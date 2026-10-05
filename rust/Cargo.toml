@@ -20,6 +20,14 @@ members = [
     # labelled at birth). See docs/design/SP_T3_SKELETON_MEASUREMENT.md.
     "shekyl-sp-t3-spike",
 
+    # WSS-Q1(b) grading harness. NOT a spike: `WALLET_SIDE_STORE.md` §6.3.4
+    # requires a re-grade on a material prover-pin change, so this one must
+    # outlive its first run and keep compiling -- the opposite lifecycle to the
+    # `-spike` crates above. `shekyl-economics-sim` is the precedent. Nothing in
+    # the production graph may depend on it; `scripts/ci/check_bench_not_a_dependency.py`
+    # is what enforces that.
+    "shekyl-wss-q1b-bench",
+
     # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
     # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
     # once `ANON_ZONE_TRANSIT_MEASURED_MS` lands (rule 15: debt, labelled at
@@ -98,6 +106,23 @@ members = [
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 
+    # Timing engine (P2P-3 TE). The core stores wake hints. The service is
+    # one thread homes send to. No sockets, no C++ bridge.
+    # See docs/design/P2P_TIMING_ENGINE.md.
+    "shekyl-timing-engine",
+
+    # D5's thread-budget ledger. Dependency-free: the timing engine
+    # records its one thread here and does not gain a Tokio runtime to
+    # do it. See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-thread-ledger",
+
+    # D5's one runtime constructor. The worker count and the blocking
+    # cap are inputs. The pool is a row on shekyl-thread-ledger.
+    # Daemon-RPC, Tor-control, and the transport all call it. The D5
+    # pin of those counts is still ahead of any measurement.
+    # See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-runtime",
+
     # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
     # the connection that carried it. Deliberately NOT in shekyl-relay, whose
     # charter is the relay scheduler, and NOT in shekyl-consensus, because two
@@ -128,6 +153,9 @@ members = [
     # bridge that used to sit beside it is deleted (roadmap B1); the C++
     # `wallet2_ffi` surface it wrapped is Phase 5's to remove.
     "shekyl-wallet-rpc",
+    # The wallet contract's vocabulary (error codes and the engine-error
+    # mapping onto them), shared by shekyl-wallet-rpc and engine embedders.
+    "shekyl-wallet-contract",
 
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
@@ -153,6 +181,36 @@ members = [
     # Daemon chain store (DRS-R-19). P0d lands digest v0; the redb engine
     # is DRS-E1. Named at birth so DRS-0 has a crate to grow into.
     "shekyl-chain-store",
+
+    # The redb value contract both stores share (CTS-Q2, ruled 2026-09-18):
+    # `Canonical` + `CodecError` + the four value shapes, plus the codecs for
+    # types neither store owns (the scalars, and the `shekyl-types` /
+    # `shekyl-units` vocabulary). It depends on the vocabulary crates because
+    # the orphan rule leaves nowhere else for those impls once the trait is
+    # foreign to `shekyl-chain-store` (CTS-13); the vocabulary crates are
+    # `no_std` and must not learn about `redb`. Not the home of either store's
+    # own column codecs, and not the home of the digest's bump obligation —
+    # that stays with `shekyl-chain-store` (DAEMON_REDB_STORE.md §11.1(b), (f)).
+    "shekyl-store-codec",
+
+    # Consensus validation (DRS-E6, CONSENSUS_C2_R8_STORE_PLACEMENT.md §9):
+    # candidate + ChainView + RuleSet → ChainValid<'id, V> | InvalidBlock. Shares
+    # no Rust with shekyl-chain-store and must never reach it or redb — the
+    # rust-audit-test.yml belt (scripts/ci/check_chain_rules_no_store.sh, over
+    # `cargo tree -e normal,dev`) holds that transitively.
+    "shekyl-chain-rules",
+
+    # Block-template assembly (TXE-F8; CHAIN_RULES_SLICE_6.md §5.3): a
+    # candidate whose coinbase and header satisfy the census by construction,
+    # pure over a caller-composed context. The producer's half of the contract
+    # shekyl-chain-rules judges; under the same no-store belt as the rules.
+    "shekyl-block-template",
+
+    # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
+    # Source → form → sequence → validate+connect → sinks. Production code
+    # shared by E2 (replay) and E3 (live); the one crate where the validator,
+    # the store and RandomX meet.
+    "shekyl-chain-ingest",
 
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
@@ -183,6 +241,38 @@ members = [
 
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
+    "shekyl-p2p-transport",
+
+    # The peer address union. Levin frames it; the transport layer selects
+    # a connector from it. Neither crate defines a second copy.
+    "shekyl-net-address",
+
+    # Transport-layer logic (P2P_TRANSPORT_LAYER.md): declarations, the
+    # stack plan, socket counts, the ban list. No sockets. The Noise
+    # layer stays shekyl-p2p-transport. Levin is the session above the plan.
+    "shekyl-transport-layer",
+    # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
+    # connector share it. It does not know which connector is calling.
+    "shekyl-socks",
+    # The session byte cap and the socket copy under a connector.
+    # Framing stays in the connector. Clearnet and Tor both call it.
+    "shekyl-capped-stream",
+    # Clearnet connector. Keeps the transport runtime. Plaintext while the
+    # option is off, Noise while it is on, both from the stack plan.
+    # See docs/design/P2P_TRANSPORT_LAYER.md.
+    "shekyl-clearnet",
+    # Tor connector. The stream is the channel: no Noise, no handshake on
+    # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
+    # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
+    "shekyl-tor",
+    # The seam: SocketId, one cause, posts onto the connection strand.
+    # epee's TCP server is deleted (D13).
+    "shekyl-seam",
+    # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
+    # peer, the seam host, the transcript comparator, and check-goldens.
+    # Nothing in the production graph depends on it. The epee recording
+    # binary is deleted and is not linked into this crate.
+    "shekyl-p2p-harness",
 
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
@@ -193,6 +283,24 @@ members = [
     # record (ARCHIVAL_CHALLENGE_MECHANISM.md §9.5 item 3, §9.6 item 4). Holds
     # the read-only store handle and never a wallet seed — §7.2(iii) custody.
     "shekyl-p-host",
+
+    # Daemon shard-fetch client: the other half of `shekyl-p-serve`'s
+    # protocol (ARCHIVAL_SHARD_FETCH.md, SF-D1..SF-D8). Tor-zone SOCKS5h dial,
+    # the SF-D5 request header, the SF-D8 countersignature verify, and a
+    # content-verify hole; reads no chain state, holds no key (SF-D4 cut).
+    "shekyl-p-fetch",
+
+    # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
+    # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC
+    # crate (`check_p_fetch_dep_cut.py`).
+    "shekyl-archival-fetch-sched",
+
+    # rend-spec-v3 onion hostname from an Ed25519 public key. Encoding
+    # only — no Tor instance. Wallet serving (`OnionIdentity`) and daemon
+    # fetch (`ServingEndpoint`) both read it so the address a persona
+    # publishes and the address a daemon dials cannot drift (PWD-E9: the
+    # two Tor *instances* stay separate; this is the one transform).
+    "shekyl-onion-v3",
 
     # Capability families (PWD-E9): the client speaks the protocol for any
     # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
@@ -268,12 +376,16 @@ members = [
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
 # `[workspace]` table inside each one) so that `cargo check
-# --workspace` on stable never tries to resolve libfuzzer-sys, which
-# only builds under `cargo +nightly fuzz build`. Hardening-pass
-# commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
+# --workspace` on stable never resolves libfuzzer-sys. The audit
+# workflow checks `shekyl-fcmp/fuzz` on its own manifest: those four
+# harnesses are the signature-drift gate, and libfuzzer-sys 0.4
+# typechecks on the pinned stable toolchain. The other harnesses stay
+# out of that job. Hardening-pass commit 8
+# (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
-    "shekyl-archival-retention/fuzz",
+    "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
+    "shekyl-p2p-transport/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
     # the fork — the EC-membership review artifact; this vendored copy is
@@ -509,6 +621,14 @@ shekyl-fcmp-proofs = { opt-level = 3 }
 # of every debug `cargo test` run, here and in CI.
 fips205 = { opt-level = 3 }
 sha2 = { opt-level = 3 }
+# Each economics-sim scenario is folded once. These four crates are that
+# fold's per-block path (the reward, the fill rule, the weight predictor).
+# An unoptimised copy of them sets the length of every debug `cargo test`
+# run, here and in CI. The override is the per-block path of the one fold.
+shekyl-economics-sim = { opt-level = 3 }
+shekyl-economics = { opt-level = 3 }
+shekyl-block-template = { opt-level = 3 }
+shekyl-tx-weight = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

@@ -282,6 +282,42 @@ pub enum Command {
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
     /// this surface without a validated-string path.
     SetConf(HsLayerPins),
+    /// `SIGNAL <name>` — deliver one of tor's control signals. Typed as a
+    /// closed enum ([`Signal`]) so, like the onion commands, the arm cannot
+    /// render a token that is not a signal name.
+    Signal(Signal),
+}
+
+/// A control signal tor accepts on `SIGNAL`. Closed on purpose: only the
+/// signals with a named consumer are here, and adding one is a visible edit.
+///
+/// **Not a per-request isolation mechanism.** [`Self::NewNym`] is
+/// process-global — it marks every client circuit dirty and purges the
+/// client's onion-service descriptor and intro-point state — so a
+/// consumer that wanted *one* stream on a fresh circuit while others keep
+/// theirs wants SOCKS isolation (`IsolateSOCKSAuth`), not this. Tor also
+/// rate-limits it to one per ten seconds (`MAX_SIGNEWNYM_RATE`); a second
+/// within that window is answered `250 OK` and *deferred*, so a caller that
+/// needs the rotation to have happened spaces its signals itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// `NEWNYM`: switch to clean circuits and forget client-side
+    /// onion-service state, so the next request builds everything from
+    /// scratch. Consumer: the SP-T3 measurement rig's cold arm
+    /// (`shekyl-sp-t3-spike::harness`, `ARCHIVAL_SHARD_FETCH.md` §9.1 (c)),
+    /// which models a daemon's first fetch from a persona it has never
+    /// dialled.
+    NewNym,
+}
+
+impl Signal {
+    /// The signal's name on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NewNym => "NEWNYM",
+        }
+    }
 }
 
 /// The one `GETINFO` key whose reply is legitimately megabytes: the full network
@@ -333,6 +369,10 @@ impl Command {
             // Also infallible: every value is a `$hex` specifier that cannot
             // carry a space or control byte (see `vanguards`).
             Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
+            // A closed enum of signal names: nothing to validate.
+            Self::Signal(signal) => {
+                return Ok(Zeroizing::new(format!("SIGNAL {}", signal.as_str())))
+            }
         };
         if tokens.is_empty() {
             return Err(ControlError::InvalidCommand);
@@ -1375,6 +1415,14 @@ mod tests {
         assert_eq!(
             cmd.to_wire().unwrap().as_str(),
             "SETEVENTS STREAM STATUS_CLIENT"
+        );
+    }
+
+    #[test]
+    fn signal_renders_its_closed_name() {
+        assert_eq!(
+            Command::Signal(Signal::NewNym).to_wire().unwrap().as_str(),
+            "SIGNAL NEWNYM"
         );
     }
 

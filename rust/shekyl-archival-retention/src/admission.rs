@@ -58,11 +58,17 @@
 //!    *more* of the same ones (the predicate is over the holding's **sum**), and
 //!    every copy the griefer bonds lowers their own scarcity income.
 //! 4. **Timing is killed by the read-point** — see [`ParentStateHoldings`].
-//! 5. **Validator cost is bounded, and here is the actual number:** the caller
-//!    does **two** LMDB point lookups per held shard (the `r_market` row and the
-//!    segment freeze height), so at `MAX_HOLDINGS_SHARDS = 4096` one bond post
-//!    costs at most ~8k point reads. Real, but not a cheap DoS: every shard in
-//!    the holding is priced at a full `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
+//! 5. **Validator cost is bounded, and here is the actual number:** this
+//!    function does no I/O. The caller gathers two facts per held shard.
+//!    The caller that exists is the C++ LMDB validator: one point lookup
+//!    for the `r_market` row and one for the segment freeze, so one bond
+//!    post is at most `2 · MAX_HOLDINGS_SHARDS` point reads. The Rust epoch
+//!    close does not use this gather. A closed shard's height there is a
+//!    binary search over the parent (one recorded-row read per probe, plus
+//!    one after the loop), paid once per closed shard per settlement
+//!    boundary and sized by the closed universe, not by this cap. Real, but
+//!    not a cheap DoS: every shard in the holding is priced at a full
+//!    `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
 //!    collateral, and the tx carries a PQC signature and pays weight fees. The
 //!    arithmetic itself is a single pass. The whole-corpus case walks **none**,
 //!    because it short-circuits ([`check_admission`]) — without that
@@ -71,21 +77,18 @@
 //!
 //! ## Scope: `JoinMarket` only
 //!
-//! Rebond pins its post-holdings as a **superset** of the record
-//! ([`crate::bond_post::verify_rebond_bond_post`] Pin 1) and HoldingsUpdate-add
-//! only adds, so both are **monotone in credited work** and cannot turn a viable
-//! position into a zero — there is no bypass through them. HoldingsUpdate-**drop**
-//! can reduce work and is left ungated *on purpose*: refusing an **entry** into a
-//! zero costs the applicant nothing (they never entered, and are free to pick a
-//! different holding), whereas refusing an **exit-ward** move would trap capital
-//! in a larger position than the holder wants and force a full `Release` where
-//! they asked for a partial one. The gate protects reach; it must not tax it.
+//! Reinstate cannot change holdings (immutable-bond 2026-09-20), so it cannot
+//! turn a viable position into a zero. There is no in-place drop kind:
+//! shrinking is persona rotation (`Release` + `JoinMarket`). The gate protects
+//! reach; it must not tax it.
 
 use core::ffi::CStr;
 
+use shekyl_types::BlockHeight;
+
 use crate::bond_floor::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
-use crate::consensus_state::{shard_age_milli, shard_work_micro};
+use crate::consensus_state::{shard_work_micro, ShardClose};
 use crate::constants::effective_settlement_epoch_blocks;
 use crate::reward_arithmetic::work_milli_from_micro;
 
@@ -137,7 +140,8 @@ pub struct AdmissionShard {
 /// and a release in the *same* block could be sequenced to catch a transient `r`.
 /// Reading parent state makes ordering irrelevant and makes every validator
 /// compute an identical verdict — the same discipline as the
-/// `frozen_segment_count` frontier-read and the M3-1 cached-counter drift ruling.
+/// CEN-F17 `closed_shards_before` parent-state read and the M3-1 cached-counter
+/// drift ruling.
 ///
 /// The read-point lives in the **type name** rather than a comment so a tip-state
 /// gather is a visible lie at the call site instead of a silent default. Note the
@@ -153,8 +157,8 @@ pub struct AdmissionShard {
 ///   for that whole epoch. It is ordering-immune **by construction** — no
 ///   discipline at the call site is needed to make it so.
 /// - `age_milli` is **height-derived** ([`crate::consensus_state::shard_age_milli`]
-///   takes a `close_block_height`, and a shard's freeze height can be written by
-///   the very block under validation).
+///   takes a `close_block_height`, and the very block under validation can be
+///   the one whose archival bytes close a shard).
 ///
 /// So the parent-height discipline is required *because of `age_milli`*, which is
 /// why this type is named for the parent block rather than the settled epoch.
@@ -208,18 +212,15 @@ pub enum AdmissionError {
     /// the *vin*. Here the caller's own parallel arrays are ragged, so there is no
     /// single "gathered" length to report — collapsing them to a max/min would
     /// discard exactly the fact a debugger needs, namely *which column is short*.
-    /// Every length is carried instead.
-    #[error(
-        "admission gather columns disagree: r_market={r_market}, \
-         freeze_heights={freeze_heights}, has_segment={has_segment}"
-    )]
+    /// Every length is carried instead. (The C ABI's `(freeze_height,
+    /// has_segment)` pair is zipped into the `closes` column before this
+    /// check, so a ragged pair surfaces at the FFI under the same code.)
+    #[error("admission gather columns disagree: r_market={r_market}, closes={closes}")]
     GatherColumnLengthMismatch {
         /// Length of the `r_market` column.
         r_market: usize,
-        /// Length of the `freeze_heights` column.
-        freeze_heights: usize,
-        /// Length of the `has_segment` column.
-        has_segment: usize,
+        /// Length of the `closes` column.
+        closes: usize,
     },
 }
 
@@ -271,7 +272,7 @@ pub const fn admission_code_cstr(code: u8) -> &'static CStr {
             c"holdings credit no work at the parent-block read-point - this bond would score zero at every epoch close"
         }
         codes::ERR_GATHER_COLUMNS => {
-            c"admission gather columns disagree with each other (r_market / freeze_heights / has_segment)"
+            c"admission gather columns disagree with each other (r_market / shard closes)"
         }
         _ => c"unknown admission error",
     }
@@ -299,57 +300,52 @@ impl ParentStateHoldings<'_> {
     }
 }
 
-/// Build the per-shard parent-state gather from raw LMDB columns.
+/// Build the per-shard parent-state gather from the store's two columns: each
+/// held shard's `r_market` row and its [`ShardClose`].
 ///
-/// C++ owns the I/O; this owns the **age derivation** (parent height + freeze
-/// height + SEB schedule) so the daemon cannot re-implement `shard_age_milli`
-/// or pass a tip-dated age by accident at this layer.
+/// The store owns the I/O; this owns the **age derivation** (parent height +
+/// shard close + SEB schedule) so no caller re-implements `shard_age_milli` or
+/// passes a tip-dated age by accident at this layer.
 ///
-/// ## `has_segment` is a column, not a sentinel
+/// ## The close is a variant, not a sentinel
 ///
-/// A shard with **no frozen segment** scores `age_milli = 0` — exactly as the
-/// reward path does ([`crate::consensus_state::shard_contribution_micro`], whose
-/// age term is `if shard.has_segment { shard_age_milli(..) } else { 0 }`). That
-/// fact **cannot be recovered from `freeze_height` alone**: `0` is a legitimate
-/// genesis-band freeze height (the "oldest" sentinel → longest horizon), so a
-/// missing row and a genesis-frozen shard are indistinguishable by value. Worse,
-/// defaulting a missing row to `0` yields `age_epochs == chain_epochs` and so the
-/// **maximum** age — the reward path's zero becomes admission's maximum, which
-/// over-scores the holding and admits bonds the pay path would score lower.
+/// An **open** shard scores `age_milli = 0` — exactly as the reward path does
+/// ([`crate::consensus_state::shard_contribution_micro`], whose age term is
+/// [`ShardClose::age_milli`]). That fact **cannot be recovered from a height
+/// alone**: `0` is a legitimate close height (the genesis band, the "oldest"),
+/// so an open shard and a genesis-band shard are indistinguishable by value,
+/// and defaulting the open shard to `0` would yield `age_epochs == chain_epochs`
+/// and so the **maximum** age — the reward path's zero becomes admission's
+/// maximum, which over-scores the holding and admits bonds the pay path would
+/// score lower. [`ShardClose::Open`] carries the fact as a variant, so the
+/// mistake has no field to be written into.
 ///
-/// Passing the presence bit explicitly is what keeps admission and payment the
-/// same computation. Encoding it as a magic freeze height (e.g. defaulting to
-/// `parent_height` so the `close <= freeze` branch fires) would produce the right
-/// number today by writing a false fact into the data, and would rot the moment
-/// anything else reads that column.
+/// On `SHT-Q2`'s partition the close is the archival fold's
+/// (`shekyl_chain_rules::shard_close_height`), read on the view at the parent;
+/// the C++ validator's segment pair reaches here through
+/// [`ShardClose::from_wire`] at the FFI, CEN-L10's ruled divergence.
 pub fn parent_state_shards_from_gather(
     r_market: &[u64],
-    freeze_heights: &[u64],
-    has_segment: &[bool],
+    closes: &[ShardClose],
     parent_height: u64,
 ) -> Result<Vec<AdmissionShard>, AdmissionError> {
-    if r_market.len() != freeze_heights.len() || r_market.len() != has_segment.len() {
+    if r_market.len() != closes.len() {
         return Err(AdmissionError::GatherColumnLengthMismatch {
             r_market: r_market.len(),
-            freeze_heights: freeze_heights.len(),
-            has_segment: has_segment.len(),
+            closes: closes.len(),
         });
     }
     let seb = effective_settlement_epoch_blocks();
+    // `parent_height` arrives as the FFI's bare `u64` (grandfathered,
+    // `check_inland_height_u64.py`); it decodes here, once.
+    let judged_at = BlockHeight::from_raw(parent_height);
     Ok(r_market
         .iter()
-        .zip(freeze_heights.iter())
-        .zip(has_segment.iter())
-        .map(
-            |((&r_market, &freeze_height), &has_segment)| AdmissionShard {
-                r_market,
-                age_milli: if has_segment {
-                    shard_age_milli(parent_height, freeze_height, seb)
-                } else {
-                    0
-                },
-            },
-        )
+        .zip(closes.iter())
+        .map(|(&r_market, &close)| AdmissionShard {
+            r_market,
+            age_milli: close.age_milli(judged_at, seb),
+        })
         .collect())
 }
 
@@ -604,55 +600,63 @@ mod tests {
         );
     }
 
-    /// **The age term must match the reward path on BOTH branches.** A shard with
-    /// no frozen segment scores `age_milli = 0` at payment
+    /// **The age term must match the reward path on BOTH arms.** An open shard
+    /// scores `age_milli = 0` at payment
     /// ([`crate::consensus_state::shard_contribution_micro`]), so it must score 0
-    /// here too.
+    /// here too — `SHT-Q1`'s falsifier on the admission surface: no height
+    /// closes the shard; it is open until its bytes arrive.
     ///
     /// This is the single-source property at its sharpest, because the failure is
-    /// silent and inverted: `freeze_height = 0` is a *legitimate* genesis-band
-    /// value, so a missing row cannot be detected from the height alone — and
-    /// defaulting it to `0` gives `age_epochs == chain_epochs`, i.e. the
-    /// **maximum** age where payment gives zero. Admission would then over-score
-    /// and admit bonds the pay path scores lower.
+    /// silent and inverted: `0` is a *legitimate* genesis-band close height, so
+    /// an open shard cannot be detected from a height alone — and defaulting it
+    /// to `0` gives `age_epochs == chain_epochs`, i.e. the **maximum** age where
+    /// payment gives zero. Admission would then over-score and admit bonds the
+    /// pay path scores lower.
     #[test]
-    fn an_unfrozen_shard_scores_zero_age_exactly_as_the_reward_path_does() {
+    fn an_open_shard_scores_zero_age_exactly_as_the_reward_path_does() {
         const SEB: u64 = crate::constants::SETTLEMENT_EPOCH_BLOCKS;
         let parent_height = SEB * 40;
 
-        // Same freeze height, differing only in whether a segment exists.
-        let unfrozen =
-            parent_state_shards_from_gather(&[7], &[0], &[false], parent_height).expect("gather");
-        let frozen =
-            parent_state_shards_from_gather(&[7], &[0], &[true], parent_height).expect("gather");
+        let open = parent_state_shards_from_gather(&[7], &[ShardClose::Open], parent_height)
+            .expect("gather");
+        let genesis_band = BlockHeight::from_raw(0);
+        let closed = parent_state_shards_from_gather(
+            &[7],
+            &[ShardClose::ClosedAt(genesis_band)],
+            parent_height,
+        )
+        .expect("gather");
 
         assert_eq!(
-            unfrozen[0].age_milli, 0,
-            "no segment must score zero age, as shard_contribution_micro does"
+            open[0].age_milli, 0,
+            "an open shard must score zero age, as shard_contribution_micro does"
         );
         assert_eq!(
-            frozen[0].age_milli,
-            shard_age_milli(parent_height, 0, SEB),
-            "a frozen shard must score the production age term unchanged"
+            closed[0].age_milli,
+            crate::consensus_state::shard_age_milli(
+                BlockHeight::from_raw(parent_height),
+                genesis_band,
+                SEB
+            ),
+            "a closed shard must score the production age term unchanged"
         );
         assert!(
-            frozen[0].age_milli > 0,
-            "fixture must actually separate the branches, or it proves nothing"
+            closed[0].age_milli > 0,
+            "fixture must actually separate the arms, or it proves nothing"
         );
     }
 
     /// Ragged gather columns name every length, so a debugger can see *which*
     /// column is short rather than a max/min that discards it.
     #[test]
-    fn ragged_gather_columns_report_all_three_lengths() {
-        let err = parent_state_shards_from_gather(&[1, 2, 3], &[0, 0], &[true], 0)
+    fn ragged_gather_columns_report_both_lengths() {
+        let err = parent_state_shards_from_gather(&[1, 2, 3], &[ShardClose::Open; 2], 0)
             .expect_err("ragged columns must fail closed");
         assert_eq!(
             err,
             AdmissionError::GatherColumnLengthMismatch {
                 r_market: 3,
-                freeze_heights: 2,
-                has_segment: 1,
+                closes: 2,
             }
         );
         assert_eq!(
@@ -690,18 +694,17 @@ mod tests {
         ));
     }
 
-    /// Age derivation lives in the gather builder so C++ cannot re-implement
-    /// `shard_age_milli` or tip-date the age at this layer.
+    /// Age derivation lives in the gather builder so no caller re-implements
+    /// `shard_age_milli` or tip-dates the age at this layer.
     #[test]
     fn parent_state_shards_from_gather_derives_age_and_rejects_parallel_mismatch() {
         let r = [0u64, 1];
-        let freeze = [0u64, 0];
-        let seg = [true, true];
-        let shards = parent_state_shards_from_gather(&r, &freeze, &seg, 0).expect("parallel");
+        let closes = [ShardClose::ClosedAt(BlockHeight::from_raw(0)); 2];
+        let shards = parent_state_shards_from_gather(&r, &closes, 0).expect("parallel");
         assert_eq!(shards.len(), 2);
         assert_eq!(shards[0].age_milli, 0);
         assert!(matches!(
-            parent_state_shards_from_gather(&[1], &[0, 0], &[true], 0),
+            parent_state_shards_from_gather(&[1], &closes, 0),
             Err(AdmissionError::GatherColumnLengthMismatch { .. })
         ));
         assert_eq!(

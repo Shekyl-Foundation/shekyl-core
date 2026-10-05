@@ -25,7 +25,6 @@ use shekyl_archival_retention::{
     MembershipOnlyBacking, ShardSet, ShardWorkEntry, WorkEpochClaim,
     VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
 const EMISSION_CONNECT_KAT: &str = include_str!("fixtures/emission_connect_kat_v1.json");
@@ -54,7 +53,6 @@ fn build_connect_vin() -> ArchivalRewardEmissionVin {
     const SHARD: u64 = 7;
     let epochs = [1u64, 2];
     let backing_pubkey = vec![0x22u8; SINGLE_KEY_CANONICAL_LEN];
-    let pqc_pk_hash = hash_pqc_public_key(&backing_pubkey);
     ArchivalRewardEmissionVin {
         p_pubkey: vec![0x11; SINGLE_KEY_CANONICAL_LEN],
         holdings: HoldingsDescriptor {
@@ -76,7 +74,6 @@ fn build_connect_vin() -> ArchivalRewardEmissionVin {
         backing: MembershipOnlyBacking {
             proof: vec![0xAB; 64],
             pseudo_out: [0x33; 32],
-            pqc_pk_hash,
             backing_pubkey,
             tree_depth: 3,
         },

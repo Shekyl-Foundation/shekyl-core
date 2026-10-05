@@ -32,6 +32,7 @@
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_config.h"
 #include "serialization/difficulty_type.h"
+#include "serialization/string.h" // blobdata fields below; was transitive via the deleted tx_extra.h
 
 
 namespace cryptonote

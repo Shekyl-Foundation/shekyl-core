@@ -21,6 +21,7 @@
 
 use shekyl_difficulty::consts::MTP_WINDOW_USIZE;
 use shekyl_difficulty::{is_above_mtp, is_timestamp_below_ftl};
+use shekyl_types::Timestamp;
 
 const VECTOR_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -33,14 +34,18 @@ fn load_vectors() -> serde_json::Value {
     serde_json::from_str(&raw).expect("MTP_BOUNDARY_V1.json is not valid JSON")
 }
 
-fn window_from(case: &serde_json::Value) -> [u64; MTP_WINDOW_USIZE] {
-    let raw: Vec<u64> = case["window"]
+fn ts(v: u64) -> Timestamp {
+    Timestamp::from_raw(v)
+}
+
+fn window_from(case: &serde_json::Value) -> [Timestamp; MTP_WINDOW_USIZE] {
+    let raw: Vec<Timestamp> = case["window"]
         .as_array()
         .expect("window is an array")
         .iter()
-        .map(|v| v.as_u64().expect("window entries are u64"))
+        .map(|v| ts(v.as_u64().expect("window entries are u64")))
         .collect();
-    raw.try_into().unwrap_or_else(|v: Vec<u64>| {
+    raw.try_into().unwrap_or_else(|v: Vec<Timestamp>| {
         panic!("predicate windows are exactly 11 wide, got {}", v.len())
     })
 }
@@ -63,7 +68,7 @@ fn predicate_cases_match_is_above_mtp() {
         let expected = case["verdict"].as_bool().expect("verdict");
 
         assert_eq!(
-            is_above_mtp(candidate, &window),
+            is_above_mtp(ts(candidate), &window),
             expected,
             "predicate case `{name}`: candidate {candidate} vs window {window:?}"
         );
@@ -97,7 +102,7 @@ fn ftl_cases_match_is_timestamp_below_ftl() {
         let expected = case["verdict"].as_bool().expect("verdict");
 
         assert_eq!(
-            is_timestamp_below_ftl(candidate, local_clock),
+            is_timestamp_below_ftl(ts(candidate), ts(local_clock)),
             expected,
             "FTL case `{name}`: candidate {candidate} vs local clock {local_clock}"
         );
@@ -129,8 +134,12 @@ fn predicate_cases_match_combined_rule() {
         let candidate = case["candidate"].as_u64().expect("candidate");
         let expected = case["verdict"].as_bool().expect("verdict");
 
-        let (verdict, median) = check_timestamp_rule(candidate, &window, 0, candidate);
-        assert_eq!(case["median"].as_u64().expect("median"), median, "{name}");
+        let (verdict, median) = check_timestamp_rule(ts(candidate), &window, ts(0), ts(candidate));
+        assert_eq!(
+            case["median"].as_u64().expect("median"),
+            median.to_raw(),
+            "{name}"
+        );
         let want = if expected {
             TimestampRuleVerdict::Ok
         } else {
@@ -152,18 +161,23 @@ fn assembly_cases_pad_with_genesis_timestamp() {
 
     for case in cases {
         let name = case["name"].as_str().expect("case name");
-        let history: Vec<u64> = case["history_newest_first"]
+        let history: Vec<Timestamp> = case["history_newest_first"]
             .as_array()
             .expect("history is an array")
             .iter()
-            .map(|v| v.as_u64().expect("history entries are u64"))
+            .map(|v| ts(v.as_u64().expect("history entries are u64")))
             .collect();
         let genesis_ts = case["genesis_ts"].as_u64().expect("genesis_ts");
         let candidate = case["candidate"].as_u64().expect("candidate");
         let expected = case["verdict"].as_bool().expect("verdict");
 
-        let (verdict, median) = check_timestamp_rule(candidate, &history, genesis_ts, candidate);
-        assert_eq!(case["median"].as_u64().expect("median"), median, "{name}");
+        let (verdict, median) =
+            check_timestamp_rule(ts(candidate), &history, ts(genesis_ts), ts(candidate));
+        assert_eq!(
+            case["median"].as_u64().expect("median"),
+            median.to_raw(),
+            "{name}"
+        );
         let want = if expected {
             TimestampRuleVerdict::Ok
         } else {
@@ -184,16 +198,17 @@ fn ftl_cases_match_combined_rule() {
         .expect("ftl_cases.cases");
     assert!(!cases.is_empty());
 
-    let zero_window = [0u64; 11];
+    let zero_window = [ts(0); 11];
     for case in cases {
         let name = case["name"].as_str().expect("case name");
         let candidate = case["candidate"].as_u64().expect("candidate");
         let local_clock = case["local_clock"].as_u64().expect("local_clock");
         let ftl_ok = case["verdict"].as_bool().expect("verdict");
 
-        let (verdict, median) = check_timestamp_rule(candidate, &zero_window, 0, local_clock);
+        let (verdict, median) =
+            check_timestamp_rule(ts(candidate), &zero_window, ts(0), ts(local_clock));
         assert_eq!(!ftl_ok, verdict == TimestampRuleVerdict::AboveFtl, "{name}");
-        assert_eq!(0, median, "{name}");
+        assert_eq!(0, median.to_raw(), "{name}");
     }
 }
 
@@ -201,10 +216,10 @@ fn ftl_cases_match_combined_rule() {
 /// selection is the caller's job (C2-R3-Q1 sub-a).
 #[test]
 fn wider_window_is_refused() {
-    let too_wide = [5u64; 12];
-    let (verdict, median) = check_timestamp_rule(999, &too_wide, 0, 999);
+    let too_wide = [ts(5); 12];
+    let (verdict, median) = check_timestamp_rule(ts(999), &too_wide, ts(0), ts(999));
     assert_eq!(TimestampRuleVerdict::WindowTooWide, verdict);
-    assert_eq!(0, median);
+    assert_eq!(0, median.to_raw());
 }
 
 /// The template-edge premise on the one implementation: at
@@ -215,13 +230,13 @@ fn wider_window_is_refused() {
 fn template_edge_no_timestamp_satisfies_both_bounds() {
     let clock = 1_000_000u64;
     let edge_median = clock + 540;
-    let edge_window = [edge_median; 11];
+    let edge_window = [ts(edge_median); 11];
 
-    let (v1, m1) = check_timestamp_rule(clock, &edge_window, 0, clock);
+    let (v1, m1) = check_timestamp_rule(ts(clock), &edge_window, ts(0), ts(clock));
     assert_eq!(TimestampRuleVerdict::NotAboveMedian, v1);
-    assert_eq!(edge_median, m1);
-    let (v2, _) = check_timestamp_rule(edge_median + 1, &edge_window, 0, clock);
+    assert_eq!(edge_median, m1.to_raw());
+    let (v2, _) = check_timestamp_rule(ts(edge_median + 1), &edge_window, ts(0), ts(clock));
     assert_eq!(TimestampRuleVerdict::AboveFtl, v2);
-    let (v3, _) = check_timestamp_rule(edge_median + 1, &edge_window, 0, clock + 1);
+    let (v3, _) = check_timestamp_rule(ts(edge_median + 1), &edge_window, ts(0), ts(clock + 1));
     assert_eq!(TimestampRuleVerdict::Ok, v3);
 }

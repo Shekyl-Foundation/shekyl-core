@@ -63,12 +63,12 @@ fn funding_block(recipient: &ArchivalPKeys) -> ScannableBlock {
 /// across a rebuilt chain.
 fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<ScannableBlock> {
     let mut c: Vec<ScannableBlock> = (0..len)
-        .map(|h| make_synthetic_block(h as u64, [0u8; 32]))
+        .map(|h| make_synthetic_block(h as u64, shekyl_types::BlockHash::NULL))
         .collect();
     for (i, b) in recipient_blocks {
         c[*i] = b.clone();
     }
-    let mut prev = [0u8; 32];
+    let mut prev = shekyl_types::BlockHash::NULL;
     for (h, sb) in c.iter_mut().enumerate() {
         // The coinbase claims its own height. The bench fixture hard-codes `Gen(0)`,
         // so set it to the position — both to keep the F5 fetch-loop tripwire honest
@@ -135,7 +135,7 @@ fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
 /// A tiny test horizon so a sweep needs only a few real blocks.
 fn cfg(reorg_depth: u64, batch_blocks: u64) -> PScanConfig {
     PScanConfig {
-        reorg_depth,
+        reorg_depth: BlockCount::from_raw(reorg_depth),
         batch_blocks,
     }
 }
@@ -379,7 +379,7 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await
@@ -397,7 +397,7 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await
@@ -458,7 +458,7 @@ async fn dispatch_defers_retire_while_the_slot_holds_unspent_funding() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX), // fully corroborating tip
+        ChainCount::from_raw(u64::MAX), // fully corroborating tip
         PScanConfig::production(),
     )
     .await
@@ -506,7 +506,7 @@ async fn durable_prune_defers_when_the_claimed_tip_does_not_corroborate() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(0),
+        ChainCount::from_raw(0),
         PScanConfig::production(),
     )
     .await
@@ -553,7 +553,7 @@ async fn dispatch_does_not_retire_before_the_window_closes() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await

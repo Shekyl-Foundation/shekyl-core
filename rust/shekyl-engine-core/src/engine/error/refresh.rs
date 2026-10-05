@@ -5,7 +5,92 @@
 
 //! Refresh and ledger error vocabulary.
 
+use std::fmt;
+
+use shekyl_types::{BlockCount, BlockHeight};
+
 use super::IoError;
+
+/// Why a rollback is outside the finality window.
+///
+/// Two honest causes, one refusal. [`Self::Measured`] is a depth both
+/// sides of the comparison actually have. [`Self::RecordEnded`] is a
+/// hash record that ran out while a past-finality fork is still
+/// possible — the depth is how far the record reached, not a guess at
+/// the fork. A new cause is a new match arm and a contract bump: the
+/// wallet message and `data.breach` name this set exhaustively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalityBreach {
+    /// The dropped span was measured: every stored block through the
+    /// window disagreed, or the tree tip and the retained height are
+    /// both known and the gap exceeds `W`.
+    Measured,
+    /// The hash record ended before a common ancestor was found, on a
+    /// chain tall enough that the fork may lie past `W`.
+    RecordEnded,
+}
+
+impl FinalityBreach {
+    /// Wire spelling of [`Self`], stable for `error.data.breach`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Measured => "measured",
+            Self::RecordEnded => "record_ended",
+        }
+    }
+}
+
+impl fmt::Display for FinalityBreach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Measured => "the depth was measured",
+            Self::RecordEnded => "the hash record ended before the fork was confirmed",
+        })
+    }
+}
+
+/// A rollback the finality policy refused.
+///
+/// `depth` is a span, not a height. For [`FinalityBreach::Measured`] it
+/// is the span that was compared with `W`. For
+/// [`FinalityBreach::RecordEnded`] it is only how far the stored hashes
+/// reached, which may be shorter than `W`. The steps that clear the tree
+/// file and the scan history are the RPC message's job; this value states
+/// the span that was known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinalityStop {
+    /// Blocks the rollback would drop, or — when the record ended — the
+    /// number of stored blocks that already disagreed.
+    pub depth: BlockCount,
+    /// `W`. [`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`].
+    pub finality_depth: BlockCount,
+    /// Which of the two causes produced this stop.
+    pub breach: FinalityBreach,
+}
+
+impl fmt::Display for FinalityStop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.breach {
+            // The span was compared with `W` and lost.
+            FinalityBreach::Measured => write!(
+                f,
+                "a rollback of {depth} blocks is outside the {window}-block finality window ({breach})",
+                depth = self.depth,
+                window = self.finality_depth,
+                breach = self.breach,
+            ),
+            // `depth` is how far the record reached, which can be less than `W`.
+            // Saying that span is outside the window states a comparison that did not happen.
+            FinalityBreach::RecordEnded => write!(
+                f,
+                "the hash record ended after {depth} mismatches, before a common ancestor inside the {window}-block finality window was confirmed",
+                depth = self.depth,
+                window = self.finality_depth,
+            ),
+        }
+    }
+}
 
 // --- Refresh ---------------------------------------------------------------
 
@@ -26,10 +111,10 @@ pub enum RefreshError {
     )]
     ConcurrentMutation {
         /// `wallet.synced_height` observed at merge time.
-        wallet: u64,
+        wallet: BlockHeight,
         /// `result.start_height` in the value passed to
         /// `apply_scan_result`.
-        result: u64,
+        result: BlockHeight,
     },
 
     /// A second `refresh` was attempted while one was already in flight.
@@ -74,6 +159,13 @@ pub enum RefreshError {
     /// surfacing as a partial-state failure.
     #[error("refresh cancelled")]
     Cancelled,
+
+    /// The chain the daemon serves kept reorganizing: a further reorg was
+    /// detected after the attempt's rewind budget was spent, so the attempt
+    /// stopped rather than scan a region it could no longer check. Nothing
+    /// was merged. Retry once the chain settles.
+    #[error("reorg storm: the chain diverged again after the rewind budget was spent")]
+    ReorgStorm,
 
     /// Daemon-side refresh failure: an RPC call into `shekyld` failed,
     /// or the daemon returned data that the scanner / merge logic could
@@ -158,37 +250,37 @@ pub enum RefreshError {
     /// keeps the ledger from advancing past an un-updated tree rather
     /// than silently diverging the two tips.
     ///
-    /// `context` is a compile-time-fixed classification named at the
-    /// call site — no daemon/scanner bytes flow in, matching the
-    /// `&'static str`-only discipline of
+    /// `fault` names the failure class; its data is compile-time-fixed —
+    /// no daemon/scanner bytes flow in, matching the discipline of
     /// [`Self::InternalInvariantViolation`]. Daemon transport failures
     /// during the genesis/birthday backfill fetch surface through
     /// [`Self::Io`] (the established `fetch_block_hash_at` mapping), not
     /// here; this variant covers the tree-feed-specific steps (backfill
     /// block decode, the actor ingest/rollback handshake).
     ///
-    /// A fail-stopped actor ([`crate::engine::curve_tree_actor::CurveTreeHandleError::Unavailable`])
-    /// or a [`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned)
-    /// client maps here with `recoverable_by_respawn = true`: the CT-5a commit-5
-    /// engine-side respawn (R1-Q4) drops the dead actor, resumes a writer
-    /// over the same open store, and retries the cursor-driven ingest once
-    /// ([`Engine::ingest_scan_result_with_respawn`](crate::engine::Engine::ingest_scan_result_with_respawn)).
-    /// Every other ingest failure (producer-contract, decode, a tree-state
-    /// client error a resume would reproduce) is `false` and surfaces
-    /// terminally.
-    #[error("curve-tree ingest failed: {context}")]
+    /// Whether a respawn can heal it is a property of the fault
+    /// ([`CurveTreeIngestFault::recoverable_by_respawn`]), read by
+    /// [`Engine::ingest_scan_result_with_respawn`](crate::engine::Engine::ingest_scan_result_with_respawn)
+    /// to decide whether to respawn-and-retry once. The bounded retry budget
+    /// and escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
+    #[error("curve-tree ingest failed: {fault}")]
     CurveTreeIngest {
-        /// Compile-time-fixed name of the ingest failure class, named
-        /// at the call site so audit can read every distinguishable
-        /// case from source.
-        context: &'static str,
-        /// `true` when a resume-over-held-store respawn (R1-Q4) can heal the
-        /// failure (fail-stopped actor or `ClientError::Poisoned`); `false`
-        /// for failures a resume would reproduce. Read by
-        /// [`Engine::ingest_scan_result_with_respawn`](crate::engine::Engine::ingest_scan_result_with_respawn)
-        /// to decide whether to respawn-and-retry. The bounded retry budget +
-        /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
-        recoverable_by_respawn: bool,
+        /// Why the ingest failed, one member per remedy.
+        fault: CurveTreeIngestFault,
+    },
+
+    /// A rollback would pass `W`
+    /// ([`shekyl_curve_tree::FINALITY_DEPTH_BLOCKS`]), the depth at which
+    /// this wallet's persisted state is final (`CT-6` C7).
+    ///
+    /// The store can truncate through a frozen segment — F9 requires it —
+    /// and a wallet refresh must not ask. [`FinalityStop`] is the fact.
+    /// The words that tell a caller to remove the curve-tree file and clear
+    /// scan history are the RPC error's, not a second copy here.
+    #[error("{stop}")]
+    ReorgDeeperThanFinality {
+        /// The span that failed the finality comparison, and why.
+        stop: FinalityStop,
     },
 
     /// [`Engine::start_rescan`](crate::engine::Engine::start_rescan) refused: a
@@ -225,6 +317,59 @@ pub enum RefreshError {
     RescanPersist(String),
 }
 
+/// Why a scan result could not be ingested into the curve tree — one member
+/// per remedy, so what a caller does next is read from the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CurveTreeIngestFault {
+    /// The curve-tree actor fail-stopped. A respawn over the held store heals
+    /// it (R1-Q4).
+    #[error("curve-tree actor unavailable")]
+    ActorUnavailable,
+    /// A rollback committed but failed before the client's memory was
+    /// rebuilt ([`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned));
+    /// its documented recovery is to resume over the same store.
+    #[error("curve-tree client poisoned")]
+    ClientPoisoned,
+    /// The respawn could not resume a writer over the held store. Reopening
+    /// the wallet reopens the store, which names its own fault.
+    #[error("curve-tree respawn resume failed")]
+    RespawnFailed,
+    /// The rebuilt root disagrees with the root the block header commits to
+    /// (§3.3, CT-5b O5): the daemon served leaves its own header does not
+    /// commit to. A respawn re-derives the same root.
+    #[error("curve-tree root mismatch vs header")]
+    RootMismatch,
+    /// A backfill block the daemon served did not decode into leaves.
+    #[error("backfill block decode failed")]
+    BackfillBlockUndecodable,
+    /// The client rejected the ingest: a producer-contract or tree-state
+    /// fault a resume would reproduce.
+    #[error("curve-tree client rejected ingest")]
+    ClientRejected,
+    /// The ingested tip's successor height overflowed.
+    #[error("ingested tip height overflow")]
+    TipHeightOverflow,
+    /// A backfill height did not fit `usize`.
+    #[error("backfill height exceeds usize")]
+    BackfillHeightOverflow,
+}
+
+impl From<CurveTreeIngestFault> for RefreshError {
+    fn from(fault: CurveTreeIngestFault) -> Self {
+        Self::CurveTreeIngest { fault }
+    }
+}
+
+impl CurveTreeIngestFault {
+    /// Whether a drop-and-reopen respawn of the actor can heal the failure.
+    /// Every other fault reproduces on a resume, so it surfaces terminally
+    /// rather than livelocking a retry.
+    #[must_use]
+    pub const fn recoverable_by_respawn(self) -> bool {
+        matches!(self, Self::ActorUnavailable | Self::ClientPoisoned)
+    }
+}
+
 // --- Ledger ----------------------------------------------------------------
 
 /// Per-domain error for [`LedgerEngine`](crate::engine::traits::LedgerEngine),
@@ -259,3 +404,26 @@ pub enum RefreshError {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LedgerError {}
+
+#[cfg(test)]
+mod tests {
+    use super::CurveTreeIngestFault as F;
+
+    /// Only a fail-stopped actor and a poisoned client heal on a respawn;
+    /// every other fault reproduces on resume and must surface terminally.
+    #[test]
+    fn only_a_stopped_or_poisoned_client_is_respawn_recoverable() {
+        for (fault, recoverable) in [
+            (F::ActorUnavailable, true),
+            (F::ClientPoisoned, true),
+            (F::RespawnFailed, false),
+            (F::RootMismatch, false),
+            (F::BackfillBlockUndecodable, false),
+            (F::ClientRejected, false),
+            (F::TipHeightOverflow, false),
+            (F::BackfillHeightOverflow, false),
+        ] {
+            assert_eq!(fault.recoverable_by_respawn(), recoverable, "{fault:?}");
+        }
+    }
+}

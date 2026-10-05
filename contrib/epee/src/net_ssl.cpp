@@ -325,9 +325,9 @@ bool is_ssl(const unsigned char *data, size_t len)
 
 bool ssl_options_t::has_strong_verification(boost::string_ref host) const noexcept
 {
-  // onion and i2p addresses contain information about the server cert
+  // An onion address contains information about the server cert
   // which both authenticates and encrypts
-  if (host.ends_with(".onion") || host.ends_with(".i2p"))
+  if (host.ends_with(".onion"))
     return true;
   switch (verification)
   {

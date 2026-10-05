@@ -3,7 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `epee::net_utils::network_address` type-tagged union (`LV2_PORTABLE_STORAGE.md` §6.2).
+//! Portable-storage codec for [`shekyl_net_address::NetworkAddress`]
+//! (`LV2_PORTABLE_STORAGE.md` §6.2).
+//!
+//! The union lives in `shekyl-net-address`. This module is the Levin
+//! framing of that union: the `address_type` tags and the section layout.
+//! `m_ip` is the IPv4 octets as a little-endian `uint32` after C++
+//! `SWAP32LE` (identity on little-endian hosts). IPv6 `addr` is a 16-byte
+//! blob. A Tor section is `host` + `port`.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -13,45 +20,12 @@ use super::error::Error;
 use super::get;
 use super::PortableMap;
 
+pub use shekyl_net_address::NetworkAddress;
+
 /// `epee::net_utils::address_type` values written as `network_address.type`.
 pub const ADDR_IPV4: u8 = 1;
 pub const ADDR_IPV6: u8 = 2;
-pub const ADDR_I2P: u8 = 3;
 pub const ADDR_TOR: u8 = 4;
-
-/// Levin-wire `network_address` (nested under `peerlist_entry.adr`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NetworkAddress {
-    /// `address_type::ipv4`. `m_ip` is the IPv4 octets as a little-endian
-    /// `uint32` after C++ `SWAP32LE` (identity on little-endian hosts).
-    Ipv4 {
-        /// Octets in network order (127, 0, 0, 1).
-        ip: Ipv4Addr,
-        /// Host port.
-        port: u16,
-    },
-    /// `address_type::ipv6`. Inner `addr` is a 16-byte POD-as-blob.
-    Ipv6 {
-        /// 16-byte address.
-        ip: Ipv6Addr,
-        /// Host port.
-        port: u16,
-    },
-    /// `address_type::i2p`. Inner map is `host` + `port`.
-    I2p {
-        /// `.b32.i2p` host.
-        host: String,
-        /// Port (C++ keeps it for older clients).
-        port: u16,
-    },
-    /// `address_type::tor`. Inner map is `host` + `port`.
-    Tor {
-        /// `.onion` host.
-        host: String,
-        /// Port.
-        port: u16,
-    },
-}
 
 impl PortableMap for NetworkAddress {
     fn to_section(&self) -> Result<Section, Error> {
@@ -69,7 +43,6 @@ impl PortableMap for NetworkAddress {
                 addr.insert("m_port", Value::UInt16(*port));
                 (ADDR_IPV6, addr)
             }
-            Self::I2p { host, port } => (ADDR_I2P, host_port(host, *port)),
             Self::Tor { host, port } => (ADDR_TOR, host_port(host, *port)),
         };
         root.insert("addr", Value::Object(inner));
@@ -90,10 +63,6 @@ impl PortableMap for NetworkAddress {
                 let ip = Ipv6Addr::from(get::blob::<16>(addr, "addr")?);
                 let port = get::u16_val(addr, "m_port")?;
                 Ok(Self::Ipv6 { ip, port })
-            }
-            ADDR_I2P => {
-                let (host, port) = host_port_from(addr)?;
-                Ok(Self::I2p { host, port })
             }
             ADDR_TOR => {
                 let (host, port) = host_port_from(addr)?;

@@ -40,6 +40,7 @@
 #include <condition_variable>
 #include <set>
 #include "shekyl/shekyl_ffi.h"
+#include <cstdlib>
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
@@ -72,7 +73,7 @@ public:
   unsigned handle_incoming_tx_calls = 0;
   bool handle_incoming_tx_result = true;
   uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed)
   {
     ++handle_incoming_tx_calls;
     if (handle_incoming_tx_result)
@@ -87,7 +88,7 @@ public:
   void pause_mine(){}
   void resume_mine(){}
   bool on_idle(){return true;}
-  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
+  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){return true;}
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){return true;}
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
@@ -107,10 +108,9 @@ public:
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size_result = true;
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
-  bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
+  virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
   virtual void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
@@ -129,8 +129,6 @@ public:
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
-  uint32_t get_blockchain_pruning_seed() const { return 0; }
-  bool prune_blockchain(uint32_t pruning_seed = 0) { return true; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -178,6 +176,15 @@ struct cryptonote_protocol_handler_test_seam
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
+
+/// The ban list is the process socket table. A `node_server` used to own
+/// its maps, so each test started empty. This drops what the previous
+/// test left, and drops again when the test returns.
+struct ban_isolate
+{
+  ban_isolate() { shekyl_bans_clear(); }
+  ~ban_isolate() { shekyl_bans_clear(); }
+};
 
 static bool is_blocked(Server &server, const epee::net_utils::network_address &address, time_t *t = NULL)
 {
@@ -254,10 +261,10 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
   cprotocol.set_p2p_endpoint(&server);
 
   std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100, 0});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100, 0});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100, 0});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 100, 0});                 // tor port 0: kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100});   // kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100});   // ip 0: dropped
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100});       // port 0: dropped
+  peers.push_back({net::tor_address::unknown(), 100});                 // tor port 0: kept
 
   ASSERT_TRUE(server.sanitize_peerlist(peers));
 
@@ -275,6 +282,7 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
 
 TEST(ban, add)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -360,6 +368,7 @@ TEST(ban, add)
 
 TEST(ban, limit)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -368,10 +377,29 @@ TEST(ban, limit)
   // starts empty
   ASSERT_TRUE(server.get_blocked_hosts().empty());
   ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), std::numeric_limits<time_t>::max() - 1));
-  ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
+  ASSERT_FALSE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), std::numeric_limits<time_t>::max() - 1));
+  ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
   ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS(1,2,3,4), 1));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
+}
+
+TEST(node_server, managed_onion_is_advertised_only_after_publish)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+
+  auto& zone = server.add_zone(epee::net_utils::connector_id::tor);
+  zone.m_config.m_net_config.max_in_connection_count = 8;
+  const char* service = "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd";
+  server.apply_managed_onion_publish(zone, 1, service, 18080);
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(),
+    net::tor_address::unknown().host_str());
+
+  server.apply_managed_onion_publish(zone, SHEKYL_DAEMON_TOR_OK, service, 18080);
+  const auto expected = MONERO_UNWRAP(net::tor_address::make(std::string(service) + ".onion:18080"));
+  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(), expected.host_str());
 }
 
 namespace
@@ -428,6 +456,7 @@ namespace
 
 TEST(ban, subnet)
 {
+  [[maybe_unused]] ban_isolate isolate;
   // Formerly GTEST_SKIP'd as "intermittent allocator failure in constrained
   // environments; tracked for dedicated fix" — nothing in the tree tracked
   // it, and the stated cause was wrong on all three counts. The body called
@@ -478,15 +507,120 @@ TEST(ban, subnet)
   ASSERT_TRUE(server.get_blocked_subnets().size() == 0);
 }
 
+TEST(ban, file_entries_are_permanent)
+{
+  [[maybe_unused]] ban_isolate isolate;
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+  const auto ban_path = node_dir / "banlist.txt";
+  ASSERT_TRUE(epee::file_io_utils::save_string_to_file(ban_path.string(), "1.2.3.4\n"));
+
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {"--ban-list", ban_path.string()})));
+  const auto rows = server.ban_list();
+  ASSERT_EQ(rows.size(), 1u);
+  ASSERT_EQ(rows[0].permanent, 1);
+  ASSERT_EQ(rows[0].remaining_ns, 0u);
+  ASSERT_TRUE(server.host_ban_is_permanent(MAKE_IPV4_ADDRESS(1,2,3,4)));
+}
+
+TEST(node_server, operator_onion_is_advertised)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+
+  const std::string onion =
+    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion";
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
+    // The count is omitted: an explicit count below the embargo floor
+    // refuses to start, and the count is not what this test observes.
+    "--tx-proxy", "tor,127.0.0.1:9050",
+    "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
+  })));
+  const auto announced = server.get_announced_address(epee::net_utils::connector_id::tor);
+  ASSERT_EQ(announced.host_str(), onion);
+  ASSERT_EQ(announced.as<net::tor_address>().port(), 18080);
+}
+
+TEST(node_server, exclusive_onion_does_not_require_tx_proxy)
+{
+  // The managed Tor supplies SOCKS after the command line. Refusing here was
+  // the default posture being unable to dial a named onion. A missing pin
+  // degrades inbound; it must not be what rejects the option.
+  const char *saved = std::getenv("SHEKYL_TOR_BINARY");
+  const std::string saved_copy = saved ? saved : std::string{};
+  ASSERT_EQ(::setenv("SHEKYL_TOR_BINARY", "/no/such/shekyl-tor", 1), 0);
+  auto restore = epee::misc_utils::create_scope_leave_handler([&]() {
+    if (saved)
+      ::setenv("SHEKYL_TOR_BINARY", saved_copy.c_str(), 1);
+    else
+      ::unsetenv("SHEKYL_TOR_BINARY");
+  });
+
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir]() {
+    boost::filesystem::remove_all(node_dir);
+  });
+
+  const std::string onion =
+    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion:12021";
+  std::vector<std::string> args{
+    "--data-dir", node_dir.string(),
+    "--p2p-bind-ip", "127.0.0.1",
+    "--p2p-bind-port", "48119",
+    "--no-igd",
+    "--add-exclusive-node", onion,
+  };
+  boost::program_options::options_description options_description{};
+  cryptonote::core::init_options(options_description);
+  Server::init_options(options_description);
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(server.init(vm));
+
+  test_core offline_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> offline_protocol(offline_core, NULL);
+  Server offline(offline_protocol);
+  const auto offline_dir = create_node_dir();
+  ASSERT_TRUE(!offline_dir.empty());
+  auto auto_remove_offline = epee::misc_utils::create_scope_leave_handler([&offline_dir]() {
+    boost::filesystem::remove_all(offline_dir);
+  });
+  ASSERT_FALSE(offline.init(offline_node_vm(offline_dir, {"--add-exclusive-node", onion})));
+}
+
 TEST(ban, ignores_port)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
+  // The span is the ordinary block time. A duration that does not fit in
+  // nanoseconds is refused, and that refusal is ban.limit's subject.
   ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
-  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5), std::numeric_limits<time_t>::max() - 1));
+  ASSERT_TRUE(server.block_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,6)));
   ASSERT_TRUE(server.unblock_host(MAKE_IPV4_ADDRESS_PORT(1,2,3,4,5)));
@@ -496,6 +630,7 @@ TEST(ban, ignores_port)
 
 TEST(ban, file_banlist)
 {
+  [[maybe_unused]] ban_isolate isolate;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
@@ -602,848 +737,6 @@ TEST(node_server, bind_same_p2p_port)
 
   EXPECT_FALSE(init(new_node(), port));
   EXPECT_TRUE(init(new_node(), port_another));
-}
-
-TEST(cryptonote_protocol_handler, race_condition)
-{
-  GTEST_SKIP() << "Flaky race-condition stress test; skipped for deterministic CI signal.";
-  struct contexts {
-    using basic = epee::net_utils::connection_context_base;
-    using cryptonote = cryptonote::cryptonote_connection_context;
-    using p2p = nodetool::p2p_connection_context_t<cryptonote>;
-  };
-  using context_t = contexts::p2p;
-  using handler_t = epee::levin::async_protocol_handler<context_t>;
-  using connection_t = epee::net_utils::connection<handler_t>;
-  using connection_ptr = boost::shared_ptr<connection_t>;
-  using connections_t = std::vector<connection_ptr>;
-  using shared_state_t = typename connection_t::shared_state;
-  using shared_state_ptr = std::shared_ptr<shared_state_t>;
-  using io_context_t = boost::asio::io_context;
-  using event_t = epee::simple_event;
-  using ec_t = boost::system::error_code;
-  auto create_conn_pair = [](connection_ptr in, connection_ptr out) {
-    using endpoint_t = boost::asio::ip::tcp::endpoint;
-    using acceptor_t = boost::asio::ip::tcp::acceptor;
-    io_context_t io_context;
-    endpoint_t endpoint(boost::asio::ip::make_address("127.0.0.1"), 5262);
-    acceptor_t acceptor(io_context);
-    ec_t ec;
-    acceptor.open(endpoint.protocol(), ec);
-    EXPECT_EQ(ec.value(), 0);
-    acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-    acceptor.bind(endpoint, ec);
-    EXPECT_EQ(ec.value(), 0);
-    acceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
-    EXPECT_EQ(ec.value(), 0);
-    out->socket().open(endpoint.protocol(), ec);
-    EXPECT_EQ(ec.value(), 0);
-    acceptor.async_accept(in->socket(), [](const ec_t &ec){});
-    out->socket().async_connect(endpoint, [](const ec_t &ec){});
-    io_context.run();
-    acceptor.close(ec);
-    EXPECT_EQ(ec.value(), 0);
-    EXPECT_TRUE(in->start(true, true));
-    EXPECT_TRUE(out->start(false, true));
-    return std::make_pair<>(std::move(in), std::move(out));
-  };
-  auto get_conn_tag = [](connection_t &conn){
-    context_t context;
-    conn.get_context(context);
-    return context.m_connection_id;
-  };
-  using work_t = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
-  using work_ptr = std::shared_ptr<work_t>;
-  using workers_t = std::vector<std::thread>;
-  using commands_handler_t = epee::levin::levin_commands_handler<context_t>;
-  using p2p_endpoint_t = nodetool::i_p2p_endpoint<contexts::cryptonote>;
-  using core_t = cryptonote::core;
-  using core_ptr = std::unique_ptr<core_t>;
-  using core_protocol_t = cryptonote::t_cryptonote_protocol_handler<core_t>;
-  using core_protocol_ptr = std::shared_ptr<core_protocol_t>;
-  using block_t = cryptonote::block;
-  using diff_t = cryptonote::difficulty_type;
-  using reward_t = uint64_t;
-  using height_t = uint64_t;
-  struct span {
-    using blocks = epee::span<const block_t>;
-  };
-  auto get_block_template = [](
-    core_t &core,
-    block_t &block,
-    diff_t &diff,
-    reward_t &reward
-  ){
-    auto &storage = core.get_blockchain_storage();
-    const auto height = storage.get_current_blockchain_height();
-    const auto hardfork = storage.get_current_hard_fork_version();
-    block.major_version = hardfork;
-    block.minor_version = storage.get_ideal_hard_fork_version();
-    block.prev_id = storage.get_tail_id();
-    auto &db = storage.get_db();
-    block.timestamp = db.get_top_block_timestamp();
-    block.nonce = 0xACAB;
-    block.miner_tx.vin.clear();
-    block.miner_tx.vout.clear();
-    block.miner_tx.extra.clear();
-    block.miner_tx.version = 3;
-    block.miner_tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
-    block.miner_tx.vin.push_back(cryptonote::txin_gen{height});
-    cryptonote::add_tx_pub_key_to_extra(block.miner_tx, {});
-    cryptonote::get_block_reward(
-      db.get_block_weight(height - 1),
-      {},
-      db.get_block_already_generated_coins(height - 1),
-      reward,
-      hardfork
-    );
-    block.miner_tx.vout.push_back(cryptonote::tx_out{reward, cryptonote::txout_to_key{}});
-    diff = storage.get_difficulty_for_next_block();
-  };
-  struct stat {
-    struct chain {
-      diff_t diff;
-      reward_t reward;
-    };
-  };
-  auto add_block = [](
-    core_t &core,
-    const block_t &block,
-    const stat::chain &stat
-  ){
-    core.get_blockchain_storage().get_db().batch_start({}, {});
-    core.get_blockchain_storage().get_db().add_block(
-      {block, cryptonote::block_to_blob(block)},
-      cryptonote::get_transaction_weight(block.miner_tx),
-      core.get_blockchain_storage().get_next_long_term_block_weight(
-        cryptonote::get_transaction_weight(block.miner_tx)
-      ),
-      stat.diff,
-      stat.reward,
-      0,
-      {},
-      {}
-    );
-    core.get_blockchain_storage().get_db().batch_stop();
-  };
-  struct messages {
-    struct core {
-      using sync = cryptonote::CORE_SYNC_DATA;
-    };
-    using handshake = nodetool::COMMAND_HANDSHAKE_T<core::sync>;
-  };
-  struct net_node_t: commands_handler_t, p2p_endpoint_t {
-    using span_t = epee::span<const uint8_t>;
-    using zone_t = epee::net_utils::zone;
-    using uuid_t = boost::uuids::uuid;
-    using relay_t = cryptonote::relay_method;
-    using blobs_t = std::vector<cryptonote::blobdata>;
-    using callback_t = std::function<bool(contexts::cryptonote &, uint32_t)>;
-    using address_t = epee::net_utils::network_address;
-    using connections_t = std::vector<std::pair<zone_t, uuid_t>>;
-    struct bans {
-      using subnets = std::map<epee::net_utils::ipv4_network_subnet, time_t>;
-      using hosts = std::map<std::string, time_t>;
-    };
-    shared_state_ptr shared_state;
-    core_protocol_ptr core_protocol;
-    virtual int invoke(int command, const span_t in, epee::byte_stream &out, context_t &context) override {
-      if (core_protocol) {
-        if (command == messages::handshake::ID) {
-          return epee::net_utils::buff_to_t_adapter<void, typename messages::handshake::request, typename messages::handshake::response>(
-            command,
-            in,
-            out,
-            [this](int command, typename messages::handshake::request &in, typename messages::handshake::response &out, context_t &context){
-              core_protocol->process_payload_sync_data(in.payload_data, context, true);
-              core_protocol->get_payload_sync_data(out.payload_data);
-              return 1;
-            },
-            context
-          );
-        }
-        bool handled;
-        return core_protocol->handle_invoke_map(false, command, in, out, context, handled);
-      }
-      else
-        return {};
-    }
-    virtual int notify(int command, const span_t in, context_t &context) override {
-      if (core_protocol) {
-        bool handled;
-        epee::byte_stream out;
-        return core_protocol->handle_invoke_map(true, command, in, out, context, handled);
-      }
-      else
-        return {};
-    }
-    virtual void callback(context_t &context) override {
-      if (core_protocol)
-        core_protocol->on_callback(context);
-    }
-    virtual void on_connection_new(context_t&) override {}
-    virtual void on_connection_close(context_t &context) override {
-      if (core_protocol)
-        core_protocol->on_connection_close(context);
-    }
-    virtual ~net_node_t() override {}
-    virtual bool add_host_fail(const address_t&, unsigned int = {}) override {
-      return {};
-    }
-    virtual bool block_host(address_t address, time_t = {}, bool = {}) override {
-      return {};
-    }
-    virtual bool drop_connection(const contexts::basic& context) override {
-      if (shared_state)
-        return shared_state->close(context.m_connection_id);
-      else
-        return {};
-    }
-    virtual bool for_connection(const uuid_t& uuid, callback_t f) override {
-      if (shared_state)
-        return shared_state->for_connection(uuid,[&f](context_t &context){
-          return f(context, context.support_flags);
-        });
-      else
-        return {};
-    }
-    virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer in, const contexts::basic& context) override {
-      if (shared_state)
-        return shared_state->send(in.finalize_notify(command), context.m_connection_id);
-      else
-        return {};
-    }
-    virtual bool relay_notify_to_list(int command, epee::levin::message_writer in, connections_t connections) override {
-      if (shared_state) {
-        for (auto &e: connections)
-          shared_state->send(in.finalize_notify(command), e.second);
-      }
-      return {};
-    }
-    virtual bool unblock_host(const address_t&) override {
-      return {};
-    }
-    virtual zone_t send_txs(blobs_t, const zone_t, const uuid_t&, relay_t, cryptonote::zone_route) override {
-      return {};
-    }
-    virtual void record_tx_arrivals(blobs_t, const uuid_t&) override {}
-    virtual bans::subnets get_blocked_subnets() override {
-      return {};
-    }
-    virtual bans::hosts get_blocked_hosts() override {
-      return {};
-    }
-    virtual uint64_t get_public_connections_count() override {
-      if (shared_state)
-        return shared_state->get_connections_count();
-      else
-        return {};
-    }
-    virtual void add_used_stripe_peer(const contexts::cryptonote&) override {}
-    virtual void clear_used_stripe_peers() override {}
-    virtual void remove_used_stripe_peer(const contexts::cryptonote&) override {}
-    virtual void for_each_connection(callback_t f) override {
-      if (shared_state)
-        shared_state->foreach_connection([&f](context_t &context){
-          return f(context, context.support_flags);
-        });
-    }
-    virtual void request_callback(const contexts::basic &context) override {
-      if (shared_state)
-        shared_state->request_callback(context.m_connection_id);
-    }
-  };
-  auto conduct_handshake = [get_conn_tag](net_node_t &net_node, connection_ptr conn){
-    event_t handshaked;
-    net_node.shared_state->for_connection(
-      get_conn_tag(*conn),
-      [&handshaked, &net_node](context_t &context){
-        typename messages::handshake::request msg;
-        net_node.core_protocol->get_payload_sync_data(msg.payload_data);
-        epee::net_utils::async_invoke_remote_command2<typename messages::handshake::response>(
-          context,
-          messages::handshake::ID,
-          msg,
-          *net_node.shared_state,
-          [&handshaked, &net_node](int code, const typename messages::handshake::response &msg, context_t &context){
-            EXPECT_TRUE(code >= 0);
-            net_node.core_protocol->process_payload_sync_data(msg.payload_data, context, true);
-            handshaked.raise();
-          },
-          std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT}
-        );
-        return true;
-      }
-    );
-    handshaked.wait();
-  };
-  using path_t = boost::filesystem::path;
-  auto create_dir = []{
-    ec_t ec;
-    path_t path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return path_t{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (not ec && success)
-      return path;
-    return path_t{};
-  };
-  auto remove_tree = [](const path_t &path){
-    ec_t ec;
-    boost::filesystem::remove_all(path, ec);
-  };
-  using options_t = boost::program_options::variables_map;
-  struct daemon_t {
-    options_t options;
-    core_ptr core;
-    core_protocol_ptr core_protocol;
-    net_node_t net_node;
-    shared_state_ptr shared_state;
-    connections_t conn;
-  };
-  struct daemons_t {
-    daemon_t main;
-    daemon_t alt;
-  };
-  using options_description_t = boost::program_options::options_description;
-
-  const auto dir = create_dir();
-  ASSERT_TRUE(not dir.empty());
-
-  daemons_t daemon{
-    {
-      [&dir]{
-        options_t options;
-        boost::program_options::store(
-          boost::program_options::command_line_parser({
-            "--data-dir",
-            (dir / "main").string(),
-            "--fixed-difficulty=1",
-            "--block-sync-size=1",
-            "--db-sync-mode=fastest:async:50000",
-          }).options([]{
-            options_description_t options_description{};
-            cryptonote::core::init_options(options_description);
-            return options_description;
-          }()).run(),
-          options
-        );
-        return options;
-      }(),
-      {},
-      {},
-      {},
-      {},
-      {},
-    },
-    {
-      [&dir]{
-        options_t options;
-        boost::program_options::store(
-          boost::program_options::command_line_parser({
-            "--data-dir",
-            (dir / "alt").string(),
-            "--fixed-difficulty=1",
-            "--block-sync-size=1",
-            "--db-sync-mode=fastest:async:50000",
-          }).options([]{
-            options_description_t options_description{};
-            cryptonote::core::init_options(options_description);
-            return options_description;
-          }()).run(),
-          options
-        );
-        return options;
-      }(),
-      {},
-      {},
-      {},
-      {},
-      {},
-    },
-  };
-
-  io_context_t io_context;
-  work_ptr work = std::make_shared<work_t>(io_context.get_executor());
-  workers_t workers;
-  while (workers.size() < 4) {
-    workers.emplace_back([&io_context]{
-      io_context.run();
-    });
-  }
-
-  connection_t::set_rate_up_limit(std::numeric_limits<int64_t>::max());
-  connection_t::set_rate_down_limit(std::numeric_limits<int64_t>::max());
-
-  {
-    daemon.main.core = core_ptr(new core_t(nullptr));
-    daemon.main.core->init(daemon.main.options, nullptr);
-    daemon.main.net_node.core_protocol = daemon.main.core_protocol = core_protocol_ptr(new core_protocol_t(
-      *daemon.main.core, &daemon.main.net_node, {}
-    ));
-    daemon.main.core->set_cryptonote_protocol(daemon.main.core_protocol.get());
-    daemon.main.core_protocol->init(daemon.main.options);
-    daemon.main.net_node.shared_state = daemon.main.shared_state = std::make_shared<shared_state_t>();
-    daemon.main.shared_state->set_handler(&daemon.main.net_node);
-    daemon.alt.shared_state = std::make_shared<shared_state_t>();
-    daemon.alt.shared_state->set_handler(&daemon.alt.net_node);
-
-    struct {
-      event_t prepare;
-      event_t check;
-      event_t finish;
-    } events;
-    auto connections = create_conn_pair(
-      connection_ptr(new connection_t(io_context, daemon.main.shared_state, {}, {})),
-      connection_ptr(new connection_t(io_context, daemon.alt.shared_state, {}, {}))
-    );
-    {
-      auto conn = connections.first;
-      auto shared_state = daemon.main.shared_state;
-      const auto tag = get_conn_tag(*conn);
-      boost::asio::post(conn->strand_, [tag, conn, shared_state, &events]{
-        shared_state->for_connection(tag, [](context_t &context){
-          context.m_expect_height = -1;
-          context.m_expect_response = -1;
-          context.m_last_request_time = boost::date_time::min_date_time;
-          context.m_score = 0;
-          context.m_state = contexts::cryptonote::state_synchronizing;
-          return true;
-        });
-        events.prepare.raise();
-        events.check.wait();
-        shared_state->for_connection(tag, [](context_t &context){
-          EXPECT_TRUE(context.m_expect_height == -1);
-          EXPECT_TRUE(context.m_expect_response == -1);
-          EXPECT_TRUE(context.m_last_request_time == boost::date_time::min_date_time);
-          EXPECT_TRUE(context.m_score == 0);
-          EXPECT_TRUE(context.m_state == contexts::cryptonote::state_synchronizing);
-          return true;
-        });
-        events.finish.raise();
-      });
-    }
-    events.prepare.wait();
-    daemon.main.core_protocol->on_idle();
-    events.check.raise();
-    events.finish.wait();
-
-    boost::asio::post(connections.first->strand_, [connections]{
-      connections.first->cancel();
-    });
-    boost::asio::post(connections.second->strand_, [connections]{
-      connections.second->cancel();
-    });
-    connections.first.reset();
-    connections.second.reset();
-    while (daemon.main.shared_state->sock_count);
-    while (daemon.alt.shared_state->sock_count);
-    daemon.main.core_protocol->deinit();
-    daemon.main.core->stop();
-    daemon.main.core->deinit();
-    daemon.main.net_node.shared_state.reset();
-    daemon.main.shared_state.reset();
-    daemon.main.core_protocol.reset();
-    daemon.main.core.reset();
-    daemon.alt.shared_state.reset();
-  }
-
-  {
-    daemon.main.core = core_ptr(new core_t(nullptr));
-    daemon.main.core->init(daemon.main.options, nullptr);
-    daemon.main.net_node.core_protocol = daemon.main.core_protocol = core_protocol_ptr(new core_protocol_t(
-      *daemon.main.core, &daemon.main.net_node, {}
-    ));
-    daemon.main.core->set_cryptonote_protocol(daemon.main.core_protocol.get());
-    daemon.main.core->set_checkpoints({});
-    daemon.main.core_protocol->init(daemon.main.options);
-    daemon.main.net_node.shared_state = daemon.main.shared_state = std::make_shared<shared_state_t>();
-    daemon.main.shared_state->set_handler(&daemon.main.net_node);
-    daemon.alt.core = core_ptr(new core_t(nullptr));
-    daemon.alt.core->init(daemon.alt.options, nullptr);
-    daemon.alt.net_node.core_protocol = daemon.alt.core_protocol = core_protocol_ptr(new core_protocol_t(
-      *daemon.alt.core, &daemon.alt.net_node, {}
-    ));
-    daemon.alt.core->set_cryptonote_protocol(daemon.alt.core_protocol.get());
-    daemon.alt.core->set_checkpoints({});
-    daemon.alt.core_protocol->init(daemon.alt.options);
-    daemon.alt.net_node.shared_state = daemon.alt.shared_state = std::make_shared<shared_state_t>();
-    daemon.alt.shared_state->set_handler(&daemon.alt.net_node);
-
-    struct {
-      io_context_t io_context;
-      work_ptr work;
-      workers_t workers;
-    } check;
-    check.work = std::make_shared<work_t>(check.io_context.get_executor());
-    while (check.workers.size() < 2) {
-      check.workers.emplace_back([&check]{
-        check.io_context.run();
-      });
-    }
-    while (daemon.main.conn.size() < 1) {
-      daemon.main.conn.emplace_back(new connection_t(check.io_context, daemon.main.shared_state, {}, {}));
-      daemon.alt.conn.emplace_back(new connection_t(io_context, daemon.alt.shared_state, {}, {}));
-      create_conn_pair(daemon.main.conn.back(), daemon.alt.conn.back());
-      conduct_handshake(daemon.alt.net_node, daemon.alt.conn.back());
-    }
-    struct {
-      event_t prepare;
-      event_t sync;
-      event_t finish;
-    } events;
-    {
-      auto conn = daemon.main.conn.back();
-      auto shared_state = daemon.main.shared_state;
-      const auto tag = get_conn_tag(*conn);
-      boost::asio::post(conn->strand_, [tag, conn, shared_state, &events]{
-        shared_state->for_connection(tag, [](context_t &context){
-          EXPECT_TRUE(context.m_state == contexts::cryptonote::state_normal);
-          return true;
-        });
-        events.prepare.raise();
-        events.sync.wait();
-        shared_state->for_connection(tag, [](context_t &context){
-          EXPECT_TRUE(context.m_state == contexts::cryptonote::state_normal);
-          return true;
-        });
-        events.finish.raise();
-      });
-    }
-    events.prepare.wait();
-    daemon.main.core->get_blockchain_storage().add_block_notify(
-      [&events](height_t height, span::blocks blocks){
-        if (height >= CRYPTONOTE_PRUNING_STRIPE_SIZE)
-          events.sync.raise();
-      }
-    );
-    {
-      stat::chain stat{
-        daemon.alt.core->get_blockchain_storage().get_db().get_block_cumulative_difficulty(
-          daemon.alt.core->get_current_blockchain_height() - 1
-        ),
-        daemon.alt.core->get_blockchain_storage().get_db().get_block_already_generated_coins(
-          daemon.alt.core->get_current_blockchain_height() - 1
-        ),
-      };
-      while (daemon.alt.core->get_current_blockchain_height() < CRYPTONOTE_PRUNING_STRIPE_SIZE + CRYPTONOTE_PRUNING_TIP_BLOCKS) {
-        block_t block;
-        diff_t diff;
-        reward_t reward;
-        get_block_template(*daemon.alt.core, block, diff, reward);
-        stat.diff += diff;
-        stat.reward = stat.reward < (SHEKYL_EMISSION_CURVE_ASYMPTOTE - stat.reward) ? stat.reward + reward : SHEKYL_EMISSION_CURVE_ASYMPTOTE;
-        add_block(*daemon.alt.core, block, stat);
-        if (daemon.main.core->get_current_blockchain_height() + 1 < CRYPTONOTE_PRUNING_STRIPE_SIZE)
-          add_block(*daemon.main.core, block, stat);
-      }
-    }
-    while (daemon.main.conn.size() < 2) {
-      daemon.main.conn.emplace_back(new connection_t(check.io_context, daemon.main.shared_state, {}, {}));
-      daemon.alt.conn.emplace_back(new connection_t(io_context, daemon.alt.shared_state, {}, {}));
-      create_conn_pair(daemon.main.conn.back(), daemon.alt.conn.back());
-      conduct_handshake(daemon.alt.net_node, daemon.alt.conn.back());
-    }
-    events.finish.wait();
-
-    for (;daemon.main.conn.size(); daemon.main.conn.pop_back()) {
-      auto conn = daemon.main.conn.back();
-      boost::asio::post(conn->strand_, [conn]{
-        conn->cancel();
-      });
-    }
-    for (;daemon.alt.conn.size(); daemon.alt.conn.pop_back()) {
-      auto conn = daemon.alt.conn.back();
-      boost::asio::post(conn->strand_, [conn]{
-        conn->cancel();
-      });
-    }
-    while (daemon.main.shared_state->sock_count);
-    while (daemon.alt.shared_state->sock_count);
-    daemon.main.core_protocol->deinit();
-    daemon.main.core->stop();
-    daemon.main.core->deinit();
-    daemon.main.net_node.shared_state.reset();
-    daemon.main.shared_state.reset();
-    daemon.main.core_protocol.reset();
-    daemon.main.core.reset();
-    daemon.alt.core_protocol->deinit();
-    daemon.alt.core->stop();
-    daemon.alt.core->deinit();
-    daemon.alt.net_node.shared_state.reset();
-    daemon.alt.shared_state.reset();
-    daemon.alt.core_protocol.reset();
-    daemon.alt.core.reset();
-    check.work.reset();
-    for (auto& w: check.workers) {
-      w.join();
-    }
-  }
-
-  work.reset();
-  for (auto& w: workers) {
-    w.join();
-  }
-  remove_tree(dir);
-}
-
-TEST(node_server, race_condition)
-{
-  GTEST_SKIP() << "Flaky race-condition stress test; skipped for deterministic CI signal.";
-  struct contexts {
-    using cryptonote = cryptonote::cryptonote_connection_context;
-    using p2p = nodetool::p2p_connection_context_t<cryptonote>;
-  };
-  using context_t = contexts::cryptonote;
-  using options_t = boost::program_options::variables_map;
-  using options_description_t = boost::program_options::options_description;
-  using worker_t = std::thread;
-  struct protocol_t {
-  private:
-    using p2p_endpoint_t = nodetool::i_p2p_endpoint<context_t>;
-    using lock_t = std::mutex;
-    using condition_t = std::condition_variable_any;
-    using unique_lock_t = std::unique_lock<lock_t>;
-    p2p_endpoint_t *p2p_endpoint;
-    lock_t lock;
-    condition_t condition;
-    bool started{};
-    size_t counter{};
-  public:
-    using payload_t = cryptonote::CORE_SYNC_DATA;
-    using blob_t = cryptonote::blobdata;
-    using connection_context = context_t;
-    using payload_type = payload_t;
-    using relay_t = cryptonote::relay_method;
-    using string_t = std::string;
-    using span_t = epee::span<const uint8_t>;
-    using blobs_t = epee::span<const cryptonote::blobdata>;
-    using block_queue_t = cryptonote::block_queue;
-    using stripes_t = std::pair<uint32_t, uint32_t>;
-    using byte_stream_t = epee::byte_stream;
-    struct core_events_t: cryptonote::i_core_events {
-      uint64_t get_current_blockchain_height() const override { return {}; }
-      bool is_synchronized() const override { return {}; }
-      bool pool_has_tx(const crypto::hash &) const override { return true; }
-      void on_transactions_relayed(blobs_t blobs, relay_t relay, epee::net_utils::zone) override {}
-      void on_stem_propagated(epee::span<const crypto::hash>) override {}
-    };
-    int handle_invoke_map(bool is_notify, int command, const span_t in, byte_stream_t &out, context_t &context, bool &handled) {
-      return {};
-    }
-    bool on_idle() {
-      if (not p2p_endpoint)
-        return {};
-      {
-        unique_lock_t guard(lock);
-        if (not started)
-          started = true;
-        else
-          return {};
-      }
-      std::vector<blob_t> txs(128 / 64 * 1024 * 1024, blob_t(1, 'x'));
-      worker_t worker([this]{
-        p2p_endpoint->for_each_connection(
-          [this](context_t &, uint32_t){
-            {
-              unique_lock_t guard(lock);
-              ++counter;
-              condition.notify_all();
-              condition.wait(guard, [this]{ return counter >= 3; });
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(8));
-            return false;
-          }
-        );
-      });
-      {
-        unique_lock_t guard(lock);
-        ++counter;
-        condition.notify_all();
-        condition.wait(guard, [this]{ return counter >= 3; });
-        ++counter;
-        condition.notify_all();
-        condition.wait(guard, [this]{ return counter >= 5; });
-      }
-      p2p_endpoint->send_txs(
-        std::move(txs),
-        epee::net_utils::zone::public_,
-        {},
-        relay_t::fluff,
-        cryptonote::once_at_origin_route(relay_t::fluff, epee::net_utils::zone::public_)
-      );
-      worker.join();
-      return {};
-    }
-    bool init(const options_t &options) { return {}; }
-    bool deinit() { return {}; }
-    void set_p2p_endpoint(p2p_endpoint_t *p2p_endpoint) {
-      this->p2p_endpoint = p2p_endpoint;
-    }
-    bool process_payload_sync_data(const payload_t &payload, contexts::p2p &context, bool is_inital) {
-      context.m_state = context_t::state_normal;
-      context.m_needed_objects.resize(512 * 1024);
-      {
-        unique_lock_t guard(lock);
-        ++counter;
-        condition.notify_all();
-        condition.wait(guard, [this]{ return counter >= 3; });
-        ++counter;
-        condition.notify_all();
-        condition.wait(guard, [this]{ return counter >= 5; });
-      }
-      return true;
-    }
-    bool get_payload_sync_data(blob_t &blob) { return {}; }
-    bool get_payload_sync_data(payload_t &payload) { return {}; }
-    bool on_callback(context_t &context) { return {}; }
-    core_events_t &get_core(){ static core_events_t core_events; return core_events;}
-    void log_connections() {}
-    const block_queue_t &get_block_queue() const {
-      static block_queue_t block_queue;
-      return block_queue;
-    }
-    void stop() {}
-    void on_connection_close(context_t &context) {}
-    void set_max_out_peers(epee::net_utils::zone zone, unsigned int max) {}
-    bool no_sync() const { return {}; }
-    void set_no_sync(bool value) {}
-    string_t get_peers_overview() const { return {}; }
-    stripes_t get_next_needed_pruning_stripe() const { return {}; }
-    bool needs_new_sync_connections(epee::net_utils::zone zone) const { return {}; }
-    bool is_busy_syncing() { return {}; }
-  };
-  using node_server_t = nodetool::node_server<protocol_t>;
-  auto conduct_test = [](protocol_t &protocol){
-    struct messages {
-      struct core {
-        using sync = cryptonote::CORE_SYNC_DATA;
-      };
-      using handshake = nodetool::COMMAND_HANDSHAKE_T<core::sync>;
-    };
-    using handler_t = epee::levin::async_protocol_handler<context_t>;
-    using connection_t = epee::net_utils::connection<handler_t>;
-    using connection_ptr = boost::shared_ptr<connection_t>;
-    using shared_state_t = typename connection_t::shared_state;
-    using shared_state_ptr = std::shared_ptr<shared_state_t>;
-    using io_context_t = boost::asio::io_context;
-    using work_t = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
-    using work_ptr = std::shared_ptr<work_t>;
-    using workers_t = std::vector<std::thread>;
-    using endpoint_t = boost::asio::ip::tcp::endpoint;
-    using event_t = epee::simple_event;
-    struct command_handler_t: epee::levin::levin_commands_handler<context_t> {
-      using span_t = epee::span<const uint8_t>;
-      using byte_stream_t = epee::byte_stream;
-      int invoke(int, const span_t, byte_stream_t &, context_t &) override { return {}; }
-      int notify(int, const span_t, context_t &) override { return {}; }
-      void callback(context_t &) override {}
-      void on_connection_new(context_t &) override {}
-      void on_connection_close(context_t &) override {}
-      ~command_handler_t() override {}
-      static void destroy(epee::levin::levin_commands_handler<context_t>* ptr) { delete ptr; }
-    };
-    io_context_t io_context;
-    work_ptr work = std::make_shared<work_t>(io_context.get_executor());
-    workers_t workers;
-    while (workers.size() < 4) {
-      workers.emplace_back([&io_context]{
-        io_context.run();
-      });
-    }
-    boost::asio::post(io_context, [&]{
-      protocol.on_idle();
-    });
-    boost::asio::post(io_context, [&]{
-      protocol.on_idle();
-    });
-    shared_state_ptr shared_state = std::make_shared<shared_state_t>();
-    shared_state->set_handler(new command_handler_t, &command_handler_t::destroy);
-    connection_ptr conn{new connection_t(io_context, shared_state, {}, {})};
-    endpoint_t endpoint(boost::asio::ip::make_address("127.0.0.1"), 48080);
-    conn->socket().connect(endpoint);
-    conn->socket().set_option(boost::asio::ip::tcp::socket::reuse_address(true));
-    conn->start({}, {});
-    context_t context;
-    conn->get_context(context);
-    event_t handshaked;
-    typename messages::handshake::request_t msg{{
-      ::config::NETWORK_ID,
-      epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0, 58080}},
-    }};
-    epee::net_utils::async_invoke_remote_command2<typename messages::handshake::response>(
-      context,
-      messages::handshake::ID,
-      msg,
-      *shared_state,
-      [conn, &handshaked](int code, const typename messages::handshake::response &msg, context_t &context){
-        EXPECT_TRUE(code >= 0);
-        handshaked.raise();
-      },
-      std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT}
-    );
-    handshaked.wait();
-    boost::asio::post(conn->strand_, [conn]{
-      conn->cancel();
-    });
-    conn.reset();
-    work.reset();
-    for (auto& w: workers) {
-      w.join();
-    }
-  };
-  using path_t = boost::filesystem::path;
-  using ec_t = boost::system::error_code;
-  auto create_dir = []{
-    ec_t ec;
-    path_t path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return path_t{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (not ec && success)
-      return path;
-    return path_t{};
-  };
-  auto remove_tree = [](const path_t &path){
-    ec_t ec;
-    boost::filesystem::remove_all(path, ec);
-  };
-  const auto dir = create_dir();
-  ASSERT_TRUE(not dir.empty());
-  protocol_t protocol{};
-  node_server_t node_server(protocol);
-  protocol.set_p2p_endpoint(&node_server);
-  node_server.init(
-    [&dir]{
-      options_t options;
-      boost::program_options::store(
-        boost::program_options::command_line_parser({
-          "--p2p-bind-ip=127.0.0.1",
-          "--p2p-bind-port=48080",
-          "--out-peers=0",
-          "--data-dir",
-          dir.string(),
-          "--no-igd",
-          "--add-exclusive-node=127.0.0.1:48080",
-        }).options([]{
-          options_description_t options_description{};
-          cryptonote::core::init_options(options_description);
-          node_server_t::init_options(options_description);
-          return options_description;
-        }()).run(),
-        options
-      );
-      return options;
-    }()
-  );
-  worker_t worker([&]{
-    node_server.run();
-  });
-  conduct_test(protocol);
-  node_server.send_stop_signal();
-  worker.join();
-  node_server.deinit();
-  remove_tree(dir);
 }
 
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
@@ -1638,11 +931,11 @@ TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
 
   // The value a caller would put on the wire...
   const std::array<uint8_t, 32> nonce =
-    data.server->mint_recorded_handshake_nonce(epee::net_utils::zone::public_);
+    data.server->mint_recorded_handshake_nonce(epee::net_utils::connector_id::clearnet);
   // ...is already recognisable the moment it exists. If the recording moved
   // after the request write, this handshake — an inbound arriving before the
   // insert — would not be detected as self.
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
     << "the minted nonce was not in its zone's in-flight set on return: the "
        "insert now follows the value's availability to the writer, so a "
        "self-connection arriving in that window goes undetected";
@@ -1694,17 +987,17 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
   ASSERT_TRUE(data.server->init(vm));
 
   const std::array<uint8_t, 32> nonce{{0x5a}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
 
   // Within-zone only: the tor probe must NOT match — and must not consume.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::tor, nonce))
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::tor, nonce))
     << "a nonce recorded on public_ matched on tor: the drop is a cross-zone "
        "correlation oracle";
 
   // Fires exactly once on its own zone...
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
   // ...and a replay cannot fire it again.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
     << "erase-on-match failed: a peer that learned the nonce by being dialed "
        "could replay it";
 
@@ -1728,23 +1021,23 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
   //
   // Exit 1 — attempt termination (what do_handshake_with_peer's scope guard
   // calls on every path: success, failure, timeout). This is the size bound.
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "the match above must have removed it";
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
-  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_));
-  data.server->erase_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
+  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet));
+  data.server->erase_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "an attempt that terminated left its nonce in the set: the set grows "
        "without bound across attempts";
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
 
   // Exit 2 — match. Erase-on-match is the other removal path; the count is
   // the observable a missing erase cannot satisfy. What this pins is
   // single-fire and prompt removal, NOT a second size bound.
   const std::array<uint8_t, 32> second{{0x7c}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, second);
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, second));
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, second);
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, second));
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
     << "a matched nonce stayed in the set: it would linger until the attempt "
        "terminates and could fire a second time in that window";
 
@@ -1811,7 +1104,7 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
   ASSERT_TRUE(data.server->init(vm));
 
   EXPECT_EQ(epee::net_utils::network_address{net::tor_address::unknown()},
-            data.server->get_announced_address(epee::net_utils::zone::tor))
+            data.server->get_announced_address(epee::net_utils::connector_id::tor))
     << "a dialer-only anonymity zone must announce the constant unknown "
        "sentinel: any per-node value correlates the hidden service with the "
        "node's other identities";
@@ -1820,11 +1113,11 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
   // the public zone announces ipv4 with the HOST HALF ZEROED — only the
   // port is the claim — so the two zones' announcements must differ and the
   // public one must carry no host.
-  const auto pub = data.server->get_announced_address(epee::net_utils::zone::public_);
+  const auto pub = data.server->get_announced_address(epee::net_utils::connector_id::clearnet);
   ASSERT_EQ(epee::net_utils::ipv4_network_address::get_type_id(), pub.get_type_id());
   EXPECT_EQ(0u, pub.as<epee::net_utils::ipv4_network_address>().ip())
     << "the public advert is port-only; the host half must stay zeroed";
-  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::zone::public_), pub.port());
+  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::connector_id::clearnet), pub.port());
 
   data.server->deinit();
 }
@@ -1997,7 +1290,7 @@ namespace
   // however the daemon behaves.
   time_t anon_window_after(uint32_t consecutive)
   {
-    return nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, consecutive);
+    return nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, consecutive);
   }
 
   epee::net_utils::network_address tor_addr(const char* host)
@@ -2108,14 +1401,12 @@ TEST(node_server, unknown_zone_keeps_the_public_window)
   // comes from hidden-service republication, a property invalid addresses do
   // not have. This pins the safe default so a later refactor to `!= public_`
   // reds a test instead of silently shortening suppression.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::invalid, 1),
+  EXPECT_EQ(nodetool::failed_addr_cache::window(std::nullopt, 1),
             P2P_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::public_, 1),
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::clearnet, 1),
             P2P_FAILED_ADDR_FORGET_SECONDS);
-  // ...while both real anonymity zones do get it.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::tor, 1),
-            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::zone::i2p, 1),
+  // The anonymity zone gets the short window.
+  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, 1),
             P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
 }
 
@@ -2399,7 +1690,6 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
   const crypto::hash parent = a_parent_hash();
   auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
   const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
-    /*sync_pruned_blocks=*/true, /*local_pruning_seed=*/0, /*pruning_seed=*/0,
     /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
   ASSERT_EQ(50u, reserved.first);
   queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);
@@ -2682,6 +1972,46 @@ TEST(attributable_drop, an_unparseable_announce_still_severs)
   EXPECT_EQ(1u, h.endpoint.dropped.size());
 }
 
+// The ingress gate drops only a session that has not finished the
+// handshake. A peer that is still synchronising, or paused in standby,
+// has completed it, so the batch reaches the core. The node's own sync
+// is a separate refusal and does not depend on that peer state.
+TEST(tx_ingress, a_handshake_complete_peer_is_admitted)
+{
+  const cryptonote::cryptonote_connection_context::state states[] = {
+    cryptonote::cryptonote_connection_context::state_synchronizing,
+    cryptonote::cryptonote_connection_context::state_standby,
+    cryptonote::cryptonote_connection_context::state_normal,
+  };
+  for (const auto state : states)
+  {
+    SCOPED_TRACE(static_cast<int>(state));
+    NotifyHarness h;
+    h.ctx().m_state = state;
+    EXPECT_EQ(1, h.notify_txs());
+    EXPECT_TRUE(h.endpoint.dropped.empty());
+    EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
+  }
+}
+
+TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
+{
+  NotifyHarness h;
+  h.ctx().m_state = cryptonote::cryptonote_connection_context::state_before_handshake;
+  EXPECT_EQ(1, h.notify_txs());
+  EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+}
+
+TEST(tx_ingress, an_unsynchronised_node_ignores_the_batch)
+{
+  NotifyHarness h;
+  cryptonote_protocol_handler_test_seam::set_synchronized(h.cprotocol, false);
+  EXPECT_EQ(1, h.notify_txs());
+  EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+}
+
 // The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
 // only witness is the announced value itself. Operator influence remains and is
 // exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
@@ -2726,7 +2056,7 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
     boost::program_options::notify(vm);
     if (!data.server->init(vm))
       return uint32_t(0xffffffff);   // distinguishable from a real 0
-    return data.server->get_announced_port(epee::net_utils::zone::public_);
+    return data.server->get_announced_port(epee::net_utils::connector_id::clearnet);
   };
 
   // Accepting inbound on a pingback-capable zone: announce the listening port.
@@ -2737,4 +2067,138 @@ TEST(node_server, announced_port_is_derived_from_listener_and_zone)
   EXPECT_EQ(0u, announced("48087", "0"))
     << "a node that refuses every inbound connection must not announce a port "
        "for peers to attract themselves to";
+}
+
+// ---------------------------------------------------------------------------
+// PWD-I7 — the inbound SAFETY bound
+//
+// `--in-peers` used to narrow its `-1` sentinel straight into a `uint32_t`,
+// so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
+// That became the only inbound bound when the per-host cap was deleted.
+//
+// The replacement is a decision Rust returns from a descriptor probe.
+// These tests pin the C++ half: an unset `--in-peers` stores that decision,
+// and an explicit value — including `0` — is stored as given. `0` is a legal
+// operator choice meaning "refuse every inbound connection" and cannot
+// double as "unset", which is why the descriptor is signed.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+  struct in_peers_fixture
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    in_peers_fixture(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+
+    // The PRODUCTION init path: the real descriptor through the real parser.
+    // `in_peers < 0` leaves the flag unset, so the sentinel stands.
+    bool init(const char* port, const int in_peers)
+    {
+      boost::program_options::options_description desc_options("Command line options");
+      cryptonote::core::init_options(desc_options);
+      Server::init_options(desc_options);
+
+      const char* argv[2] = {nullptr, nullptr};
+      boost::program_options::variables_map vm;
+      boost::program_options::store(
+        boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+      // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+      vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+        boost::program_options::variable_value(std::string("127.0.0.2"), false);
+      vm.find(nodetool::arg_p2p_bind_port.name)->second =
+        boost::program_options::variable_value(std::string(port), false);
+      if (in_peers >= 0)
+        vm.find(nodetool::arg_in_peers.name)->second =
+          boost::program_options::variable_value(static_cast<std::int64_t>(in_peers), false);
+
+      boost::program_options::notify(vm);
+      return server->init(vm);
+    }
+  };
+}
+
+TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
+{
+  // Red edit: make `apply_inbound_ceiling` return before storing a bounded
+  // decision, so the unset sentinel stays at the counter maximum. This fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48090", -1));
+
+  const uint32_t ceiling = d.server->get_max_in_public_peers();
+  EXPECT_NE(std::numeric_limits<uint32_t>::max(), ceiling)
+    << "an unset --in-peers must not resolve to an unbounded interval";
+  EXPECT_GT(ceiling, 0u)
+    << "a machine with a normal descriptor limit has inbound headroom";
+}
+
+TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
+{
+  // The operator's number is not a starting point for the bound -- it IS the
+  // bound. A derivation that overrode it would silently discard the one
+  // input that is a choice rather than a reading.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48091", 1));
+  EXPECT_EQ(1u, d.server->get_max_in_public_peers());
+}
+
+TEST(node_server, in_peers_above_the_descriptor_ceiling_is_refused)
+{
+  in_peers_fixture probe;
+  ASSERT_TRUE(probe.init("48094", -1));
+  const uint32_t derived = probe.server->get_max_in_public_peers();
+  if (derived == std::numeric_limits<uint32_t>::max())
+    return;
+  in_peers_fixture over;
+  EXPECT_FALSE(over.init("48095", static_cast<int>(derived) + 1));
+}
+
+TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
+{
+  // The reason the descriptor is SIGNED. `0` means "refuse every inbound
+  // connection", which is legal and distinct from "unset"; an unsigned type
+  // could not carry both and the sentinel would have to steal a real value.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48092", 0));
+  EXPECT_EQ(0u, d.server->get_max_in_public_peers())
+    << "--in-peers 0 must survive as itself, not be re-derived";
+}
+
+TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
+{
+  // The outbound cap is a TERM in the inbound ceiling's reservation, so a
+  // runtime `out_peers` change invalidates a ceiling derived against the old
+  // one. Without the re-derive, raising out_peers leaves inbound reserved
+  // against a smaller outbound budget and live outbound plus inbound can
+  // exceed the descriptor limit — the exhaustion the ceiling exists to stop.
+  //
+  // Red edit: drop the `apply_inbound_ceiling` call at the end of
+  // `change_max_out_public_peers`. The ceiling then does not move and the
+  // first expectation fails.
+  in_peers_fixture d;
+  ASSERT_TRUE(d.init("48093", -1));
+
+  const uint32_t before = d.server->get_max_in_public_peers();
+  ASSERT_GT(before, 0u) << "the derivation must have produced a real ceiling";
+
+  // Raise the outbound reserve. Every extra promised outbound descriptor is
+  // one fewer the process may spend on inbound.
+  const size_t raised = 256;
+  d.server->change_max_out_public_peers(raised);
+  const uint32_t after = d.server->get_max_in_public_peers();
+
+  EXPECT_LT(after, before)
+    << "raising the outbound reserve must lower the inbound ceiling";
+
+  // And back down again: the reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(8);
+  EXPECT_GT(d.server->get_max_in_public_peers(), after)
+    << "lowering the outbound reserve must return the headroom";
 }

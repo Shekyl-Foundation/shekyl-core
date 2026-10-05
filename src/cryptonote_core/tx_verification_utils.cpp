@@ -52,10 +52,12 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
     std::vector<const ct::CtSig*> rvv;
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
-    const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
-    const size_t min_tx_version = hf_version >= HF_VERSION_SHEKYL_NG ? 3 : (hf_version >= HF_VERSION_DYNAMIC_FEE ? 2 : 1);
+    // Genesis minimum is version 3. The version-1 and version-2 arms were
+    // unreachable: both fork constants are 1.
+    const size_t max_tx_version = 3;
+    const size_t min_tx_version = 3;
 
-    const size_t tx_weight_limit = get_transaction_weight_limit(hf_version);
+    const size_t tx_weight_limit = get_transaction_weight_limit();
 
     for (; tx_begin != tx_end; ++tx_begin)
     {
@@ -79,7 +81,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
 
         // Rule 4
         const size_t tx_weight = get_transaction_weight(tx, blob_size);
-        if (hf_version >= HF_VERSION_PER_BYTE_FEE && tx_weight > tx_weight_limit)
+        if (tx_weight > tx_weight_limit)
         {
             tvc.m_verifivation_failed = true;
             tvc.m_too_big = true;
@@ -200,13 +202,11 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
 namespace cryptonote
 {
 
-uint64_t get_transaction_weight_limit(const uint8_t hf_version)
+uint64_t get_transaction_weight_limit()
 {
-    // from v8, limit a tx to 50% of the minimum block weight
-    if (hf_version >= HF_VERSION_PER_BYTE_FEE)
-        return get_min_block_weight(hf_version) / 2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-    else
-        return get_min_block_weight(hf_version) - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
+    // Half the minimum block weight, less the coinbase reserve. The pre-v8
+    // full-zone arm was unreachable from genesis.
+    return get_min_block_weight(1) / 2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
 }
 
 bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv)

@@ -58,8 +58,8 @@ const RESTRICTED_METHODS: &[&str] = &[
     "get_alternate_chains",
     "relay_tx",
     "sync_info",
-    "prune_blockchain",
     "flush_cache",
+    "request_archival_shard",
 ];
 
 /// Whether this listener must refuse this JSON-RPC method.
@@ -492,8 +492,8 @@ mod tests {
         "get_alternate_chains",
         "relay_tx",
         "sync_info",
-        "prune_blockchain",
         "flush_cache",
+        "request_archival_shard",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,

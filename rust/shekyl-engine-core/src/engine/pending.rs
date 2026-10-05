@@ -102,6 +102,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
+use shekyl_engine_state::PaymentRequestId;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
 use shekyl_units::AtomicUnits;
@@ -292,6 +293,13 @@ pub struct TxRecipient {
     pub address: String,
     /// Amount to send to this address in atomic units (no fee).
     pub amount_atomic_units: AtomicUnits,
+    /// The payment request this send answers, when it was composed from a
+    /// `shekyl:` link that carried a `rid`: echoed in the output's
+    /// encrypted label so the payee's wallet attributes the receive
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.11). `None` writes the sentinel.
+    /// Wallet-local bookkeeping on both ends; the wire is uniform either
+    /// way, so an observer learns nothing from its presence.
+    pub rid: Option<PaymentRequestId>,
 }
 
 /// Caller request to [`Engine::build_pending_tx`].
@@ -303,6 +311,31 @@ pub struct TxRequest {
     /// Fee tier, resolved at build time against the daemon fee
     /// snapshot through the `FeeEstimator` seam.
     pub priority: FeePriority,
+}
+
+impl TxRequest {
+    /// The refusals that need no ledger, no network and no permit, run
+    /// first on every build path: an empty recipient list, and a `rid` the
+    /// label cannot echo. The latter is refused here, at the request, not
+    /// downgraded to the sentinel at sign time — the payer asked for
+    /// attribution and would silently not get it — and not discovered
+    /// after selection and proving as a signer failure.
+    pub fn check_recipients(&self) -> Result<(), SendError> {
+        if self.recipients.is_empty() {
+            return Err(SendError::InvalidRecipient {
+                reason: "TxRequest must carry at least one recipient",
+            });
+        }
+        if self.recipients.iter().any(|r| {
+            r.rid
+                .is_some_and(|rid| !PaymentRequestId::rid_fits_wire(rid.as_u64()))
+        }) {
+            return Err(SendError::InvalidRecipient {
+                reason: "recipient rid must be non-zero and fit the u48 wire encoding",
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Display-friendly recipient summary stored alongside the
@@ -386,7 +419,7 @@ pub(crate) struct Reservation {
     /// build. Sorted ascending so a debug print is deterministic.
     pub selected_transfer_indices: Vec<usize>,
     /// Engine's `synced_height` at the moment of the build.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded `block_hash_at(built_at_height)` at build
     /// time. The reorg-rewind invariant in
     /// [`PendingTxError::ChainStateChanged`] compares this against
@@ -453,7 +486,7 @@ pub struct PendingTx {
     /// [`Engine::submit_pending_tx`] / [`Engine::discard_pending_tx`].
     pub id: ReservationId,
     /// Engine's `synced_height` at build time.
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// Engine's recorded block hash at `built_at_height` at build
     /// time.
     pub built_at_tip_hash: [u8; 32],
@@ -491,7 +524,7 @@ pub struct PendingTx {
     /// CT-5d: the height of the reference block this proof is anchored to
     /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
     /// the anchor age without parsing `tx_bytes`.
-    pub reference_height: u64,
+    pub reference_height: shekyl_types::BlockHeight,
 }
 
 /// Default reservation TTL used by both
@@ -648,17 +681,11 @@ pub(crate) fn build_pending_tx_in_state(
     next_id: &mut u64,
     request: &TxRequest,
 ) -> Result<PendingTx, SendError> {
-    if request.recipients.is_empty() {
-        return Err(SendError::InvalidRecipient {
-            reason: "TxRequest must carry at least one recipient",
-        });
-    }
+    request.check_recipients()?;
 
     let synced = ledger.height();
     let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {
-        return Err(SendError::CannotSign {
-            reason: "wallet has not ingested any block yet",
-        });
+        return Err(SendError::NotSynced);
     };
 
     let mut total_amount = AtomicUnits::ZERO;
@@ -729,7 +756,7 @@ pub(crate) fn build_pending_tx_in_state(
     // Derive the SnapshotId from a freshly-read LedgerSnapshot view
     // of the same LedgerBlock the rest of this body used for
     // candidate selection. The minor allocation (one ReorgBlocks
-    // clone, capped at DEFAULT_REORG_BLOCKS_CAPACITY) is bounded by
+    // clone, trimmed to the finality hash window) is bounded by
     // the wallet's reorg-window length and dominated by the rest of
     // the build pipeline's allocations.
     //
@@ -794,16 +821,19 @@ pub(crate) fn submit_pending_tx_in_state(
     let safety = NetworkSafetyConstants::for_network(network);
     let max_reorg = safety.max_reorg_depth;
     let synced = ledger.height();
+    let built = entry.built_at_height;
 
-    if synced.saturating_sub(entry.built_at_height) > max_reorg {
+    // `synced` is the inclusive tip. Age is instant − instant.
+    let age = synced.saturating_sub(built);
+    if age > max_reorg {
         return Err(PendingTxError::TooOld {
-            built: entry.built_at_height,
+            built,
             current: synced,
             max_reorg,
         });
     }
 
-    let stored = ledger.block_hash_at(entry.built_at_height).copied();
+    let stored = ledger.block_hash_at(built).copied();
     if stored != Some(entry.built_at_tip_hash) {
         return Err(PendingTxError::ChainStateChanged {
             height: entry.built_at_height,
@@ -875,7 +905,7 @@ where
         // in flight — both are legitimate `Poll::Pending` reasons that
         // the sync wrapper cannot drive. Callers on an async runtime
         // must use `build_pending_tx_async`.
-        Poll::Pending => Err(SendError::CannotSign {
+        Poll::Pending => Err(SendError::BuildInvariant {
             reason: "sync Engine::build_pending_tx requires an immediately-ready \
                      PendingTxEngine future (async assembly or build-permit \
                      contention — use build_pending_tx_async)",
@@ -962,7 +992,7 @@ impl<
     /// `build` performs real async I/O — it awaits the curve-tree actor's
     /// `AssembleTx` to assemble the FCMP++ membership path — so the sync wrapper's
     /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
-    /// returns `CannotSign`. Callers already on an async runtime use this method
+    /// returns `BuildInvariant`. Callers already on an async runtime use this method
     /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
     /// `&self` (W-B step 1): the slow FCMP++ membership assembly inside
     /// build no longer needs the embedder's exclusive Engine borrow —

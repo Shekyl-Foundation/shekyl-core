@@ -195,14 +195,19 @@
                   {
                     "name": "bond_post_offset_blocks",
                     "ty": {
-                      "name": "u64",
-                      "ty": "U64"
+                      "name": "BlockCount",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
                     }
                   },
                   {
                     "name": "anchor_t0",
                     "ty": {
-                      "name": "BlockHeight",
+                      "name": "ChainCount",
                       "ty": {
                         "NewtypeStruct": {
                           "name": "u64",
@@ -245,7 +250,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -472,7 +477,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -699,7 +704,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -926,7 +931,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",

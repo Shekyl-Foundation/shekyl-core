@@ -64,15 +64,51 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{NewTransactions, PortableMap, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay::{
-    AchievedOutConnections, CarrierToken, Driver, Effect, FloorTransition, FloorWatch, FluffReach,
-    NoiseQueues, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId, Zone,
+    AchievedOutConnections, CarrierToken, ConnectorId, Driver, Effect, FloorTransition, FloorWatch,
+    NodeSync, NoiseQueues, Relay, RelayCarrier, RelayPlan, StemTallySnapshot, TxBlob, TxId,
 };
 use shekyl_relay_privacy::params::{carrier, DandelionParams};
 use shekyl_relay_privacy::schedule::PeerDirection;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::zone::{LinkSecrecy, RelayZone};
 
 use crate::secure_relay_rng::SecureRelayRng;
+
+/// Connectors named by bits of `mask`, in [`ConnectorId::ALL`] order.
+/// A bit past [`ConnectorId::COUNT`] is a caller bug and refuses the handle.
+fn connectors_from_mask(mask: u32) -> Result<Vec<ConnectorId>, ()> {
+    let known = (1u32 << ConnectorId::COUNT) - 1;
+    if mask & !known != 0 {
+        return Err(());
+    }
+    Ok(ConnectorId::ALL
+        .iter()
+        .copied()
+        .filter(|connector| mask & (1u32 << connector.index()) != 0)
+        .collect())
+}
+
+/// `connector` is a [`ConnectorId`] discriminant. Unknown bytes are false.
+#[no_mangle]
+pub extern "C" fn shekyl_connector_address_hidden_from_peer(connector: u8) -> bool {
+    connector_from_byte(connector).is_some_and(shekyl_relay::address_hidden_from_peer)
+}
+
+/// This connector's native encryption cell says a network observer cannot
+/// read the byte stream. Unknown bytes are false. Not the anonymity cell,
+/// and not cover eligibility: [`shekyl_connector_address_hidden_from_peer`]
+/// is the anonymity cell, and the relay's [`shekyl_relay::CoverClass`] is
+/// the cover ruling.
+#[no_mangle]
+pub extern "C" fn shekyl_connector_link_encrypted(connector: u8) -> bool {
+    connector_from_byte(connector).is_some_and(shekyl_relay::link_encrypted)
+}
+
+fn connector_from_byte(byte: u8) -> Option<ConnectorId> {
+    ConnectorId::ALL
+        .iter()
+        .copied()
+        .find(|connector| u8::try_from(connector.index()).ok() == Some(byte))
+}
 
 /// The nil UUID: an absent stem slot, or a locally originated transaction.
 const NIL: [u8; 16] = [0u8; 16];
@@ -83,6 +119,21 @@ pub const SHEKYL_RELAY_PLAN_STEM: i32 = 0;
 pub const SHEKYL_RELAY_PLAN_NO_ROUTE: i32 = 1;
 /// Settled for this epoch: fluff. Retrying cannot change the answer.
 pub const SHEKYL_RELAY_PLAN_FLUFF_EPOCH: i32 = 2;
+/// Local origin while this node is unsynchronised. Send nothing, record nothing.
+pub const SHEKYL_RELAY_PLAN_AWAIT_SYNC: i32 = 3;
+/// Local origin on a hidden-address edge. One ordinary send; record `local`.
+/// A failed write is terminal.
+pub const SHEKYL_RELAY_PLAN_OWN_EDGE: i32 = 4;
+/// The hidden-address pool is empty. Send nothing, record nothing, do not fluff.
+pub const SHEKYL_RELAY_PLAN_NO_OWN_EDGE: i32 = 5;
+
+fn node_sync_from_ffi(node_synchronised: bool) -> NodeSync {
+    if node_synchronised {
+        NodeSync::Synchronised
+    } else {
+        NodeSync::Unsynchronised
+    }
+}
 
 /// Carrier: the zone's ordinary connection.
 pub const SHEKYL_RELAY_CARRIER_ORDINARY: u8 = 0;
@@ -211,44 +262,15 @@ pub type CarrierResolvedCb =
 /// adjacent `bool`s at the end of a C signature, where a transposition
 /// compiles cleanly on both sides and is silent at runtime.
 ///
-/// Transposing *these two* is not a generic footgun — it swaps the i2p/tor
-/// outbound-only fluff rule with the covert enable, which is exactly the
-/// regression RP-3a's first pass shipped and the eight `private_*` gtests
-/// caught (§18.4c). The header is hand-written rather than cbindgen-generated,
-/// so nothing mechanically checks the C++ declaration against this definition;
-/// a bitmask removes the ordering question rather than relying on that check.
+/// Bit 0 is not a flag. It used to mean "fluff to outbound peers only".
+/// Fluff reach is per session now: an inbound anonymity session receives
+/// a fluff. Passing bit 0 does nothing, and the value is not reserved as
+/// a constant — a named unused bit is the grep hit that gets finished.
 ///
-/// The i2p/tor rule: fluff to outbound connections only, never to an inbound
-/// peer, who on a hidden service is a stranger that dialled us. It follows the
-/// **network**, not covert mode — a hidden-service zone with covert disabled
-/// still needs it, which is why the two bits are independent.
-pub const SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY: u32 = 1 << 0;
-
-/// This zone runs covert (noise) channels. See
-/// [`SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY`] for why these are bits.
+/// This zone runs covert (noise) channels. The header is hand-written
+/// rather than cbindgen-generated, so the value is pinned by
+/// `zone_flag_bits_do_not_transpose` against `shekyl_ffi.h`.
 pub const SHEKYL_RELAY_ZONE_NOISE_ENABLED: u32 = 1 << 1;
-
-/// Supplies the outbound connection set on demand.
-///
-/// [`shekyl_relay_zone_poll`] invokes this **at most once per call, and only
-/// when a wake crosses an epoch boundary** and the stem map must be rebuilt — a
-/// plain fluff-release wake never calls it, so the caller never pays for the
-/// connection scan the inherited fluff path also skipped. It writes the id count
-/// through `out_n` and returns a pointer to `*out_n * 16` readable bytes that
-/// stays valid until the poll returns, or null with `*out_n == 0` for an empty
-/// set.
-///
-/// This is a *pull*, the one this module otherwise forbids (§18.5 finding 3) —
-/// but the hazard there was C++ reaching into the Rust-owned stem map off-strand
-/// while the driver mutates it. This reads the reverse direction: it pulls the
-/// **C++/asio-owned** connection table, synchronously, on the same strand the
-/// wake fired on, and hands the bytes straight back. No Rust zone state is read,
-/// so the race the seal names cannot arise.
-///
-/// Being a C++ callback reached from Rust, it must not unwind: a throw across
-/// this boundary is undefined behaviour, so the C++ side catches internally and
-/// reports an empty set.
-pub type OutboundCb = extern "C" fn(ctx: *mut c_void, out_n: *mut usize) -> *const u8;
 
 /// Opaque zone handle. C++ holds `*mut RelayZoneHandle` and nothing else.
 pub struct RelayZoneHandle {
@@ -264,7 +286,7 @@ pub struct RelayZoneHandle {
     ///   `set_carrier_development`, which defaults off;
     /// - **development-enabled** — an ENCRYPTED zone built after
     ///   `set_carrier_development(true)` holds `Some`. A cleartext one still
-    ///   does not, and that refusal is `Zone::new`'s (§93.2), not the flag's.
+    ///   does not, and that refusal is `Relay::new`'s (§93.2), not the flag's.
     ///
     /// Ownership here rather than in `Driver` is CV-4's type barrier expressed
     /// as a field, and that is unchanged by either posture: the scheduler
@@ -316,11 +338,15 @@ impl RelayZoneHandle {
     }
 }
 
+/// Not a connector index. Matches `SHEKYL_CONNECTOR_BYTE_UNSPECIFIED`.
+pub const CONNECTOR_BYTE_UNSPECIFIED: u8 = 0xff;
+
 /// Fixed-layout stem-tally row for the §55 transit path.
 ///
-/// Native endian, 40 bytes. Published as rows so multi-zone merge can sort and
-/// emit JSON once at the edge rather than splicing hand-rolled arrays. Layout
-/// must match `ShekylStemTallyRow` in `shekyl_ffi.h`.
+/// Native endian, 48 bytes. The connector is the index the stem was
+/// forwarded on; [`CONNECTOR_BYTE_UNSPECIFIED`] means the tally recorded
+/// none. Padding keeps the next row 8-aligned. Layout must match
+/// `ShekylStemTallyRow` in `shekyl_ffi.h`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylStemTallyRow {
@@ -328,9 +354,11 @@ pub struct ShekylStemTallyRow {
     pub propagated: u64,
     pub silent: u64,
     pub distinct_sources: u64,
+    pub connector: u8,
+    pub _pad: [u8; 7],
 }
 
-const STEM_TALLY_ROW_SIZE: usize = 40;
+const STEM_TALLY_ROW_SIZE: usize = 48;
 
 const _: () = assert!(std::mem::size_of::<ShekylStemTallyRow>() == STEM_TALLY_ROW_SIZE);
 
@@ -469,35 +497,6 @@ extern "C" fn noop_noise(_: *mut c_void, _: usize, _: *const u8, _: *const u8, _
     false
 }
 
-/// # Safety
-/// `ids` must point to `n * 16` readable bytes, or be null with `n == 0`.
-unsafe fn read_ids(ids: *const u8, n: usize) -> Vec<ConnectionId> {
-    let Some(len) = n.checked_mul(16) else {
-        debug_assert!(false, "read_ids: n * 16 overflows");
-        return Vec::new();
-    };
-    // Through the crate's FFI-read seam, which owns the `isize::MAX` bound that
-    // `from_raw_parts` requires at the LANGUAGE level — violating it is UB even
-    // when the caller really did provide that much memory, so `checked_mul`
-    // alone was not enough. `slice_from_ptr` also owns the null / zero-length
-    // arms, so those checks come out with it (SA-R-7's residual, closed here
-    // for the two readers this crossing exercises).
-    let Some(bytes) = crate::legacy_util::slice_from_ptr(ids, len) else {
-        debug_assert!(
-            isize::try_from(len).is_ok(),
-            "read_ids: {len} bytes exceeds the isize::MAX slice bound"
-        );
-        return Vec::new();
-    };
-    (0..n)
-        .filter_map(|i| {
-            let mut b = [0u8; 16];
-            b.copy_from_slice(&bytes[i * 16..i * 16 + 16]);
-            (b != NIL).then(|| ConnectionId::from_bytes(b))
-        })
-        .collect()
-}
-
 /// Read `n` packed 32-byte transaction ids.
 ///
 /// Mirrors [`read_ids`]' boundary discipline: the length is computed with
@@ -564,90 +563,62 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
 ///
 /// The epoch length is a parameter because it is C++-owned and already
-/// crosses this boundary. Every zone C++ constructs today uses
+/// crosses this boundary. Every relay C++ constructs today uses
 /// `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` (600 s); a future in-process caller
 /// may pass another. Passing the choice through keeps one owner of it
 /// rather than a second copy of the rule here.
 ///
-/// `outbound_fluff_only` is the i2p/tor rule: fluff to outbound connections
-/// only, never to an inbound peer. It is a property of the *network* rather than
-/// of noise mode — a hidden-service zone with noise disabled still needs it — so
-/// it is passed rather than derived from the epoch parameters. See
-/// [`FluffReach::OutboundOnly`].
+/// Fluff reach is not a flag. An inbound session receives a fluff. The
+/// old outbound-only bit is gone; passing bit 0 does nothing.
 ///
-/// `zone` is the `epee::net_utils::zone` discriminant this handle serves. It
-/// selects the transport-bound half of [`DandelionParams`] (§89.2) and is
-/// therefore NOT redundant with `outbound_fluff_only`: fluff reach is a
-/// property of the network, transit latency is a property of the transport,
-/// and outbound-only fluff on clearnet is still an open item (§25.5). An
-/// out-of-domain byte decodes to `Invalid`, which draws the longer (anonymity)
-/// parameters — the fail-safe direction.
+/// `configured` is the relay's identity: one bit per connector index. A
+/// bit past the connector count refuses the handle. The epoch pair is the
+/// caller's. The stem embargo is drawn later, from the connector that
+/// forwarded the stem. Cover is refused unless some named connector is an
+/// open link. Tor is volume cover and is not one.
 ///
-/// Returns null on input a zone cannot be built from: a `stems` that would
+/// Returns null on input a relay cannot be built from: a `stems` that would
 /// overflow the slot arithmetic, or a zero epoch — which is not merely useless
 /// but harmful, since every wake would find the epoch expired and the daemon's
 /// relay timer would spin. The caller treats null as a startup logic error.
 ///
-/// It also returns null on a configuration [`Zone::new`] refuses, not only a
-/// malformed one. Secrecy is read from the **zone discriminant**, not from a
-/// flag bit: `SHEKYL_RELAY_ZONE_NOISE_ENABLED` on a cleartext `zone` byte
-/// (public, or out-of-domain) is noise on a link where padding sizes conceals
-/// nothing an observer cannot already read. The fluff-reach bit is a different
-/// axis — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an *encrypted*
-/// zone is a valid configuration (encrypted clearnet, when that exists) and
-/// builds. [`Zone::new`] also refuses a channel count other than the
-/// inherited width, and a noise epoch too short to carry a full-size
-/// message. Every [`shekyl_relay::ZoneNewError`] maps to null because
-/// that is the only channel a C ABI has. They are enforced at
-/// [`Zone::new`], so an in-process Rust caller after the daemon cutover
-/// cannot route around them.
+/// It also returns null on a configuration [`Relay::new`] refuses.
+/// `SHEKYL_RELAY_ZONE_NOISE_ENABLED` with no open link is a carrier that
+/// has nowhere to run: Tor takes no envelope. [`Relay::new`] also refuses a channel
+/// count other than the inherited width, and a noise epoch too short to
+/// carry a full-size message. Every [`shekyl_relay::RelayNewError`] maps
+/// to null because that is the only channel a C ABI has.
 #[no_mangle]
 pub extern "C" fn shekyl_relay_zone_new(
     now_ms: u64,
-    zone: u8,
     stems: usize,
     min_epoch_secs: u32,
     epoch_jitter_secs: u32,
     flags: u32,
+    configured: u32,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
     }
-    let outbound_fluff_only = flags & SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY != 0;
     let noise_enabled = flags & SHEKYL_RELAY_ZONE_NOISE_ENABLED != 0;
-    let relay_zone = RelayZone::from_ffi_u8(zone);
+    let Ok(configured_connectors) = connectors_from_mask(configured) else {
+        return std::ptr::null_mut();
+    };
+    // The epoch scheduler reads only this pair. Embargo timers are built
+    // per connector inside `Relay::new`, from measured transit.
     let params = DandelionParams {
         min_epoch_secs,
         epoch_jitter_secs,
-        // `adopted_for`, not `adopted`: `hop` is transport-bound (§89.2), and
-        // this zone's stem-observation window must be drawn from the SAME
-        // parameters as the embargo its successor draws for the same
-        // transaction. A clearnet-provisioned window on an anonymity zone
-        // expires as `silent` long before an honest successor is even allowed
-        // to re-relay, so `stem_tallies` would report the whole anonymity peer
-        // set as withholding. The epoch pair stays C++-owned and crosses as
-        // the arguments above.
-        ..DandelionParams::adopted_for(relay_zone)
+        ..DandelionParams::inherited()
     };
-    let reach = if outbound_fluff_only {
-        FluffReach::OutboundOnly
-    } else {
-        FluffReach::EveryPeer
-    };
-    // Secrecy is a function of the zone discriminant, not a flag bit. The
-    // zone byte already crosses and encryption is a property of the network,
-    // so `LinkSecrecy::of` keeps one transposable bit off the ABI and keeps
-    // the eligibility rule in one place — `RelayZone::is_encrypted`.
-    let secrecy = LinkSecrecy::of(relay_zone);
     let mut rng = SecureRelayRng;
     // `Err` is a refused configuration, not an allocation failure. See
-    // `Zone::new`. Null is the only channel a C ABI has for saying so.
-    let Ok(zone) = Zone::new(
+    // `Relay::new`. Null is the only channel a C ABI has for saying so.
+    let Ok(zone) = Relay::new(
         params,
         stems,
-        reach,
-        secrecy,
         noise_enabled,
+        &configured_connectors,
         now_ms,
         &mut rng,
     ) else {
@@ -679,7 +650,7 @@ pub extern "C" fn shekyl_relay_zone_new(
         // the epoch is the argument that sizes both. See `window_budget`.
         let budget = carrier::noise_windows_in_epoch(min_epoch_secs) as usize;
         let Some(q) = NoiseQueues::new(stems, dummy, budget) else {
-            // Same refusal channel as `Zone::new` above: a null handle.
+            // Same refusal channel as `Relay::new` above: a null handle.
             return core::ptr::null_mut();
         };
         Some(q)
@@ -806,17 +777,18 @@ pub unsafe extern "C" fn shekyl_relay_zone_free(handle: *mut RelayZoneHandle) {
     }
 }
 
-/// A peer completed its handshake.
+/// A peer's Levin handshake completed (session established).
 ///
 /// A nil or null `id` is ignored: neither names a connection to track.
 ///
 /// # Safety
 /// `handle` must be live; `id` must point to 16 readable bytes, or be null.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
+pub unsafe extern "C" fn shekyl_relay_zone_on_session_established(
     handle: *mut RelayZoneHandle,
     id: *const u8,
     is_income: bool,
+    network: u8,
 ) {
     if handle.is_null() {
         return;
@@ -827,9 +799,20 @@ pub unsafe extern "C" fn shekyl_relay_zone_on_handshake(
     } else {
         PeerDirection::Outbound
     };
-    let h = &mut *handle;
-    h.driver.zone_mut().on_handshake_complete(peer, direction);
-    h.publish();
+    let Some(connector) = connector_from_byte(network) else {
+        tracing::error!(
+            "session established with connector byte {network:#x}; the relay does not know it, so the session is not registered"
+        );
+        return;
+    };
+    // `publish` is `&self` and must not overlap the `driver`/`rng` borrow.
+    {
+        let RelayZoneHandle { driver, rng, .. } = &mut *handle;
+        driver
+            .zone_mut()
+            .on_session_established(peer, direction, connector, rng);
+    }
+    (*handle).publish();
 }
 
 /// A peer disconnected.
@@ -914,7 +897,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enabled(handle: *const RelayZon
 /// **The observation window is drawn in the zone**, from the adopted embargo
 /// timer cached at zone construction against the zone's own params — not
 /// rebuilt here. This export is marshaling only (rule 20): if §12.11's window
-/// ever diverges from the embargo, the change is one field on `Zone`.
+/// ever diverges from the embargo, the change is one field on `Relay`.
 ///
 /// # Safety
 /// `handle` must be null (no-op) or a live zone from
@@ -1055,6 +1038,11 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_snapshot(
                     propagated: t.propagated,
                     silent: t.silent,
                     distinct_sources: t.distinct_sources,
+                    connector: t
+                        .connector
+                        .and_then(|connector| u8::try_from(connector.index()).ok())
+                        .unwrap_or(CONNECTOR_BYTE_UNSPECIFIED),
+                    _pad: [0; 7],
                 },
             );
         }
@@ -1079,43 +1067,25 @@ pub unsafe extern "C" fn shekyl_relay_zone_stem_in_flight(handle: *const RelayZo
     }
 }
 
-/// R-1: should this *originated* transaction take the anonymity zone?
-/// One roll, at origination (Q12-D5a). Relayed traffic does not call this.
-///
-/// **A verdict crosses, not a probability.** The rate and its reasoning stay
-/// in Rust; C++ asks a yes/no question at the one origination site and acts
-/// on the answer. Handing C++ the probability would put the draw — and a
-/// second place to get the rate wrong — on the wrong side of the boundary.
-///
-/// Handle-free: the roll is a property of the policy, not of any zone
-/// instance, and it draws from the process CSPRNG exactly as the embargo does.
-///
-/// **Callers own the pre-fluff test.** This says *whether to take anonymity*,
-/// not *whether the transaction is still stemming*. A transaction that has
-/// fluffed must leave the zone, or one that entered over Tor never reaches
-/// the public network.
-/// §18.4's diagnostic store — **deliberately NOT on `RelayZoneHandle`**: the
-/// FOLLOWUPS spec forbids the integer landing on the handle the stem/fluff
-/// decision reads, so that reaching this state from a wire path requires a
-/// call to a diagnostic-named global, a visible edit no review misses. Keyed
-/// by zone byte (one anonymity zone per byte per process); lives for the
-/// process, which a diagnostic may.
+/// §18.4's diagnostic store. Process-global, keyed by connector index
+/// (0 clearnet, 1 tor). Deliberately not on the relay handle: a wire path
+/// reaches it only through this diagnostic export.
 fn floor_watches() -> &'static Mutex<std::collections::HashMap<u8, FloorWatch>> {
     static WATCHES: std::sync::OnceLock<Mutex<std::collections::HashMap<u8, FloorWatch>>> =
         std::sync::OnceLock::new();
     WATCHES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-/// §18.4's live diagnostic: record the zone's achieved outbound
-/// anonymity-CONNECTION count; returns the floor transition (0 steady,
-/// 1 went below, 2 recovered) for the operator warn log. The floor
-/// comparison lives in [`FloorWatch::note`] — the logging path — and this
-/// state is readable by NOTHING on a wire path (§18.3).
+/// §18.4's live diagnostic: record this connector's achieved outbound
+/// connection count. Returns the floor transition (0 steady, 1 went below,
+/// 2 recovered) for the operator warn log. The floor comparison lives in
+/// [`FloorWatch::note`] — the logging path — and this state is readable by
+/// nothing on a wire path (§18.3).
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_note_achieved_out(zone: u8, achieved: u32) -> u8 {
+pub extern "C" fn shekyl_relay_zone_note_achieved_out(connector: u8, achieved: u32) -> u8 {
     match floor_watches().lock() {
         Ok(mut m) => m
-            .entry(zone)
+            .entry(connector)
             .or_insert_with(|| {
                 FloorWatch::new(shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS)
             })
@@ -1129,7 +1099,7 @@ pub extern "C" fn shekyl_relay_zone_note_achieved_out(zone: u8, achieved: u32) -
 /// is never a fabricated zero.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
-    zone: u8,
+    connector: u8,
     out_achieved: *mut u32,
     out_floor: *mut u32,
     out_below: *mut bool,
@@ -1138,7 +1108,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
         return false;
     }
     let snap = match floor_watches().lock() {
-        Ok(m) => m.get(&zone).and_then(FloorWatch::snapshot),
+        Ok(m) => m.get(&connector).and_then(FloorWatch::snapshot),
         Err(_) => None,
     };
     match snap {
@@ -1150,25 +1120,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
         }
         None => false,
     }
-}
-
-/// R-1 origination roll AND its zone mapping, one crossing (rule 40's
-/// coarse-call rule): draws whether this ORIGINATED transaction takes the
-/// anonymity zone and returns the zone byte `send_txs` reads — `invalid` (0,
-/// fail-closed anonymity) or `public_` (1, clearnet BY DESIGN, not fallback).
-///
-/// Replaces the `shekyl_relay_zone_divert_originated_tx` +
-/// `shekyl_relay_zone_originated_zone_from_anonymity_roll` pair, whose only
-/// caller fed the first's bool straight into the second — a Rust-owned value
-/// crossing to C++ only to cross straight back for a two-arm map. The rate
-/// and the mapping both stay in Rust; a zone byte crosses, not a probability
-/// and not an intermediate verdict. Relayed traffic does not call this; it
-/// inherits its arrival zone.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_roll_originated_zone() -> u8 {
-    let mut rng = SecureRelayRng;
-    let take = shekyl_relay_privacy::divert_to_anonymity_zone(&mut rng);
-    shekyl_relay::zone_route::originated_zone_from_anonymity_roll(take) as u8
 }
 
 /// The outbound-connection floor the embargo provisioning assumes (F-8b, §45).
@@ -1198,84 +1149,14 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
     shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
 }
 
-// ---------------------------------------------------------------------------
-// Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12, 18)
-//
-// The decision family moved from C++ `cryptonote_protocol/enums.h` under rule
-// 20; C++ keeps the `zone_route` compile-time token as a seam guard whose body
-// forwards here. Bytes cross raw and are `static_assert`ed on the C++ side
-// against `relay_method`, `epee::net_utils::zone` and `zone_route::decision`.
-//
-// Unknown bytes are a caller bug (same process, asserted contract), and they
-// map to the SAFE arm — fail-closed / false — never to a guess that could put
-// a transaction on clearnet. Refuse-to-leak is this family's whole invariant
-// (§30.5), so the defensive default is the invariant itself.
-// ---------------------------------------------------------------------------
-
-/// Q12-D5a once-at-origin routing: `(relay_method byte, zone byte)` → decision
-/// byte (0 = keep_arrival, 1 = anonymity_fail_closed, 2 = public_clearnet).
+/// Hidden-address outbound connections a restricted node opens.
 ///
-/// Unknown method or zone bytes return `1` (fail-closed: send nothing).
+/// The own-edge rotates over that pool. Not
+/// [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]: that floor
+/// is the fluff measurement's degree.
 #[no_mangle]
-pub extern "C" fn shekyl_relay_zone_once_at_origin_route(tx_relay: u8, origin_zone: u8) -> u8 {
-    use shekyl_relay::zone_route::{once_at_origin_route, NetZone, RelayMethod};
-    match (
-        RelayMethod::from_byte(tx_relay),
-        NetZone::from_byte(origin_zone),
-    ) {
-        (Some(m), Some(z)) => once_at_origin_route(m, z) as u8,
-        _ => shekyl_relay::zone_route::ZoneRouteDecision::AnonymityFailClosed as u8,
-    }
-}
-
-/// §30.5 / §89.8: an origin on a non-public zone keeps its `local` txpool
-/// record whatever the transport did.
-///
-/// # Unknown-byte policy — and why `false` is NOT the safe arm here
-///
-/// For this predicate the leak direction is inverted relative to its
-/// siblings: `false` on a `local` origin lets the record upgrade to
-/// `stem`/`fluff` (`levin_notify.cpp`'s record site), and the monotone
-/// upgrade means the next pool re-relay places the entry in `public_req` —
-/// an anonymity-origin transaction on clearnet. So an unknown **zone** byte
-/// on a decodable `local` origin returns `true`: a zone this build cannot
-/// decode is not provably public, and keeping `local` fail-closes later
-/// (pool re-relay → `invalid` → send nothing). The cost is liveness on a
-/// zone that does not exist; the alternative is the §30.5 leak. An unknown
-/// **method** byte returns `false` — no `local` claim is invented for a
-/// class this build cannot name.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_originated_stays_in_zone(tx_relay: u8, nzone: u8) -> bool {
-    use shekyl_relay::zone_route::{originated_stays_in_zone, NetZone, RelayMethod};
-    match (RelayMethod::from_byte(tx_relay), NetZone::from_byte(nzone)) {
-        (Some(m), Some(z)) => originated_stays_in_zone(m, z),
-        (Some(RelayMethod::Local), None) => true,
-        _ => false,
-    }
-}
-
-/// Pre-fluff relay methods (stem / local). Unknown bytes return `false`.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_is_pre_fluff_relay(tx_relay: u8) -> bool {
-    shekyl_relay::zone_route::RelayMethod::from_byte(tx_relay)
-        .is_some_and(shekyl_relay::zone_route::is_pre_fluff_relay)
-}
-
-/// R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes return
-/// `false` (no coherence claim is invented for a zone that does not decode).
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_r1_coherence_keeps_origin(
-    tx_relay: u8,
-    origin_zone: u8,
-) -> bool {
-    use shekyl_relay::zone_route::{r1_coherence_keeps_origin, NetZone, RelayMethod};
-    match (
-        RelayMethod::from_byte(tx_relay),
-        NetZone::from_byte(origin_zone),
-    ) {
-        (Some(m), Some(z)) => r1_coherence_keeps_origin(m, z),
-        _ => false,
-    }
+pub extern "C" fn shekyl_hop0_outbound_target() -> u32 {
+    shekyl_relay_privacy::params::HOP0_OUTBOUND_TARGET
 }
 
 #[no_mangle]
@@ -1287,25 +1168,32 @@ pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHan
 }
 
 /// Decide what to do with a batch: `SHEKYL_RELAY_PLAN_STEM` (writing the
-/// successor into `out_dest`), `..._NO_ROUTE`, or `..._FLUFF_EPOCH`.
+/// successor into `out_dest`), `..._NO_ROUTE`, `..._FLUFF_EPOCH`,
+/// `..._AWAIT_SYNC`, `..._OWN_EDGE`, or `..._NO_OWN_EDGE`.
 ///
-/// Three-way rather than a bool because the caller must distinguish a
-/// *transient* failure to route — refresh connections and re-plan — from an
-/// epoch decision no refresh can change, and because the two produce different
-/// `relay_method` events. The alternative is C++ re-evaluating
-/// `!fluffing || local_origin` for itself, which duplicates the RD-4 predicate
-/// (§16.1); see [`RelayPlan`] for the full reasoning.
+/// Not a bool, because the caller must distinguish a *transient* failure to
+/// route — refresh connections and re-plan — from an epoch decision no
+/// refresh can change, and from a hold that sends nothing. The routable
+/// outcomes also produce different `relay_method` events. The alternative is
+/// C++ re-evaluating `!fluffing || local_origin` for itself, which duplicates
+/// the RD-4 predicate (§16.1); see [`RelayPlan`] for the full reasoning.
+///
+/// `node_synchronised` is this node's chain sync, converted once here into
+/// [`NodeSync`]. It is not a second spelling of `local_origin`.
 ///
 /// A null handle reports `NO_ROUTE`: nothing is routable through a zone that
-/// does not exist, and the caller's fallback is then the safe one.
+/// does not exist, and the caller's fallback is then the safe one. That is
+/// not an `AWAIT_SYNC` decision — there is no zone to withhold for.
 ///
 /// `source` is the relaying peer, or the **nil UUID** for a transaction this
 /// node originated — the distinction RD-4 turns on, so it is a contract rather
 /// than a convention. Null is accepted and means the same thing.
 ///
-/// Production notify prefers [`shekyl_relay_zone_plan_relay_with_refresh`],
-/// which owns the one mid-call refresh on `NO_ROUTE`. This pure plan remains
-/// for callers that already refreshed (send-failure retry) and for tests.
+/// Production notify prefers [`shekyl_relay_zone_plan_dispatch_with_refresh`].
+/// [`shekyl_relay_zone_plan_relay_with_refresh`] owns the one mid-call refresh
+/// on `NO_ROUTE`. This pure plan remains for callers that already refreshed
+/// (send-failure retry) and for tests. `AWAIT_SYNC`, `OWN_EDGE`, and
+/// `NO_OWN_EDGE` do not refresh.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
@@ -1315,6 +1203,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
+    node_synchronised: bool,
     out_dest: *mut u8,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
@@ -1322,48 +1211,48 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_relay(
     }
     let h = &mut *handle;
     let source = read_id(source);
-    let plan = h
-        .driver
-        .zone_mut()
-        .plan_relay(source, local_origin, &mut h.rng);
+    let plan = h.driver.zone_mut().plan_relay(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     write_plan(plan, out_dest)
 }
 
-/// Plan a relay; on `NO_ROUTE`, merge `outbound` into the stem map once and
-/// re-plan.
+/// Plan a relay; on `NO_ROUTE`, merge this zone's established outbound
+/// sessions into the stem map once and re-plan.
 ///
-/// This is the production path for `dandelionpp_notify`: the refresh policy
-/// lives in Rust with the rest of zone scheduling, so the C++ shim only offers
-/// the outbound snapshot and performs transport. A settled fluff epoch does not
-/// refresh. See [`shekyl_relay::Zone::plan_relay_with_refresh`]. No callback:
-/// commands return nothing, and a covert channel the refresh leaves unbound
-/// clears at its next due tick through [`shekyl_relay_zone_poll`]'s
-/// `on_unbind`.
+/// The refresh policy lives in Rust with the rest of zone scheduling. The
+/// candidates are the session registry. A settled fluff epoch does not
+/// refresh, and neither does `AWAIT_SYNC`, `OWN_EDGE`, or `NO_OWN_EDGE`. See
+/// [`shekyl_relay::Relay::plan_relay_with_refresh`]. No callback: commands
+/// return nothing, and a covert channel the refresh leaves unbound clears at
+/// its next due tick through [`shekyl_relay_zone_poll`]'s `on_unbind`.
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
-/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
 /// `out_dest` must point to 16 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_plan_relay_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
-    outbound: *const u8,
-    n: usize,
+    node_synchronised: bool,
     out_dest: *mut u8,
 ) -> i32 {
     if handle.is_null() || out_dest.is_null() {
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
-    let plan = h
-        .driver
-        .zone_mut()
-        .plan_relay_with_refresh(source, local_origin, peers, &mut h.rng);
+    let plan = h.driver.zone_mut().plan_relay_with_refresh(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     write_plan(plan, out_dest)
 }
@@ -1386,6 +1275,18 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
             std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
             SHEKYL_RELAY_PLAN_FLUFF_EPOCH
         }
+        RelayPlan::AwaitSync => {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_AWAIT_SYNC
+        }
+        RelayPlan::OwnEdge(destination) => {
+            std::ptr::copy_nonoverlapping(destination.as_bytes().as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_OWN_EDGE
+        }
+        RelayPlan::NoOwnEdge => {
+            std::ptr::copy_nonoverlapping(NIL.as_ptr(), out_dest, 16);
+            SHEKYL_RELAY_PLAN_NO_OWN_EDGE
+        }
     }
 }
 
@@ -1393,9 +1294,8 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 /// **one** crossing (rule 40).
 ///
 /// Supersedes [`shekyl_relay_zone_plan_relay_with_refresh`] for the covert
-/// path. The precedent for folding a decision and its mapping into a single
-/// call rather than shuttling an intermediate verdict is
-/// `shekyl_relay_zone_roll_originated_zone`.
+/// path. Phase, carrier, and slot cross together rather than as an
+/// intermediate verdict the caller would map a second time.
 ///
 /// Return value is the same `SHEKYL_RELAY_PLAN_*` code as the older entry
 /// point, so a caller that ignores the carrier reads exactly what it read
@@ -1419,7 +1319,6 @@ unsafe fn write_plan(plan: RelayPlan, out_dest: *mut u8) -> i32 {
 ///
 /// # Safety
 /// `handle` must be live; `source` must point to 16 readable bytes or be null;
-/// `outbound` must point to `n * 16` readable bytes or be null with `n == 0`;
 /// `out_dest` must point to 16 writable bytes; `out_carrier` must point to one
 /// writable byte; `out_channel` must point to a writable `u32`.
 #[no_mangle]
@@ -1427,8 +1326,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     handle: *mut RelayZoneHandle,
     source: *const u8,
     local_origin: bool,
-    outbound: *const u8,
-    n: usize,
+    node_synchronised: bool,
     out_dest: *mut u8,
     out_carrier: *mut u8,
     out_channel: *mut u32,
@@ -1450,13 +1348,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
         }
         return SHEKYL_RELAY_PLAN_NO_ROUTE;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     let source = read_id(source);
-    let dispatch =
-        h.driver
-            .zone_mut()
-            .plan_dispatch_with_refresh(source, local_origin, peers, &mut h.rng);
+    let dispatch = h.driver.zone_mut().plan_dispatch_with_refresh(
+        source,
+        local_origin,
+        node_sync_from_ffi(node_synchronised),
+        &mut h.rng,
+    );
     h.publish();
     match dispatch.carrier {
         RelayCarrier::Ordinary => {
@@ -1489,33 +1388,26 @@ pub unsafe extern "C" fn shekyl_relay_zone_plan_dispatch_with_refresh(
     write_plan(dispatch.plan, out_dest)
 }
 
-/// Merge the caller's current outbound set into the stem map mid-epoch.
+/// Merge this zone's established outbound sessions into the stem map.
 ///
-/// Ports `update_channels::run`. On a public zone this is the only thing that
-/// ever populates the map: `notify` is constructed before any peer connects, so
-/// without it every transaction would fluff. The daemon reaches it on three
-/// paths: a new outbound connection, a covert send that failed, and the forced
-/// refresh after a stem send failure. No callback: commands return nothing,
-/// and a covert channel the merge leaves unbound clears at its next due tick
-/// through [`shekyl_relay_zone_poll`]'s `on_unbind`.
+/// An outbound handshake already does this. What remains is the explicit
+/// refresh: a covert send that failed, and the retry after a stem send
+/// failure. A full map returns unchanged and draws nothing. No callback:
+/// commands return nothing, and a covert channel the merge leaves unbound
+/// clears at its next due tick through [`shekyl_relay_zone_poll`]'s
+/// `on_unbind`.
 ///
 /// # Safety
-/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`.
+/// `handle` must be live.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_update_stems(
-    handle: *mut RelayZoneHandle,
-    outbound: *const u8,
-    n: usize,
-) {
+pub unsafe extern "C" fn shekyl_relay_zone_update_stems(handle: *mut RelayZoneHandle) {
     if handle.is_null() {
         return;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
     // Since §20.3 nothing re-points on a push — an unbound channel clears at
-    // its next due tick via `poll`.
-    h.driver.zone_mut().update_stems(peers, &mut h.rng);
+    // its next due tick via `poll`. Candidates are the zone's outbound sessions.
+    h.driver.zone_mut().update_stems(&mut h.rng);
     h.publish();
 }
 
@@ -1592,29 +1484,25 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 
 /// Run every step due at `now_ms`, delivering results through the callbacks.
 ///
-/// The outbound set is not passed in: `gather_outbound` is called back **only**
-/// when a wake crosses an epoch boundary and the stem map is rebuilt, so a
-/// fluff-release wake — the common case — never triggers the connection scan.
-/// See [`OutboundCb`] for why this pull is the sanctioned exception to §18.5.
+/// An epoch boundary rebuilds the stem map from the zone's established
+/// outbound sessions. A fluff-release wake does not.
 ///
 /// # Safety
 /// `handle` must be live; the callbacks must be valid for the duration of the
-/// call. `gather_outbound` must honour the [`OutboundCb`] contract: on return,
-/// its pointer covers `*out_n * 16` readable bytes (or is null with `*out_n`
-/// zero), valid until this call returns, and it must not unwind.
+/// call and must not unwind.
 ///
 /// **NO CALLBACK MAY RE-ENTER THIS HANDLE.** This function holds
 /// `&mut RelayZoneHandle` for its whole body — and a mutable borrow of the
 /// carrier queue across `dispatch` — while it invokes every callback. Calling
 /// any `shekyl_relay_zone_*` function on the same handle from inside one
 /// constructs a second `&mut` aliasing those live borrows, which is undefined
-/// behaviour. It applies to **all four**, not only the newest: buffer whatever
-/// the callback learns and act on it after this returns.
+/// behaviour. It applies to all three callbacks: buffer whatever the
+/// callback learns and act on it after this returns.
 ///
 /// Stated on both sides of the boundary deliberately: a Rust caller reads this
 /// section, a C caller reads `shekyl_relay_zone_poll` in `shekyl_ffi.h`, and
 /// neither doc system can reference the other — the FFI boundary is the
-/// uncrossable one that earns a second copy. Both must name all four
+/// uncrossable one that earns a second copy. Both must name all three
 /// callbacks. The C++ producer did exactly this, recording a stem observation
 /// from the resolution callback, until review caught it.
 #[no_mangle]
@@ -1622,7 +1510,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
     ctx: *mut c_void,
-    gather_outbound: OutboundCb,
     on_fluff: FluffCb,
     on_noise: NoiseSendCb,
     on_carrier_resolved: CarrierResolvedCb,
@@ -1631,17 +1518,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         return;
     }
     let h = &mut *handle;
-    let effects = h.driver.poll(
-        now_ms,
-        || {
-            let mut n: usize = 0;
-            let ptr = gather_outbound(ctx, &raw mut n);
-            // SAFETY: the `OutboundCb` contract makes `ptr` cover `n * 16`
-            // readable bytes (or null with `n == 0`), valid for this call.
-            unsafe { read_ids(ptr, n) }
-        },
-        &mut h.rng,
-    );
+    let effects = h.driver.poll(now_ms, &mut h.rng);
     h.publish();
     dispatch(
         effects,
@@ -1685,21 +1562,14 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
 /// a deadline-crossing rollover's do.
 ///
 /// # Safety
-/// `handle` must be live; `outbound` must point to `n * 16` readable bytes or be
-/// null with `n == 0`.
+/// `handle` must be live.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(
-    handle: *mut RelayZoneHandle,
-    now_ms: u64,
-    outbound: *const u8,
-    n: usize,
-) {
+pub unsafe extern "C" fn shekyl_relay_zone_force_epoch(handle: *mut RelayZoneHandle, now_ms: u64) {
     if handle.is_null() {
         return;
     }
-    let peers = read_ids(outbound, n);
     let h = &mut *handle;
-    h.driver.force_epoch(now_ms, &peers, &mut h.rng);
+    h.driver.force_epoch(now_ms, &mut h.rng);
     h.publish();
 }
 

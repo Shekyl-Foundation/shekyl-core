@@ -32,8 +32,7 @@
 #include "block_validation.h"
 
 using namespace epee;
-#include "crypto/pow_registry.h"
-#include "crypto/pow_schema.h"
+#include "crypto/pow_randomx.h"
 
 using namespace cryptonote;
 
@@ -263,6 +262,81 @@ bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonot
     return cryptonote::block_orphaned(bvc) && !cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
   else
     return !cryptonote::block_orphaned(bvc) && cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
+}
+
+bool gen_block_already_known_is_already_exists::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  block blk_1;
+  generator.construct_block(blk_1, blk_0, miner_account);
+  events.push_back(blk_1);
+  // The same block again: `prepare_handle_incoming_blocks` sees a known hash
+  // and skips the PoW pre-compute; `add_new_block` then answers from
+  // `have_block` before any rule runs (blockchain.cpp `add_new_block`).
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+bool gen_block_already_known_is_already_exists::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  if (2 == event_idx)
+    return cryptonote::block_already_exists(bvc) && !cryptonote::block_added(bvc)
+      && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+  else
+    return cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+      && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+}
+
+bool gen_block_already_known_in_alt_store_is_already_exists::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  block blk_1;
+  generator.construct_block(blk_1, blk_0, miner_account);
+  events.push_back(blk_1);
+  // A second child of genesis: not the tip's child, so `add_new_block`
+  // routes it to `handle_alternative_block`, which stores it as an alt block.
+  block blk_1_alt;
+  generator.construct_block_manually(blk_1_alt, blk_0, miner_account, test_generator::bf_timestamp, 0, 0, blk_1.timestamp + 1);
+  events.push_back(blk_1_alt);
+  // The alt block again: `have_block` finds it in the alt store —
+  // ALREADY_EXISTS from the second arm, before any routing.
+  events.push_back(blk_1_alt);
+
+  DO_CALLBACK(events, "check_one_alt_block");
+  DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+bool gen_block_already_known_in_alt_store_is_already_exists::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  switch (event_idx)
+  {
+    case 1: // main-chain child
+      return cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    case 2: // admitted as an alt block: not added to main, not rejected
+      return !cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    case 3: // the alt block resubmitted
+      return cryptonote::block_already_exists(bvc) && !cryptonote::block_added(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    default:
+      return !cryptonote::block_rejected(bvc);
+  }
+}
+
+bool gen_block_already_known_in_alt_store_is_already_exists::check_one_alt_block(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_already_known_in_alt_store_is_already_exists::check_one_alt_block");
+  // The resubmission stored nothing: one alt block, not two.
+  CHECK_EQ(1, c.get_alternative_blocks_count());
+  return true;
 }
 
 bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
@@ -728,20 +802,12 @@ namespace
 {
 // Twin of the unit-test double in pow_longhash_gate.cpp -- deliberately
 // duplicated rather than shared: it is five lines of test scaffolding in a
-// different binary, and any IPowSchema change breaks both loudly at compile
+// different binary, and any pow_hash_fn change breaks both loudly at compile
 // time, so there is nothing here that can silently drift.
-class FailingPowSchema final : public IPowSchema
+bool failing_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash&)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash&) const override
-  {
-    return false;
-  }
-  const char* name() const override { return "FailingCoreTestSchema"; }
-};
-
-const FailingPowSchema g_failing_pow_schema{};
+  return false;
+}
 } // namespace
 
 gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
@@ -749,8 +815,8 @@ gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
   : m_invalid_block_idx(invalid_block_idx)
   , m_expected_height(expected_height)
 {
-  REGISTER_CALLBACK("install_failing_pow_schema",
-    gen_block_pow_verifier_failure_base::install_failing_pow_schema);
+  REGISTER_CALLBACK("install_failing_pow_hash",
+    gen_block_pow_verifier_failure_base::install_failing_pow_hash);
   REGISTER_CALLBACK("check_rejected_unproven",
     gen_block_pow_verifier_failure_base::check_rejected_unproven);
 }
@@ -759,14 +825,14 @@ gen_block_pow_verifier_failure_base::~gen_block_pow_verifier_failure_base()
 {
   // Belt: an assertion failure between install and check must not leave the
   // override installed for whatever test runs next in this binary.
-  set_pow_schema_override_for_tests(nullptr);
+  set_pow_hash_override_for_tests(nullptr);
 }
 
-bool gen_block_pow_verifier_failure_base::install_failing_pow_schema(
+bool gen_block_pow_verifier_failure_base::install_failing_pow_hash(
   cryptonote::core& /*c*/, size_t /*ev_index*/,
   const std::vector<test_event_entry>& /*events*/)
 {
-  set_pow_schema_override_for_tests(&g_failing_pow_schema);
+  set_pow_hash_override_for_tests(failing_pow_hash);
   return true;
 }
 
@@ -775,7 +841,7 @@ bool gen_block_pow_verifier_failure_base::check_rejected_unproven(
   const std::vector<test_event_entry>& /*events*/)
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_block_pow_verifier_failure_base::check_rejected_unproven");
-  set_pow_schema_override_for_tests(nullptr);
+  set_pow_hash_override_for_tests(nullptr);
 
   // The bvc assertions only run if the candidate actually reached them; a
   // harness change that stopped submitting it would otherwise pass here
@@ -803,7 +869,7 @@ bool gen_block_pow_verifier_failure_main::generate(std::vector<test_event_entry>
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  DO_CALLBACK(events, "install_failing_pow_schema");
+  DO_CALLBACK(events, "install_failing_pow_hash");
 
   // A normal, fully valid block: mined against the real schema at generation
   // time, so the verifier failure at submission is its only defect.
@@ -821,7 +887,7 @@ bool gen_block_pow_verifier_failure_alt::generate(std::vector<test_event_entry>&
   MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
   MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
 
-  DO_CALLBACK(events, "install_failing_pow_schema");
+  DO_CALLBACK(events, "install_failing_pow_hash");
 
   // Forks from blk_1 while the tip is blk_2, so it takes
   // handle_alternative_block. Mined to a second account so it differs from

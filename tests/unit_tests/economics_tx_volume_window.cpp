@@ -123,16 +123,17 @@ TEST(economics_tx_volume_window, shim_hands_the_exact_pair_to_rust_undivided)
   ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_exact, version, exact));
   ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_floored, version, floored));
 
-  // new (exact, M_r = 0.81) / old (floored, M_r = 0.80 = the lower rail).
-  EXPECT_EQ(reward_exact, UINT64_C(829440000000));
-  EXPECT_EQ(reward_floored, UINT64_C(819200000000));
+  // new (exact, M_r = 0.81) / old (floored, M_r = 0.80 = the lower rail),
+  // on curve(A/2) = (A/2) >> 22 = 512 SKL at the design's ESF 22 per block
+  // (halved 2026-10-04 from 829440000000 / 819200000000 at 21).
+  EXPECT_EQ(reward_exact, UINT64_C(414720000000));
+  EXPECT_EQ(reward_floored, UINT64_C(409600000000));
   EXPECT_NE(reward_exact, reward_floored);
 
   // And the shim agrees with the direct FFI call on the same pair.
   uint64_t direct = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
-            shekyl_block_reward(0, 1, ag, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-                                exact.tx_count_sum, exact.blocks, &direct, &limit));
+            shekyl_block_reward(0, 1, ag, exact.tx_count_sum, exact.blocks, &direct, &limit));
   EXPECT_EQ(reward_exact, direct);
 }

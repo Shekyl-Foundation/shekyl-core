@@ -71,6 +71,7 @@ use shekyl_engine_prefs::{
 use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
+use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::atomic::{atomic_write_file, atomic_write_file_with};
 use crate::capability::Capability;
@@ -338,6 +339,25 @@ impl WalletFile {
     /// disk; the next open will hit the lost-`.wallet` rescan path
     /// (2i).
     pub fn create(params: &CreateParams<'_>) -> Result<Self, WalletFileError> {
+        if let Some(dir) = params
+            .base_path
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            // Only absence is "missing". Any other failure to read the
+            // directory keeps its own cause, so a permission refusal is not
+            // reported as a directory to create.
+            match std::fs::metadata(dir) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    return Err(WalletFileError::DirectoryMissing {
+                        dir: dir.to_path_buf(),
+                    });
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         let keys_path = keys_path_from(params.base_path);
         let state_path = state_path_from(params.base_path);
         let pscan_path = pscan_state_path_from(params.base_path);
@@ -529,7 +549,7 @@ impl WalletFile {
                     LedgerBlock::empty(),
                     BookkeepingBlock::empty(),
                     TxMetaBlock::empty(),
-                    SyncStateBlock::new(restore_from_height, None),
+                    SyncStateBlock::new(BlockHeight::from_raw(restore_from_height), None),
                     StakingBlock::empty(),
                 );
                 OpenOutcome::StateLost {
@@ -1093,7 +1113,7 @@ impl WalletFile {
     /// session.
     ///
     /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_engine_state::NetworkSafetyConstants::max_reorg_depth
-    pub fn effective_max_reorg_depth(&self) -> u64 {
+    pub fn effective_max_reorg_depth(&self) -> BlockCount {
         self.overrides.effective_max_reorg_depth(self.network)
     }
 
@@ -1101,14 +1121,14 @@ impl WalletFile {
     /// that do not have a persisted `SyncStateBlock` to anchor them
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
     /// See `docs/WALLET_PREFS.md` §3.3.
-    pub fn effective_skip_to_height(&self) -> u64 {
+    pub fn effective_skip_to_height(&self) -> BlockHeight {
         self.overrides.effective_skip_to_height(self.network)
     }
 
     /// Refresh cursor used when the wallet opens without a
     /// `SyncStateBlock`. Mirrors `effective_skip_to_height` but
     /// scoped to the recovery path per the audit doc §3.3.
-    pub fn effective_refresh_from_block_height(&self) -> u64 {
+    pub fn effective_refresh_from_block_height(&self) -> BlockHeight {
         self.overrides
             .effective_refresh_from_block_height(self.network)
     }
@@ -1692,6 +1712,75 @@ mod tests {
             .expect("a snapshot is a point in time: the earlier one still answers for then");
     }
 
+    /// A missing directory is named as such, before anything is written —
+    /// not the `NotFound` of whichever write runs first.
+    #[test]
+    fn create_into_a_missing_directory_is_directory_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("absent");
+        let base = absent.join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        match WalletFile::create(&params) {
+            Err(WalletFileError::DirectoryMissing { dir: named }) => assert_eq!(named, absent),
+            other => panic!("expected DirectoryMissing, got {other:?}"),
+        }
+        assert!(!absent.exists(), "nothing was created");
+    }
+
+    /// A file where the wallet directory should be is not "missing": it is
+    /// there, and nothing can be created inside it.
+    #[test]
+    fn create_under_a_file_is_not_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"not a directory").unwrap();
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let base = occupied.join("x.wallet");
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        match WalletFile::create(&params) {
+            Err(WalletFileError::Io(e)) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);
+            }
+            other => panic!("expected Io(NotADirectory), got {other:?}"),
+        }
+    }
+
+    /// A directory that cannot be read keeps its own cause — the remedy is
+    /// permissions, not creating a directory that exists.
+    #[cfg(unix)]
+    #[test]
+    fn create_under_an_unreadable_directory_keeps_the_permission_cause() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A superuser reads through any mode bits; the refusal cannot be
+        // staged there, so the test asserts only where it can.
+        let probe = std::fs::metadata(locked.join("inner"));
+        let staged = matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let base = locked.join("inner").join("x.wallet");
+        let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+        let outcome = WalletFile::create(&params);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if staged {
+            match outcome {
+                Err(WalletFileError::Io(e)) => {
+                    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                }
+                other => panic!("expected Io(PermissionDenied), got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn create_refuses_existing_keys_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1822,7 +1911,7 @@ mod tests {
                 assert_eq!(restore_from_height, u64::from(RESTORE_HINT));
                 assert_eq!(
                     ledger.sync_state.restore_from_height,
-                    u64::from(RESTORE_HINT),
+                    BlockHeight::from_raw(u64::from(RESTORE_HINT)),
                     "fresh ledger must inherit restore_height_hint from keys file"
                 );
                 // Fresh ledger: no transfers, no tx_meta, no bookkeeping.
@@ -2045,7 +2134,7 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(2),
+            max_reorg_depth: Some(BlockCount::from_raw(2)),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };
@@ -2055,8 +2144,11 @@ mod tests {
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);
         // Overridden fields take the override's value.
-        assert_eq!(handle.effective_max_reorg_depth(), 2);
-        assert_eq!(handle.effective_skip_to_height(), 12_345);
+        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(2));
+        assert_eq!(
+            handle.effective_skip_to_height(),
+            BlockHeight::from_raw(12_345)
+        );
         // Non-overridden field still reads the network default.
         let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
         assert_eq!(

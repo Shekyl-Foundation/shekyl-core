@@ -74,6 +74,11 @@ pub mod difficulty_ffi;
 // production LMDB; the hasher is shekyl-chain-store.
 pub mod chain_digest_ffi;
 
+// DRS-E2 trace writer: the C++ LMDB exporter's one door. Facts records and
+// digest checkpoints, written and hashed in Rust (`shekyl-chain-ingest`);
+// the exporter and this surface die with the daemon at cutover.
+pub mod e2_trace_ffi;
+
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
 // PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
@@ -95,6 +100,23 @@ pub mod curve_tree_replica_ffi;
 // has n > 0 outputs, neither when n == 0. The rule lives in shekyl-wire; the
 // daemon's admission path hands over its own parse's field lengths.
 pub mod tx_extra_ffi;
+
+// tx_extra codec (TX_EXTRA_RUST_CUTOVER.md §3): shekyl-wire parses and
+// builds tx_extra; the daemon transports. Field/pubkey/leaf reads, the
+// bytes-taking I19 form, and the coinbase writer — the C++ parser's
+// replacement, one call per site.
+pub mod tx_extra_codec_ffi;
+
+// The transaction id (ARCHIVAL_SHARD_COUNT_CUTOVER.md SHT-Q2): shekyl-wire
+// mixes — hashing the segments and measuring the archival length the id
+// binds — and the daemon's calculate_transaction_hash serializes and cuts.
+// One mixer; the C++ one is deleted.
+pub mod txid_ffi;
+
+// The PQC signing preimage (CHAIN_RULES_SLICE_6.md §5 commit 7, Q7 (c)):
+// shekyl-wire derives every input's signed hash; the daemon verifies against
+// it. Replaces the C++ assembly in tx_pqc_verify.cpp, one call per tx.
+pub mod tx_signing_ffi;
 
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
@@ -123,6 +145,26 @@ pub mod relay_zone_ffi;
 // the Rust-pinned libzstd is the single zstd implementation in the binary.
 pub mod levin_ffi;
 
+// Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
+// and returns the admission decision. C++ passes reservations only.
+pub mod inbound_ceiling_ffi;
+
+// The p2p seam. C++ posts onto the connection strand. Rust records the
+// cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
+pub mod seam_ffi;
+
+// The thread ledger at the C boundary: one executor row, and the report
+// of every row. The floor check is ExecutorBudget::above_floor; this
+// module does not reimplement it.
+pub mod executor_ffi;
+
+// Zone listen and dial. The seam stays connector-agnostic; this module is
+// where clearnet and Tor meet it.
+pub mod zone_ffi;
+
+// Production network ids. C++ asks for the 16 bytes; it does not state them.
+pub mod network_id_ffi;
+
 // Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.
@@ -147,6 +189,7 @@ pub use shekyl_logging;
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.
+mod economics_ffi;
 mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
@@ -157,6 +200,8 @@ mod legacy_tx;
 mod legacy_types;
 mod legacy_util;
 
+#[allow(unused_imports)]
+pub use economics_ffi::*;
 #[allow(unused_imports)]
 pub use legacy_core::*;
 #[allow(unused_imports)]

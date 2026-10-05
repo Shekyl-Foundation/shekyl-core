@@ -98,13 +98,13 @@ impl ContentFingerprint {
         total_covered: AtomicUnits,
     ) -> Result<Self, SendError> {
         let paid = AtomicUnits::checked_sum(recipients.iter().map(|r| r.amount_atomic_units))
-            .ok_or(SendError::CannotSign {
+            .ok_or(SendError::BuildInvariant {
                 reason: "recipient amount sum overflowed computing the content fingerprint",
             })?;
         let change = paid
             .checked_add(fee)
             .and_then(|spent| total_covered.checked_sub(spent))
-            .ok_or(SendError::CannotSign {
+            .ok_or(SendError::BuildInvariant {
                 reason: "balance does not cover recipients + fee computing the content fingerprint",
             })?;
         Ok(Self::from_parts(fee, recipients, change))
@@ -144,7 +144,7 @@ pub(crate) struct ConsumerHeldEntry {
     /// [`SnapshotId`] pinned at build for submit-time comparison.
     pub snapshot_id: SnapshotId,
     /// Engine `synced_height` at build (defense-in-depth checks).
-    pub built_at_height: u64,
+    pub built_at_height: shekyl_types::BlockHeight,
     /// `block_hash_at(built_at_height)` at build.
     pub built_at_tip_hash: [u8; 32],
     /// Serialized signed transaction for daemon broadcast.
@@ -185,10 +185,11 @@ impl ConsumerHeldEntry {
     /// tests build through the real pipeline and never use this — the
     /// `request` / `reference` here are placeholders, not a re-anchorable tx.
     pub(crate) fn for_outstanding_test(tx_bytes: Vec<u8>) -> Self {
+        use shekyl_curve_tree::{BlockHash, CurveTreeRoot};
         Self {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
-            built_at_height: 0,
+            built_at_height: shekyl_types::BlockHeight::ZERO,
             built_at_tip_hash: [0u8; 32],
             tx_bytes,
             request: TxRequest {
@@ -196,9 +197,9 @@ impl ConsumerHeldEntry {
                 priority: crate::engine::pending::FeePriority::Standard,
             },
             reference: ReferenceBlock {
-                height: shekyl_curve_tree::BlockHeight(0),
-                curve_tree_root: [0u8; 32],
-                block_hash: [0u8; 32],
+                height: shekyl_curve_tree::BlockHeight::from_raw(0),
+                curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+                block_hash: BlockHash::NULL,
             },
             content_gen: 0,
             fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),

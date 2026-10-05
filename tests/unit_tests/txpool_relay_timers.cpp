@@ -48,6 +48,7 @@
 #include "cryptonote_core/tx_pool.h"
 #include "net/net_utils_base.h"
 #include "shekyl/shekyl_ffi.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 
@@ -180,7 +181,7 @@ cryptonote::blobdata make_minimal_tx_blob()
   cryptonote::transaction tx{};
   tx.version = 1;
   tx.unlock_time = 0;
-  return cryptonote::tx_to_blob(tx);
+  return shekyl_test_fixtures::tx_blob(tx);
 }
 
 txpool_tx_meta_t make_meta(uint64_t weight, time_t receive_time)
@@ -275,11 +276,11 @@ TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
 // ─────────────────────────────────────────────────────────────────────────────
 // §92.5c item 3: an ORIGIN's re-broadcast is derived, not `MIN_RELAY_TIME`.
 //
-// `originated_stays_in_zone` pins an anonymity-zone origin at `local`
-// permanently, so that entry lives on the re-broadcast branch for its whole
-// life. §15.4 cleared `MIN_RELAY_TIME` from the embargo's neighbourhood
-// because it "governs an already-fluffed transaction" — true when written, and
-// vacated by that predicate, which created a class that is never fluffed.
+// An own-edge success records `local`, so a hidden-address origin lives on
+// the re-broadcast branch for its whole life. §15.4 cleared `MIN_RELAY_TIME`
+// from the embargo's neighbourhood because it "governs an already-fluffed
+// transaction" — true when written, and vacated by that plan, which created
+// a class that is never fluffed.
 //
 // At 300 s the origin re-emitted BELOW its own zone's embargo median (346 s).
 // The base is now the 1-in-10 survival quantile — the confidence the network
@@ -290,8 +291,7 @@ TEST(txpool_relay_timers, local_holds_past_min_relay_time)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
   ASSERT_GT(derived, 300) << "the derived origin retry must exceed MIN_RELAY_TIME, "
                              "or this test cannot discriminate";
 
@@ -315,8 +315,7 @@ TEST(txpool_relay_timers, local_is_released_after_the_derived_interval)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());
@@ -372,8 +371,7 @@ TEST(txpool_relay_timers, an_observed_local_stops_re_broadcasting)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());
@@ -391,8 +389,7 @@ TEST(txpool_relay_timers, the_same_local_without_the_verdict_still_relays)
 {
   const time_t now = time(nullptr);
   const time_t derived =
-    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
-      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
 
   RelayTimerFixture fx;
   ASSERT_TRUE(fx.init());
@@ -544,6 +541,27 @@ TEST(relay_deadline, zero_draw_still_never_lands_in_the_past)
   // mid-second, which is exactly what truncation would produce.
   EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 1), 0), 5001);
   EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 0), 0), 5000);
+}
+
+TEST(txpool_meta, set_relay_method_clears_observed_circulating_and_keeps_fcmp_verified)
+{
+  // The circulating bit shares a byte with the relay-method bits and with
+  // fcmp_verified. Setting the method clears circulating — that is the
+  // documented reset — and must not move fcmp_verified or the method that
+  // was just written.
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.observed_circulating = 1;
+  meta.fcmp_verified = 1;
+  meta.set_relay_method(cryptonote::relay_method::stem);
+  EXPECT_EQ(0, meta.observed_circulating);
+  EXPECT_EQ(1, meta.fcmp_verified);
+  EXPECT_EQ(cryptonote::relay_method::stem, meta.get_relay_method());
+
+  // Bit 3 shares the byte and is live. Setting it after the method is
+  // written must not move the method the decoder returns.
+  meta.observed_circulating = 1;
+  EXPECT_EQ(1, meta.fcmp_verified);
+  EXPECT_EQ(cryptonote::relay_method::stem, meta.get_relay_method());
 }
 
 TEST(relay_deadline, is_monotonic_in_the_draw)

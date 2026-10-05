@@ -1,6 +1,14 @@
 name: ci/gh-actions/cli
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   push:
     # `main` only. PRs are covered by `pull_request` (the merge commit into
     # the base — the stronger signal). A push-to-dev trigger used to
@@ -36,7 +44,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -81,6 +89,9 @@ jobs:
           base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            # The queue's group: its base is the `dev` tip the group merges onto.
+            base="${{ github.event.merge_group.base_sha }}"
           else
             base="${{ github.event.before }}"
           fi
@@ -252,7 +263,7 @@ jobs:
           # No system zstd: Levin compression is the Rust-pinned vendored
           # libzstd inside the linked shekyl image (PR #411). Installing a
           # host libzstd would reintroduce the dual-lib story we deleted.
-          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc libunwind-headers protobuf abseil ccache
+          brew install --quiet cmake boost openssl libpgm miniupnpc libunwind-headers ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -356,6 +367,15 @@ jobs:
       # tracking issue (the visibility route #660's ruling required of any
       # cost tier). Either way this is not the critical path: depends.yml
       # (74-113 min) and randomx (90 min) already run longer, concurrently.
+      # Binary isolation on the shekyld this job just linked (Release,
+      # --gc-sections). Cron in randomx-v2-differential.yml still runs
+      # the same script; this is the per-PR copy so a production
+      # reference of the PoW test setter cannot merge on a green source
+      # grep alone. nm is binutils, pulled in by build-essential.
+      - name: symbol isolation on linked daemon (nm)
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
@@ -366,9 +386,10 @@ jobs:
         run: scripts/ci/run_live_daemon_gates.sh
 
       # Pack the CTest tree for the 24.04 test job. Same shape as
-      # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
-      # (CMakeLists.txt), so test binaries are statically linked against
-      # in-tree libraries and the tar can drop *.o / *.a / CMakeFiles.
+      # economics-c2a-prime.yml: internal libraries are always static
+      # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
+      # statically linked against in-tree libraries and the tar can drop
+      # *.o / *.a / CMakeFiles.
       # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
       # that the test job installs. CMake bakes absolute paths into
       # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
@@ -652,7 +673,7 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
         run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium libusb lmdb
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium lmdb
       - name: save vcpkg cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
@@ -672,7 +693,6 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTS=OFF `
             -DSTACK_TRACE=OFF `
-            -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       # Daemon only. The C++ wallet stack was deleted at Phase 5, and the

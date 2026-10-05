@@ -581,7 +581,7 @@ bespoke drain serializer) and **verified by diffing an actual drain tx
 against an actual transfer tx** at the same arity, not by separately
 green-checking output count, `tx_extra` fields, and `unlock_time`.
 *Preliminary substrate (this round)* for the sub-surface flagged
-most-likely-to-diverge — the `0x07` PQC leaf-hash: it is appended
+most-likely-to-diverge — the `0x07` PQC leaf entry (`CM ‖ record`, `PL-D3`): it is appended
 **unconditionally** by the shared path (`sign_bridge.rs:283`,
 `push_pqc_leaf_hashes`, per output in vout order — a curve-tree-leaf
 requirement, not a reward marker; a prior transfer-path gap was closed in
@@ -589,7 +589,7 @@ PR-4b, `sign_bridge.rs:278-280`), so it is **uniform** across transfer
 and drain rather than a reward-only tag. The byte-diff remains the guard:
 it fires at DS-PR-1 (a real drain tx must exist to diff), and any
 drain-specific divergence — including a regression that re-opens the
-leaf-hash gap or a bespoke serializer that bypasses the shared path —
+leaf-entry gap or a bespoke serializer that bypasses the shared path —
 fails it.
 
 **UPDATE 2026-07-20 (DS-PR-1 impl — post-closure substrate pin, not a
@@ -872,7 +872,7 @@ sub-PR lands.
   hidden/committed values, enforced by routing through the shared
   `sign_bridge` path and verified by diffing a real drain tx against a
   real transfer tx (§5 composite-arm paragraph). Cheap source check on the
-  flagged-most-likely-to-diverge sub-surface: the `0x07` PQC leaf-hash is
+  flagged-most-likely-to-diverge sub-surface: the `0x07` PQC leaf entry is
   appended **unconditionally** by the shared path (`sign_bridge.rs:283`;
   a prior transfer-path gap closed in PR-4b) — uniform across transfer and
   drain, not a reward-only tag. #4 accepted with the closure rationale

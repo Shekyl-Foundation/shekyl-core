@@ -587,7 +587,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   markers in the wire source. **Reopen clause (rule-21):** if testnet reveals a
   needed change it lands then (pre-genesis = free). `bond_post` is
   **JoinMarket-only at genesis** (`bond_post.rs:44` rejects other `post_kind`s;
-  Rebond/Release/HoldingsUpdate are post-genesis). The still-moving parts
+  Reinstate/Release/HoldingsUpdate are post-genesis) *[records-was at Q4's
+  resolution: Release and Reinstate verify arms have since landed, and
+  `HoldingsUpdate` was REJECTED 2026-09-20 — `from_u8(3)` is
+  `InvalidPostKind`, so byte 3 is refused, not deferred]*. The still-moving parts
   (cover-entropy `shekyl-standoff` draw; bond magnitude/duration) are **off-wire**
   (cover = a confidential output; magnitude/duration = constants that fill
   `bonded_total`/`bond_credit`), so they don't touch the bytes. *(Collapses the
@@ -596,7 +599,9 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-06-25 on pin `2753111c50`**)* The wire layer
+  reference; **re-vetted 2026-09-29 on pin `2485a176`** (merged into the fork as
+  `3378433c`, the live pin, with an identical crypto tree), earlier the same day on
+  `a08001f14c` and on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
   fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
@@ -621,6 +626,32 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `kat_fcmp_proof_size_depth1_row` matches it to the **real** `sign_transaction` proof;
   (c) the `fcmps` proof self-consistency suite is green on the new pin (7/7). Q6 is
   **frozen on `2753111c50`**.
+
+  **Re-vet (2026-09-29, pin `2753111c50` → `a08001f14c`, shekyl-core #911).** The
+  re-vendor took four upstream crypto commits (`76399e58`, `b4dd1c99`, `31c26d96`,
+  `77788c36`) and left the frozen interiors alone: `rust/shekyl-oxide/crypto/fcmps/`
+  is byte-identical to `dev` (Shekyl's PL-D3 crate is not mirrored from the fork —
+  `SHEKYL_OXIDE_VENDORING.md` §"What the pin covers"), and the Bp+ interior is
+  first-party `shekyl-bulletproofs`, untouched. What did change is refusal-only: the
+  Bulletproofs statement rejects an unconstrained Pedersen commitment
+  (`DidNotConstrainCommitment`), the inner-product witness rejects a non-power-of-two
+  length, `Generators::new` rejects a duplicated `g`, and Helios/Selene `from_bytes`
+  rejects the sign-set encoding of the identity. None of these alters what an honest
+  prover emits or how it is framed, so the proof's content, length, and serialization
+  are unchanged. Verified: `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
+  `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green (79/79).
+  The freeze **holds** at `a08001f14c`.
+
+  **Re-vet (2026-09-29, pin `a08001f14c` → `2485a176`, shekyl-core #911).**
+  The Pedersen isolation gate now combines duplicate terms before it decides, so
+  `V(i) + V(i)` and `2·V(i)` are one row. Shekyl's FCMP statement passes an empty
+  `V`, so accepting the concatenated shape does not change a membership proof.
+  Helios/Selene `to_bytes` clears the sign bit for every `x == 0` representative;
+  `recover_y(0)` is still `None`, so an honest on-curve point never takes that
+  path. `fcmps` and the Bp+ interior are untouched. Verified:
+  `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
+  `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green
+  (81 passed, 1 ignored). The freeze **holds** at `2485a176`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
@@ -769,9 +800,10 @@ pre-renumber tags until recapture.)*
 **9.5 Inputs** — `gen 0x00`: `tag(1) · V(height)`. `fcmp 0x01`: `tag(1) · key_image[32]` (no `amount`/`key_offsets`, Q1).
 **9.6 Outputs** — `tagged_key 0x00` (sole type): `V(amount) · tag(1) · key[32] · view_tag(1)` (amount cleartext for coinbase, `0` for confidential spend outputs).
 **9.6a `tx_extra` PQC fields** (inside `extra` of §9.4 — genesis-pinned internal structure, not opaque; FA-6 / POST_QUANTUM_CRYPTOGRAPHY / CT2 §3.1):
-- **`0x06` KEM ciphertext** — ~~**per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded — the struck sentence stays as the record of what the spec claimed): both implementations emit and read **one field per transaction** — C++ `construct_miner_tx` / `construct_tx_with_tx_key` build a single `tx_extra_pqc_kem_ciphertext` reserving `n_outputs · HYBRID_KEM_CT_BYTES` (`src/cryptonote_core/cryptonote_tx_utils.cpp:197`, `:498`); Rust reads one blob (`rust/shekyl-wire/src/tx_extra.rs:222`, `read_blob`) that `pqc_kem_per_output` splits. **Corrected — per tx:** `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs` in vout order, self-describing on the wire, and **consensus requires** `len == 1120·n_outputs` (n from `vout`): exactly one field when `n > 0`, none when `n == 0` (CEN-I19; a short or missing field leaves the recipient unable to ever see or spend the payment, which a relay-only rule would still let a miner commit).
-- **`0x07` PQC leaf hashes** — **per tx**: `h_pqc[32] × n_outputs` concatenated in vout order (`h_pqc = Blake2b(pqc_pk)`); ~~**not self-describing** — consensus parses `32·n_outputs` (n from `vout`)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded): both serializers length-prefix the field — C++ `FIELD(blob)` on `std::string` writes `varint(size)` then the bytes and reads under a `remaining_bytes()` bound (`src/serialization/string.h:36-40`); Rust `read_blob` (`rust/shekyl-wire/src/tx_extra.rs:224-225`). **Corrected:** `varint(len) · h_pqc[32] × n_outputs`, self-describing on the wire, and **consensus requires** `len == 32·n_outputs`: exactly one field when `n > 0`, none when `n == 0` (CEN-I19; the field is the fourth scalar of every leaf these outputs become, so a short or missing field used to be zero-filled into the tree). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
-- **Genesis tag set** (2026-09-07) — `extra` admits exactly `0x00` padding, `0x01` tx pubkey, `0x02` nonce, `0x04` additional pubkeys, `0x05` PQC ownership, `0x06`/`0x07` above, `0x08` multisig migration, `0x09` PQC view-tag hints, `0x0A` PQC spend-auth pubkeys, `0x0B` archival attestation. The C++ variant and `shekyl-wire` now admit the **same set**, which is what lets `validate_context_free_pruned` refuse an unparseable `extra` outright rather than skipping the shape rule. The inherited `0x03` merge-mining and `0xDE` minergate tags are **deleted** (rule 60); their byte values stay retired so a future tag cannot reuse a meaning older software would parse differently. An unknown tag makes the whole blob unparseable — `tx_extra` has no generic skip.
+- **`0x06` KEM ciphertext** — ~~**per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded — the struck sentence stays as the record of what the spec claimed): both implementations emit and read **one field per transaction** — C++ `construct_miner_tx` / `construct_tx_with_tx_key` build a single `tx_extra_pqc_kem_ciphertext` reserving `n_outputs · HYBRID_KEM_CT_BYTES` (`src/cryptonote_core/cryptonote_tx_utils.cpp:197`, `:498`); Rust reads one blob (`rust/shekyl-wire/src/tx_extra/mod.rs:220`, `read_blob`) that `pqc_kem_per_output` splits. **Corrected — per tx:** `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs` in vout order, self-describing on the wire, and **consensus requires** `len == 1120·n_outputs` (n from `vout`): exactly one field when `n > 0`, none when `n == 0` (CEN-I19; a short or missing field leaves the recipient unable to ever see or spend the payment, which a relay-only rule would still let a miner commit).
+- **`0x07` PQC leaf entries** — **per tx**: `(CM[32] ‖ record[32]) × n_outputs` concatenated in vout order (`CM = H_ℓ(hybrid_pk)·G_k + r·J`, the leaf commitment whose x-coordinate is the leaf's 4th scalar; `record = cSHAKE256(hybrid_pk ‖ r_h)` — `PL-D3` / `PL-D3a`, 2026-09-14, superseding the former 32-byte `h_pqc = Blake2b(hybrid_pk)` entry; every `CM` must be a canonical prime-order non-identity point at admission); ~~**not self-describing** — consensus parses `32·n_outputs` (n from `vout`)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded): both serializers length-prefix the field — C++ `FIELD(blob)` on `std::string` writes `varint(size)` then the bytes and reads under a `remaining_bytes()` bound (`src/serialization/string.h:36-40`); Rust `read_blob_bounded` (`rust/shekyl-wire/src/tx_extra/mod.rs:227-236`). **Corrected:** `varint(len) · h_pqc[32] × n_outputs`, self-describing on the wire, and **consensus requires** `len == 32·n_outputs`: exactly one field when `n > 0`, none when `n == 0` (CEN-I19; the field is the fourth scalar of every leaf these outputs become, so a short or missing field used to be zero-filled into the tree). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
+- **Genesis tag set** (2026-09-07; `0x05` REJECTED and `0x08` RESERVED 2026-09-22, PR #825) — `extra` admits exactly `0x00` padding, `0x01` tx pubkey, `0x02` nonce, `0x04` additional pubkeys, `0x06`/`0x07` above, `0x09` PQC view-tag hints, `0x0A` PQC spend-auth pubkeys, `0x0B` archival attestation. **One codec** (2026-09-23, `TX_EXTRA_RUST_CUTOVER.md`): `shekyl-wire`'s `tx_extra` parses and builds every `extra`; the C++ daemon calls it over the FFI and never parses one itself, which is what lets `validate_context_free_pruned` and admission refuse an unparseable `extra` with the same verdict. The inherited `0x03` merge-mining and `0xDE` minergate tags are **deleted** (rule 60); their byte values, `0x05`'s and `0x08`'s stay retired so a future tag cannot reuse a meaning older software would parse differently. An unknown tag makes the whole blob unparseable — `tx_extra` has no generic skip.
+- **9.6b Coinbase extra grammar** (consensus, `TXE-Q6′` ruled 2026-09-23; census `CEN-I20`) — a coinbase's `extra` is **exactly** `0x01 · pubkey[32]` · `0x02 · V(8) · nonce[8]` · `0x06 · V(1120·n) · kem` · `0x07 · V(64·n) · leaf` in that order for `n = |vout| > 0` outputs, and exactly the first two fields when `n == 0`; any other tag (padding, `0x04`, the staged `0x09`/`0x0A`, `0x0B`), any other count, length or order is refused at connect and at DB add (`shekyl_wire::tx_extra::check_coinbase_extra_shape`). Off the coinbase, `0x02` is refused outright (the nonce exists for template search, which only the coinbase does; FA-10's `enc_label` is the tagging channel). **The whitelist is the consensus rule, so adding a tag to it — the `0x0B` attestation producer, when it lands — is a consensus amendment ruled here, not an implementation detail of the producer's PR.** The nonce is fixed at 8 bytes because the 32-bit header nonce exhausts a template at `2^32 / 120 s ≈ 36 MH/s`, each extra byte multiplies that by 256, 8 never binds and matches the pool convention (`reserve_size: 8`), and a fixed width carries no length signal; genesis carries eight zero bytes (it was not nonce-searched). Consequence for CEN-M4: the largest grammar-valid coinbase extra is `18 994` bytes (`|vout| = 16`), below the 24 576 relay cap, so the coinbase extra is bounded by consensus for the first time.
 **9.7 Ct** — `ct_type(1)` then:
 - `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
 - `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
@@ -802,7 +834,7 @@ pre-renumber tags until recapture.)*
 | Bound | Value | Constant |
 |---|---|---|
 | tx / block | **0x10000000** | `CRYPTONOTE_MAX_TX_PER_BLOCK` (config:45) |
-| block weight | median-window limit (long-term window **100,000**; short-term surge factor **ratified S = 4** — census C2-R2 Q3 struck the inherited ×50, which the config constant still carries as implementation residue until the store port) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
+| block weight | median-window limit (long-term window **100,000**; short-term surge factor **S = 4**) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `block_weight_short_term_surge_factor` (`shekyl_effective_block_weight_median`) |
 
 **Fossil flag (→ economics / block-weight owner, not this doc):**
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` has **V1/V2/V5** variants
@@ -823,25 +855,49 @@ over-cap block, must be rejected by both impls).
 
 ## 11. Hashing layer (consensus identities)
 
-- **Tx hash** = `cn_fast_hash` over concatenated component hashes (format_utils.cpp:1137/1163-1182):
-  - coinbase (`Null`, no pqc): **3-part** `H(prefix) · H(base) · null_hash`
-  - spend (`Fcmp`, pqc present): **4-part** `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`,
-    used iff `has_pqc && !pqc_auths.empty()` where `has_pqc = version≥3 && vin[0] != gen`
-    (a `gen`-first tx hashes 3-part like a coinbase).
+- **Tx hash** = `keccak256` over concatenated 32-byte words. **One mixer, in Rust**
+  (`shekyl-wire` `transaction/txid.rs`, `mix`); the C++ `calculate_transaction_hash`
+  serializes, cuts the blob at the offsets its serializer recorded, and calls it
+  (`shekyl_txid_from_segments`) — it hashes nothing and measures nothing (`SHT-Q2`,
+  [`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F family 1).
+  Three arities, by what the body carries:
+  - coinbase (`Null`): **3 words** `H(prefix) · H(base) · null_hash`. A coinbase
+    carries no archival good, so no length;
+  - FCMP++ with no `pqc_auths` component (the serve-credit form, RF-D9):
+    **4 words** `H(prefix) · H(base) · H(prunable) · L`;
+  - FCMP++ spend: **5 words** `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · L`,
+    used iff the first input exists and is not `gen` and `pqc_auths` is non-empty.
 
-  where `H(prefix)` = `get_transaction_prefix_hash` (version + prefix fields),
-  `H(base)` = hash of `serialize_ct_base`, `H(pqc_auths)` = hash of the serialized
-  pqc_auths vec, `H(prunable)` = hash of prunable (`null_hash` for coinbase).
-  ⚠️ The `H(pqc_auths)` preimage is **count-prefixed**: the hash serializes
-  `pqc_auths` with the **generic `std::vector` archiver** (format_utils.cpp:1169 →
-  `begin_array(cnt)` → leading `varint(N)`), so the preimage is `V(N) · auth₀ · … ·
+  `H(prefix)` = hash of the version varint and the prefix fields; `H(base)` = hash
+  of the ct type byte through the committed base; `H(prunable)` = hash of the
+  prunable region (`null_hash` when a body in hand does not hold it). That digest
+  also travels alone — the `txs_prunable_hash` row, and `prunable_hash` beside a
+  pruned body — and has one definition, `shekyl-wire` `prunable_hash_of`, which
+  the C++ daemon reaches over `shekyl_tx_prunable_hash`.
+  **`L` is the transaction's archival length** — the bytes of the tx-level
+  `pqc_auths` segment as the body carries it (no count prefix) plus the bytes of
+  the prunable region — as a `u64`, little-endian in the low 8 bytes of the word,
+  the other 24 zero. It is the operand the shard partition is cut by
+  ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §8.6): bound
+  here, it cannot be reported differently for a transaction that keeps its id. It
+  is **not** on the wire and **not** signed — it is measured from the body, or
+  supplied beside a pruned one and checked by this recomputation. The three
+  arities differ in word count, so no body of one arity shares a preimage with a
+  body of another. *Vocabulary:* "3-part" and "4-part", used across the code and
+  the design docs, count the **component digests** — 4-part ⇔ the body carries the
+  `pqc_auths` component — not the preimage's words; `L` is the word after them.
+  ⚠️ The `H(pqc_auths)` preimage is **count-prefixed**: `V(N) · auth₀ · … ·
   auth_{N-1}` — **unlike** the tx *body*, where the count is implicit (`vin.size()`,
-  no prefix; basic.h:505-516). The two C++ paths legitimately differ; the Rust
-  `hash()` must prepend `V(N)` for the hash component only.
-- **Pruning stable (pruned == full).** `pqc_auths` are **unprunable** (kept in the
-  pruned form, format_utils.cpp:1204) and `prunable_hash` is retained, so all
-  components match → identical tx hash. *(The EOF-tolerant pqc-auths-empty form is
-  a genuinely different tx with the 3-part hash — correct, not a collision.)*
+  no prefix). The mixer prepends `V(N)` for the hash component only; `L` counts the
+  body's bytes, without it.
+- **Pruning stable (pruned == full).** A pruned form supplies what it no longer
+  holds: `prunable_hash` for a storage-pruned spend (which keeps its `pqc_auths`),
+  `H(pqc_auths)` too for a skeleton, and `L` in both — from the store's
+  `txs_archival_len` row, or from the daemon RPC reply's `archival_len`
+  (`Transaction::hash_with_supplied_prunable` / `hash_with_supplied_components`).
+  Every supplied value is an operand of the id it is checked against, so a wrong
+  one yields another id, not another transaction under the same id. C++ has no
+  pruned txid function: a pruned body has no length there to measure.
 - **Block hash** = `cn_fast_hash( V(len) · hashing_blob )`, where
   `hashing_blob = BlockHeader · tx_tree_hash · V(tx_count+1)`. The `V(len)` prefix
   comes from `get_object_hash` serializing the blob as a string
@@ -1021,11 +1077,12 @@ they have different authorities:
    `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs`, consensus
    requires `len == 1120·n_outputs` (CEN-I19)
    (FA-6 / POST_QUANTUM_CRYPTOGRAPHY §Phase 2; `extra.rs` `PqcKemCiphertext`).
-3. **`tx_extra` 0x07 (PQC leaf hashes)** = per-tx `h_pqc[32] × n_outputs`
+3. **`tx_extra` 0x07 (PQC leaf entries)** = per-tx `(CM[32] ‖ record[32]) × n_outputs`
    concatenated (vout order), ~~**not self-describing** — parsed by output count~~
    **length-prefixed** (refuted 2026-09-05, §9.6a); consensus requires
-   `len == 32·n_outputs` (CEN-I19)
-   (FA-6 §3.1; CT2_DRAIN_ORDER §3.1; `h_pqc = Blake2b(pqc_pk)`).
+   `len == 64·n_outputs` and every `CM` a canonical prime-order non-identity
+   point (CEN-I19 shape + `PL-D3` content rule)
+   (FA-6 §3.1; CT2_DRAIN_ORDER §3.1; `FCMP_SPEND_LINKABILITY.md` §6.2).
 4. **`view_tag` derivation is wrong in §2.2** — it is `HKDF-SHA512(ml_kem_ss,
    salt=shekyl-view-tag-prefilter-v1, label‖output_index_le64)[0]`, off the
    **ML-KEM** shared secret (FA-6 §4.2; `derivation.rs:263`), *not* keccak off the

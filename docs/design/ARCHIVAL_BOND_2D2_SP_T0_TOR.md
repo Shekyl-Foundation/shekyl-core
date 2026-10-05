@@ -227,22 +227,28 @@ earlier verification claims stay independently checkable: **15.0.17** recorded 2
 **15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
 `71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
 
-**No `linux-aarch64` pin exists, and the reason is upstream.** The Tor Project does **not** publish a
-`linux-aarch64` Expert Bundle on the stable line: enumerated at 15.0.17 and at 15.0.19, the Linux
-targets are `linux-i686` and `linux-x86_64` only, and the aarch64 builds are `android-aarch64` (Bionic)
-and `macos-aarch64` (Mach-O) — neither of which runs on a 64-bit Linux ARM host. `linux-aarch64`
-appears first in the **16.0a1 alpha** (`tor-expert-bundle-linux-aarch64-16.0a1.tar.gz`, 2025-12-15),
-which verifies Good under the same signing key but is an alpha, and the checklist pins from *stable*.
+**`linux-aarch64` pin (RULED 2026-09-29): Expert Bundle 16.0a12, tor `0.4.9.12`, an alpha.** Verified
+`tor-expert-bundle-linux-aarch64-16.0a12.tar.gz` — tarball SHA256
+`e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, Good signature under
+`EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the extracted binary's SHA256
+`e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`, recorded in `CURRENT_PIN`'s
+`aarch64` arm. The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:
+at 15.0.17, 15.0.19 and 15.0.24 the Linux targets are `linux-i686` and `linux-x86_64` only, and the
+aarch64 builds are `android-aarch64` (Bionic) and `macos-aarch64` (Mach-O). `linux-aarch64` exists only
+in the alpha line, from 16.0a1 (2025-12-15) on.
 
-Consequence, recorded because it is load-bearing elsewhere:
-[`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc) names a Pi 4 as
-the minimum supported device, and that device **cannot currently obtain a `VerifiedTorBinary`** —
-`CURRENT_PIN` is `None` off x86_64 and `discover_and_verify` fails closed with `Unpinned`, which is the
-correct behaviour. **This is a fact about Tor's release matrix, not a defect in either decision**, and
-it resolves when 16.0 goes stable. Until then an aarch64 host may be given the alpha binary through
-`SHEKYL_TEST_PINNED_TOR_BINARY` for **measurement only**; it must not be promoted into `CURRENT_PIN`,
-because pinning an alpha on a mission-#1 security precondition is a different decision from bumping a
-stable pin.
+*Records-was, superseded by the ruling above:* this paragraph previously ruled that the alpha **must
+not** be promoted into `CURRENT_PIN` — an aarch64 host could be given it through
+`SHEKYL_TEST_PINNED_TOR_BINARY` for measurement only, and the floor device would wait for 16.0 stable.
+The ground that reopened it is the transport cutover: `P2P_TRANSPORT_LAYER.md` D9 takes the Tor
+deadline distribution on the floor device under the shipping posture, a managed ephemeral Tor with
+onion-service proof-of-work on, and `discover_and_verify` refuses a managed launch without a pin. An
+attached distro Tor measures a different posture, and an x86_64 measurement is not the floor (rule 76).
+So the alpha is pinned, on the same gate and the same signing key as the stable pin. What it costs,
+stated: aarch64 builds ship an alpha Tor until stable publishes the target. **Reopen:** the first stable
+bundle with `linux-aarch64` replaces this pin; alpha-line security advisories are on the checklist's
+watch until then. [`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)
+names the Pi 4 as the minimum supported device, and that device now obtains a `VerifiedTorBinary`.
 
 ### Tor binaries used for the transit measurement (not shipped)
 

@@ -16,18 +16,21 @@ use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
     challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk, encode_path,
-    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, split_countersignature,
-    verify_segment_path, ArchivalServeCreditPruned, ArchivalServeCreditResponse,
-    SegmentPathOpening, ED25519_COUNTERSIGNATURE_LEN, SEGMENT_LEAF_COUNT, SETTLEMENT_EPOCH_BLOCKS,
+    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, settlement_epoch_last_block,
+    settlement_epoch_open_height, split_countersignature, verify_segment_path,
+    ArchivalServeCreditPruned, ArchivalServeCreditResponse, SegmentPathOpening,
+    ED25519_COUNTERSIGNATURE_LEN, SEGMENT_LEAF_COUNT,
 };
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, CurveTreeRoot,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar, SELENE_CHUNK_WIDTH};
+use shekyl_fcmp::tree::{
+    ed25519_point_to_selene_scalar, leaf_from_chunk_entry, SELENE_CHUNK_WIDTH,
+};
 
 const CT2_FIXTURE: &str = include_str!("../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 const KAT_FIXTURE: &str = include_str!("fixtures/gate2_serve_credit_kat_v1.json");
@@ -95,15 +98,6 @@ fn layers_from_json(v: &Value) -> Vec<Vec<[u8; 32]>> {
                 .collect()
         })
         .collect()
-}
-
-fn settlement_epoch_open_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
-}
-
-fn settlement_epoch_close_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_open_height(settlement_epoch)
-        .saturating_add(SETTLEMENT_EPOCH_BLOCKS.saturating_sub(1))
 }
 
 fn integration_keypair(
@@ -196,7 +190,7 @@ fn build_integration_substrate(
 
     let block_hash_at_seal = [0xABu8; 32];
     let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = settlement_epoch_close_height(settlement_epoch);
+    let h_close = settlement_epoch_last_block(settlement_epoch);
     let h_seal = challenge_seal_height(h_open);
     let h_fire = challenge_fire_height(
         h_open,
@@ -411,8 +405,13 @@ fn ct2_main_chain() -> Vec<Ct2Block> {
                     .expect("outputs")
                     .iter()
                     .map(|o| RawOutput {
-                        output_key: decode_hex32(o["output_key"].as_str().expect("O")),
-                        commitment: o["commitment"].as_str().map(decode_hex32),
+                        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(decode_hex32(
+                            o["output_key"].as_str().expect("O"),
+                        )),
+                        commitment: o["commitment"]
+                            .as_str()
+                            .map(decode_hex32)
+                            .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
                         target: TargetKind::TaggedKey,
                     })
                     .collect(),
@@ -427,21 +426,21 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
     }
     let tip = blocks.last().expect("non-empty");
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::NULL,
     };
     (client, blocks, reference)
 }
@@ -453,7 +452,7 @@ fn ct2_opening_at(
     raw: RawOutput,
 ) -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
     let input = AssembleInput {
-        gindex: Gindex(gindex),
+        gindex: Gindex::from_raw(gindex),
         output_key: raw.output_key,
         commitment: raw.commitment.expect("coinbase output has a commitment"),
     };
@@ -463,7 +462,14 @@ fn ct2_opening_at(
         .iter()
         .find(|cl| cl.output_key == input.output_key)
         .expect("chunk leaf for opened output");
-    let leaf_bytes = construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
+    // The chunk carries the 4th scalar (CM.x), not the commitment point.
+    let leaf_bytes = leaf_from_chunk_entry(
+        cl.output_key.as_bytes(),
+        &cl.key_image_gen,
+        cl.commitment.as_bytes(),
+        &cl.cm_x,
+    )
+    .expect("leaf");
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers,
@@ -471,7 +477,7 @@ fn ct2_opening_at(
     };
     (
         leaf_bytes,
-        reference.curve_tree_root,
+        reference.curve_tree_root.to_bytes(),
         opening,
         layer_scalars,
     )
@@ -479,7 +485,7 @@ fn ct2_opening_at(
 
 fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
     let (client, blocks, reference) = ct2_ingested();
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     let drained = blocks
         .iter()
         .find(|b| b.height == last_drained)
@@ -510,10 +516,10 @@ fn ct2_full_chunk_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
+        scalars.push(cl.cm_x);
     }
     scalars
 }

@@ -74,6 +74,9 @@ pub mod bench_fixtures;
 #[cfg(test)]
 pub(crate) mod tests;
 
+#[cfg(test)]
+mod pqc_leaf_verdict_tests;
+
 pub use balance::BalanceSummary;
 pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};

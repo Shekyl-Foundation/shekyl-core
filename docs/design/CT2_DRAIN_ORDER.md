@@ -50,7 +50,7 @@ byte-for-byte, composed into the root equality:
 
 ```text
 blocks ──S1──▶ (global_output_index, leaf bytes) per output
-           ──S1-leaf──▶ 128-byte leaf {O.x, I.x, C.x, h_pqc}
+           ──S1-leaf──▶ 128-byte leaf {O.x, I.x, C.x, CM.x}
            ──S2──▶ drained leaf stream in (maturity, gindex) order
            ──build_layers / build_upper_layers──▶ curve_tree_root
                        ║
@@ -137,8 +137,10 @@ not diverge).
 ## 3. S1-leaf — coinbase / `CTTypeNull` leaf construction (the sharp sub-surface)
 
 Every block has a coinbase, so a wrong coinbase leaf diverges the tree at every
-block. The leaf is `construct_leaf(O, C, h_pqc) → 128 B = {O.x, I.x, C.x,
-h_pqc}` where `I = Hp(O)` (key-image generator, Monero biased hash-to-curve),
+block. The leaf is `construct_leaf(O, C, CM) → 128 B = {O.x, I.x, C.x,
+CM.x}` where `I = Hp(O)` (key-image generator, Monero biased hash-to-curve)
+and `CM` is the output's PQC leaf commitment point from its `0x07` entry
+(`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)),
 x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 (`rust/shekyl-fcmp/src/tree.rs:328-353`, `311-325`).
 
@@ -147,22 +149,29 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Is coinbase a tree leaf? | **Yes** — `collect_outputs(blk.miner_tx, true)`; deferred, maturity `+60`. | `blockchain_db.cpp:417-420`, `372-374` |
 | Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `ct_types.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
 | Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `ct_ops.cpp:322-333` |
-| Coinbase `h_pqc` | **Real per-output hybrid hash**, `Blake2b-512("shekyl-pqc-leaf" ‖ hybrid_pk) wide-reduced`, computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_HASHES`, `N×32` in vout order). | `derivation.rs:53-71`, `cryptonote_tx_utils.cpp:162-192`,`726-755`, `tx_extra.h:45` |
-| Where the tree reads `h_pqc` | `extract_leaf_hashes` parses `tx.extra` and takes the **single** `tx_extra_pqc_leaf_hashes` field (blob `N×32` in vout order); `collect_outputs` slices `blob + i*32`. **Since 2026-09-06 (CEN-I19) there is no fallback:** admission rejects any transaction with outputs that does not carry exactly one `0x07` of `32·N` bytes (and exactly one `0x06` of `1120·N`), so at DB add a parse failure, an absent field or a wrong length is an **abort** (`DB_ERROR`), never a zero-filled leaf. ~~Falls back to 32 zero bytes when: parse fails, the tag is absent, `blob.size() % 32 != 0`, or `i >= num_leaf_hashes`~~ — that fail-open stored leaves whose PQ binding was to nothing and was retired with the rule. A transaction with no outputs carries no field and contributes no leaf. | `blockchain_db.cpp:528` (`extract_leaf_hashes`), `cryptonote_format_utils.cpp:1000` (`check_tx_extra_pqc_field_shape`), `tx_extra.h:45,219-228`, `GENESIS_TX_WIRE_FORMAT.md` §9.6a |
+| Coinbase leaf commitment | **Real per-output `CM = H_ℓ(hybrid_pk)·G_k + r·J`** (`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14); formerly the Blake2b key hash `h_pqc`), computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_ENTRIES`, `N×64` entries `CM ‖ record` in vout order). | `derivation.rs` (`derive_pqc_leaf`), `cryptonote_tx_utils.cpp` |
+| Where the tree reads the commitment | `extract_leaf_hashes` parses `tx.extra` and takes the **single** `tx_extra_pqc_leaf_hashes` field (blob `N×64` in vout order); `collect_outputs` slices `blob + i*64` and hands the entry's leading 32 bytes (`CM`) to the shared leaf constructor, which extracts `CM.x`. **Since 2026-09-06 (CEN-I19) there is no fallback:** admission rejects any transaction with outputs that does not carry exactly one correctly-sized field, and since `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14) also any entry whose point is not admissible; the collector aborts on either. | `blockchain_db.cpp` (`extract_leaf_hashes`, `collect_outputs`) |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
 | Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `ct_types.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
 
-### 3.1 Replication obligation — `h_pqc` is on-chain, not recomputable
+### 3.1 Replication obligation — the leaf commitment is on-chain, not recomputable
 
-The load-bearing finding: **`h_pqc` cannot be recomputed from the bare public
-output** — it is the hash of the *hybrid public key*, carried in `tx_extra`
-`0x07`. The wallet's block-derived leaf builder **must parse `tx_extra` `0x07`**
-(vout-indexed) for both coinbase and regular outputs, replicating the **exact**
-`extract_leaf_hashes` semantics: validate `blob.size() % 32 == 0` (else treat
-the whole field as absent → zeros), then per-output `h_pqc = i < num_leaf_hashes
-? blob[i*32 .. i*32+32] : zeros`. This is a new S1-leaf input the block-derived
-pipeline must thread; it was not in the spike prompt's `{O.x, I.x, C.x, h_pqc}`
-description (which read as if `h_pqc` were derivable).
+The load-bearing finding: **the leaf's 4th scalar cannot be recomputed from
+the bare public output** — it is the x-coordinate of the PQC leaf commitment
+`CM` (a commitment to the hybrid public key's hash under a blind only the
+output's owner can derive; `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)), carried in `tx_extra` `0x07`. The
+wallet's block-derived leaf builder **must parse `tx_extra` `0x07`**
+(vout-indexed) for both coinbase and regular outputs, slicing one 64-byte
+entry per output and taking its leading 32 bytes as `CM`
+(`recon::extract_leaf_commitments`). **There is no zero fallback** (census
+`d-3`, retired with `PL-D3`): an absent tag, a length that is not `64 × n`,
+or an entry count that is not the output count is an ingest error
+(`ClientError::LeafEntries`) — on an admitted chain none of these can occur,
+because the same rule refuses the transaction at relay and connect; the
+replica surfaces a feed that violated it rather than storing a leaf set the
+daemon never holds. This is a new S1-leaf input the block-derived pipeline
+must thread; it was not in the spike prompt's `{O.x, I.x, C.x, h_pqc}`
+description (which read as if the value were derivable).
 
 **Parser ownership — RESOLVED: reuse `shekyl_scanner::extra::Extra`.** The Rust
 `tx_extra` parser already exists and **already decodes tag `0x07`**:
@@ -216,7 +225,7 @@ re-raised:
 
 **Consequence for the KAT.** There is **no engineered-torsion vector in §8** —
 it would test nothing about S1/S2/S3 drain-order agreement (the divergence
-surfaces are the *inputs* to `construct_leaf` — which `O`/`C`/`h_pqc`, in which
+surfaces are the *inputs* to `construct_leaf` — which `O`/`C`/`CM`, in which
 order — not the hash math inside it, which is shared). Leaf-builder *totality*
 on adversarial points (decompress-failure → `None`, no panic) is a **CT-1
 leaf-construction unit concern**, already approached by
@@ -334,7 +343,7 @@ The block-derived wallet pipeline (Round 1 implementation) is:
    `tx_hashes` order, vout order).
 2. For each indexed output, apply the **leaf-skip predicate** (§2.2:
    target-variant ∧ `i < outPk.size()` ∧ `construct_leaf`-ok); for included
-   outputs run the **S1-leaf** builder: `O`, `C` from `outPk[i].mask`, `h_pqc`
+   outputs run the **S1-leaf** builder: `O`, `C` from `outPk[i].mask`, `CM`
    parsed via `shekyl_scanner::extra::Extra` from `tx_extra` `0x07` with the
    `extract_leaf_hashes` validation/slice (§3.1).
 3. Register each leaf as pending with maturity `+10`/`+60`/staked.
@@ -442,7 +451,7 @@ what is drivable **today**:
   60) drains as position `0`, a single leaf wrapped into the layer-1 Helios
   root (the first `R_0`);
 - a **coinbase-heavy** stretch — every miner output drains at `+60` with on-chain
-  `h_pqc` (§3); confirms coinbase leaf construction and the `+60` rule;
+  the leaf commitment (§3); confirms coinbase leaf construction and the `+60` rule;
 - **both reorg depths**, both coinbase-generatable, because §6's
   journal-membership split has two branches and a coinbase reorg reaches each by
   depth. A popped block `h`'s coinbase (maturity `h + 60`) has drained at tip
@@ -490,7 +499,13 @@ level-0/1 segment. **This is the Round-1 KAT and the TDD oracle.**
   leaf mix.
 - **seam-parity: scanner `Extra` `0x07` extraction == daemon `parse_tx_extra`**
   on adversarial `tx_extra` — duplicate `0x07` tags, malformed/truncated tags,
-  and tag ordering. The lean-crate split (CT-1) is faithful to the daemon's own
+  and tag ordering. **CLOSED by construction 2026-09-23** (`TX_EXTRA_RUST_CUTOVER.md`):
+  the daemon's `parse_tx_extra` is deleted and `blockchain_db.cpp` reads the
+  `0x07` blob through `shekyl_tx_extra_leaf_entries` → `shekyl_wire::tx_extra::parse`,
+  the same function scanner `Extra::read` calls, so there is one parser and no
+  seam to keep in parity; duplicates and malformed tags are refused by the
+  shape rule on both sides (`check_tx_extra_shape`). The paragraph below is the
+  obligation as it stood. The lean-crate split (CT-1) is faithful to the daemon's own
   two-stage structure: scanner `Extra` owns the **parse** stage (find the `0x07`
   blob), `shekyl-curve-tree::recon::extract_leaf_hashes` owns the **validate**
   stage (absent / `len % 32 != 0` → empty, slice). The validate half is mirrored
@@ -503,7 +518,7 @@ level-0/1 segment. **This is the Round-1 KAT and the TDD oracle.**
   duplicate/malformed `tx_extra` needs a spend to construct, so it rides the same
   spend-dependent reversion as the malformed-length validate case (§9 #2). Until
   verified, the parse-stage assumption is: **scanner `Extra` is the sole parser
-  and matches the daemon** — a silent divergence here shifts `h_pqc` per output
+  and matches the daemon** — a silent divergence here shifts the leaf commitment per output
   and breaks every leaf.
 
 Tier B's assertions are **written now** (the rule is enumerated and correct) but
@@ -587,11 +602,13 @@ Authoritative close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOS
    **not** indexed for a root. KAT boundary pin at heights 60/61 (not interior
    heights). `empty_tree_is_a_ct2_boundary` in CT-0 remains the executable
    chunk-empty vs tree-empty distinction.
-3. **`h_pqc` on-chain — LANDED.** `CURVE_TREE_CLIENT.md` §4.1 (Set A) documents
-   block-derived `h_pqc` parsed from `tx_extra` `0x07` (public, parsed input,
-   not `TransferDetails`). Parser ownership: `shekyl_scanner::extra::Extra`;
-   validate stage: `recon::extract_leaf_hashes`. Scanner `0x07` unit tests
-   landed; daemon adversarial parity deferred to Tier B (§8.2).
+3. **Leaf value on-chain — LANDED.** `CURVE_TREE_CLIENT.md` §4.1 (Set A) documents
+   the block-derived leaf commitment parsed from `tx_extra` `0x07` (public,
+   parsed input, not `TransferDetails`). Parser ownership:
+   `shekyl_scanner::extra::Extra`; slice stage: `recon::extract_leaf_commitments`
+   (was `extract_leaf_hashes` with a zero fallback until `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14); the
+   fallback is gone — a bad payload is an ingest error). Scanner `0x07` unit
+   tests landed; daemon adversarial parity deferred to Tier B (§8.2).
 
 ### Open questions for Round 1
 
@@ -644,10 +661,10 @@ Authoritative close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOS
 
 ## 10. Round-0 closure
 
-The enumeration is complete: S1 (index assignment), S1-leaf (coinbase/`h_pqc`),
+The enumeration is complete: S1 (index assignment), S1-leaf (coinbase/leaf commitment),
 S2 (drain trigger + batch + empty root), S3 (reorg) are each pinned to source
 with the genesis corners named. The two framing corrections (coinbase `+60`,
-empty root = `selene_hash_init`) and the `h_pqc`-on-chain obligation are the
+empty root = `selene_hash_init`) and the leaf-commitment-on-chain obligation are the
 Round-0 findings that change the implementation shape.
 
 The two Tier-A critical-path items are also resolved at source ahead of

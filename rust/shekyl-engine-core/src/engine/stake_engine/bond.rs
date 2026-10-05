@@ -11,6 +11,7 @@ use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
+use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
@@ -78,8 +79,8 @@ pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
     pub bound_tx: PBoundBytes,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
-    /// the drawn entry-gap spread.
-    pub bond_post_offset_blocks: u64,
+    /// the drawn entry-gap spread (a [`BlockCount`], height-semantics C4).
+    pub bond_post_offset_blocks: BlockCount,
     /// The spent funding records' gindexes — the §3.5 reservation set.
     pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
@@ -113,7 +114,8 @@ impl Message<AssembleBond> for StakeEngine {
         // pre-SA-2b signing circularity forced a second, public-parts
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
-        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone())
+        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
         let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
@@ -173,7 +175,7 @@ impl Message<AssembleBond> for StakeEngine {
                     .sign(
                         &keys.hybrid_sign_sk,
                         shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                        payload_hash,
+                        payload_hash.as_bytes(),
                     )
                     .map_err(|e| BondAssemblyError::build("bond pqc auth signing", e))?;
                 sig.to_canonical_bytes()

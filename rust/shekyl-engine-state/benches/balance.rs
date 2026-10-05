@@ -39,9 +39,9 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
 
     TransferDetails {
         tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-        internal_output_index: seed & 0xff,
-        global_output_index: seed,
-        block_height: height,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(seed & 0xff),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(seed),
+        block_height: shekyl_types::BlockHeight::from_raw(height),
         key,
         key_offset: Scalar::ZERO,
         commitment: Commitment::new(Scalar::ONE, 1_000 + seed),
@@ -52,8 +52,9 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spending_tx_hash: None,
         source_ciphertext: None,
         output_handle: None,
-        eligible_height: height + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
         frozen: (seed & 0xf) == 0,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
@@ -89,7 +90,7 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(BalanceSummary::compute(
                         black_box(transfers),
-                        current_height,
+                        shekyl_types::BlockHeight::from_raw(current_height),
                         black_box(&spend_locks),
                     ))
                 });

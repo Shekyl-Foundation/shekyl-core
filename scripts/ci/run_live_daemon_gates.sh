@@ -43,8 +43,8 @@
 # named criterion is met here: nightly-live-daemon-slow.yml opens (or
 # comments on) a tracking issue on failure, so a slow-lane red is pushed
 # at a human rather than waiting to be noticed. If that notification step
-# is ever removed, the split loses its justification and the slow pair
-# moves back to ARMED.
+# is ever removed, the split loses its justification and the slow gates
+# move back to ARMED.
 
 set -euo pipefail
 
@@ -87,9 +87,10 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #   restricted_listener / ported_console / ported_p2p / native_handlers /
 #     e2e_fcmp_spend_accepted_by_daemon — pre-existing (armed 2026-09-07;
 #     the north-star also failed red in CI 2026-09-08, PR #656).
+#   e2e_fcmp_spend_reorg_restores_pool_and_fee — sabotage 2026-09-23:
+#     fee-delta expected value dropped `+ txn_fee`; panicked at the mined
+#     sum (8455500000) against the pre-mine sum (0).
 #   regtest_daemon_spawns_and_mines_to_wallet_address — sabotage 2026-09-08.
-#   e2e_get_curve_tree_path_returns_valid_path — historical red: 404 on the
-#     Axum transport before the route registration (its doc comment).
 #   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
 #     InvalidNode("invalid block") before the shekyl-wire parse migration.
 #   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
@@ -100,17 +101,33 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
 #   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#   jsonrpc_we_carries_handler_status_through_the_result_envelope — the
+#     result-envelope leg split out of restricted_listener_* by PR #782;
+#     sabotage 2026-09-18 (envelope pointer inverted, panicked there).
+#   get_output_histogram_stays_unrouted — PR #782's deletion falsifier
+#     (SOK-Q3): red by construction on any tree that routes the method
+#     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
+#     inverted, panicked there).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
+#   e2e_cxx_template_fills_to_its_median (slow) — historical red
+#     2026-09-28: its premise (a C++-built block at the limit) failed its
+#     own assertions on the first run; the C++ producer stops at its
+#     fee/penalty equilibrium past the median (CHAIN_RULES_SLICE_7.md §3.5).
+#     Fifty wallet spends into the pool: ~5 min debug, too heavy per-PR.
+#   e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx (slow) —
+#     historical red 2026-09-28: the C++ refused the Rust block at the
+#     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
+#     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
   engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
+  engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
-  engine::regtest_e2e::e2e_get_curve_tree_path_returns_valid_path
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
@@ -118,13 +135,18 @@ ARMED=(
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
+  engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
+  engine::regtest_e2e::get_output_histogram_stays_unrouted
 )
 
-# Consensus gates too heavy for the per-PR lane (13 + 19 min measured):
-# the nightly live-daemon workflow runs these with GATE_LANE=slow.
+# Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the
+# two slice-7 gates ~5 min each in a debug build, fifty spends apiece): the
+# nightly live-daemon workflow runs these with GATE_LANE=slow.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
+  engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
+  engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided

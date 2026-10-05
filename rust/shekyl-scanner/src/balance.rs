@@ -6,6 +6,7 @@
 //! Balance computation with lock/frozen categorization.
 
 use serde::Serialize;
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::transfer::TransferDetails;
@@ -21,6 +22,12 @@ pub struct BalanceSummary {
     pub locked_by_timelock: AtomicUnits,
     /// Balance in frozen outputs.
     pub frozen: AtomicUnits,
+    /// Balance in received-but-unspendable outputs
+    /// (`TransferDetails::unspendable`, `PL-D3` §6.2): on chain and
+    /// retained in the ledger, so counted in `total`, but never in
+    /// `unlocked` — the chain leaf does not open to this wallet's
+    /// derivation, so no spend can ever be proven.
+    pub unspendable: AtomicUnits,
     /// Balance committed to a network-exposed spend awaiting chain
     /// confirmation (the F14 lock, `DAEMON_SUBMIT_VERDICT.md` §2.6).
     /// Counted in `total` (the spend has not settled) but never in
@@ -52,7 +59,7 @@ impl BalanceSummary {
     /// reconciler applied.
     pub fn compute(
         transfers: &[TransferDetails],
-        current_height: u64,
+        current_height: BlockHeight,
         spend_locks: &shekyl_engine_state::InFlightSpendLocks,
     ) -> Self {
         let mut summary = BalanceSummary::default();
@@ -64,6 +71,11 @@ impl BalanceSummary {
 
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
+
+            if td.unspendable.is_some() {
+                summary.unspendable = accumulate(summary.unspendable, amount);
+                continue;
+            }
 
             if spend_locks.contains(td.global_output_index) {
                 summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
@@ -99,9 +111,9 @@ mod tests {
         use crate::transfer::SPENDABLE_AGE;
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
-            internal_output_index: 0,
-            global_output_index: 0,
-            block_height: height,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(0),
+            block_height: shekyl_types::BlockHeight::from_raw(height),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ZERO,
             commitment: Commitment::new(Scalar::ZERO, amount),
@@ -112,8 +124,9 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: height + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
         }
@@ -129,7 +142,7 @@ mod tests {
         let mut journal = SendJournalBlock::empty();
         journal.record_dispatched(
             txid,
-            90,
+            BlockHeight::from_raw(90),
             0,
             Vec::new(),
             vec![SendInputRef { gindex, amount: 0 }],
@@ -147,7 +160,7 @@ mod tests {
 
     #[test]
     fn empty_balance() {
-        let summary = BalanceSummary::compute(&[], 100, &no_locks());
+        let summary = BalanceSummary::compute(&[], BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
     }
@@ -155,7 +168,7 @@ mod tests {
     #[test]
     fn basic_unlocked_balance() {
         let transfers = vec![make_td(1000, 50), make_td(2000, 60)];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(3000));
         assert_eq!(summary.unlocked, AtomicUnits::from_raw(3000));
     }
@@ -163,7 +176,7 @@ mod tests {
     #[test]
     fn timelocked_outputs() {
         let transfers = vec![make_td(1000, 95)];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.locked_by_timelock, AtomicUnits::from_raw(1000));
@@ -174,7 +187,7 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.spent = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
     }
 
@@ -183,10 +196,10 @@ mod tests {
     #[test]
     fn awaiting_confirmation_excluded_from_unlocked() {
         let mut td = make_td(1000, 50);
-        td.global_output_index = 77;
+        td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(77);
         let locks = locks_over(77, [7u8; 32]);
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &locks);
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &locks);
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::from_raw(1000));
@@ -198,10 +211,10 @@ mod tests {
     #[test]
     fn spent_row_supersedes_its_journal_lock() {
         let mut td = make_td(1000, 50);
-        td.global_output_index = 78;
+        td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(78);
         td.spent = true;
         let locks = locks_over(78, [8u8; 32]);
-        let summary = BalanceSummary::compute(&[td], 100, &locks);
+        let summary = BalanceSummary::compute(&[td], BlockHeight::from_raw(100), &locks);
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::ZERO);
     }
@@ -211,9 +224,36 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.frozen = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+        let summary = BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.frozen, AtomicUnits::from_raw(1000));
+    }
+
+    /// A received-but-unspendable output (`PL-D3` §6.2) is retained — it is
+    /// on chain, so `total` counts it — but never spendable, in either
+    /// reason.
+    #[test]
+    fn unspendable_counted_in_total_never_in_unlocked() {
+        use shekyl_engine_state::UnspendableReason;
+        for reason in [
+            UnspendableReason::PqcLeafMismatch,
+            UnspendableReason::PqcLeafEntryAbsent,
+        ] {
+            let mut td = make_td(1000, 50);
+            td.unspendable = Some(reason);
+            let transfers = vec![td];
+            let summary =
+                BalanceSummary::compute(&transfers, BlockHeight::from_raw(100), &no_locks());
+            assert_eq!(summary.total, AtomicUnits::from_raw(1000), "{reason:?}");
+            assert_eq!(summary.unlocked, AtomicUnits::ZERO, "{reason:?}");
+            assert_eq!(
+                summary.unspendable,
+                AtomicUnits::from_raw(1000),
+                "{reason:?}"
+            );
+            assert_eq!(summary.frozen, AtomicUnits::ZERO, "{reason:?}");
+            assert_eq!(summary.locked_by_timelock, AtomicUnits::ZERO, "{reason:?}");
+        }
     }
 }

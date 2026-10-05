@@ -170,7 +170,7 @@ pub fn assert_equivalent(
 ///
 /// # Why this is separate from [`assert_equivalent`]
 ///
-/// Per `RANDOMX_V2_MUTATION_REGIME.md` MR-F10, the verdict used to be
+/// Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` MR-F10, the verdict used to be
 /// reachable only through [`assert_equivalent`], which takes live
 /// sessions — so exercising the `Err` branch required a 256-MiB
 /// Argon2d derive *and* a linked C oracle, and consequently no
@@ -418,7 +418,7 @@ mod tests {
     // NO test that induces a divergence and asserts the verdict
     // reports it — the only `#[should_panic]` tests in the crate were
     // input validation and a rationale-format check. See
-    // `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
+    // `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
 
     /// Baseline: identical fingerprints are accepted.
     ///

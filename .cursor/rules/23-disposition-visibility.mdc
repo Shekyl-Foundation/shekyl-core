@@ -1,5 +1,5 @@
 ---
-description: Every disposition class (REJECTED / DEFERRED / STAGED / RESERVED) has a defined grep surface. Zero code symbols for anything not staged; refused names stay in namespace contracts as structured status entries, not header prose.
+description: Every disposition class (REJECTED / DEFERRED / STAGED / RESERVED) has a defined grep surface. Zero code symbols for anything not staged; refused names stay in namespace contracts as structured status entries, not header prose. Document assertions are a grep surface too - grep returns a LINE, so a superseded row or a section whose status differs from its file's declares that status in the matching line, never only in a banner or an enclosing heading.
 alwaysApply: true
 ---
 
@@ -117,6 +117,44 @@ name in a client enum is pre-provisioning, not protection.
   later rejected — a refusal must state what *is* (not offered;
   funds held; use X instead), not promise what might be.
 
+## Document assertions are a grep surface too
+
+The four classes above govern **code symbols** and **FOLLOWUPS rows**.
+The same doctrine governs **prose and tables**, because an agent
+reconstructing intent greps documents at least as often as code — and
+`grep` returns a **line**, not a document. A reader who arrives
+mid-file has not seen the H1, the status banner, the enclosing heading,
+or the *"why we aren't doing this"* sentence above the match. They act
+on what the regex returned.
+
+So: **a document assertion's status must be readable in the line that
+matches it.** Not in a banner, not in a heading above it.
+
+- A **superseded** table row, formula, or sim output carries
+  `SUPERSEDED`/`REJECTED` **in the row**, or is deleted. This is the
+  REJECTED class applied to prose: an artifact with no self-describing
+  status is the documentary form of the bare `const` with no consuming
+  arm — the grep hit that reads as current.
+- A **section** whose status differs from its file's declares it **in
+  its own heading**.
+- A **records-was** claim (a verdict at a pin, a dated measurement)
+  carries its **era in-line**. It is then legible rather than a
+  landmine, and it stays — a pinned verdict is a claim that is true
+  now, with provenance, not history to be swept into git.
+
+The failure this prevents is not hypothetical and is not a human
+failure: a `CLOSED as record` design round carried a §5.5 heading
+reading *"nothing here is ruled"* **1148 lines** below a banner stating
+all three sub-rounds were ruled and built — and six live conformance
+rows cited that section as their ratified spec. Both of
+`95-documentation-lifecycle`'s mechanisms, banner and archive, failed on
+one file at once.
+
+Reading discipline, the other half: when a grep returns a row, read
+what **encloses** it — heading, banner, and any refusal line above it —
+before reasoning from it, and say which round or era you are reading
+from rather than reporting a row as the document's conclusion.
+
 ## Related rules
 
 - **`15-deletion-and-debt.mdc`** — when to delete vs defer; the
@@ -133,3 +171,7 @@ name in a client enum is pre-provisioning, not protection.
 - **`47-gate-subject-assertion.mdc`** — gates that read a contract
   registry must fail on empty extraction; a status table nothing
   reads is header prose with extra steps.
+- **`95-documentation-lifecycle.mdc`** — the status banner is not the
+  grep surface; that rule carries the line-local status requirement for
+  documents, of which this rule's REJECTED/SUPERSEDED prose form is the
+  disposition half.

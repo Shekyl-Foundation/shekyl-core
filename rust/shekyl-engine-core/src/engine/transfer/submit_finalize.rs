@@ -90,7 +90,7 @@ where
         // carried input set (spent race-guard included). Same path as
         // `AlreadyInChain` — only the baseline height differs.
         self.ledger.with_wallet_ledger_mut(|wallet| {
-            let accepted_at_height = wallet.ledger.height();
+            let accepted_at_height = wallet.ledger.height().to_raw();
             wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), accepted_at_height);
         });
 
@@ -162,7 +162,7 @@ where
         state.loop_breaker.record_accept();
 
         let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
-            let synced_height = wallet.ledger.height();
+            let synced_height = wallet.ledger.height().to_raw();
             // F40 §2.5(a): baseline at the claimed confirming height, not
             // the wallet's current height — the watchdog horizon counts
             // from the block that (per the verdict) settles the spend.

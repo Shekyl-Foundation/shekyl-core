@@ -90,21 +90,20 @@ public:
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const
   { ids.push_back(crypto::null_hash); current_height = chain_height; return true; }
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id) const { height = chain_height ? chain_height - 1 : 0; top_id = crypto::null_hash; }
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone) { return true; }
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed) { return true; }
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   void pause_mine(){}
   void resume_mine(){}
   bool on_idle(){ return true; }
-  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){ return true; }
+  bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp){ return true; }
   bool handle_get_objects(cryptonote::NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote::cryptonote_connection_context& context){ return true; }
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("scripted_core: get_blockchain_storage must not be reached"); }
   bool get_test_drop_download() const { return true; }
   bool get_test_drop_download_height() const { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
-  bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return target_height; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
-  void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}
+  void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, std::optional<std::uint8_t>) {}
   void on_stem_propagated(epee::span<const crypto::hash>) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
@@ -120,8 +119,6 @@ public:
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
-  uint32_t get_blockchain_pruning_seed() const { return 0; }
-  bool prune_blockchain(uint32_t pruning_seed = 0) { return true; }
   bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) { return false; }
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
@@ -317,7 +314,7 @@ TEST(sync_orphan_arm, bookkeeping_mismatch_keeps_teeth)
   // names the parent there, then fill it -- the queue now "knows" the
   // parent at height 299 while the target span claims it at 99.
   r.handler.m_block_queue.reserve_span(299, 299, 1, other_id, addr,
-      false, 0, 0, 400, {{parent_hash, 299}}, boost::posix_time::microsec_clock::universal_time());
+      400, {{parent_hash, 299}}, boost::posix_time::microsec_clock::universal_time());
   std::vector<cryptonote::block_complete_entry> filler{ make_entry(299, crypto::null_hash) };
   r.handler.m_block_queue.add_blocks(299, filler, other_id, addr, 0.0f, filler[0].block.size());
 

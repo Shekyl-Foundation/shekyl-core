@@ -72,7 +72,8 @@ namespace boost
       // reader could not parse -- so the test passed with the version gate
       // removed, for the wrong reason. Verified by instrumenting the loader:
       // the fixture drives `serialize(peerlist_types, ver=7)` against
-      // CURRENT=8, which is the comparison under test.
+      // CURRENT (8 when written, 9 since the pruning_seed removal), which is
+      // the comparison under test.
       const uint64_t size = elem.peers.size();
       a & size;
       for (auto& p : elem.peers)
@@ -131,12 +132,12 @@ TEST(peer_list, merge_peer_lists)
 
 namespace
 {
-  bool check_empty(nodetool::peerlist_storage& peers, std::initializer_list<epee::net_utils::zone> zones)
+  bool check_empty(nodetool::peerlist_storage& peers, std::initializer_list<std::optional<epee::net_utils::connector_id>> connectors)
   {
     bool pass = false;
-    for (const epee::net_utils::zone zone : zones)
+    for (const std::optional<epee::net_utils::connector_id> connector : connectors)
     {
-      const nodetool::peerlist_types types{peers.take_zone(zone)};
+      const nodetool::peerlist_types types{peers.take_connector(connector)};
       EXPECT_TRUE(types.gray.empty());
       pass = types.gray.empty();
     }
@@ -347,9 +348,9 @@ TEST(peerlist_manager, white_does_not_survive_a_save_load_cycle)
 
 TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 {
-  // PEERLIST_STORE_LIST_CEILING is derived from the runtime per-zone caps
-  // the peerlist manager trims to (derivation at the constant's
-  // definition); store() itself serializes whatever lists it is handed and
+  // PEERLIST_STORE_LIST_CEILING is the corruption bound: gray cap times
+  // the stored networks times headroom (derivation at the constant's
+  // definition). store() itself serializes whatever lists it is handed and
   // enforces nothing — which is what lets this test write an oversized
   // store. A list beyond the ceiling therefore cannot come from a normally
   // operating daemon, and open() must refuse it — falling back to the
@@ -359,7 +360,7 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
   nodetool::peerlist_types types{};
   types.gray.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
   for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
 
   std::ostringstream stream{};
   EXPECT_TRUE(peers.store(stream, types));
@@ -381,8 +382,8 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
   // the constant in net_peerlist.h AND re-pin the digest, in the same
   // change.
   nodetool::peerlist_types types{};
-  types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
-  types.gray.push_back({net::tor_address::unknown(), 88, 384});
+  types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
+  types.gray.push_back({net::tor_address::unknown(), 88});
 
   nodetool::peerlist_storage peers{};
   std::ostringstream stream{};
@@ -391,9 +392,11 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
   const crypto::hash digest = crypto::cn_fast_hash(bytes.data(), bytes.size());
   const std::string digest_hex = epee::string_tools::pod_to_hex(digest);
 
-  // v8 store shape (id-less v5 entries), pinned 2026-09-06.
-  const char* pinned = "61787d1a71a8e63149cab08aafc45780f1f1ed064bbd0ca4aea365990f06f536";
-  EXPECT_EQ(8u, nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
+  // v9 store shape (id-less, seed-less v6 entries), pinned 2026-09-21; the
+  // v8 pin (id-less v5 entries, 2026-09-06) was
+  // 61787d1a71a8e63149cab08aafc45780f1f1ed064bbd0ca4aea365990f06f536.
+  const char* pinned = "875deec70b0bc5cbe5b8ad32e9c22708dbfe39bd656e7c1408a5409c4ac0fe87";
+  EXPECT_EQ(9u, nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
     << "store version moved to " << nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER
     << ": re-pin the digest literal in this test in the same change";
   EXPECT_EQ(pinned, digest_hex)
@@ -410,12 +413,12 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
 // three-list format with its populated white section.
 TEST(peerlist_storage, a_v7_store_is_dropped_whole)
 {
-  using zone = epee::net_utils::zone;
+  using connector_id = epee::net_utils::connector_id;
 
   std::string buffer{};
   {
     legacy_low_version_store legacy{};
-    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44});
 
     std::ostringstream stream{};
     {
@@ -434,18 +437,18 @@ TEST(peerlist_storage, a_v7_store_is_dropped_whole)
   // by skipping its own assertion whenever `open` refused the stream, which is
   // how the first version of this test passed with the version gate removed.
   ASSERT_TRUE(bool(read_peers));
-  nodetool::peerlist_types restored = read_peers->take_zone(zone::public_);
+  nodetool::peerlist_types restored = read_peers->take_connector(connector_id::clearnet);
   EXPECT_TRUE(restored.gray.empty())
     << "a store declaring a pre-current version restored " << restored.gray.size()
     << " peer(s); the version gate is the only thing preventing an older "
        "store's entries -- including its white section -- from being adopted";
-  EXPECT_TRUE(check_empty(*read_peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(*read_peers, {std::nullopt, connector_id::clearnet, connector_id::tor}));
 }
 
 TEST(peerlist_storage, store)
 {
   using address_type = epee::net_utils::address_type;
-  using zone = epee::net_utils::zone;
+  using connector_id = epee::net_utils::connector_id;
 
   // The store carries ONE list. Entries are given distinct last_seen stamps
   // so every assertion below is a lookup rather than a positional read --
@@ -461,21 +464,21 @@ TEST(peerlist_storage, store)
   };
 
   nodetool::peerlist_storage peers{};
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {std::nullopt, connector_id::clearnet, connector_id::tor}));
 
   std::string buffer{};
   {
     nodetool::peerlist_types types{};
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
-    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 45, 0});
-    types.gray.push_back({net::tor_address::unknown(), 75, 0});
-    types.gray.push_back({net::tor_address::unknown(), 88, 0});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 45});
+    types.gray.push_back({net::tor_address::unknown(), 75});
+    types.gray.push_back({net::tor_address::unknown(), 88});
 
     std::ostringstream stream{};
     EXPECT_TRUE(peers.store(stream, types));
     buffer = stream.str();
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {std::nullopt, connector_id::clearnet, connector_id::tor}));
   {
     std::istringstream stream{buffer};
     std::optional<nodetool::peerlist_storage> read_peers =
@@ -483,10 +486,10 @@ TEST(peerlist_storage, store)
     ASSERT_TRUE(bool(read_peers));
     peers = std::move(*read_peers);
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::i2p}));
+  EXPECT_TRUE(check_empty(peers, {std::nullopt}));
 
-  nodetool::peerlist_types types = peers.take_zone(zone::public_);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p}));
+  nodetool::peerlist_types types = peers.take_connector(connector_id::clearnet);
+  EXPECT_TRUE(check_empty(peers, {std::nullopt, connector_id::clearnet}));
 
   ASSERT_EQ(2u, types.gray.size());
   {
@@ -504,8 +507,8 @@ TEST(peerlist_storage, store)
     EXPECT_EQ(45u, b->last_seen);
   }
 
-  types = peers.take_zone(zone::tor);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p, zone::tor}));
+  types = peers.take_connector(connector_id::tor);
+  EXPECT_TRUE(check_empty(peers, {std::nullopt, connector_id::clearnet, connector_id::tor}));
 
   ASSERT_EQ(2u, types.gray.size());
   {

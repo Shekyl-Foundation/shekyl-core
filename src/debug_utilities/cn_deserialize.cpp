@@ -30,7 +30,6 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_core/blockchain.h"
 #include "common/command_line.h"
 #include "version.h"
@@ -42,30 +41,6 @@ namespace po = boost::program_options;
 using namespace epee;
 
 using namespace cryptonote;
-
-static std::string extra_nonce_to_string(const cryptonote::tx_extra_nonce &extra_nonce)
-{
-  if (extra_nonce.nonce.size() == 9 && extra_nonce.nonce[0] == TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID)
-    return "encrypted payment ID: " + epee::string_tools::buff_to_hex_nodelimer(extra_nonce.nonce.substr(1));
-  if (extra_nonce.nonce.size() == 33 && extra_nonce.nonce[0] == TX_EXTRA_NONCE_PAYMENT_ID)
-    return "plaintext payment ID: " + epee::string_tools::buff_to_hex_nodelimer(extra_nonce.nonce.substr(1));
-  return epee::string_tools::buff_to_hex_nodelimer(extra_nonce.nonce);
-}
-
-static void print_extra_fields(const std::vector<cryptonote::tx_extra_field> &fields)
-{
-  std::cout << "tx_extra has " << fields.size() << " field(s)" << std::endl;
-  for (size_t n = 0; n < fields.size(); ++n)
-  {
-    std::cout << "field " << n << ": ";
-    if (std::holds_alternative<cryptonote::tx_extra_padding>(fields[n])) std::cout << "extra padding: " << std::get<cryptonote::tx_extra_padding>(fields[n]).size << " bytes";
-    else if (std::holds_alternative<cryptonote::tx_extra_pub_key>(fields[n])) std::cout << "extra pub key: " << std::get<cryptonote::tx_extra_pub_key>(fields[n]).pub_key;
-    else if (std::holds_alternative<cryptonote::tx_extra_nonce>(fields[n])) std::cout << "extra nonce: " << extra_nonce_to_string(std::get<cryptonote::tx_extra_nonce>(fields[n]));
-    else if (std::holds_alternative<cryptonote::tx_extra_additional_pub_keys>(fields[n])) std::cout << "additional tx pubkeys: " << boost::join(std::get<cryptonote::tx_extra_additional_pub_keys>(fields[n]).data | boost::adaptors::transformed([](const crypto::public_key &key){ return epee::string_tools::pod_to_hex(key); }), ", " );
-    else std::cout << "unknown";
-    std::cout << std::endl;
-  }
-}
 
 int main(int argc, char* argv[])
 {
@@ -123,26 +98,15 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  bool full;
+  // tx_extra is printed as the raw bytes inside the JSON; the field-level
+  // pretty-printer left with the C++ tx_extra parser (TX_EXTRA_RUST_CUTOVER.md
+  // §4). The codec is shekyl-wire's; decode an extra with it, not here.
   cryptonote::block block;
   cryptonote::transaction tx;
-  std::vector<cryptonote::tx_extra_field> fields;
   if (cryptonote::parse_and_validate_block_from_blob(blob, block))
   {
     std::cout << "Parsed block:" << std::endl;
     std::cout << cryptonote::obj_to_json_str(block) << std::endl;
-    bool parsed = cryptonote::parse_tx_extra(block.miner_tx.extra, fields);
-    if (!parsed)
-      std::cout << "Failed to parse tx_extra" << std::endl;
-
-    if (!fields.empty())
-    {
-      print_extra_fields(fields);
-    }
-    else
-    {
-      std::cout << "No fields were found in tx_extra" << std::endl;
-    }
   }
   else if (cryptonote::parse_and_validate_tx_from_blob(blob, tx) || cryptonote::parse_and_validate_tx_base_from_blob(blob, tx))
   {
@@ -151,24 +115,6 @@ int main(int argc, char* argv[])
     else
       std::cout << "Parsed transaction:" << std::endl;
     std::cout << cryptonote::obj_to_json_str(tx) << std::endl;
-
-    bool parsed = cryptonote::parse_tx_extra(tx.extra, fields);
-    if (!parsed)
-      std::cout << "Failed to parse tx_extra" << std::endl;
-
-    if (!fields.empty())
-    {
-      print_extra_fields(fields);
-    }
-    else
-    {
-      std::cout << "No fields were found in tx_extra" << std::endl;
-    }
-  }
-  else if (((full = cryptonote::parse_tx_extra(std::vector<uint8_t>(blob.begin(), blob.end()), fields)) || true) && !fields.empty())
-  {
-    std::cout << "Parsed" << (full ? "" : " partial") << " tx_extra:" << std::endl;
-    print_extra_fields(fields);
   }
   else
   {

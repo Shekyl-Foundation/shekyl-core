@@ -6,6 +6,42 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
+/// Penalty-free block-weight zone in bytes.
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_full_reward_zone_bytes`. The C++ macro
+/// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` and
+/// `shekyl_wire::transaction::MIN_BLOCK_WEIGHT` are generated from the same
+/// key. [`EconomicParams::full_reward_zone`] carries it; the reward and the
+/// fee floor read the field, not a caller-supplied copy.
+pub const FULL_REWARD_ZONE: u64 = GENERATED_BLOCK_WEIGHT_FULL_REWARD_ZONE;
+
+/// The long-term median's window in blocks (CEN-G6): the long-term
+/// effective median is the median of `long_term_weight` over the
+/// `min(window, height)` recorded blocks below the connecting one, floored
+/// at [`FULL_REWARD_ZONE`].
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_long_term_window_blocks` (100 000 ≈ 139 days at 120 s,
+/// C2-R2 Q2). The C++ `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` is
+/// defined from the same key. Below this height the window *is* the chain
+/// — the early-chain arm C2-R2 Q2 names — and the surge factor is the
+/// only bound on weight growth.
+pub const BLOCK_WEIGHT_LONG_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_LONG_TERM_WINDOW;
+
+/// The short-term median's window in blocks (CEN-G6b): the median of
+/// `weight` over the last `min(window, height)` blocks, clamped to
+/// `[LTEM, S · LTEM]` by [`effective_median`](crate::effective_median);
+/// the block-weight limit is twice the result.
+///
+/// Generated from `config/consensus_constants.json`
+/// `block_weight_short_term_window_blocks`. Three readers, one key: the
+/// median, the fee estimator's `grace_blocks` assertion and the RPC
+/// `grace_blocks` ceiling (the ceiling is the median's horizon by
+/// derivation). The C++ `CRYPTONOTE_REWARD_BLOCKS_WINDOW` is defined from
+/// the same key.
+pub const BLOCK_WEIGHT_SHORT_TERM_WINDOW: u64 = GENERATED_BLOCK_WEIGHT_SHORT_TERM_WINDOW;
+
 /// The emission curve's asymptote in atomic units
 /// (`emission_curve_asymptote` from `config/economics_params.json`) — the
 /// value `curve = (asymptote − already_generated) >> esf` decays toward,
@@ -44,9 +80,8 @@ const _: () = {
     // not a whole number of minutes would TRUNCATE, understating the tail
     // and therefore OVERSTATING the headroom years this block asserts —
     // the assertion would keep passing while the property it proves
-    // weakened (PR #640 review). `emission_speed_factor` carries the same
-    // invariant as a `debug_assert`, which release builds strip; this one
-    // is const-evaluated and cannot be.
+    // weakened (PR #640 review). This one is const-evaluated, so release
+    // builds keep it.
     assert!(
         GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
         "DAA target must be a whole number of minutes, or the tail-per-block division truncates and the FL-R14 headroom proof below is weakened"
@@ -100,7 +135,10 @@ pub const BLOCKS_PER_YEAR: u64 = GENERATED_BLOCKS_PER_YEAR;
 /// (`generation_active_at(height)`); that is a FOLLOWUPS item and would
 /// move the generation out of this build-time constant into engine-held
 /// state. Until then it stays a constant.
-pub const CALIBRATION_GENERATION: u32 = 0;
+/// Generation 1 (2026-10-04): the emission speed factor became per block,
+/// the design's 22, where generation 0 applied Monero's per-minute
+/// conversion and ran the curve at 21.
+pub const CALIBRATION_GENERATION: u32 = 1;
 
 /// A malformed parameter set, refused at the door.
 ///
@@ -136,11 +174,12 @@ struct EconomicParamsWire {
     burn_cap: u64,
     staker_pool_share: u64,
     emission_curve_asymptote: u64,
-    emission_speed_factor_per_minute: u64,
+    emission_speed_factor_per_block: u64,
     final_subsidy_per_minute: u64,
     daa_target_seconds: u64,
     escalation_knee_n: u64,
     escalation_asymptote_share: u64,
+    full_reward_zone: u64,
 }
 
 impl TryFrom<EconomicParamsWire> for EconomicParams {
@@ -155,11 +194,12 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             burn_cap: w.burn_cap,
             staker_pool_share: w.staker_pool_share,
             emission_curve_asymptote: w.emission_curve_asymptote,
-            emission_speed_factor_per_minute: w.emission_speed_factor_per_minute,
+            emission_speed_factor_per_block: w.emission_speed_factor_per_block,
             final_subsidy_per_minute: w.final_subsidy_per_minute,
             daa_target_seconds: w.daa_target_seconds,
             escalation_knee_n: w.escalation_knee_n,
             escalation_asymptote_share: w.escalation_asymptote_share,
+            full_reward_zone: w.full_reward_zone,
         };
         p.validate()?;
         Ok(p)
@@ -176,16 +216,35 @@ pub struct EconomicParams {
     pub burn_cap: u64,
     pub staker_pool_share: u64,
     pub emission_curve_asymptote: u64,
-    pub emission_speed_factor_per_minute: u64,
+    /// Right-shift of the remaining supply. Each block emits
+    /// `remaining >> emission_speed_factor_per_block`. Per block: the
+    /// design's 22 (`DESIGN_CONCEPTS.md` §3).
+    pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,
-    /// `frozen_segment_count` at which the D2 escalation saturates. Shape frozen,
-    /// **number provisional-until-testnet** (§11.4 ceremony).
+    /// `closed_shard_count` at which the D2 escalation saturates. Shape frozen,
+    /// **number provisional-until-testnet** (§11.4 ceremony). The literal was
+    /// swept in J-segments before the operand was re-keyed to closed
+    /// `T`-transaction shards (PDM-Q6 item 4); it is re-derived, not
+    /// converted, when the Stage-2 sweep re-runs on the shard operand
+    /// (`docs/FOLLOWUPS.md`, the D2 operand row). Behaviour-neutral until
+    /// then: the shipped asymptote equals `staker_pool_share`, so the map
+    /// is flat at every `n`.
     pub escalation_knee_n: u64,
     /// Staker share at and beyond the knee. **Number provisional**; the genesis
     /// value equals `staker_pool_share`, which makes the escalation flat and the
     /// behaviour bit-identical to today's constant until the ceremony pins it.
     pub escalation_asymptote_share: u64,
+    /// Penalty-free block-weight zone in bytes (CEN-F14b, G6b). The effective
+    /// median is soft-raised to it before the weight penalty, and the
+    /// block-weight limit is twice it.
+    ///
+    /// Authority: `config/consensus_constants.json`
+    /// `block_weight_full_reward_zone_bytes`, also read by the C++ header
+    /// generator and by `shekyl-wire`'s `MIN_BLOCK_WEIGHT`. Declared last so
+    /// the params digest appends it (since format `0x03`); the preimage order is
+    /// this declaration order.
+    pub full_reward_zone: u64,
 }
 
 impl Default for EconomicParams {
@@ -198,11 +257,12 @@ impl Default for EconomicParams {
             burn_cap: GENERATED_BURN_CAP,
             staker_pool_share: GENERATED_STAKER_POOL_SHARE,
             emission_curve_asymptote: GENERATED_EMISSION_CURVE_ASYMPTOTE,
-            emission_speed_factor_per_minute: GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE,
+            emission_speed_factor_per_block: GENERATED_EMISSION_SPEED_FACTOR_PER_BLOCK,
             final_subsidy_per_minute: GENERATED_FINAL_SUBSIDY_PER_MINUTE,
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
             escalation_knee_n: GENERATED_ESCALATION_KNEE_N,
             escalation_asymptote_share: GENERATED_ESCALATION_ASYMPTOTE_SHARE,
+            full_reward_zone: FULL_REWARD_ZONE,
         };
         // Build-generated constants must satisfy the frozen shape; the unit test
         // `shipped_defaults_are_well_formed` is the loud gate, this is the
@@ -348,8 +408,8 @@ mod escalation_param_tests {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
-                "emission_curve_asymptote":7,"emission_speed_factor_per_minute":8,
-                "final_subsidy_per_minute":9,"daa_target_seconds":10,
+                "emission_curve_asymptote":7,"emission_speed_factor_per_block":8,
+                "final_subsidy_per_minute":9,"daa_target_seconds":10,"full_reward_zone":300000,
                 "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
         )
     }
@@ -379,14 +439,14 @@ mod escalation_param_tests {
 
     #[test]
     fn the_neutral_genesis_parameterization_is_accepted_and_flat() {
-        use crate::escalation::{staker_pool_share_at, FrozenSegmentCount};
+        use crate::escalation::{staker_pool_share_at, ClosedShardCount};
 
         let p: EconomicParams =
             serde_json::from_str(&valid_json(250_000, 250_000)).expect("neutral params are valid");
         let esc = p.escalation();
         for n in [0u64, 1, 50_000, 100_000, u64::MAX] {
             assert_eq!(
-                staker_pool_share_at(FrozenSegmentCount::new(n), &esc).to_raw(),
+                staker_pool_share_at(ClosedShardCount::new(n), &esc).to_raw(),
                 250_000,
                 "the pre-ceremony default must be bit-identical to the flat share"
             );

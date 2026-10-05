@@ -9,7 +9,7 @@
 //! Constraint set (`FOLLOWUPS.md`, TJ entries):
 //!
 //! - **Floor** — false-slash probability over a bond life, from transport
-//!   weather (`p^r` per read attempt-chain) and fabrication (bounded by the
+//!   weather (`p^a` per read, `a` attempts) and fabrication (bounded by the
 //!   gap `e^−λ_eff`: a fabricated miss only survives in an epoch no diligent
 //!   read covered).
 //! - **Ceiling** — W16: every slash-free miss is a baseline a strategic
@@ -31,9 +31,11 @@
 //! spans **~13 epochs**, not `13/λ_eff`.
 //!
 //! What `λ_eff` buys sits in [`MissModel`]: pass-dominance **compounds** the
-//! transport term across the epoch's reads — `(p^r)^j` for `j` reads, not
-//! `p^r`. Coverage and retry depth are substitutes; coverage's version has
-//! better independence (`j` miners / circuits vs `r` retries on one client).
+//! transport term across the epoch's reads — `(p^a)^j` for `j` reads, not
+//! `p^a`. Coverage and attempts per read are substitutes on that term, and
+//! only coverage's version is independent (`j` miners and circuits against
+//! `a` attempts on one client, in one window): see [`MissSources::attempts`]
+//! for why the calibration credits one attempt.
 //!
 //! # Structure
 //!
@@ -56,8 +58,10 @@ pub const N_HARD_BOUND: u32 = 25;
 /// lifetime constant.
 pub const BOND_LIFE_EPOCHS: f64 = A5_REWARD_HORIZON_EPOCHS;
 
-/// Sensitivity grid: retry depths under review (rig re-run still owns `r`).
-const SENSITIVITY_RETRIES: [u32; 3] = [1, 2, 3];
+/// Sensitivity grid: attempts per read. The first is the calibration
+/// ([`default_sources`]); the others show what crediting a retry as an
+/// independent draw would claim, which the calibration does not.
+const SENSITIVITY_ATTEMPTS: [u32; 3] = [1, 2, 3];
 /// Sensitivity grid: hashrate points (targeted φ saturates by ~1e-3).
 const SENSITIVITY_F: [f64; 3] = [1.0, 0.10, 0.001];
 /// Cap-delivered projection band; the operative projection is marked in-row.
@@ -73,12 +77,29 @@ const CAP_PAIR_BAND: [f64; 5] = [5_000.0, 10_000.0, 20_000.0, 40_000.0, 100_000.
 /// belongs.
 #[derive(Debug, Clone, Copy)]
 pub struct MissSources {
-    /// Per-attempt transport failure. **Stand-in 0.30** (2026-07-30 cold-path
-    /// onion, no PoW / no flood) — does not transfer to SP-T3; rig re-run gates
-    /// the real value.
+    /// Per-attempt transport failure. **0.30, retained and measured-supported**
+    /// (ruled 2026-10-02, `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6). It began as
+    /// a stand-in from a 2026-07-30 cold-path run with no PoW; the W₂ size
+    /// ladder has since measured the single-attempt miss at the largest
+    /// served object at 0.041 with PoW on and 0.20 on the worst day observed
+    /// (95 % upper bound 0.238), so 0.30 bounds every window read. The
+    /// failure window has to hold on a bad day, not a typical one, which is
+    /// why it is not tightened to a measured value. **Reopens** if any
+    /// measured window's upper bound exceeds 0.30. Tightening needs a
+    /// multi-day series that characterizes the bad-day tail; one good window
+    /// never justifies it.
     pub p_attempt: f64,
-    /// Attempts per read before a witness gives up (`r`).
-    pub retries: u32,
+    /// Attempts per read the model **credits** (`a`): a read fails with
+    /// probability `p_attempt^attempts`.
+    ///
+    /// **One, deliberately** (design owner, 2026-10-02), although the client
+    /// retries. On the worst day the W₂ size ladder measured, most misses
+    /// were circuit failures that did not depend on the object's size, and
+    /// such failures cluster inside a window. A retry there is not an
+    /// independent draw, so crediting it (`p²`) would overstate what it
+    /// protects against. The protocol's retry is margin on top of this
+    /// calibration, never part of it.
+    pub attempts: u32,
     /// Probability a fabricator files a miss against this pair in an epoch.
     /// Under F-1 the operative value is [`targeted_fabrication_intensity`]
     /// (≈ 1 at any measurable hashrate). [`ambient_fabrication_intensity`] is
@@ -93,7 +114,7 @@ impl MissSources {
         MissModel {
             lambda_eff,
             p_attempt: self.p_attempt,
-            retries: self.retries,
+            attempts: self.attempts,
             fabrication_intensity: self.fabrication_intensity,
         }
     }
@@ -109,15 +130,17 @@ pub struct MissModel {
     /// Delivered diligent reads per pair per epoch (never the policy target).
     pub lambda_eff: f64,
     pub p_attempt: f64,
-    pub retries: u32,
+    /// Attempts per read credited as independent
+    /// ([`MissSources::attempts`]).
+    pub attempts: u32,
     pub fabrication_intensity: f64,
 }
 
 impl MissModel {
-    /// Probability one read's attempt-chain fails (`p^r`).
+    /// Probability a read fails: every credited attempt misses (`p^a`).
     #[must_use]
     pub fn read_failure(&self) -> f64 {
-        self.p_attempt.clamp(0.0, 1.0).powi(self.retries as i32)
+        self.p_attempt.clamp(0.0, 1.0).powi(self.attempts as i32)
     }
 
     /// Gap probability `e^−λ_eff` — the only epoch class a fabricated miss
@@ -137,7 +160,7 @@ impl MissModel {
     /// Probability an epoch settles as a **missed** observation.
     ///
     /// Disjoint sources: fabrication `e^−λ · φ`, and transport
-    /// `e^{−λ(1−p^r)} − e^{−λ}` (Poisson PGF, no truncation).
+    /// `e^{−λ(1−p^a)} − e^{−λ}` (Poisson PGF, no truncation).
     #[must_use]
     pub fn missed_epoch_rate(&self) -> f64 {
         let fabricated = self.gap() * self.fabrication_intensity.clamp(0.0, 1.0);
@@ -367,7 +390,7 @@ impl FeasibilityTargets {
     #[must_use]
     pub fn operative_defaults() -> Self {
         Self {
-            lambda_target: 3.0,
+            lambda_target: f64::from(shekyl_archival_retention::CHALLENGES_PER_PAIR_PER_EPOCH),
             false_slash_target: 1e-3,
             free_ride_bound: 0.80,
             k_cap: 6.0,
@@ -377,24 +400,25 @@ impl FeasibilityTargets {
     }
 }
 
-/// Default sources minus coverage: stand-in `p`, single-retry witnesses,
-/// targeted fabrication intensity `φ ≈ 1`. Coverage is derived by
+/// Default sources minus coverage: the retained `p` (see
+/// [`MissSources::p_attempt`]), one credited attempt per read (see
+/// [`MissSources::attempts`]), targeted fabrication intensity `φ ≈ 1`. Coverage is derived by
 /// [`evaluate`] from [`FeasibilityTargets`].
 #[must_use]
 pub fn default_sources() -> MissSources {
     MissSources {
         p_attempt: 0.30,
-        retries: 1,
+        attempts: 1,
         fabrication_intensity: 1.0,
     }
 }
 
 // ── pure evaluation surface ─────────────────────────────────────────────────
 
-/// One sensitivity-table row (retry × hashrate) at the shipped window.
+/// One sensitivity-table row (attempts × hashrate) at the shipped window.
 #[derive(Debug, Clone, Copy)]
 pub struct SensitivityRow {
-    pub retries: u32,
+    pub attempts: u32,
     pub f: f64,
     pub phi_targeted: f64,
     pub phi_ambient: f64,
@@ -498,12 +522,12 @@ pub fn evaluate(
 
     let shipped = PinExposure::at(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, observation_ceiling);
 
-    let mut sensitivity = Vec::with_capacity(SENSITIVITY_RETRIES.len() * SENSITIVITY_F.len());
-    for &r in &SENSITIVITY_RETRIES {
+    let mut sensitivity = Vec::with_capacity(SENSITIVITY_ATTEMPTS.len() * SENSITIVITY_F.len());
+    for &attempts in &SENSITIVITY_ATTEMPTS {
         for &f in &SENSITIVITY_F {
             let phi = targeted_fabrication_intensity(f, seb);
             let probe = MissModel {
-                retries: r,
+                attempts,
                 fabrication_intensity: phi,
                 ..model
             };
@@ -515,7 +539,7 @@ pub fn evaluate(
                 observation_ceiling,
             );
             sensitivity.push(SensitivityRow {
-                retries: r,
+                attempts,
                 f,
                 phi_targeted: phi,
                 phi_ambient: ambient_fabrication_intensity(f, lambda_target),
@@ -632,16 +656,19 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          Inputs: lambda_target={LT:.3} reads/pair/epoch; OPERATIVE evaluation at\n\
          DELIVERED lambda={DL:.3} (projection {PP:.0} pairs; k_cap binds past\n\
          {KNEE:.0} pairs, so target and delivered coincide only below that knee);\n\
-         p_attempt={P:.3} (STAND-IN: measured 2026-07-30 with NO PoW and NO\n\
-         flood -- does not transfer to the SP-T3 operating point; the rig re-run\n\
-         gates the real value), r={R}, fabrication_intensity={FI:.2} (1.00 =\n\
-         every gap epoch poisoned).",
+         p_attempt={P:.3} (RETAINED 2026-10-02, measured-supported: the W2 size\n\
+         ladder's worst observed day missed 0.20, 95% upper bound 0.238, and its\n\
+         PoW-on window 0.041; reopens if a measured window's upper bound exceeds\n\
+         it), attempts={A} (ONE credited, deliberately: bad-day misses were mostly\n\
+         circuit failures, correlated within a window, so a retry is not an\n\
+         independent draw and is margin, not calibration),\n\
+         fabrication_intensity={FI:.2} (1.00 = every gap epoch poisoned).",
         LT = t.lambda_target,
         DL = snap.delivered_lambda,
         PP = t.projected_pairs,
         KNEE = snap.knee_pairs,
         P = model.p_attempt,
-        R = model.retries,
+        A = model.attempts,
         FI = model.fabrication_intensity,
     )?;
     writeln!(
@@ -652,16 +679,17 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          spans ~{SPAN:.1} epochs, so detection latency does NOT collapse and the\n\
          within-epoch independence worry does not arise (draws stay one per epoch,\n\
          weeks apart). What lambda_eff buys instead: pass-dominance COMPOUNDS the\n\
-         transport term across an epoch's reads -- (p^r)^j for j reads, not p^r --\n\
-         so coverage and retry depth are SUBSTITUTES on that term, and coverage's\n\
-         version has better independence (j miners, j circuits vs r retries on one).",
+         transport term across an epoch's reads -- (p^a)^j for j reads, not p^a --\n\
+         so coverage and attempts per read are SUBSTITUTES on that term, and only\n\
+         coverage's version is independent (j miners, j circuits vs a attempts on\n\
+         one client in one window).",
         OR = snap.observation_rate,
         N = FAILURE_WINDOW_N,
         SPAN = f64::from(FAILURE_WINDOW_N) / snap.observation_rate,
     )?;
     writeln!(
         out,
-        "  TERMS: gap (poisonable) = e^-lambda = {G:.4}; read-failure p^r = {RF:.4};\n\
+        "  TERMS: gap (poisonable) = e^-lambda = {G:.4}; read-failure p^a = {RF:.4};\n\
          per-epoch missed = {ME:.6}; per-OBSERVATION miss q = {Q:.6}.\n\
          Bond life {BL:.0} epochs; union-bound ceiling = {CEIL:.0} observations\n\
          (<= 1 obs/epoch; E[obs] = bond_life * rate = {EOBS:.1}).",
@@ -700,7 +728,7 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
 
     // P(any) is the operative frame: a slash opens a record-scoped bad
     // interval (excludes the whole record from r_market, blocks HoldingsUpdate
-    // until Rebond). Expected pairs lost prices only the burn.
+    // until Reinstate). Expected pairs lost prices only the burn.
     let bond_floor_skl = crate::proxy::bond_at_risk_skl();
     writeln!(
         out,
@@ -708,7 +736,7 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          and the reason is mechanical rather than a risk preference. A slash\n\
          opens a bad interval on the RECORD (bad_intervals are record-scoped, not\n\
          per-shard), which excludes the whole record from r_market via\n\
-         good_through and blocks HoldingsUpdate until Rebond. One pair slashed is\n\
+         good_through and blocks HoldingsUpdate until Reinstate. One pair slashed is\n\
          therefore a whole-portfolio disruption plus a burn -- the harm is\n\
          record-scoped, so the probability must be too. At the shipped pin,\n\
          P(any of {MH} pairs) = {FH:.3e}; EXPECTED pairs lost = {EP:.3e} (~{SKL:.4}\n\
@@ -738,8 +766,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
     )?;
     writeln!(
         out,
-        "{:<6} {:>9} {:>10} {:>10} {:>12} {:>14} {:>10}",
-        "r",
+        "{:<8} {:>9} {:>10} {:>10} {:>12} {:>14} {:>10}",
+        "attempts",
         "f",
         "phi_tgt",
         "phi_amb",
@@ -750,8 +778,8 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
     for row in &snap.sensitivity {
         writeln!(
             out,
-            "{:<6} {:>9.3} {:>10.4} {:>10.4} {:>12.5} {:>14.2e} {:>10}",
-            row.retries,
+            "{:<8} {:>9.3} {:>10.4} {:>10.4} {:>12.5} {:>14.2e} {:>10}",
+            row.attempts,
             row.f,
             row.phi_targeted,
             row.phi_ambient,
@@ -804,10 +832,10 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
     writeln!(
         out,
         "  FEASIBLE REGION at the operative point (delivered lambda {DL:.3},\n\
-         projection {PP:.0} pairs, r={R}, targeted phi={FI:.2}):",
+         projection {PP:.0} pairs, attempts={A}, targeted phi={FI:.2}):",
         DL = snap.delivered_lambda,
         PP = t.projected_pairs,
-        R = model.retries,
+        A = model.attempts,
         FI = model.fabrication_intensity,
     )?;
     writeln!(
@@ -849,8 +877,9 @@ pub fn write_report(out: &mut impl fmt::Write, snap: &FeasibilitySnapshot) -> fm
          free-ride). A cell is feasible iff m_min <= m <= m_max. The W16 bound is\n\
          an INPUT here: its value comes from the crisis-price degrade economics,\n\
          not from this arm. The operative verdicts are GATED on two labelled\n\
-         inputs: the stand-in p (rig re-run) and the pair projection -- move\n\
-         either and the same tables re-answer without re-deriving the arm.",
+         inputs: the retained p (reopened by a measured window above it) and\n\
+         the pair projection -- move either and the same tables re-answer\n\
+         without re-deriving the arm.",
         MH = mh,
     )?;
     Ok(())
@@ -938,24 +967,24 @@ mod tests {
     }
 
     #[test]
-    fn sensitivity_holder_falls_as_retry_depth_rises() {
+    fn sensitivity_holder_falls_as_credited_attempts_rise() {
         let snap = default_snapshot();
-        // Fix f = 1.0 (first column of each retry block) and require holder
-        // to drop when r increases — retry depth is the remaining floor lever
-        // under targeted fabrication.
+        // Fix f = 1.0 (first column of each attempts block) and require
+        // holder to drop as more attempts are credited — the lever the
+        // calibration deliberately leaves at one.
         let at_f1: Vec<_> = snap
             .sensitivity
             .iter()
             .filter(|r| (r.f - 1.0).abs() < 1e-15)
             .collect();
-        assert_eq!(at_f1.len(), SENSITIVITY_RETRIES.len());
+        assert_eq!(at_f1.len(), SENSITIVITY_ATTEMPTS.len());
         for w in at_f1.windows(2) {
             assert!(
                 w[1].holder < w[0].holder,
-                "r={} holder {} should beat r={} holder {}",
-                w[1].retries,
+                "attempts={} holder {} should beat attempts={} holder {}",
+                w[1].attempts,
                 w[1].holder,
-                w[0].retries,
+                w[0].attempts,
                 w[0].holder
             );
         }
@@ -999,11 +1028,11 @@ mod tests {
     #[test]
     fn pass_dominance_compounds_the_transport_term() {
         // Compounding is real but Poisson-dispersion-bounded: j=1 epochs
-        // dominate, so the gain is ~4× not the mean-read (p^r)^λ myth.
+        // dominate, so the gain is ~4× not the mean-read (p^a)^λ myth.
         let m = MissModel {
             lambda_eff: 3.0,
             p_attempt: 0.30,
-            retries: 1,
+            attempts: 1,
             fabrication_intensity: 0.0,
         };
         let transport = m.missed_epoch_rate();
@@ -1022,7 +1051,7 @@ mod tests {
             ..m
         };
         assert!(thinner.missed_epoch_rate() > transport);
-        let deeper = MissModel { retries: 2, ..m };
+        let deeper = MissModel { attempts: 2, ..m };
         assert!(deeper.missed_epoch_rate() < transport);
     }
 
@@ -1093,8 +1122,20 @@ mod tests {
         assert!(ambient_fabrication_intensity(0.10, lam) < 0.30);
     }
 
+    /// The calibration credits one attempt per read although the client
+    /// retries: a read fails exactly as often as one attempt does. Crediting
+    /// a retry is a ruling to change ([`MissSources::attempts`]), not a
+    /// default to drift into.
     #[test]
-    fn retry_depth_not_hashrate_is_what_carries_the_floor() {
+    fn the_calibration_credits_one_attempt_per_read() {
+        let sources = default_sources();
+        assert_eq!(sources.attempts, 1);
+        let model = sources.at_coverage(3.0);
+        assert!((model.read_failure() - sources.p_attempt).abs() < 1e-15);
+    }
+
+    #[test]
+    fn credited_attempts_not_hashrate_are_what_carry_the_floor() {
         let seb = 10_000.0;
         let base = MissModel {
             fabrication_intensity: targeted_fabrication_intensity(1e-3, seb),
@@ -1108,7 +1149,10 @@ mod tests {
             (base.miss_given_observation() - tiny_f.miss_given_observation()).abs() < 1e-3,
             "targeted fabrication must not scale with hashrate"
         );
-        let deeper = MissModel { retries: 2, ..base };
+        let deeper = MissModel {
+            attempts: 2,
+            ..base
+        };
         assert!(deeper.miss_given_observation() < 0.6 * base.miss_given_observation());
     }
 

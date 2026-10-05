@@ -379,6 +379,11 @@ impl RpcSession {
         self.open_wallet.borrow().is_some()
     }
 
+    /// The open wallet's name, for the prompt (CU-1). `None` when closed.
+    pub fn open_wallet_name(&self) -> Option<String> {
+        self.open_wallet.borrow().clone()
+    }
+
     /// Record that `name` is now the open wallet.
     pub fn set_open(&self, name: &str) {
         *self.open_wallet.borrow_mut() = Some(name.to_owned());
@@ -457,17 +462,23 @@ impl RpcSession {
             .ok_or_else(|| RpcError::Transport("response missing 'result'".into()))
     }
 
-    /// Print an RPC failure to stderr. Server messages are stable and
-    /// secret-free by contract; `--debug` additionally shows `error.data`.
-    pub fn report(&self, context: &str, err: &RpcError) {
-        eprintln!("{context}: {err}");
-        if self.debug {
-            if let RpcError::Rpc {
-                data: Some(data), ..
-            } = err
-            {
-                eprintln!("[DEBUG] error.data = {data}");
-            }
+    /// Record an RPC failure for the printer.
+    ///
+    /// Server messages are stable and secret-free by contract. `--debug`
+    /// shows `error.data` when the printer runs in human mode. The returned
+    /// value is what the caller puts in `Err`, so a script stops. Dropping
+    /// it is a warning.
+    #[must_use = "reporting an RPC error fails the command"]
+    pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
+        let code = err.code().unwrap_or(crate::outcome::TRANSPORT);
+        let data = match err {
+            RpcError::Rpc { data, .. } => data.clone(),
+            RpcError::Transport(_) => None,
+        };
+        crate::outcome::CommandFailed {
+            code,
+            message: format!("{context}: {err}"),
+            data,
         }
     }
 
@@ -868,7 +879,8 @@ mod tests {
     fn no_secret_ever_travels_through_a_json_value() {
         // Every file that sends a secret-bearing request. A new one must be
         // added here; the FOLLOWUPS entry undercounted precisely because no
-        // such list existed.
+        // such list existed. Startup holds the password and hands it to the
+        // command layer; the request is built in the files below.
         let senders = [
             (
                 "commands/lifecycle.rs",
@@ -876,7 +888,6 @@ mod tests {
             ),
             ("commands/staking.rs", include_str!("commands/staking.rs")),
             ("commands/scripted.rs", include_str!("commands/scripted.rs")),
-            ("main.rs", include_str!("main.rs")),
         ];
 
         // `change_password` carries two secrets under two keys, which is why a
@@ -889,15 +900,62 @@ mod tests {
             concat!("\"mne", "monic\":"),
         ];
 
-        for (name, src) in senders {
-            for field in forbidden_json_fields {
-                assert!(
-                    !src.contains(field),
-                    "{name} builds a JSON object with {field} — a secret in a \
-                     serde_json::Value is a heap copy that never gets wiped. \
-                     Send it through a borrowed rpc_client::params shape instead."
-                );
+        // The NEGATIVE needles run over every `.rs` in the crate, not just the
+        // list. The regression this gate names — "the next author will reach
+        // for `json!` exactly the way the first nine did" — produces a file
+        // that sends a secret and uses no params shape at all, so a list the
+        // author must remember to extend is blind to it by construction, and
+        // so is any completeness check written over `params::` (that measures
+        // which files already did the right thing, not which ones send
+        // secrets). Over-inclusion is the safe direction here: these needles
+        // are negative, so scanning too much is a false RED, never a false
+        // green. Comment-only lines are dropped because this file's own doc
+        // comment spells `"password":` while explaining the needle.
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut walked: std::collections::BTreeSet<String> = Default::default();
+        let mut stack = vec![src_root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's src/ is readable") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(&src_root)
+                        .expect("walked under src/")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = std::fs::read_to_string(&path).expect("read source");
+                    let code: String = text
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with("//"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    for field in forbidden_json_fields {
+                        assert!(
+                            !code.contains(field),
+                            "{rel} builds a JSON object with {field} — a secret in \
+                             a serde_json::Value is a heap copy that never gets \
+                             wiped. Send it through a borrowed rpc_client::params \
+                             shape instead."
+                        );
+                    }
+                    walked.insert(rel);
+                }
             }
+        }
+
+        // Rule 47, and the cross-check the two instruments need: a walk that
+        // silently stopped reaching files would pass every assertion above. The
+        // hand-written list is the known-good population, so the walk must
+        // contain all of it — if it ever doesn't, the walk is broken, not the
+        // list.
+        for (name, src) in senders {
+            assert!(
+                walked.contains(name),
+                "the src/ walk no longer reaches {name}, so its negative needles \
+                 above proved nothing — fix the walk before trusting this gate"
+            );
             assert!(
                 src.contains(concat!("par", "ams::")),
                 "{name} is listed as a secret-bearing sender but no longer uses \

@@ -180,11 +180,6 @@ library archives (`.a`).
 | Doxygen      | any           | NO       | `doxygen`            | `doxygen`    | `doxygen`          | `doxygen`           | YES      | Documentation   |
 | Graphviz     | any           | NO       | `graphviz`           | `graphviz`   | `graphviz`         | `graphviz`          | YES      | Documentation   |
 | lrelease     | ?             | NO       | `qttools5-dev-tools` | `qt5-tools`  | `qt5-tools`        | `qt5-linguist`      | YES      | Translations    |
-| libhidapi    | ?             | NO       | `libhidapi-dev`      | `hidapi`     | `hidapi-devel`     | `hidapi-devel`      | YES      | Hardware wallet |
-| libusb       | ?             | NO       | `libusb-1.0-0-dev`   | `libusb`     | `libusb-devel`     | `libusbx-devel`     | YES      | Hardware wallet |
-| libprotobuf  | ?             | NO       | `libprotobuf-dev`    | `protobuf`   | `protobuf-devel`   | `protobuf-devel`    | YES      | Hardware wallet |
-| protoc       | ?             | NO       | `protobuf-compiler`  | `protobuf`   | `protobuf`         | `protobuf-compiler` | YES      | Hardware wallet |
-| libudev      | ?             | NO       | `libudev-dev`        | `systemd`    | `eudev-libudev-devel` | `systemd-devel`  | YES      | Hardware wallet |
 
 [1] On Debian/Ubuntu `libgtest-dev` only includes sources and headers. You must
 build the library binary manually. This can be done with the following command `sudo apt-get install libgtest-dev && cd /usr/src/gtest && sudo cmake . && sudo make`
@@ -198,17 +193,17 @@ then:
 Install all dependencies at once on Debian/Ubuntu:
 
 ```
-sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev qttools5-dev-tools libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler libudev-dev libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
+sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev qttools5-dev-tools libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
 ```
 
 Install all dependencies at once on Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake boost openssl libsodium libunwind xz readline gtest python3 ccache doxygen graphviz qt5-tools hidapi libusb protobuf systemd
+sudo pacman -Syu --needed base-devel cmake boost openssl libsodium libunwind xz readline gtest python3 ccache doxygen graphviz qt5-tools
 ```
 
 Install all dependencies at once on Fedora:
 ```
-sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel libunwind-devel xz-devel readline-devel gtest-devel ccache doxygen graphviz qt5-linguist hidapi-devel libusbx-devel protobuf-devel protobuf-compiler systemd-devel
+sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel libunwind-devel xz-devel readline-devel gtest-devel ccache doxygen graphviz qt5-linguist
 ```
 
 Install all dependencies at once on openSUSE:
@@ -234,18 +229,36 @@ pkg install git gmake cmake pkgconf boost-libs libsodium
 Clone recursively to pull-in needed submodule(s):
 
 ```
-git clone --recursive https://github.com/Shekyl/Shekyl
+git clone --recursive https://github.com/Shekyl-Foundation/shekyl-core
 ```
 
 If you already have a repo cloned, initialize and update:
 
 ```
-cd Shekyl && git submodule init && git submodule update
+cd shekyl-core && git submodule init && git submodule update
 ```
 
 *Note*: If there are submodule differences between branches, you may need 
 to use `git submodule sync && git submodule update` after changing branches
 to build successfully.
+
+**Checkout hygiene.** A non-recursive clone leaves `external/randomx-v2`
+empty. `git -C` that path then walks up and reports the superproject SHA,
+which is not the pin. Default daemon CMake does **not** need that tree
+(production PoW is the Rust verifier). Initialize it when you run the
+differential harness or T15:
+
+```
+git submodule update --init --recursive
+cmake -B build -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
+# then: RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+```
+
+Never `git submodule update --init --recursive --exclude …` for this crate.
+Worktrees inherit gitlinks, not submodule working trees — re-run init in
+the worktree. `-DMANUAL_SUBMODULES=1` is an escape hatch, not the happy
+path. `external/randomx` (tevador v1) is a gitlink-only pin and is **not**
+required for a default clone.
 
 ### Build instructions
 
@@ -258,7 +271,7 @@ invokes cmake commands as needed.
 * Change to the root of the source code directory, change to the most recent release branch, and build:
 
     ```bash
-    cd Shekyl
+    cd shekyl-core
     git checkout dev
     make
     ```
@@ -366,7 +379,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi
+    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -376,7 +389,7 @@ application.
 * To git clone, run:
 
     ```bash
-    git clone --recursive https://github.com/Shekyl/Shekyl.git
+    git clone --recursive https://github.com/Shekyl-Foundation/shekyl-core.git
     ```
 
 **Building**
@@ -384,10 +397,10 @@ application.
 * Change to the cloned directory, run:
 
     ```bash
-    cd Shekyl
+    cd shekyl-core
     ```
 
-* If you would like a specific [version/tag](https://github.com/Shekyl/Shekyl/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `dev`, skip this step:
+* If you would like a specific [version/tag](https://github.com/Shekyl-Foundation/shekyl-core/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `dev`, skip this step:
 
     ```bash
     git checkout <tag>
@@ -436,7 +449,7 @@ Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs protobuf readline libusb1 git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
+Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs readline git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
 
 Third-party dependencies are usually under `/usr/pkg/`, but if you have a custom setup, adjust the "/usr/pkg" (below) accordingly.
 

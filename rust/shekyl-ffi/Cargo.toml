@@ -37,9 +37,20 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# Domain newtypes reconstructed immediately inside the difficulty FFI
+# shims (RTN-5). ABI stays raw `u64` / `ShekylU128`.
+shekyl-types = { path = "../shekyl-types" }
 # DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
 # is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
+# DRS-E2 trace writer (`e2_trace_ffi`): the one door the C++ LMDB exporter
+# hands bytes through; the format and the checkpoint hashing are Rust's
+# (RD-F9, RD-Q9). Harvest shim — the C++ side dies at cutover (§1.3).
+# Trace writer only (RD-F9, RD-Q9). Default features pull the pipeline,
+# the RPC fetcher and clap — harvest FFI does not need them, and feature
+# unification on `cargo build -p shekyl-ffi` (the daemon image) stays
+# at the writer.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
 # verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default
@@ -94,10 +105,27 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 # shim reaches the Rust-pinned libzstd through these exports, making it the
 # single zstd in the binary (system-libzstd link dropped).
 shekyl-levin = { path = "../shekyl-levin" }
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+# Genesis block-hash pins (`genesis_hash_for`). `shekyl_network_id` derives
+# the handshake id from that pin; this crate does not restate the hash.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+# The p2p seam. C++ posts onto the connection strand; this crate
+# records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
+shekyl-seam = { path = "../shekyl-seam" }
+# v3 onion hostname <-> service key. The seam stores the key; this crate
+# decodes a dialed hostname at the boundary and re-encodes it for SOCKS.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-tor = { path = "../shekyl-tor" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+shekyl-net-address = { path = "../shekyl-net-address" }
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
@@ -107,6 +135,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"

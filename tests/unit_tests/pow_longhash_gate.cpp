@@ -8,9 +8,9 @@
 // The 0xff sentinel is a belt, not the gate — at difficulty 1 every hash
 // passes check_hash, so the verifier's returned bool is the gate. These tests
 // pin the verdict contracts at the seams take-able in a unit test:
-//   - get_block_longhash (bool overload): false + belt on schema failure;
+//   - get_block_longhash (bool overload): false + belt on hash failure;
 //   - get_altblock_longhash: same contract, now routed through the one
-//     IPowSchema dispatch point;
+//     hash_pow_randomx dispatch point;
 //   - block_longhash_worker: an uncomputed hash never enters the precompute
 //     table (a table hit is trusted by the consumer without re-checking).
 //
@@ -18,7 +18,7 @@
 // precompute worker here, and the two validation sites by the core-test
 // regressions gen_block_pow_verifier_failure_{main,alt}
 // (tests/core_tests/block_validation.cpp), which submit a fully valid block
-// under a failing schema at difficulty 1 and assert it is rejected as
+// under a failing hash at difficulty 1 and assert it is rejected as
 // unproven. Reverting either consumer to ignore the bool turns those red.
 
 #define IN_UNIT_TESTS
@@ -29,8 +29,7 @@
 #include <unordered_map>
 
 #include "blockchain_db/testdb.h"
-#include "crypto/pow_registry.h"
-#include "crypto/pow_schema.h"
+#include "crypto/pow_randomx.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
@@ -45,38 +44,52 @@ using namespace cryptonote;
 namespace
 {
 
-class FailingPowSchema final : public IPowSchema
+bool failing_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash&)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash&) const override
-  {
-    return false; // the verifier-failure arm under test
-  }
-  const char* name() const override { return "FailingTestSchema"; }
-};
+  return false; // the verifier-failure arm under test
+}
 
-// Control schema: proves the override seam engages (a test must be able to
+// Control hash: proves the override seam engages (a test must be able to
 // observe its own setup) and pins the success path through the same seams.
-class ConstPowSchema final : public IPowSchema
+bool const_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash& out)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash& out) const override
-  {
-    memset(out.data, 0x42, sizeof(out.data));
-    return true;
-  }
-  const char* name() const override { return "ConstTestSchema"; }
-};
+  memset(out.data, 0x42, sizeof(out.data));
+  return true;
+}
 
-struct SchemaOverrideGuard
+// Records the seed the dispatch received. The existing gate tests ignore the
+// seed, so they stay green if explicit seeds stop winning, lookup is skipped,
+// or the no-chain fallback stops being zeros. This override is the pin.
+crypto::hash g_seen_seed{};
+bool g_saw_seed = false;
+
+bool record_seed_pow(const void*, size_t, const crypto::hash& seed, crypto::hash& out)
 {
-  explicit SchemaOverrideGuard(const IPowSchema* s)
+  g_seen_seed = seed;
+  g_saw_seed = true;
+  memset(out.data, 0x42, sizeof(out.data));
+  return true;
+}
+
+crypto::hash tagged_seed(uint8_t fill)
+{
+  crypto::hash h = crypto::null_hash;
+  memset(h.data, fill, sizeof(h.data));
+  return h;
+}
+
+bool hashes_eq(const crypto::hash& a, const crypto::hash& b)
+{
+  return std::memcmp(a.data, b.data, sizeof(a.data)) == 0;
+}
+
+struct HashOverrideGuard
+{
+  explicit HashOverrideGuard(pow_hash_fn fn)
   {
-    set_pow_schema_override_for_tests(s);
+    set_pow_hash_override_for_tests(fn);
   }
-  ~SchemaOverrideGuard() { set_pow_schema_override_for_tests(nullptr); }
+  ~HashOverrideGuard() { set_pow_hash_override_for_tests(nullptr); }
 };
 
 class PowGateTestDB : public BaseTestDB
@@ -129,13 +142,12 @@ bool is_belt_sentinel(const crypto::hash& h)
 
 TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0))
+  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr))
     << "verifier failure must surface through the bool";
   EXPECT_TRUE(is_belt_sentinel(res))
     << "the 0xff belt must still be written for bool-ignoring callers";
@@ -143,8 +155,7 @@ TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
 
 TEST(pow_longhash_gate, altblock_longhash_reports_failure_and_seeds_belt)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   block blk{};
   blk.major_version = 1;
@@ -158,13 +169,12 @@ TEST(pow_longhash_gate, altblock_longhash_reports_failure_and_seeds_belt)
 
 TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
 {
-  ConstPowSchema constant;
-  SchemaOverrideGuard guard(&constant);
+  HashOverrideGuard guard(const_pow_hash);
 
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0));
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
   for (size_t i = 0; i < sizeof(res.data); ++i)
     ASSERT_EQ(0x42, static_cast<unsigned char>(res.data[i]));
 
@@ -181,8 +191,7 @@ TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
 // uncomputed hash entering it would resurrect the fail-open one layer up.
 TEST(pow_longhash_gate, worker_never_caches_uncomputed_hash)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   PowGateTestDB* db = new PowGateTestDB();
   BlockchainAndPool bap;
@@ -198,8 +207,7 @@ TEST(pow_longhash_gate, worker_never_caches_uncomputed_hash)
 
 TEST(pow_longhash_gate, worker_caches_computed_hash)
 {
-  ConstPowSchema constant;
-  SchemaOverrideGuard guard(&constant);
+  HashOverrideGuard guard(const_pow_hash);
 
   PowGateTestDB* db = new PowGateTestDB();
   BlockchainAndPool bap;
@@ -211,4 +219,46 @@ TEST(pow_longhash_gate, worker_caches_computed_hash)
   bap.bc.block_longhash_worker(1, epee::span<const block>(&blk, 1), map);
   ASSERT_EQ(1u, map.size());
   ASSERT_EQ(0x42, static_cast<unsigned char>(map.begin()->second.data[0]));
+}
+
+// Pins the three seed-resolution arms, plus "explicit seed wins over lookup"
+// (the previous `pbc == nullptr` path dropped a caller-supplied seed).
+TEST(pow_longhash_gate, seed_selection_arms)
+{
+  HashOverrideGuard guard(record_seed_pow);
+
+  block blk{};
+  blk.major_version = 1;
+  crypto::hash res = crypto::null_hash;
+  const crypto::hash explicit_seed = tagged_seed(0xAB);
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, crypto::null_hash))
+    << "no chain and no seed must hash under the all-zero genesis seed";
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, &explicit_seed));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, explicit_seed))
+    << "an explicit seed must win even when there is no Blockchain";
+
+  PowGateTestDB* db = new PowGateTestDB();
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  const crypto::hash looked_up =
+    bap.bc.get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(1));
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(&bap.bc, blk, res, 1, nullptr));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, looked_up))
+    << "nullptr seed with a chain must look the seed up";
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(&bap.bc, blk, res, 1, &explicit_seed));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, explicit_seed))
+    << "an explicit seed must win over the chain lookup";
 }

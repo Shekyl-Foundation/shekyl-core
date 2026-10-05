@@ -136,13 +136,18 @@ There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:`
 | --- | --- |
 | Post-quantum spend / ownership | [POST_QUANTUM_CRYPTOGRAPHY.md](POST_QUANTUM_CRYPTOGRAPHY.md) |
 | FCMP++ membership | [FCMP_PLUS_PLUS.md](FCMP_PLUS_PLUS.md) |
+| FCMP++ spend linkability (`PL-` round, open) | [design/FCMP_SPEND_LINKABILITY.md](design/FCMP_SPEND_LINKABILITY.md) |
 | Economics / denomination | [DESIGN_CONCEPTS.md](DESIGN_CONCEPTS.md) |
 | Genesis allocations | [GENESIS_TRANSPARENCY.md](GENESIS_TRANSPARENCY.md), [GENESIS_ALLOCATIONS.md](GENESIS_ALLOCATIONS.md) |
 | Archival staking (mechanism) | [V3_STAKER_ARCHIVAL.md](V3_STAKER_ARCHIVAL.md) |
+| Archival serving route (request) | [design/ARCHIVAL_SERVING_ROUTE.md](design/ARCHIVAL_SERVING_ROUTE.md) |
 | Archival wallet FSM | [design/PHASE_2B_FSM_RETOOL.md](design/PHASE_2B_FSM_RETOOL.md) |
 | Principal stake lifecycle | [design/PRINCIPAL_STAKE_LIFECYCLE.md](design/PRINCIPAL_STAKE_LIFECYCLE.md) |
 | Reward emission | [design/REWARD_EMISSION_LEG.md](design/REWARD_EMISSION_LEG.md) |
 | Address format (operator) | [USER_GUIDE.md](USER_GUIDE.md); message-signing / address v2: [design/WALLET_MESSAGE_SIGNING.md](design/WALLET_MESSAGE_SIGNING.md) |
+| Tor cover posture | [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md) — relay contribution, not a protocol carrier (TRC) |
+| Daemon chain-store invariants (`SI-`) | [design/STORE_INVARIANT_REGISTER.md](design/STORE_INVARIANT_REGISTER.md) — what the Rust store must hold regardless of consensus; never a consensus rule (C2-R8) |
+| Daemon consensus validation (`shekyl-chain-rules`) | [design/CHAIN_RULES_CRATE.md](design/CHAIN_RULES_CRATE.md) — the crate that judges a block against the census's rules and mints the `ChainValid` the store connects; no store handle (DRS-E6) |
 | Staker operations | [STAKER_OPERATOR_GUIDE.md](STAKER_OPERATOR_GUIDE.md) |
 
 Identifier collisions (Phase 2 vs Bond-PR 2, and the rest): [design/IMPLEMENTATION_INDEX.md](design/IMPLEMENTATION_INDEX.md).
@@ -151,6 +156,7 @@ Identifier collisions (Phase 2 vs Bond-PR 2, and the rest): [design/IMPLEMENTATI
 
 - [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md)
 - [USER_GUIDE.md](USER_GUIDE.md)
+- [TOR_RELAY.md](TOR_RELAY.md) — non-exit Tor relay; daemon client on that same process (cover posture; not a default)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SIGNING.md](SIGNING.md), [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
 

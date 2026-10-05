@@ -10,9 +10,10 @@
 //!   running-max formulation produces signed solvetimes. After §5.3
 //!   step 5's minimum-L floor, `L` is mathematically positive and is
 //!   re-typed to `u128` for the step-7 division.
-//! - All FFI-boundary types (`chain_height`, `timestamps[i]`, entries
-//!   of `cumulative_difficulties`, `next_difficulty`) are `u64` /
-//!   `u128`.
+//! - Domain types at the algorithm edge: [`shekyl_types::BlockHeight`],
+//!   [`shekyl_types::Timestamp`], [`crate::CumulativeDifficulty`],
+//!   [`crate::Difficulty`]. The FFI shim reconstructs these from the
+//!   raw C ABI immediately and unwraps only when writing the out-ptr.
 //! - The §5.3 step-8 overflow guard prevents `u128` overflow on the
 //!   `avg_D * N * (N+1) * T * 99` multiplication chain when `avg_D >
 //!   2_000_000 * N * N * T`.
@@ -26,6 +27,8 @@
 
 use crate::consts::{GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS};
 use crate::error::Error;
+use crate::types::{CumulativeDifficulty, Difficulty};
+use shekyl_types::{BlockHeight, Timestamp};
 
 /// LWMA-1 next-difficulty computation per
 /// `docs/completed/DAA_LWMA1.md` §5.3.
@@ -35,20 +38,19 @@ use crate::error::Error;
 /// - `chain_height`: height of the chain tip (the most recent block
 ///   already on chain). Genesis is height `0`. The function computes
 ///   the difficulty for the *next* block at height `chain_height + 1`.
-/// - `timestamps`: raw `u64` block timestamps (seconds since Unix
-///   epoch), in chain order with `timestamps[0]` the oldest and the
-///   last entry the chain tip. When `chain_height >= N`, must contain
-///   exactly `N + 1` entries (the consensus invariant — see §5.3 step
-///   1's boundary; an off-by-one here is a hard fork). When
-///   `chain_height < N`, this slice is *not inspected* and may be of
-///   any length, including empty.
-/// - `cumulative_difficulties`: matching window of `u128` cumulative
+/// - `timestamps`: block timestamps (Unix seconds), in chain order with
+///   `timestamps[0]` the oldest and the last entry the chain tip. When
+///   `chain_height >= N`, must contain exactly `N + 1` entries (the
+///   consensus invariant — see §5.3 step 1's boundary; an off-by-one
+///   here is a hard fork). When `chain_height < N`, this slice is *not
+///   inspected* and may be of any length, including empty.
+/// - `cumulative_difficulties`: matching window of cumulative
 ///   difficulties; the length contract mirrors `timestamps`.
 ///
 /// # Output
 ///
-/// On success, the `u128` difficulty value that the next block must
-/// satisfy per §5.3 step 9's rounded output.
+/// On success, the [`Difficulty`] the next block must satisfy per
+/// §5.3 step 9's rounded output.
 ///
 /// # Errors
 ///
@@ -60,15 +62,15 @@ use crate::error::Error;
 ///   violation (cumulative difficulty is monotonically
 ///   non-decreasing). The caller must treat this as a protocol error.
 pub fn lwma1_next(
-    chain_height: u64,
-    timestamps: &[u64],
-    cumulative_difficulties: &[u128],
-) -> Result<u128, Error> {
+    chain_height: BlockHeight,
+    timestamps: &[Timestamp],
+    cumulative_difficulties: &[CumulativeDifficulty],
+) -> Result<Difficulty, Error> {
     // §5.3 step 1: genesis short-circuit. The first N+1 blocks
     // share GENESIS_DIFFICULTY; the algorithm computes against the
     // window only once chain_height has reached N.
-    if chain_height < N {
-        return Ok(GENESIS_DIFFICULTY);
+    if chain_height.to_raw() < N {
+        return Ok(Difficulty::from_raw(GENESIS_DIFFICULTY));
     }
 
     // §5.3 step 1 boundary: when chain_height >= N, the window MUST
@@ -107,7 +109,7 @@ pub fn lwma1_next(
     // an implementation-defined `u64 -> i64` cast at the max() site
     // and is the natural width for the subtraction `timestamps[0] -
     // T` which would underflow `u64` when `timestamps[0] < T`.
-    let mut prev_max: i128 = i128::from(timestamps[0]) - t_i128;
+    let mut prev_max: i128 = i128::from(timestamps[0].to_raw()) - t_i128;
 
     // §5.3 step 2 (Round 12 ordering correction): solvetime is
     // computed BEFORE the running-max update so iter 1's synthetic
@@ -121,7 +123,7 @@ pub fn lwma1_next(
     // this).
     let mut acc: i128 = 0;
     for (i, &raw_ti) in timestamps.iter().enumerate().skip(1) {
-        let ti = i128::from(raw_ti);
+        let ti = i128::from(raw_ti.to_raw());
         let solvetime = (ti - prev_max).clamp(lo, hi);
         // `i` is in 1..=N (skip(1) above iter()ed over the N+1-length
         // slice). Weight equals the slice index, matching canonical
@@ -154,8 +156,8 @@ pub fn lwma1_next(
     // cumulative_difficulties[0]` is a consensus invariant; if it
     // doesn't hold, the chain state is broken and we surface
     // ERR_OVERFLOW rather than producing a wrap-around value.
-    let cd_n = cumulative_difficulties[N_USIZE];
-    let cd_0 = cumulative_difficulties[0];
+    let cd_n = cumulative_difficulties[N_USIZE].to_raw();
+    let cd_0 = cumulative_difficulties[0].to_raw();
     let avg_d: u128 = cd_n
         .checked_sub(cd_0)
         .ok_or(Error::Overflow)?
@@ -235,5 +237,5 @@ pub fn lwma1_next(
         r /= 10;
     }
 
-    Ok(next_d)
+    Ok(Difficulty::from_raw(next_d))
 }

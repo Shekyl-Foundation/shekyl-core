@@ -53,36 +53,28 @@
 name: ci/benchmarks
 
 on:
+  # No `merge_group:` trigger, deliberately (06-branching.mdc, the merge
+  # queue): a PR-comment comparator whose jobs are gated on the PR
+  # payload; there is no group to compare against or comment on.
   pull_request:
     branches: [dev]
-    paths:
-      - "rust/shekyl-engine-state/**"
-      - "rust/shekyl-engine-file/**"
-      - "rust/shekyl-engine-core/**"
-      - "rust/shekyl-scanner/**"
-      - "rust/shekyl-tx-builder/**"
-      - "rust/shekyl-oxide/**"
-      - "rust/shekyl-crypto-pq/**"
-      - "rust/Cargo.lock"
-      - "rust/Cargo.toml"
+    # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
+    # 2026-10-05). A bench's cost depends on its dependency closure, not on
+    # its own crate: `relay_admission_verify_iai` lives in `shekyl-ffi` and
+    # measures code in `shekyl-fcmp` and `shekyl-fcmp-proofs`. A per-crate
+    # list that omits one of those runs neither the comparison nor the
+    # baseline refresh for a change there, and the next PR that does trigger
+    # the gate is then compared against a baseline that predates the change.
+    # `push` takes this list by anchor: a path that refreshes no baseline is
+    # the same hole from the other side, so the two must not differ.
+    paths: &paths
+      - "rust/**"
       - "scripts/bench/**"
       - ".github/workflows/benchmarks.yml"
       - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
   push:
     branches: [dev]
-    paths:
-      - "rust/shekyl-engine-state/**"
-      - "rust/shekyl-engine-file/**"
-      - "rust/shekyl-engine-core/**"
-      - "rust/shekyl-scanner/**"
-      - "rust/shekyl-tx-builder/**"
-      - "rust/shekyl-oxide/**"
-      - "rust/shekyl-crypto-pq/**"
-      - "rust/Cargo.lock"
-      - "rust/Cargo.toml"
-      - "scripts/bench/**"
-      - ".github/workflows/benchmarks.yml"
-      - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
+    paths: *paths
   workflow_dispatch:
 
 # Top-level defaults: read-only. Per-job overrides upgrade to write

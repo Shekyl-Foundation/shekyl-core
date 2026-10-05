@@ -23,12 +23,12 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    BlockHash, BlockHeight, BlockLeaves, CommitmentBytes, CurveTreeClient, CurveTreeRoot,
+    OneTimePubkey, OutputIdentity, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::selene_hash_init;
 
@@ -71,18 +71,24 @@ fn decode_block(b: &Value) -> Block {
     let root = decode_hex32(b["curve_tree_root"].as_str().expect("root hex"));
     let mt = &b["miner_tx"];
     let blob = decode_hex(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
-    // Real post-parse validation/slicing — the recon-owned half of the
-    // daemon's extract_leaf_hashes (the %32 check + per-output slice).
-    let leaf_hashes = extract_leaf_hashes(Some(&blob));
+    // The recon-owned slice of the `0x07` payload: one 64-byte `CM ‖ record`
+    // entry per output; the leaf commitment point is its first 32 bytes.
+    let n_outputs = mt["outputs"].as_array().expect("outputs array").len();
+    let commitments = extract_leaf_commitments(Some(&blob), n_outputs).expect("0x07 entries");
     let outputs = mt["outputs"]
         .as_array()
         .expect("outputs array")
         .iter()
-        .enumerate()
-        .map(|(i, o)| OutputIdentity {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
-            h_pqc: per_output_h_pqc(&leaf_hashes, i),
+        .zip(commitments)
+        .map(|(o, cm)| OutputIdentity {
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
+            cm,
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -119,8 +125,14 @@ fn reconstruct_roots(blocks: &[Block]) -> Vec<[u8; 32]> {
             is_miner: true,
             outputs: &blk.outputs,
         }];
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
-        let drained_through = blk.height.saturating_sub(1);
+        gindex = collect_block_leaves(
+            BlockHeight::from_raw(blk.height),
+            &txs,
+            gindex,
+            &mut entries,
+        )
+        .expect("KAT chain has no bad published point");
+        let drained_through = BlockHeight::from_raw(blk.height.saturating_sub(1));
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));
     }
@@ -249,8 +261,13 @@ fn decode_client_block(b: &Value) -> ClientBlock {
         .expect("outputs array")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -274,12 +291,12 @@ fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
 fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
     let txs = [TxLeafInputs {
         is_miner: true,
-        leaf_hash_blob: Some(&blk.blob),
+        leaf_entry_blob: Some(&blk.blob),
         outputs: &blk.outputs,
     }];
     client
         .ingest_block(BlockLeaves {
-            height: BlockHeight(blk.height),
+            height: BlockHeight::from_raw(blk.height),
             txs: &txs,
         })
         .unwrap();
@@ -306,19 +323,19 @@ fn client_reconstructs_consensus_root_at_every_height() {
         for blk in &blocks {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: BlockHeight(blk.height),
+                    height: BlockHeight::from_raw(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
             let reference = ReferenceBlock {
-                height: BlockHeight(blk.height),
-                curve_tree_root: blk.root,
-                block_hash: [0u8; 32],
+                height: BlockHeight::from_raw(blk.height),
+                curve_tree_root: CurveTreeRoot::from_bytes(blk.root),
+                block_hash: BlockHash::NULL,
             };
             if client.verify_root(&reference).is_err() {
                 mismatches.push(blk.height);
@@ -349,13 +366,13 @@ fn next_block_root_is_the_header_of_the_block_about_to_be_built() {
         let mut mismatches = Vec::new();
         for blk in &blocks {
             let produced = client.next_block_root().unwrap();
-            if produced != blk.root {
+            if produced != CurveTreeRoot::from_bytes(blk.root) {
                 mismatches.push(blk.height);
             }
             ingest_client_block(&mut client, blk);
             // Once ingested, the verifier-side read names the same state.
             assert_eq!(
-                client.root_at(BlockHeight(blk.height)).unwrap(),
+                client.root_at(BlockHeight::from_raw(blk.height)).unwrap(),
                 produced,
                 "chain {name}: root_at({}) disagrees with the header it was built from",
                 blk.height
@@ -384,20 +401,20 @@ fn client_path_matches_recon_path() {
         for (blk, recon_root) in client_blocks.iter().zip(&recon) {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: BlockHeight(blk.height),
+                    height: BlockHeight::from_raw(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
             assert_eq!(
                 client
-                    .root_at(BlockHeight(blk.height))
+                    .root_at(BlockHeight::from_raw(blk.height))
                     .expect("store hot path"),
-                *recon_root,
+                CurveTreeRoot::from_bytes(*recon_root),
                 "client/recon divergence at height {}",
                 blk.height,
             );
@@ -433,7 +450,9 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
         ingest_client_block(&mut persistent, blk);
     }
 
-    persistent.rollback_to_fork(BlockHeight(fork)).unwrap();
+    persistent
+        .rollback_to_fork(BlockHeight::from_raw(fork))
+        .unwrap();
     for blk in deep.iter().skip(fork_index + 1) {
         ingest_client_block(&mut persistent, blk);
     }
@@ -444,12 +463,12 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
     }
 
     assert_eq!(
-        persistent.root_at(BlockHeight(fork)).unwrap(),
-        fresh.root_at(BlockHeight(fork)).unwrap(),
+        persistent.root_at(BlockHeight::from_raw(fork)).unwrap(),
+        fresh.root_at(BlockHeight::from_raw(fork)).unwrap(),
         "shared-prefix root at fork"
     );
     for blk in deep.iter().skip(fork_index + 1) {
-        let height = BlockHeight(blk.height);
+        let height = BlockHeight::from_raw(blk.height);
         let persistent_root = persistent.root_at(height).unwrap();
         assert_eq!(
             persistent_root,
@@ -458,7 +477,8 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
             blk.height
         );
         assert_eq!(
-            persistent_root, blk.root,
+            persistent_root,
+            CurveTreeRoot::from_bytes(blk.root),
             "persistent root must match consensus oracle at height {}",
             blk.height
         );

@@ -46,8 +46,8 @@ public:
     if (!construct_miner_tx(0, 0, 0, 2, 0, /*frozen_segment_count=*/0, m_bob.get_keys().m_account_address, m_tx))
       return false;
 
-    m_tx_pub_key = get_tx_pub_key_from_extra(m_tx);
-    return true;
+    return shekyl_tx_extra_tx_pubkey(m_tx.extra.data(), m_tx.extra.size(),
+      reinterpret_cast<uint8_t*>(&m_tx_pub_key)) == SHEKYL_TX_EXTRA_OK;
   }
 
 protected:

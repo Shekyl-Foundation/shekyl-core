@@ -32,7 +32,7 @@ pub fn relatedness(a: &TransferDetails, b: &TransferDetails) -> u32 {
     }
 
     // Close block heights suggest temporal correlation
-    let height_diff = a.block_height.abs_diff(b.block_height);
+    let height_diff = a.block_height.to_raw().abs_diff(b.block_height.to_raw());
     if height_diff > 0 && height_diff <= 10 {
         score += 1;
     }
@@ -213,8 +213,13 @@ mod tests {
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];
         tx_hash[..8].copy_from_slice(&global_idx.to_le_bytes());
-        let output = make_wallet_output(tx_hash, 0, global_idx, amount);
-        TransferDetails::from_wallet_output(&output, height)
+        let output = make_wallet_output(
+            shekyl_types::TxHash::from_bytes(tx_hash),
+            0,
+            global_idx,
+            amount,
+        );
+        TransferDetails::from_wallet_output(&output, shekyl_types::BlockHeight::from_raw(height))
     }
 
     #[test]

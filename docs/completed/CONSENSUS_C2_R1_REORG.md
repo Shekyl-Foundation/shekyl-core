@@ -1135,7 +1135,7 @@ obligation (§5.2) is confirmed necessary by inspection.
   independently establishes misrepresentation and KEEPS its teeth —
   each job gets its own signal, one bit stops meaning two things.
 
-### 5.4 Proposed round structure (no rulings yet)
+### 5.4 Round structure — ADOPTED (the three-sub-round split R1a/R1b/R1c; all three since ruled and built, see the Status banner)
 
 Decision-grouped, three questions — all nine rows walked to a home
 (K1→Q1, K4→Q1, K9→Q1, K10→Q2, A1→Q2+Q3, A2→Q3, A4→Q3, K2→Q3, K3→Q3):
@@ -1157,7 +1157,7 @@ is NOT ratified as orchestration** — Q3 rules its two-consumers-one-flag
 split: re-request on the live path vs punish on the sync path, per
 §5.3). Per-ruling falsifiers throughout; ratify-then-build.
 
-### 5.5 Proposed rulings (DRAFT — steering review, then Rick; nothing here is ruled)
+### 5.5 C2-R1c rulings Q1a–Q3b — RULED, signed in full 2026-09-04 (the text below IS the ruled text; the pre-ratification framing this heading used to carry was true only before that date)
 
 **C2-R1c-Q1a — the admission-tier contract (CEN-K4).** Ratify the
 two-tier admission design as deliberate: the cheap tier (claimed-height

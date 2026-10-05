@@ -33,10 +33,16 @@
 //! - **T15** (`randomx_v2_sys_signature_audit_pin`): reads the
 //!   `[package.metadata.shekyl] fork-pin-sha = "…"` value from
 //!   [`rust/randomx-v2-sys/Cargo.toml`](../../randomx-v2-sys/Cargo.toml)
-//!   and the current HEAD SHA of the
-//!   [`external/randomx-v2`](../../../external/randomx-v2)
-//!   submodule, asserting equality. A mismatch indicates the
-//!   submodule has advanced without an `extern "C"` re-audit
+//!   and asserts it against the superproject gitlink
+//!   `HEAD:external/randomx-v2` (the pin the superproject records).
+//!   `git -C external/randomx-v2 rev-parse HEAD` is the wrong
+//!   instrument: an empty checkout walks up and reports the
+//!   superproject HEAD. Three assertions, in order: the directory
+//!   is populated; the gitlink equals the pin; on-disk HEAD equals
+//!   the pin iff `external/randomx-v2/.git` exists (guarded by
+//!   `--show-toplevel`). Not-initialized and SHA-mismatch messages
+//!   are textually distinguishable. A gitlink mismatch indicates
+//!   the submodule advanced without an `extern "C"` re-audit
 //!   per [§1.7 + R1-D2](../../../docs/design/RANDOMX_V2_PHASE2G_PLAN.md);
 //!   the fork-pin-bump PR (separate scope) is the disposition.
 //!
@@ -53,7 +59,7 @@
 
 #![cfg(unix)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Resolve the workspace root from this crate's manifest dir.
@@ -172,8 +178,42 @@ fn t14_randomx_v2_sys_sole_consumer() {
 }
 
 // ---------------------------------------------------------------------------
-// T15: randomx-v2-sys fork-pin SHA matches submodule HEAD
+// T15: randomx-v2-sys fork-pin SHA matches superproject gitlink
 // ---------------------------------------------------------------------------
+
+fn dir_is_populated(path: &Path) -> bool {
+    // Fail closed on I/O: a directory we cannot read is not a pin we
+    // can attest. Ignore `.git` — a gitfile/gitdir leftover from an
+    // interrupted `submodule update` is not RandomX source. CMake
+    // `file(GLOB … /*)` *includes* dotfiles; both CMake populate
+    // checks filter `.git` the same way (`dir_populated_ignoring_git`).
+    let entries = std::fs::read_dir(path).unwrap_or_else(|e| {
+        panic!(
+            "read_dir {}: {e} (fail closed — cannot attest population)",
+            path.display()
+        )
+    });
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|e| panic!("read_dir entry {}: {e} (fail closed)", path.display()));
+        if entry.file_name() != ".git" {
+            return true;
+        }
+    }
+    false
+}
+
+fn git_rev_parse(cwd: &Path, spec: &str) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["rev-parse", spec])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("failed to invoke git rev-parse: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
 #[test]
 fn t15_randomx_v2_sys_signature_audit_pin() {
@@ -205,31 +245,83 @@ fn t15_randomx_v2_sys_signature_audit_pin() {
         );
 
     let submodule_dir = workspace_root().join("external").join("randomx-v2");
-    let head_output = Command::new("git")
-        .args(["-C"])
-        .arg(&submodule_dir)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .expect("failed to invoke `git rev-parse HEAD` in external/randomx-v2");
-    assert!(
-        head_output.status.success(),
-        "git rev-parse HEAD failed in {}; submodule not initialized? \
-         stderr = {}",
-        submodule_dir.display(),
-        String::from_utf8_lossy(&head_output.stderr),
-    );
-    let head_sha = String::from_utf8(head_output.stdout)
-        .expect("git rev-parse HEAD output not UTF-8")
-        .trim()
-        .to_string();
 
-    assert_eq!(
-        pin, head_sha,
-        "randomx-v2-sys fork-pin-sha mismatch with external/randomx-v2 HEAD. \
-         Cargo.toml pin: {pin}; submodule HEAD: {head_sha}. \
-         Per §1.7 + R1-D2 + T15 a mismatch indicates the submodule advanced \
-         without re-auditing the `extern \"C\"` declarations in \
-         randomx-v2-sys/src/lib.rs. The fork-pin-bump procedure is a \
-         separate-scope PR per §5.7 drift-prevention discipline.",
+    // 1. Populated: non-empty directory. An empty checkout is not a
+    // SHA mismatch — `git -C` that path walks up and reports the
+    // superproject HEAD.
+    assert!(
+        dir_is_populated(&submodule_dir),
+        "external/randomx-v2 is not initialized (missing or empty directory). \
+         `git -C external/randomx-v2 rev-parse HEAD` walks up and reports \
+         the superproject SHA, which is not the pin. Initialize with: \
+         `git submodule update --init external/randomx-v2`. Never pass \
+         `--exclude` for this crate. Worktrees inherit gitlinks but not \
+         submodule working trees; re-run the same init in the worktree. \
+         Default daemon CMake does not need this tree; the differential \
+         harness and T15 do. See CLAUDE.md checkout hygiene.",
     );
+
+    let root = workspace_root()
+        .canonicalize()
+        .expect("workspace root canonicalize");
+    let submodule_dir = root.join("external").join("randomx-v2");
+
+    // 2. Gitlink == pin. `HEAD:external/randomx-v2` is recorded in the
+    // superproject and cannot walk into an empty dir.
+    let gitlink = git_rev_parse(&root, "HEAD:external/randomx-v2").unwrap_or_else(|err| {
+        panic!(
+            "git rev-parse HEAD:external/randomx-v2 failed in {}: {err}",
+            root.display()
+        )
+    });
+    assert_eq!(
+        pin, gitlink,
+        "SHA mismatch: randomx-v2-sys fork-pin-sha does not match the \
+         superproject gitlink HEAD:external/randomx-v2. Cargo.toml pin: \
+         {pin}; gitlink: {gitlink}. Per §1.7 + R1-D2 + T15 a mismatch \
+         indicates the submodule advanced without re-auditing the \
+         `extern \"C\"` declarations in randomx-v2-sys/src/lib.rs. The \
+         fork-pin-bump procedure is a separate-scope PR per §5.7 \
+         drift-prevention discipline.",
+    );
+
+    // 3. On-disk HEAD == pin, only if the checkout has its own .git
+    // (file or directory) whose `--show-toplevel` is the submodule
+    // itself. T15 is a git-checkout test: `HEAD:external/randomx-v2`
+    // already required the superproject `.git`, so a source tarball
+    // with no git metadata fails at step 2 — there is no tarball skip
+    // contract. Guard `--show-toplevel` so a leftover `.git` that
+    // still walks up is not treated as a submodule HEAD.
+    let git_marker = submodule_dir.join(".git");
+    if git_marker.exists() {
+        let toplevel = git_rev_parse(&submodule_dir, "--show-toplevel").unwrap_or_else(|err| {
+            panic!(
+                "git rev-parse --show-toplevel failed in {}: {err}",
+                submodule_dir.display()
+            )
+        });
+        let toplevel_path = PathBuf::from(&toplevel)
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("canonicalize show-toplevel {toplevel}: {e}"));
+        assert_eq!(
+            toplevel_path, submodule_dir,
+            "external/randomx-v2/.git exists but git rev-parse --show-toplevel \
+             is {toplevel_path:?}, not the submodule directory. Refusing to \
+             compare on-disk HEAD (walk-up).",
+        );
+        let on_disk = git_rev_parse(&submodule_dir, "HEAD").unwrap_or_else(|err| {
+            panic!(
+                "git rev-parse HEAD failed in {}: {err}",
+                submodule_dir.display()
+            )
+        });
+        assert_eq!(
+            pin, on_disk,
+            "SHA mismatch: external/randomx-v2 on-disk HEAD does not match \
+             fork-pin-sha. Cargo.toml pin: {pin}; on-disk HEAD: {on_disk}. \
+             The gitlink matches the pin; the working tree is checked out at \
+             a different commit. `git submodule update --init external/randomx-v2` \
+             to reset it.",
+        );
+    }
 }

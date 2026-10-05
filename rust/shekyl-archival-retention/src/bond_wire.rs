@@ -27,59 +27,90 @@ pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 /// only if P-set uniformity is abandoned. (Truncation ≠ shorter-valid is
 /// also true — PR #229 — and incidental to that load-bearing reason.)
 pub const HYBRID_PUBKEY_CANONICAL_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
-pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
+// The holdings vocabulary the daemon store also persists moved to
+// `shekyl-types` (`DRS_E1_SARCH.md` `SAR-Q2`, 2026-09-23); re-exported at the
+// paths this crate's callers already use. The folds over it stay here.
+pub use shekyl_types::archival::{
+    HoldingsDescriptor, HoldingsKind, HoldingsKindError, ShardSet, ShardSetError,
+    MAX_HOLDINGS_SHARDS,
+};
+
+/// The serving endpoint on the wire: the raw 32-byte Ed25519 public key of
+/// the persona's v3 onion service (`EU-D3`). The `.onion` address is a display
+/// form; the wire never carries it.
+pub const ENDPOINT_BYTES: usize = 32;
+
+/// Wire discriminant of a bond-post vin (gate-4 §3.4.1). Copy so FFI, debit-auth,
+/// and `as u8` sites can name the byte without carrying JoinMarket's fields.
+///
+/// Discriminant `3` was `HoldingsUpdate`. **REJECTED 2026-09-20** (immutable-bond
+/// ruling): in-place holdings mutation is a clusterable same-class stream, so a
+/// persona's bond is fixed at join. The byte stays unassigned — `from_u8(3)` is
+/// [`WireError::InvalidPostKind`] — so the name cannot be silently re-minted
+/// (rule 23). Holdings change is persona rotation (`Release` + `JoinMarket`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BondPostKind {
     JoinMarket = 0,
-    Rebond = 1,
+    Reinstate = 1,
     Release = 2,
-    HoldingsUpdate = 3,
 }
 
 impl BondPostKind {
     pub fn from_u8(v: u8) -> Result<Self, WireError> {
         match v {
             0 => Ok(Self::JoinMarket),
-            1 => Ok(Self::Rebond),
+            1 => Ok(Self::Reinstate),
             2 => Ok(Self::Release),
-            3 => Ok(Self::HoldingsUpdate),
             _ => Err(WireError::InvalidPostKind(v)),
         }
     }
+
+    /// Unit kinds: Reinstate / Release. `None` for JoinMarket, which needs
+    /// `bond_spend_pk` and the endpoint before it is a [`BondKind`].
+    pub const fn unit_kind(self) -> Option<BondKind> {
+        match self {
+            Self::Reinstate => Some(BondKind::Reinstate),
+            Self::Release => Some(BondKind::Release),
+            Self::JoinMarket => None,
+        }
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum HoldingsKind {
-    ShardSetCompact = 0,
-    CompleteTree = 1,
+/// Kind of a decoded [`ArchivalBondPostVin`]. JoinMarket is the only variant
+/// that carries extra data (`bond_spend_pk` + serving endpoint). Holdings and
+/// the amount terms live on the vin — every kind has them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BondKind {
+    JoinMarket {
+        bond_spend_pk: Vec<u8>,
+        endpoint: [u8; ENDPOINT_BYTES],
+    },
+    Reinstate,
+    Release,
 }
 
-impl HoldingsKind {
-    pub fn from_u8(v: u8) -> Result<Self, WireError> {
-        match v {
-            0 => Ok(Self::ShardSetCompact),
-            1 => Ok(Self::CompleteTree),
-            _ => Err(WireError::InvalidHoldingsKind(v)),
+impl BondKind {
+    pub const fn tag(&self) -> BondPostKind {
+        match self {
+            Self::JoinMarket { .. } => BondPostKind::JoinMarket,
+            Self::Reinstate => BondPostKind::Reinstate,
+            Self::Release => BondPostKind::Release,
         }
     }
 
-    /// Which LMDB scan produces the per-shard last-served slice that
-    /// [`crate::whole_record_last_served`] folds into the release-cooldown
-    /// anchor.
-    ///
-    /// Exhaustive on this enum: a third holdings kind fails to compile until
-    /// its scan is written. That is the gate the two C++ gather sites cannot
-    /// provide — they used to branch on `is_complete_tree()` independently,
-    /// coupled only by comments. Compact holdings store a shard list; a
-    /// complete-tree record stores none, so folding that empty list reports
-    /// "never served" (the permissive cooldown branch) for a record that has.
-    pub const fn last_served_scan(self) -> LastServedScan {
+    pub fn bond_spend_pk(&self) -> Option<&[u8]> {
         match self {
-            Self::ShardSetCompact => LastServedScan::HeldShards,
-            Self::CompleteTree => LastServedScan::AllShards,
+            Self::JoinMarket { bond_spend_pk, .. } => Some(bond_spend_pk.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&[u8; ENDPOINT_BYTES]> {
+        match self {
+            Self::JoinMarket { endpoint, .. } => Some(endpoint),
+            _ => None,
         }
     }
 }
@@ -99,151 +130,41 @@ pub enum LastServedScan {
     AllShards = 1,
 }
 
-/// A bounded, duplicate-free list of held shard ids — the validated form of a
-/// `ShardSetCompact` holdings' shard list (gate-4 §3.4.1).
+/// The kind → scan decision, as a method on the moved [`HoldingsKind`].
 ///
-/// Parse-don't-validate: the two structural invariants that were previously
-/// carried by convention — each verify re-guarding, and `bond_floor` signalling
-/// an invalid set with an in-band `0` (the same value the legitimate empty exit
-/// shape returns) — are enforced once, at construction, so an invalid set is
-/// unrepresentable past any decoder:
-///
-/// - **bounded**: `len <= MAX_HOLDINGS_SHARDS` (the codec cap);
-/// - **duplicate-free**: a shard id appears at most once ("a set on the wire" —
-///   previously rejected only inside the `HoldingsUpdate`/`Rebond` diffs and
-///   silently tolerated by `JoinMarket`, which let `[7, 7]` bond `2·FLOOR` for
-///   one shard).
-///
-/// **Insertion order is preserved** (ratified 2026-07-15): the §3.4.1 encoding
-/// writes the ids in slice order, so a valid `ShardSet` encodes byte-identically
-/// to the pre-newtype `Vec` — this change tightens *validity* (dupe-carrying
-/// byte strings now reject at decode) without re-encoding any accepted tx. So
-/// `[7, 42]` and `[42, 7]` remain distinct valid encodings of the same set;
-/// benign, since holdings feed the signature preimage (only the signer produces
-/// either, and only one connects).
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct ShardSet(Vec<u64>);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShardSetError {
-    /// `len > MAX_HOLDINGS_SHARDS`.
-    CountExceeded { got: usize },
-    /// A shard id appears more than once.
-    Duplicate { shard_id: u64 },
+/// `HoldingsKind` now lives in `shekyl-types` (`SAR-Q2`), which holds words
+/// and no folds; this decision is this crate's, so it is an extension trait
+/// here rather than an inherent method there. Exhaustive on the enum: a
+/// third holdings kind fails to compile until its scan is written — the gate
+/// the two C++ gather sites could not provide (they branched on
+/// `is_complete_tree()` independently, coupled only by comments). Compact
+/// holdings store a shard list; a complete-tree record stores none, so
+/// folding that empty list would report "never served" (the permissive
+/// cooldown branch) for a record that has.
+pub trait HoldingsKindScan {
+    /// Which scan produces the per-shard last-served slice that
+    /// [`crate::whole_record_last_served`] folds into the release-cooldown
+    /// anchor.
+    fn last_served_scan(self) -> LastServedScan;
 }
 
-impl fmt::Display for ShardSetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl HoldingsKindScan for HoldingsKind {
+    fn last_served_scan(self) -> LastServedScan {
         match self {
-            Self::CountExceeded { got } => {
-                write!(
-                    f,
-                    "shard count {got} exceeds the bound ({MAX_HOLDINGS_SHARDS})"
-                )
-            }
-            Self::Duplicate { shard_id } => {
-                write!(f, "shard id {shard_id} appears more than once")
-            }
+            Self::ShardSetCompact => LastServedScan::HeldShards,
+            Self::CompleteTree => LastServedScan::AllShards,
         }
     }
 }
 
-impl std::error::Error for ShardSetError {}
-
-impl ShardSet {
-    /// The one fallible constructor — every decoder / FFI marshal / builder
-    /// routes through it. Enforces the bound and duplicate-freeness; preserves
-    /// insertion order.
-    pub fn new(ids: Vec<u64>) -> Result<Self, ShardSetError> {
-        if ids.len() > MAX_HOLDINGS_SHARDS {
-            return Err(ShardSetError::CountExceeded { got: ids.len() });
-        }
-        // Duplicate check on a sorted scratch copy — do NOT perturb the caller's
-        // insertion order (that is the wire form). Bounded above, so the sort is
-        // at most MAX_HOLDINGS_SHARDS elements.
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        if let Some(pair) = sorted.windows(2).find(|w| w[0] == w[1]) {
-            return Err(ShardSetError::Duplicate { shard_id: pair[0] });
-        }
-        Ok(Self(ids))
-    }
-
-    /// The empty set (`CompleteTree` carries none; the `Release` exit shape). The
-    /// empty set is trivially bounded and duplicate-free.
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self(Vec::new())
-    }
-
-    /// Borrow the ids as a slice (also available through `Deref`).
-    #[must_use]
-    pub fn as_slice(&self) -> &[u64] {
-        &self.0
-    }
-
-    /// Consume into the raw id vec — the `shekyl-wire` handoff (an independent
-    /// oracle that owns its own bound/dupe checks).
-    #[must_use]
-    pub fn into_vec(self) -> Vec<u64> {
-        self.0
-    }
-}
-
-impl core::ops::Deref for ShardSet {
-    type Target = [u64];
-    fn deref(&self) -> &[u64] {
-        &self.0
-    }
-}
-
-impl TryFrom<Vec<u64>> for ShardSet {
-    type Error = ShardSetError;
-    fn try_from(ids: Vec<u64>) -> Result<Self, ShardSetError> {
-        Self::new(ids)
-    }
-}
-
-// Order-sensitive comparison against raw id lists — matches the wire form, for
-// call sites and tests that assert a set equals expected ids.
-impl PartialEq<[u64]> for ShardSet {
-    fn eq(&self, other: &[u64]) -> bool {
-        self.0 == other
-    }
-}
-
-impl<const N: usize> PartialEq<[u64; N]> for ShardSet {
-    fn eq(&self, other: &[u64; N]) -> bool {
-        self.0.as_slice() == other.as_slice()
-    }
-}
-
-impl PartialEq<Vec<u64>> for ShardSet {
-    fn eq(&self, other: &Vec<u64>) -> bool {
-        &self.0 == other
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HoldingsDescriptor {
-    pub kind: HoldingsKind,
-    pub shard_ids: ShardSet,
-}
-
+/// Byte-exact `txin_archival_bond_post` (gate-4 §3.4.1). JoinMarket-coupled
+/// fields live on [`BondKind`]; holdings and the amount terms are on the
+/// struct, matching `shekyl-wire::BondPost`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalBondPostVin {
     pub hybrid_public_key: Vec<u8>,
     pub p_canonical_id: [u8; 32],
-    pub post_kind: BondPostKind,
-    /// The GF-1 debit authorizer (gate-4 §4.1 `bond_spend_pk`, gate-6 §9.6),
-    /// **JoinMarket-coupled on the wire** (§9.11, mirroring the `shekyl-wire`
-    /// `BondPostKind::JoinMarket { bond_spend_pk }` oracle): present with the
-    /// exact canonical single-key length iff `post_kind == JoinMarket` —
-    /// committed once into the record at connect, immutable for the record's
-    /// life, and the key every later `bond_debit` verifies against. `write`
-    /// and `read_payload` enforce the coupling (a non-JoinMarket vin carrying
-    /// one, or a JoinMarket vin without one, is unrepresentable on the wire).
-    pub bond_spend_pk: Vec<u8>,
+    pub kind: BondKind,
     pub holdings: HoldingsDescriptor,
     pub bonded_total_atomic: u64,
     pub bond_credit: u64,
@@ -256,13 +177,18 @@ pub enum WireError {
     UnknownVinType(u8),
     HybridPubkeyLenNotCanonical { got: usize },
     BondSpendPkLenNotCanonical { got: usize },
-    BondSpendPkForbidden,
     HoldingsCountExceeded { got: usize },
     HoldingsDuplicateShard { shard_id: u64 },
     ShardListForbiddenForCompleteTree,
     InvalidPostKind(u8),
     InvalidHoldingsKind(u8),
     TrailingBytes,
+}
+
+impl From<HoldingsKindError> for WireError {
+    fn from(err: HoldingsKindError) -> Self {
+        Self::InvalidHoldingsKind(err.0)
+    }
 }
 
 impl fmt::Display for WireError {
@@ -280,12 +206,6 @@ impl fmt::Display for WireError {
                 write!(
                     f,
                     "bond_spend_pk length {got} != canonical single-key length"
-                )
-            }
-            Self::BondSpendPkForbidden => {
-                write!(
-                    f,
-                    "bond_spend_pk is JoinMarket-coupled; other post kinds must not carry one"
                 )
             }
             Self::HoldingsCountExceeded { got } => {
@@ -382,27 +302,93 @@ pub fn read_holdings_descriptor<R: Read>(r: &mut R) -> Result<HoldingsDescriptor
 }
 
 impl ArchivalBondPostVin {
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), WireError> {
+    pub fn join_market(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        bond_spend_pk: Vec<u8>,
+        endpoint: [u8; ENDPOINT_BYTES],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            kind: BondKind::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+            },
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit: 0,
+        }
+    }
+
+    pub fn release(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            kind: BondKind::Release,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+        }
+    }
+
+    pub fn reinstate(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            kind: BondKind::Reinstate,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+        }
+    }
+
+    pub const fn post_kind(&self) -> BondPostKind {
+        self.kind.tag()
+    }
+
+    pub fn bond_spend_pk(&self) -> Option<&[u8]> {
+        self.kind.bond_spend_pk()
+    }
+
+    pub fn endpoint(&self) -> Option<&[u8; ENDPOINT_BYTES]> {
+        self.kind.endpoint()
+    }
+
+    /// Write-time checks the kind type cannot hold: hybrid-key length,
+    /// JoinMarket `bond_spend_pk` length, holdings bounds. Presence couplings
+    /// are the variant — they are not checked here.
+    pub fn check_couplings(&self) -> Result<(), WireError> {
         if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
             return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
         }
-        // §9.11 coupling: JoinMarket carries the exact-canonical-length key;
-        // every other kind must not carry one. Enforced at write so a
-        // misconstruction is loud rather than silently dropped or emitted.
-        match self.post_kind {
-            BondPostKind::JoinMarket => {
-                if self.bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
-                    return Err(WireError::BondSpendPkLenNotCanonical {
-                        got: self.bond_spend_pk.len(),
-                    });
-                }
-            }
-            _ => {
-                if !self.bond_spend_pk.is_empty() {
-                    return Err(WireError::BondSpendPkForbidden);
-                }
+        if let BondKind::JoinMarket { bond_spend_pk, .. } = &self.kind {
+            if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
+                return Err(WireError::BondSpendPkLenNotCanonical {
+                    got: bond_spend_pk.len(),
+                });
             }
         }
         if self.holdings.kind == HoldingsKind::ShardSetCompact
@@ -415,15 +401,24 @@ impl ArchivalBondPostVin {
         if self.holdings.kind == HoldingsKind::CompleteTree && !self.holdings.shard_ids.is_empty() {
             return Err(WireError::ShardListForbiddenForCompleteTree);
         }
+        Ok(())
+    }
 
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), WireError> {
+        self.check_couplings()?;
         w.write_all(&[VIN_TYPE_ARCHIVAL_BOND_POST])?;
         write_varint(&self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
-        w.write_all(&[self.post_kind as u8])?;
-        if self.post_kind == BondPostKind::JoinMarket {
-            write_varint(&self.bond_spend_pk.len(), w)?;
-            w.write_all(&self.bond_spend_pk)?;
+        w.write_all(&[self.post_kind() as u8])?;
+        if let BondKind::JoinMarket {
+            bond_spend_pk,
+            endpoint,
+        } = &self.kind
+        {
+            write_varint(&bond_spend_pk.len(), w)?;
+            w.write_all(bond_spend_pk)?;
+            w.write_all(endpoint)?;
         }
         write_holdings_descriptor(w, &self.holdings)?;
         write_varint(&self.bonded_total_atomic, w)?;
@@ -446,19 +441,23 @@ impl ArchivalBondPostVin {
         let mut hybrid_public_key = vec![0u8; pk_len];
         r.read_exact(&mut hybrid_public_key)?;
         let p_canonical_id = read_bytes(r)?;
-        let post_kind = BondPostKind::from_u8(read_byte(r)?)?;
-        // §9.11 coupling: the key bytes exist on the wire iff JoinMarket, so
-        // `read` can never yield a non-JoinMarket vin carrying one.
-        let bond_spend_pk = if post_kind == BondPostKind::JoinMarket {
-            let spk_len: usize = read_varint(r)?;
-            if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
-                return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
+        let tag = BondPostKind::from_u8(read_byte(r)?)?;
+        let kind = match tag {
+            BondPostKind::JoinMarket => {
+                let spk_len: usize = read_varint(r)?;
+                if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
+                    return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
+                }
+                let mut bond_spend_pk = vec![0u8; spk_len];
+                r.read_exact(&mut bond_spend_pk)?;
+                let endpoint = read_bytes(r)?;
+                BondKind::JoinMarket {
+                    bond_spend_pk,
+                    endpoint,
+                }
             }
-            let mut spk = vec![0u8; spk_len];
-            r.read_exact(&mut spk)?;
-            spk
-        } else {
-            Vec::new()
+            BondPostKind::Reinstate => BondKind::Reinstate,
+            BondPostKind::Release => BondKind::Release,
         };
         let holdings = read_holdings_descriptor(r)?;
         let bonded_total_atomic = read_varint(r)?;
@@ -467,8 +466,7 @@ impl ArchivalBondPostVin {
         Ok(Self {
             hybrid_public_key,
             p_canonical_id,
-            post_kind,
-            bond_spend_pk,
+            kind,
             holdings,
             bonded_total_atomic,
             bond_credit,
@@ -496,286 +494,22 @@ impl ArchivalBondPostVin {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::id::p_canonical_id_from_hybrid_pubkey;
-
-    #[test]
-    fn bond_post_roundtrip_shard_set() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-            },
-            bonded_total_atomic: 1_500_000_000,
-            bond_credit: 1_500_000_000,
-            bond_debit: 0,
-        };
-        let wire = vin.serialize().unwrap();
-        assert_eq!(wire[0], VIN_TYPE_ARCHIVAL_BOND_POST);
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded, vin);
+impl ArchivalBondPostVin {
+    pub(crate) fn set_bond_spend_pk(&mut self, pk: Vec<u8>) {
+        match &mut self.kind {
+            BondKind::JoinMarket { bond_spend_pk, .. } => *bond_spend_pk = pk,
+            _ => panic!("bond_spend_pk exists only on JoinMarket"),
+        }
     }
 
-    #[test]
-    fn bond_post_complete_tree_has_no_shard_list_on_wire() {
-        let hybrid_pk = vec![0x01; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        let wire = vin.serialize().unwrap();
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded.holdings.kind, HoldingsKind::CompleteTree);
-        assert!(decoded.holdings.shard_ids.is_empty());
-    }
-
-    /// A truncated (or over-long) hybrid pubkey is malformed, not a shorter
-    /// valid key — both write and read demand the exact canonical length
-    /// (mirrors the emission wire; the C++ oracle enforces the same equality).
-    #[test]
-    fn bond_post_rejects_non_canonical_pubkey_length() {
-        let mut vin = ArchivalBondPostVin {
-            hybrid_public_key: vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1],
-            p_canonical_id: [0x11; 32],
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
-        vin.hybrid_public_key = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES + 1];
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
-
-        // Read side: craft a payload with a truncated pk_len.
-        let mut wire = Vec::new();
-        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
-        wire.extend_from_slice(&vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
-        assert!(matches!(
-            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
-    }
-
-    /// §9.11 coupling: `bond_spend_pk` is present with the exact canonical
-    /// length iff JoinMarket. Both directions of the misconstruction are
-    /// unrepresentable — write refuses to emit them, read refuses to parse
-    /// them — mirroring the shekyl-wire `BondPostKind` enum coupling.
-    #[test]
-    fn bond_spend_pk_is_join_market_coupled() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let base = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7]).unwrap(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-
-        // JoinMarket with a non-canonical key length refuses to write.
-        let mut vin = base.clone();
-        vin.bond_spend_pk = vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1];
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-        let mut vin = base.clone();
-        vin.bond_spend_pk = Vec::new();
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-
-        // A non-JoinMarket vin carrying a key refuses to write (it would be
-        // silently dropped otherwise — the coupling means the wire has no
-        // place for it).
-        let mut vin = base.clone();
-        vin.post_kind = BondPostKind::Release;
-        vin.holdings.shard_ids = ShardSet::empty();
-        vin.bonded_total_atomic = 0;
-        vin.bond_credit = 0;
-        vin.bond_debit = 750_000_000;
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkForbidden)
-        ));
-        // The same vin without the key round-trips, key-less.
-        vin.bond_spend_pk = Vec::new();
-        let wire = vin.serialize().unwrap();
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded, vin);
-        assert!(decoded.bond_spend_pk.is_empty());
-
-        // Read side: a JoinMarket payload with a truncated key length refuses.
-        let mut wire = Vec::new();
-        write_varint(&HYBRID_PUBKEY_CANONICAL_BYTES, &mut wire).unwrap();
-        wire.extend_from_slice(&hybrid_pk);
-        wire.extend_from_slice(&base.p_canonical_id);
-        wire.push(BondPostKind::JoinMarket as u8);
-        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
-        wire.extend_from_slice(&vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
-        assert!(matches!(
-            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-    }
-
-    /// Golden byte vector for the shared holdings codec.
-    ///
-    /// **Blast radius: TWO consensus wires.** This fragment is byte-identical on
-    /// the bond-post wire (`0x03`, this module) **and** the reward-emission wire
-    /// (`0x04`, [`crate::emission_wire`], which mirrors this exact pin in
-    /// `emission_wire::tests::holdings_codec_golden_vector_shared_with_bond_wire`).
-    /// A change that moves these bytes is a consensus change to both surfaces and
-    /// must fail both suites loudly — do not "fix" this test by updating the pin
-    /// without a genesis-format decision covering both wires.
-    #[test]
-    fn holdings_codec_golden_vector_shared_with_emission_wire() {
-        let shard_set = HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&shard_set).unwrap(),
-            [0x00, 0x02, 0x07, 0x2A],
-            "ShardSetCompact golden bytes moved — consensus change to BOTH wires"
-        );
-        let complete = HoldingsDescriptor {
-            kind: HoldingsKind::CompleteTree,
-            shard_ids: ShardSet::empty(),
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&complete).unwrap(),
-            [0x01],
-            "CompleteTree golden byte moved — consensus change to BOTH wires"
-        );
-        // Read side of the same pin: the golden bytes decode back exactly.
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x00u8, 0x02, 0x07, 0x2A].as_slice()).unwrap(),
-            shard_set
-        );
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x01u8].as_slice()).unwrap(),
-            complete
-        );
-    }
-
-    #[test]
-    fn shard_set_rejects_oversize_at_construction() {
-        // MAX + 1 DISTINCT ids — fails the bound (count is checked before dupes).
-        let ids: Vec<u64> = (0..=MAX_HOLDINGS_SHARDS as u64).collect();
-        assert_eq!(ids.len(), MAX_HOLDINGS_SHARDS + 1);
-        assert_eq!(
-            ShardSet::new(ids),
-            Err(ShardSetError::CountExceeded {
-                got: MAX_HOLDINGS_SHARDS + 1
-            })
-        );
-        // The bound holds exactly at the cap.
-        assert!(ShardSet::new((0..MAX_HOLDINGS_SHARDS as u64).collect()).is_ok());
-    }
-
-    #[test]
-    fn shard_set_rejects_duplicate_at_construction() {
-        // "A set on the wire": the constructor rejects a repeated id, naming it.
-        assert_eq!(
-            ShardSet::new(vec![7, 42, 7]),
-            Err(ShardSetError::Duplicate { shard_id: 7 })
-        );
-        assert!(ShardSet::new(vec![7, 42, 9]).is_ok());
-        assert!(ShardSet::empty().is_empty());
-    }
-
-    #[test]
-    fn shard_set_preserves_insertion_order_byte_identically() {
-        // Q2 (2026-07-15): order is NOT canonicalized — `[42, 7]` stays `[42, 7]`
-        // and encodes in that order, so the type change re-encodes no accepted tx.
-        let unsorted = ShardSet::new(vec![42, 7]).unwrap();
-        assert_eq!(unsorted.as_slice(), &[42, 7]);
-        let holdings = HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: unsorted,
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&holdings).unwrap(),
-            [0x00, 0x02, 0x2A, 0x07],
-            "insertion order must survive encoding (no canonical sort)"
-        );
-        // Round-trip: decode preserves the same order.
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x00u8, 0x02, 0x2A, 0x07].as_slice()).unwrap(),
-            holdings
-        );
-    }
-
-    #[test]
-    fn last_served_scan_is_exhaustive_on_holdings_kind() {
-        // A third HoldingsKind variant fails to compile in last_served_scan
-        // until its arm is written — that is the gate. This test pins the
-        // two kinds that exist so a silent swap of the arms goes red.
-        assert_eq!(
-            HoldingsKind::ShardSetCompact.last_served_scan(),
-            LastServedScan::HeldShards
-        );
-        assert_eq!(
-            HoldingsKind::CompleteTree.last_served_scan(),
-            LastServedScan::AllShards
-        );
-        assert_ne!(
-            LastServedScan::HeldShards as u8,
-            LastServedScan::AllShards as u8
-        );
-    }
-
-    #[test]
-    fn decode_rejects_duplicate_carrying_wire_bytes() {
-        // The validity tightening at the wire boundary: a byte string carrying a
-        // duplicate id (count 2, ids [7, 7]) is rejected at decode — it was
-        // silently accepted before the newtype. Valid txs are unaffected (the
-        // golden-vector test above pins their bytes unchanged).
-        let dupe_bytes = [0x00u8, 0x02, 0x07, 0x07];
-        assert!(matches!(
-            read_holdings_descriptor(&mut dupe_bytes.as_slice()),
-            Err(WireError::HoldingsDuplicateShard { shard_id: 7 })
-        ));
-        // And an oversize count is still rejected (count varint past the cap).
-        let mut oversize = vec![0x00u8];
-        // varint(4097) then no ids needed — the count guard fires first.
-        oversize.extend_from_slice(&[0x81, 0x20]); // LEB128 for 4097
-        assert!(matches!(
-            read_holdings_descriptor(&mut oversize.as_slice()),
-            Err(WireError::HoldingsCountExceeded { got: 4097 })
-        ));
+    pub(crate) fn set_endpoint(&mut self, ep: [u8; ENDPOINT_BYTES]) {
+        match &mut self.kind {
+            BondKind::JoinMarket { endpoint, .. } => *endpoint = ep,
+            _ => panic!("endpoint exists only on JoinMarket"),
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "bond_wire_tests.rs"]
+mod tests;

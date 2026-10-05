@@ -167,7 +167,7 @@ pub fn oq2_report(
                 n,
                 r,
                 mv,
-                splitting_loss_milli(4_096, mv, r),
+                splitting_loss_milli(MAX_HOLDINGS_SHARDS as u64, mv, r),
             )?;
         }
     }

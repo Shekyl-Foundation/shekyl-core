@@ -139,12 +139,20 @@ pub fn parse_payment_uri(uri: &str) -> Result<PaymentUri, PaymentUriError> {
                     label = Some(percent_decode_component(value)?);
                 }
                 "rid" => {
-                    let parsed = value
-                        .parse::<u64>()
-                        .map_err(|_| PaymentUriError::InvalidRid)?;
-                    if !rid_fits_wire(parsed) {
-                        return Err(PaymentUriError::InvalidRid);
+                    // The contract's `PaymentRequestId` grammar `^[1-9][0-9]*$`
+                    // (`PaymentRequestId::from_str` in engine-state states the
+                    // same rule): the integer parser alone would accept `+1`
+                    // and `01`, which a conforming client rejects.
+                    let canonical = !value.is_empty()
+                        && !value.starts_with('0')
+                        && value.bytes().all(|b| b.is_ascii_digit());
+                    let parsed = if canonical {
+                        value.parse::<u64>().ok()
+                    } else {
+                        None
                     }
+                    .filter(|&raw| rid_fits_wire(raw))
+                    .ok_or(PaymentUriError::InvalidRid)?;
                     rid = Some(parsed);
                 }
                 "expiry" => {
@@ -226,6 +234,26 @@ mod tests {
         let p = parse_payment_uri(&uri).unwrap();
         assert_eq!(p.rid, Some(42));
         assert_eq!(p.amount_atomic, Some(100));
+    }
+
+    #[test]
+    fn parse_rejects_non_canonical_rid_text() {
+        for bad in [
+            "shekyl:addr?rid=+1",
+            "shekyl:addr?rid=01",
+            "shekyl:addr?rid=0",
+            "shekyl:addr?rid=1x",
+        ] {
+            assert_eq!(
+                parse_payment_uri(bad).unwrap_err(),
+                PaymentUriError::InvalidRid,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            parse_payment_uri("shekyl:addr?rid=10").unwrap().rid,
+            Some(10)
+        );
     }
 
     #[test]

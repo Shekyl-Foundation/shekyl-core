@@ -125,8 +125,6 @@ public:
 
   bool flush_txpool(const std::vector<std::string>& args);
 
-  bool output_histogram(const std::vector<std::string>& args);
-
   bool print_coinbase_tx_sum(const std::vector<std::string>& args);
 
   bool alt_chain_info(const std::vector<std::string>& args);
@@ -141,9 +139,7 @@ public:
 
   bool version(const std::vector<std::string>& args);
 
-  bool prune_blockchain(const std::vector<std::string>& args);
 
-  bool check_blockchain_pruning(const std::vector<std::string>& args);
 
   bool print_net_stats(const std::vector<std::string>& args);
 

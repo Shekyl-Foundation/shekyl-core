@@ -25,11 +25,12 @@
 // 
 
 // TODO(shekyl-v4): Migrate Levin protocol handler from boost::asio to
-// standalone Asio. Tightly coupled to abstract_tcp_server2; migrate together.
+// standalone Asio. The handler sits on i_service_endpoint and moves with LV-3.
 #pragma once
 #include <boost/asio/steady_timer.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/unordered_map.hpp>
+#include <boost/smart_ptr/enable_shared_from_this.hpp>
 #include <boost/smart_ptr/make_shared.hpp>
 
 #include <atomic>
@@ -223,26 +224,24 @@ public:
     virtual void reset_timer()=0;
   };
   template <class callback_t>
-  struct anvoke_handler: invoke_response_handler_base
+  struct anvoke_handler: invoke_response_handler_base,
+                        public boost::enable_shared_from_this<anvoke_handler<callback_t>>
   {
+    /// What a fired timer reports. Close sets `destroyed`. A response
+    /// that loses `cancel_timer` leaves `timed_out`.
+    enum class timeout_report
+    {
+      timed_out,
+      destroyed,
+    };
+
     anvoke_handler(const callback_t& cb, const std::chrono::milliseconds timeout,  async_protocol_handler& con, int command)
       :m_cb(cb), m_timeout(timeout), m_con(con), m_timer(con.m_pservice_endpoint->get_io_context()), m_timer_started(false),
-      m_cancel_timer_called(false), m_timer_cancelled(false), m_command(command)
+      m_cancel_timer_called(false), m_timer_cancelled(false), m_outer_finished(false), m_command(command)
     {
       if(m_con.start_outer_call())
       {
-        MDEBUG(con.get_context_ref() << "anvoke_handler, timeout: " << timeout.count());
         m_timer.expires_after(timeout);
-        m_timer.async_wait([&con, command, cb, timeout](const boost::system::error_code& ec)
-        {
-          if(ec == boost::asio::error::operation_aborted)
-            return;
-          MINFO(con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
-          epee::span<const uint8_t> fake;
-          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, con.get_context_ref());
-          con.close();
-          con.finish_outer_call();
-        });
         m_timer_started = true;
       }
     }
@@ -253,7 +252,14 @@ public:
     boost::asio::steady_timer m_timer;
     bool m_timer_started;
     bool m_cancel_timer_called;
+    /// `cancel()` aborted the wait, so `handle` or `cancel` delivers.
     bool m_timer_cancelled;
+    /// `start_outer_call`'s ref is released once, from `handle`, `cancel`,
+    /// or the timeout completion.
+    std::atomic<bool> m_outer_finished;
+    /// Close sets this before `cancel_timer`. The completion reads it
+    /// on the connection strand.
+    timeout_report m_timeout_report = timeout_report::timed_out;
     const std::chrono::milliseconds m_timeout;
     int m_command;
     virtual bool handle(int res, const epee::span<const uint8_t> buff, typename async_protocol_handler::connection_context& context)
@@ -261,7 +267,7 @@ public:
       if(!cancel_timer())
         return false;
       m_cb(res, buff, context);
-      m_con.finish_outer_call();
+      finish_outer_call_once();
       return true;
     }
     virtual bool is_timer_started() const
@@ -270,11 +276,12 @@ public:
     }
     virtual void cancel()
     {
+      m_timeout_report = timeout_report::destroyed;
       if(cancel_timer())
       {
         epee::span<const uint8_t> fake;
         m_cb(LEVIN_ERROR_CONNECTION_DESTROYED, fake, m_con.get_context_ref());
-        m_con.finish_outer_call();
+        finish_outer_call_once();
       }
     }
     virtual bool cancel_timer()
@@ -290,22 +297,49 @@ public:
     {
       if (!m_cancel_timer_called && m_timer.cancel() > 0)
       {
-        callback_t& cb = m_cb;
-        const auto timeout = m_timeout;
-        async_protocol_handler& con = m_con;
-        int command = m_command;
         m_timer.expires_after(m_timeout);
-        m_timer.async_wait([&con, cb, command, timeout](const boost::system::error_code& ec)
-        {
-          if(ec == boost::asio::error::operation_aborted)
-            return;
-          MINFO(con.get_context_ref() << "Timeout on invoke operation happened, command: " << command << " timeout: " << timeout.count());
-          epee::span<const uint8_t> fake;
-          cb(LEVIN_ERROR_CONNECTION_TIMEDOUT, fake, con.get_context_ref());
-          con.close();
-          con.finish_outer_call();
-        });
+        arm_timeout();
       }
+    }
+
+    /// Register the wait. The handler must already be owned by a
+    /// `shared_ptr`: `shared_from_this` throws `bad_weak_ptr` until then.
+    /// The wait callback holds that owner, so `release_protocol` dropping
+    /// the handler list cannot destroy it before the completion runs.
+    void arm_timeout()
+    {
+      // `this->` is required. The base depends on `callback_t`, so an
+      // unqualified `shared_from_this` is not found by two-phase lookup.
+      boost::shared_ptr<anvoke_handler> self = this->shared_from_this();
+      m_timer.async_wait([self](const boost::system::error_code& ec)
+      {
+        if(ec == boost::asio::error::operation_aborted)
+          return;
+        // `start_outer_call`'s ref is still held, so `begin_closed` cannot
+        // post destruction yet. Releasing it at the end of the closure
+        // posts destruction behind this completion when it is the last.
+        self->m_con.m_pservice_endpoint->post([self] {
+          if(!self->m_timer_cancelled)
+          {
+            const bool destroyed = self->m_timeout_report == timeout_report::destroyed;
+            const int code = destroyed
+                ? LEVIN_ERROR_CONNECTION_DESTROYED
+                : LEVIN_ERROR_CONNECTION_TIMEDOUT;
+            if(!destroyed)
+              MINFO(self->m_con.get_context_ref() << "Timeout on invoke operation happened, command: " << self->m_command << " timeout: " << self->m_timeout.count());
+            epee::span<const uint8_t> fake;
+            self->m_cb(code, fake, self->m_con.get_context_ref());
+            self->m_con.close();
+          }
+          self->finish_outer_call_once();
+        });
+      });
+    }
+    void finish_outer_call_once()
+    {
+      bool expected = false;
+      if(m_outer_finished.compare_exchange_strong(expected, true))
+        m_con.finish_outer_call();
     }
   };
   critical_section m_invoke_response_handlers_lock;
@@ -320,7 +354,12 @@ public:
       MERROR("Adding response handler to a released object");
       return false;
     }
-    boost::shared_ptr<invoke_response_handler_base> handler(boost::make_shared<anvoke_handler<callback_t>>(cb, timeout, con, command));
+    // Arm after make_shared returns. shared_from_this() throws
+    // bad_weak_ptr until the shared_ptr has taken ownership, and a
+    // running io_context can fire a zero timeout during construction.
+    auto handler = boost::make_shared<anvoke_handler<callback_t>>(cb, timeout, con, command);
+    if(handler->is_timer_started())
+      handler->arm_timeout();
     m_invoke_response_handlers.push_back(handler);
     return handler->is_timer_started();
   }
@@ -485,7 +524,7 @@ public:
           epee::span<const uint8_t> buff_to_invoke = m_cache_in_buffer.carve((std::string::size_type)m_current_head.m_cb);
           m_state = stream_state_head;
 
-          // abstract_tcp_server2.h manages max bandwidth for a p2p link
+          // The operator link budget is the rate limit. This handler does not sleep.
           if (!(m_current_head.m_flags & (LEVIN_PACKET_REQUEST | LEVIN_PACKET_RESPONSE)))
           {
             // special noise/fragment command
@@ -590,7 +629,7 @@ public:
               );
 
               // peer_id remains unset if dropped
-              if (m_current_head.m_command == m_connection_context.handshake_command() && m_connection_context.handshake_complete())
+              if (m_current_head.m_command == m_connection_context.handshake_command() && m_connection_context.session_established())
                 m_max_packet_size = m_config.m_max_packet_size;
 
               if(!send_message(return_message.finalize_response(m_current_head.m_command)))

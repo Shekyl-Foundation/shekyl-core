@@ -47,7 +47,6 @@ function tidy_for_language() {
 	-DCMAKE_CXX_COMPILER=clang++ \
 	-DUSE_CCACHE=ON \
 	-DUSE_CLANG_TIDY_${LANG}=ON \
-	-DBUILD_SHARED_LIBS=ON \
 	-DBUILD_TESTS=ON
 
 	make clean 					# Clean up, so that the result can be regenerated from scratch

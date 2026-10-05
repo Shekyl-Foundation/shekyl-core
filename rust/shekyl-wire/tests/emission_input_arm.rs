@@ -23,6 +23,7 @@
 
 mod common;
 use common::conforming_pqc_extra;
+use shekyl_types::{BlockHash, PCanonicalId};
 
 use shekyl_wire::transaction::{
     ARCHIVAL_EMISSION_VIN_MAX_BYTES, TAG_INPUT_ARCHIVAL_REWARD_EMISSION,
@@ -90,7 +91,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],
@@ -278,9 +279,10 @@ fn emission_mixed_with_bond_post_rejected() {
     // key-imaged ToKey fee spends are the only permitted co-residents (Q11).
     let bond = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0x01; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x02; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x02; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0x03; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1,

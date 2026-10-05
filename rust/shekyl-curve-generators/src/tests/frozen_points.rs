@@ -34,7 +34,8 @@ use helioselene::{Helios, Selene};
 
 use crate::{
     BulletproofGenerators, FcmpGenerators, H_pow_2, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, H,
-    HELIOS_HASH_INIT, SELENE_HASH_INIT, T,
+    HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_G_K_TABLE,
+    PQC_LEAF_COMMITMENT_J, PQC_LEAF_COMMITMENT_J_TABLE, SELENE_HASH_INIT, T,
 };
 
 fn ed_hex(p: &curve25519_dalek::EdwardsPoint) -> String {
@@ -95,6 +96,33 @@ fn frozen_singletons() {
         "6935f413f83109138a7a14b409552d3b76d88fca81bb5927e9a1e130cdfe29f9",
         "FCMP++ generator V moved"
     );
+    // PL-D3 (2026-09-14): the PQC leaf-commitment generators, NUMS from their
+    // frozen DSTs; a moved point silently changes which spends are valid.
+    assert_eq!(
+        ed_hex(&PQC_LEAF_COMMITMENT_G_K),
+        "4b0a97c470e3346aa84bf505ff2d5812bb67823841e201404dbc969578ed01bd",
+        "PQC leaf-commitment key generator G_k moved"
+    );
+    assert_eq!(
+        ed_hex(&PQC_LEAF_COMMITMENT_J),
+        "ce50952ec0eb88a68a5ae4dc2c81b6f0eb1490e91c79b4dd0c3f3bcc7ebbcc68",
+        "PQC leaf-commitment blind generator J moved"
+    );
+    // Pairwise distinct from every Ed25519 generator the proofs use.
+    let all = [
+        ed_hex(&H),
+        ed_hex(&T),
+        ed_hex(&FCMP_PLUS_PLUS_U),
+        ed_hex(&FCMP_PLUS_PLUS_V),
+        ed_hex(&PQC_LEAF_COMMITMENT_G_K),
+        ed_hex(&PQC_LEAF_COMMITMENT_J),
+    ];
+    let distinct: std::collections::HashSet<&String> = all.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        all.len(),
+        "generators must be pairwise distinct"
+    );
     assert_eq!(
         hex::encode(HELIOS_HASH_INIT.to_bytes()),
         "139352002b5c2011a636f8cfa1c14c1f93510c8054929578c44b69638f7c070d",
@@ -104,6 +132,27 @@ fn frozen_singletons() {
         hex::encode(SELENE_HASH_INIT.to_bytes()),
         "8681759fee95c1c97169b8d1476cfab7da101edef5932cf03053ae56f7081d07",
         "Selene hash-init generator moved"
+    );
+}
+
+/// The precomputed fixed-base tables are pinned to their frozen points:
+/// table-mul must equal plain point-mul for a nonzero scalar. This bites if a
+/// table is ever built from (or edited to) a different point than the frozen
+/// generator it names; it does NOT re-pin the points themselves — that is
+/// [`frozen_singletons`].
+#[test]
+fn leaf_commitment_tables_match_their_points() {
+    let s = curve25519_dalek::Scalar::from(0xd3d3_d3d3_d3d3_d3d3u64);
+    assert_ne!(s, curve25519_dalek::Scalar::ZERO);
+    assert_eq!(
+        &*PQC_LEAF_COMMITMENT_G_K_TABLE * &s,
+        *PQC_LEAF_COMMITMENT_G_K * s,
+        "G_k table drifted from the frozen G_k point"
+    );
+    assert_eq!(
+        &*PQC_LEAF_COMMITMENT_J_TABLE * &s,
+        *PQC_LEAF_COMMITMENT_J * s,
+        "J table drifted from the frozen J point"
     );
 }
 

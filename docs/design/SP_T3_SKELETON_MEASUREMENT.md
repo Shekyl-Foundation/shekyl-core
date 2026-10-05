@@ -103,7 +103,7 @@ from its **bond**, not from sharing a host.
 | **SPIKE-F-18** | **PoW-enabled ≠ PoW-active.** Below escalation the service advertises **no `pow-params` at all** and honest clients solve **nothing** — enabling the defense costs a quiescent persona zero, and is invisible until actually attacked | MEDIUM | **CONFIRMED (measured)** (§19a) |
 | **SPIKE-F-19** | **The fixed 3,326,976-byte payload is a guard→persona confirmation oracle.** A guard-holding adversary confirms *which* `.onion` its circuit carries by fetching the shard on demand (public + free + fixed-size = the signature is the payload). Turns the literature's "expensive" active-confirmation step nearly free. **Wire-format property ⇒ freezes at genesis** | HIGH | **TJ-B, not spike** (§20); recorded so it cannot drift past the §9.4 freeze |
 | **SPIKE-F-14** | §6a's three inbound protections are all **per-connection**; **nothing bounds aggregate load**, and `MaxStreams` is per-*circuit* so it does not either. A ~100-byte request returns ~3.33 MB — **~33 000× egress amplification** | **HIGH** (general, every `P`) | **CONFIRMED (source)** — both levers now built (§16) |
-| **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17) |
+| **SPIKE-F-15** | **PoW effort is adaptive (AIMD), so the DoS defense and the §8.3 margin are coupled — not independent as this report first recorded them.** `D*` was measured with PoW **disabled**; under escalation honest miners pay solve time and the distribution shifts toward the deadline | MEDIUM | **CONFIRMED (spec + measured on `dev`)** — immaterial at measured effort, **ceiling unmeasured** (§17); at effort 0 on a size ladder, no measurable cost on any judged statistic, sign unresolved (§19b, 2026-10-02) |
 | **SPIKE-F-7** | D4's payload is a **cost, not a blocker**: ~5 h of one-time regtest mining plus a batched extraction | INFO | **REFUTED as a halt** |
 
 Two charter halt conditions were pre-registered as likely and **neither fired**:
@@ -346,7 +346,7 @@ so a short extraction cannot pass unnoticed.
 
 One correctness point the extractor does not paper over: `chunk_outputs_blob`
 carries compressed **Ed25519 points**, while a curve-tree leaf is
-`construct_leaf`'s `O.x ‖ I.x ‖ C.x ‖ h_pqc` over Wei25519 x-coordinates. Serving
+`construct_leaf`'s `O.x ‖ I.x ‖ C.x ‖ CM.x` over Wei25519 x-coordinates. Serving
 the blob verbatim would serve real chain data that is nonetheless *not what a
 persona archives*, so the conversion runs locally through the same function the
 wallet path uses. The blob's `I` is skipped rather than trusted —
@@ -469,7 +469,14 @@ introduction-point reuse. All three are measured below.
 | Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
 | Co-serving penalty *(deterrence floor, not architecture)* | **QUANTIFIED AS A LOWER BOUND** | Doing the forbidden thing costs **both** axes at once: complete guard overlap (2/2) **and** ≥ ×1.54 on `D*`. **Floor, not characterization** — one run, N=2, C-tor, single vantage. See §12.0d. Distinct from **SPIKE-F-11** (one persona, many readers), which is conformant and **unmeasured**. |
 | `MaxStreams` **exhaustion** on A observable at B | **UNMEASURABLE-HERE** | Distinct from the contention row above and **not claimed either way**. Deliberate flooding to the stream cap, distinguished from ambient variance, needs a controlled load generator and a quiet baseline this spike does not have. Contention at concurrency 2 is not evidence about the exhaustion path. |
-| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
+| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_servable_outcome_renders_one_identical_404` (`rust/shekyl-p-serve/src/serve_tests.rs`). Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). *(Citation repaired 2026-09-11.)* |
+
+
+> **Citation repaired 2026-09-11.** The row named `every_non_route_gets_one_identical_error`,
+> deleted with the spike at `d0206a6581`. Successor:
+> `every_non_servable_outcome_renders_one_identical_404`, which includes the wrong-METHOD
+> case as the same `NOT_FOUND` bytes — a 405 is a second error shape, not an existence
+> leak. Holdings are chain-public (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §0, §6).
 
 ---
 
@@ -743,6 +750,25 @@ confirmed they served what the client leg believed it fetched.
 
 ### 12.2 How to produce the numbers
 
+> **Amendment 2026-09-14 — the rig below is the re-based one, not the one
+> §12.0–§12.1 and §13 measured with.** The records above stand as measured:
+> persona↔persona over one tor, every fetch under a unique SOCKS proxy-user
+> (per-fetch isolation), body unsigned. Since
+> [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) §9.1 (c) the rig is
+> **daemon→wallet**: one client tor the fetches dial through with **no
+> per-fetch isolation** (the production posture of `shekyl-p-fetch`), each
+> persona behind **its own tor**. "Cold" is `SIGNAL NEWNYM` on the client tor
+> before the fetch; "warm" is circuit reuse. Every fetch carries the `SF-D5`
+> header and verifies the `SF-D8` countersignature; a completed exchange the
+> client refuses is a `Refused` outcome, distinct from `Circuit`/`Stall`. The
+> two-persona concurrent arm became a **sweep** over `SHEKYL_SPIKE_PERSONAS`
+> (powers of two), which prints the `SF-D7` churn table; the cold arm's p99
+> is printed against the `L` note's two thresholds. Neither pin is picked by
+> the binary. Numbers from the re-based rig are **not comparable** to the
+> tables above without this note, and go in the (c) record, not here.
+> `live_apparatus` passed over real Tor on the re-based rig in 110 s
+> (three bootstraps, header sent, bodies verified under each persona's key).
+
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).
 # 2. Extract the real shard.
@@ -754,19 +780,38 @@ SHEKYL_SPIKE_SHARD_OUT=/path/shard.bin \
 SHEKYL_SPIKE_TOR=/path/to/pinned/tor \
 SHEKYL_SPIKE_SHARD=/path/shard.bin \
 SHEKYL_SPIKE_OUT=/path/observations.tsv \
+SHEKYL_SPIKE_PERSONAS=8 \
 SHEKYL_SPIKE_COLD=200 SHEKYL_SPIKE_WARM=200 SHEKYL_SPIKE_CONC=100 \
 SHEKYL_SPIKE_HOURS=24 \
   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 ```
 
+`SHEKYL_SPIKE_PERSONAS` (2026-09-14) is the sweep width: that many persona
+tors come up beside the client tor, and the concurrent arm runs widths
+`1, 2, 4, …` up to it, `CONC` rounds each. Every tor shares the box's uplink,
+which biases the sweep pessimistic — named in the table header.
+
 ### 12.3 Arms and their sample sizes
+
+**As run on the persona↔persona rig, 2026-08 (records-was; §13 reads from
+these):**
 
 | Arm | Purpose | `N` run |
 |---|---|---|
 | Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | **60** |
 | Warm circuit, single stream | Optimistic; circuit reused | **60** |
-| 2 personas concurrent | §5.2 contention datum | **30 pairs (60 obs)** |
+| 2 personas concurrent | §5.2 contention datum — **SUPERSEDED** on the re-based rig by the sweep below; the contention datum it doubled as is SPIKE-F-11's, measured from other hosts | **30 pairs (60 obs)** |
 | Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **RUN — 2,680 fetches over a full 25 h diurnal span (§13a)** |
+
+**RUN 2026-09-16 on the re-based daemon→wallet rig (`ARCHIVAL_SHARD_FETCH.md`
+§9.1 (c) LANDED, PR #746 — numbers live there, not here):**
+
+| Arm | Purpose | `N` run |
+|---|---|---|
+| Cold (`NEWNYM` before each), single stream | Pessimistic; descriptor + intro + rendezvous inside the timed path. Its single-attempt p99 is the `L` falsifier's input | **200** (p99 48.27 s) |
+| Warm (circuit reuse), single stream | Optimistic; the organic fill scheduler's steady state against one `P` | **200** (p99 12.26 s) |
+| Concurrency sweep, widths `1, 2, 4, 8` | `SF-D7`'s client-side churn table — the upper-bound input for `N`; one `NEWNYM` per round, `width` cold fetches to `width` personas at once | **100 rounds per width** (all valid; pin `N = 8`) |
+| Soak, ≥ 24 h | As above — span, not count | **1774** over ≥ 24 h (p99 86.06 s) |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
@@ -973,6 +1018,12 @@ should treat it as a bug.
 > that the inbound-hardening shape it validated now has exactly one
 > implementation. The numbers already recorded in this document were taken on
 > the `x-spike/v0` route and are not restated.
+
+> **Amendment (2026-09-10, `RF-R1`).** The production route is now
+> `/shard/{id}` ([`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md)).
+> A re-run of this rig exercises that path, via `shekyl_p_serve::ROUTE_PREFIX`.
+> The numbers above were taken on `x-spike/v0` then driven against
+> `x-provisional/v0`; they are not restated. The spike remains disposable.
 
 **Candidates to survive, having been *validated* here rather than designed here:**
 
@@ -1379,6 +1430,33 @@ zero; and the one residual (solve-time at the clamp) is measured by solving at a
 fixed effort, not by a flood.
 
 ---
+
+## 19b. SPIKE-F-15 at zero effort, measured: no measurable PoW cost on a size ladder; sign unresolved (2026-10-02)
+
+The `SPIKE-F-15` row records `D*` as measured with PoW disabled. The W₂ PoW comparison
+([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §4.1a, read in
+§10.5) measured both postures inside one 24-hour window: four personas, PoW off, on,
+off, on, three object sizes, 955 fetches per posture, every fetch on fresh circuits.
+The verdicts were fixed before the run (bootstrap interval of on − off against a
+margin of 3 points on completion and 10 % on a percentile).
+
+- **No measurable PoW cost on any of the nine judged statistics; the sign is
+  unresolved** (the finding as the design owner ruled it,
+  `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6). None is materially worse with PoW on. On eight, the interval excludes a cost larger than
+  the margin. On the ninth, p90 for the 0.83 MB object, it does not (6.8 s faster to
+  4.8 s slower, against ±2.0 s): a cost there is neither shown nor ruled out.
+- **One is material in PoW's favour:** p90 for the 3.33 MB object, 49.2 s off against
+  27.5 s on (difference −21.7 s, 95 % interval −29.6 to −5.7 s, margin ±4.9 s).
+- **Unattributed.** A posture is two onions in one window and an observation records
+  no persona, so posture is not separable from circuit placement. Two PoW-off days
+  differ by more than the postures do on eight of the nine statistics, every one but
+  this p90. "PoW helps" is not a finding. §19a already gives
+  the reason PoW itself should make no difference here: at effort 0 the descriptor
+  carries no `pow-params`, so the client does nothing PoW-specific.
+
+What this supports is the quiescent case on real object sizes: with PoW on, no
+material cost to a fetch was detected. What it does not touch is the row's open half — the
+distribution **under escalation** — which this run never provoked.
 
 ## 20. SPIKE-F-19 — the fixed payload size is a guard→persona confirmation oracle (TJ-B)
 

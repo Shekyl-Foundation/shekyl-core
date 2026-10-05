@@ -110,17 +110,23 @@ fn multiplexer_warning() -> Option<&'static str> {
     None
 }
 
-/// Returns true if the command's input line must not be added to readline
-/// history. Covers secrets (`restore`'s mnemonic) and large bearer pastes
-/// (proof strings, message signatures). An OUTBOUND tx proof embeds the
-/// raw per-tx key; a reserve proof is a permanent spend-detection beacon;
-/// `verify` carries a ~21.7 KB armored signature — none of those belong
-/// in a plaintext history file.
-pub fn omit_from_history(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "restore" | "check_tx_proof" | "check_reserve_proof" | "verify"
-    )
+/// The display form of an address (CU-4): the first 24 characters, an
+/// ellipsis, and the last 12. Shekyl's hybrid-PQC addresses run to hundreds
+/// of characters; the full string is unusable at a glance and floods scrollback.
+/// This form is **display-only** — it can never be pasted as a destination —
+/// so surfaces that print it say where the full form lives (`address --full`
+/// / `address --out <path>`). Short inputs pass through unchanged.
+#[must_use]
+pub fn short_address(addr: &str) -> String {
+    const HEAD: usize = 24;
+    const TAIL: usize = 12;
+    let chars: Vec<char> = addr.chars().collect();
+    if chars.len() <= HEAD + TAIL + 1 {
+        return addr.to_owned();
+    }
+    let head: String = chars[..HEAD].iter().collect();
+    let tail: String = chars[chars.len() - TAIL..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// Neutralize control characters in free-form, externally-supplied text before
@@ -144,15 +150,31 @@ pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{omit_from_history, sanitize_for_terminal};
+    use super::{sanitize_for_terminal, short_address};
+    use crate::catalog::omit_from_history;
     use std::borrow::Cow;
 
     #[test]
+    fn short_address_keeps_head_and_tail_only() {
+        let long = format!("{}{}{}", "a".repeat(24), "b".repeat(100), "c".repeat(12));
+        let short = short_address(&long);
+        assert_eq!(short, format!("{}…{}", "a".repeat(24), "c".repeat(12)));
+
+        // At or under the head+tail budget, the address passes through whole.
+        assert_eq!(short_address("skl1short"), "skl1short");
+    }
+
+    #[test]
     fn history_omits_secrets_and_bearer_pastes() {
-        for cmd in ["restore", "check_tx_proof", "check_reserve_proof", "verify"] {
-            assert!(omit_from_history(cmd), "{cmd} must stay out of history");
+        for line in [
+            "wallet restore name word",
+            "check payment tx addr proof",
+            "check reserve addr proof",
+            "verify addr sig hello",
+        ] {
+            assert!(omit_from_history(line), "{line} must stay out of history");
         }
-        assert!(!omit_from_history("sign"));
+        assert!(!omit_from_history("sign hello"));
         assert!(!omit_from_history("balance"));
     }
 

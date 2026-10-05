@@ -61,6 +61,7 @@
 //! [`tor_config`] is the fingerprint-minimal `WalletTorControlConfig` surface,
 //! [`start`] is the Engine construction site.
 
+pub(crate) mod daemon_tip;
 pub(crate) mod disk;
 pub(crate) mod start;
 pub(crate) mod task;

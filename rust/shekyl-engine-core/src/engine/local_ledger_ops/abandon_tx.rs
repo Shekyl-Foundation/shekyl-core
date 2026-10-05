@@ -165,9 +165,9 @@ mod tests {
     fn mk_row(seed: u8, gindex: u64) -> TransferDetails {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
-            internal_output_index: 0,
-            global_output_index: gindex,
-            block_height: 10,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(gindex),
+            block_height: shekyl_types::BlockHeight::from_raw(10),
             key: curve25519_dalek::constants::ED25519_BASEPOINT_POINT,
             key_offset: curve25519_dalek::Scalar::ONE,
             commitment: shekyl_curve_primitives::Commitment::new(
@@ -181,8 +181,9 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 10,
+            eligible_height: shekyl_types::BlockHeight::from_raw(10),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::Unattributed,
         }
@@ -221,7 +222,7 @@ mod tests {
         wallet.send_journal.rows.insert(
             txid,
             SendRecord {
-                dispatched_at_height: 20,
+                dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                 fee: 5,
                 recipients: Vec::new(),
                 change_amount: 0,
@@ -293,13 +294,15 @@ mod tests {
             guard.ledger.send_journal.rows.insert(
                 confirmed,
                 SendRecord {
-                    dispatched_at_height: 20,
+                    dispatched_at_height: shekyl_types::BlockHeight::from_raw(20),
                     fee: 5,
                     recipients: Vec::new(),
                     change_amount: 0,
                     inputs: Vec::new(),
                     lock_baseline: None,
-                    state: SendState::Confirmed { height: 25 },
+                    state: SendState::Confirmed {
+                        height: shekyl_types::BlockHeight::from_raw(25),
+                    },
                 },
             );
         }
@@ -310,8 +313,8 @@ mod tests {
         assert!(matches!(
             err,
             AbandonTxError::StateForbids {
-                state: SendState::Confirmed { height: 25 }
-            }
+                state: SendState::Confirmed { height },
+            } if height == shekyl_types::BlockHeight::from_raw(25)
         ));
     }
 
@@ -348,19 +351,21 @@ mod tests {
             let wallet = &mut guard.ledger;
             let mut spent = mk_row(0x10, 7);
             spent.spent = true;
-            spent.spent_height = Some(30);
+            spent.spent_height = Some(shekyl_types::BlockHeight::from_raw(30));
             spent.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [0x33; 32],
             ));
             spent.spending_tx_hash = Some(shekyl_types::TxHash::from_bytes(txid));
             wallet.ledger.transfers.push(spent);
-            wallet.ledger.tip.synced_height = 40;
+            wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
             wallet.reconcile_after_scan_merge(None);
 
             assert_eq!(
                 wallet.send_journal.rows[&txid].state,
-                SendState::Confirmed { height: 30 },
+                SendState::Confirmed {
+                    height: shekyl_types::BlockHeight::from_raw(30)
+                },
                 "late confirmation un-abandons loudly"
             );
             assert!(
@@ -374,7 +379,10 @@ mod tests {
         }
         // The wallet still reports the height it was seeded at.
         let engine = arc.read().await;
-        assert_eq!(engine.ledger.synced_height(), 40);
+        assert_eq!(
+            engine.ledger.synced_height(),
+            shekyl_types::BlockHeight::from_raw(40)
+        );
     }
 
     /// Abandon-from-Dispatched keeps the carried-input locks alive
@@ -409,7 +417,7 @@ mod tests {
         crate::engine::rescan::reset_scan_derived_state(&mut state.ledger, &mut state.indexes);
         let wallet = &mut state.ledger;
         wallet.ledger.transfers.push(mk_row(0x11, 7));
-        wallet.ledger.tip.synced_height = 40;
+        wallet.ledger.tip.synced_height = shekyl_types::BlockHeight::from_raw(40);
 
         wallet.reconcile_after_scan_merge(None);
 
@@ -418,12 +426,16 @@ mod tests {
         // derivation reads it directly.
         let locks = wallet.spend_locks();
         let lock = locks
-            .get(7)
+            .get(shekyl_types::GlobalOutputIndex::from_raw(7))
             .expect("the abandoned row's carried input stays locked across the wipe");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
-        assert_eq!(lock.accepted_at_height, 25);
+        assert_eq!(
+            lock.accepted_at_height,
+            shekyl_types::BlockHeight::from_raw(25)
+        );
         assert!(
-            !wallet.ledger.transfers[0].is_spendable(u64::MAX, &locks),
+            !wallet.ledger.transfers[0]
+                .is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

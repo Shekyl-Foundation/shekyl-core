@@ -54,9 +54,7 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
             wallet: found,
             expected,
         },
-        other => OpenError::Io(IoError::WalletFile {
-            detail: other.to_string(),
-        }),
+        other => OpenError::Io(IoError::WalletFile(other)),
     }
 }
 

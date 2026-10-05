@@ -35,7 +35,8 @@
 //!    method entry, before the daemon-tip read.
 //! 2. **Daemon tip read** — [`DaemonEngine::get_height`] for the
 //!    attempt's scan ceiling. RPC failure surfaces as
-//!    [`LocalRefreshError::Io`]; the
+//!    [`LocalRefreshError::DaemonUnreachable`] or
+//!    [`LocalRefreshError::DaemonProtocol`]; the
 //!    [`RefreshDiagnostic::DaemonProtocolError`] classification at
 //!    this site lands at C5 alongside the `RpcError → ProtocolErrorKind`
 //!    classifier (per §7.X C5 "Producer-side `RpcError`
@@ -56,10 +57,11 @@
 //!    - [`fetch_block_with_retry`] fetches the block;
 //!    - reorg-detection compares the daemon's
 //!      `block.header.previous` against `snapshot.block_hash_at`;
-//!      on mismatch [`find_fork_point`] walks back to the fork
-//!      and the per-event accumulators rewind to the fork height;
-//!      [`RefreshDiagnostic::ReorgObserved`] emits with the
-//!      bucketed `(fork_height, depth)` payload;
+//!      on mismatch [`find_fork_point`] walks back to the fork.
+//!      A fork inside finality rewinds the accumulators and emits
+//!      [`RefreshDiagnostic::ReorgObserved`]; a walk that passes
+//!      finality returns [`LocalRefreshError::PastFinality`] and
+//!      emits no rewind;
 //!    - producer-side per-tx excessive-outputs pre-pass: every
 //!      transaction whose `outputs.len() >
 //!      shekyl_scanner::MAX_OUTPUTS` emits
@@ -137,17 +139,16 @@
 //! [`ScanOutcome::Cancelled`] without exposing partial state;
 //! the producer translates to [`LocalRefreshError::Cancelled`].
 //!
-//! # Why a unit-variant error
+//! # Why the producer error carries no daemon string
 //!
-//! [`LocalRefreshError`] is unit-variant-only per the §2.3 +
-//! §5.4.7 R6 two-channel reframe binding pinned at
-//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)'s
-//! rustdoc. Per-event detail flows through the
-//! [`DiagnosticSink`] channel; the terminal error carries only
-//! the discriminant. This forecloses attacker-controlled
-//! `String` payloads from flowing through the error type into
-//! orchestrator-side state (the §5.4.7 R6 memory-amplifier
-//! closure).
+//! [`LocalRefreshError`] carries no attacker-controlled `String`
+//! (§2.3 + §5.4.7 R6, pinned on
+//! [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)).
+//! Per-event detail flows through the [`DiagnosticSink`] channel.
+//! [`LocalRefreshError::PastFinality`] is the exception with fields,
+//! and they are a [`FinalityStop`](super::error::FinalityStop): two
+//! block-counts and a closed breach. The remedy is a function of that
+//! span, and a daemon payload cannot land in it.
 //!
 //! [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 //! [`Scanner`]: shekyl_scanner::Scanner
@@ -157,9 +158,8 @@
 use std::time::Duration;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
 use std::collections::BTreeMap;
 
@@ -169,10 +169,7 @@ use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
 use super::curve_tree_decode;
-use super::diagnostics::{
-    DiagnosticSink, MalformedKind, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
-};
-use super::error::{IoError, RefreshError};
+use super::diagnostics::{DiagnosticSink, MalformedKind, RefreshDiagnostic, SuppressedClass};
 use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgress};
 use super::traits::daemon::DaemonEngine;
 use super::traits::refresh::RefreshEngine;
@@ -286,7 +283,7 @@ pub struct LocalRefresh {
     /// `synced_height + 1` only. The orchestrator anchors the ledger
     /// when this exceeds `synced_height + 1` before taking a
     /// snapshot; see [`super::scan_floor`].
-    scan_start_floor: u64,
+    scan_start_floor: shekyl_types::BlockHeight,
     /// The bond watch's candidate set (SA-R-6): persona canonical id →
     /// slot, inverted from the open-built `StakingBlock::persona_id_cache`
     /// (durably-retired slots already excluded at open). Public
@@ -313,7 +310,10 @@ impl LocalRefresh {
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+    pub const fn new(
+        view_material: ViewMaterial,
+        scan_start_floor: shekyl_types::BlockHeight,
+    ) -> Self {
         Self::with_bond_watch(view_material, scan_start_floor, BTreeMap::new())
     }
 
@@ -322,7 +322,7 @@ impl LocalRefresh {
     /// `assemble`, the seam that already holds the cache.
     pub const fn with_bond_watch(
         view_material: ViewMaterial,
-        scan_start_floor: u64,
+        scan_start_floor: shekyl_types::BlockHeight,
         bond_watch: BTreeMap<PCanonicalId, u32>,
     ) -> Self {
         Self {
@@ -333,7 +333,7 @@ impl LocalRefresh {
     }
 
     /// Persisted/session scan floor wired at wallet open.
-    pub(crate) const fn scan_start_floor(&self) -> u64 {
+    pub(crate) const fn scan_start_floor(&self) -> shekyl_types::BlockHeight {
         self.scan_start_floor
     }
 
@@ -384,93 +384,14 @@ impl LocalRefresh {
     }
 }
 
-// ============================================================================
-// LocalRefreshError (unit-variant-only)
-// ============================================================================
-
-/// Producer-side error type for [`LocalRefresh::produce_scan_result`].
-///
-/// **Unit-variant-only** per the §2.3 + §5.4.7 R6 two-channel
-/// reframe binding pinned at
-/// [`RefreshEngine::Error`](super::traits::refresh::RefreshEngine::Error)'s
-/// rustdoc. Per-event detail (height, RPC payload, scanner
-/// rejection class) flows through the [`DiagnosticSink`] channel;
-/// the terminal error carries only the discriminant the
-/// orchestrator branches on.
-///
-/// # Variant set
-///
-/// - [`Cancelled`](Self::Cancelled) — observed at cancellation
-///   checkpoints 2, 3, or 5. Producer returns immediately with
-///   no further scan work.
-/// - [`Io`](Self::Io) — daemon-side I/O failure (block-fetch
-///   retry budget exhausted; daemon-tip RPC failure).
-///   Producer-side classification via
-///   [`RefreshDiagnostic::DaemonProtocolError`] lands at C5
-///   alongside the `RpcError → ProtocolErrorKind` classifier.
-/// - [`Malformed`](Self::Malformed) — daemon delivered a
-///   structurally-malformed block (either the producer's
-///   excessive-outputs pre-pass tripped, or the scanner's own
-///   structural validation rejected the block). The
-///   `MalformedKind` discriminant is reported through
-///   [`DiagnosticSink`] at the emit site.
-/// - [`Internal`](Self::Internal) — structural invariant
-///   violation that is not reachable from adversarial input
-///   (e.g., scanner construction from validated view-material
-///   fails). Reported to the orchestrator as
-///   [`RefreshError::InternalInvariantViolation`] with a
-///   `&'static str` context label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum LocalRefreshError {
-    /// Cancellation observed at checkpoint 2, 3, or 5.
-    #[error("scan cancelled before completing the requested range")]
-    Cancelled,
-
-    /// Daemon-side I/O failure (block-fetch retry budget exhausted
-    /// or daemon-tip RPC failure).
-    #[error("daemon I/O failure during refresh")]
-    Io,
-
-    /// Daemon returned a structurally-malformed block (producer's
-    /// pre-pass or scanner-side structural validation tripped).
-    #[error("daemon returned a structurally malformed block")]
-    Malformed,
-
-    /// A further reorg was detected after the per-attempt rewind budget
-    /// (`MAX_REORG_REWINDS_PER_ATTEMPT`) was spent. The attempt aborts
-    /// rather than scanning on with detection disarmed — see the budget
-    /// constant's docs for why merging a blind region is unsound for the
-    /// bond watch's monotone adoptions.
-    #[error("reorg storm: rewind budget exhausted and the chain diverged again")]
-    ReorgStorm,
-
-    /// Internal invariant violation; not reachable from
-    /// adversarial input.
-    #[error("internal invariant violation during refresh")]
-    Internal,
-}
-
-impl From<LocalRefreshError> for RefreshError {
-    fn from(e: LocalRefreshError) -> Self {
-        match e {
-            LocalRefreshError::Cancelled => RefreshError::Cancelled,
-            LocalRefreshError::Io => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: daemon I/O failure during refresh".to_string(),
-            }),
-            LocalRefreshError::Malformed => RefreshError::Io(IoError::Scanner {
-                detail: "LocalRefresh: daemon returned a structurally malformed block".to_string(),
-            }),
-            LocalRefreshError::ReorgStorm => RefreshError::Io(IoError::Daemon {
-                detail: "LocalRefresh: reorg storm — the chain served by the daemon diverged \
-                         again after the per-attempt rewind budget; retry when it stabilizes"
-                    .to_string(),
-            }),
-            LocalRefreshError::Internal => RefreshError::InternalInvariantViolation {
-                context: "LocalRefresh: scanner construction failed against view material",
-            },
-        }
-    }
-}
+// The producer's error vocabulary (§5.4.7 R6: no attacker-controlled
+// string; `PastFinality` carries the measured stop) and the bounded
+// `RpcError` classification for the diagnostic stream.
+#[path = "local_refresh_error.rs"]
+mod producer_error;
+use super::reorg_finality::ForkCursor;
+use producer_error::classify_rpc_error;
+pub(crate) use producer_error::LocalRefreshError;
 
 // ============================================================================
 // EmitState — per-attempt per-class emission budget (§5.4.8 #5 + F13-S)
@@ -628,8 +549,8 @@ impl RefreshEngine for LocalRefresh {
             // `ProtocolErrorKind` classification is emitted via
             // the rate-limited diagnostic stream (per-block
             // ceiling + F13-S latch handled by `emit_state`).
-            let tip = match daemon.get_height().await {
-                Ok(t) => t as u64,
+            let chain_tip = match daemon.get_height().await {
+                Ok(count) => count,
                 Err(e) => {
                     error!(error = %e, "LocalRefresh: get_height failed");
                     emit_state.try_emit(
@@ -638,7 +559,7 @@ impl RefreshEngine for LocalRefresh {
                             kind: classify_rpc_error(&e),
                         },
                     );
-                    return Err(LocalRefreshError::Io);
+                    return Err(LocalRefreshError::from_daemon_fault(e.fault()));
                 }
             };
 
@@ -659,28 +580,31 @@ impl RefreshEngine for LocalRefresh {
             // gate-consistent (`start == synced_height + 1`) by construction:
             // a re-derivation could disagree with the anchored height if the
             // daemon advanced between the anchor's height read and this one,
-            // breaking the merge gate.
-            let original_start = snapshot.synced_height.saturating_add(1);
-            let end = tip;
-            if original_start >= end {
-                let parent_hash = parent_hash_for_start(&snapshot, original_start);
-                return Ok(ScanResult::empty_at(original_start, parent_hash));
+            // breaking the merge gate. Caught up: `has_block` rejects the next ordinal.
+            let scan_start = snapshot.synced_height.saturating_add(BlockCount::ONE);
+            let scan_end = chain_tip.next_height();
+            if !chain_tip.has_block(scan_start) {
+                let parent_hash = parent_hash_for_start(&snapshot, scan_start);
+                return Ok(ScanResult::empty_at(scan_start, parent_hash));
             }
+
+            // Linkage starts above height 1; its parent is not a stored block hash.
+            let block_one = BlockHeight::ZERO.saturating_add(BlockCount::ONE);
 
             // Per-block scan loop with checkpoint-5 per-output
             // cancellation via Scanner::scan_with_cancel.
-            let mut effective_start = original_start;
-            let mut effective_parent_hash = parent_hash_for_start(&snapshot, original_start);
-            if original_start > 1 && effective_parent_hash.is_none() {
+            let mut effective_start = scan_start;
+            let mut effective_parent_hash = parent_hash_for_start(&snapshot, scan_start);
+            if scan_start > block_one && effective_parent_hash.is_none() {
                 // Boundary parent-hash fetch for a floored/birthday-anchored
                 // start: the snapshot's reorg window doesn't carry the hash
-                // at `original_start - 1`. Route through the same retry /
+                // one below `scan_start`. Route through the same retry /
                 // cancellation / diagnostic helper the per-block scan uses so
                 // a transient failure here is retried with backoff rather than
                 // terminating refresh as `Io` on the first error.
                 let parent = fetch_block_with_retry(
                     daemon,
-                    original_start - 1,
+                    scan_start.saturating_sub_count(BlockCount::ONE),
                     &cancel,
                     &mut emit_state,
                     diagnostics,
@@ -688,7 +612,7 @@ impl RefreshEngine for LocalRefresh {
                 .await?;
                 effective_parent_hash = Some(parent.block.hash());
             }
-            let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
+            let mut block_hashes: Vec<(BlockHeight, BlockHash)> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
             let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
@@ -704,11 +628,11 @@ impl RefreshEngine for LocalRefresh {
             // leaf set and the consensus header `curve_tree_root`, materialized
             // here where the `ScannableBlock` is in hand and carried on
             // `ScanResult` for the merge-driven ingest (CT-5a commit 4).
-            let mut block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)> = Vec::new();
-            let mut block_curve_tree_roots: Vec<(u64, [u8; 32])> = Vec::new();
+            let mut block_leaves: Vec<(BlockHeight, Vec<OwnedTxLeaves>)> = Vec::new();
+            let mut block_curve_tree_roots: Vec<(BlockHeight, CurveTreeRoot)> = Vec::new();
 
-            let mut h = original_start;
-            while h < end {
+            let mut h = scan_start;
+            while h < scan_end {
                 // Per-block boundary: clear per-block emission
                 // counters (F13-S latches remain set).
                 emit_state.reset_block();
@@ -751,10 +675,12 @@ impl RefreshEngine for LocalRefresh {
                 // check vouched for, which the bond watch's monotone
                 // sighting adoption cannot survive (a stale fork sighting
                 // would pass O5 and burn cursor slots permanently).
-                if h > 1 {
+                if h > block_one {
                     let expected_parent = match block_hashes.last() {
-                        Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
-                        _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
+                        Some(&(prev_h, prev_hash)) if prev_h + BlockCount::ONE == h => {
+                            Some(prev_hash)
+                        }
+                        _ => parent_hash_for_start(&snapshot, h).or(if h == effective_start {
                             effective_parent_hash
                         } else {
                             None
@@ -768,7 +694,7 @@ impl RefreshEngine for LocalRefresh {
                             // no consumer sees the blind region.
                             if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
                                 warn!(
-                                    height = h,
+                                    height = h.to_raw(),
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
                                     "LocalRefresh: reorg detected after the rewind budget was \
                                      spent; aborting the attempt (reorg storm)",
@@ -776,32 +702,19 @@ impl RefreshEngine for LocalRefresh {
                                 return Err(LocalRefreshError::ReorgStorm);
                             }
                             warn!(
-                                height = h,
+                                height = h.to_raw(),
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
-                            // Anchor the fork-walk at the persisted-window
-                            // top (`synced_height`), not `h - 1`. An
-                            // intra-attempt straddle's fork can sit *above*
-                            // the window, where `find_fork_point` (which
-                            // walks only the window) would return
-                            // `from_height + 1` immediately and splice
-                            // *around* the fork instead of behind it.
-                            // Anchoring at `synced_height` makes the
-                            // conservative answer the attempt boundary:
-                            // refetch the attempt range rather than keep
-                            // possibly-stale intra-attempt blocks. The
-                            // anchor is unconditionally `synced_height` (the
-                            // window top), never `h - 1`, and this holds for
-                            // *every* reorg this attempt, not only the first:
-                            // the rewind target is where the current chain
-                            // diverges from the persisted window — a function
-                            // of window-vs-daemon alone, independent of the
-                            // detection height `h` — and `find_fork_point`
-                            // measures exactly that. It follows that every
-                            // `fork_height <= synced_height + 1`, which is
-                            // what makes the clear-and-re-scan below sound
-                            // across repeated detection.
+                            // Anchor at `synced_height`, not `h - 1`. The fork
+                            // is where the daemon diverges from the persisted
+                            // window, independent of the detection height, so
+                            // every successful `fork_height` is
+                            // `<= synced_height + 1` and the clear-and-rescan
+                            // below stays sound on a later, shallower reorg.
+                            // A walk that cannot confirm a fork inside
+                            // finality returns `PastFinality` and emits no
+                            // rewind.
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
@@ -811,8 +724,8 @@ impl RefreshEngine for LocalRefresh {
                                 diagnostics,
                             )
                             .await?;
-                            let depth =
-                                u32::try_from(h.saturating_sub(fork_height)).unwrap_or(u32::MAX);
+                            let depth = u32::try_from(h.saturating_sub(fork_height).to_raw())
+                                .unwrap_or(u32::MAX);
                             emit_state.try_emit(
                                 diagnostics,
                                 RefreshDiagnostic::ReorgObserved { fork_height, depth },
@@ -825,7 +738,7 @@ impl RefreshEngine for LocalRefresh {
                             reorg_rewinds += 1;
                             if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
                                 warn!(
-                                    fork_height,
+                                    fork_height = fork_height.to_raw(),
                                     max = MAX_REORG_REWINDS_PER_ATTEMPT,
                                     "LocalRefresh: reorg-rewind budget spent; a further \
                                      divergence this attempt aborts as a reorg storm",
@@ -836,7 +749,7 @@ impl RefreshEngine for LocalRefresh {
 
                             // Discard every block accumulated this attempt and
                             // restart from the fork. On the first reorg
-                            // `fork_height <= original_start <= every accumulated
+                            // `fork_height <= scan_start <= every accumulated
                             // height`, so `clear()` matches the height-keyed
                             // `retain(< fork_height)` it replaces. It is also
                             // correct across a *second, shallower* reorg (a fork
@@ -918,9 +831,8 @@ impl RefreshEngine for LocalRefresh {
                 let mut miner_tx_hash: Option<shekyl_types::TxHash> = None;
                 for input in &miner_tx.prefix.inputs {
                     if let Input::ToKey { key_image, .. } = input {
-                        let containing_tx_hash = *miner_tx_hash.get_or_insert_with(|| {
-                            shekyl_types::TxHash::from_bytes(miner_tx.hash())
-                        });
+                        let containing_tx_hash =
+                            *miner_tx_hash.get_or_insert_with(|| miner_tx.hash());
                         spent_key_images.push(KeyImageObserved {
                             block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
@@ -946,7 +858,7 @@ impl RefreshEngine for LocalRefresh {
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                         *key_image,
                                     ),
-                                containing_tx_hash: shekyl_types::TxHash::from_bytes(*tx_hash),
+                                containing_tx_hash: *tx_hash,
                             });
                         }
                     }
@@ -1000,7 +912,7 @@ impl RefreshEngine for LocalRefresh {
                         // ExcessiveOutputs class is handled in the
                         // pre-pass above (the scanner gate is
                         // defense-in-depth).
-                        debug!(height = h, error = %source, "LocalRefresh: scanner rejected block");
+                        debug!(height = h.to_raw(), error = %source, "LocalRefresh: scanner rejected block");
                         emit_state.try_emit(
                             diagnostics,
                             RefreshDiagnostic::DaemonMalformed {
@@ -1046,15 +958,15 @@ impl RefreshEngine for LocalRefresh {
                 _ = progress.send(RefreshProgress::phase_only(
                     h,
                     block_hashes.len() as u64,
-                    end.saturating_sub(original_start),
+                    scan_end.saturating_sub(scan_start).to_raw(),
                     RefreshPhase::Scanning,
                 ));
 
-                h += 1;
+                h = h + BlockCount::ONE;
             }
 
             Ok(ScanResult {
-                processed_height_range: effective_start..end,
+                processed_height_range: effective_start..scan_end,
                 parent_hash: effective_parent_hash,
                 block_hashes,
                 new_transfers,
@@ -1068,22 +980,15 @@ impl RefreshEngine for LocalRefresh {
     }
 }
 
-// ============================================================================
-// Inner helpers (mirror engine/refresh/ free helpers; kept local
-// to bound the C4 diff to a single new file. C5 collapses these
-// when the legacy free `produce_scan_result` is deleted.)
-// ============================================================================
-
-/// Resolve the `parent_hash` field for a result whose
-/// `processed_height_range.start == start`. Returns `None` for
-/// genesis (`start <= 1`) and the snapshot's recorded hash at
-/// `start - 1` otherwise.
-fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<[u8; 32]> {
-    if start <= 1 {
-        None
-    } else {
-        snapshot.block_hash_at(start - 1)
-    }
+/// Parent hash of a scan that starts at `start`.
+///
+/// `None` for genesis and for height 1: that parent is the genesis
+/// previous-hash, which the snapshot does not store as a block hash.
+fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: BlockHeight) -> Option<BlockHash> {
+    let parent = start
+        .checked_sub_count(BlockCount::ONE)
+        .filter(|height| !height.is_zero())?;
+    snapshot.block_hash_at(parent).map(BlockHash::from_bytes)
 }
 
 /// Map a [`ScanError`] to the corresponding [`MalformedKind`]
@@ -1100,128 +1005,47 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
     MalformedKind::InvalidBlockStructure
 }
 
-/// Classify an upstream [`RpcError`] into the bounded
-/// [`ProtocolErrorKind`] tag without propagating the underlying
-/// `String` payload.
+/// Walk backwards from `from_height` until a stored hash matches the
+/// daemon, or [`ForkCursor`] refuses the walk.
 ///
-/// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §4 Phase 0e
-/// and §5.4.7 R6 memory-amplifier closure (binding): the
-/// producer's observability stream MUST carry only the bounded
-/// variant-tag classification of `RpcError`; the `String` payload
-/// that `InternalError(String)` / `ConnectionError(String)` /
-/// `InvalidNode(String)` carry is dropped at this boundary so an
-/// adversarial daemon cannot drive memory amplification into the
-/// wallet's diagnostic stream.
-///
-/// # Refresh-reachable mapping
-///
-/// Refresh issues `get_height` and `fetch_scannable_block`, the
-/// latter composing the `Rpc` transport primitives `get_block` /
-/// `get_transactions` / `get_o_indexes` (the §8 step-4 `shekyl-wire`
-/// migration replaced the single-call `get_scannable_block_by_number`
-/// the Round 4 audit was written against). The refresh-reachable
-/// upstream variants and their tags:
-///
-/// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
-/// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
-/// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
-/// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
-/// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
-/// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
-///   (reachable via the `get_transactions` leg of the block fetch: a
-///   daemon that names transaction hashes in a block and then reports
-///   them missing is internally inconsistent, which from the refresh
-///   path is the "unexpected envelope" `InvalidNode` signal).
-///
-/// # Defensive mapping for non-refresh-reachable variants
-///
-/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` are not
-/// reachable from refresh — they belong to the future
-/// `PendingTxEngine` send-tx path. If they nonetheless surface from
-/// this site (e.g., upstream RPC client behavior change), the
-/// defensive classification is [`ProtocolErrorKind::InvalidNode`] —
-/// "the daemon returned an envelope the producer did not expect from
-/// this RPC method." [`ProtocolErrorKind`] is `#[non_exhaustive]`;
-/// PR 5's `PendingTxEngine` extraction may grow the variant set
-/// additively.
-///
-/// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
-//
-// `clippy::match_same_arms` would have us merge the
-// `InvalidNode(_)` arm with the
-// `TransactionsNotFound | InvalidFee | InvalidPriority` arm
-// because both map to `ProtocolErrorKind::InvalidNode`. Keeping
-// them separate preserves the rustdoc's reachability boundary:
-// the grouped arm carries `TransactionsNotFound` (refresh-reachable
-// via the block fetch's `get_transactions` leg — an inconsistent
-// daemon, mapped to `InvalidNode`) alongside the genuinely
-// non-refresh-reachable `InvalidFee` / `InvalidPriority` defensive
-// fallbacks (send-tx path). Merging would lose that boundary, which
-// future maintainers need when PR 5's `PendingTxEngine` extraction
-// reaches this site.
-#[allow(clippy::match_same_arms)]
-const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
-    match err {
-        RpcError::ConnectionError(_) => ProtocolErrorKind::ConnectionError,
-        RpcError::InternalError(_) => ProtocolErrorKind::InternalError,
-        RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
-        RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
-        RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
-        // All map to `InvalidNode`: `TransactionsNotFound` is
-        // refresh-reachable (block fetch's `get_transactions` leg;
-        // inconsistent daemon), while `InvalidFee` / `InvalidPriority`
-        // are non-refresh-reachable defensive fallbacks. See rustdoc.
-        RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
-            ProtocolErrorKind::InvalidNode
-        }
-    }
-}
-
-/// Walk backwards from `from_height` to find the highest height
-/// at which the daemon's reported block hash matches the
-/// wallet's snapshot. Returns `(matching_height + 1)` so the
-/// caller can use it directly as the fork-rewind point.
-///
-/// Stops at height `1` (genesis) if no match is found in the
-/// window. Honours cancellation between fetch attempts.
-///
-/// The `emit_state` / `diagnostics` parameters thread through to
-/// [`fetch_block_with_retry`]'s per-attempt `RpcError`
-/// classification so producer-side `DaemonProtocolError` events
-/// emit under the per-block ceiling + F13-S latch discipline
-/// during reorg-walk traversal.
+/// A match returns the first divergent height. A missing hash is not a
+/// match. Cancellation is honoured between fetches. `emit_state` /
+/// `diagnostics` thread through to [`fetch_block_with_retry`].
 async fn find_fork_point<R: DaemonEngine>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
-    from_height: u64,
+    from_height: BlockHeight,
     cancel: &CancellationToken,
     emit_state: &mut EmitState,
     diagnostics: &dyn DiagnosticSink,
-) -> Result<u64, LocalRefreshError> {
-    let mut h = from_height;
+) -> Result<BlockHeight, LocalRefreshError> {
+    let mut cursor = ForkCursor::at_tip(from_height);
+    let mut height = from_height;
     loop {
         if cancel.is_cancelled() {
             return Err(LocalRefreshError::Cancelled);
         }
-
-        if h == 0 {
-            return Ok(1);
+        if height.is_zero() {
+            return Ok(cursor.reached_genesis());
         }
-
-        let Some(stored_hash) = snapshot.block_hash_at(h) else {
-            return Ok(h + 1);
+        let Some(stored) = snapshot.block_hash_at(height).map(BlockHash::from_bytes) else {
+            return cursor
+                .record_ended(height)
+                .map_err(LocalRefreshError::PastFinality);
         };
-
-        let daemon_block = fetch_block_with_retry(rpc, h, cancel, emit_state, diagnostics).await?;
-        if daemon_block.block.hash() == stored_hash {
-            return Ok(h + 1);
+        let daemon_block =
+            fetch_block_with_retry(rpc, height, cancel, emit_state, diagnostics).await?;
+        if daemon_block.block.hash() == stored {
+            return Ok(cursor.agreed(height));
         }
-
         debug!(
-            height = h,
+            height = height.to_raw(),
             "LocalRefresh::find_fork_point: hash mismatch, walking back"
         );
-        h -= 1;
+        cursor
+            .disagreed()
+            .map_err(LocalRefreshError::PastFinality)?;
+        height = height.saturating_sub_count(BlockCount::ONE);
     }
 }
 
@@ -1238,13 +1062,13 @@ async fn find_fork_point<R: DaemonEngine>(
 /// many emissions in a single block window.
 async fn fetch_block_with_retry<R: DaemonEngine>(
     rpc: &R,
-    height: u64,
+    height: BlockHeight,
     cancel: &CancellationToken,
     emit_state: &mut EmitState,
     diagnostics: &dyn DiagnosticSink,
 ) -> Result<ScannableBlock, LocalRefreshError> {
     let height_usize =
-        usize::try_from(height).expect("block height fits in usize on 64-bit targets");
+        usize::try_from(height.to_raw()).expect("block height fits in usize on 64-bit targets");
 
     let mut delay = INITIAL_RETRY_DELAY;
     for attempt in 0..MAX_BLOCK_FETCH_RETRIES {
@@ -1254,9 +1078,9 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
 
         match rpc.fetch_scannable_block(height_usize).await {
             Ok(b) => return Ok(b),
-            Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
+            Err(e) if e.fault().is_retryable() && attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
                 warn!(
-                    height,
+                    height = height.to_raw(),
                     attempt = attempt + 1,
                     max = MAX_BLOCK_FETCH_RETRIES,
                     error = %e,
@@ -1276,10 +1100,10 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
             }
             Err(e) => {
                 error!(
-                    height,
+                    height = height.to_raw(),
+                    attempts = attempt + 1,
                     error = %e,
-                    "LocalRefresh::fetch_block_with_retry: block fetch failed after {} attempts",
-                    MAX_BLOCK_FETCH_RETRIES,
+                    "LocalRefresh::fetch_block_with_retry: block fetch failed",
                 );
                 emit_state.try_emit(
                     diagnostics,
@@ -1287,7 +1111,7 @@ async fn fetch_block_with_retry<R: DaemonEngine>(
                         kind: classify_rpc_error(&e),
                     },
                 );
-                return Err(LocalRefreshError::Io);
+                return Err(LocalRefreshError::from_daemon_fault(e.fault()));
             }
         }
     }

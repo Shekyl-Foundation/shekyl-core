@@ -35,15 +35,18 @@ pub enum TargetKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OutputIdentity {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment mask (`C = ct_signatures.outPk[i].mask`).
     /// `None` when the output has no commitment slot
     /// (`i >= outPk.size()`), which makes it leaf-ineligible (the C++
     /// skip (b)).
-    pub commitment: Option<[u8; 32]>,
-    /// Per-output PQC leaf hash (`h_pqc`), already resolved with the
-    /// zero-fallback applied (see [`crate::recon::per_output_h_pqc`]).
-    pub h_pqc: [u8; 32],
+    pub commitment: Option<CommitmentBytes>,
+    /// The output's published PQC leaf commitment point `CM` (compressed
+    /// Ed25519; the first 32 bytes of its `0x07` entry, `PL-D3`), sliced by
+    /// [`crate::recon::extract_leaf_commitments`]. The leaf's 4th scalar is
+    /// its x-coordinate, which [`crate::recon::try_build_leaf`] extracts.
+    /// No fallback: an output without one is not ingested.
+    pub cm: [u8; 32],
     /// Output target kind.
     pub target: TargetKind,
 }
@@ -62,7 +65,7 @@ pub struct OutputIdentity {
 /// Deliberately **not** a full [`OutputIdentity`]: resolution uses only
 /// `gindex` and the check uses only `(output_key, commitment)`, so carrying
 /// `h_pqc` / `target` would force the engine to fabricate two fields it does
-/// not hold for an owned output (the real `h_pqc` comes back *from* the
+/// not hold for an owned output (the leaf's 4th scalar comes back *from* the
 /// drained leaf in [`ChunkLeaf`]). Public material only — `Copy`, no secrets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AssembleInput {
@@ -71,10 +74,10 @@ pub struct AssembleInput {
     pub gindex: Gindex,
     /// Compressed Ed25519 output public key (`O`) the caller expects at
     /// `gindex`.
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment (`C`) the caller expects at `gindex`. Non-optional:
     /// an owned output is always leaf-eligible and commitment-bearing.
-    pub commitment: [u8; 32],
+    pub commitment: CommitmentBytes,
 }
 
 /// Implement `redb::Value` + `redb::Key` for an integer newtype by
@@ -125,30 +128,123 @@ macro_rules! redb_delegated_key {
 }
 pub(crate) use redb_delegated_key;
 
-/// Block height on the Shekyl chain. Typed so a height can never be
-/// swapped with a tree position, gindex, or leaf count at a store seam —
-/// the compiler rejects the mix-up rather than a KAT catching it later.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct BlockHeight(pub u64);
+/// Block height on the Shekyl chain. Re-exported from [`shekyl_types`] so
+/// a height can never be swapped with a tree position, gindex, or leaf
+/// count at a store seam — and so this crate cannot mint a second
+/// `BlockHeight` that is not the vocabulary type (RTN-4).
+use shekyl_fcmp::tree::{leaf_from_chunk_entry, SCALARS_PER_LEAF};
 
-redb_delegated_key!(BlockHeight, u64, "shekyl_curve_tree::BlockHeight");
+pub use shekyl_types::{
+    BlockHash, BlockHeight, CommitmentBytes, CurveTreeRoot, GlobalOutputIndex, OneTimePubkey,
+};
 
 /// Global output index (the daemon's `next_output_seq` counter), assigned
-/// to every `vout` in C++ drain order. Typed for the same swap-rejection
-/// reason as [`BlockHeight`]; keys the pending-candidates table.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Gindex(pub u64);
+/// to every `vout` in C++ drain order. Same type as
+/// [`GlobalOutputIndex`]; the local tuple-struct is retired (RTN-4).
+pub type Gindex = GlobalOutputIndex;
 
-redb_delegated_key!(Gindex, u64, "shekyl_curve_tree::Gindex");
+/// redb table key for a [`Gindex`]. The orphan rule forbids
+/// `impl redb::Key for shekyl_types::GlobalOutputIndex`; this wrapper
+/// is store-local. `TypeName` is kept as `shekyl_curve_tree::Gindex` so
+/// existing stores still open (layout identical to the retired tuple
+/// struct).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct GindexKey(u64);
+
+impl From<Gindex> for GindexKey {
+    fn from(g: Gindex) -> Self {
+        Self(g.to_raw())
+    }
+}
+
+impl From<GindexKey> for Gindex {
+    fn from(k: GindexKey) -> Self {
+        Gindex::from_raw(k.0)
+    }
+}
+
+redb_delegated_key!(GindexKey, u64, "shekyl_curve_tree::Gindex");
 
 /// Dense tree position in drain order (`(maturity, gindex)` sort).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct TreePosition(pub u64);
+/// Re-exported from [`shekyl_types`] — both stores key their leaf tables by
+/// it, so the word lives with the vocabulary (`SCU-Q2`, 2026-09-21); this
+/// crate keeps the arithmetic that assigns one. The local tuple struct with
+/// a public field is retired; construct with `from_raw`, read with
+/// `to_raw`.
+pub use shekyl_types::TreePosition;
 
-redb_delegated_key!(TreePosition, u64, "shekyl_curve_tree::TreePosition");
+/// redb table key for a [`TreePosition`]. The orphan rule forbids
+/// `impl redb::Key for shekyl_types::TreePosition`; this wrapper is
+/// store-local, as [`GindexKey`] is. `TypeName` is kept as
+/// `shekyl_curve_tree::TreePosition` so existing stores still open (layout
+/// identical to the retired struct: the bare `u64`). The field is private,
+/// as `GindexKey`'s is: construct with [`Self::from_raw`] or [`From`], read
+/// with [`Self::to_raw`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct TreePositionKey(u64);
+
+impl TreePositionKey {
+    /// Wrap a raw position. An edge constructor for a table scan that
+    /// already holds the key as `u64`.
+    #[must_use]
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// The raw position. An edge accessor.
+    #[must_use]
+    pub(crate) const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<TreePosition> for TreePositionKey {
+    fn from(p: TreePosition) -> Self {
+        Self::from_raw(p.to_raw())
+    }
+}
+
+impl From<TreePositionKey> for TreePosition {
+    fn from(k: TreePositionKey) -> Self {
+        TreePosition::from_raw(k.to_raw())
+    }
+}
+
+redb_delegated_key!(TreePositionKey, u64, "shekyl_curve_tree::TreePosition");
+
+/// redb table key for a [`BlockHeight`]. Same orphan-rule reason as
+/// [`TreePositionKey`]: the vocabulary type lives in `shekyl-types`, so the
+/// `redb::Key` impl has to be on a store-local wrapper. The distinct
+/// `TypeName` is what stops the snapshot ring being opened with a tree
+/// position or a gindex as its key — the two numbers that index this
+/// crate's other tables and would otherwise be silently interchangeable.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct BlockHeightKey(u64);
+
+impl BlockHeightKey {
+    /// The raw height. An edge accessor for a range scan.
+    #[must_use]
+    pub(crate) const fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<BlockHeight> for BlockHeightKey {
+    fn from(h: BlockHeight) -> Self {
+        Self(h.to_raw())
+    }
+}
+
+impl From<BlockHeightKey> for BlockHeight {
+    fn from(k: BlockHeightKey) -> Self {
+        BlockHeight::from_raw(k.to_raw())
+    }
+}
+
+redb_delegated_key!(BlockHeightKey, u64, "shekyl_curve_tree::BlockHeight");
 
 /// A drained tree leaf: its global output index, its maturity height, the
-/// 128-byte curve-tree leaf (`{O.x, I.x, C.x, h_pqc}`), and the public
+/// 128-byte curve-tree leaf (`{O.x, I.x, C.x, CM.x}`), and the public
 /// output identity it was built from. Tree position is determined by drain
 /// order `(maturity, gindex)`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -183,6 +279,23 @@ pub struct LeafEntry {
     pub identity: OutputIdentity,
 }
 
+impl LeafEntry {
+    /// `CM.x`, the last scalar of [`Self::leaf`].
+    ///
+    /// [`shekyl_fcmp::tree::construct_leaf`] writes the leaf as
+    /// `O.x ‖ I.x ‖ C.x ‖ CM.x`. Path assembly carries the fourth scalar as
+    /// stored, because a [`ChunkLeaf`] does not hold the `CM` point.
+    #[must_use]
+    pub(crate) fn cm_x(&self) -> [u8; 32] {
+        const SCALAR_LEN: usize = 32;
+        const START: usize = (SCALARS_PER_LEAF - 1) * SCALAR_LEN;
+        const _: () = assert!(START + SCALAR_LEN == 128);
+        let mut scalar = [0u8; SCALAR_LEN];
+        scalar.copy_from_slice(&self.leaf[START..START + SCALAR_LEN]);
+        scalar
+    }
+}
+
 /// One output in a path's Selene leaf chunk — the public per-output tuple
 /// the FCMP++ prover's `Path.leaves` consumes. Mirrors the field names of
 /// `shekyl_tx_builder::types::LeafEntry` so the engine adapter that builds
@@ -191,13 +304,43 @@ pub struct LeafEntry {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ChunkLeaf {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Key image generator `I = Hp(O)` (compressed), derived in-crate.
     pub key_image_gen: [u8; 32],
     /// Compressed amount commitment (`C`).
-    pub commitment: [u8; 32],
-    /// Per-output PQC leaf hash (`h_pqc`).
-    pub h_pqc: [u8; 32],
+    pub commitment: CommitmentBytes,
+    /// The leaf's 4th scalar: `CM.x`, the Wei25519 x-coordinate of the
+    /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
+    /// every sibling in the chunk.
+    pub cm_x: [u8; 32],
+}
+
+impl ChunkLeaf {
+    /// The leaf's four Selene scalars, in hash order: `O.x`, `I.x`, `C.x`,
+    /// `CM.x`.
+    ///
+    /// [`shekyl_fcmp::tree::leaf_from_chunk_entry`] owns the conversion.
+    /// [`shekyl_fcmp::tree::construct_leaf`] does not apply: it takes the
+    /// `CM` point, and a chunk carries `CM.x`. This function splits the
+    /// 128-byte leaf into scalar slots.
+    ///
+    /// `None` when one of the three compressed points does not convert.
+    /// Leaves the tree holds converted at ingest, so `None` means the path
+    /// was built from bytes that never passed admission.
+    #[must_use]
+    pub fn scalars(&self) -> Option<[[u8; 32]; SCALARS_PER_LEAF]> {
+        let leaf = leaf_from_chunk_entry(
+            self.output_key.as_bytes(),
+            &self.key_image_gen,
+            self.commitment.as_bytes(),
+            &self.cm_x,
+        )?;
+        let mut out = [[0u8; 32]; SCALARS_PER_LEAF];
+        for (slot, chunk) in out.iter_mut().zip(leaf.chunks_exact(32)) {
+            slot.copy_from_slice(chunk);
+        }
+        Some(out)
+    }
 }
 
 /// Curve-tree context for one transaction's membership proof, shared by
@@ -206,9 +349,9 @@ pub struct ChunkLeaf {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TreeContext {
     /// Hash of the reference block (echoed into `CtSig.referenceBlock`).
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     /// Header-committed curve-tree root at the reference height.
-    pub tree_root: [u8; 32],
+    pub tree_root: CurveTreeRoot,
     /// Tree depth (number of layers), derived from the reconstructed
     /// layer stack (`build_layers(stream).len()`), not carried on
     /// [`ReferenceBlock`].
@@ -262,10 +405,10 @@ pub struct ReferenceBlock {
     /// Block height.
     pub height: BlockHeight,
     /// Header-committed curve-tree root (consensus value to match).
-    pub curve_tree_root: [u8; 32],
+    pub curve_tree_root: CurveTreeRoot,
     /// Hash of the block at [`Self::height`], echoed into
     /// [`TreeContext::reference_block`] for the eventual
     /// `CtSig.referenceBlock`. A consensus value the caller holds from the
     /// synced header alongside [`Self::curve_tree_root`].
-    pub block_hash: [u8; 32],
+    pub block_hash: BlockHash,
 }

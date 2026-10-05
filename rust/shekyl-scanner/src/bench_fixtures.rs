@@ -94,11 +94,13 @@ use shekyl_crypto_pq::{
         HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, HYBRID_KEM_CT_LEN,
         ML_KEM_768_CT_LEN,
     },
+    leaf_commitment::PQC_LEAF_ENTRY_LEN,
     output::construct_output,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -158,11 +160,10 @@ pub fn make_bench_wallet() -> BenchWalletKeys {
         .expect("HybridX25519MlKem::keypair_generate is infallible under OsRng");
 
     // Per `view_pair::ViewPair::new`, the only structural requirement
-    // on the spend point is `is_torsion_free()`. The basepoint
-    // trivially satisfies this and avoids the need for a wallet seed.
-    // The view scalar is similarly arbitrary; we pin it to a fixed
-    // value so bench fixtures are byte-deterministic save for the
-    // KEM keypair.
+    // on the spend point is `is_torsion_free()`; a basepoint multiple
+    // satisfies it and avoids the need for a wallet seed. The view
+    // scalar is similarly arbitrary; we pin it to a fixed value so bench
+    // fixtures are byte-deterministic save for the KEM keypair.
     let view_scalar = Scalar::from_bytes_mod_order([0x07u8; 32]);
 
     // `HybridKemSecretKey` impls `Drop` via `#[zeroize(drop)]`, so we
@@ -176,24 +177,29 @@ pub fn make_bench_wallet() -> BenchWalletKeys {
     let sk_ml_kem: Vec<u8> = sk.ml_kem.clone();
     drop(sk);
 
+    // Spend-key pair: a fixed canonical scalar and its basepoint multiple.
+    // The two halves must correspond — the scanner's post-recovery
+    // key-image step (`compute_output_key_image`) parses the secret
+    // canonically and the ownership claim compares the recovered `B'`
+    // with `view_pair.spend()` — or an output built to this wallet would
+    // be recovered and then silently dropped before reaching the caller.
+    // The bench-fixture builders set the on-chain spend point to `2 * G`
+    // (`fake_spend_key_bytes()`, deliberately distinct from this wallet's
+    // spend point — see that function's rustdoc), so their recovered `B'`
+    // misses ownership by construction and key-image computation never
+    // runs; `scannable_block_for_recipient` with this wallet's spend point
+    // is the owned case.
+    let spend_scalar = Scalar::from_bytes_mod_order([0x11u8; 32]);
+    let spend_secret: SpendSecret = Zeroizing::new(spend_scalar.to_bytes());
+    let spend_pub = spend_scalar * ED25519_BASEPOINT_POINT;
+
     let view_pair = ViewPair::new(
-        ED25519_BASEPOINT_POINT,
+        spend_pub,
         Zeroizing::new(view_scalar),
         Zeroizing::new(sk_x25519),
         Zeroizing::new(sk_ml_kem),
     )
-    .expect("ED25519_BASEPOINT_POINT is torsion-free by definition");
-
-    // Spend-key secret: arbitrary 32-byte value. The bench fixture
-    // builders below set the on-chain spend point to `2 * G` (via
-    // `fake_spend_key_bytes()`, deliberately distinct from the bench
-    // wallet's registered spend point `G` — see that function's
-    // rustdoc for the rationale), so the recovered `B'` during
-    // scanning equals `2 * G` and misses the subaddress-table key
-    // `G`. Ownership lookup misses by construction and key-image
-    // computation never runs. Keeping a real-shaped `Zeroizing`
-    // here mirrors the production `Scanner::new` API.
-    let spend_secret: SpendSecret = Zeroizing::new([0x11u8; 32]);
+    .expect("a scalar multiple of the basepoint is torsion-free");
 
     BenchWalletKeys {
         view_pair,
@@ -214,17 +220,15 @@ pub fn make_bench_wallet() -> BenchWalletKeys {
 /// - **Non-default.** Not the curve identity, so it is a valid
 ///   spend point shape.
 /// - **Distinct from the bench wallet's registered spend point.**
-///   [`make_bench_wallet`] registers the spend point as
-///   [`ED25519_BASEPOINT_POINT`] (`G`) for [`ViewPair`]
-///   construction. The scanner's subaddress table is keyed on that
-///   exact point. Returning `G` here would make the recovered `B'`
-///   during scanning match the registered key, ownership lookup
-///   would succeed, and the cost would include post-recovery
+///   [`make_bench_wallet`] registers the spend point as a fixed
+///   basepoint multiple `s·G` (`s` = the wallet's spend secret) for
+///   [`ViewPair`] construction. The scanner's ownership claim compares
+///   the recovered `B'` with that exact point. Returning it here would
+///   make ownership succeed, and the cost would include post-recovery
 ///   key-image computation — **defeating the worst-case
 ///   classification** (which the adversarial-daemon threat model
-///   cannot force). `2 * G` guarantees ownership-miss: the
-///   recovered `B'` equals `2 * G`, which is not present in the
-///   subaddress-table keyed on `G`.
+///   cannot force). `2 * G` (`s ≠ 2`) guarantees ownership-miss: the
+///   recovered `B'` equals `2 * G`, which is not the registered point.
 ///
 /// The result is that every per-output decap in the worst-case
 /// fixture runs the full slow path (view-tag match → KEM decap →
@@ -261,6 +265,7 @@ fn assemble_scannable_block(
     let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
+    let mut leaf_entries: Vec<u8> = Vec::with_capacity(n_outputs * PQC_LEAF_ENTRY_LEN);
 
     for output_index in 0..n_outputs {
         let out = construct_output(
@@ -298,6 +303,11 @@ fn assemble_scannable_block(
         kem_ct.extend_from_slice(&out.kem_ciphertext_x25519);
         kem_ct.extend_from_slice(&out.kem_ciphertext_ml_kem);
         per_output_kem_cts.push(kem_ct);
+        // The output's real `0x07` entry (`CM ‖ record`, PL-D3): the scanner
+        // verifies it against the recipient's own derivation, so a fixture
+        // that omitted it would classify every recovered output
+        // received-but-unspendable.
+        leaf_entries.extend_from_slice(&out.pqc_leaf.entry_bytes());
     }
 
     // Serialize the extra through the PRODUCTION writer
@@ -309,7 +319,9 @@ fn assemble_scannable_block(
     // The scanner re-parses the byte slice via `Extra::read` at scan
     // time, mirroring the production daemon → scanner path.
     let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
-    let extra_serialized = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts).serialize();
+    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts);
+    extra.push_pqc_leaf_entries(leaf_entries);
+    let extra_serialized = extra.serialize();
 
     let tx = Transaction {
         prefix: TxPrefix {
@@ -324,7 +336,7 @@ fn assemble_scannable_block(
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts,
                 enc_labels,
@@ -339,16 +351,18 @@ fn assemble_scannable_block(
     // must equal `transactions.len()`), never the hash values themselves, so
     // a placeholder hash is structurally sufficient and invariant across
     // iterations.
-    let placeholder_tx_hash = [0xAAu8; 32];
+    let placeholder_tx_hash = TxHash::from_bytes([0xAAu8; 32]);
 
     let header = BlockHeader {
         major_version: 1,
         minor_version: 0,
         timestamp: 0,
-        previous: [0u8; 32],
+        previous: BlockHash::NULL,
         nonce: 0,
-        curve_tree_root: [0u8; 32],
-        attestation_root: shekyl_archival_retention::empty_attestation_root(),
+        curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
     };
 
     // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),

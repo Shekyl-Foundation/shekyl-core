@@ -1,45 +1,39 @@
 # V3 Design Notes — Staker Archival as Useful Work
 
-> **Ship-timing correction (2026-07-19).** This document's body still carries the
-> earlier scoping in which archival shipped in a **V3.x dot-release** with V3.0
-> "without this mechanism active." That framing is **superseded**: archival
-> pay-for-service is the **genesis (V3.0) staking model**. The confidential
-> claim/tier staking it would have replaced was retired pre-genesis
-> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md)),
-> the reward leg is specified "for genesis"
-> ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
-> archival bond/claim stack is built and exercised as genesis-live (the
-> emission-claim regtest e2e drove a real accepted-and-applied claim on
-> 2026-07-19, PR #345). *(This clause originally cited the `K_COVER`
-> genesis-seal stack as the evidence; that gate was retired 2026-07-19,
-> PR #346. The correction it supports is unaffected — the evidence is
-> now the live claim path itself, which is stronger.)* Read internal
-> "V3.x dot-release" / "V3.0 ships without this mechanism active" statements below
-> as historical. The *design* is unchanged by this correction — only the ship
-> version. Calibration/simulation gates still apply per `STAKER_ARCHIVAL_SIM.md`.
+**Status:** LIVING CONTRACT — last verified 2026-09-19 at `dev@6c41bf820`,
+**contracted** that day under the `PDM` propagation sweep (document 3 of 4;
+[`FOLLOWUPS.md`](FOLLOWUPS.md) "`PDM` propagation sweep" row, ruled
+2026-09-19). This is the **front door** to archival staking — the problem it
+solves, the economic design, the query-privacy doctrine, and the
+firewalled-pseudonym model — and it keeps only what no other document holds.
+Everything mechanism-shaped is a **cited pointer** to the contract that owns
+it, never a second copy:
 
-**Status:** V3 ship feature. Originally drafted as V4-scoped; rescoped to
-V3 by the 2026-04-27 actor-architecture decision-log entry, which
-established `ArchivalEngine` as a Stage 5 actor (sibling to
-`StakeEngine`, not a child) shipping in a V3.x dot-release gated on
-simulation evidence. This document is the canonical archival-mechanism
-design home; it is referenced by `docs/FOLLOWUPS.md` (V3.0 RPC boundary
-refinements, V3.1 `assemble_tree_path_for_output` resolution, V3.x
-Stage 5 native build) and by `docs/V3_WALLET_DECISION_LOG.md`
-*2026-04-27 — Engine architecture: actor model with staged migration
-from composition*.
+| Surface | Owning contract |
+|---|---|
+| What is archived, what a shard is, what every daemon keeps and discards | [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) — `PDM-Q6` (the good: each transaction's prunable body + `pqc_auths`), `PDM-Q-F32` (a shard: a consecutive `tx_id` range `[b_k, b_{k+1})` closed on crossing `SHARD_BYTES`, sized in `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`), `PDM-Q12` (the segment freeze is retired; the serving unit is the body), `PDM-Q2` (the universal discard window `W`), `PDM-Q9` (the daemon holds no serving state) |
+| Where an archiver's bodies live | [`design/WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md) — `P`'s serving store, the wallet's only redb, `StakeEngine`-owned (`WSS-Q1` (a)); erased only on the two-epoch pin-release gate (`WSS-Q8`); the principal's proving state is not a store (§6.3) |
+| Fetch and countersignature | [`design/ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) — one client, two callers (`SF-D1`); uniform memoryless holder draw (`SF-D10`); signed message (`SF-D8`) |
+| The route `P` serves | [`design/ARCHIVAL_SERVING_ROUTE.md`](design/ARCHIVAL_SERVING_ROUTE.md) (`RF-R1`, `/shard/{id}`); the daemon is the client, no wallet talks to a wallet ([`design/ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) `EU-D1`) |
+| Challenges, settlement, slash | [`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md) (derived assignment, 2-of-3 per epoch, whole-shard read verified per-tx); [`design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) (`SO-D8`) |
+| Bond wire, `P` FSM, bond-post kinds | [`design/ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md); [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) |
+| The principal's lifecycle (stake in, release, drain) | [`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) |
+| Reward emission and the reward formula | [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (§4 three-channel stack, §4.0 `Curve` ∘ servo pin); [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) (`market_R` as a derived ledger count, §3.3) |
+| The `P` ↔ principal firewall | [`design/ARCHIVAL_FIREWALL_GATE6.md`](design/ARCHIVAL_FIREWALL_GATE6.md) |
+| Foundation identity set, `CompleteTree`, nominal bond, slash chain, key rotation | [`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md); disclosure posture in [`design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`](design/FOUNDATION_ARCHIVAL_DISCLOSURE.md) |
+| Economics validation | [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (sealed 2026-06-16, §L18) |
 
-The mechanism ships in a V3.x dot-release. The exact dot-version is
-gated on the simulation work described in *Simulation as separate
-project* below — the open design questions (shard granularity, query
-routing protocol, price curve shape, quick-pick portfolio composition,
-unstake-cascade dynamics, privacy-of-queries detailed protocol,
-foundation-node integration) close against simulation evidence rather
-than against speculation. V3.0 ships without this mechanism active;
-V3.0's design surface (RPC boundaries, daemon-selection logic, reward
-disbursement architecture) is built so the V3.x ship is purely
-additive, not a refactor.
-
+Archival pay-for-service is the **genesis (V3.0) staking model**. The
+confidential claim / lock-tier staking it replaced was deleted pre-genesis
+([`completed/LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md);
+rule 95's standing instruction). That is a design pin, not an implementation
+claim; status per leg lives with the owning contracts. The archival bond and
+emission legs are built and exercised as genesis-live (the emission-claim regtest
+e2e drove an accepted-and-applied claim 2026-07-19, PR #345;
+[`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §4a);
+the serving leg is built and being wired
+([`design/ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) §9). Nothing
+here is scoped to a later dot-release.
 **Author / decision context:** Originated in Phase 1 wallet-rewrite
 session (2026-04-26) as an answer to the long-running question "what
 useful work do stakers actually do for the network?" The framing has
@@ -48,15 +42,15 @@ FCMP++'s historical reference-block archival need (already in
 `docs/FOLLOWUPS.md`) was paired with BitTorrent-style scarcity-priced
 commons coverage as the mechanism shape. Rescoped to V3 ship in the
 2026-04-27 actor-architecture decision; the rescoping does not change
-the design — the actor model makes shipping it cleanly possible
-within V3.x as a sibling actor to `StakeEngine`.
+the design. (That entry planned an `ArchivalEngine` Stage-5 sibling actor;
+what landed is the `StakeEngine` actor with the serving host composed beside it
+in `shekyl-p-host` — [`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.7 is the record.)
 
 ---
-
 ## The problem this solves
 
 Two structural problems converge:
-
 **Problem 1: Stakers don't do useful work.** Across PoW, PoS, and storage
 chains, no system has cleanly answered "what real work do stakers perform?"
 PoW miners do hash-function makework (wasted electricity). Generic PoS
@@ -66,15 +60,27 @@ storage business, but storage *is the product*, not a service the chain
 needs. None of these is "the staker performs useful work *the network
 itself needs* as a side effect of staking." The staker's only contribution
 is capital-at-risk, which is a security bond, not a service.
+**Problem 2: complete transactions must stay retrievable after every daemon
+discards them.** Every node keeps the curve tree complete — its layer 0 is
+never pruned and is the tree's own commitment — and a wallet proves a spend from
+its own output's path plus the public root, so **spending never needs a pruned
+region** ([`design/WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md) §6.3;
+`PDM-Q-F11`). What every daemon *does* discard, uniformly, is the bulk of each
+old transaction: its prunable body (`CtSigPrunable`) and its `pqc_auths` — ~95 %
+of transaction bytes — for every shard whose freeze epoch has passed
+(`PDM-Q2`, re-ruled 2026-09-22: a shard closed in epoch `E` is held by every
+daemon through epoch `E+1` and discarded at the boundary into `E+2`; `PDM-Q6`). The txid components that commit to those bytes
+(`txs_prunable_hash`, `txs_pqc_auth_hash`) are kept forever on every node, so
+anyone who holds a body can prove it is the right one; but the body itself has
+to be held by *someone* or it is gone. Rescan from seed, audit, and dispute all
+need it. Foundation-only retention is a centralization concern; discarding
+without a distributed holder is a data-loss concern.
 
-**Problem 2: FCMP++ has a real, growing archival problem.** Wallets
-constructing transactions can reference blocks up to 100 blocks old, and
-the proof construction needs the curve-tree state at that exact historical
-height. Today this is served by foundation-operated `--no-prune` archival
-nodes. As the chain grows, full archival becomes expensive (the curve tree
-state alone scales linearly with output count, and FCMP++ outputs are
-rich). Foundation-only archival is a centralization concern; pruning
-without distributed archival is a data-loss concern.
+*Not* "FCMP++ proof construction needs historical tree state served by
+archival nodes": that claim is false — the tree is complete on every node and
+spending never touches pruned regions — so it is not a problem this design
+solves. The problem is the **retrievability of complete transactions**
+(`PDM-Q6`, `WSS-1`).
 
 These two problems have a joint solution: **stakers archive the chain.**
 Stakers' unique properties — long-term presence, bonded reputation, and
@@ -83,25 +89,19 @@ structurally suited to performing distributed long-term archival. Miners
 optimize for current block; transactors are transient. Stakers are the
 only class with skin-in-the-game on the chain's *long-term* health, and
 archival is exactly long-term-health work.
-
-The unconventional move: **decouple consensus-securing work (capital-at-risk)
-from useful work (archival service), pay them from related but distinct
-reward streams, let stakers self-select into how much of each they do.**
-Most "useful PoS" attempts fail because they try to make consensus and
-useful-work be the same activity. They aren't. They can be the same actor
-class, paid from related sources, without being conflated.
+The move that makes this coherent — followed to its end in *Pay-for-service
+rebasing* below — is that **staking *is* archiving**: one staker type, one
+work-paid reward, the principal a small eligibility gate that is never slashed,
+and the service bonded by slashable per-shard collateral. Earlier drafts framed
+it as two decoupled reward streams; that framing is superseded there.
 
 ---
-
 ## Service promise — genesis-pinned commitments
-
 This section is a **set of commitments**, not a description. The sim
 (`docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*) validated market
-retention economics **conditional** on these pins. Step 1 (L15d/L16d
-durability rescore) is closed; **step 0 closes when this section ships.**
-Several pins are **cheap at genesis, unfixable after** — key rotation,
-replication-count semantics, and the on-chain foundation identity set.
-
+retention economics **conditional** on these pins, and the pins shipped —
+several are **cheap at genesis, unfixable after** (key rotation,
+replication-count semantics, the on-chain foundation identity set).
 ### User-facing promise (one class)
 
 **Permanent retention (hard guarantee).** Deep history is never deleted.
@@ -139,48 +139,49 @@ user-facing summary in `docs/PUBLIC_NARRATIVE_FAQ.md`.
 
 The seeding SLO lives in the maintenance / archiver section below, not
 in user-facing materials.
-
 ### Archival data scope (design pin — gates legal, FAQ, and challenges)
 
-Three **distinct** data sets appear in archival discourse; conflating them
-makes user-facing retention claims unverifiable. This pin names each set,
-who retains it, what challenges verify, and what each promise depends on.
-Cross-ref: `docs/design/CURVE_TREE_CLIENT.md` §7.6 (one schema, footprint
-varies).
+**Owned by `PDM`; cited here, never restated.** Three distinct things appear in
+archival discourse, and user-facing retention claims are unverifiable if they
+are conflated:
 
-| Set | Contents (normative) | Typical holder | Challenge verifies |
-|---|---|---|---|
-| **A — Wallet-minimum** | Sub-root frontiers (`R_k`), **owned-output chunks** (once scanned), active (unpruned) frontier segment — enough to forward-sync and assemble **your** spend paths | Every syncing wallet / lean node | **Not** archiver retention challenges |
-| **B — Deep archival shard** | Full CT **segment leaves** per shard plus per-shard **canonical auxiliary** (headers, transactions, and per-height tree roots in the shard's position range) needed to construct **FCMP++ historical reference proofs** (Merkle path from a random leaf position to **`R_k`**) | Market archivers (subset of shards); foundation **`CompleteTree`** (all shards) | **Yes** — retention-proof challenges sample shard *s* and verify path to `R_k` from held material |
-| **C — Full canonical block corpus** | Complete canonical **blocks and transactions** for chain history — output discovery, amount decryption context, rescan from seed, audit trail | Foundation complete archive; full nodes may retain; market archivers hold **C for their shard ranges** as part of shard auxiliary | Indirectly — pruning safety and wallet rescan depend on **C** being retrievable somewhere durable |
+- **The archival good** is each transaction's prunable body plus its
+  `pqc_auths` (`PDM-Q6` items 1–2). It is what archivers hold, serve, and are
+  challenged on; it is verified per transaction against the two txid components
+  every node keeps forever.
+- **The skeleton** — headers, the curve tree (complete on every node, its layer 0
+  never pruned), the txid hash rows, and the retained per-transaction length rows
+  — is kept by **every** daemon, uniformly, forever (`PDM-Q1`, `PDM-Q9`). It is
+  not archival: nobody is paid to hold it and no challenge tests it.
+- **A shard** is a consecutive `tx_id` range `[b_k, b_{k+1})` of the good,
+  closed when its cumulative bytes cross `SHARD_BYTES` (`PDM-Q-F32`). Bonds,
+  the wire's holdings echo, and the challenge draw all name this one unit
+  (`PDM-Q6` item 3). There is no leaf-shaped shard, no shard root `R_k`, and no
+  segment freeze (`PDM-Q12`).
 
-**What "complete tree" means.** Foundation and archiver **`CompleteTree`**
-registrations commit to **all of B across all shards** (the deep archival
-substrate), **not** "curve-tree structure alone." The curve tree is
-commitments and proof paths (set **B**); it is **not** interchangeable with
-**C** (full blocks/txs) or **A** (your wallet's already-scanned outputs).
+**Who holds what.** Every daemon prunes uniformly at the epoch boundary after
+a shard's freeze epoch (`PDM-Q2`) and holds no serving
+state (`PDM-Q9`). Market archivers hold the bodies of their bonded shards in
+`P`'s serving store ([`design/WALLET_SIDE_STORE.md`](design/WALLET_SIDE_STORE.md)),
+filled from their own daemon while the shard is still universally held and
+served whole-shard over `P`'s onion. The Foundation `CompleteTree` holds every
+shard — behind a persona, never on a daemon (`WSS-Q10`). A wallet that does not
+stake holds no archival good at all; its proving state is not a store
+(`WSS` §6.3).
 
-**User-facing promise mapping (load-bearing):**
+**User-facing promise mapping (load-bearing).** *Permanent retention* (hard)
+depends on the good being held for every closed shard — the Foundation floor
+plus market redundancy. *"Your old transaction history won't disappear"*
+depends on the same thing: rescan from seed needs the complete transaction, and
+the complete transaction is exactly the skeleton (everyone's) plus the good
+(the archivers'). *Auditable foundation floor*: the Foundation `CompleteTree` is
+challengeable on every shard with public pass/fail.
 
-| Claim | Depends on |
-|---|---|
-| **Permanent retention** (hard) | **B + C** for all canonical history — deep proof substrate **and** block/tx corpus needed for rescan, audit, and dispute backstop |
-| **"Your old transaction history won't disappear"** | **C** retrievable for rescan + wallet persistence of **A** after scan; **B** for spending with old reference blocks / deep proofs — **not** satisfied by **B alone** (proof-state-only archive cannot reconstruct full wallet history from seed) |
-| **Auditable foundation floor** | Foundation **`CompleteTree`** holds **B + C** in full; public fetch + challenge pass/fail on **B** |
-
-**Normal nodes vs archivers.** A non-staker wallet retains **A** only and
-**prunes** deep segment leaves to `R_k`. Archivers retain **B** (and the
-shard-scoped **C** auxiliary their challenges and serving require). The
-foundation floor retains **B + C** completely. Market redundancy (set **B**
-and shard-local **C** above the floor) is the decentralization trajectory;
-the floor is the disclosed durability anchor for **B + C**.
-
-**Legal / FAQ inheritance.** User-facing copy must **not** say "complete
-archival tree" when meaning "everything needed to restore your wallet from
-seed" unless **C** is included — say **complete deep archival substrate plus
-canonical block history**, or cite this table. Counsel and
-`docs/PUBLIC_NARRATIVE_FAQ.md` lock only after this pin.
-
+**Legal / FAQ inheritance.** User-facing copy must say what is actually
+retained — **complete transactions for all of chain history** — not "the
+archival tree"; the tree is never at risk. `docs/PUBLIC_NARRATIVE_FAQ.md` and
+`design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` are re-keyed to this pin
+(2026-09-19); counsel's lock is on this section.
 ### Durability guarantee — foundation floor + market redundancy
 
 **Public anchor (foundation).** The durability number users and operators
@@ -203,29 +204,15 @@ durability credit** only; no market reward; real challenges, public
 pass/fail — no economic extraction path.
 
 #### Foundation complete-tree seeds (first subsection — the guarantee's base)
-
-Foundation **seed nodes are seeds of the tree, not just of discovery:**
-> **Correction (2026-08-03).** This subsection previously said the Foundation
-> seeds sit at "known locations (Tor-client fetch to **public addresses** — **not**
-> six-hop hidden-service rendezvous for the fetch leg)", and repeated the claim
-> twice more (the seeding bullet below, and the seeding-transport note in the
-> retrieval-latency section). **Both halves were wrong**, and the sentence
-> actively misled: it reads as though the Foundation has a clearnet fetch path
-> that ordinary `P`s do not.
->
-> **The ruling: all shard retrieval occurs across Tor, period.** "Known" describes
-> the **address**, not the transport — a *published, known `.onion` v3 address* —
-> and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
-> over. There is **no separate Foundation retrieval mechanism** and no clearnet
-> leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
-> flag is absent from `shekyl_tor_control_client::control::onion::OnionFlags`, so it is
-> unrepresentable.)
-
-each holds **complete sets B + C** (deep archival substrate and canonical
-block history; §*Archival data scope*) from genesis, at **known `.onion` v3
+Foundation **seed nodes are seeds of the tree, not just of discovery:** each
+holds the **complete archival good for every shard** plus the skeleton every
+node keeps (§*Archival data scope*) from genesis, at **known `.onion` v3
 addresses** — retrieved over an **ordinary v3 rendezvous**, exactly as any other
-`P` is. They provide:
-
+`P` is. **All shard retrieval occurs across Tor, period** (ruled 2026-08-03):
+"known" describes the *address*, not the transport; there is no separate
+Foundation retrieval mechanism and no clearnet leg (`ADD_ONION`'s `NonAnonymous`
+flag is unrepresentable in `shekyl_tor_control_client::control::onion::OnionFlags`).
+They provide:
 - **Durability floor** — observable, placement-controlled correlated-loss
   tail (you choose providers/jurisdictions — a **placement** property; the
   *durability* argument does not lean on location-hiding, which is a separate
@@ -306,55 +293,16 @@ mechanism. They are **fully excluded from archival reward claims** (no
 reward path exists). Reputational failure on a public challenge is the
 binding deterrent for a known entity; the slash amount is not the
 economic lever.
-
-**Nominal uniform bond (pinned — not zero).** Each **active** genesis
-foundation identity posts **one** retention bond at **`ARCHIVAL_BOND_FLOOR`**
-(the same minimum valid per-shard bond floor pinned at gate 4), **once per
-archival pseudonym `P`**, not per shard. This is **not** skin-in-the-game
-economics — it is the price of keeping the foundation on the **single
-uniform holding + challenge + slash path**. Zero bond would require a
-`foundation → skip slash` branch in consensus-critical slash code;
-rejected. On failed challenge the **standard slash path runs** — see
-**`CompleteTree` slash semantics** below — removing the nominal bond and
-**releasing** the `P` until it re-posts.
-
-**`CompleteTree` slash semantics (consensus chain — same code path, explicit
-post-slash state).** A market holder with `ShardSetCompact` failing shard *s*
-loses **that shard's bond** and remains bonded on other shards. A
-**`CompleteTree`** holder has **one** nominal bond for the entire tree; a
-failed retention challenge on **any** sampled shard:
-
-1. **Slashes the whole bond** (`ARCHIVAL_BOND_FLOOR` in full — not
-   `FLOOR/shards`, which would be a no-op slash and **skip-slash in disguise**;
-   rejected explicitly).
-2. **Clears the bonded holding** — `P` is **released** (the state zero-bond
-   was designed to avoid).
-3. **Removes `P` from `durability_count`** until it **re-posts bond** and
-   re-activates through the normal registration path.
-
-Re-bonding is the only resume path; there is no partial bonded state for
-`CompleteTree`. **`N_active = 3`** at genesis pin (see
-`docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §9.1) is sized so **one**
-failed sample knocks **one whole seat** out of the durability floor until
-re-bond — margin is **challenge-failure absorption**, not only geographic
-diversity.
-
-**Holdings wire (complete tree without state bloat).** Foundation seeds
-register **`CompleteTree`** on the general `HoldingsDescriptor` (one
-sentinel = holder of all shards), **not** O(shards) per-shard bond rows.
-See `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4. **`market_R`**
-does not count `CompleteTree` holders (`Market` membership excludes foundation).
-**`durability_count`** counts each **bonded-and-good-standing** genesis
-`CompleteTree` slot for every shard — see replication table below.
-
-**Reversion (bonding — ordered):**
-
-1. **Now:** nominal **`ARCHIVAL_BOND_FLOOR` × 1** per active genesis `P`,
-   uniform across the set; standard slash path.
-2. **Never:** zero bond with skip-slash branch.
-3. **Never:** per-shard bond rows for foundation complete-tree (state-bloat
-   path to a foundation-only holding type).
-
+**Nominal uniform bond, slash → release → removal, holdings wire, bonding
+reversion ladder.** Mechanism — owned by
+[`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md)
+§3 (one `ARCHIVAL_BOND_FLOOR` bond per active genesis `P`, standard slash path,
+the `CompleteTree` slash chain), §4 (`HoldingsDescriptor` / `CompleteTree`
+sentinel), and its rejections (zero bond with a skip-slash branch; per-shard
+rows for the complete tree). The economic consequence this document owns:
+`N_active = 3` is sized so one failed sample knocks one whole seat out of the
+durability floor until re-bond — margin is challenge-failure absorption, not
+only geographic diversity.
 **Reward economics — fully outside the formula.** Foundation archivers
 draw **no slice** of the market reward pot and do **not** enter scarcity
 denominators. The entire pot flows to the market; the foundation is a
@@ -370,21 +318,12 @@ it buys a foundation-earnings line item with no benefit.
 pin). Wallet **payment addresses are not enumerated** — only archival
 pseudonym **`P` pubkeys** (V3.0 payment-address shape is pinned separately;
 FA-1 single static address backs stake off this block).
-
-The privileged set is **enumerated in genesis** — maximally transparent,
-undeniable, auditable. Membership confers **one** distinctive protocol
-consequence (see replication table): genesis enumeration is required for a
-**`CompleteTree`** holder to count in **`durability_count`** for all shards.
-All other properties (`CompleteTree` descriptor, nominal bond, reward
-exclusion, challenge path) follow from the **general** archival model — any
-`CompleteTree` registrant gets them; only durability credit for the full tree
-requires genesis membership.
-
-- **`durability_count`** credit for **`CompleteTree`** (all shards) — **genesis
-  slot only**, when bonded-and-good-standing.
-- Challenge path — **general** (any bonded archiver).
-- **`market_R`** — **not** a membership check; see descriptor rule below.
-
+Membership confers **one** distinctive protocol consequence: genesis
+enumeration is required for a **`CompleteTree`** holder to count in
+**`durability_count`** for all shards. Everything else (descriptor, nominal
+bond, reward exclusion, challenge path) follows from the general archival model
+and any `CompleteTree` registrant gets it ([`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md)
+§2, §6–§7).
 This is the concrete form of "our security includes the foundation" —
 same trust class as hard-coded seed discovery keys, not a hidden flag.
 **Irreversible without fork:** even if the market eventually dwarfs the
@@ -475,19 +414,20 @@ queries do not inherit that bound. **Transport for seeding does not differ from
 user query transport** — both are the v3 rendezvous (2026-08-03 correction; the
 earlier "may differ … if fetch is from public foundation complete copies" wording
 contradicted the one-mechanism ruling).
-
 ---
 
 ## The mechanism
 
 ### BitTorrent-style scarcity-priced commons coverage
 
-Chain state is partitioned into **shards** — deterministic ranges of
-blockchain history (e.g., curve-tree state for blocks 100,000–110,000,
-plus the transactions and per-height tree roots needed to construct
-historical reference proofs against any block in that range). Granularity
-is tunable; per-epoch (~10,000 blocks) is the candidate scale.
-
+Chain history is partitioned into **shards** — consecutive `tx_id` ranges of
+transactions' prunable bodies and `pqc_auths`, each closed when its cumulative
+bytes cross `SHARD_BYTES` (`PDM-Q-F32`; the unit and its boundaries are
+`PDM`'s, §*Archival data scope*). A shard becomes bondable when it closes and
+scarce only when every daemon discards it at the boundary after its freeze
+epoch (`PDM-Q2`, `PDM-Q6` item 3); between the two — the whole freeze epoch,
+never less than one full epoch — the archiver's wallet fills its store from
+its own daemon, pull before bond (`PDM-Q9`).
 Stakers archive shards. The archival commitment is **part of the staking
 protocol itself**, not a separate service layer. The staking software
 *is* the archival client. There's no "run an archival node alongside your
@@ -503,252 +443,82 @@ under-served shards earn more than stakers piling onto popular ones.
 This is the BitTorrent insight applied to chain archival: distributed
 coverage emerges from individual rational decisions when the price signal
 is right. The protocol prices; it doesn't allocate.
-
 ### Quick-pick: opt-in market participation
 
-Not every staker wants to play the rare-shard market. Tier-1 yield-seekers
-who locked 1,000-block tier-1 stakes may have no interest in archival
-strategy. **Quick-pick allocation** handles this: the staker opts into a
-default allocation, the protocol assigns them a balanced portfolio of
-shards (mix of common/rare, recent/historical, weighted to roughly
-average market reward), and they earn average archival yield without
-having to make decisions.
-
-Active stakers opt out of quick-pick and pick their own shards. The two
-classes coexist:
-
-- **Active stakers**: hunt rare shards, earn premium archival yield, do
-  the work of optimizing coverage.
-- **Quick-pick stakers**: take the default allocation, earn average yield,
-  do no optimization work.
-
-Quick-pick has a useful secondary property: **its allocation algorithm is
-the protocol's coverage backstop.** If active stakers are over-clustered
-on rare-recent shards, quick-pick can be tuned to compensate by allocating
-passive stakers more heavily to under-served shards. The passive class
-becomes a tunable lever for uniform coverage, controlled by the protocol
-designer rather than emerging purely from the market.
-
-The lottery quick-pick analogy: same shape. Don't care about which numbers?
-Take the auto-pick. Network gets the same participation either way.
+Not every staker wants to play the rare-shard market. **Quick-pick allocation**
+is this design's answer: the staker opts into a default allocation, the wallet
+proposes a balanced portfolio of shards (mix of common/rare, recent/historical,
+weighted to roughly average market reward), and they earn average archival
+yield without making decisions. Active stakers pick their own shards. The two
+classes coexist — active stakers hunt rare shards and do the work of optimizing
+coverage; quick-pick stakers take the default and do none — and the default's
+allocation rule is a **coverage backstop**: if active stakers over-cluster,
+the default can lean passive stakers toward under-served shards. The landed
+selection surface — what the wallet shows and how a shard is chosen — is
+[`design/ARCHIVAL_SHARD_SELECTION_LIST.md`](design/ARCHIVAL_SHARD_SELECTION_LIST.md)
+(`SL-`); a protocol-level quick-pick allocator is design intent here, not a
+landed mechanism.
 
 ### Verification: challenge-response
 
-Stakers periodically receive on-chain challenges for shards they claim.
-Challenge format: "produce the Merkle path for block H's curve tree root
-showing leaf X." The path is cheap to verify on-chain (the network already
-has the root). Failure to respond within a window slashes the *archival
-reward* (not the principal stake; see "decoupling" below).
-
-The verification doesn't try to detect "lazy storage" (re-fetching from
-peers on demand). Instead, the protocol routes archival queries from
-wallets to whichever stakers are *actually serving them efficiently* —
-challenge response latency is tracked, and stakers with consistently
-high latency lose query routing. Lazy storage stakers naturally lose to
-honest-storage stakers in any shard with real demand. The market handles
-laziness.
-
-### Decoupling: archival reward separate from principal yield
-
-> **Superseded in steady state by *Pay-for-service rebasing* below (pending
-> sim/soundness ratification).** The two-stream framing here — an unconditional
-> consensus-bond yield *plus* an additive archival stream — assumed staking
-> renders a consensus service worth an unconditional yield. The enumeration in
-> *Pay-for-service rebasing* shows it does not: archival is the only service, so
-> the streams collapse into one work-paid reward and the unconditional
-> `staker_emission_share` is retired (subject to the bootstrap caveat). The one
-> property below that **survives unchanged** is *principal is never slashed* —
-> it is load-bearing in both framings (resilience under archival stress) and is
-> kept verbatim. Read the rest of this subsection as the decision history that
-> led to the rebasing, not the current target.
-
-Critical design property: **archival performance does not slash
-principal.** A staker with archival outages loses archival yield only.
-The principal stake's consensus-bond yield (the existing
-`staker_emission_share=15%` from the V3 economy) flows regardless.
-
-Why this matters: slashing principal for archival failures would create
-perverse incentives. Stakers with infrastructure problems would unstake
-rather than risk principal, and the network would lose both their security
-bond *and* their archival capacity simultaneously. Decoupling preserves
-the security model under archival stress.
-
-In V3 economy structure terms:
-
-- **V3.0 ships**: `staker_pool_share=25%`, `staker_emission_share=15%`,
-  `staker_emission_decay=0.90/year`. Principal bond yield. Unconditional.
-- **V3.x adds (this mechanism)**: archival reward stream. Conditional on
-  archival performance. Funded from a separate slice (see "Funding"
-  below).
-
-A staker doing both consensus-bonding and archival earns the sum. A staker
-doing only consensus-bonding (archival outage, intentionally passive,
-not opted in) earns only the principal yield. The two yield streams are
-additive and independent.
-
-The actor-architecture decision-log entry locks this property
-structurally as well: `StakeEngine` (Stage 3, principal yield) and
-`ArchivalEngine` (Stage 5, archival yield) are sibling actors with
-independent slashing domains. A bug in archival logic that slashes
-archival-yield cannot be misrouted to slash principal-yield, because
-the actors do not share state — the cross-actor query
-`StakeEngine::is_active_staker(entity_id) -> bool` gates archival
-eligibility, but the response is authoritative and there is no shared
-mutable state for a bug to corrupt.
-
-### Tier interaction: lock duration as archival commitment depth
-
-> **Superseded in steady state by *Pay-for-service rebasing* below (the keystone /
-> gate 4).** The tier-weighted pricing described here is the **tier oracle**
-> F-ARCHIVAL identifies: it makes the public shard-set Bayesian evidence of the
-> backing stake's tier. The rebasing **deletes the staker tier** and recovers the
-> deep-history retention-horizon matching it provided with a **slashable per-shard
-> retention bond** — *not* with demonstrated-longevity, which is a past signal that
-> cannot bind future retention (an earlier draft proposed longevity-pricing for this
-> and is corrected by the keystone). Read this subsection as the rationale for the
-> property the per-shard bond must reproduce (deep-history retention-horizon
-> matching), not the current target.
-
-The existing tier system serves double duty.
-
-- **Tier 1** (1,000-block lock, 1.0× yield): short-lock, can hold ephemeral
-  shards, but archival commitment is shallow. Best for hot-set archival
-  (recent, frequently-queried, low-rarity).
-- **Tier 2** (25,000-block lock, 1.5× yield): medium-lock, medium
-  archival commitment. Mixed roles.
-- **Tier 3** (150,000-block lock, 2.0× yield): long-lock, deep archival
-  commitment. Best for critical-history archival (deep, rarely queried,
-  high redundancy value).
-
-The shard pricing should reflect this: a shard held only by tier-1 stakers
-(short locks, frequent turnover) is structurally riskier than a shard held
-by tier-3 stakers at the same nominal replication count. The reward
-formula should weight by tier, naturally driving critical-history shards
-toward long-tier holders.
-
-This is elegant because it means the *shape* of the staker class matters
-for archival, not just the count. Tier-3 stakers become the network's
-long-term archivists; tier-1 stakers are the marginal hot-set. The economy
-already created these tiers; archival uses them.
-
-**Privacy cost of this elegance — the portfolio becomes a tier oracle.**
-Because tier sorts onto shard type (tier-1 → hot/recent, tier-3 →
-deep/historical, reward weighted by tier), **which shards a staker holds is
-strong Bayesian evidence of their tier.** This is a tier-disclosure channel
-*entirely separate from* the confidential-staking claim wire — and it is the
-channel the share feature (`docs/V3_SHARD_VISUALIZATION.md`) gamifies stakers
-into advertising. Two consequences, analyzed in
-`docs/V3_STAKER_ARCHIVAL.md` (this file; finding **F-ARCHIVAL**): (1)
-the claim-wire tier and this archival tier-weighting are **separable levers** —
-**whole-system tier privacy requires weakening both**, so de-tiering the claim
-alone would *not* close the tier leak while this coupling exists and portfolios
-are observable; (2) whether this fires for *every* staker on-chain or *only* for
-self-sharers depends entirely on the commitment-binding question below. Weakening
-the tier-weighted pricing (toward tier-blind pricing or quick-pick-dominant
-allocation) is an explicit **economics-vs-privacy** choice: it trades the
-tier-archival alignment for portfolio privacy. Tracked as a Stage-5 design-review
-item alongside the binding decision.
-
+Owned by [`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md).
+What this document needs from it: assignment is **derived** from chain state,
+not committed (§2 there); every bonded pair `(P, s)` is challenged **three
+times per epoch** and credited on **2-of-3** passes (§3); the challenge *is* an
+ordinary read — the witness (the producer of block `h`) fetches the **whole
+shard** over `P`'s onion and verifies it **per transaction** against the txid
+components every node keeps (`PDM-Q6`; `SF-D1`, `SF-D8`); sustained failure
+slashes the **shard's bond**, never the principal. There is no latency-based
+query routing and no "lazy storage" market: organic reads draw a holder
+**uniformly at random** (`SF-D10`), and the reward pays **retention**, not
+retrieval volume (§*The reward curve*).
 ### Privacy: mandatory anonymization on queries
 
-Open concern. A staker serving "wallet at IP X queried block H's curve
-tree state" learns that wallet X is constructing a transaction with
-reference block H. That's metadata FCMP++ specifically protects against;
-distributing archival to many stakers means many parties have query
-metadata.
+A holder serving "daemon at IP X fetched shard *s*" would learn that some
+wallet behind X wants old history — metadata this chain exists to protect;
+distributing archival to many stakers means many parties could hold such
+metadata. Two rulings close it:
 
-**Defense (V3 ships):** mandatory Tor / I2P / mixnet routing for
-archival queries. The wallet routes queries through anonymizing
-infrastructure before reaching the staker. This is consistent with
-Shekyl's existing privacy stance (the chain already supports Tor for
-daemon connections per `docs/ANONYMITY_NETWORKS.md`). The cost is
-latency, which is acceptable for archival queries (they're not in the
-transaction-broadcast hot path).
+- **Every fetch rides Tor, in both directions, with no clearnet leg.** `P`
+  serves from a v3 onion; the requester is a **daemon** acting as a Tor client
+  with no address of its own, so witness, recovery, and operator reads are
+  indistinguishable on the wire (`SF-D2`, `SF-D3`, `PDM-Q9`). No wallet ever
+  talks to a wallet (`EU-D1`). The cost is latency, which is acceptable for
+  archival reads — they are not in the transaction-broadcast hot path — and it
+  is why retrieval latency is a *soft* expectation (§*Service promise*).
+- **The reader is not the wallet.** A wallet never needs a pruned region to
+  spend (§*The problem this solves*), so no spend leaks a reference block to
+  an archiver; the daemon fetches a shard episodically for rescan or repair and
+  retains nothing (`PDM-Q9`, `WSS-Q9`).
 
-**Stronger defense (post-V3-ship, optional):** wallets query for cover
-traffic in addition to actual queries. The staker can't infer which
-historical block the wallet actually needs. More expensive but stronger.
+Cover reads remain an optional later strengthening; nothing rules them in.
 
-For V3.x ship of the archival mechanism, mandatory Tor/I2P is
-sufficient. The privacy story for distributed archival is *better* than
-foundation-only archival, because trust is distributed across stakers
-(no single trusted operator) rather than concentrated.
+**Self-advertisement is the residual.** `P`'s held shard-set is public by
+function (the bond record is the advertisement), and a distinctive portfolio is
+recognizable if its owner shows it around. Shard visualizations are designed to
+be shared ([`V3_SHARD_VISUALIZATION.md`](V3_SHARD_VISUALIZATION.md)), so the
+person who publishes their portfolio bridges real-world identity → `P`. That
+bridge is the sharer's choice and never the protocol's: the firewall's job is
+that *nothing else* draws the `P` ↔ principal edge (*The firewall is a stack*).
 
-**Second-order concern — self-advertisement bridges identity to the
-claim cohort (cross-track to staking privacy).** This is separate from
-query metadata. Two archival-side surfaces compose adversarially with
-the retired claim-era claim-cohort leak (finding F0; living surfaces
-`docs/design/PHASE_2B_FSM_RETOOL.md` and this file): (1) the
-**on-chain holder registry** candidate for "Query routing protocol"
-(below) publishes which staker holds which shard; and (2) a staker's
-**held shard-set is distinctive** for active rare-shard hunters. Because
-shard visualizations are *designed to be shared*
-(`docs/V3_SHARD_VISUALIZATION.md`, "print/share rendering"), a staker who
-posts their portfolio bridges real-world identity → on-chain holder →
-(composed with F0's revealed `tier`/`creation`) their claim cohort.
-Tier-role legibility (tier-3 = deep archivist) lets ordinary bragging
-leak `tier` for free. The mitigation is not more query anonymization;
-it is a **privacy review of the holder-registry shape and the share
-feature against claim-cohort linkage** before `ArchivalEngine` /
-`shekyl-shard-visual` ship. Tracked in `docs/FOLLOWUPS.md` under the
-F0 pre-genesis residue, if any remains. The query-routing design choice (DHT/registry vs. gossip,
-below) should weigh registry-published holder presence as a privacy cost,
-not only a routing-efficiency tradeoff.
-
-**Commitment binding: public address-bound vs. privately membership-proof-bound
-— RESOLVED IN DESIGN (private, firewalled pseudonym), pending sim/soundness
-ratification.** The section above (and the V3 ship default) covers only *query
-metadata*. It does not, on its own, decide how the archival *commitment* — "I
-archive shard X, I earn the reward" — binds to identity, and that gap was the
-highest-value open privacy item in the staking/archival surface
-(`docs/V3_STAKER_ARCHIVAL.md`, finding **F-ARCHIVAL**). It is
-resolved below in *Pay-for-service rebasing and the firewalled-pseudonym identity
-model* — **private**, via a membership-proof-registered pseudonym, subject to the
-gate-list there. The remainder of this subsection records the question and the
-presumption that drove the resolution. The existing draft mechanisms **lean
-public**: on-chain
-challenge-response to "shards they claim," an on-chain holder registry ("each
-shard's holders publish presence"), and reward routing to identified servers.
-The two outcomes are not close:
-
-- **Public address-bound** ("address A archives shard X, A earns the reward"
-  on-chain): combined with *mandatory* archival and tier-sorted shards (above),
-  **every staker's membership and approximate tier become public by
-  construction**, with no sharing required. This would be a larger staking-privacy
-  leak than the claim wire itself.
-- **Privately membership-proof-bound**: the commitment proves "a bonded stake of
-  mine covers shard X" *without* revealing which stake or address; rewards route to
-  **stealth outputs**; the archival identity is **HKDF-separated** from the
-  claim/spend identity. Only stakers who *choose* to share expose themselves; the
-  chain-side confidential-staking work retains its value.
-
-**Presumption = private**, on architectural consistency: the rest of staking is a
-privacy-first membership-proof + nullifier + stealth model, and public binding
-would be the inherited "easier to count if public" convenience. The pattern is
-not exotic — data availability is a public good answerable by anyone holding the
-shard; only *reward eligibility* needs identity, and that can be proven privately,
-exactly as claims are. **The hard part is private replication counting:** scarcity
-pricing needs a per-shard distinct-**market**-holder count (reward ∝ `1/market_R`;
-see §*Service promise* — `durability_count` is a different symbol), and counting
-holders *without identifying them* (private set cardinality / proof-of-distinct-
-holders) is the non-trivial primitive public binding gets for free. That is the
-cost a private design must solve, and it does not move the presumption.
-
-This decision **gates** the confidential-staking `W`-bucketing `W`-choice (a
-non-sharer's bucketing privacy is undone if archival publishes their membership
-and tier regardless). Decide it **before `ArchivalEngine` ships** and consistent
-with the claim-privacy posture; the pre-genesis discount favors designing private
-binding from the start over retrofitting it. Tracked in `docs/FOLLOWUPS.md`.
+**Commitment binding — RESOLVED: private, firewalled pseudonym.** The archival
+commitment ("I archive shard *s*, I earn the reward") binds to a **pseudonym
+`P`** that is a stable, discoverable, challengeable identity by function, and
+whose link to the principal is what the whole design protects. Public
+address-bound archival was rejected: with mandatory archival it would have made
+every staker's participation public by construction. The model is the next
+section.
 
 ---
-
 ## Pay-for-service rebasing and the firewalled-pseudonym identity model
 
-**Status: intended steady-state design (F-ARCHIVAL resolution). Supersedes the
-two-stream / consensus-bond framing in *Decoupling* and the tier-elegance in
-*Tier interaction* above. Gated on the simulation work and a fresh soundness
-pass (the gate-list at the end of this section) before it is consensus-real.**
-
+**Status: the genesis staking model — built, wire-frozen
+([`design/GENESIS_TX_WIRE_FORMAT.md`](design/GENESIS_TX_WIRE_FORMAT.md) Q11),
+and sim-sealed ([`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)
+§L18, 2026-06-16).** It supersedes the two-stream / consensus-bond framing and
+the tier-weighted pricing of earlier drafts, both deleted from this document
+with the claim era; the gate-list at the end of this section records where each
+gate closed.
 **Why this is a genesis-class decision, not a deferrable privacy refinement.**
 Capital-bonded yield has **no justification in the fee-only era**: paying new
 emission to lock idle coins is precisely the rent `00-mission.mdc` forbids, and it
@@ -765,7 +535,6 @@ do?") all the way down and changes the answer's shape. The earlier draft answere
 staking could provide shows there is only one, which collapses the two streams
 into one and — as a free consequence — dissolves two of the hardest
 confidential-staking privacy/soundness findings (F0 and F-INFLATION's 8a).
-
 ### Archival is the only service staking provides
 
 Enumerating every candidate, the others are not services staking renders:
@@ -779,7 +548,7 @@ Enumerating every candidate, the others are not services staking renders:
 - **Capital-at-risk "security bond" — not a service, and weaker than the label.**
   A bond secures something only if it is *slashable for the misbehavior it bonds
   against*. Here the principal is slashable for **nothing**: consensus is not
-  staking's job, and the *Decoupling* design explicitly keeps archival failure off
+  staking's job, and the design explicitly keeps archival failure off
   the principal. A bond that cannot be slashed for any network failure is not
   bonding anything; it is locked coins. (The keystone below restores a *genuinely*
   slashable bond — the **per-shard retention bond** — which bonds the actual
@@ -794,10 +563,11 @@ Enumerating every candidate, the others are not services staking renders:
   feedback loop the economy reads, not a service the network needs provided. It
   exists only because staking exists for some other reason, so it cannot *be* the
   reason.
-
 The enumeration bottoms out at archival: the one genuine, growing, structural
-network need staking fills — historical curve-tree state served on demand so
-FCMP++ proofs against the 100-block window keep working as the chain outgrows full
+network need staking fills — complete transactions kept retrievable after every
+daemon discards their bodies at the boundary after their shard's freeze epoch
+(§*The problem this solves*; `PDM-Q2`, `PDM-Q6`)
+— as the chain outgrows full
 retention. So the staking reward **is** payment for the archival service, and
 "stake without archiving" is being paid for nothing — the exact *Problem 1*
 rent-seeking this whole design set out to kill. **Opt-out staking is therefore
@@ -811,13 +581,13 @@ not via an escape hatch that should not exist.
   rather than aspirational.
 - **One reward: performance-scaled payment for the service** (retention-based,
   scarcity-weighted; curve shape below). The two additive yield streams of
-  *Decoupling* collapse into this single stream; the unconditional
+  the earlier draft collapse into this single stream; the unconditional
   `staker_emission_share` consensus-bond yield — payment for no service — is
   retired (subject to the bootstrap caveat in the gate-list).
 - **Principal becomes locked collateral, not yield-bearing-for-being-a-bond.** It
   always returns at unlock and is **never slashed** (preserving the resilience
-  rationale of *Decoupling*: an infra outage costs reward, not principal, so a
-  staker does not rage-unstake). The lock stops being a yield multiplier and becomes
+  rationale the earlier two-stream draft named: an infra outage costs reward, not
+  principal, so a staker does not rage-unstake). The lock stops being a yield multiplier and becomes
   a **small eligibility gate** only. The Sybil cost and the deep-archival commitment
   are carried **not** by the lock but by the **per-shard retention bonds** (the
   keystone, below) — which is what *de-overloads* the lock: the lock can stay small
@@ -838,51 +608,29 @@ achievable goal is a **firewalled pseudonym** — a long-lived archival identity
 cryptographically, network-, timing-, and output-isolated from the
 spend/claim/principal identity, whose unavoidable public surface leaks nothing past
 "some pseudonym holds these shards."
+**The mechanism this model is built on — each piece cited to its owner:**
 
-**Transfer-shaped admission (leading genesis form — see
-[`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) §2.4).**
-Replace `StakeEngine::is_active_staker(entity_id)` with firewalled **`P`** keyed off
-the **bond record** (gate 4), not a linkable stake lookup.
-
-**Two irreducible consensus-special surfaces:** per-shard **bond** (slashable,
-consensus-tracked) and **reward emission** (mint authorized by public work +
-membership-only backing). Stake-in (principal → `P`) and unstake-out (`P` →
-principal) are **ordinary FCMP++ main-tree transfers** — firewall = base privacy.
-
-- **`P` is an independent keypair, HKDF-derived from the wallet seed** — not an
-  algebraic offset of the principal key; dual scan (principal + `P`).
-- **Admission funding (no consensus role — gate 7 closed bonds-only 2026-06-11):**
-  ordinary transfer to `P` on the main tree with **no consensus minimum**
-  ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §10.2;
-  [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) ledger G7) and **no
-  wallet-policy minimum** (gate-6 §2.5 pin) — funding shape/timing hygiene only.
-  Decision **3C** staking subtree is **not** shipped for genesis.
-- **Off-chain backing before first reward:** `P` must be a known, serving, backed
-  archiver **before** earning — peers present/observe backing off-chain; otherwise
-  spam or ignored challenges. The **first on-chain reward emission** anchors bond
-  state (holdings + claimed-epoch bitmap) — there is **no** separate registration
-  transaction; fusion removes the tx, not the event. *(Superseded, noted 2026-07-19:
-  gate 4 refined fusion to "no separate registration transaction **type** in the
-  retired stake sense" — join-Market **is** the registration event and rides its own
-  dedicated `txin_archival_bond_post` vin;
-  [`ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md) §2.3/§3.1.)*
-- **Reward emission crypto:** FCMP++ **membership-only control** at settlement-epoch
-  cadence (prove backing, **no** key image in spent set). **No published
-  reward-dedup tag** — `N_arch = x·G_arch` is **rejected** (stake-keyed tags
-  collide under shared admission stake and do not dedup epochs). **Double-claim
-  prevention** = per-`P` **claimed-settlement-epoch set** on the bond record
-  (`check_and_set(E)` semantics; sparse absolute epochs — see
-  [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6), reorg-reverted
-  with `pop_block`. **`R_market`** is a **derived ledger count** (gate 3 dissolved —
-  no `ν` primitive; see [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
-  §2). **Wire + verifier:** [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md).
-- **Intra-epoch unbacked window:** between emissions (~one settlement epoch),
-  backing is not re-verified on-chain; `P` may spend admission principal after a
-  payout. This is safe **only because challenge failure slashes bond** regardless
-  of admission state — **bond, not stake-tree, is the maintained anchor.**
-- **Sybil-resistance** lives in **per-shard bonds** (total bond = shards × rate),
-  not `P`-uniqueness or a published archival nullifier.
-
+- **Transfer-shaped admission.** Stake-in (principal → `P`) and drain (`P` →
+  principal) are ordinary FCMP++ main-tree transfers with no consensus minimum
+  and no wallet minimum — firewall = base privacy
+  ([`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
+  DQ1; [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)
+  "Admission shape"). There is no linkable "active staker" lookup; `P` is keyed
+  off the **bond record**.
+- **`P` is an independent keypair, HKDF-derived from the wallet seed** — never
+  an algebraic offset of the principal key — with its own cold bond authority
+  and hot serving identity ([`rust/shekyl-crypto-pq/src/archival_p.rs`](../rust/shekyl-crypto-pq/src/archival_p.rs);
+  [`design/ARCHIVAL_FIREWALL_GATE6.md`](design/ARCHIVAL_FIREWALL_GATE6.md) §9.4/§9.6).
+- **Two irreducible consensus-special surfaces:** the per-shard **bond**
+  (`txin_archival_bond_post`; join-Market is the registration event —
+  [`design/ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)) and
+  **reward emission** (mint authorized by public work + membership-only backing,
+  deduped on the bond record's claimed-epoch set —
+  [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6, §7).
+- **`R_market` is a derived ledger count**, not a published tag
+  ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2–§3).
+- **Sybil-resistance lives in per-shard bonds** (total bond = shards × rate),
+  not in `P`-uniqueness (*Per-shard retention bonds*, below).
 Net on-chain: **P ↔ shard-set ↔ performance is public; principal link is hidden by
 transfer privacy + gate 6 firewall.** Crypto novelty on the reward leg is
 **membership-only control** (subtraction from today's verify) — not
@@ -890,13 +638,13 @@ ClaimLinkability / non-spending SAL sibling — when dedup is state-based.
 
 ### Tier-neutral shard pricing — breaking the tier oracle
 
-Even firewalled, P's shard-set is public, and the *Tier interaction* tier-weighted
-pricing makes that shard-set a **tier oracle**: a deep-historical portfolio
-Bayesian-signals a tier-3 backing stake, re-leaking the exact tier the
-confidential-staking claim wire spends effort protecting (F0) and narrowing which
-stakes could back P. The fix is **tier-neutral shard pricing** — price purely by
-replication scarcity (the BitTorrent insight), so any tier profitably holds any
-shard and the sorting disappears.
+Even firewalled, P's shard-set is public, and any tier-weighted shard pricing (an
+earlier draft priced shards by the backing stake's lock tier) would make that
+shard-set a **tier oracle**: a deep-historical portfolio would Bayesian-signal a
+long-lock backing stake, narrowing which stakes could back P. The rule is
+**tier-neutral shard pricing** — price purely by replication scarcity (the
+BitTorrent insight) — and with the tiers themselves deleted there is nothing
+left to sort on.
 
 But tier-weighting was buying something real: **a credible commitment to
 long-horizon retention of critical (deep-history) shards.** An earlier draft of
@@ -907,23 +655,22 @@ signal — it prices observed stability — but deep history needs a commitment 
 can drop a shard tomorrow). Observed longevity can still feed the scarcity/coverage
 signal, but it **cannot carry the deep-history guarantee.** The keystone that can
 is a per-shard bond.
-
 ### Per-shard retention bonds — the keystone (deep-history guarantee + Sybil cost + de-overloaded lock)
 
 The deep-history commitment does **not** have to be a staker-wide property (a
 tier). Make it **per-shard**: holding a deep-history shard requires posting
 **slashable collateral against retaining it for a duration.** Drop the shard inside
 the window → lose the bond (the *archival* bond only — principal stays
-never-slashed, bounded and voluntary, consistent with *Decoupling*'s resilience
-rationale). Three things fall out of one mechanism:
+never-slashed, bounded and voluntary, consistent with the resilience rationale
+above). Three things fall out of one mechanism:
 
 - **The deep-history guarantee becomes real, not inferred.** A bond at risk is a
   credible commitment to *future* retention — exactly what demonstrated-longevity
   could not provide. This is the property tier-weighting was actually buying,
   recovered honestly.
-- **The staker-wide tier disappears, so F0 dies and the oracle dies with it.** With
-  no principal tier driving shard allocation, there is no `tier_num` for the claim
-  wire (F0) and the public residual is "**pseudonym P holds these shard-types**,"
+- **The staker-wide tier disappears, and the oracle dies with it.** With no
+  principal tier driving shard allocation there is no tier to leak anywhere, and
+  the public residual is "**pseudonym P holds these shard-types**,"
   firewalled — *not* a stake-cohort key. The tier oracle (F-ARCHIVAL coupling #2)
   closes because per-shard bonds replace the tier, **not** because tier "falls out
   for free."
@@ -938,20 +685,12 @@ This **de-overloads the lock parameter**: the eligibility lock can stay small (t
 monetary supply-sink knob you want small), while the **per-shard bonds** are the
 anti-hoard / anti-Sybil capital cost (the thing you want to scale). They are now
 **two separate parameters** instead of one pulled two ways.
-
-**Holdings descriptor (wire pin — pre-`ArchivalEngine`).** Registration carries
-`HoldingsDescriptor`: either **`ShardSetCompact`** (partial portfolio) or
-**`CompleteTree`** (one sentinel = all shards). **`market_R`** is the **derived
-ledger count** at epoch close ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
-§3.3) — **`ShardSetCompact`** market holders with `serve_credit_bit ∧ good_through`;
-**`CompleteTree`** / foundation identities are **excluded from `Market`**, so they
-never appear in `market_R` **without any foundation flag on the pricing path**. Market archivers
-use per-shard bond accounting (`total bond = shards × rate`). Genesis
-foundation identities use **`CompleteTree`** plus **one nominal bond per `P`**
-(`ARCHIVAL_BOND_FLOOR`); **`durability_count`** for all shards requires
-**genesis enumeration** in addition. Full block:
-`docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §4–§6.
-
+**Holdings descriptor and the two counts.** Mechanism — the `HoldingsDescriptor`
+(`ShardSetCompact` / `CompleteTree`) is
+[`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md)
+§4's; `market_R` as a derived ledger count at epoch close is
+[`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+§3.3's; which consumer reads which count is §*Replication count* above.
 **The honest correction this forces.** "Pay for work, not wealth" was wrong, and
 the per-shard bond is why: **capital re-enters, proportional to work.** The reframe
 does not *escape* capital — it **re-bases** it, from "wealth as a yield multiplier"
@@ -988,18 +727,61 @@ as everywhere else in the privacy design. Three layers must hold:
 - **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
   funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
   bond in wallet hygiene.
+### A bond is immutable for its life
+
+**Ruled 2026-09-20.** A persona's bond is **immutable for its life**. The
+holdings set is fixed at the bond post and never mutates. The only
+holdings-change mechanism is **persona rotation**: under the two-active
+overlap, the new persona bonds the new set and the old releases and drains —
+two events of two pseudonyms, decorrelated, with the overlap covering serving
+continuity and the cooldown. `Reinstate` (né `Rebond`) survives as the sole
+in-place record operation: zero-money, post-slash, and not a change of
+holdings.
+
+**Why — and this paragraph is the protection, not commentary.** Clustering
+requires **same-class repetition**; a single event cannot be clustered. The
+design caps `P`-authored same-class events at **one per class per persona
+lifetime** — fund, bond, release, drain — bond amounts are **quantized** at
+`|S| · FLOOR` so the amount dimension carries no operator signal, and serving
+is **miner-authored** (the credit wire rides coinbases). A persona's authored
+chain footprint is therefore ~four transactions of four *distinct* classes.
+**The clusterable object is an incremental-update stream, and this ruling makes
+it unconstructible.**
+
+Read that as a standing constraint on future work, because the failure mode is
+specific and cheap to reach: **without this paragraph, incremental holdings
+updates return as an obvious efficiency PR** — *"why post a whole new bond to
+add one shard?"* — and silently destroy the property. The answer is that the
+efficiency is real and the cost is the anonymity set. Any proposal to
+re-introduce in-place holdings mutation must first say what it does about
+same-class repetition; *"it's only one more event"* is the argument that ends
+with a stream.
+
+**History — the shape of how this resolved is part of the record.** The idea
+was proposed early and **tabled** while shard selection was still open: under
+system-assigned shards an operator's holdings would be mutated *involuntarily
+and incrementally*, which forced exactly the update stream this ruling
+forbids — so the objection was real, and fatal, on the design as it then
+stood. Shard **self-selection** (market picker with the Foundation
+complete-tree floor) removed that premise entirely; the objection did not
+weaken, its subject ceased to exist. Reopened and ratified 2026-09-20. **The
+fence was not indecision — it was a dependency**, and tabling rather than
+deciding is what let the ruling be taken cleanly once the dependency cleared.
 
 ### The reward curve — retention, scarcity, banded plateau-cap
 
 - **Reward retention, not retrieval.** "Work" means **proven retention** —
-  scarcity-weighted challenge-response passes over time — **not** query-serving
-  volume. Rewarding retrieval volume starves the rarely-queried deep-historical
-  shards (precisely the critical history), so nobody holds them. Retrieval latency
-  stays where the *Verification* section puts it: a **routing-quality signal** that
-  allocates queries (a secondary market), not the reward basis.
-- **Challenge unpredictability.** The challenged leaf must be unpredictable
-  (derive it from a *future* block hash, proof-of-retrievability style), or a holder
-  stores only the challengeable subset and free-rides the rest.
+  scarcity-weighted challenge passes over time — **not** query-serving volume.
+  Rewarding retrieval volume starves the rarely-read deep-historical shards
+  (precisely the critical history), so nobody holds them. Retrieval has **no**
+  reward role and no routing market: organic reads draw a holder uniformly
+  (`SF-D10`).
+- **Challenge unpredictability.** A holder must not be able to store only the
+  challengeable subset. Under the landed mechanism the challenged pair and the
+  read window are **derived from the previous block's hash** and the read is the
+  **whole shard** verified per transaction, so there is no challengeable subset
+  to store ([`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+  §2; `PDM-Q6`).
 - **Two composing layers.** The per-shard `1/R` inverse-replication price already
   does coverage *and* self-suppression (you become a replica when you hold a shard:
   pick up a singleton and you halve its per-shard reward; pile onto a covered shard
@@ -1026,125 +808,54 @@ as everywhere else in the privacy design. Three layers must hold:
   than passive non-pickup, worse in thin-population regimes. Default to the
   plateau-cap; reserve the declining tail for if cap-evasion proves live, gated on
   population so it cannot bite during thin coverage.
+The landed formula is [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
+§4: `work_P(E) = Σ_s scarcity(s,E) · serve_credit_bit(P,s,E)` with the
+three-channel `scarcity`, and `reward_P = budget · Curve(work_P) / Σ Curve(work)`
+(§4.0, cap in the numerator, market-only denominator).
 
 ### What this dissolves (the convergence)
 
-Work-based reward is **publicly computable**, which collapses the two hardest
-confidential-staking threads:
+Work-based reward is **publicly computable**, so privacy stops being "hide the
+amounts" and becomes entirely **firewall the identity**. The confidential-yield
+apparatus that needed a hidden per-staker amount — cleartext tiers on the claim
+wire, confidential entitlement and its range proofs, a portfolio that
+Bayesian-signalled a tier — has no reason to exist and was deleted with the
+claim era. What the existential soundness question became is **retention-proof
+unforgeability**: anyone recomputes `P`'s payout from public archival history,
+so inflation would be *loud* (detectable) rather than *silent*. Its feasibility
+record is [`design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md).
+Reward is publicly computable **globally, not locally** — a `P`'s payout needs
+the public aggregate `Σwork` via the supply servo — and *public, not local* is
+what kills silent inflation.
 
-- **F0 (cleartext tier reveal) dissolves at the source.** The tier was on the claim
-  wire only because reward `= tier_num · amount` and the verifier needed `tier_num`
-  to compute it. Reward `= f(archival work)` does not need the tier, so the
-  cohort-collapse driver leaves the wire.
-- **The portfolio tier oracle (F-ARCHIVAL coupling #2) dissolves too — the third
-  convergence.** Because the deep-history commitment is now a **per-shard bond**
-  rather than a staker tier (keystone above), there is no tier for a portfolio to
-  Bayesian-signal. This is the convergence that is *earned*, not free: it holds
-  **because per-shard bonds replace the staker tier**, so both tier levers (claim
-  wire + portfolio) close together.
-- **F-INFLATION 8a (confidential-reward soundness) transforms into a *loud* 8c.**
-  With reward computed over public quantities there is no hidden amount in the
-  entitlement: no `M·amount`, no bounded-remainder, no confidential reward range
-  proof.   Anyone recomputes P's payout from public archival history; reward emission is
-  "I am P (bond record), here is publicly-computed work, membership-only backing
-  proves control, mint to stealth output; epoch *E* deduped on bond state." The only
-  ZK left on the reward path is **membership-only control + stealth payout**. The existential
-  soundness item does not vanish — it **moves to retention-proof unforgeability (the
-  new 8c)** — but it moves from *silent* (confidential, undetectable) to *loud*
-  (public, recomputable, detectable). Turning silent inflation into detectable
-  inflation is the single best thing that can happen to a confidential system's
-  soundness posture.
+### Gate-list — closure record
 
-Privacy stops being "hide the amounts" and becomes entirely **firewall the
-identity** — simpler to make sound and arguably more robust. **Reward is publicly
-computable globally, not locally** (a P's payout needs the public aggregate
-`Σwork` via the supply servo, gate 1) — but *public, not local,* is what kills
-silent inflation, so 8a-dissolution survives the servo.
+Seven gates stood between this rebasing and consensus-real. Each is closed;
+the ruling lives where it was made:
 
-### Gate-list — what must be blessed before this is consensus-real
-
-This rebasing is bigger than a curve; it changes *what staking is* (from
-capital-bonded yield to **work-paid service collateralized by per-shard capital
-bonds**). The near-term pin is the curve shape (banded plateau-cap,
-retention-based, scarcity-weighted); the following must be resolved by simulation
-and a fresh soundness pass before it ships:
-
-1. **Σwork supply-safety servo (does not come free — but is differencing-clean).**
-   Today `ρ_e = budget_e/band_sum_e` guarantees `Σreward ≤ budget_e` *by
-   construction*; a per-staker plateau-cap alone bounds only per-staker *work credit*,
-   not payout, unless composed correctly with the servo. The genesis-pinned composition
-   is **`reward_P = budget · Curve(work_P) / Σ_{P'∈Market} Curve(work_{P'})`** — cap in
-   the numerator, market-only denominator (`Σwork` = sum of capped work; foundation
-   excluded per two-count table). This distributes the **full** `budget` when any market
-   archiver has positive credited work; a capped whale’s foregone share flows to others.
-   (Rejected: `Curve(budget·work/Σwork)` — strands budget when caps bind.) This concedes the
-   earlier "locally computable" claim — a P's reward needs the public aggregate. But
-   **the §14 differencing leak does *not* transfer:** `band_sum` leaked because it
-   aggregated *confidential* amounts, so its deltas exposed hidden components.
-   `Σwork` is a sum of **continuously public** numbers (challenge-responses are
-   on-chain events, replication is a public count), so differencing it reveals
-   nothing not already readable off P's public archival record. The servo is
-   therefore supply-safe **and** differencing-clean — strictly better than `band_sum`
-   on the privacy axis; the side-channel dies with the confidentiality of its inputs.
-2. **Retention-proof soundness + state-cost (8a → loud 8c).** Reward is loud only if
-   every node recomputes every P's challenge-pass record and per-shard replication —
-   i.e. **per-P, per-shard retention state in consensus**, validated each claim. The
-   existential soundness item moves from "hard *silent* ZK proof" to
-   "**retention-proof unforgeability (8c)** + consensus state-growth/recompute cost,"
-   and from undetectable to detectable. For a chain whose archival exists *because*
-   tree state outgrows retention, putting the archival *reward accounting* into
-   replicated state is the irony to weigh — but loud-and-bounded beats
-   silent-and-existential.
-3. **`R_market` derived ledger count (gate 3 dissolved — no `ν`).** Scarcity
-   pricing drives the whole market reward, so a credible per-shard distinct-**market**-
-   holder count is load-bearing. Under form **C**, per-`P` `Curve` grouping makes
-   holdings **consensus-public**; the prior `ν = H(P_key, shard)` primitive promised
-   hidden-`P` counting but is **incompatible** with the adopted reward shape (same
-   dissolution as `N_arch`). **`market_R(s,E)`** is the count of market archivers with
-   `serve_credit_bit ∧ good_through` at epoch close — derived from the serve-credit ledger keyed
-   by public `P_id`. Privacy that remains is **P ↔ principal** (gate 6), not
-   P-holdings hiding. See [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
-   §2–§3.
-4. **Per-shard retention bond replacing tier (the keystone — collapses old G-D/G-E).**
-   Deep-history retention needs a commitment to *future* retention; demonstrated
-   longevity (a past signal) cannot provide it. A **slashable per-shard retention
-   bond** does, and simultaneously kills the staker tier (→ F0 + portfolio oracle
-   both close) and makes Sybil-splitting worthless (**total bond = shards × rate,
-   independent of pseudonym count**), flipping the scarce input back to
-   expensive-countable capital. It de-overloads the lock (small eligibility lock vs.
-   scaling per-shard bonds = two separate parameters). The real residual is
-   **bond-rate calibration** — high enough for Sybil-deterrence + deep-history
-   guarantee, low enough not to exclude capital-poor-storage-rich archivers — a
-   sim-and-design bind, not a knob set by eye. (This supersedes the earlier
-   tier-decision / longevity-pricing framing of this gate.)
-5. **Bootstrap shape — permanent foundation floor, market overlapped.**
-   **Supersedes** the earlier "foundation sheds as staker coverage is
-   demonstrated" bootstrap model. Foundation seed archivers hold a
-   **permanent, complete-tree, reward-invisible** floor (§*Service
-   promise*): bootstrap, fee-era backstop, seeding source, and
-   durability anchor in one mechanism — **no `decay_pop` withdrawal.**
-   Decentralization is market redundancy **above** the floor, not
-   foundation withdrawal. The bootstrap **subsidy** shape remains
-   **privacy-decided**: flat per-active-bonded-**market**-shard (not
-   amount-scaled — resurrects F0); foundation-overlapped; sunset on the
-   **subsidy**, not on the floor.
-6. **`P` backing-and-firewall design (unbuilt; transfer-shaped — §2.4).**
-   Off-chain backing presentation + first reward emission on-chain anchor;
-   membership-only control on emission; **reward dedup on bond-record epoch bitmap**
-   (no `N_arch` published tag). Bonds carry Sybil-resistance; `P` needs
-   **unlinkability + firewall**, not uniqueness. Bond-funding hygiene (principal→`P`
-   lump vs earnings ramp) is a residual correlation channel.
-7. **Economic simulation re-priced (gate 7 — foundational; couples to §2.4 (iii)).**
-   If admission principal goes soft or away, **bond-locked supply is the sole sink** —
-   re-price macro `stake_ratio` / circulating-supply at the same severity as
-   per-reward proof aggregate. Bond-rate calibration (item 4) is a sim output. Until
-   the sim blesses the re-pricing, the rebasing is not consensus-real. The
-   sim is specified (spec-first, pre-code) in
-   [`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md); iteration 1 isolates
-   **coverage dynamics** (does `1/R` + plateau-cap + per-shard bonds actually produce
-   "every shard covered, spread, none-holds-everything"?), with the other gates layered as
-   later iterations.
-
+1. **`Σwork` supply-safety servo** — `reward_P = budget · Curve(work_P) / Σ_{P'∈Market} Curve(work_{P'})`,
+   cap in the numerator, market-only denominator, full budget distributed;
+   differencing-clean because every input is continuously public.
+   [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §4.0 (E-1).
+2. **Retention-proof soundness (loud 8c)** —
+   [`design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md`](design/ARCHIVAL_RETENTION_PROOF_8C_FEASIBILITY.md);
+   the test is [`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md).
+3. **`R_market` derived ledger count (no `ν`)** —
+   [`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2–§3.
+4. **Per-shard retention bond replacing the tier (the keystone)** —
+   [`design/ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md); bond-rate
+   calibration is a sim output ([`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)).
+5. **Bootstrap shape — permanent foundation floor, market overlapped** —
+   §*Service promise* here; identity set in
+   [`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md).
+   The bootstrap **subsidy** is flat per-active-bonded-market-shard and sunsets;
+   the floor never does.
+6. **`P` backing-and-firewall design** — built:
+   [`design/ARCHIVAL_FIREWALL_GATE6.md`](design/ARCHIVAL_FIREWALL_GATE6.md),
+   [`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md).
+7. **Economic simulation re-priced** — sealed 2026-06-16 with zero parameter
+   change ([`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §L18);
+   gate 7 closed bonds-only (`ARCHIVAL_TIMING_CONSTANTS.md` / REL §10.2).
 **Honest residual.** An opted-in staker has a **long-lived public pseudonymous
 profile** — shard-set, longevity, performance — *by function*, and the count of
 pseudonyms approximates the count of active stakes (an aggregate, like `band_sum`,
@@ -1161,20 +872,7 @@ they re-merge into one profile — the firewall hygiene must hold *per pseudonym
 pseudonym-uniqueness, carry Sybil-resistance, running multiple Ps is not itself an
 attack — it buys no bond savings — so the residual is a *privacy* hygiene concern,
 not a *security* one.)
-
-**Scope note (relation to existing sections).** This rebasing **replaces** the
-two-stream confidential-yield subsystem rather than extending it: the
-reserve-DLEQ entitlement, bounded-remainder range proof, and amount-scaled
-`tier_num · amount` reward (`V3_STAKER_ARCHIVAL.md`; `rust/shekyl-staking/`
-`entitlement.rs` / `tiers.rs` / `rewards.rs`) are the *capital-bonded-yield*
-machinery and are obsoleted by it, not adapted. Pre-genesis that is the right
-trade — the audit-surface deletion is large and is exactly the convergence's
-benefit — but it is a **replacement**, and `V3_STAKER_ARCHIVAL.md` is **not**
-edited to match until the tier decision (gate 4) and the supply normalizer
-(gate 1) are settled, since that doc is the subsystem this would replace.
-
 ---
-
 ## Funding: where do archival rewards come from
 
 Three candidate paths, each with tradeoffs:
@@ -1207,117 +905,34 @@ relationship between archival demand and burn modulation, the steady-state
 distribution under various staker populations — all of these are the kind
 of questions Rick's existing economic-simulation work on the V3 economy
 would handle naturally with a parameter sweep.
+The landed budget — `budget(E)` and its three reward channels — is
+[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §4's; the
+three paths above are the design rationale that produced it.
 
 ---
 
 ## Bootstrap dynamics: archival load matches network maturity
 
-Important property worth being explicit about: **the archival problem
-doesn't exist at chain launch.** At block 45, the chain has 45 blocks of
-state; full retention is trivial; no archival mechanism is needed.
-
-The archival load grows with the chain. Approximately:
-
-- **Months 0–6 post-launch (V3.0 era)**: chain is small, full retention
-  is cheap for anyone. Foundation nodes carry whatever archival the
-  network needs. The staker archival mechanism *exists in design* but
-  has not yet shipped (V3.0 ships without it; the simulation work that
-  gates V3.x ship is in flight). This is fine — the consensus-bond
-  yield is the dominant return.
-
-- **Months 6–18 post-launch (V3.x era, mechanism shipped)**: chain has
-  grown enough that pruning becomes attractive for some operators.
-  Foundation nodes stay full-archival. Active stakers start finding
-  meaningful rare shards as pruning consumers shed deep history. The
-  archival reward stream becomes meaningful. `ArchivalEngine` (Stage 5)
-  has shipped in a V3.x dot-release; stakers running V3.x clients
-  archive shards as part of staking.
-
-- **Months 18+ post-launch**: archival is a real economic activity.
-  Foundation nodes can selectively shed shards that are well-replicated
-  by the staker market, becoming more of a coverage-floor than primary-
-  archive. Staker archival is load-bearing.
-
-This means the V3.x dot-release that ships the mechanism doesn't have
-to be load-bearing immediately. The economic structure ships in place;
-the load arrives when the chain is large enough to need it. No "the
-mechanism has to work at launch" pressure — the V3.0 → V3.x window is
-long enough for the mechanism to settle before it carries real weight.
-
-It also means the bootstrap path naturally avoids the cold-start
-allocation problem: when the first staker joins, *the network doesn't
-need archival yet*, so it's fine that their allocation choices don't
-cover history uniformly. By the time archival load matters, the staker
-population is large enough for the market to converge to good coverage.
-
-This phasing aligns with the V3 economy's existing late-cycle dynamics —
-early-cycle stakers are mostly capital-anchoring (consensus bond
-dominant), late-cycle stakers shift toward service provision (archival
-reward dominant) as chain maturity demands it.
+**The archival problem does not exist at chain launch, and the design does not
+need it to.** Nothing is scarce until the first shard is discarded, which
+happens at the boundary into epoch 2 at the earliest (`PDM-Q2`, re-ruled
+2026-09-22: in epochs 0 and 1 nothing discards — about four weeks at genesis
+parameters, not the ~195 days the 2026-09-18 `W` gave — and later still on a
+chain too quiet to close a shard in epoch 0). Until then every daemon holds
+every shard, and the economics run in a **launch free regime** — bonds are
+posted on shards everyone still has, so that scarcity arrives with holders
+already committed rather than with the Foundation `CompleteTree` as the first
+and only holder of everything (`PDM-Q6` item 3; the in-window reward weight is
+routed to [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)).
+Every later shard has the same window: closed and bondable while universally
+held, scarce `≥ W` blocks later. So the mechanism ships at genesis and carries
+weight only when the chain is large enough to need it — no "it has to work at
+launch" pressure, and no cold-start allocation problem, because by the time
+coverage matters the staker population has had two epochs to form, and every
+later shard gives it a full freeze epoch more. The
+Foundation floor stays complete throughout (§*Service promise*); it never sheds.
 
 ---
-
-## V3 architectural requirements
-
-This mechanism ships in a V3.x dot-release; V3.0 ships without it
-active. V3.0's design choices must be aligned with the mechanism so the
-V3.x ship is purely additive — no refactor of V3.0 surfaces required
-when `ArchivalEngine` lands. Specifically:
-
-**1. Staker reward distribution architecture supports layering an
-archival reward stream.** The `staker_pool_share=25%` and
-`staker_emission_share=15%` define the principal yield in V3.0. The
-V3.x archival reward stream layers alongside, without modifying
-principal payout. **Status: enforced by Stage 3 / Stage 5 actor
-separation.** `StakeEngine` (Stage 3, principal yield) and
-`ArchivalEngine` (Stage 5, archival yield) produce independent event
-streams (`StakeEvent`, `ArchivalEvent`) that `LedgerEngine` merges. The
-disbursement code paths accommodate two reward types by construction;
-adding the second stream in V3.x is a new actor + a new event variant,
-not a modification of existing disbursement logic.
-
-**2. Tier system's lock-duration semantics remain consistent with using
-lock duration as an archival commitment indicator.** Lock duration is
-already a governance signal; the V3.x archival mechanism adds "archival
-commitment depth" as a second meaning. **Status: already aligned.**
-Lock duration is structural not nominal; nothing prevents adding a
-second interpretation. The Stage 3 `StakeEngine` design pins
-lock-duration semantics; the Stage 5 `ArchivalEngine` consumes those
-semantics via the `is_active_staker(entity_id) -> bool` cross-actor
-query plus a (TBD-by-Stage-5-design) `stake_tier(entity_id) -> Tier`
-query for tier-weighted reward formulas.
-
-**3. Component 3 governance burn redirect is flexible enough to fund a
-new reward stream.** The burn-rate-to-archival path requires the
-Component 3 mechanism to permit redirecting burn flow to a non-emission
-target. **Status: needs confirmation against the Component 3 spec
-before V3.x ship.** Tracked as a Stage 5 design-closure prerequisite;
-if the existing Component 3 spec does not permit non-emission redirect
-targets, the spec extension is itself a Stage 5 deliverable rather
-than a V3.0 surface change.
-
-**4. Daemon RPC surface permits "query historical state from staker
-peer" alongside "query from foundation node."** Wallets need to be able
-to route archival queries to either source. **Status: enforced by
-Stage 4 RPC boundary refinements.** The multi-peer archival routing
-client surface is drafted as part of the V3.0 RPC boundary refinements
-(per `docs/FOLLOWUPS.md` V3.0 entry); activation pairs with Stage 5
-shipping in V3.x. The `assemble_tree_path_for_output` RPC routing is
-designed against a multi-source model from the start, not retrofitted.
-
-**5. The wallet's daemon-selection logic does not foreclose multi-peer
-archival.** V3.0's daemon-selection logic supports multi-peer routing
-for historical-reference queries (foundation `--no-prune` archival as
-floor; staker peers as the primary path once `ArchivalEngine` ships).
-**Status: enforced by Stage 4 `DaemonEngine` migration** — the actor's
-public message protocol exposes single-daemon and multi-peer routing
-as first-class operations rather than retrofitting multi-peer onto a
-single-daemon assumption. The V3.x ship of `ArchivalEngine` activates
-the multi-peer path; V3.0 ships with the surface present and tested
-against mock multi-source archival oracles.
-
----
-
 ## What this is not
 
 Worth being explicit about what this design is not, because it's
@@ -1348,199 +963,94 @@ which removes the conflict.
 "archival service" with stakers as employees. The mechanism is
 permissionless: any staker can opt in, prices emerge from the market,
 foundation nodes are the floor not the primary.
-
-The structural difference from prior art: **decoupling consensus-securing
-work from useful work, paying them from related but distinct streams.**
-This is the move I haven't seen in any other PoS or PoW system. It's
-either-or in prior art (PoW conflates them, PoS has no useful work).
-Decoupling is the unconventional answer.
-
----
-
-## Open design questions
-
-These gate the V3.x ship dot-version. Each closes against simulation
-evidence (per *Simulation as separate project* below) or against design
-review during Stage 5.
-
-**Shard granularity.** Per-block (too small, challenge overhead). Per-
-epoch ~10,000 blocks (probably right). Needs modeling against expected
-chain growth and FCMP++ state size per block.
-
-**Query routing protocol.** DHT-style on-chain holder registry (each
-shard's holders publish presence). Gossip protocol (BitTorrent-like).
-Hybrid (on-chain registry of opted-in stakers, gossip for actual
-discovery). Each has tradeoffs — DHT is deterministic but adds protocol
-surface; gossip is more BitTorrent-faithful but less guaranteed.
-
-**Challenge-response interval.** Per-block (excessive). Per-epoch
-matched to claim windows (probably right). Per-claim-window for stakers
-making active claims; longer interval for purely-passive archival.
-**Consensus pin (2026-06-07):** `MAX_CLAIM_AGE_W` bounds unclaimable
-epochs and prunes reward-accounting state (`ClaimedEpochSet`, retention
-rows, `Σwork` history) — see
-[`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §2.4;
-[`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §6.6. Trades
-state growth against lapse-forfeiture economics (not decorrelation — F1 T-A1).
-
-**Price curve shape.** Naive 1/R (diminishing returns, may give weak
-redundancy). 1/R² (sharper redundancy preference). Threshold function
-(R=1→2 transition heavily rewarded, R=N→N+1 above some N rewarded
-linearly). Needs simulation. The economic-simulation work already done
-for the V3 economy is the right tool.
-
-**Quick-pick portfolio composition.** What does "balanced portfolio"
-mean concretely? Even mix across shard ages? Weighted by current
-under-coverage? Tied to staker tier (tier-3 quick-pick gets deep-
-history, tier-1 gets recent)? Needs design.
-
-**Unstake-cascade dynamics.** When a staker unstakes, their shards
-shift to the market's "available" pool. The lock-tier system means
-unstaking happens on a schedule, but mass unstaking events (price
-crash, foundation policy change) could compress this. Simulation would
-clarify the failure modes.
-
-**Privacy-of-queries detailed protocol.** Mandatory Tor/I2P is the V3
-ship default; cover-traffic protocols are post-V3-ship. The exact
-integration with existing `ANONYMITY_NETWORKS.md` infrastructure needs
-design.
-
-**Foundation-node integration.** Foundation seed archivers are
-genesis-enumerated complete-tree holders (§*Service promise*). They
-serve publicly auditable complete archives, participate in challenges,
-and are **fully excluded from market reward math**. The market self-
-organizes on `market_R`; `durability_count` observability reports how
-much redundancy exists above the foundation floor. No "signal shards X,Y,Z
-so the market de-prioritizes" protocol is required — the economic split
-already prices as if the foundation is not there.
+The structural difference from prior art: **staking is archiving** — the
+staking reward is payment for a service the chain itself consumes, bonded by
+slashable per-shard collateral, with consensus left entirely to proof of work.
+Prior art is either-or (PoW conflates consensus and work; PoS has no useful
+work); paying stakers only for archival, and for nothing else, is the
+unconventional answer.
 
 ---
 
-## Simulation as separate project
+## Formerly open design questions — where each closed
 
-This design must be validated via simulation before the V3.x dot-
-release that ships `ArchivalEngine`. Treat the simulation as a separate
-project, parallel to (not blocking) the V3.0 ship. The simulation
-output is the gating evidence for closing the open design questions
-above.
+These once gated the ship. Each is now ruled, and the ruling lives with its
+owner:
 
-**Scope of simulation:**
+- **Shard granularity** → byte-bounded `tx_id` ranges closing at `SHARD_BYTES`
+  (`PDM-Q-F32`).
+- **Query routing protocol** → no registry, no gossip, no wallet-to-wallet: the
+  bond record is the advertisement, the daemon is the client, holders are drawn
+  uniformly (`PDM-Q9`, `EU-D1`, `SF-D10`;
+  [`design/ARCHIVAL_SERVING_ROUTE.md`](design/ARCHIVAL_SERVING_ROUTE.md)).
+- **Challenge-response interval** → three derived challenges per pair per
+  epoch, 2-of-3 ([`design/ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+  §3); `MAX_CLAIM_AGE_W` bounds unclaimable epochs
+  ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §5).
+- **Price curve shape** → the three-channel scarcity stack under a banded
+  plateau-cap ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) §4).
+- **Quick-pick portfolio composition** → the landed selection surface is
+  [`design/ARCHIVAL_SHARD_SELECTION_LIST.md`](design/ARCHIVAL_SHARD_SELECTION_LIST.md);
+  tier-keyed composition is gone with the tiers.
+- **Unstake-cascade dynamics** → the age-stratified bond-mobility
+  reconciliation, sealed ([`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)
+  §L18); release cooldown and slashable-through-cooldown in
+  [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) P2B-7.
+- **Privacy-of-queries protocol** → Tor v3 rendezvous both ways, daemon as the
+  client (`SF-D2`, `SF-D3`; §*Privacy* above).
+- **Foundation-node integration** →
+  [`design/FOUNDATION_GENESIS_IDENTITY_SET.md`](design/FOUNDATION_GENESIS_IDENTITY_SET.md)
+  (§*Service promise* above for the economics).
 
-- Parameter sweep on the price curve shape (1/R vs 1/R² vs threshold
-  variants). Measure equilibrium replication factor distributions across
-  shard rarity classes.
-- Stress tests on staker population dynamics: cold-start (few stakers),
-  steady-state (large stable population), unstake cascade (mass exit
-  event), tier-distribution skew (mostly tier-1 vs mostly tier-3).
-- Economic stress tests: low query demand (reward signal weak), high
-  query demand (reward signal strong), oscillating demand (does the
-  market respond fast enough?).
-- Adversarial scenarios: lazy-storage attackers, sybil attackers
-  (multiple stake identities chasing the same shard), targeted-
-  censorship attackers.
-- Cold-start/late-cycle phase analysis: how does the mechanism behave
-  through the months-0-to-18 maturity arc?
+## Simulation
 
-**Inputs:** good (well-distributed stakers, normal demand), bad
-(over-clustering on hot shards, under-coverage of cold tail), ugly
-(mass unstaking events, demand spikes, staker collusion).
-
-**Outputs:** coverage maps (which shards have what replication),
-reward distributions (who earns what under what conditions), failure
-mode characterization (what breaks first as parameters degrade).
-
-The economic-simulation infrastructure already built for the V3 economy
-is the right starting point. The shape of the simulation is similar
-(parameter sweep, scenario suite, heatmap visualization), just over a
-different state space (shard coverage rather than supply curves).
-
-The simulation project is a useful artifact independent of the V3.x
-ship dot-version: it produces public documentation of how the mechanism
-would behave, which can inform the community discussion that should
-precede the V3.x activation.
+The simulation this design was validated by is built
+(`rust/shekyl-staking-sim`) and its record is
+[`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md): coverage
+dynamics, bond mobility, cold-start, the swan scenarios, and the R-3
+age-stratified reconciliation that gated the seal — **sealed 2026-06-16 with
+zero parameter change** (§L18). The sim is the authority on the numbers this
+document argues about; where the two differ, the sim wins.
 
 ---
 
 ## Conclusion
 
-This design is the answer to the long-running "what real work do
-stakers do?" question. The mechanism is:
+This design is the answer to the long-running "what real work do stakers do?"
+question:
 
-1. **Stakers archive the chain** as part of the staking protocol, not as
-   a separate service.
-2. **Shards are priced by scarcity**, not by demand. Rare shards pay
-   more.
-3. **Quick-pick allocation** for passive stakers; active stakers play
-   the rare-shard market.
-4. **Challenge-response verification**, no human judgment.
-5. **Decoupled rewards**: archival yield is additive to principal yield,
-   never slashes principal.
-6. **Tier system handles depth**: tier-3 long-lock stakers naturally
-   take critical-history shards, tier-1 short-lock stakers take hot-set.
-7. **Privacy preserved** via mandatory Tor/I2P routing on archival
-   queries.
-8. **Funding via Component 3 burn redirect**, leveraging existing
-   adaptive economic mechanism.
-9. **Bootstrap-aligned**: archival load grows with chain maturity, so
-   the V3.x ship dot-release does not need to be immediately load-
-   bearing.
-10. **Actor-architecture aligned**: `ArchivalEngine` is a Stage 5 actor,
-    sibling to `StakeEngine` (not a child), enforcing slashing-domain
-    integrity, failure isolation, and the Hayekian shard-market
-    property at the architectural level.
-
-The structural innovation: **decoupling consensus-securing work from
-useful work**, paying them from related but distinct streams, letting
-stakers self-select. This pattern doesn't appear in prior PoS, PoW, or
-storage-chain designs.
-
-> **Update (F-ARCHIVAL resolution — see *Pay-for-service rebasing*).** Following
-> *Problem 1* to its end shows there is no consensus-securing *service* to pay for
-> (PoW does consensus; the principal bonds nothing slashable). The steady-state
-> innovation is sharper and simpler than "decouple two streams": **staking is the
-> opt-in to archival because staking = archiving**, one work-paid reward, principal
-> as a small eligibility gate, the deep-history commitment and Sybil cost carried by
-> **per-shard retention bonds** (the keystone — capital re-based to slashable
-> service-collateral), privacy via a firewalled pseudonym. Points 5 (additive
-> two-stream rewards) and 6 (tier-sorted depth) above are superseded by the
-> single-stream, tier-neutral, **per-shard-bonded** model, pending the gate-list.
-
-V3.0 ships with the architectural surface in place (Stage 4 RPC
-boundary refinements, multi-peer archival routing client surface,
-`StakeEngine` cross-actor query exposed) but with the mechanism not
-yet active. V3.x ships `ArchivalEngine` itself (Stage 5), gated on
-simulation evidence that closes the open design questions. The V3.x
-activation is purely additive — no consensus-layer hard fork required,
-no V3.0 surface refactor required, no migration code required.
-Simulation work proceeds as a separate project; its conclusions gate
-the dot-version, not the existence of the mechanism.
+1. **Staking is archiving.** If you stake, you hold and serve shards of the
+   archival good; there is no other staking.
+2. **Shards are priced by scarcity**, not by demand — rare shards pay more, and
+   picking one up dilutes its price.
+3. **One work-paid reward.** Payment for proven retention; the principal is a
+   small eligibility gate, never slashed; the service is bonded by slashable
+   per-shard collateral, which is also the Sybil cost.
+4. **Verification is an ordinary read**, derived from chain state, no human
+   judgment.
+5. **Privacy is a firewalled pseudonym** — `P` is public by function; the
+   `P` ↔ principal edge is what the crypto, network, timing, output, and
+   bond-funding layers protect.
+6. **Every daemon prunes uniformly and holds no serving state**; archivers hold
+   bodies in the wallet; the Foundation `CompleteTree` is a permanent,
+   reward-invisible floor.
+7. **Bootstrap-aligned**: nothing is scarce until the boundary into epoch 2,
+   so the mechanism ships at genesis and carries weight when the chain needs it.
 
 ---
 
 ## References and cross-cutting concerns
 
-- `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture:
-  actor model with staged migration from composition* (canonical pin
-  of `ArchivalEngine` as Stage 5 sibling actor; the rescoping of this
-  document from V4 to V3 ship)
+- Owning contracts for every mechanism named here: the table at the top.
+- `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture: actor
+  model with staged migration from composition* (the rescoping of this document
+  from V4 to V3 ship); *2026-09-17 — Two stores by obligation* (the wallet holds
+  serving state, the daemon holds only archival consensus state).
 - `docs/V3_SHARD_VISUALIZATION.md` — companion shard-surface design
-  (deterministic data art over shard content; shipped via the
-  `shekyl-shard-visual` library crate; companion to this archival
-  mechanism)
-- `docs/FOLLOWUPS.md` — V3.0 RPC boundary refinements (multi-peer
-  archival routing client surface), V3.1 sibling-resolution entry for
-  `assemble_tree_path_for_output` (FCMP++ historical-reference cutover
-  via Stage 5 `ArchivalEngine`), V3.x Stage 5 `ArchivalEngine` native
-  build (the no-tradeability enforcement-point inventory closed
-  2026-09-04 — codified in `docs/V3_SHARD_VISUALIZATION.md`, *Not
-  tradeable*)
-- `docs/DESIGN_CONCEPTS.md` — V3 economic structure
-  (`staker_pool_share`, `staker_emission_share`, lock tiers,
-  Component 3 governance)
-- `docs/ANONYMITY_NETWORKS.md` — existing Tor/I2P infrastructure
-- `docs/PUBLIC_NARRATIVE_FAQ.md` — user/partner archival promise (2026-06)
-- `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — legal disclosure draft
-- `docs/SEED_NODE_DEPLOYMENT.md` — foundation `--no-prune` archival
-  policy
-- `docs/design/REWARD_EMISSION_LEG.md` — archival reward emission
-  (lock-tier disbursement is deleted)
+  (deterministic data art over shard content; `shekyl-shard-visual`; *Not
+  tradeable*).
+- `docs/ANONYMITY_NETWORKS.md` — Tor infrastructure.
+- `docs/PUBLIC_NARRATIVE_FAQ.md` — user/partner archival promise.
+- `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — legal disclosure draft.
+- `docs/completed/LEGACY_CLAIM_ERA_RETIREMENT.md` — the claim-era staking this
+  model replaced, and its deletion.

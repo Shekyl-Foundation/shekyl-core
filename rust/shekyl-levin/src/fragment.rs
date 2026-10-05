@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Dummy ("noise") messages and noise-shaped fragmentation. Used by the
-//! white-noise feature over i2p/Tor: every emitted message is exactly
+//! white-noise feature over Tor: every emitted message is exactly
 //! `noise_size` bytes so real traffic is indistinguishable from dummies.
 //! `epee::levin::make_noise_notify` / `make_fragmented_notify` forward here.
 

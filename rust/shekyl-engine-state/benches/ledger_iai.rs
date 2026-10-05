@@ -57,9 +57,9 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
 
     TransferDetails {
         tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-        internal_output_index: seed & 0xff,
-        global_output_index: seed,
-        block_height: height,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(seed & 0xff),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(seed),
+        block_height: shekyl_types::BlockHeight::from_raw(height),
         key,
         key_offset: Scalar::ZERO,
         commitment: Commitment::new(Scalar::ONE, 1_000 + seed),
@@ -70,8 +70,9 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spending_tx_hash: None,
         source_ciphertext: None,
         output_handle: None,
-        eligible_height: height + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
         frozen: false,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
@@ -87,12 +88,16 @@ fn build_ledger(n: usize) -> WalletLedger {
     // share the same tip-pinning requirement; the deserialize bench
     // below would otherwise panic out of Valgrind with the same
     // `tip-height-not-below-transfer` shape.
-    let tip_height = transfers.iter().map(|t| t.block_height).max().unwrap_or(0);
+    let tip_height = transfers
+        .iter()
+        .map(|t| t.block_height.to_raw())
+        .max()
+        .unwrap_or(0);
     w.ledger = LedgerBlock {
         block_version: w.ledger.block_version,
         transfers,
         tip: BlockchainTip {
-            synced_height: tip_height,
+            synced_height: shekyl_types::BlockHeight::from_raw(tip_height),
             tip_hash: Some([0xAB; 32]),
         },
         reorg_blocks: w.ledger.reorg_blocks.clone(),

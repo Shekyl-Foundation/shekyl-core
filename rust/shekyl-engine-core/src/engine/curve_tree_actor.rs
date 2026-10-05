@@ -82,6 +82,7 @@ use shekyl_curve_tree::{
 };
 
 use crate::scan::OwnedTxLeaves;
+use shekyl_types::CurveTreeRoot;
 
 // ---------------------------------------------------------------------------
 // Actor
@@ -293,7 +294,7 @@ pub(crate) struct VerifyRoot {
     /// The height whose reconstructed root to check (must be `<=` ingested tip).
     pub height: BlockHeight,
     /// The consensus header-committed root the reconstruction must match.
-    pub expected_root: [u8; 32],
+    pub expected_root: CurveTreeRoot,
 }
 
 /// Actor message reading [`CurveTreeClient::root_and_depth_at`]: the
@@ -314,8 +315,10 @@ pub(crate) struct RootAndDepthAt {
 /// Actor message assembling every membership path for one transaction in a
 /// single handler invocation (CT-5c T3 / Q2).
 ///
-/// The handler loops [`CurveTreeClient::assemble_path`] over `inputs` against
-/// the one shared `reference`. Because the actor processes messages serially,
+/// The handler makes one [`CurveTreeClient::assemble_paths`] call over `inputs`
+/// against the one shared `reference`, which reconstructs the drained leaves
+/// and their layers **once for the batch** instead of once per input
+/// (`CT-6` increment 3, closeout row (a)). Because the actor processes messages serially,
 /// no [`IngestBlock`] / [`RollbackToFork`] interleaves mid-assembly — the
 /// read-path snapshot atomicity (E1) is the handler invocation itself, not a
 /// discipline the caller must uphold. One `reference` for the whole batch makes
@@ -347,7 +350,7 @@ impl Message<IngestBlock> for CurveTreeActor {
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
-                leaf_hash_blob: tx.leaf_hash_blob.as_deref(),
+                leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })
             .collect();
@@ -466,7 +469,9 @@ impl Message<RootAndDepthAt> for CurveTreeActor {
         msg: RootAndDepthAt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client.root_and_depth_at(msg.height)
+        self.client
+            .root_and_depth_at(msg.height)
+            .map(|(root, depth)| (root.to_bytes(), depth))
     }
 }
 
@@ -493,11 +498,10 @@ impl Message<AssembleTx> for CurveTreeActor {
         }
         // One handler invocation = one snapshot: every path is assembled
         // against the same `reference` with no ingest/rollback interleave (E1).
-        let mut paths = Vec::with_capacity(msg.inputs.len());
-        for input in &msg.inputs {
-            paths.push(self.client.assemble_path(input, &msg.reference)?);
-        }
-        Ok(paths)
+        // `assemble_paths` reconstructs the tree once for the batch rather than
+        // once per input (`CT-6` increment 3), so the shared snapshot is now a
+        // property of the values as well as of the `reference`.
+        self.client.assemble_paths(&msg.inputs, &msg.reference)
     }
 }
 
@@ -820,7 +824,7 @@ impl CurveTreeHandle {
     /// Read the tree's authoritative resume cursor
     /// ([`CurveTreeClient::ingested_tip_height`]): the last ingested height, or
     /// `None` when fresh. The forward / backfill driver calls this every
-    /// iteration to compute its next height (`tip + 1`, `BlockHeight(0)` when
+    /// iteration to compute its next height (`tip + 1`, `BlockHeight::from_raw(0)` when
     /// `None`) instead of holding a local frontier (D2). On a stopped actor it
     /// returns [`CurveTreeHandleError::Unavailable`]; the read itself never
     /// produces [`CurveTreeHandleError::Client`].
@@ -882,7 +886,7 @@ impl CurveTreeHandle {
     pub(crate) async fn verify_root(
         &self,
         height: BlockHeight,
-        expected_root: [u8; 32],
+        expected_root: CurveTreeRoot,
     ) -> Result<(), CurveTreeHandleError> {
         self.actor_ref()
             .ask(VerifyRoot {
@@ -1045,13 +1049,13 @@ mod tests {
         // Ingest empty blocks 0..=2 → persisted cursor at height 2.
         for h in 0..=2 {
             handle
-                .ingest(BlockHeight(h), Arc::new(Vec::new()))
+                .ingest(BlockHeight::from_raw(h), Arc::new(Vec::new()))
                 .await
                 .expect("ingest empty block");
         }
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "three consecutive ingests leave the cursor at height 2"
         );
 
@@ -1085,24 +1089,24 @@ mod tests {
         // (a) resume-from-store: the persisted cursor survived the fail-stop.
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "respawn resumes from the persisted store cursor (no genesis replay)"
         );
         // (b) propagation: the clone taken before the respawn observes the
         // fresh actor through the shared cell — whole heal, not partial.
         assert_eq!(
             clone.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "the pre-respawn clone observes the respawned actor via the shared cell"
         );
         // And ingest resumes at cursor+1 through the clone.
         clone
-            .ingest(BlockHeight(3), Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(3), Arc::new(Vec::new()))
             .await
             .expect("ingest resumes at cursor+1 after respawn");
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(3)),
+            Some(BlockHeight::from_raw(3)),
             "post-respawn ingest advances the shared cursor seen by every clone"
         );
     }
@@ -1138,7 +1142,7 @@ mod tests {
     }
 
     /// Cursor-read `ask` round-trip on a fresh client returns `None` — the
-    /// `BlockHeight(0)` resume point for a from-genesis ingest (D2). This pins
+    /// `BlockHeight::from_raw(0)` resume point for a from-genesis ingest (D2). This pins
     /// the transport + reply type + collapse for [`IngestedTipHeight`]; the
     /// non-`None` (post-ingest, post-rollback) cursor behavior is proven at the
     /// client level (`ingested_tip_height_getter_tracks_cursor`) and exercised

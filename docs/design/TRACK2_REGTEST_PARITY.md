@@ -157,19 +157,22 @@ vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
 (2) and (3) edit vendored `shekyl-oxide` RPC code (protocol code, ours per rule
 10) and diverge from the stale `monero-oxide@3933664d` pin.
 
-4. **`get_curve_tree_path` returns 404 under the Rust/Axum daemon RPC.** The
-   C++ `on_get_curve_tree_*` handlers exist and are registered in the legacy
-   epee dispatch but are missing from the Axum/FFI JSON-RPC dispatch table
-   (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so the wallet's
-   curve-tree path fetch 404s when the daemon runs the default Rust RPC server.
-   Handler-side bugs also surfaced (immature outputs must be skipped, not
-   errored; branch-layer count loop is `<= tree_depth`). Surfaced 2026-06-21
-   debugging the C++ FCMP++ spend path; the exploration was reverted as
-   out-of-scope C++ debt. Both the dispatch gap and the spend-path findings the
-   Rust send-path must reproduce are tracked in
-   [`FOLLOWUPS.md`](../FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
-   endpoints missing from the FFI dispatch table" and "C++ FCMP++ wallet send
-   path incomplete".
+4. **`get_curve_tree_path` 404 under the Rust/Axum daemon RPC — CLOSED twice
+   over (records-was, 2026-06-21).** As found: the C++ `on_get_curve_tree_*`
+   handlers were registered only in the legacy epee dispatch and missing from
+   the Axum/FFI table (`core_rpc_ffi.cpp` `get_jsonrpc_table()`), so a
+   daemon-side path fetch 404'd on the default Rust RPC server; handler-side
+   bugs surfaced alongside (immature outputs to skip, not error; branch-layer
+   loop `<= tree_depth`). What happened since: the routes were registered
+   2026-06-23 (PR #174); then the path endpoint itself was **deleted**
+   2026-09-18 (`SOK-10` Q7 → A — spend-revealing under
+   `PHASE_2A_SEND_PATH.md` §3.0.1, no consumer, wrong `chunk_outputs` on any
+   chain with a transaction). The wallet assembles paths locally and makes no
+   daemon path fetch, so nothing remains to 404; `get_curve_tree_info` /
+   `get_curve_tree_checkpoint` stay registered. The dispatch-gap FOLLOWUPS row
+   this item cited is gone. The separate send-path item ("C++ FCMP++ wallet
+   send path is incomplete", `FOLLOWUPS.md`) is about the Rust send path
+   reproducing the C++ debugging findings and is unaffected by the deletion.
 
 ### In-process Rust FCMP++ spend validation (no daemon)
 

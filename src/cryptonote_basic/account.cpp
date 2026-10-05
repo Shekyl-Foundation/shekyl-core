@@ -112,8 +112,7 @@ DISABLE_VS_WARNINGS(4244 4345)
 
       // --- classical scalar secrets ----------------------------------------
       // Write through the `data` array rather than the mlocked wrapper so we
-      // don't trip -Wclass-memaccess; this matches the xor_with_key_stream
-      // access pattern above.
+      // don't trip -Wclass-memaccess.
       std::memcpy(keys.m_spend_secret_key.data, blob.spend_sk, 32);
       std::memcpy(keys.m_view_secret_key.data,  blob.view_sk,  32);
 
@@ -165,87 +164,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_master_seed_present = false;
   }
   //-----------------------------------------------------------------
-  hw::device& account_keys::get_device() const  {
-    return *m_device;
-  }
-  //-----------------------------------------------------------------
-  void account_keys::set_device( hw::device &hwdev)  {
-    m_device = &hwdev;
-    MCDEBUG("device", "account_keys::set_device device type: "<<typeid(hwdev).name());
-  }
-  //-----------------------------------------------------------------
-  static void derive_key(const crypto::chacha_key &base_key, crypto::chacha_key &key)
-  {
-    static_assert(sizeof(base_key) == sizeof(crypto::hash), "chacha key and hash should be the same size");
-    epee::mlocked<tools::scrubbed_arr<char, sizeof(base_key)+1>> data;
-    memcpy(data.data(), &base_key, sizeof(base_key));
-    data[sizeof(base_key)] = config::HASH_KEY_MEMORY;
-    crypto::generate_chacha_key(data.data(), sizeof(data), key, 1);
-  }
-  //-----------------------------------------------------------------
-  static epee::wipeable_string get_key_stream(const crypto::chacha_key &base_key, const crypto::chacha_iv &iv, size_t bytes)
-  {
-    // derive a new key
-    crypto::chacha_key key;
-    derive_key(base_key, key);
-
-    // chacha
-    epee::wipeable_string buffer0(std::string(bytes, '\0'));
-    epee::wipeable_string buffer1 = buffer0;
-    crypto::xchacha20(buffer0.data(), buffer0.size(), key, iv, buffer1.data());
-    return buffer1;
-  }
-  //-----------------------------------------------------------------
-  void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
-  {
-    // Encrypt spend_sk, view_sk, and (if present) the master seed in-place.
-    // master_seed contributes its own byte span so a wallet without one
-    // (a view-only wallet or a device wallet) doesn't shift the offsets of
-    // spend_sk / view_sk. Ordering:
-    //   spend_sk[32] || view_sk[32] || master_seed[0 or 64]
-    const size_t ms_bytes = m_master_seed_64.size();
-    epee::wipeable_string key_stream = get_key_stream(
-        key, m_encryption_iv,
-        sizeof(crypto::secret_key) * 2 + ms_bytes);
-    const char *ptr = key_stream.data();
-    for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
-      m_spend_secret_key.data[i] ^= *ptr++;
-    for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
-      m_view_secret_key.data[i] ^= *ptr++;
-    for (size_t i = 0; i < ms_bytes; ++i)
-      m_master_seed_64[i] ^= static_cast<uint8_t>(*ptr++);
-  }
-  //-----------------------------------------------------------------
-  void account_keys::encrypt(const crypto::chacha_key &key)
-  {
-    m_encryption_iv = crypto::rand<crypto::chacha_iv>();
-    xor_with_key_stream(key);
-  }
-  //-----------------------------------------------------------------
-  void account_keys::decrypt(const crypto::chacha_key &key)
-  {
-    xor_with_key_stream(key);
-    if (!m_master_seed_64.empty()) {
-      shekyl_mlock(m_master_seed_64.data(), m_master_seed_64.size());
-      shekyl_madvise_dontdump(m_master_seed_64.data(), m_master_seed_64.size());
-      m_master_seed_present = true;
-    }
-  }
-  //-----------------------------------------------------------------
-  void account_keys::encrypt_viewkey(const crypto::chacha_key &key)
-  {
-    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2);
-    const char *ptr = key_stream.data();
-    ptr += sizeof(crypto::secret_key);
-    for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
-      m_view_secret_key.data[i] ^= *ptr++;
-  }
-  //-----------------------------------------------------------------
-  void account_keys::decrypt_viewkey(const crypto::chacha_key &key)
-  {
-    encrypt_viewkey(key);
-  }
-  //-----------------------------------------------------------------
   account_base::account_base()
   {
     set_null();
@@ -265,15 +183,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     }
     m_keys = account_keys();
     m_creation_timestamp = 0;
-  }
-  //-----------------------------------------------------------------
-  void account_base::deinit()
-  {
-    try{
-      m_keys.get_device().disconnect();
-    } catch (const std::exception &e){
-      MERROR("Device disconnect exception: " << e.what());
-    }
   }
   //-----------------------------------------------------------------
   void account_base::forget_spend_key()
@@ -493,46 +402,6 @@ DISABLE_VS_WARNINGS(4244 4345)
       m_creation_timestamp = 0; // lowest value
   }
 
-  //-----------------------------------------------------------------
-  void account_base::create_from_device(const std::string &device_name)
-  {
-    hw::device &hwdev =  hw::get_device(device_name);
-    hwdev.set_name(device_name);
-    create_from_device(hwdev);
-  }
-
-  void account_base::create_from_device(hw::device &hwdev)
-  {
-    m_keys.set_device(hwdev);
-    MCDEBUG("device", "device type: "<<typeid(hwdev).name());
-    CHECK_AND_ASSERT_THROW_MES(hwdev.init(), "Device init failed");
-    CHECK_AND_ASSERT_THROW_MES(hwdev.connect(), "Device connect failed");
-    try {
-      CHECK_AND_ASSERT_THROW_MES(hwdev.get_public_address(m_keys.m_account_address), "Cannot get a device address");
-      CHECK_AND_ASSERT_THROW_MES(hwdev.get_secret_keys(m_keys.m_view_secret_key, m_keys.m_spend_secret_key), "Cannot get device secret");
-      // Hardware-wallet integration for PQC is tracked separately; the
-      // device FFI currently returns only Ed25519 scalars so we can't
-      // materialize an ML-KEM keypair deterministically without the seed.
-      // For v1 we ship with device wallets as "classical signing only" and
-      // will teach device_ledger.cpp the master-seed export path in a
-      // follow-up (see docs/POST_QUANTUM_CRYPTOGRAPHY.md §Hardware).
-      clear_msg_sign_pk(m_keys);
-    } catch (const std::exception &e){
-      hwdev.disconnect();
-      throw;
-    }
-    struct tm timestamp = {0};
-    timestamp.tm_year = 2014 - 1900;  // year 2014
-    timestamp.tm_mon = 4 - 1;  // month april
-    timestamp.tm_mday = 15;  // 15th of april
-    timestamp.tm_hour = 0;
-    timestamp.tm_min = 0;
-    timestamp.tm_sec = 0;
-
-    m_creation_timestamp = mktime(&timestamp);
-    if (m_creation_timestamp == (uint64_t)-1) // failure
-      m_creation_timestamp = 0; // lowest value
-  }
   //-----------------------------------------------------------------
   void account_base::create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey)
   {

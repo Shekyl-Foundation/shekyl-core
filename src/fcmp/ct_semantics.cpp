@@ -83,52 +83,6 @@ namespace
 
 }
 
-    void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
-        const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
-        const std::vector<xmr_amount> &outamounts, const keyV &destinations)
-    {
-        CHECK_AND_ASSERT_THROW_MES(!inamounts.empty(), "fill_construct_tx_rct_stub: no inputs");
-        const size_t n_out = outamounts.size();
-        const size_t n_in = inamounts.size();
-        CHECK_AND_ASSERT_THROW_MES(destinations.size() == n_out, "fill_construct_tx_rct_stub: destinations/outamounts mismatch");
-
-        rv.type = CTTypeFcmpPlusPlusPqc;
-        rv.message = message;
-        rv.txnFee = txnFee;
-        rv.referenceBlock = referenceBlock;
-        rv.p.curve_trees_tree_depth = 0;
-        rv.p.fcmp_pp_proof.clear();
-
-        rv.outPk.resize(n_out);
-        rv.enc_amounts.resize(n_out);
-        rv.enc_labels.resize(n_out);
-        for (size_t i = 0; i < n_out; ++i)
-            rv.outPk[i].dest = copy(destinations[i]);
-
-        keyV C, masks;
-        rv.p.bulletproofs_plus.clear();
-        rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(outamounts, C, masks));
-        for (size_t i = 0; i < n_out; ++i)
-            rv.outPk[i].mask = scalarmult8(C[i]);
-
-        key sumout = zero();
-        for (size_t i = 0; i < n_out; ++i)
-            sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-
-        rv.p.pseudoOuts.resize(n_in);
-        keyV a(n_in);
-        key sumpouts = zero();
-        for (size_t i = 0; i < n_in - 1; i++)
-        {
-            skGen(a[i]);
-            sc_add(sumpouts.bytes, a[i].bytes, sumpouts.bytes);
-            genC(rv.p.pseudoOuts[i], a[i], inamounts[i]);
-        }
-        const size_t last = n_in - 1;
-        sc_sub(a[last].bytes, sumout.bytes, sumpouts.bytes);
-        genC(rv.p.pseudoOuts[last], a[last], inamounts[last]);
-    }
-
     bool verBulletproofPlus(const BulletproofPlus &proof)
     {
       try { return bulletproof_plus_VERIFY(proof); }
@@ -143,7 +97,7 @@ namespace
       catch (...) { return false; }
     }
 
-    key get_tx_prehash(const CtSig &rv, hw::device &hwdev)
+    key get_tx_prehash(const CtSig &rv)
     {
       keyV hashes;
       hashes.reserve(3);
@@ -154,7 +108,6 @@ namespace
       binary_archive<true> ba(ss);
       const size_t inputs = rv.p.pseudoOuts.size();
       const size_t outputs = rv.enc_amounts.size();
-      key prehash;
       CHECK_AND_ASSERT_THROW_MES(const_cast<CtSig&>(rv).serialize_ctsig_base(ba, inputs, outputs),
           "Failed to serialize CtSigBase");
       cryptonote::get_blob_hash(ss.str(), h);
@@ -177,8 +130,7 @@ namespace
           kv.push_back(p.R[n]);
       }
       hashes.push_back(cn_fast_hash(kv));
-      hwdev.tx_prehash(ss.str(), inputs, outputs, hashes, rv.outPk, prehash);
-      return  prehash;
+      return cn_fast_hash(hashes);
     }
 
     //ver FCMP++ simple

@@ -18,11 +18,12 @@
 //! to stdout alone; expectation and guidance lines go to stderr, so a
 //! scripted `sign` can capture exactly the signature.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{SignMessageResult, VerifyMessageResult};
 use shekyl_wallet_rpc::WalletRpcErrorCode;
 
 use super::require_open;
+use crate::outcome::{failed, CommandResult};
 use crate::rpc_client::{RpcError, RpcSession};
 
 /// Refuse `@path` signature files larger than this. Any valid armored
@@ -33,40 +34,50 @@ use crate::rpc_client::{RpcError, RpcSession};
 /// read to EOF and shipped to the server just to bounce.
 const SIG_FILE_MAX_BYTES: usize = 2 * shekyl_crypto_pq::message_signing::MSG_SIG_MAX_ENCODED_LEN;
 
-pub fn cmd_sign(rpc: &RpcSession, message: &str) {
-    if !require_open(rpc) {
-        return;
+pub fn cmd_sign(
+    rpc: &RpcSession,
+    presentation: &crate::outcome::Presentation,
+    message: &str,
+) -> CommandResult {
+    require_open(rpc)?;
+    if presentation.human() {
+        eprintln!("Signing — this takes a few seconds by design; please wait...");
     }
-    eprintln!("Signing — this takes a few seconds by design; please wait...");
     match rpc.call("sign_message", json!({ "message": message })) {
         Ok(val) => match serde_json::from_value::<SignMessageResult>(val) {
-            Ok(r) if !r.signature.is_empty() => {
-                println!("{}", r.signature);
-                eprintln!(
-                    "Done. Share the message, this signature, and your address; anyone \
-                     can verify them together with \"verify\" — no wallet needed. Keep \
-                     the signature on a single line when pasting it, or write it to a \
-                     file and pass @path to verify."
-                );
-            }
-            Ok(_) | Err(_) => rpc.report(
+            Ok(r) if !r.signature.is_empty() => Ok(json!({"signature": r.signature})),
+            Ok(_) | Err(_) => Err(rpc.report(
                 "Failed to sign message",
                 &RpcError::Transport("server returned no signature".into()),
-            ),
+            )),
         },
-        Err(e) => rpc.report("Failed to sign message", &e),
+        Err(e) => Err(rpc.report("Failed to sign message", &e)),
     }
 }
 
-pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &str) {
+pub(crate) fn show_signature(val: &Value) {
+    if let Some(signature) = val.get("signature").and_then(|v| v.as_str()) {
+        println!("{signature}");
+    }
+    eprintln!(
+        "Done. Share the message, this signature, and your address; anyone \
+         can verify them together with \"verify\" — no wallet needed. Keep \
+         the signature on a single line when pasting it, or write it to a \
+         file and pass @path to verify."
+    );
+}
+
+pub fn cmd_verify(
+    rpc: &RpcSession,
+    address: &str,
+    signature: &str,
+    message: &str,
+) -> CommandResult {
     // Deliberately no `require_open`: verification is a public operation
     // over public inputs (SM-R-6).
     let signature = match load_signature(signature) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("Could not verify signature: {e}");
-            return;
-        }
+        Err(e) => return failed(format!("Could not verify signature: {e}")),
     };
     let result = rpc.call(
         "verify_message",
@@ -82,20 +93,23 @@ pub fn cmd_verify(rpc: &RpcSession, address: &str, signature: &str, message: &st
     let invalid = i64::from(WalletRpcErrorCode::MessageSigVerifyFailed.as_i32());
     match result {
         Ok(val) => match serde_json::from_value::<VerifyMessageResult>(val) {
-            Ok(_) => println!("Signature is VALID for this address and message."),
-            Err(_) => rpc.report(
+            Ok(_) => Ok(json!({"valid": true})),
+            Err(_) => Err(rpc.report(
                 "Could not verify signature",
                 &RpcError::Transport("unexpected server response".into()),
-            ),
+            )),
         },
-        // The one negative *answer* gets a verdict line; every other
-        // refusal (corrupted paste, unknown scheme, unbound address
-        // format, malformed input) already carries its own remedy in the
-        // server's sentence, which `report` prints verbatim.
-        Err(e) if e.code() == Some(invalid) => {
-            println!("Signature is INVALID: not a signature by that address over this message.");
-        }
-        Err(e) => rpc.report("Could not verify signature", &e),
+        // The one negative *answer* is a verdict, not a failed command.
+        Err(e) if e.code() == Some(invalid) => Ok(json!({"valid": false})),
+        Err(e) => Err(rpc.report("Could not verify signature", &e)),
+    }
+}
+
+pub(crate) fn show_verify(val: &Value) {
+    if val.get("valid").and_then(Value::as_bool).unwrap_or(false) {
+        println!("Signature is VALID for this address and message.");
+    } else {
+        println!("Signature is INVALID: not a signature by that address over this message.");
     }
 }
 

@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Release-cooldown gate for `Release` and `HoldingsUpdate`-drop (gate-4 §4.3/§4.4;
-//! `PHASE_2B_FSM_RETOOL.md` P2B-8 Q1/Q2).
+//! Release-cooldown gate for `Release` (gate-4 §4.3; `PHASE_2B_FSM_RETOOL.md`
+//! P2B-8 Q1/Q2). *(As written it also gated "`HoldingsUpdate`-drop (gate-4
+//! §4.4)"; that kind is REJECTED 2026-09-20 and `Release` is the only exit.)*
 //!
 //! The cooldown anchor is a persona's **last-served settlement epoch**, and it is
 //! *derived*, never stored (P2B-8 Q1/Q2 — "derive from the landed source of truth,
@@ -57,9 +58,10 @@ pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
 /// slash deadline before the release can verify).
 ///
 /// Elapsed iff `current_settlement_epoch >= last_served_epoch + RELEASE_COOLDOWN_EPOCHS`.
-/// `RELEASE_COOLDOWN_EPOCHS` covers the challenge-resolution window by construction
-/// (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2 L16 pin: `RELEASE_COOLDOWN_EPOCHS · SEB >
-/// CHALLENGE_RESOLUTION_BLOCKS`). A persona that never served (`None`) has earned
+/// `RELEASE_COOLDOWN_EPOCHS` covers the slash grace by construction
+/// (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2 L16 pin: `RELEASE_COOLDOWN_EPOCHS >
+/// SLASH_GRACE_EPOCHS`, both in epochs, so it holds on every schedule). A
+/// persona that never served (`None`) has earned
 /// nothing whose settlement the exit could outrun — every epoch it held without
 /// serving either was already slashed at its deadline while bonded or falls in the
 /// exit-forgiven tail (module docs) — so the cooldown is vacuously elapsed.

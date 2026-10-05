@@ -10,7 +10,8 @@
 //! An archival shard is one frozen level-2 curve-tree segment:
 //! `SEGMENT_LEAF_COUNT` = 25 992 leaves × 128 bytes ≈ 3.33 MB
 //! (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2; the leaf width is pinned by
-//! `shekyl_fcmp::tree::construct_leaf`, which packs `O.x ‖ I.x ‖ C.x ‖ h_pqc`).
+//! `shekyl_fcmp::tree::construct_leaf`, which packs `O.x ‖ I.x ‖ C.x ‖ CM.x`
+//! — the 4th scalar is the `PL-D3` leaf commitment's x-coordinate).
 //!
 //! The ruling for this spike is that the payload is a **real shard from a regtest
 //! chain, not synthetic bytes**, and this module refuses to paper over that: it
@@ -37,14 +38,18 @@
 //!   (`DEFAULT_LOCK_WINDOW`). Shard 0 additionally needs the freeze gate
 //!   `tip − end_block_height ≥ SPENDABLE_AGE(60) + REORG_MARGIN(720)`, so the
 //!   target height is ≈ 25 992 + 60 + 780 ≈ 26 832 blocks.
-//! - **Does an extraction path exist?** Yes, and it is a *batched* RPC rather than
+//! - **Does an extraction path exist?** It did at the time of the measurement
+//!   (records-was; the RPC below was removed 2026-09-18 — `SOK-10` Q7 → A, see
+//!   `bins/extract_shard.rs`). It was a *batched* RPC rather than
 //!   the 684 round-trips a per-chunk read would imply:
 //!   `COMMAND_RPC_GET_CURVE_TREE_PATH` takes a **vector** of `output_indices` and
-//!   returns, per entry, a `chunk_outputs_blob` of `[O:32][I:32][C:32][h_pqc:32]`
-//!   for every leaf in that leaf-chunk (`core_rpc_server_commands_defs.h`). Those
-//!   are compressed Ed25519 points, so the 128-byte *leaf* is then rebuilt
-//!   locally with `shekyl_fcmp::tree::construct_leaf` — the same function
-//!   `shekyl_curve_tree::recon::try_build_leaf` uses on the wallet path.
+//!   returns, per entry, a `chunk_outputs_blob` of `[O:32][I:32][C:32][CM.x:32]`
+//!   for every leaf in that leaf-chunk (`core_rpc_server_commands_defs.h`). The
+//!   first three fields are compressed Ed25519 points and the 4th is the leaf's
+//!   scalar as the chunk carries it (`PL-D3`: the commitment point itself is not
+//!   served), so the 128-byte *leaf* is rebuilt locally with
+//!   `shekyl_fcmp::tree::leaf_from_chunk_entry` — the constructor for exactly
+//!   this served-chunk shape.
 //!
 //! So D4 is a cost, not a blocker, and the halt does not fire.
 
@@ -55,14 +60,10 @@ use shekyl_p_serve::{ProviderError, ShardBody, ShardProvider};
 
 /// Leaves in one frozen level-2 segment (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
 /// §5.2: `SELENE_CHUNK_WIDTH · HELIOS_CHUNK_WIDTH · SELENE_CHUNK_WIDTH`
-/// = 38 · 18 · 38).
-///
-/// Duplicated as a literal rather than imported: this crate is disposable and
-/// must not become a consumer that a future constants change has to sweep. The
-/// authoritative value is `shekyl_archival_retention::segment_freeze`'s
-/// `SEGMENT_LEAF_COUNT`, and [`ShardFixture::load`]'s size check is what catches a
-/// drift between them.
-pub const SEGMENT_LEAF_COUNT: usize = 25_992;
+/// = 38 · 18 · 38), read from its one owner. `shekyl-archival-retention`'s
+/// consensus `SEGMENT_LEAF_COUNT` is const-asserted equal to the same function,
+/// so the fixture's size and the server's unit cannot drift apart.
+pub const SEGMENT_LEAF_COUNT: usize = shekyl_fcmp::tree::leaves_per_segment();
 
 /// Bytes per curve-tree leaf (`construct_leaf`: four 32-byte fields).
 pub const LEAF_BYTES: usize = 128;
@@ -81,7 +82,7 @@ pub enum FixtureError {
         path: String,
     },
     /// The file exists but is not a whole shard. Either the extraction stopped
-    /// early or `SEGMENT_LEAF_COUNT` has drifted from the consensus constant.
+    /// early or the file was extracted under another segment size.
     WrongSize {
         /// Bytes actually read.
         got: usize,
@@ -105,7 +106,7 @@ impl std::fmt::Display for FixtureError {
             Self::WrongSize { got, want } => write!(
                 f,
                 "shard fixture is {got} bytes, not {want}: extraction stopped early, or \
-                 SEGMENT_LEAF_COUNT drifted from the consensus constant"
+                 the file was extracted under another segment size"
             ),
             Self::Io(e) => write!(f, "shard fixture read failed: {e}"),
         }
@@ -184,19 +185,27 @@ impl std::fmt::Debug for ShardFixture {
 /// carrying a second copy of it that drifts (as it did, until the copy was
 /// deleted).
 pub struct FixtureShardProvider {
-    payload: Arc<[u8]>,
+    /// The served objects, indexed by shard id.
+    objects: Vec<Arc<[u8]>>,
 }
 
 impl FixtureShardProvider {
-    /// Wrap a pre-loaded payload.
+    /// Wrap one pre-loaded payload, served as shard 0.
     #[must_use]
     pub fn new(payload: Arc<[u8]>) -> Self {
-        Self { payload }
+        Self::with_objects(vec![payload])
+    }
+
+    /// Serve several payloads, shard `i` being `objects[i]`. An id past the
+    /// end is the ordinary miss.
+    #[must_use]
+    pub fn with_objects(objects: Vec<Arc<[u8]>>) -> Self {
+        Self { objects }
     }
 }
 
 impl ShardProvider for FixtureShardProvider {
-    fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+    fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
         // `flat` refuses a payload that is not a whole number of leaves —
         // the served frame declares a leaf count, so such bytes have no
         // representable header. [`ShardFixture::load`] already enforces
@@ -204,16 +213,46 @@ impl ShardProvider for FixtureShardProvider {
         // payload handed to [`FixtureShardProvider::new`] directly, and it
         // renders the ordinary miss rather than a body no witness could
         // verify.
-        Ok(ShardBody::flat(Arc::clone(&self.payload)))
+        let Some(payload) = usize::try_from(shard_id)
+            .ok()
+            .and_then(|i| self.objects.get(i))
+        else {
+            return Ok(None);
+        };
+        Ok(ShardBody::flat(Arc::clone(payload)))
     }
 }
 
 impl std::fmt::Debug for FixtureShardProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let lens: Vec<usize> = self.objects.iter().map(|o| o.len()).collect();
         f.debug_struct("FixtureShardProvider")
-            .field("len", &self.payload.len())
+            .field("lens", &lens)
             .finish()
     }
+}
+
+/// The multi-size W₂ run's objects (`ARCHIVAL_SHARD_T_DERIVATION.md` §4.1): the real
+/// shard and two sizes derived from **its own bytes**, served as shard ids
+/// `0` (the shard, 1×), `1` (its first half, ½×) and `2` (its first quarter, ¼×) —
+/// a 4× byte span, every size a whole number of leaves.
+///
+/// The shard is the top of the ladder because it is the largest object the
+/// production frame can carry: `ServedFrameHeader::for_segment` refuses a leaf
+/// count past one segment, so a larger object is unservable, not merely unusual
+/// (the client's `max_body_bytes` bound of two segments is headroom for padding,
+/// not a second segment).
+///
+/// Nothing here is synthetic in the sense the honesty gate forbids: every byte
+/// served is a byte of the extracted shard. What varies is only how many of them
+/// are sent, and a Tor transit of opaque, uncompressed bytes does not depend on
+/// their values — so the size is the one variable the ladder moves.
+#[must_use]
+pub fn size_ladder(fixture: &ShardFixture) -> Vec<Arc<[u8]>> {
+    let one = fixture.bytes();
+    let half: Arc<[u8]> = Arc::from(&one[..one.len() / 2]);
+    let quarter: Arc<[u8]> = Arc::from(&one[..one.len() / 4]);
+    vec![one, half, quarter]
 }
 
 #[cfg(test)]
@@ -283,5 +322,60 @@ mod tests {
         assert!(!fixture.is_empty());
         // Shared, not copied: two handles to one buffer.
         assert!(Arc::ptr_eq(&fixture.bytes(), &fixture.bytes()));
+    }
+
+    fn patterned_fixture() -> ShardFixture {
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        let bytes: Vec<u8> = (0..SHARD_BYTES)
+            .map(|i| u8::try_from(i % 251).expect("below 251"))
+            .collect();
+        f.write_all(&bytes).expect("write");
+        ShardFixture::load(f.path()).expect("an exact-size fixture loads")
+    }
+
+    /// The ladder is 1×, ½×, ¼× of the real shard, a 4× span; every size is a
+    /// whole number of leaves and framable by the production frame, and every
+    /// byte is the shard's.
+    #[test]
+    fn the_size_ladder_is_the_shard_at_one_half_and_quarter() {
+        let fixture = patterned_fixture();
+        let ladder = size_ladder(&fixture);
+        let lens: Vec<usize> = ladder.iter().map(|o| o.len()).collect();
+        assert_eq!(lens, [SHARD_BYTES, SHARD_BYTES / 2, SHARD_BYTES / 4]);
+        for object in &ladder {
+            assert_eq!(
+                object.len() % LEAF_BYTES,
+                0,
+                "{} is not whole leaves",
+                object.len()
+            );
+            assert!(shekyl_p_serve::ShardBody::flat(Arc::clone(object)).is_some());
+        }
+        let one = fixture.bytes();
+        assert!(
+            Arc::ptr_eq(&ladder[0], &one),
+            "shard 0 is the fixture itself"
+        );
+        assert_eq!(&ladder[1][..], &one[..SHARD_BYTES / 2]);
+        assert_eq!(&ladder[2][..], &one[..SHARD_BYTES / 4]);
+        // One leaf past a segment is unservable — why the shard tops the ladder.
+        let past: Arc<[u8]> = vec![0u8; SHARD_BYTES + LEAF_BYTES].into();
+        assert!(shekyl_p_serve::ShardBody::flat(past).is_none());
+    }
+
+    /// Shard `i` is object `i`; past the end is the ordinary miss.
+    #[test]
+    fn the_provider_serves_each_object_by_shard_id() {
+        let objects: Vec<Arc<[u8]>> = vec![
+            vec![1u8; LEAF_BYTES].into(),
+            vec![2u8; 2 * LEAF_BYTES].into(),
+        ];
+        let provider = FixtureShardProvider::with_objects(objects);
+        for (id, leaves) in [(0u64, 1u64), (1, 2)] {
+            let body = provider.shard_bytes(id).expect("ok").expect("served");
+            let payload = leaves * u64::try_from(LEAF_BYTES).expect("fits");
+            assert!(body.header().framed_len() > payload);
+        }
+        assert!(provider.shard_bytes(2).expect("ok").is_none());
     }
 }

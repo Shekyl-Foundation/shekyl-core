@@ -33,37 +33,24 @@
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 
-#include "single_tx_test_base.h"
+#include "cryptonote_basic/account.h"
 
-class test_ge_tobytes : public multi_tx_test_base<1>
+class test_ge_tobytes
 {
 public:
   static const size_t loop_count = 10000;
 
-  typedef multi_tx_test_base<1> base_class;
-
   bool init()
   {
-    using namespace cryptonote;
-
-    if (!base_class::init())
+    // A canonical point to decompress: a fresh account's spend key. (This
+    // used to build a whole C++ transaction to read a key image out of it;
+    // that builder left with the C++ tx_extra codec, TXE-Q1, and the
+    // benchmark's subject was never the transaction.)
+    cryptonote::account_base alice;
+    alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
+    const crypto::public_key& pk = alice.get_keys().m_account_address.m_spend_public_key;
+    if (ge_frombytes_vartime(&m_p3, (const unsigned char*) &pk) != 0)
       return false;
-
-    cryptonote::account_base m_alice;
-    cryptonote::transaction m_tx;
-
-    m_alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-
-    std::vector<tx_destination_entry> destinations;
-    destinations.push_back(tx_destination_entry(1, m_alice.get_keys().m_account_address, false));
-
-    if (!construct_tx(this->m_miners[this->real_source_idx].get_keys(), this->m_sources, destinations, std::nullopt, std::vector<uint8_t>(), m_tx))
-      return false;
-    
-    const cryptonote::txin_to_key& txin = std::get<cryptonote::txin_to_key>(m_tx.vin[0]);
-    if (ge_frombytes_vartime(&m_p3, (const unsigned char*) &txin.k_image) != 0)
-      return false;
-
     return true;
   }
 

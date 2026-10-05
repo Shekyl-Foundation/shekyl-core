@@ -33,11 +33,20 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_types::{BlockCount, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v10** renames the
+/// Schema version of the durable pending-post block. **v12** retypes
+/// [`PendingBondPost::bond_post_offset_blocks`] from bare `u64` to
+/// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
+/// transparent `u64` are identical; the schema type-name change still
+/// bumps per rule 42). Pre-genesis: refuse, don't migrate. **v11** retypes the
+/// dispatch-clock stamp fields (`anchor_t0`, `Dispatched::at`) from
+/// ordinal `BlockHeight` to [`ChainCount`] (height-semantics Phase 2b;
+/// postcard bytes of the transparent `u64` are identical; the schema
+/// type-name change still bumps per rule 42). Pre-genesis: refuse, don't
+/// migrate. **v10** renames the
 /// v9 `PendingUnbond` record set to [`PendingRelease`] (the internal
 /// Unbond → Release vocabulary rename; wire `BondPostKind` discriminant `2`
 /// unchanged) — the terminal exit's persist-before-dispatch
@@ -82,7 +91,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 10;
+pub const PENDING_POST_VERSION: u32 = 12;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -108,8 +117,9 @@ pub enum PendingPostState {
     /// (seal-before-send): a crash after this seal resumes as "maybe sent",
     /// which is safe because every resend is byte-identical (pin P-2).
     Dispatched {
-        /// Tip height the due-check fired against at the first send.
-        at: BlockHeight,
+        /// Claimed chain **count** the due-check fired against at the first
+        /// send (WI-3 R2-1 clock; not an ordinal).
+        at: ChainCount,
         /// Total send attempts (first send inclusive); bumped on every
         /// byte-identical resubmit, bounded by the driver's attempt budget.
         attempts: u32,
@@ -135,12 +145,29 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to the bond-post broadcast.
-    pub bond_post_offset_blocks: u64,
-    /// Tip height at assemble time — the private intent anchor `t0` the
-    /// plan's offsets are relative to. WI-3's due-check is pure:
-    /// `due = anchor_t0 + bond_post_offset_blocks`.
-    pub anchor_t0: BlockHeight,
+    /// Blocks from `anchor_t0` to the bond-post broadcast — a span
+    /// ([`BlockCount`]), on the same clock as `anchor_t0`.
+    ///
+    /// ```
+    /// fn needs_span(offset: shekyl_types::BlockCount) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_span(post.bond_post_offset_blocks);
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: the due-count offset is a span, not an ordinal.
+    /// fn needs_height(_: shekyl_types::BlockHeight) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_height(post.bond_post_offset_blocks);
+    /// }
+    /// ```
+    pub bond_post_offset_blocks: BlockCount,
+    /// Claimed chain **count** at assemble time — the private intent
+    /// anchor `t0` the plan's offsets are relative to. WI-3's due-check
+    /// is pure: `due = anchor_t0 + bond_post_offset_blocks` on this
+    /// count clock (not an ordinal).
+    pub anchor_t0: ChainCount,
     /// Global output indexes of the funding outputs this post spends — the
     /// reservation set: funding selection excludes these while the post is
     /// live (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1).
@@ -573,7 +600,7 @@ impl PendingPostBlock {
     pub fn mark_claim_dispatched(
         &mut self,
         persona: &PCanonicalId,
-        at: BlockHeight,
+        at: ChainCount,
     ) -> Option<(u32, &PendingEmissionClaim)> {
         let claim = self.claims.iter_mut().find(|c| &c.persona == persona)?;
         let attempts = match &mut claim.state {
@@ -622,7 +649,7 @@ impl PendingPostBlock {
     pub fn mark_drain_dispatched(
         &mut self,
         persona: &PCanonicalId,
-        at: BlockHeight,
+        at: ChainCount,
     ) -> Option<(u32, &PendingDrain)> {
         let drain = self.drains.iter_mut().find(|d| &d.persona == persona)?;
         let attempts = match &mut drain.state {
@@ -683,7 +710,7 @@ impl PendingPostBlock {
     pub fn mark_dispatched(
         &mut self,
         persona: &PCanonicalId,
-        at: BlockHeight,
+        at: ChainCount,
     ) -> Option<(u32, &PendingBondPost)> {
         let post = self.posts.iter_mut().find(|p| &p.persona == persona)?;
         let attempts = match &mut post.state {
@@ -847,7 +874,7 @@ impl PendingPostBlock {
     pub fn seal_claim(
         &mut self,
         mut claim: PendingEmissionClaim,
-        at: BlockHeight,
+        at: ChainCount,
         snapshot_generation: u64,
     ) -> SealAdmission {
         match self.classify_seal(
@@ -869,7 +896,7 @@ impl PendingPostBlock {
     pub fn seal_drain(
         &mut self,
         mut drain: PendingDrain,
-        at: BlockHeight,
+        at: ChainCount,
         snapshot_generation: u64,
     ) -> SealAdmission {
         match self.classify_seal(
@@ -895,7 +922,7 @@ impl PendingPostBlock {
     pub fn seal_release(
         &mut self,
         mut release: PendingRelease,
-        at: BlockHeight,
+        at: ChainCount,
         snapshot_generation: u64,
     ) -> SealAdmission {
         match self.classify_seal(
@@ -1047,8 +1074,8 @@ mod tests {
             p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
-            bond_post_offset_blocks: 12,
-            anchor_t0: BlockHeight::from_raw(1_000),
+            bond_post_offset_blocks: BlockCount::from_raw(12),
+            anchor_t0: ChainCount::from_raw(1_000),
             funding_gindexes: gindexes
                 .iter()
                 .copied()
@@ -1153,7 +1180,7 @@ mod tests {
     /// it a transition.
     #[test]
     fn an_admitted_claim_seal_inserts_a_dispatched_record() {
-        let at = BlockHeight::from_raw(900);
+        let at = ChainCount::from_raw(900);
         let mut block = PendingPostBlock::empty();
 
         let g = block.generation();
@@ -1192,7 +1219,7 @@ mod tests {
     /// `remove_settled` later reads as evidence.
     #[test]
     fn a_refused_seal_inserts_nothing() {
-        let at = BlockHeight::from_raw(900);
+        let at = ChainCount::from_raw(900);
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(
@@ -1254,7 +1281,7 @@ mod tests {
 
         // B seals the same input and confirms; the settlement tick retires it.
         assert_eq!(
-            block.seal_drain(drain(0xBB, &[7]), BlockHeight::from_raw(900), a_snapshot),
+            block.seal_drain(drain(0xBB, &[7]), ChainCount::from_raw(900), a_snapshot),
             SealAdmission::Admit
         );
         let retired = block.remove_settled(&live(&[]));
@@ -1287,7 +1314,7 @@ mod tests {
     /// exactly the window the test above closes.
     #[test]
     fn every_release_moves_the_generation_and_only_a_release_does() {
-        let at = BlockHeight::from_raw(900);
+        let at = ChainCount::from_raw(900);
         let p = PCanonicalId::from_bytes([0xAA; 32]);
         let mut block = PendingPostBlock::empty();
 
@@ -1479,7 +1506,7 @@ mod tests {
             block
                 .mark_dispatched(
                     &PCanonicalId::from_bytes([0xAA; 32]),
-                    BlockHeight::from_raw(1_012)
+                    ChainCount::from_raw(1_012)
                 )
                 .map(|(attempts, _)| attempts),
             Some(1)
@@ -1490,7 +1517,7 @@ mod tests {
         assert_eq!(
             back.posts()[0].state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(1_012),
+                at: ChainCount::from_raw(1_012),
                 attempts: 1
             }
         );
@@ -1553,27 +1580,27 @@ mod tests {
 
         assert_eq!(
             block
-                .mark_dispatched(&persona, BlockHeight::from_raw(500))
+                .mark_dispatched(&persona, ChainCount::from_raw(500))
                 .map(|(attempts, _)| attempts),
             Some(1)
         );
         // Resubmit at a later tip: attempts bump, `at` stays at first send. The
         // returned post reflects the just-applied transition (same lookup).
         let (attempts, post) = block
-            .mark_dispatched(&persona, BlockHeight::from_raw(510))
+            .mark_dispatched(&persona, ChainCount::from_raw(510))
             .expect("live post");
         assert_eq!(attempts, 2);
         assert_eq!(
             post.state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(500),
+                at: ChainCount::from_raw(500),
                 attempts: 2
             }
         );
         assert_eq!(
             block.posts()[0].state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(500),
+                at: ChainCount::from_raw(500),
                 attempts: 2
             }
         );
@@ -1581,7 +1608,7 @@ mod tests {
         assert!(block
             .mark_dispatched(
                 &PCanonicalId::from_bytes([0xEE; 32]),
-                BlockHeight::from_raw(1)
+                ChainCount::from_raw(1)
             )
             .is_none());
     }
@@ -1713,7 +1740,7 @@ mod tests {
         // Seal-before-send transition + round-trip through postcard.
         assert_eq!(
             block
-                .mark_claim_dispatched(&persona, BlockHeight::from_raw(500))
+                .mark_claim_dispatched(&persona, ChainCount::from_raw(500))
                 .map(|(attempts, _)| attempts),
             Some(1)
         );
@@ -1724,7 +1751,7 @@ mod tests {
         assert_eq!(
             back.claims()[0].state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(500),
+                at: ChainCount::from_raw(500),
                 attempts: 1
             }
         );
@@ -1784,7 +1811,7 @@ mod tests {
         // Seal-before-send transition + round-trip through postcard.
         assert_eq!(
             block
-                .mark_drain_dispatched(&persona, BlockHeight::from_raw(500))
+                .mark_drain_dispatched(&persona, ChainCount::from_raw(500))
                 .map(|(attempts, _)| attempts),
             Some(1)
         );
@@ -1795,7 +1822,7 @@ mod tests {
         assert_eq!(
             back.drains()[0].state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(500),
+                at: ChainCount::from_raw(500),
                 attempts: 1
             }
         );
@@ -1839,7 +1866,7 @@ mod tests {
         assert_eq!(
             block.seal_release(
                 release(0xAA, &[7, 9]),
-                BlockHeight::from_raw(500),
+                ChainCount::from_raw(500),
                 generation
             ),
             SealAdmission::Admit
@@ -1850,7 +1877,7 @@ mod tests {
         assert_eq!(
             block.releases()[0].state,
             PendingPostState::Dispatched {
-                at: BlockHeight::from_raw(500),
+                at: ChainCount::from_raw(500),
                 attempts: 1
             }
         );
@@ -1860,7 +1887,7 @@ mod tests {
         // second is doomed, and "retry" would be the wrong remedy).
         assert!(block.has_live_release_for(&persona));
         assert_eq!(
-            block.seal_release(release(0xAA, &[11]), BlockHeight::from_raw(501), generation),
+            block.seal_release(release(0xAA, &[11]), ChainCount::from_raw(501), generation),
             SealAdmission::PersonaLive
         );
 
@@ -1922,7 +1949,7 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         let g0 = block.generation();
         assert_eq!(
-            block.seal_release(release(0xAA, &[7, 9]), BlockHeight::from_raw(500), g0),
+            block.seal_release(release(0xAA, &[7, 9]), ChainCount::from_raw(500), g0),
             SealAdmission::Admit
         );
 
@@ -1952,11 +1979,11 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(
-            block.seal_release(release(0xAA, &[7]), BlockHeight::from_raw(500), g),
+            block.seal_release(release(0xAA, &[7]), ChainCount::from_raw(500), g),
             SealAdmission::Admit
         );
         assert_eq!(
-            block.seal_release(release(0xBB, &[8]), BlockHeight::from_raw(500), g),
+            block.seal_release(release(0xBB, &[8]), ChainCount::from_raw(500), g),
             SealAdmission::Admit
         );
 

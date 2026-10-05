@@ -286,8 +286,9 @@ pub(crate) struct BondPostPlacement {
     pub vin: JoinMarketVin,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
     /// the drawn entry-gap spread. (No entry offset: only the bond post is
-    /// chain-attributable, so there is no second event to place.)
-    pub bond_post_offset_blocks: u64,
+    /// chain-attributable, so there is no second event to place.) A
+    /// [`BlockCount`] (height-semantics C4), not an instant.
+    pub bond_post_offset_blocks: BlockCount,
 }
 
 impl Message<PlanBondPost> for StakeEngine {
@@ -332,7 +333,8 @@ impl Message<PlanBondPost> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings)
+        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {
             vin,

@@ -37,6 +37,7 @@ mod budget_throttle;
 mod clustering;
 mod cover;
 mod curve;
+mod f34_heavy_era;
 mod failure_confirmation;
 mod fingerprint;
 mod gf7_breakeven;
@@ -190,9 +191,14 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!(
         "  on cold tail only); auOld = oldest-band cadence (P3). L14; 0 outside audit model."
     );
+    eprintln!(
+        "  szMn = realized MEAN shard size; szLo/szMd/szHi = frac_under within the light/\
+         mid/heavy SIZE tercile (PDM-Q-F34 composition axis; size tracks era density, so\
+         szHi is the young/dense end). 1.00/equal bands outside the composition axis."
+    );
     eprintln!();
     eprintln!(
-        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>6} {:>5} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>5} {:>6} | {:>5} {:>5} {:>5} {:>5} | {:>6} {:>6} | {:>5} {:>6} {:>5} {:>4} {:>6} {:>6} {:>14} {:>5} {:>5} {:>5} | {:>5} {:>6} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} {:>5}",
         "scenario",
         "axis",
         "bond",
@@ -249,6 +255,10 @@ fn print_summary(results: &[ScenarioResult]) {
         "auC",
         "auDp",
         "auOld",
+        "szMn",
+        "szLo",
+        "szMd",
+        "szHi",
     );
 
     for r in results {
@@ -258,7 +268,7 @@ fn print_summary(results: &[ScenarioResult]) {
         let whale_b4 = old.and_then(|b| b.whale_share);
         let slot_ratio = m.colocated_coverage;
         eprintln!(
-            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>6.3} {:>5.3} | {:>4} {:>4} {:>5} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5} {:>6.3} {:>6.3} | {:>6.3} {:>6.3} {:>6.3} | {:>5.2} {:>6.1} | {:>5.3} {:>5.3} {:>5.1} {:>5.3} | {:>6.1} {:>6.3} | {:>5.3} {:>6.0} {:>5.0} {:>4.0} {:>6.0} {:>6.0} {:>14} {:>5.0} {:>5.0} {:>5.0} | {:>5.3} {:>6.4} {:>5} {:>5.3} | {:>5.3} {:>5.4} {:>5} | {:>5.3} {:>5.3} {:>5.2} {:>5.3} | {:>5.2} {:>5.3} {:>5.3} {:>5.3}",
             r.name,
             r.axis,
             r.bond_rate,
@@ -322,6 +332,10 @@ fn print_summary(results: &[ScenarioResult]) {
             r.audit_oversight_credited,
             r.audit_deep_share,
             r.audit_oldest_cadence,
+            r.size_mean,
+            r.size_band_under_target[0],
+            r.size_band_under_target[1],
+            r.size_band_under_target[2],
         );
     }
 
@@ -513,6 +527,208 @@ fn print_failure_confirmation_report(axis_filter: Option<&str>) {
     }
 }
 
+/// **`--f34-heavy-era`** — `STAKER_ARCHIVAL_SIM.md` §L19a/§L19b: JSON to stdout, the
+/// graded table to stderr.
+fn print_f34_heavy_era_report() {
+    use f34_heavy_era::{BREACH_X, SEEDS};
+    let reports = f34_heavy_era::heavy_era_report();
+    match serde_json::to_string_pretty(&reports) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 report: {e}"),
+    }
+    eprintln!("F34 heavy-era arm (§L19a): N = {SEEDS} paired seeds, BREACH iff min over seeds of max-over-cells (arm − control) > {BREACH_X}");
+    eprintln!("base      shape      S |  minDelta   diagMin | void mOff |  deepHeavy | VERDICT");
+    for r in &reports {
+        let dh: Vec<String> = r
+            .seeds
+            .iter()
+            .map(|s| format!("{}/{}", s.deep_heavy, s.heavy))
+            .collect();
+        eprintln!(
+            "{:<9} {:<8} {:>3.0} | {:>9} {:>9} | {:>4} {:>4} | {:>10} | {}",
+            r.base,
+            r.shape,
+            r.spread,
+            r.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.diag_min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.void_runs,
+            r.mean_off_one,
+            dh.first().cloned().unwrap_or_default(),
+            r.verdict
+        );
+    }
+}
+
+/// **`--f34-levers`** — §L19c/§L19d: the lever test on covered Burst. The table prints
+/// the seeds over `X` and the absolute arm/control state beside every registered
+/// verdict (§L19g).
+fn print_f34_levers_report() {
+    use f34_heavy_era::{slots, BREACH_X, SEEDS};
+    let rows = f34_heavy_era::lever_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 lever report: {e}"),
+    }
+    eprintln!("F34 lever test (§L19c), covered Burst: N = {SEEDS} paired seeds, BREACH iff min over seeds > {BREACH_X}");
+    eprintln!(
+        "lever       S  | scale   aw | slots   |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:<10} {:>3.0} | {:>5.2} {:>4.1} | {:>3}/{:<3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.lever,
+            r.spread,
+            r.levers.storage_scale,
+            r.levers.age_weight,
+            r.slots.0,
+            r.slots.1,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
+        );
+    }
+    for spread in [4.0, 10.0] {
+        let lowest = |lever: &str| {
+            rows.iter()
+                .filter(|r| r.lever == lever && r.spread == spread && r.grade.verdict == "clear")
+                .map(|r| r.levers)
+                .next()
+        };
+        eprintln!(
+            "S = {spread:.0}: lowest clearing headroom {} | lowest clearing age_weight {}",
+            lowest("headroom").map_or("none in ladder".into(), |l| format!(
+                "{:.2} (slots {:?})",
+                l.storage_scale,
+                slots(l.storage_scale)
+            )),
+            lowest("age_weight")
+                .map_or("none in ladder".into(), |l| format!("{:.1}", l.age_weight)),
+        );
+    }
+}
+
+/// **`--f34-l19j`** — §L19j: the two runs that settle §L19i's unresolved cells, graded
+/// by the governing verdict, with the over-`X` fraction and its binomial standard error.
+fn print_f34_l19j_report() {
+    use f34_heavy_era::BREACH_X;
+    let rows = f34_heavy_era::l19j_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 l19j report: {e}"),
+    }
+    eprintln!("F34 §L19j, covered Burst, X = {BREACH_X}");
+    eprintln!(
+        "run  S  | unit_cost |  N |  minDelta  median     max  >X  frac (±se) | arm / ctl worst (median) | worst cell (seeds) | GOVERNING"
+    );
+    for r in &rows {
+        let g = &r.point.grade;
+        let (over, n) = (g.seeds_over_x as f64, r.n_seeds as f64);
+        let frac = over / n;
+        let se = (frac * (1.0 - frac) / n).sqrt();
+        eprintln!(
+            " {}  {:>3.1} | {:>9.3} | {:>2} | {:>9} {:>7} {:>7} {:>3}  {:.3} (±{:.3}) | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.run,
+            r.point.spread,
+            r.point.storage_unit_cost,
+            r.n_seeds,
+            g.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.median_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            g.seeds_over_x,
+            frac,
+            se,
+            g.median_arm_worst,
+            g.median_ctl_worst,
+            g.modal_worst_band,
+            g.modal_worst_band_seeds,
+            r.n_seeds,
+            g.governing_verdict
+        );
+    }
+}
+
+/// **`--f34-calibrated`** — §L19h: the realistic spreads across the calibrated
+/// `storage_unit_cost` grid. The governing (three-valued) verdict is the graded column;
+/// §L19a's registered verdict is printed beside it for continuity only.
+fn print_f34_calibrated_report() {
+    use f34_heavy_era::{BREACH_X, SEEDS};
+    let rows = f34_heavy_era::calibrated_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 calibrated report: {e}"),
+    }
+    eprintln!(
+        "F34 §L19h, covered Burst: calibrated storage_unit_cost grid, N = {SEEDS} paired seeds, X = {BREACH_X}"
+    );
+    eprintln!(
+        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | GOVERNING | (L19a rule)"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:>4.1} | {:>9.3} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {} | ({})",
+            r.spread,
+            r.storage_unit_cost,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.governing_verdict,
+            r.grade.verdict
+        );
+    }
+}
+
+/// **`--f34-unit-cost`** — §L19e/§L19f: the `storage_unit_cost` sweep (item 7).
+fn print_f34_unit_cost_report() {
+    use f34_heavy_era::SEEDS;
+    let rows = f34_heavy_era::unit_cost_report();
+    match serde_json::to_string_pretty(&rows) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing f34 unit-cost report: {e}"),
+    }
+    eprintln!(
+        "F34 item 7 (§L19e), covered Burst: storage_unit_cost sweep, N = {SEEDS} paired seeds"
+    );
+    eprintln!(
+        "  S  | unit_cost |  minDelta  median     max  >X | arm / ctl worst (median) | worst cell (seeds) | VERDICT"
+    );
+    for r in &rows {
+        eprintln!(
+            "{:>3.0} | {:>9.2} | {:>9} {:>7} {:>7} {:>3} | {:>5.3} / {:>5.3} | {:?} ({}/{}) | {}",
+            r.spread,
+            r.storage_unit_cost,
+            r.grade.min_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade
+                .median_delta
+                .map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.max_delta.map_or("-".into(), |d| format!("{d:+.3}")),
+            r.grade.seeds_over_x,
+            r.grade.median_arm_worst,
+            r.grade.median_ctl_worst,
+            r.grade.modal_worst_band,
+            r.grade.modal_worst_band_seeds,
+            SEEDS,
+            r.grade.verdict
+        );
+    }
+}
+
 fn print_timing_cluster_report() {
     let report = timing_cluster::verify();
     eprintln!("shekyl-staking-sim — archival timing cluster pin (ARCHIVAL_TIMING_CONSTANTS.md)");
@@ -526,9 +742,9 @@ fn print_timing_cluster_report() {
         report.constants.archival_reorg_depth_days * 24.0,
     );
     eprintln!(
-        "  release_cooldown={} epochs  challenge={} blocks  prune_epochs={}  couplings+F4: {}",
+        "  release_cooldown={} epochs  slash_grace={} epochs  prune_epochs={}  couplings+F4: {}",
         report.constants.release_cooldown_epochs,
-        report.constants.challenge_resolution_blocks,
+        report.constants.slash_grace_epochs,
         report.constants.prune_horizon_epochs,
         yn(report.all_pass)
     );
@@ -1871,6 +2087,26 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--f34-l19j") {
+        print_f34_l19j_report();
+        return;
+    }
+    if std::env::args().any(|a| a == "--f34-calibrated") {
+        print_f34_calibrated_report();
+        return;
+    }
+    if std::env::args().any(|a| a == "--f34-unit-cost") {
+        print_f34_unit_cost_report();
+        return;
+    }
+    if std::env::args().any(|a| a == "--f34-levers") {
+        print_f34_levers_report();
+        return;
+    }
+    if std::env::args().any(|a| a == "--f34-heavy-era") {
+        print_f34_heavy_era_report();
+        return;
+    }
     if std::env::args().any(|a| a == "--budget-throttle") {
         print_budget_throttle_report();
         return;
@@ -1958,7 +2194,7 @@ fn main() {
 mod tests {
     use crate::metrics::gini;
     use crate::model::{bond_age, bond_duration, g_age, r_target, World};
-    use crate::model::{Actor, Shard};
+    use crate::model::{Actor, CompositionParams, EraShape, Shard};
     use crate::participation::{foundation_floor, foundation_floor_aged};
 
     #[test]
@@ -2028,7 +2264,18 @@ mod tests {
 
     #[test]
     fn advance_epoch_retires_oldest_and_decrements_locks() {
-        let shards = vec![Shard { age: 0.98 }, Shard { age: 0.2 }];
+        let shards = vec![
+            Shard {
+                age: 0.98,
+                size_seed: 0.0,
+                size: 1.0,
+            },
+            Shard {
+                age: 0.2,
+                size_seed: 0.0,
+                size: 1.0,
+            },
+        ];
         let actors = vec![Actor {
             storage_capacity: 4,
             capital: 10.0,
@@ -2040,7 +2287,16 @@ mod tests {
         w.locks[0][0] = 3;
         w.holdings[0][1] = true;
         w.locks[0][1] = 0;
-        w.advance_epoch(0.05);
+        w.advance_epoch(
+            0.05,
+            &CompositionParams {
+                spread: 1.0,
+                era_shape: EraShape::Monotone,
+                cv_tx: 0.0,
+                decorrelated: false,
+            },
+            0.0,
+        );
         // Shard 0 crossed age 1.0 → retired/recycled: age reset, holding+lock cleared.
         assert!((w.shards[0].age - 0.0).abs() < 1e-12);
         assert!(!w.holdings[0][0]);

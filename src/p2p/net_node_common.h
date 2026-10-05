@@ -51,8 +51,8 @@ namespace nodetool
   template<class t_connection_context>
   struct i_p2p_endpoint
   {
-    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)=0;
-    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay, cryptonote::zone_route route)=0;
+    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections)=0;
+    virtual bool send_txs(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay)=0;
     //! §46: hand every arrived tx to every zone's stem-observation watch,
     //! BEFORE pool admission — a returned tx that the pool then rejects still
     //! proves the successor relayed it. Implementation parses to canonical
@@ -69,21 +69,18 @@ namespace nodetool
     virtual std::map<std::string, time_t> get_blocked_hosts()=0;
     virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets()=0;
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1)=0;
-    virtual void add_used_stripe_peer(const t_connection_context &context)=0;
-    virtual void remove_used_stripe_peer(const t_connection_context &context)=0;
-    virtual void clear_used_stripe_peers()=0;
   };
 
   template<class t_connection_context>
   struct p2p_endpoint_stub: public i_p2p_endpoint<t_connection_context>
   {
-    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)
+    virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections)
     {
       return false;
     }
-    virtual epee::net_utils::zone send_txs(std::vector<cryptonote::blobdata> txs, const epee::net_utils::zone origin, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay, cryptonote::zone_route route)
+    virtual bool send_txs(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay)
     {
-      return epee::net_utils::zone::invalid;
+      return false;
     }
     virtual void record_tx_arrivals(std::vector<cryptonote::blobdata>, const boost::uuids::uuid&)
     {
@@ -132,15 +129,6 @@ namespace nodetool
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score)
     {
       return true;
-    }
-    virtual void add_used_stripe_peer(const t_connection_context &context)
-    {
-    }
-    virtual void remove_used_stripe_peer(const t_connection_context &context)
-    {
-    }
-    virtual void clear_used_stripe_peers()
-    {
     }
   };
 }

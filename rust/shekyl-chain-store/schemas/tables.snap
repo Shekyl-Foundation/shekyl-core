@@ -1,0 +1,43 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+tables = 38
+[tables]
+alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
+archival_attestation_witness = #20 map<u64, shekyl::Blob<attestation_witness>>
+archival_bond = #21 map<[u8;32], shekyl::Coded<bond_record>>
+archival_budget = #26 map<u64, shekyl::Coded<atomic_units>>
+archival_budget_accruing = #27 map<u64, shekyl::Coded<atomic_units>>
+archival_r_market = #24 map<(u64,u64), shekyl::Coded<r_market>>
+archival_serve_credit = #18 map<([u8;32],u64,u64,u64), shekyl::Present>
+archival_settlement = #19 map<&[u8], shekyl::Unshaped>
+archival_sigma_work = #25 map<u64, shekyl::Coded<sigma_work_milli>>
+archival_slash_applied = #22 map<([u8;32],u64,u64), shekyl::Present>
+archival_slash_log = #23 map<(u64,u32), shekyl::Coded<slash_log_entry>>
+block_burn = #17 map<u64, shekyl::Coded<atomic_units>>
+block_heights = #1 map<shekyl::LmdbHashKey, shekyl::Coded<block_height>>
+block_info = #2 map<u64, shekyl::Coded<block_info>>
+blocks = #0 map<u64, shekyl::Blob<block>>
+curve_tree_layers = #31 map<(u8,u64), shekyl::Coded<layer_hash>>
+curve_tree_leaf_counts = #34 map<u64, shekyl::Coded<leaf_count>>
+curve_tree_leaves = #30 map<u64, shekyl::Coded<tree_leaf>>
+curve_tree_meta = #32 map<(), shekyl::Coded<curve_tree_state>>
+curve_tree_roots = #33 map<u64, shekyl::Coded<curve_root>>
+hf_starting_heights = #14 map<&[u8], shekyl::Unshaped>
+hf_versions = #15 map<u64, shekyl::Coded<rule_set_id>>
+leaf_to_output = #29 map<u64, shekyl::Coded<global_output_index>>
+output_amounts = #11 map<(u64,u64), shekyl::Coded<out_key>>
+output_to_leaf = #28 map<u64, shekyl::Coded<tree_position>>
+output_txs = #10 map<u64, shekyl::Coded<out_tx>>
+properties = #16 map<&str, shekyl::Blob<property_cell>>
+spent_keys = #12 map<shekyl::LmdbHashKey, shekyl::Present>
+tx_indices = #8 map<shekyl::LmdbHashKey, shekyl::Coded<tx_index>>
+tx_outputs = #9 map<u64, shekyl::Coded<tx_output_indices>>
+txs = #3 map<u64, shekyl::Unshaped>
+txs_archival_len = #37 map<u64, shekyl::Coded<archival_length>>
+txs_pqc_auth_hash = #36 map<u64, shekyl::Coded<pqc_auth_hash>>
+txs_pqc_auths = #5 map<u64, shekyl::Blob<tx_pqc_auths>>
+txs_prunable = #6 map<u64, shekyl::Blob<tx_prunable>>
+txs_prunable_hash = #7 map<u64, shekyl::Coded<prunable_hash>>
+txs_pruned = #4 map<u64, shekyl::Blob<tx_pruned>>
+undo_log = #35 map<u64, shekyl::Coded<undo_log>>

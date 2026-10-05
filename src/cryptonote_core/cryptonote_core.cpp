@@ -124,11 +124,6 @@ namespace cryptonote
   , "Defines how many minutes of block synchronization data to request at a time (default is 2 minutes)"
   , 2
   };
-  const command_line::arg_descriptor<bool> arg_sync_pruned_blocks  = {
-    "sync-pruned-blocks"
-  , "Allow syncing from nodes with only pruned blocks"
-  };
-
   static const command_line::arg_descriptor<bool> arg_test_drop_download = {
     "test-drop-download"
   , "For net tests: in download, discard ALL blocks instead checking/saving them (very fast)"
@@ -168,11 +163,6 @@ namespace cryptonote
   , "Run a program for each new block, '%s' will be replaced by the block hash"
   , ""
   };
-  static const command_line::arg_descriptor<bool> arg_prune_blockchain  = {
-    "prune-blockchain"
-  , "Prune blockchain"
-  , false
-  };
   static const command_line::arg_descriptor<std::string> arg_reorg_notify = {
     "reorg-notify"
   , "Run a program for each reorg, '%s' will be replaced by the split height, "
@@ -210,16 +200,13 @@ namespace cryptonote
   core::core(i_cryptonote_protocol* pprotocol):
               m_mempool(m_blockchain_storage),
               m_blockchain_storage(m_mempool),
-              m_miner(this, [this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash) {
-                return cryptonote::get_block_longhash(&m_blockchain_storage, b, hash, height, seed_hash, threads);
+              m_miner(this, [this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash) {
+                return cryptonote::get_block_longhash(&m_blockchain_storage, b, hash, height, seed_hash);
               }),
               m_starter_message_showed(false),
               m_target_blockchain_height(0),
-              m_checkpoints_path(""),
-              m_last_json_checkpoints_update(0),
               m_nettype(UNDEFINED)
   {
-    m_checkpoints_updating.clear();
     set_cryptonote_protocol(pprotocol);
   }
 #if defined(__GNUC__) && !defined(__clang__)
@@ -240,37 +227,6 @@ namespace cryptonote
   void core::set_checkpoints(checkpoints&& chk_pts)
   {
     m_blockchain_storage.set_checkpoints(std::move(chk_pts));
-  }
-  //-----------------------------------------------------------------------------------
-  void core::set_checkpoints_file_path(const std::string& path)
-  {
-    m_checkpoints_path = path;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::update_checkpoints()
-  {
-    // Uniform across every network (C2-R1b-Q2a, rule 71): the periodic
-    // checkpoint reload runs wherever a checkpoints.json exists, so an
-    // operator can rehearse an override on testnet before touching
-    // mainnet. The former `!= MAINNET` guard returned TRUE — reporting
-    // success for work it never did.
-    if (m_checkpoints_updating.test_and_set()) return true;
-
-    bool res = true;
-    if (time(NULL) - m_last_json_checkpoints_update >= 600)
-    {
-      res = m_blockchain_storage.update_checkpoints(m_checkpoints_path);
-      m_last_json_checkpoints_update = time(NULL);
-    }
-
-    m_checkpoints_updating.clear();
-
-    // if anything fishy happened getting new checkpoints, bring down the house
-    if (!res)
-    {
-      graceful_exit();
-    }
-    return res;
   }
   //-----------------------------------------------------------------------------------
   void core::stop()
@@ -298,10 +254,8 @@ namespace cryptonote
     command_line::add_arg(desc, arg_offline);
     command_line::add_arg(desc, arg_block_download_max_size);
     command_line::add_arg(desc, arg_span_limit);
-    command_line::add_arg(desc, arg_sync_pruned_blocks);
     command_line::add_arg(desc, arg_max_txpool_weight);
     command_line::add_arg(desc, arg_block_notify);
-    command_line::add_arg(desc, arg_prune_blockchain);
     command_line::add_arg(desc, arg_reorg_notify);
     command_line::add_arg(desc, arg_block_rate_notify);
     command_line::add_arg(desc, arg_keep_alt_blocks);
@@ -321,13 +275,11 @@ namespace cryptonote
 
     m_config_folder = command_line::get_arg(vm, arg_data_dir);
 
-    auto data_dir = boost::filesystem::path(m_config_folder);
-
     // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
-    // wiring — the points object AND the json reload path — is
-    // identical on mainnet, testnet and stagenet. Data may differ per
-    // network (the compiled-in list, when one ever exists); the code
-    // path may not.
+    // wiring is identical on mainnet, testnet and stagenet. Data may
+    // differ per network (the compiled-in list, when one ever exists);
+    // the code path may not. The compiled-in table is the only source --
+    // the data-dir checkpoints.json channel was deleted (PDM-Q-F23).
     {
       cryptonote::checkpoints checkpoints;
       if (!checkpoints.init_default_checkpoints(m_nettype))
@@ -335,11 +287,6 @@ namespace cryptonote
         throw std::runtime_error("Failed to initialize checkpoints");
       }
       set_checkpoints(std::move(checkpoints));
-
-      boost::filesystem::path json(JSON_HASH_FILE_NAME);
-      boost::filesystem::path checkpoint_json_hashfile_fullpath = data_dir / json;
-
-      set_checkpoints_file_path(checkpoint_json_hashfile_fullpath.string());
     }
 
 
@@ -410,6 +357,104 @@ namespace cryptonote
     return m_blockchain_storage.get_alternative_blocks_count();
   }
   //-----------------------------------------------------------------------------------------------
+  //-----------------------------------------------------------------------------------------------
+  bool parse_db_sync_mode(const std::string &spec, bool is_default,
+                          db_sync_settings &out, std::string &error)
+  {
+    db_sync_settings parsed;
+
+    std::string trimmed = spec;
+    boost::trim(trimmed);
+
+    // An empty specification is "not specified": the defaults below stand. The
+    // pre-2026-09-13 form had an `options.size() == 0` branch for this, which
+    // boost::split can never produce -- splitting "" yields one empty element,
+    // not an empty vector -- so the branch was unreachable and the empty string
+    // fell through to the silent-default `else` this function replaces.
+    if (trimmed.empty())
+    {
+      parsed.db_flags = DBF_FAST;
+      out = parsed;
+      return true;
+    }
+
+    std::vector<std::string> options;
+    boost::split(options, trimmed, boost::is_any_of(" :"));
+
+    for (const auto &option : options)
+      MDEBUG("option: " << option);
+
+    bool safemode = false;
+    if (options[0] == "safe")
+    {
+      safemode = true;
+      parsed.db_flags = DBF_SAFE;
+      parsed.sync_mode = is_default ? db_defaultsync : db_nosync;
+    }
+    else if (options[0] == "fast")
+    {
+      parsed.db_flags = DBF_FAST;
+      parsed.sync_mode = is_default ? db_defaultsync : db_async;
+    }
+    else if (options[0] == "fastest")
+    {
+      parsed.db_flags = DBF_FASTEST;
+      parsed.sync_threshold = 1000; // default to fastest:async:1000
+      parsed.sync_mode = is_default ? db_defaultsync : db_async;
+    }
+    else
+    {
+      // FAIL CLOSED. The pre-2026-09-13 form was `else db_flags = DEFAULT_FLAGS;`
+      // with no diagnostic, and DEFAULT_FLAGS is DBF_FAST, which db_lmdb maps to
+      // MDB_NOSYNC -- so `--db-sync-mode=saf` silently selected the LEAST durable
+      // mode. Pre-genesis there is no deployed base to break, so an unrecognised
+      // token refuses to start instead.
+      error = "unrecognised db sync mode \"" + options[0] + "\"; expected safe, fast or fastest";
+      return false;
+    }
+
+    if (options.size() >= 2 && !safemode)
+    {
+      if (options[1] == "sync")
+        parsed.sync_mode = is_default ? db_defaultsync : db_sync;
+      else if (options[1] == "async")
+        parsed.sync_mode = is_default ? db_defaultsync : db_async;
+      else
+      {
+        // The same defect one field along, and it had no `else` at all: an
+        // unrecognised options[1] was silently ignored, leaving whatever
+        // options[0] had chosen. Same durability setting, same treatment.
+        error = "unrecognised db sync policy \"" + options[1] + "\"; expected sync or async";
+        return false;
+      }
+    }
+
+    if (options.size() >= 3 && !safemode)
+    {
+      char *endptr;
+      const uint64_t threshold = strtoull(options[2].c_str(), &endptr, 0);
+      if (*endptr == '\0' || !strcmp(endptr, "blocks"))
+      {
+        parsed.sync_on_blocks = true;
+        parsed.sync_threshold = threshold;
+      }
+      else if (!strcmp(endptr, "bytes"))
+      {
+        parsed.sync_on_blocks = false;
+        parsed.sync_threshold = threshold;
+      }
+      else
+      {
+        // Unchanged: this token already refused. The two above now match it.
+        error = "invalid db sync threshold \"" + options[2] + "\"; expected <n>, <n>blocks or <n>bytes";
+        return false;
+      }
+    }
+
+    out = parsed;
+    return true;
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options)
   {
     start_time = std::time(nullptr);
@@ -426,7 +471,6 @@ namespace cryptonote
     bool db_salvage = command_line::get_arg(vm, cryptonote::arg_db_salvage) != 0;
     uint64_t blocks_threads = command_line::get_arg(vm, arg_prep_blocks_threads);
     size_t max_txpool_weight = command_line::get_arg(vm, arg_max_txpool_weight);
-    bool prune_blockchain = command_line::get_arg(vm, arg_prune_blockchain);
     bool keep_alt_blocks = command_line::get_arg(vm, arg_keep_alt_blocks);
     bool keep_fakechain = command_line::get_arg(vm, arg_keep_fakechain);
 
@@ -482,80 +526,38 @@ namespace cryptonote
 
     try
     {
-      uint64_t db_flags = 0;
-
-      std::vector<std::string> options;
-      boost::trim(db_sync_mode);
-      boost::split(options, db_sync_mode, boost::is_any_of(" :"));
       const bool db_sync_mode_is_default = command_line::is_arg_defaulted(vm, cryptonote::arg_db_sync_mode);
 
-      for(const auto &option : options)
-        MDEBUG("option: " << option);
-
-      // default to fast:async:1
-      uint64_t DEFAULT_FLAGS = DBF_FAST;
-
-      if(options.size() == 0)
+      db_sync_settings resolved;
+      std::string db_sync_error;
+      if (!parse_db_sync_mode(db_sync_mode, db_sync_mode_is_default, resolved, db_sync_error))
       {
-        // default to fast:async:1
-        db_flags = DEFAULT_FLAGS;
+        // Refuse to start. A durability control that silently falls back to its
+        // least durable setting on a typo is the one failure a node cannot
+        // detect from its own behaviour.
+        MFATAL("Invalid --db-sync-mode: " << db_sync_error);
+        return false;
       }
 
-      bool safemode = false;
-      if(options.size() >= 1)
-      {
-        if(options[0] == "safe")
-        {
-          safemode = true;
-          db_flags = DBF_SAFE;
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_nosync;
-        }
-        else if(options[0] == "fast")
-        {
-          db_flags = DBF_FAST;
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-        }
-        else if(options[0] == "fastest")
-        {
-          db_flags = DBF_FASTEST;
-          sync_threshold = 1000; // default to fastest:async:1000
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-        }
-        else
-          db_flags = DEFAULT_FLAGS;
-      }
-
-      if(options.size() >= 2 && !safemode)
-      {
-        if(options[1] == "sync")
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_sync;
-        else if(options[1] == "async")
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-      }
-
-      if(options.size() >= 3 && !safemode)
-      {
-        char *endptr;
-        uint64_t threshold = strtoull(options[2].c_str(), &endptr, 0);
-        if (*endptr == '\0' || !strcmp(endptr, "blocks"))
-        {
-          sync_on_blocks = true;
-          sync_threshold = threshold;
-        }
-        else if (!strcmp(endptr, "bytes"))
-        {
-          sync_on_blocks = false;
-          sync_threshold = threshold;
-        }
-        else
-        {
-          LOG_ERROR("Invalid db sync mode: " << options[2]);
-          return false;
-        }
-      }
+      uint64_t db_flags = resolved.db_flags;
+      sync_mode = resolved.sync_mode;
+      sync_on_blocks = resolved.sync_on_blocks;
+      sync_threshold = resolved.sync_threshold;
 
       if (db_salvage)
         db_flags |= DBF_SALVAGE;
+
+      // A4: report what was RESOLVED, not what was asked for. The point of the
+      // row is that the durability posture is explicit rather than a library
+      // default reached by omission, and that is only checkable from a running
+      // node if the node says which flags it opened with.
+      MGINFO("Database sync: flags=0x" << std::hex << db_flags << std::dec
+        << (db_flags & DBF_SAFE ? " (safe)" : "")
+        << (db_flags & DBF_FAST ? " (fast: MDB_NOSYNC)" : "")
+        << (db_flags & DBF_FASTEST ? " (fastest: MDB_NOSYNC|MDB_WRITEMAP|MDB_MAPASYNC)" : "")
+        << (db_flags & DBF_SALVAGE ? " (salvage)" : "")
+        << ", sync_mode=" << (int)sync_mode
+        << ", threshold=" << sync_threshold << (sync_on_blocks ? " blocks" : " bytes"));
 
       db->open(filename, db_flags);
       if(!db->m_open)
@@ -613,7 +615,23 @@ namespace cryptonote
       MERROR("Failed to parse block rate notify spec: " << e.what());
     }
 
-    const std::pair<uint8_t, uint64_t> regtest_hard_forks[3] = {std::make_pair(1, 0), std::make_pair(mainnet_hard_forks[num_mainnet_hard_forks-1].version, 1), std::make_pair(0, 0)};
+    // Regtest carries the issued networks' table: version 1 at height 1,
+    // exactly `mainnet_hard_forks` (`hardforks.cpp`). Nettype selects data,
+    // never behaviour, on the consensus surface (rule 71), and this table
+    // IS consensus data: `get_earliest_ideal_height_for_version(
+    // HF_VERSION_SHEKYL_NG)` is CEN-F21's epoch — the height the staker
+    // share's decay is measured from — read by validate_miner_transaction,
+    // the template, the relay floor and the fee RPC. The inherited shape
+    // `{(1, 0), (latest, 1)}` put version 1 at height 0 here alone; with
+    // mainnet's latest version also 1, `HardFork::add_fork` rejected the
+    // second row (version <= back) and the table was `[(1, 0)]`, so regtest
+    // decayed the split from height 0 while every issued network decays it
+    // from height 1 — a 1-unit share difference at ~5.7 % of heights, found
+    // by the Rust producer's block at the consensus bound being refused for
+    // its coinbase (`regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_
+    // is_judged_by_the_cxx`, the falsifier). `shekyl_e2_trace_export.cpp`
+    // carries the same table for the same reason.
+    const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {std::make_pair(mainnet_hard_forks[num_mainnet_hard_forks-1].version, 1), std::make_pair(0, 0)};
     const cryptonote::test_options regtest_test_options = {
       regtest_hard_forks,
       0
@@ -637,31 +655,18 @@ namespace cryptonote
     if (block_sync_size > BLOCKS_SYNCHRONIZING_MAX_COUNT)
       MERROR("Error --block-sync-size cannot be greater than " << BLOCKS_SYNCHRONIZING_MAX_COUNT);
 
-    MGINFO("Loading checkpoints");
+    MGINFO("Enforcing checkpoints");
 
-    // load json checkpoints, and verify them
-    // with respect to what blocks we already have
-    CHECK_AND_ASSERT_MES(update_checkpoints(), false, "One or more checkpoints loaded from json conflicted with existing checkpoints.");
+    // Verify the compiled-in checkpoints against the blocks we already
+    // have; a conflict the rollback cannot resolve fail-stops init
+    // (C2-R1b F-1(b)).
+    CHECK_AND_ASSERT_MES(m_blockchain_storage.enforce_checkpoints(), false, "A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback.");
 
     r = m_miner.init(vm, m_nettype);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
 
     if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
       m_blockchain_storage.get_db().drop_alt_blocks();
-
-    if (prune_blockchain)
-    {
-      // display a message if the blockchain is not pruned yet
-      if (!m_blockchain_storage.get_blockchain_pruning_seed())
-      {
-        MGINFO("Pruning blockchain...");
-        CHECK_AND_ASSERT_MES(m_blockchain_storage.prune_blockchain(), false, "Failed to prune blockchain");
-      }
-      else
-      {
-        CHECK_AND_ASSERT_MES(m_blockchain_storage.update_blockchain_pruning(), false, "Failed to update blockchain pruning");
-      }
-    }
 
     return load_state_data();
   }
@@ -711,7 +716,7 @@ namespace cryptonote
     return false;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     tvc = {};
 
@@ -737,7 +742,7 @@ namespace cryptonote
     }
 
     const uint64_t tx_weight = get_transaction_weight(tx, tx_blob.size());
-    if (!add_new_tx(tx, txid, tx_blob, tx_weight, tvc, tx_relay, relayed, origin_zone))
+    if (!add_new_tx(tx, txid, tx_blob, tx_weight, tvc, tx_relay, relayed))
       return false;
 
     if (tvc.m_verifivation_failed)
@@ -807,7 +812,7 @@ namespace cryptonote
     // on the same shape rather than zero-filling (blockchain_db.cpp).
     {
       std::string why;
-      if (!check_tx_extra_pqc_field_shape(tx, why))
+      if (!check_tx_extra_shape(tx, why))
       {
         MERROR_VER(why << ", rejected for tx id= " << get_transaction_hash(tx));
         tvc.m_verifivation_failed = true;
@@ -851,7 +856,7 @@ namespace cryptonote
       return false;
     }
 
-    if (!check_output_types(tx, hf_version))
+    if (!check_output_types(tx))
     {
       MERROR_VER("tx does not use valid output type(s)");
       tvc.m_verifivation_failed = true;
@@ -991,13 +996,13 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::add_new_tx(transaction& tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     crypto::hash tx_hash = get_transaction_hash(tx);
     blobdata bl;
     t_serializable_object_to_blob(tx, bl);
     size_t tx_weight = get_transaction_weight(tx, bl.size());
-    return add_new_tx(tx, tx_hash, bl, tx_weight, tvc, tx_relay, relayed, origin_zone);
+    return add_new_tx(tx, tx_hash, bl, tx_weight, tvc, tx_relay, relayed);
   }
   //-----------------------------------------------------------------------------------------------
   size_t core::get_blockchain_total_transactions() const
@@ -1005,7 +1010,7 @@ namespace cryptonote
     return m_blockchain_storage.get_total_transactions();
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  bool core::add_new_tx(transaction& tx, const crypto::hash& tx_hash, const cryptonote::blobdata &blob, size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
     if(m_mempool.have_tx(tx_hash, relay_category::broadcasted))
     {
@@ -1020,7 +1025,7 @@ namespace cryptonote
     }
 
     uint8_t version = m_blockchain_storage.get_current_hard_fork_version();
-    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version, origin_zone);
+    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version);
 
     // If new incoming tx passed verification and entered the pool, notify subscribers
     if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::broadcasted))
@@ -1059,9 +1064,8 @@ namespace cryptonote
          would let an entry re-stem indefinitely instead of diffusing.
 
          The leak the #427 tripwire recorded was the `forward` arm, which put
-         STILL-STEMMING anonymity traffic into `stem_req` at `zone::public_` —
-         stemming on the wrong network. Deleting the class closes it; there is
-         nothing left here to route by origin. */
+         still-stemming traffic onto the clearnet fluff request. Deleting
+         the class closes it; there is nothing left here to route by origin. */
       for (auto& tx : txs)
       {
         switch (std::get<2>(tx))
@@ -1086,15 +1090,12 @@ namespace cryptonote
          re-relaying public and private _should_ be acceptable here. */
       const boost::uuids::uuid source = boost::uuids::nil_uuid();
       if (!public_req.txs.empty())
-        get_protocol()->relay_transactions(public_req, source, epee::net_utils::zone::public_, relay_method::fluff);
+        get_protocol()->relay_transactions(public_req, source, relay_method::fluff);
       if (!private_req.txs.empty())
-        /* `invalid`+`local` is the fail-closed backstop for originated
-           traffic that chose anonymity and kept its `local` record. It is
-           ALSO the first send of a missed submit nudge, whose origination
-           roll never ran — a second chooser, D5a in miniature. Those two
-           are indistinguishable here without persisting the roll, and
-           rolling here is the `source.is_nil()` reversal. FOLLOWUPS. */
-        get_protocol()->relay_transactions(private_req, source, epee::net_utils::zone::invalid, relay_method::local);
+        /* `local` is the origin's record, including a missed submit nudge.
+           Hop 0 inside the relay fail-closes when the construction bit is
+           set and no eligible edge exists. */
+        get_protocol()->relay_transactions(private_req, source, relay_method::local);
     }
     return true;
   }
@@ -1135,7 +1136,7 @@ namespace cryptonote
     m_mempool.on_stem_propagated(txids);
   }
   //-----------------------------------------------------------------------------------------------
-  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const epee::net_utils::zone zone)
+  void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay, const std::optional<std::uint8_t> stem_connector)
   {
     // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
@@ -1158,7 +1159,7 @@ namespace cryptonote
     std::vector<bool> just_broadcasted{};
     just_broadcasted.reserve(tx_hashes.size());
 
-    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, zone, just_broadcasted);
+    m_mempool.set_relayed(epee::to_span(tx_hashes), tx_relay, stem_connector, just_broadcasted);
 
     if (matches_category(tx_relay, relay_category::broadcasted))
       notify_txpool_event(tx_blobs, epee::to_span(tx_hashes), epee::to_span(txs), just_broadcasted);
@@ -1174,9 +1175,9 @@ namespace cryptonote
     return m_blockchain_storage.get_miner_data(major_version, height, prev_id, seed_hash, difficulty, median_weight, already_generated_coins, tx_backlog);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, bool clip_pruned, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
+  bool core::find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const
   {
-    return m_blockchain_storage.find_blockchain_supplement(qblock_ids, clip_pruned, resp);
+    return m_blockchain_storage.find_blockchain_supplement(qblock_ids, resp);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, uint64_t &start_height, std::vector<uint64_t> &distribution, uint64_t &base) const
@@ -1593,7 +1594,6 @@ namespace cryptonote
     relay_txpool_transactions(); // txpool handles periodic DB checking
     m_check_disk_space_interval.do_call(boost::bind(&core::check_disk_space, this));
     m_block_rate_interval.do_call(boost::bind(&core::check_block_rate, this));
-    m_blockchain_pruning_interval.do_call(boost::bind(&core::update_blockchain_pruning, this));
     m_miner.on_idle();
     m_mempool.on_idle();
     return true;
@@ -1726,16 +1726,6 @@ namespace cryptonote
     return m_mempool.get_complement(hashes, txes);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::update_blockchain_pruning()
-  {
-    return m_blockchain_storage.update_blockchain_pruning();
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::check_blockchain_pruning()
-  {
-    return m_blockchain_storage.check_blockchain_pruning();
-  }
-  //-----------------------------------------------------------------------------------------------
   void core::set_target_blockchain_height(uint64_t target_blockchain_height)
   {
     m_target_blockchain_height = target_blockchain_height;
@@ -1751,16 +1741,6 @@ namespace cryptonote
     boost::filesystem::path path(m_config_folder);
     boost::filesystem::space_info si = boost::filesystem::space(path);
     return si.available;
-  }
-  //-----------------------------------------------------------------------------------------------
-  uint32_t core::get_blockchain_pruning_seed() const
-  {
-    return get_blockchain_storage().get_blockchain_pruning_seed();
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::prune_blockchain(uint32_t pruning_seed)
-  {
-    return get_blockchain_storage().prune_blockchain(pruning_seed);
   }
   //-----------------------------------------------------------------------------------------------
   std::time_t core::get_start_time() const

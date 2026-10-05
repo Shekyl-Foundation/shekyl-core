@@ -5,161 +5,52 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::BalanceView;
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
-use shekyl_engine_core::StakedBalance;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
-    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails, UnspendableReason,
 };
-use shekyl_scanner::BalanceSummary;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
-use crate::params::parse_hex32;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
     RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
     TransferDirection, TransferState, TransferView,
 };
 
-/// Decimal string for OpenAPI `AtomicUnits`.
-pub fn atomic_units_string(amount: AtomicUnits) -> String {
-    amount.to_raw().to_string()
-}
-
-/// Map scanner balance + the authoritative staking view into the locked
-/// OpenAPI balance shape (WI-RPC-5: staking fields carry live values, never
-/// the pre-Stage-3 `"0"` placeholder).
-///
-/// `staked` is the checked sum of the two bonded legs `get_staked_balance`
-/// keeps separate (confirmed + in-flight sealed principal);
-/// `claimable_rewards` is `rewards_received_unspent` — received-and-unspent
-/// staking-side money, not a claim-era entitlement. `liquid` mirrors
-/// `unlocked` until staking splits liquid from locked principal. For a
-/// non-staker the caller passes `Some(&StakedBalance::ZERO)`, which is a
-/// true zero (nothing is staked), not a placeholder.
-///
-/// `staking: None` is the **degrade** arm — the sealed staking read failed
-/// — and projects the staking fields *absent*: the liquid fields stay
-/// authoritative while nothing fabricates a zero over a bad seal (the
-/// engine's fail-closed pin, carried onto the wire as structural absence
-/// rather than a `-32603` blackout of the whole balance surface).
-///
-/// # Errors
-///
-/// A bonded-principal sum that overflows the money type is a corrupt view
-/// (the supply cap keeps any legitimate sum far below `u64::MAX`). That
-/// arm answers [`WalletRpcError::InternalError`]: checked, not saturating,
-/// because a clamped `u64::MAX` would render as a plausible (absurd)
-/// balance instead of failing loudly — and a structured error, not a
-/// panic, because the workspace builds with `panic = "abort"`, so a panic
-/// on this hot path would take the whole wallet-rpc server down for a
-/// state one wallet file caused (same disposition as `transfer_view`'s
-/// internal-error arm and `StakeInError::CoverOverflow`). Deliberately
-/// NOT folded into the degrade arm: a view that *loaded* but sums past
-/// the money type is corrupt-loud territory, while the degrade arm is
-/// for a view that could not load at all.
-pub fn get_balance_result(
-    b: &BalanceSummary,
-    staking: Option<&StakedBalance>,
-) -> Result<GetBalanceResult, WalletRpcError> {
-    let unlocked = atomic_units_string(b.unlocked);
-    let staked = staking
-        .map(|s| {
-            s.bonded_principal_confirmed
-                .to_raw()
-                .checked_add(s.bonded_principal_pending.to_raw())
-                .map(|sum| sum.to_string())
-                .ok_or_else(|| {
-                    WalletRpcError::InternalError(
-                        "bonded principal legs exceed the money type (corrupt staking view)"
-                            .to_owned(),
-                    )
-                })
-        })
-        .transpose()?;
-    Ok(GetBalanceResult {
-        liquid: unlocked.clone(),
-        staked,
-        unlocked,
-        claimable_rewards: staking.map(|s| atomic_units_string(s.rewards_received_unspent)),
-        pending: atomic_units_string(b.awaiting_confirmation),
-    })
+/// Serialize the engine's one-glance balance ([`BalanceView`]) as the
+/// contract's `get_balance` result. Pure wire shaping: which leg is liquid,
+/// how the bonded legs sum, and what an unreadable staking seal does to the
+/// staking fields are decided by [`shekyl_engine_core::StakeFacade::balance_view`],
+/// once, for every consumer. This function spells the decimal strings and
+/// carries the engine's absence onto the wire as absence.
+pub fn get_balance_result(view: &BalanceView) -> GetBalanceResult {
+    GetBalanceResult {
+        liquid: view.liquid.into(),
+        staked: view.staking.map(|s| s.staked.into()),
+        unlocked: view.unlocked.into(),
+        unspendable: view.unspendable.into(),
+        claimable_rewards: view.staking.map(|s| s.claimable_rewards.into()),
+        pending: view.pending.into(),
+    }
 }
 
 /// Stable transfer id: `{tx_hash_hex}:{internal_output_index}`.
+///
+/// The grammar's parser lives in `shekyl-wallet-contract` (re-exported
+/// below) so the RPC server and the desktop wallet accept the same
+/// strings. This function is what that parser accepts.
 pub fn transfer_id(td: &TransferDetails) -> String {
     format!("{}:{}", td.tx_hash, td.internal_output_index)
 }
 
-/// Parse a transfer id back into its `(tx_hash, internal_output_index)`
-/// parts — the inverse of [`transfer_id`], kept beside it so the id format
-/// has a single home.
-///
-/// Accepts exactly the canonical form `transfer_id` emits (64 lowercase hex
-/// chars per the crate's shared `params::parse_hex32` rule, `:`, decimal index
-/// with no leading zeros or sign). Anything else returns `None` — the same
-/// ids that per-row string equality against [`transfer_id`] output would
-/// have failed to match, so lookups by the parsed parts preserve match
-/// semantics while comparing typed fields instead of formatting a fresh id
-/// string for every ledger row scanned.
-pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
-    let (hash_hex, idx_str) = id.split_once(':')?;
-    let bytes = parse_hex32(hash_hex)?;
-    // Canonical decimal only: `u64::from_str` also accepts `+` and leading
-    // zeros, which `transfer_id` never emits and string equality would
-    // therefore never have matched.
-    if idx_str.is_empty()
-        || !idx_str.bytes().all(|b| b.is_ascii_digit())
-        || (idx_str.len() > 1 && idx_str.starts_with('0'))
-    {
-        return None;
-    }
-    let idx: u64 = idx_str.parse().ok()?;
-    Some((TxHash::from_bytes(bytes), idx))
-}
-
-/// Which side of the history a `get_transfer_by_id` id names.
-///
-/// The two id grammars are disjoint — INCOMING ids carry a `:`
-/// separator, OUTGOING ids are bare 64-char hex — so a well-formed id
-/// resolves to exactly one lookup with no ambiguity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferLookupId {
-    /// `{tx_hash_hex}:{internal_output_index}` — a scan-ledger output.
-    Incoming {
-        /// Transaction the output belongs to.
-        tx_hash: TxHash,
-        /// Index of the output within that transaction.
-        output_index: u64,
-    },
-    /// Bare `{tx_hash_hex}` — a send-journal row (txid-keyed, SJ-DQ-7).
-    Outgoing {
-        /// Transaction the send record is keyed by.
-        tx_hash: TxHash,
-    },
-}
-
-/// Parse a client-supplied `get_transfer_by_id` id.
-///
-/// `None` means the string is not an id this wallet ever emits, which
-/// is a malformed *request* — the caller reports invalid params rather
-/// than "unknown transfer". The distinction is user-visible: a person
-/// who pastes an uppercase txid must be told the id is not in canonical
-/// form, not that the send they are looking at does not exist (rule 82).
-pub fn parse_lookup_id(id: &str) -> Option<TransferLookupId> {
-    if let Some((tx_hash, output_index)) = parse_transfer_id(id) {
-        return Some(TransferLookupId::Incoming {
-            tx_hash,
-            output_index,
-        });
-    }
-    parse_hex32(id).map(|bytes| TransferLookupId::Outgoing {
-        tx_hash: TxHash::from_bytes(bytes),
-    })
-}
+pub use shekyl_wallet_contract::transfer_id::{
+    parse_lookup_id, parse_transfer_id, TransferLookupId, LOOKUP_ID_GRAMMAR,
+};
 
 /// Confirmation / spend state of a ledger row.
 ///
@@ -173,11 +64,25 @@ pub fn transfer_state(
 ) -> TransferState {
     if td.spent {
         TransferState::Spent
+    } else if td.unspendable.is_some() {
+        // PL-D3 §6.2: the scan-time verdict outranks the lock (an
+        // unspendable row is never selected, so a lock on it would itself be
+        // a defect) and CONFIRMED (which promises spendability).
+        TransferState::Unspendable
     } else if spend_locks.contains(td.global_output_index) {
         TransferState::Pending
     } else {
         TransferState::Confirmed
     }
+}
+
+/// Wire string for a row's received-but-unspendable reason
+/// (`TransferView::unspendable_reason`); `None` for a spendable row.
+pub fn unspendable_reason_string(td: &TransferDetails) -> Option<String> {
+    td.unspendable.map(|reason| match reason {
+        UnspendableReason::PqcLeafMismatch => "PQC_LEAF_MISMATCH".to_owned(),
+        UnspendableReason::PqcLeafEntryAbsent => "PQC_LEAF_ENTRY_ABSENT".to_owned(),
+    })
 }
 
 /// Project ledger receive-attribution to the RPC view (no cleartext labels).
@@ -256,14 +161,15 @@ pub fn transfer_view(
         // journal (`outgoing_transfer_view`).
         direction: TransferDirection::Incoming,
         tx_hash: td.tx_hash.to_string(),
-        amount: atomic_units_string(td.amount()),
-        fee: "0".to_owned(),
+        amount: td.amount().into(),
+        fee: AtomicUnits::ZERO.into(),
         // Ledger rows are scanner-observed, so they are always mined.
-        block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
+        block_height: Some(i64::try_from(td.block_height.to_raw()).unwrap_or(i64::MAX)),
         state: transfer_state(td, spend_locks),
         spent_height: td
             .spent_height
-            .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+            .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
+        unspendable_reason: unspendable_reason_string(td),
         // Receive-side row, so attribution is always meaningful here.
         attribution: Some(attribution_view(&td.receive_attribution)),
         // Per-txid note (SJ-DQ-7); shared across both directions of a txid.
@@ -286,7 +192,7 @@ pub fn outgoing_transfer_id(txid: &TxHash) -> String {
 /// confirmed row back to `Dispatched` (rule 82).
 pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     match row.state {
-        SendState::Confirmed { height } => Some(height),
+        SendState::Confirmed { height } => Some(height.to_raw()),
         SendState::Dispatched
         | SendState::TerminalRejected
         | SendState::PresumedDead
@@ -294,36 +200,8 @@ pub fn outgoing_block_height(row: &SendRecord) -> Option<u64> {
     }
 }
 
-/// Map journal lifecycle onto the OpenAPI `TransferState` enum.
-///
-/// Every arm is a distinct user-facing situation; none collapses into
-/// another, because each collapse is a different lie (rule 82):
-///
-/// - `Dispatched` → `PENDING` (in flight; the wallet is still waiting).
-/// - `Confirmed` → `CONFIRMED` (refresh observed the spend on chain).
-/// - `TerminalRejected` → `FAILED` (daemon refused; never mined — never
-///   collapse into `CONFIRMED`).
-/// - `PresumedDead` → `DROPPED` (the confirmed-absent watchdog released
-///   the input locks — never collapse into `PENDING`, which would say
-///   the wallet is still waiting while the same wallet reports those
-///   funds spendable again).
-/// - `Abandoned` → `ABANDONED` (user-authored give-up, P3-4 — never
-///   collapse into `DROPPED`, whose release claim is evidence-backed;
-///   an abandoned send's input locks may still be held).
-///
-/// This is the **single owner** of the journal → wire state map; error
-/// mapping and filters call here (or [`outgoing_transfer_state`]) rather
-/// than re-listing the arms.
-#[must_use]
-pub fn outgoing_transfer_state_of(state: SendState) -> TransferState {
-    match state {
-        SendState::Dispatched => TransferState::Pending,
-        SendState::Confirmed { .. } => TransferState::Confirmed,
-        SendState::TerminalRejected => TransferState::Failed,
-        SendState::PresumedDead => TransferState::Dropped,
-        SendState::Abandoned => TransferState::Abandoned,
-    }
-}
+/// The journal → wire state map, single-owned by the contract crate.
+pub use shekyl_wallet_contract::outgoing_transfer_state_of;
 
 /// Convenience: [`outgoing_transfer_state_of`] for a full journal row.
 #[must_use]
@@ -351,12 +229,14 @@ pub fn outgoing_transfer_view(
         id: outgoing_transfer_id(txid),
         direction: TransferDirection::Outgoing,
         tx_hash: txid.to_string(),
-        amount: atomic_units_string(AtomicUnits::from_raw(sent)),
-        fee: atomic_units_string(AtomicUnits::from_raw(row.fee)),
+        amount: AtomicUnits::from_raw(sent).into(),
+        fee: AtomicUnits::from_raw(row.fee).into(),
         // Crate-wide height projection idiom: OpenAPI heights are int64.
         block_height: outgoing_block_height(row).map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
         state: outgoing_transfer_state(row),
         spent_height: None,
+        // OUTGOING rows are never received-but-unspendable.
+        unspendable_reason: None,
         // Receive attribution is documented "Present on INCOMING rows
         // only" — a send has no receive side to attribute.
         attribution: None,
@@ -374,7 +254,7 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
         reorg_fork_height: summary
             .reorg
             .as_ref()
-            .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
+            .map(|r| i64::try_from(r.fork_height.to_raw()).unwrap_or(i64::MAX)),
     }
 }
 
@@ -425,9 +305,9 @@ pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResul
 pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
     BuildPendingTxResult {
         pending_tx_id: tx.id.raw().to_string(),
-        built_at_height: i64::try_from(tx.built_at_height).unwrap_or(i64::MAX),
+        built_at_height: i64::try_from(tx.built_at_height.to_raw()).unwrap_or(i64::MAX),
         built_at_tip_hash: hex::encode(tx.built_at_tip_hash),
-        fee: atomic_units_string(tx.fee_atomic_units),
+        fee: tx.fee_atomic_units.into(),
         content_gen: i64::try_from(tx.content_gen).unwrap_or(i64::MAX),
     }
 }
@@ -545,27 +425,6 @@ mod tests {
         assert_eq!(zero_idx, 0);
     }
 
-    #[test]
-    fn parse_transfer_id_rejects_non_canonical_forms() {
-        let hash_hex = "0a".repeat(32);
-        // Everything here would also have failed per-row string equality
-        // against transfer_id output, so rejecting keeps match semantics.
-        for bad in [
-            String::new(),
-            "no-colon".to_owned(),
-            format!("{hash_hex}:"),                     // empty index
-            format!("{hash_hex}:+7"),                   // sign not emitted
-            format!("{hash_hex}:07"),                   // leading zero not emitted
-            format!("{hash_hex}:1x"),                   // non-digit
-            format!("{}:1", "0A".repeat(32)),           // uppercase hex not emitted
-            format!("{}:1", "0a".repeat(31)),           // short hash
-            format!("{}:1", "0a".repeat(33)),           // long hash
-            format!("{hash_hex}:99999999999999999999"), // > u64::MAX
-        ] {
-            assert!(parse_transfer_id(&bad).is_none(), "accepted {bad:?}");
-        }
-    }
-
     /// The three Engine verdicts project 1:1 onto the OpenAPI verdict
     /// strings, with `confirmed_height` verdict-scoped: absent on
     /// `ACCEPTED` / `ALREADY_IN_POOL` (the negative control — nothing
@@ -628,91 +487,109 @@ mod tests {
         assert_eq!(projected.confirmed_height, Some(i64::MAX));
     }
 
+    /// `PL-D3` §6.2 (rule 82): a received-but-unspendable row projects as
+    /// `UNSPENDABLE` with its reason and the sender's transaction hash, and
+    /// the verdict outranks both the in-flight lock and `CONFIRMED`.
     #[test]
-    fn balance_maps_unlocked_to_liquid() {
-        let b = BalanceSummary {
-            total: AtomicUnits::from_raw(100),
-            unlocked: AtomicUnits::from_raw(40),
-            locked_by_timelock: AtomicUnits::from_raw(10),
-            frozen: AtomicUnits::ZERO,
-            awaiting_confirmation: AtomicUnits::from_raw(5),
-        };
-        let r = get_balance_result(&b, Some(&StakedBalance::ZERO)).expect("legs cannot overflow");
-        assert_eq!(r.unlocked, "40");
-        assert_eq!(r.liquid, "40");
-        assert_eq!(r.pending, "5");
-        // A non-staker's zeros are true zeros (nothing staked), not the
-        // pre-WI-RPC-5 placeholder.
-        assert_eq!(r.staked.as_deref(), Some("0"));
-        assert_eq!(r.claimable_rewards.as_deref(), Some("0"));
-    }
+    fn unspendable_row_projects_state_reason_and_sender() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        use shekyl_curve_primitives::Commitment;
+        use shekyl_engine_state::SendJournalBlock;
+        use shekyl_scanner::{TransferDetailsExt, WalletOutput};
 
-    /// WI-RPC-5: `staked` sums the two bonded legs `get_staked_balance`
-    /// keeps separate; `claimable_rewards` is `rewards_received_unspent`
-    /// verbatim. Bites against reverting to the hardcoded `"0"` projection
-    /// or against summing the wrong legs; it does NOT verify the Engine
-    /// aggregation behind `staking_read_view` (the engine-core staking_read
-    /// KATs cover that).
-    #[test]
-    fn balance_staking_fields_project_the_staking_view_legs() {
-        let b = BalanceSummary {
-            total: AtomicUnits::from_raw(100),
-            unlocked: AtomicUnits::from_raw(40),
-            locked_by_timelock: AtomicUnits::ZERO,
-            frozen: AtomicUnits::ZERO,
-            awaiting_confirmation: AtomicUnits::ZERO,
-        };
-        let staking = StakedBalance {
-            bonded_principal_confirmed: AtomicUnits::from_raw(70_000),
-            bonded_principal_pending: AtomicUnits::from_raw(30_000),
-            rewards_received_unspent: AtomicUnits::from_raw(1_234),
-        };
-        let r = get_balance_result(&b, Some(&staking)).expect("legs cannot overflow");
-        assert_eq!(
-            r.staked.as_deref(),
-            Some("100000"),
-            "confirmed + pending bonded legs"
+        let sender_tx = [0x5au8; 32];
+        let out = WalletOutput::new_for_test(
+            shekyl_types::TxHash::from_bytes(sender_tx),
+            1,
+            9,
+            ED25519_BASEPOINT_POINT,
+            Scalar::ZERO,
+            Commitment::new(Scalar::ONE, 1_000),
         );
-        assert_eq!(r.claimable_rewards.as_deref(), Some("1234"));
-        assert_eq!(r.unlocked, "40", "principal legs are untouched");
+        let mut td =
+            TransferDetails::from_wallet_output(&out, shekyl_types::BlockHeight::from_raw(5));
+        let no_locks = SendJournalBlock::empty().spend_locks();
+        assert_eq!(transfer_state(&td, &no_locks), TransferState::Confirmed);
+        assert_eq!(unspendable_reason_string(&td), None);
+
+        td.unspendable = Some(UnspendableReason::PqcLeafMismatch);
+        assert_eq!(transfer_state(&td, &no_locks), TransferState::Unspendable);
+        let view = transfer_view(&td, &no_locks, &std::collections::BTreeMap::new());
+        assert_eq!(view.state, TransferState::Unspendable);
+        assert_eq!(view.state.as_str(), "UNSPENDABLE");
+        assert_eq!(
+            view.unspendable_reason.as_deref(),
+            Some("PQC_LEAF_MISMATCH")
+        );
+        assert_eq!(
+            view.tx_hash,
+            td.tx_hash.to_string(),
+            "the sender's tx is named"
+        );
+
+        td.unspendable = Some(UnspendableReason::PqcLeafEntryAbsent);
+        assert_eq!(
+            unspendable_reason_string(&td).as_deref(),
+            Some("PQC_LEAF_ENTRY_ABSENT")
+        );
     }
 
-    /// A bonded-principal sum past the money type is a corrupt view and must
-    /// answer a structured internal error — not saturate to a plausible
-    /// (absurd) balance, and not panic (the workspace builds `panic = "abort"`,
-    /// so a panic here would abort the whole server on every `get_balance`
-    /// call against the corrupt state).
     #[test]
-    fn balance_staking_leg_overflow_is_a_structured_error_not_a_panic() {
-        let b = BalanceSummary {
-            total: AtomicUnits::ZERO,
-            unlocked: AtomicUnits::ZERO,
-            locked_by_timelock: AtomicUnits::ZERO,
-            frozen: AtomicUnits::ZERO,
-            awaiting_confirmation: AtomicUnits::ZERO,
+    fn balance_result_spells_the_engine_view_and_keeps_absence_absent() {
+        use shekyl_engine_core::StakedTotals;
+        let view = BalanceView {
+            liquid: AtomicUnits::from_raw(40),
+            unlocked: AtomicUnits::from_raw(40),
+            pending: AtomicUnits::from_raw(5),
+            unspendable: AtomicUnits::from_raw(7),
+            staking: Some(StakedTotals {
+                staked: AtomicUnits::from_raw(100_000),
+                claimable_rewards: AtomicUnits::from_raw(1_234),
+            }),
         };
-        let staking = StakedBalance {
-            bonded_principal_confirmed: AtomicUnits::from_raw(u64::MAX),
-            bonded_principal_pending: AtomicUnits::from_raw(1),
-            rewards_received_unspent: AtomicUnits::ZERO,
+        let r = get_balance_result(&view);
+        assert_eq!(r.liquid.to_string(), "40");
+        assert_eq!(r.unlocked.to_string(), "40");
+        assert_eq!(r.pending.to_string(), "5");
+        assert_eq!(r.unspendable.to_string(), "7");
+        assert_eq!(r.staked.map(|s| s.to_string()).as_deref(), Some("100000"));
+        assert_eq!(
+            r.claimable_rewards.map(|s| s.to_string()).as_deref(),
+            Some("1234")
+        );
+
+        // The degrade arm: absence crosses the wire as absence, never "0".
+        let degraded = BalanceView {
+            staking: None,
+            ..view
         };
-        let err = get_balance_result(&b, Some(&staking)).expect_err("overflow must not project");
-        assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
+        let r = get_balance_result(&degraded);
+        assert_eq!(r.staked, None);
+        assert_eq!(r.claimable_rewards, None);
+        assert_eq!(
+            r.liquid.to_string(),
+            "40",
+            "liquid fields stay authoritative"
+        );
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json.get("staked").is_none() && json.get("claimable_rewards").is_none());
     }
 
     fn sample_send_record(state: SendState) -> SendRecord {
         use shekyl_engine_state::{SendInputRef, SendRecipient};
         SendRecord {
-            dispatched_at_height: 100,
+            dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
             fee: 700,
             recipients: vec![
                 SendRecipient {
                     address: "shekyl1a".to_owned(),
                     amount: 1_000,
+                    rid: None,
                 },
                 SendRecipient {
                     address: "shekyl1b".to_owned(),
                     amount: 2_500,
+                    rid: None,
                 },
             ],
             change_amount: 100,
@@ -742,7 +619,9 @@ mod tests {
             TransferState::Dropped
         );
         assert_eq!(
-            outgoing_transfer_state(&sample_send_record(SendState::Confirmed { height: 200 })),
+            outgoing_transfer_state(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(200)
+            })),
             TransferState::Confirmed
         );
         assert_eq!(
@@ -775,7 +654,9 @@ mod tests {
     #[test]
     fn only_confirmed_sends_have_an_inclusion_height() {
         assert_eq!(
-            outgoing_block_height(&sample_send_record(SendState::Confirmed { height: 250 })),
+            outgoing_block_height(&sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250)
+            })),
             Some(250)
         );
         for unmined in [
@@ -801,15 +682,17 @@ mod tests {
 
         let view = outgoing_transfer_view(
             &txid,
-            &sample_send_record(SendState::Confirmed { height: 250 }),
+            &sample_send_record(SendState::Confirmed {
+                height: shekyl_types::BlockHeight::from_raw(250),
+            }),
             &notes,
         )
         .expect("project");
         assert_eq!(view.id, "ab".repeat(32));
         assert_eq!(view.tx_hash, view.id);
         assert_eq!(view.direction, TransferDirection::Outgoing);
-        assert_eq!(view.amount, "3500"); // 1000 + 2500
-        assert_eq!(view.fee, "700");
+        assert_eq!(view.amount.to_string(), "3500"); // 1000 + 2500
+        assert_eq!(view.fee.to_string(), "700");
         assert_eq!(view.block_height, Some(250));
         assert_eq!(view.state, TransferState::Confirmed);
         assert_eq!(view.spent_height, None);
@@ -855,45 +738,5 @@ mod tests {
         let err = outgoing_transfer_view(&TxHash::from_bytes([0xab; 32]), &row, &empty)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
-    }
-
-    /// The two id grammars are disjoint, so a well-formed id names
-    /// exactly one side of the history.
-    #[test]
-    fn lookup_id_routes_each_shape_to_its_own_side() {
-        let hash_hex = "0a".repeat(32);
-        assert_eq!(
-            parse_lookup_id(&format!("{hash_hex}:7")),
-            Some(TransferLookupId::Incoming {
-                tx_hash: TxHash::from_bytes([0x0a; 32]),
-                output_index: 7,
-            })
-        );
-        assert_eq!(
-            parse_lookup_id(&hash_hex),
-            Some(TransferLookupId::Outgoing {
-                tx_hash: TxHash::from_bytes([0x0a; 32]),
-            })
-        );
-    }
-
-    /// Ids this wallet never emits are rejected as malformed rather
-    /// than answered with "unknown transfer" — including the uppercase
-    /// txid a user gets by pasting from a block explorer, where saying
-    /// "no such transfer" would be an outright wrong answer about a
-    /// send that does exist (rule 82).
-    #[test]
-    fn lookup_id_rejects_ids_this_wallet_never_emits() {
-        for bad in [
-            String::new(),
-            "no-colon-not-hex".to_owned(),
-            "0A".repeat(32),                   // uppercase txid
-            "0a".repeat(31),                   // short
-            "0a".repeat(33),                   // long
-            format!("{}:07", "0a".repeat(32)), // leading zero in index
-            format!("{}:", "0a".repeat(32)),   // empty index
-        ] {
-            assert!(parse_lookup_id(&bad).is_none(), "accepted {bad:?}");
-        }
     }
 }

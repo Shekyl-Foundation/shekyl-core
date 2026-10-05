@@ -169,7 +169,7 @@ true and incidental).
 
 | ID | Work |
 | --- | --- |
-| **MSW-6** ✅ **LANDED** | **Relax tx-wide `scheme_id` agreement** — the staking unblock. `expected_scheme = tx.pqc_auths[0].scheme_id` forced every input to match, so scheme-2 funding could not share a tx with a scheme-1 bond vin. **Change (option a — drop the agreement):** each input is still validated per-input (scheme ∈ `{1,2}`, blob length, signature); only the cross-input agreement is removed, in lockstep across both batteries — `tx_pqc_verify.{h,cpp}` + `blockchain.cpp` (C++) and `verifier.rs` (Rust twin). **Why (corrected — *not* "guards nothing", a §11.8 error):** the *stated* purpose (a cross-input scheme-downgrade defense) was vacuous — self-referential, and per-output scheme binding is the leaf hash `h_pqc = H(hybrid_public_key)` (`blockchain.cpp:3769`), not this check. Its *actual* effect was to make a tx that spends a solo (scheme 1) and a multisig (scheme 2) output together unrepresentable — a **cross-model linkage** (co-spending is the only proof of common control under FCMP++). That has **no externality** (one-time keys, FCMP++ proof over the whole tree — no other set shrinks, unlike a small ring poisoning decoys) and mirrors Shekyl's own opt-in `scheme_id=2` self-marking cost, so it is a *wallet coin-selection invariant* — which must land as a **blocking E′/MS-5 ship gate** (never cross key models, with a test, + disclosure), not a consensus mechanism. (**Not TM-1**, whose disposition rests on impossibility — it does not transfer to this case where the mechanism existed and worked.) **Proof:** `fcmp.cpp::msw6_mixed_scheme_transaction_verifies` — a solo(1)+multisig(2) tx verifies, with a tamper control pinning the per-input signature binding. **Independent of `--features multisig`.** Own validation surface. |
+| **MSW-6** ✅ **LANDED** | **Relax tx-wide `scheme_id` agreement** — the staking unblock. `expected_scheme = tx.pqc_auths[0].scheme_id` forced every input to match, so scheme-2 funding could not share a tx with a scheme-1 bond vin. **Change (option a — drop the agreement):** each input is still validated per-input (scheme ∈ `{1,2}`, blob length, signature); only the cross-input agreement is removed, in lockstep across both batteries — `tx_pqc_verify.{h,cpp}` + `blockchain.cpp` (C++) and `verifier.rs` (Rust twin). **Why (corrected — *not* "guards nothing", a §11.8 error):** the *stated* purpose (a cross-input scheme-downgrade defense) was vacuous — self-referential, and per-output scheme binding is the leaf hash `h_pqc = H(hybrid_public_key)` (`blockchain.cpp:3769`), not this check. Its *actual* effect was to make a tx that spends a solo (scheme 1) and a multisig (scheme 2) output together unrepresentable — a **cross-model linkage** (co-spending proves common control). It mirrors Shekyl's own opt-in `scheme_id=2` self-marking cost (the 2026-09-11 "no externality / no other set shrinks" ground was struck under `PL-D1` and holds again since `PL-D3` — see the 2026-09-14 update at the end of this row), so it is a *wallet coin-selection invariant* — which must land as a **blocking E′/MS-5 ship gate** (never cross key models, with a test, + disclosure), not a consensus mechanism. (**Not TM-1**, whose disposition rests on impossibility — it does not transfer to this case where the mechanism existed and worked.) **Proof:** `fcmp.cpp::msw6_mixed_scheme_transaction_verifies` — a solo(1)+multisig(2) tx verifies, with a tamper control pinning the per-input signature binding. **Independent of `--features multisig`.** Own validation surface. **UPDATE 2026-09-14 (`PL-D1`):** the "no externality / no other set shrinks" ground is struck while every FCMP++ spend identified its input by the public 4th leaf scalar, and restored by `PL-D3` on 2026-09-14 ([`FCMP_SPEND_LINKABILITY.md`](FCMP_SPEND_LINKABILITY.md) §3.2, §12); in the interval the conclusion (wallet coin-selection invariant, not consensus) stood on the `scheme_id=2` precedent alone. |
 | **MSW-1** ✅ **LANDED** | **Bound family (narrowed).** Copy `bond_wire.rs:11` pattern: `use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN`. Kill duplicate `1996` literals in `shekyl-wire::transaction` / `cryptonote_config.h`; delete `tx_pqc_verify.cpp:49` shadow. Split jobs: `PQC_MAX_*_BLOB` = **generous DoS ceiling** (round number, documented headroom; bump needs consensus rationale); correctness = `MultisigKeyContainer::from_canonical_bytes` exact-length parse. Cross-seam KAT `n ∈ 1..=MAX` through both deserializers (absence produced F-1). Sized for **MAX=5**. — **Landed:** `HybridPublicKey/Signature::CANONICAL_LEN` is the one canonical length; `SINGLE_KEY/SIG_CANONICAL_LEN` alias it; ceilings decoupled (16384 key / 32768 sig — the sig ceiling is **not** 16384, which would make a max-threshold spend unserializable) with compile-time `const _` ladder asserts; fossil `2 + N·LEN` deleted from `cryptonote_config.h`, `tx_pqc_verify.cpp`, `shekyl-wire`. **Bound-family sweep:** `multisig_receiving.rs:177` + `shekyl-address` ×3 also hardcoded `> 7` — deduped to `MAX_MULTISIG_PARTICIPANTS`, and the crypto-pq↔address caps are **pinned equal at compile time** (`const _` in `multisig.rs`; crypto-pq already depends on address). **F-1 catcher:** `shekyl_pqc_canonical_lens()` FFI + `fcmp.cpp::msw1_pqc_constants_match_rust` prove C++ config == Rust across the FFI (31/31 fcmp green); Rust cross-seam `msw1_container_lengths_and_roundtrip_over_all_n`. |
 | **MSW-2** ✅ **LANDED** | Disjointness KAT — **length primary**, byte[2] secondary. Leaf left alone. — **Landed:** `multisig::tests::msw2_length_primary_disjointness` — `1996 ∉` container lengths, `expected_blob_len` strictly increasing (injective) so distinct `n` never collide, a length-relabelled blob is rejected on the length cross-check (not the bounds check), and `byte[2] = m_required ≥ 1` ⊥ reserved-zero as the secondary separator. |
 | **MSW-3** ✅ **LANDED** (via MSW-6) | `"output committed="` misattributions; MS-8 retirement record. — **Landed:** the misattributed `"output committed="` string was already removed by **MSW-6** (#314); no such literal remains. **MS-8 retirement recorded** here: `group_id` verify is a no-op check → folded into MSW-2's disjointness reasoning; MS-8 stays RETIRED. |
@@ -285,7 +285,7 @@ n>5 *and* zone/address usability are dispositioned.
 
 **Hybrid posture (pin 2026-07-14).** Scheme_id=2 is already
 post-quantum for authorization (M × ML-DSA). Solo and multisig share
-classical FCMP++ membership/SAL + hybrid auth via `h_pqc`. Multisig
+classical FCMP++ membership/SAL + hybrid auth bound through the leaf commitment opening (`PL-D3`). Multisig
 adds **no** classical exposure. Classical SAL is a **liveness**
 dependency (1/N *loss*), not a compromise path. Curve HNDL on
 membership privacy is real and **not multisig-specific**. Under
@@ -399,7 +399,7 @@ persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovabl
 ### What it does *not* buy
 
 - **Not smaller on the wire.** M hybrid sigs still ride; the leaf
-  commits `H(pqc_pk)` and consensus verifies it. Same auth bytes as
+  commits `CM = H_ℓ(pqc_pk)·G_k + r·J` and the proof opens it (`PL-D3`). Same auth bytes as
   Option D. Size win = composite lattice sig (dPN25 / 15.4b, 2030+).
 - **Does not fix the anonymity partition.** `scheme_id=2` and N-fold
   fan-out remain visible. Same cost at N=3 as at N=5. Honest price;
@@ -628,7 +628,7 @@ design's acceptance**, not implementation.
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
 | A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
-| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a solo/multisig cross-model linkage → a wallet coin-selection invariant (**no externality** + the opt-in `scheme_id=2` precedent; **not** TM-1), which must land as a **blocking E′/MS-5 ship gate**, **not** consensus. Length disjointness (MSW-2) still prevents cross-scheme confusion. |
+| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the in-circuit opening of the leaf commitment to the revealed key's point — `PL-D3`; before it, the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a solo/multisig cross-model linkage → a wallet coin-selection invariant (**no externality** + the opt-in `scheme_id=2` precedent; **not** TM-1), which must land as a **blocking E′/MS-5 ship gate**, not merely be tracked. |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
 | A6 | Replay `sign_own` / nonce reuse | **No** — R1-F-9 |
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
@@ -684,9 +684,10 @@ multisig surfaces). Disposition: **confirm / sharpen / push back**.
 - **A2 (lie about `scheme_id`):** with leaf-bound bytes, scheme-1
   verify requires `len==1996`; scheme-2 requires a container parse.
   Cross-scheme auth fails at length/parse without a leaf change.
-  Blockchain comment that scheme binding "relies on the leaf hash"
-  (`blockchain.cpp:4251-4253`) is imprecise — the leaf binds **bytes**;
-  scheme is enforced by how those bytes parse under `scheme_id`.
+  The blockchain comment on scheme binding (`blockchain.cpp`, MSW-6
+  paragraph) is precise only as: the leaf binds the revealed key **bytes**
+  (`k = H_ℓ(bytes)`, opened in-circuit under `PL-D3`); scheme is enforced by
+  how those bytes parse under `scheme_id`.
 
 ### MS-8 retirement — **DONE (group_id deleted)**
 
@@ -1017,9 +1018,10 @@ B→A hybrid sig; A assembles.
 **(D) two-leg binding — no new primitive.** The FROST SAL leg and the M hybrid
 `scheme_id=2` legs are *already* welded bidirectionally in the solo path: the pqc
 signed payload embeds the SAL via `prunable_hash` (`tx_pqc_verify.cpp:92`, the
-anti-substitution binding), and the curve-tree leaf `h_pqc = H(pqc_pk)` binds the
-SAL to the key (`blockchain.cpp:4190`), with the multisig key *container* hashing
-to that leaf (`multisig_pqc_leaf_hash`). MS-5 extends this unchanged; it only
+anti-substitution binding), and the curve-tree leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J`
+(opened in-circuit, `PL-D3`) binds the SAL to the key, with the multisig key
+*container* being the `pqc_pk` bytes `k` is derived from (`pqc_key_scalar`
+over the canonical container bytes). MS-5 extends this unchanged; it only
 forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
 
 **The nonce rule (corrected — the load-bearing security part).** Two shapes,
@@ -1100,7 +1102,7 @@ sound daemon-side `expected_group_id` from the creating output.
 **This conclusion does not depend on changing the leaf preimage.**
 
 **Replacement (Track A / MSW-2–3).** Pin prefix-disjointness; fix
-`"output committed="` misattributions; do not change leaf hash.
+`"output committed="` misattributions; do not change the leaf derivation (`PL-D3` changed it for every scheme alike, 2026-09-14).
 
 **Re-evaluation shape.** Only if a future scheme breaks MSW-2 reopen
 criteria *and* leaf binding is shown insufficient — new design round,
@@ -1171,7 +1173,7 @@ not a quiet reopen of MS-8.
    `n∈1..=5` + delete shadows) + MSW-2/3 + MSW-4/5 (group_id ←
    address-payload versions) + **MSW-8** (delete address
    `hybrid_sign_pubkeys`).
-5. **Do not** change leaf preimage / FFI leaf hash ABI / emission
+5. **Do not** change leaf preimage / FFI leaf-scalar ABI / emission
    Auth-B / test-vector corpus / `bond_spend_pk` length as part of
    Track A.
 6. **Do not** adopt lattice-threshold / TRacoon here.

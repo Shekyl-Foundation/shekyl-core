@@ -26,7 +26,8 @@ use shekyl_rpc_types::{
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
-use shekyl_types::BlockHeight;
+use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
+use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
 use shekyl_rpc_types::{
@@ -111,9 +112,8 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 /// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
 /// current and target heights, hard-fork schedule.
 ///
-/// Mirrors `core_rpc_server::on_get_version` including its one rule:
-/// `target_height` is `0` when the node is synchronized, whatever the core's
-/// raw target says.
+/// `target_height` is the core's target. `0` means the core reported none,
+/// not that the node is synchronized.
 pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
     let tip = facts.chain_tip()?;
     // The identity axes. Two FFI reads inside one handler still produce one
@@ -135,11 +135,7 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
-        target_height: if tip.synchronized {
-            0
-        } else {
-            tip.target_height.to_raw()
-        },
+        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
         hard_forks,
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
@@ -288,6 +284,7 @@ pub fn get_block(
     fill_pow_hash: bool,
 ) -> Result<GetBlockResponse, RpcFault> {
     let by_hash = !request.hash.is_empty();
+    let height = BlockHeight::from_raw(request.height);
     let lookup = if by_hash {
         let parsed = HashHex::from_hex(&request.hash).map_err(|_| {
             RpcFault::Refused(RpcRefusal::wrong_param(&format!(
@@ -297,7 +294,7 @@ pub fn get_block(
         })?;
         BlockLookup::Hash(parsed.to_bytes())
     } else {
-        BlockLookup::Height(BlockHeight::from_raw(request.height))
+        BlockLookup::Height(height)
     };
 
     let at = match facts.block_at(lookup, fill_pow_hash) {
@@ -316,8 +313,8 @@ pub fn get_block(
         // Past the tip is the height refusal; anything else the lookup could
         // not produce keeps the C++ "can't get block by hash" wording, whose
         // `Hash = .` for a height lookup is inherited, not a slip.
-        if !by_hash && request.height >= at.chain_height.to_raw() {
-            return Err(too_big_height(request.height, at.chain_height.to_raw()));
+        if !by_hash && !at.chain_height.has_block(height) {
+            return Err(too_big_height(height, at.chain_height));
         }
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
@@ -396,24 +393,32 @@ pub fn block_header_request(
 ///
 /// The reply is a bare JSON string — no object, no `status` — as the C++
 /// path's was. A height at or past the tip is `TOO_BIG_HEIGHT`, whose message
-/// names the top height (`chain_height - 1`), read in the same call as the
+/// names the top height ([`ChainCount::tip`]), read in the same call as the
 /// hash so the two cannot disagree.
 pub fn get_block_hash(facts: &dyn ChainFacts, height: u64) -> Result<HashHex, RpcFault> {
-    let at = facts.block_hash_at(BlockHeight::from_raw(height))?;
+    let height = BlockHeight::from_raw(height);
+    let at = facts.block_hash_at(height)?;
     match at.hash {
         Some(hash) => Ok(HashHex::from_bytes(hash.to_bytes())),
-        None => Err(too_big_height(height, at.chain_height.to_raw())),
+        None => Err(too_big_height(height, at.chain_height)),
     }
+}
+
+/// Newest existing block, or genesis on an empty chain so a handler that
+/// must remain total has a height to name. Production always has genesis.
+fn newest_block(chain: ChainCount) -> BlockHeight {
+    chain.tip().unwrap_or(BlockHeight::ZERO)
 }
 
 /// The refusal a height past the tip earns, naming the top height — one
 /// wording, since `get_block_hash` and every header method share it.
-fn too_big_height(height: u64, chain_height: u64) -> RpcFault {
+fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
     RpcFault::Refused(RpcRefusal {
         code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
         message: format!(
-            "Requested block height: {height} greater than current top block height: {}",
-            chain_height.saturating_sub(1)
+            "Requested block height: {} greater than current top block height: {}",
+            height.to_raw(),
+            newest_block(chain).to_raw(),
         ),
     })
 }
@@ -434,21 +439,22 @@ pub fn get_block_header_by_height(
     height: u64,
     fill_pow_hash: bool,
 ) -> Result<GetBlockHeaderByHeightResponse, RpcFault> {
-    let at = match facts.block_header_at(
-        BlockLookup::Height(BlockHeight::from_raw(height)),
-        fill_pow_hash,
-    ) {
+    let height = BlockHeight::from_raw(height);
+    let at = match facts.block_header_at(BlockLookup::Height(height), fill_pow_hash) {
         Ok(at) => at,
         Err(FactsFault::Inconsistent) => {
             return Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-                message: format!("Internal error: can't get block by height. Height = {height}."),
+                message: format!(
+                    "Internal error: can't get block by height. Height = {}.",
+                    height.to_raw()
+                ),
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
     };
     let Some(header) = at.header else {
-        return Err(too_big_height(height, at.chain_height.to_raw()));
+        return Err(too_big_height(height, at.chain_height));
     };
     Ok(GetBlockHeaderByHeightResponse {
         status: RpcStatus::ok(),
@@ -479,7 +485,7 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         nonce: facts.nonce,
         orphan_status: facts.orphan_status,
         height: facts.height.to_raw(),
-        depth: facts.depth,
+        depth: facts.depth.to_raw(),
         hash: HashHex::from_bytes(facts.hash.to_bytes()),
         difficulty,
         wide_difficulty,
@@ -496,8 +502,8 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         pow_hash: facts.pow_hash.map(HashHex::from_bytes),
         long_term_weight: facts.long_term_weight,
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
-        curve_tree_root: HashHex::from_bytes(facts.curve_tree_root),
-        attestation_root: HashHex::from_bytes(facts.attestation_root),
+        curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
+        attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
     }
 }
 
@@ -573,13 +579,56 @@ pub struct RenderFailed {
     pub code: i32,
 }
 
+/// A body whose archival length the daemon could not measure.
+///
+/// The length is measured at serve time from the segments the store hands
+/// over (`SHT-Q2`: nothing carries it, so nothing can carry a wrong one).
+/// That needs a pruned half this daemon's parser reads and, for an FCMP++
+/// transaction, the prunable half's bytes. Failing either, the request fails:
+/// the reply's `archival_len` is an operand of the txid, and a guessed value
+/// would hand the client an identity check it cannot pass.
+///
+/// **This is the LMDB store's contract, not every store's.** LMDB never
+/// drops a prunable half in place, so [`TxSlot`] always has the bytes and
+/// carries no length. `shekyl-chain-store` does drop them, and keeps the
+/// `txs_archival_len` row for exactly this reply: a `TxSlot` fed from that
+/// store carries the row's length, and this refusal then covers only a slot
+/// with neither the bytes nor the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LengthUnmeasured {
+    pub txid: String,
+}
+
+/// Why a gathered slot could not be projected into the reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionFailed {
+    Render(RenderFailed),
+    Length(LengthUnmeasured),
+}
+
+/// The archival length of the transaction the store handed over in two
+/// halves, measured from those bytes — or `None` when they do not hold it.
+///
+/// `pruned` is the prefix, the committed base and the tx-level `pqc_auths`;
+/// `prunable` is the region after them. A coinbase carries no archival good.
+/// An FCMP++ transaction always has a prunable region, so an empty one means
+/// this store does not hold it and its length is not here to measure.
+fn archival_len_at_serve(pruned: &[u8], prunable: &[u8]) -> Option<ArchivalLength> {
+    let body = Transaction::from_bytes(pruned).ok()?;
+    match &body.ct {
+        Ct::Null(_) => Some(ArchivalLength::ZERO),
+        Ct::Fcmp { .. } if prunable.is_empty() => None,
+        Ct::Fcmp { .. } => Some(body.archival_len_with_prunable(prunable)),
+    }
+}
+
 pub fn project_transactions<R>(
     request: &GetTransactionsRequest,
     ids: &[[u8; 32]],
     slots: &[TxSlot],
     chain_height: u64,
     render: R,
-) -> Result<GetTransactionsResponse, RenderFailed>
+) -> Result<GetTransactionsResponse, ProjectionFailed>
 where
     R: Fn(&[u8], bool) -> Result<String, i32>,
 {
@@ -647,12 +696,19 @@ where
         // transaction the store has no prunable half for, because there is
         // nothing to concatenate.
         let split_form = request.split || request.prune || prunable.is_empty();
+        let tx_hash = HashHex::from_bytes(*id);
+        let archival_len = archival_len_at_serve(pruned, prunable).ok_or_else(|| {
+            ProjectionFailed::Length(LengthUnmeasured {
+                txid: tx_hash.to_string(),
+            })
+        })?;
         let mut entry = TxEntry {
-            tx_hash: HashHex::from_bytes(*id),
+            tx_hash,
             as_hex: String::new(),
             pruned_as_hex: String::new(),
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(*prunable_hash),
+            archival_len: archival_len.to_raw(),
             as_json: String::new(),
             pruned: pruned_flag,
             double_spend_seen,
@@ -671,18 +727,22 @@ where
                 } else {
                     [pruned.as_slice(), prunable.as_slice()].concat()
                 };
-                entry.as_json = render(&blob, base_only).map_err(|code| RenderFailed {
-                    txid: entry.tx_hash.to_string(),
-                    code,
+                entry.as_json = render(&blob, base_only).map_err(|code| {
+                    ProjectionFailed::Render(RenderFailed {
+                        txid: entry.tx_hash.to_string(),
+                        code,
+                    })
                 })?;
             }
         } else {
             let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
             entry.as_hex = hex::encode(&full);
             if request.decode_as_json {
-                entry.as_json = render(&full, false).map_err(|code| RenderFailed {
-                    txid: entry.tx_hash.to_string(),
-                    code,
+                entry.as_json = render(&full, false).map_err(|code| {
+                    ProjectionFailed::Render(RenderFailed {
+                        txid: entry.tx_hash.to_string(),
+                        code,
+                    })
                 })?;
             }
         }
@@ -823,9 +883,11 @@ const TIP_READ_ATTEMPTS: usize = 4;
 ///
 /// Resolved by reading until the projection agrees with its own bound:
 /// `at.chain_height` is authoritative for the read that produced the header,
-/// so `header.height + 1 == at.chain_height` is the tip test, checked against
-/// the same snapshot rather than an earlier one. It converges on the first
-/// retry at any plausible block rate; a chain that outruns
+/// so `at.chain_height.tip() == Some(header.height)` is the tip test, checked
+/// against the same snapshot rather than an earlier one. `from_next_height`
+/// is C6's exclusive-end inverse (the next block's ordinal as a count) and
+/// would name a shorter chain if applied to an existing header. It converges
+/// on the first retry at any plausible block rate; a chain that outruns
 /// [`TIP_READ_ATTEMPTS`] is answering `CORE_BUSY`, which is true of it.
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
@@ -855,30 +917,32 @@ pub fn get_last_block_header(
                 .to_owned(),
         }));
     }
-    // `chain_height` is the count; the tip's own height is one below it. A
-    // chain with no blocks cannot occur (genesis is block 0), and saturating
-    // rather than asserting keeps the arithmetic total.
-    let mut top = tip.chain_height.to_raw().saturating_sub(1);
+    // `chain_height` is the count; the tip's own height is one below it
+    // (`ChainCount::tip`). A chain with no blocks cannot occur (genesis is
+    // block 0); `newest_block` keeps the empty case total.
+    let mut top = newest_block(tip.chain_height);
     for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(top)), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
         let Some(header) = at.header else {
             // The height came from a chain height, so it was below the tip
             // when it was chosen. Absent now means either the store cannot
             // produce a block it claims to hold, or the chain shortened under
             // us; both are read as "try the current top", and the loop bound
             // stops that becoming unbounded.
-            top = at.chain_height.to_raw().saturating_sub(1);
+            top = newest_block(at.chain_height);
             continue;
         };
         // The tip test, against the snapshot that produced this header rather
-        // than the earlier one that chose its height.
-        if header.height.to_raw().saturating_add(1) == at.chain_height.to_raw() {
+        // than the earlier one that chose its height. C6: the newest existing
+        // block's height, not `from_next_height` of this existing ordinal
+        // (that inverse names a shorter chain).
+        if at.chain_height.tip() == Some(header.height) {
             return Ok(GetLastBlockHeaderResponse {
                 status: RpcStatus::ok(),
                 block_header: block_header(&header),
             });
         }
-        top = at.chain_height.to_raw().saturating_sub(1);
+        top = newest_block(at.chain_height);
     }
     Err(RpcFault::Refused(RpcRefusal {
         code: CORE_RPC_ERROR_CODE_CORE_BUSY,
@@ -941,11 +1005,10 @@ pub fn get_block_headers_range(
     // lowers it. So this bound is a fast refusal for the common case, not a
     // guarantee for the loop below — which is why the loop still has to say
     // what a vanished height means.
-    let chain_height = facts.chain_tip()?.chain_height.to_raw();
-    if request.start_height > request.end_height
-        || request.start_height >= chain_height
-        || request.end_height >= chain_height
-    {
+    let chain = facts.chain_tip()?.chain_height;
+    let start = BlockHeight::from_raw(request.start_height);
+    let end = BlockHeight::from_raw(request.end_height);
+    if start > end || !chain.has_block(start) || !chain.has_block(end) {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
             message: "Invalid start/end heights.".to_owned(),
@@ -953,10 +1016,9 @@ pub fn get_block_headers_range(
     }
     // The span, not the endpoints, is what the cap bounds — and it is computed
     // before any chain read so an absurd range costs nothing to refuse.
-    let span = request
-        .end_height
-        .saturating_sub(request.start_height)
-        .saturating_add(1);
+    // Inclusive length is the ordinal difference plus one; the cap constant
+    // stays a raw count until Phase 2d.
+    let span = end.saturating_sub(start).to_raw().saturating_add(1);
     // **The cap bounds the count, not the difference.** The C++ tested
     // `end_height - start_height > RESTRICTED_BLOCK_HEADER_RANGE`, which
     // permits 1001 headers against a cap of 1000 — the same off-by-one the
@@ -969,13 +1031,14 @@ pub fn get_block_headers_range(
         }));
     }
     let mut headers = Vec::new();
-    for height in request.start_height..=request.end_height {
-        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(height)), pow)?;
+    for raw in request.start_height..=request.end_height {
+        let height = BlockHeight::from_raw(raw);
+        let at = facts.block_header_at(BlockLookup::Height(height), pow)?;
         let Some(header) = at.header else {
             // **A missing header here can only mean the chain shortened.**
             // On the height path the shim returns `found == 0` for exactly
-            // one condition — `height >= chain_height` as read *inside* that
-            // call — and reports a store that cannot produce a block it
+            // one condition — `!chain.has_block(height)` as read *inside*
+            // that call — and reports a store that cannot produce a block it
             // claims to hold as an error, which `?` has already propagated
             // above. So this arm is not a store contradiction and must not be
             // reported as one: it is the tip moving down between the bound
@@ -983,7 +1046,7 @@ pub fn get_block_headers_range(
             // `pop_blocks`), and the caller's range was valid when it was
             // checked. `TOO_BIG_HEIGHT` with the height that has gone is what
             // a caller can act on; a generic internal error is not.
-            return Err(too_big_height(height, at.chain_height.to_raw()));
+            return Err(too_big_height(height, at.chain_height));
         };
         headers.push(block_header(&header));
     }
@@ -1180,7 +1243,6 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
         height: c.height,
-        pruning_seed: c.pruning_seed,
         address_type: c.address_type,
     }
 }
@@ -1281,7 +1343,6 @@ pub fn get_peer_list(
             ip: e.ip,
             port: e.port,
             last_seen: e.last_seen,
-            pruning_seed: e.pruning_seed,
         };
         if e.white {
             white_list.push(peer);
@@ -1311,14 +1372,9 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
     Ok(SyncInfoResponse {
         status: RpcStatus::ok(),
         height,
-        // The same rule `get_version` applies, from the same uncollapsed
-        // facts: the raw target survives the seam and is zeroed here.
-        target_height: if tip.synchronized {
-            0
-        } else {
-            tip.target_height.to_raw()
-        },
-        next_needed_pruning_seed: queue.next_needed_pruning_stripe,
+        // The same count `get_version` reports: the core's target, not a
+        // rewrite of it when the node is synchronized.
+        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
         peers: connections
             .connections
             .iter()
@@ -1348,12 +1404,14 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
 pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
-        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip,
-        DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
+        decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
+        ChainTip, DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
-    use shekyl_types::{BlockHash, BlockHeight, TxHash};
+    use shekyl_types::{
+        AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+    };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// In-memory facts: what a store-backed implementation will look like.
@@ -1366,8 +1424,8 @@ pub(crate) mod tests {
     pub(crate) struct FakeFacts {
         pub tip: Result<ChainTip, FactsFault>,
         pub forks: Result<Vec<HardFork>, FactsFault>,
-        /// Tip of the fake chain for `block_hash_at`'s bound.
-        pub hash_chain_height: u64,
+        /// Length of the fake chain for `block_hash_at`'s bound.
+        pub hash_chain_height: ChainCount,
         /// When set, `block_hash_at` faults instead of answering.
         pub hash_fault: Option<FactsFault>,
         /// The last height `block_hash_at` was asked for.
@@ -1415,6 +1473,13 @@ pub(crate) mod tests {
         pub identity: Option<Result<DaemonIdentity, FactsFault>>,
     }
 
+    impl FakeFacts {
+        fn grown_chain(&self) -> ChainCount {
+            self.hash_chain_height
+                .saturating_add(BlockCount::from_raw(self.tip_grown.load(Ordering::Relaxed)))
+        }
+    }
+
     impl ChainFacts for FakeFacts {
         fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
             self.tip.clone()
@@ -1458,7 +1523,7 @@ pub(crate) mod tests {
         fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
             self.asked_grace.store(grace_blocks, Ordering::SeqCst);
             Ok(FeeEstimate {
-                fees: [10, 20, 30, 40],
+                fees: [10, 20, 40],
                 quantization_mask: 8,
             })
         }
@@ -1469,8 +1534,11 @@ pub(crate) mod tests {
                 return Err(fault);
             }
             Ok(BlockHashAt {
-                hash: (height.to_raw() < self.hash_chain_height).then(patterned_hash),
-                chain_height: BlockHeight::from_raw(self.hash_chain_height),
+                hash: self
+                    .hash_chain_height
+                    .has_block(height)
+                    .then(patterned_hash),
+                chain_height: self.hash_chain_height,
             })
         }
 
@@ -1479,10 +1547,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.block_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(
-                self.hash_chain_height
-                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
-            );
+            let chain_height = self.grown_chain();
             // The fake applies the same bound the shim does, so a handler that
             // forgets to check one cannot pass by luck.
             let present = match at {
@@ -1493,7 +1558,7 @@ pub(crate) mod tests {
                 }
                 BlockLookup::Height(height) => {
                     self.asked_height.store(height.to_raw(), Ordering::Relaxed);
-                    height.to_raw() < self.hash_chain_height
+                    self.hash_chain_height.has_block(height)
                 }
             };
             if !present {
@@ -1535,10 +1600,7 @@ pub(crate) mod tests {
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(
-                self.hash_chain_height
-                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
-            );
+            let chain_height = self.grown_chain();
             // Same two-arm shape as `block_at`, because it answers the same
             // question. **This is a fake chain's own shape, not a copy of the
             // shim's rule** — the fake chain has a height and nothing above it,
@@ -1564,7 +1626,7 @@ pub(crate) mod tests {
                 }
                 BlockLookup::Height(height) => {
                     self.asked_height.store(height.to_raw(), Ordering::Relaxed);
-                    if height.to_raw() >= chain_height.to_raw() {
+                    if !chain_height.has_block(height) {
                         return Ok(BlockHeaderAt {
                             header: None,
                             chain_height,
@@ -1584,9 +1646,9 @@ pub(crate) mod tests {
             // test used to compensate by hand, setting `hash_chain_height` to
             // `1_234_567 + 42 + 1` so the canned depth would line up.
             h.depth = chain_height
-                .to_raw()
-                .saturating_sub(height.to_raw())
-                .saturating_sub(1);
+                .tip()
+                .map(|top| top.saturating_sub(height))
+                .unwrap_or(BlockCount::from_raw(0));
             h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
             // Only the alt case overrides it. `sample_header()` carries the
             // value the RK-3 oracle vector was captured with, and clobbering
@@ -1613,9 +1675,9 @@ pub(crate) mod tests {
     pub(crate) fn facts(synchronized: bool, target: u64) -> FakeFacts {
         FakeFacts {
             tip: Ok(ChainTip {
-                chain_height: BlockHeight::from_raw(1_234_567),
+                chain_height: ChainCount::from_raw(1_234_567),
                 top_hash: patterned_hash(),
-                target_height: BlockHeight::from_raw(target),
+                target_height: decode_target_count(target),
                 synchronized,
                 release_build: false,
             }),
@@ -1623,7 +1685,7 @@ pub(crate) mod tests {
                 version: 1,
                 height: BlockHeight::from_raw(0),
             }]),
-            hash_chain_height: 1_234_567,
+            hash_chain_height: ChainCount::from_raw(1_234_567),
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
@@ -1646,11 +1708,11 @@ pub(crate) mod tests {
             hash: tagged_hash(11),
             prev_hash: tagged_hash(3),
             miner_tx_hash: TxHash::from_bytes(tagged_bytes(31)),
-            curve_tree_root: tagged_bytes(41),
-            attestation_root: tagged_bytes(53),
+            curve_tree_root: CurveTreeRoot::from_bytes(tagged_bytes(41)),
+            attestation_root: AttestationRoot::from_bytes(tagged_bytes(53)),
             pow_hash: None,
             height: BlockHeight::from_raw(1_234_567),
-            depth: 42,
+            depth: BlockCount::from_raw(42),
             timestamp: 1_700_000_000,
             difficulty: (1u128 << 70) + 12345,
             cumulative_difficulty: (1u128 << 71) + 99,
@@ -1697,10 +1759,49 @@ pub(crate) mod tests {
 
     // ── the get_transactions projection matrix ───────────────────────────
 
-    fn chain_slot(prunable: &[u8]) -> TxSlot {
+    /// A real transaction in the two halves the store hands over, with the
+    /// archival length the wire crate's fixture pins for it.
+    struct StoredTx {
+        pruned: Vec<u8>,
+        prunable: Vec<u8>,
+        archival_len: u64,
+    }
+
+    /// The pinned parity spend (`shekyl-wire`'s `pruned_tx_hash_parity_v1`):
+    /// prefix, base and `pqc_auths` in the pruned half, the prunable region
+    /// after it.
+    fn stored_spend() -> StoredTx {
+        let pin: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
+        ))
+        .expect("parity fixture");
+        let full = hex::decode(pin["tx_hex"].as_str().expect("tx_hex")).expect("hex");
+        let pruned = hex::decode(pin["pruned_hex"].as_str().expect("pruned_hex")).expect("hex");
+        assert!(full.starts_with(&pruned), "the pruned half is a prefix");
+        StoredTx {
+            prunable: full[pruned.len()..].to_vec(),
+            pruned,
+            archival_len: pin["archival_len"].as_u64().expect("archival_len"),
+        }
+    }
+
+    /// A real coinbase: one half, no prunable region, no archival good.
+    fn stored_coinbase() -> StoredTx {
+        let block = shekyl_wire::Block::from_bytes(include_bytes!(
+            "../../shekyl-wire/tests/vectors/regtest_coinbase_h1.block"
+        ))
+        .expect("block vector");
+        StoredTx {
+            pruned: block.miner_transaction.serialize(),
+            prunable: Vec::new(),
+            archival_len: 0,
+        }
+    }
+
+    fn chain_slot(tx: &StoredTx) -> TxSlot {
         TxSlot::Chain {
-            pruned: vec![0xAA, 0xBB],
-            prunable: prunable.to_vec(),
+            pruned: tx.pruned.clone(),
+            prunable: tx.prunable.clone(),
             prunable_hash: [0x11; 32],
             block_height: 7,
             block_timestamp: 1_700_000_000,
@@ -1734,51 +1835,51 @@ pub(crate) mod tests {
     /// field.** This replaced a C++ matrix, and the parity vectors do not
     /// reach it — they build `TxEntry` directly — so without this the
     /// behaviour is unpinned on all three request flags at once.
+    ///
+    /// The archival length is on no axis: it is the same in every cell,
+    /// **including the cells that withhold the prunable half**. That is the
+    /// cell a wallet reads — it rebuilds the txid from the pruned body, the
+    /// digest and this length (`SHT-Q2`).
     #[test]
     fn projection_matrix_over_split_prune_and_decode() {
-        const PRUNED_HEX: &str = "aabb";
-        const PRUNABLE_HEX: &str = "ccdd";
-        let prunable = [0xCC, 0xDD];
+        let tx = stored_spend();
+        let pruned_hex = hex::encode(&tx.pruned);
+        let prunable_hex = hex::encode(&tx.prunable);
+        let full_hex = format!("{pruned_hex}{prunable_hex}");
+        let full_json = format!("{full_hex}|base_only=false");
+        let base_json = format!("{pruned_hex}|base_only=true");
 
         // (split, prune, decode) -> (as_hex, pruned_as_hex, prunable_as_hex, as_json)
         let cases: [(bool, bool, bool, &str, &str, &str, &str); 6] = [
             // Neither flag: the whole transaction, concatenated, one field.
-            (false, false, false, "aabbccdd", "", "", ""),
-            (
-                false,
-                false,
-                true,
-                "aabbccdd",
-                "",
-                "",
-                "aabbccdd|base_only=false",
-            ),
+            (false, false, false, &full_hex, "", "", ""),
+            (false, false, true, &full_hex, "", "", &full_json),
             // `split`: the halves, both carried; json still covers both.
-            (true, false, false, "", PRUNED_HEX, PRUNABLE_HEX, ""),
+            (true, false, false, "", &pruned_hex, &prunable_hex, ""),
             (
                 true,
                 false,
                 true,
                 "",
-                PRUNED_HEX,
-                PRUNABLE_HEX,
-                "aabbccdd|base_only=false",
+                &pruned_hex,
+                &prunable_hex,
+                &full_json,
             ),
             // `prune`: the prunable half is withheld, and json is base-only —
             // rendering the full blob here would leak what `prune` withheld.
-            (false, true, false, "", PRUNED_HEX, "", ""),
-            (false, true, true, "", PRUNED_HEX, "", "aabb|base_only=true"),
+            (false, true, false, "", &pruned_hex, "", ""),
+            (false, true, true, "", &pruned_hex, "", &base_json),
         ];
 
         for (split, prune, decode, as_hex, pruned_as_hex, prunable_as_hex, as_json) in cases {
             let out = project_transactions(
                 &req(split, prune, decode),
                 &[[0x01; 32]],
-                &[chain_slot(&prunable)],
+                &[chain_slot(&tx)],
                 9,
                 echo_render(),
             )
-            .expect("render succeeds");
+            .expect("projection succeeds");
             let e = &out.txs[0];
             let label = format!("split={split} prune={prune} decode={decode}");
             assert_eq!(e.as_hex, as_hex, "as_hex @ {label}");
@@ -1788,42 +1889,48 @@ pub(crate) mod tests {
                 "prunable_as_hex @ {label}"
             );
             assert_eq!(e.as_json, as_json, "as_json @ {label}");
+            assert_eq!(e.archival_len, tx.archival_len, "archival_len @ {label}");
         }
     }
 
-    /// **An empty prunable half takes the split form even unasked**, because
-    /// there is nothing to concatenate — and its json is base-only for the
-    /// same reason. This is the branch the live console test reaches (the
-    /// genesis transaction), and the only one it reaches.
+    /// **A transaction with no prunable half takes the split form even
+    /// unasked**, because there is nothing to concatenate — and its json is
+    /// base-only for the same reason. This is the branch the live console
+    /// test reaches (the genesis transaction), and the only one it reaches. A
+    /// coinbase carries no archival good, so its length is zero.
     #[test]
-    fn an_empty_prunable_half_is_split_form_and_renders_base_only() {
+    fn a_coinbase_is_split_form_renders_base_only_and_has_no_archival_length() {
+        let tx = stored_coinbase();
+        let pruned_hex = hex::encode(&tx.pruned);
         let out = project_transactions(
             &req(false, false, true),
             &[[0x02; 32]],
-            &[chain_slot(&[])],
+            &[chain_slot(&tx)],
             9,
             echo_render(),
         )
-        .expect("render succeeds");
+        .expect("projection succeeds");
         let e = &out.txs[0];
         assert!(e.as_hex.is_empty(), "no concatenated form exists");
-        assert_eq!(e.pruned_as_hex, "aabb");
+        assert_eq!(e.pruned_as_hex, pruned_hex);
         assert!(e.prunable_as_hex.is_empty());
-        assert_eq!(e.as_json, "aabb|base_only=true");
+        assert_eq!(e.as_json, format!("{pruned_hex}|base_only=true"));
+        assert_eq!(e.archival_len, 0);
     }
 
     /// Chain, pool and miss land in their own places: the first two become
     /// entries carrying their location, the third only a `missed_tx` id.
     #[test]
     fn chain_pool_and_missed_slots_are_projected_to_their_own_places() {
+        let tx = stored_spend();
         let out = project_transactions(
             &req(true, false, false),
             &[[0x01; 32], [0x02; 32], [0x03; 32]],
             &[
-                chain_slot(&[0xCC]),
+                chain_slot(&tx),
                 TxSlot::Pool {
-                    pruned: vec![0xAA],
-                    prunable: vec![0xCC],
+                    pruned: tx.pruned.clone(),
+                    prunable: tx.prunable.clone(),
                     prunable_hash: [0x22; 32],
                     double_spend_seen: true,
                     relayed: true,
@@ -1834,7 +1941,7 @@ pub(crate) mod tests {
             9,
             echo_render(),
         )
-        .expect("render succeeds");
+        .expect("projection succeeds");
 
         assert_eq!(out.txs.len(), 2, "the miss must not become an entry");
         assert_eq!(out.missed_tx.len(), 1);
@@ -1848,6 +1955,10 @@ pub(crate) mod tests {
             !out.txs[1].pruned,
             "a pooled transaction is never reported pruned"
         );
+        assert_eq!(
+            out.txs[1].archival_len, tx.archival_len,
+            "a pooled transaction's length is measured like a mined one's"
+        );
     }
 
     /// A renderer failure names the transaction it failed on and fails the
@@ -1857,19 +1968,83 @@ pub(crate) mod tests {
         let err = project_transactions(
             &req(false, false, true),
             &[[0x09; 32]],
-            &[chain_slot(&[0xCC])],
+            &[chain_slot(&stored_spend())],
             9,
             |_, _| Err(-7),
         )
         .expect_err("a failing renderer must fail the reply");
-        assert_eq!(err.code, -7);
-        assert_eq!(err.txid, HashHex::from_bytes([0x09; 32]).to_string());
+        assert_eq!(
+            err,
+            ProjectionFailed::Render(RenderFailed {
+                txid: HashHex::from_bytes([0x09; 32]).to_string(),
+                code: -7,
+            })
+        );
+    }
+
+    /// The length is measured or the reply fails. An FCMP++ body the store
+    /// holds no prunable half for has no bytes to measure, and a half that is
+    /// not a transaction cannot be measured at all: neither is answered with
+    /// a length, because the client mixes that length into the txid it checks
+    /// the body against.
+    #[test]
+    fn a_body_whose_length_cannot_be_measured_fails_the_reply() {
+        let spend = stored_spend();
+        let unmeasurable = [
+            (
+                "an FCMP++ body with no prunable half",
+                StoredTx {
+                    pruned: spend.pruned.clone(),
+                    prunable: Vec::new(),
+                    archival_len: 0,
+                },
+            ),
+            (
+                "a pruned half that is not a transaction",
+                StoredTx {
+                    pruned: vec![0xAA, 0xBB],
+                    prunable: vec![0xCC],
+                    archival_len: 0,
+                },
+            ),
+        ];
+        for (what, tx) in unmeasurable {
+            let err = project_transactions(
+                &req(true, true, false),
+                &[[0x0A; 32]],
+                &[chain_slot(&tx)],
+                9,
+                echo_render(),
+            )
+            .expect_err(what);
+            assert_eq!(
+                err,
+                ProjectionFailed::Length(LengthUnmeasured {
+                    txid: HashHex::from_bytes([0x0A; 32]).to_string(),
+                }),
+                "{what}"
+            );
+        }
+    }
+
+    /// The serve-time measurement is the wire crate's: the pinned spend's
+    /// two halves measure to its pinned archival length, which is the
+    /// `pqc_auths` segment inside the pruned half plus the prunable half.
+    #[test]
+    fn the_served_length_is_the_pinned_archival_length() {
+        let tx = stored_spend();
+        let measured = archival_len_at_serve(&tx.pruned, &tx.prunable).expect("measurable");
+        assert_eq!(measured.to_raw(), tx.archival_len);
+        assert!(
+            measured.to_raw() > u64::try_from(tx.prunable.len()).expect("fits"),
+            "the pqc_auths segment counts, so the length exceeds the prunable half"
+        );
     }
 
     #[test]
     fn get_version_reproduces_the_synced_oracle_vector() {
-        // Synchronized with a non-zero raw target: the rule zeroes it, and the
-        // zero is omitted on the wire exactly as epee omitted it.
+        // Synchronized with a non-zero raw target: the reply carries that
+        // target. Synchronization is not encoded by writing 0 here.
         //
         // Against `_v5`: 3.28 removed the peer identifier from every readout
         // (PWD-I1). Before it: RK-5b's three header-method shape changes bumped
@@ -1890,7 +2065,7 @@ pub(crate) mod tests {
         // source — the digest against the compiled constant, the genesis and
         // nettype against what the facts layer handed up.
         let out = get_version(&facts(true, 999_999)).unwrap();
-        assert_eq!(out.target_height, 0);
+        assert_eq!(out.target_height, 999_999);
         assert_eq!(
             out.consensus_constants_digest,
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -1904,8 +2079,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
+        // Head of the `get_version` chain (`_v18` = 3.41). A bump that
+        // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v6.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v18.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -1934,7 +2111,7 @@ pub(crate) mod tests {
         let f = FakeFacts {
             tip: Err(FactsFault::NotReady),
             forks: Ok(vec![]),
-            hash_chain_height: 0,
+            hash_chain_height: ChainCount::ZERO,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
@@ -2023,7 +2200,7 @@ pub(crate) mod tests {
     /// vary `get_block_header_by_height`'s own `fill_pow_hash` argument.
     fn header_facts() -> FakeFacts {
         let mut f = facts(true, 0);
-        f.hash_chain_height = 1_234_610; // 1_234_567 + depth 42 + 1
+        f.hash_chain_height = ChainCount::from_raw(1_234_610); // 1_234_567 + depth 42 + 1
         f
     }
 
@@ -2258,7 +2435,7 @@ pub(crate) mod tests {
         let f = header_facts();
         assert_eq!(
             get_block(&f, &block_req("", 9_000_000), false).unwrap_err(),
-            too_big_height(9_000_000, f.hash_chain_height)
+            too_big_height(BlockHeight::from_raw(9_000_000), f.hash_chain_height,)
         );
 
         let unknown = HashHex::from_bytes([9u8; 32]).to_string();
@@ -2464,13 +2641,14 @@ pub(crate) mod tests {
     #[test]
     fn a_block_arriving_mid_read_does_not_yield_a_stale_tip() {
         let f = facts(true, 0);
-        let base = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        let before = f.tip.as_ref().expect("a tip").chain_height;
         f.tip_growth_remaining.store(1, Ordering::Relaxed);
 
         let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
         // The header returned is the *new* tip, not the height chosen from
-        // the pre-growth snapshot.
-        assert_eq!(out.block_header.height, base);
+        // the pre-growth snapshot. One growth makes the old exclusive end
+        // (`next_height`) the new tip ordinal.
+        assert_eq!(out.block_header.height, before.next_height().to_raw());
         assert_eq!(
             out.block_header.depth, 0,
             "a header reported as the last block must be the last block"
@@ -2553,7 +2731,7 @@ pub(crate) mod tests {
     #[test]
     fn a_missing_hash_costs_only_its_own_slot() {
         let mut f = facts(false, 0);
-        f.hash_chain_height = 1_234_567;
+        f.hash_chain_height = ChainCount::from_raw(1_234_567);
         let known = HashHex::from_bytes(patterned_hash().to_bytes());
         let absent = HashHex::from_bytes(tagged_hash(200).to_bytes());
         let request = GetBlockHeaderByHashRequest {
@@ -2634,20 +2812,21 @@ pub(crate) mod tests {
             "an unbounded range must cost no header reads"
         );
 
-        // The tip itself is past the end: `chain_height` is a count, so the
-        // highest readable height is one below it.
-        let tip = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        // Asking for the count as an ordinal is past the exclusive end.
+        let chain = f.tip.as_ref().expect("a tip").chain_height;
+        let past = chain.next_height().to_raw();
         let before = reads();
         assert!(matches!(
-            get_block_headers_range(&f, &range(tip, tip), false),
+            get_block_headers_range(&f, &range(past, past), false),
             Err(RpcFault::Refused(_))
         ));
-        assert_eq!(reads(), before, "the tip's own height is not readable");
+        assert_eq!(reads(), before, "the exclusive end is not readable");
 
         // And the last valid height still answers, so the bound is not
         // off by one in the other direction.
+        let last = chain.tip().expect("non-empty fake").to_raw();
         let before = reads();
-        assert!(get_block_headers_range(&f, &range(tip - 1, tip - 1), false).is_ok());
+        assert!(get_block_headers_range(&f, &range(last, last), false).is_ok());
         assert_eq!(reads(), before + 1, "exactly one header for one height");
     }
 
@@ -2671,7 +2850,7 @@ pub(crate) mod tests {
     fn a_height_that_vanishes_under_the_bound_is_a_caller_error() {
         let mut f = facts(true, 0);
         // The bound sees 1_234_567; the header arm holds only 1_000 blocks.
-        f.hash_chain_height = 1_000;
+        f.hash_chain_height = ChainCount::from_raw(1_000);
         let out = get_block_headers_range(
             &f,
             &GetBlockHeadersRangeRequest {
@@ -2785,10 +2964,7 @@ pub(crate) mod tests {
                     now: 0,
                     connections: Vec::new(),
                 }),
-                spans: Ok(SyncSpansSnapshot {
-                    next_needed_pruning_stripe: 1,
-                    spans: Vec::new(),
-                }),
+                spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
                 peers: Ok(Vec::new()),
                 asked_public_only: AtomicBool::new(false),
             }
@@ -2833,7 +3009,6 @@ pub(crate) mod tests {
             current_speed_up: 2048.0,
             height: 1_234_567,
             support_flags: 3,
-            pruning_seed: 384,
             port: 18080,
             state: 3,
             address_type: ADDRESS_TYPE_IPV4,
@@ -2967,7 +3142,6 @@ pub(crate) mod tests {
             host: format!("192.0.2.{n}"),
             last_seen: 1_750_000_000 + n,
             ip: 0,
-            pruning_seed: 0,
             port: 18080,
             white,
             blocked,
@@ -3109,13 +3283,12 @@ pub(crate) mod tests {
         );
     }
 
-    /// `sync_info` reads both sources and applies the same synchronized rule
-    /// `get_version` does — to the raw target that survived the seam.
+    /// `sync_info` reads both sources and reports the core's target, synced
+    /// or not. Writing 0 for the synced case made the two states one value.
     #[test]
-    fn sync_info_zeroes_the_target_only_when_synchronized() {
+    fn sync_info_reports_the_core_target() {
         let p2p = FakeP2p {
             spans: Ok(SyncSpansSnapshot {
-                next_needed_pruning_stripe: 7,
                 spans: vec![span(100, 10, true)],
             }),
             connections: Ok(ConnectionsSnapshot {
@@ -3129,7 +3302,6 @@ pub(crate) mod tests {
         let res = sync_info(&behind, &p2p).expect("sync info");
         assert_eq!(res.height, 1_234_567);
         assert_eq!(res.target_height, 1_234_600);
-        assert_eq!(res.next_needed_pruning_seed, 7);
         assert_eq!(
             res.peers.len(),
             1,
@@ -3141,6 +3313,6 @@ pub(crate) mod tests {
 
         let synced = facts(true, 1_234_600);
         let res = sync_info(&synced, &p2p).expect("sync info");
-        assert_eq!(res.target_height, 0);
+        assert_eq!(res.target_height, 1_234_600);
     }
 }

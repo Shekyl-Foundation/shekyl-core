@@ -54,15 +54,12 @@
 #include "net/socks.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
-#include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 #include "string_tools.h"
+#include "string_tools_lexical.h"
 
 namespace
 {
-    constexpr const boost::chrono::milliseconds future_poll_interval{500};
-    constexpr const std::chrono::seconds socks_connect_timeout{P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT};
-
     std::int64_t get_max_connections(const boost::iterator_range<boost::string_ref::const_iterator> value) noexcept
     {
         // -1 is default, 0 is error
@@ -82,46 +79,13 @@ namespace
         if (!address)
         {
             MERROR(
-                "Failed to parse " << epee::net_utils::zone_to_string(T::get_zone()) << " address \"" << value << "\": " << address.error().message()
+                "Failed to parse " << epee::net_utils::connector_id_to_string(T::connector()) << " address \"" << value << "\": " << address.error().message()
             );
             return {};
         }
         return {std::move(*address)};
     }
 
-    bool start_socks(std::shared_ptr<net::socks::client> client, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote)
-    {
-        CHECK_AND_ASSERT_MES(client != nullptr, false, "Unexpected null client");
-
-        bool set = false;
-        switch (remote.get_type_id())
-        {
-        case net::tor_address::get_type_id():
-            set = client->set_connect_command(remote.as<net::tor_address>(), std::addressof(proxy.userinfo));
-            break;
-        case net::i2p_address::get_type_id():
-            set = client->set_connect_command(remote.as<net::i2p_address>(), std::addressof(proxy.userinfo));
-            break;
-        case epee::net_utils::ipv4_network_address::get_type_id():
-            set = client->set_connect_command(remote.as<epee::net_utils::ipv4_network_address>(), std::addressof(proxy.userinfo));
-            break;
-        case epee::net_utils::ipv6_network_address::get_type_id():
-            if (client->socks_version() == net::socks::version::v5)
-            {
-                set = client->set_connect_command(remote.as<epee::net_utils::ipv6_network_address>(), std::addressof(proxy.userinfo));
-                break;
-            }
-            /* fallthrough */
-        default:
-            MERROR("Unsupported network address in socks_connect. Try socks5://");
-            return false;
-        }
-
-        const bool sent =
-            set && net::socks::client::connect_and_send(std::move(client), proxy.address);
-        CHECK_AND_ASSERT_MES(sent, false, "Unexpected failure to init socks client");
-        return true;
-    }
 }
 
 namespace nodetool
@@ -169,7 +133,7 @@ namespace nodetool
     // durable address. The default posture (no flag) is an ephemeral per-boot
     // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
     const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\". This opts into a STABLE, DURABLE onion address (for seeds and deliberately-persistent infrastructure); without it the daemon publishes an ephemeral per-boot address that identifies nothing across restarts"};
-    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot; configuring --anonymous-inbound or --tx-proxy for tor also makes the ephemeral posture yield", false};
+    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot. --tx-proxy names the SOCKS address used to dial and does not turn that inbound off. --anonymous-inbound does: it is the operator's own onion, and the per-boot publish yields to it", false};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 
@@ -181,15 +145,18 @@ namespace nodetool
     const command_line::arg_descriptor<int64_t>     arg_in_peers = {"in-peers", "set max number of in peers", -1};
     const command_line::arg_descriptor<int> arg_tos_flag = {"tos-flag", "set TOS flag", -1};
 
-    const command_line::arg_descriptor<int64_t> arg_limit_rate_up = {"limit-rate-up", "set limit-rate-up [kB/s]", P2P_DEFAULT_LIMIT_RATE_UP};
-    const command_line::arg_descriptor<int64_t> arg_limit_rate_down = {"limit-rate-down", "set limit-rate-down [kB/s]", P2P_DEFAULT_LIMIT_RATE_DOWN};
-    const command_line::arg_descriptor<int64_t> arg_limit_rate = {"limit-rate", "set limit-rate [kB/s]", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate_up = {"limit-rate-up", "set limit-rate-up [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate_down = {"limit-rate-down", "set limit-rate-down [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
+    const command_line::arg_descriptor<int64_t> arg_limit_rate = {"limit-rate", "set limit-rate [KiB/s]. -1, the default, is unlimited. 0 is refused", -1};
 
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
     };
-    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address", 1};
-
+    const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt = {
+      "clearnet-transport-encrypt",
+      "Pre-genesis test gate. Clearnet channel option for the connector: off omits the Noise layer (the cutover parity scope); on follows the declaration's stack plan. Default off. Deleted at the flip, not at cutover. Not a user privacy setting. Both ends of a test pair must set it.",
+      false
+    };
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
         namespace ip = boost::asio::ip;
@@ -268,18 +235,12 @@ namespace nodetool
                 }
             }
 
-            switch (epee::net_utils::zone_from_string(zone))
+            if (zone != "tor")
             {
-            case epee::net_utils::zone::tor:
-                proxies.back().zone = epee::net_utils::zone::tor;
-                break;
-            case epee::net_utils::zone::i2p:
-                proxies.back().zone = epee::net_utils::zone::i2p;
-                break;
-            default:
                 MERROR("Invalid network for --" << arg_tx_proxy.name);
                 return std::nullopt;
             }
+            proxies.back().zone = epee::net_utils::connector_id::tor;
 
             auto endpoint = net::socks::endpoint::get(proxy);
             if (!endpoint)
@@ -346,10 +307,6 @@ namespace nodetool
             case net::tor_address::get_type_id():
                 inbounds.back().our_address = std::move(*our_address);
                 inbounds.back().default_remote = net::tor_address::unknown();
-                break;
-            case net::i2p_address::get_type_id():
-                inbounds.back().our_address = std::move(*our_address);
-                inbounds.back().default_remote = net::i2p_address::unknown();
                 break;
             default:
                 MERROR("Invalid inbound address (" << address << ") for --" << arg_anonymous_inbound.name << ": " << (our_address ? "invalid type" : our_address.error().message()));
@@ -424,83 +381,4 @@ namespace nodetool
 #endif
     return hosts;
   }
-
-  bool is_filtered_command(const epee::net_utils::network_address& address, int command)
-    {
-        switch (command)
-        {
-        case nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::ID:
-        case nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID:
-        case cryptonote::NOTIFY_NEW_TRANSACTIONS::ID:
-            return false;
-        default:
-            break;
-        }
-
-        if (address.get_zone() == epee::net_utils::zone::public_)
-            return false;
-
-        MWARNING("Filtered command (#" << command << ") to/from " << address.str());
-        return true;
-    }
-
-    std::optional<boost::asio::ip::tcp::socket>
-    socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote)
-    {
-        using socket_type = net::socks::client::stream_type::socket;
-        using client_result = std::pair<boost::system::error_code, socket_type>;
-
-        struct notify
-        {
-            boost::promise<client_result> socks_promise;
-
-            void operator()(boost::system::error_code error, socket_type&& sock)
-            {
-                socks_promise.set_value(std::make_pair(error, std::move(sock)));
-            }
-        };
-
-        net::socks::client::close_on_exit close_client{};
-        boost::unique_future<client_result> socks_result{};
-        {
-            boost::promise<client_result> socks_promise{};
-            socks_result = socks_promise.get_future();
-
-            auto client = net::socks::make_connect_client(
-                boost::asio::ip::tcp::socket{service}, proxy.ver, notify{std::move(socks_promise)}
-             );
-            close_client.self = client;
-            if (!start_socks(std::move(client), proxy, remote))
-                return std::nullopt;
-        }
-
-        const auto start = std::chrono::steady_clock::now();
-        while (socks_result.wait_for(future_poll_interval) == boost::future_status::timeout)
-        {
-            if (socks_connect_timeout < std::chrono::steady_clock::now() - start)
-            {
-                MERROR("Timeout on socks connect (" << proxy.address << " to " << remote.str() << ")");
-                return std::nullopt;
-            }
-
-            if (stop_signal)
-                return std::nullopt;
-        }
-
-        try
-        {
-            auto result = socks_result.get();
-            if (!result.first)
-            {
-                close_client.self.reset();
-                return {std::move(result.second)};
-            }
-
-            MERROR("Failed to make socks connection to " << remote.str() << " (via " << proxy.address << "): " << result.first.message());
-        }
-        catch (boost::broken_promise const&)
-        {}
-
-        return std::nullopt;
-    }
 }

@@ -1,7 +1,7 @@
 # GAP-7 floor capture — worst-case cold-block connect verification
 # phase=pins
 # captured_utc=20260905T032729Z
-# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
 # device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
 # git_rev=aa63f4ce996d3b8f12547db51ca60a8fb69cd84a
 # rustc=rustc 1.97.1 (8bab26f4f 2026-07-14)
@@ -74,7 +74,7 @@
    Compiling multiexp v0.4.2
    Compiling crypto-bigint v0.5.5
    Compiling zerocopy v0.8.48
-   Compiling generalized-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/generalized-bulletproofs)
+   Compiling generalized-bulletproofs v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/generalized-bulletproofs)
 warning: variant `InconsistentWitness` is never constructed
   --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:97:5
    |
@@ -92,18 +92,18 @@ warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
 warning: `generalized-bulletproofs` (lib) generated 1 warning
    Compiling dalek-ff-group v0.5.0
 # thermal 03:29:01 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling ec-divisors v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/divisors)
-   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
+   Compiling ec-divisors v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/divisors)
+   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
    Compiling generic-array v1.3.5
    Compiling jobserver v0.1.34
 # thermal 03:29:16 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling shlex v1.3.0
    Compiling find-msvc-tools v0.1.9
-   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
+   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
    Compiling cc v1.2.59
    Compiling once_cell v1.21.4
-   Compiling full-chain-membership-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps)
-   Compiling helioselene v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/helioselene)
+   Compiling full-chain-membership-proofs v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/fcmps)
+   Compiling helioselene v0.1.0 (<bench-checkout>/rust/shekyl-oxide/crypto/helioselene)
 warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
   --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
    |
@@ -118,9 +118,9 @@ warning: use of deprecated method `blake2::digest::generic_array::GenericArray::
 74 |         uniform.copy_from_slice(hash.as_slice());
    |                                      ^^^^^^^^
 
-   Compiling shekyl-curve-io v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-io)
+   Compiling shekyl-curve-io v0.1.0 (<bench-checkout>/rust/shekyl-curve-io)
    Compiling crossbeam-utils v0.8.21
-   Compiling shekyl-curve-generators v0.4.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-generators)
+   Compiling shekyl-curve-generators v0.4.0 (<bench-checkout>/rust/shekyl-curve-generators)
 # thermal 03:29:31 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 warning: `helioselene` (lib) generated 2 warnings
    Compiling inout v0.1.4
@@ -138,7 +138,7 @@ warning: `helioselene` (lib) generated 2 warnings
    Compiling poly1305 v0.8.0
    Compiling chacha20 v0.9.1
    Compiling ppv-lite86 v0.2.21
-   Compiling shekyl-crypto-hash v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-hash)
+   Compiling shekyl-crypto-hash v3.1.0 (<bench-checkout>/rust/shekyl-crypto-hash)
    Compiling tracing-attributes v0.1.31
    Compiling aead v0.5.2
    Compiling regex-syntax v0.8.10
@@ -151,7 +151,7 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling signature v2.2.0
    Compiling ed25519 v2.2.3
    Compiling tracing v0.1.44
-   Compiling shekyl-encoding v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-encoding)
+   Compiling shekyl-encoding v3.1.0 (<bench-checkout>/rust/shekyl-encoding)
    Compiling zstd-sys v2.0.16+zstd.1.5.7
    Compiling regex-automata v0.4.14
    Compiling chacha20poly1305 v0.10.1
@@ -160,8 +160,8 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling unicode-normalization v0.1.25
    Compiling bitcoin_hashes v0.14.1
 # thermal 03:30:16 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-curve-primitives v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-primitives)
-   Compiling shekyl-units v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-units)
+   Compiling shekyl-curve-primitives v0.1.0 (<bench-checkout>/rust/shekyl-curve-primitives)
+   Compiling shekyl-units v3.1.0 (<bench-checkout>/rust/shekyl-units)
    Compiling postcard-derive v0.2.2
    Compiling hmac v0.12.1
    Compiling powerfmt v0.2.0
@@ -175,9 +175,9 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling bip39 v2.2.2
    Compiling rand v0.8.6
 # thermal 03:30:46 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-address v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-address)
+   Compiling shekyl-address v3.1.0 (<bench-checkout>/rust/shekyl-address)
    Compiling ed25519-dalek v2.2.0
-   Compiling shekyl-fcmp-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp-proofs)
+   Compiling shekyl-fcmp-proofs v0.1.0 (<bench-checkout>/rust/shekyl-fcmp-proofs)
    Compiling fips205 v0.4.1
    Compiling fips203 v0.4.3
 # thermal 03:31:02 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
@@ -189,7 +189,7 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
 # thermal 03:31:32 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling crossbeam-epoch v0.9.20
    Compiling time v0.3.47
-   Compiling shekyl-crypto-pq v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-pq)
+   Compiling shekyl-crypto-pq v3.1.0 (<bench-checkout>/rust/shekyl-crypto-pq)
 # thermal 03:31:47 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:32:02 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:32:17 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
@@ -205,7 +205,7 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling crypto-common v0.2.2
 # thermal 03:32:47 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling matchers v0.2.0
-   Compiling shekyl-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-bulletproofs)
+   Compiling shekyl-bulletproofs v0.1.0 (<bench-checkout>/rust/shekyl-bulletproofs)
    Compiling ring v0.17.14
    Compiling derive_more-impl v2.1.1
    Compiling heapless v0.7.17
@@ -223,13 +223,13 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
 # thermal 03:33:48 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling cipher v0.5.2
    Compiling crossbeam-deque v0.8.6
-   Compiling shekyl-ct-balance v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ct-balance)
+   Compiling shekyl-ct-balance v3.1.0 (<bench-checkout>/rust/shekyl-ct-balance)
    Compiling crossbeam-channel v0.5.15
    Compiling half v2.7.1
 # thermal 03:34:03 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-archival-retention v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-archival-retention)
-   Compiling shekyl-difficulty v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-difficulty)
-   Compiling shekyl-economics v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-economics)
+   Compiling shekyl-archival-retention v3.1.0 (<bench-checkout>/rust/shekyl-archival-retention)
+   Compiling shekyl-difficulty v3.1.0 (<bench-checkout>/rust/shekyl-difficulty)
+   Compiling shekyl-economics v3.1.0 (<bench-checkout>/rust/shekyl-economics)
    Compiling gungraun-macros v0.9.1
    Compiling cpufeatures v0.3.0
    Compiling proc-macro-error-attr3 v3.0.2
@@ -258,11 +258,11 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling derive_more v2.1.1
    Compiling yasna v0.5.2
    Compiling pem v3.0.6
-   Compiling shekyl-wire v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-wire)
+   Compiling shekyl-wire v3.1.0 (<bench-checkout>/rust/shekyl-wire)
 # thermal 03:35:18 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-portable-storage v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-portable-storage)
+   Compiling shekyl-portable-storage v3.1.0 (<bench-checkout>/rust/shekyl-portable-storage)
    Compiling cobs v0.3.0
-   Compiling shekyl-types v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-types)
+   Compiling shekyl-types v3.1.0 (<bench-checkout>/rust/shekyl-types)
    Compiling either-or-both v0.3.1
    Compiling rustls-pki-types v1.14.0
    Compiling same-file v1.0.6
@@ -272,8 +272,8 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling bitflags v2.11.0
 # thermal 03:35:33 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling linux-raw-sys v0.12.1
-   Compiling shekyl-relay-privacy v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay-privacy)
-   Compiling shekyl-relay v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay)
+   Compiling shekyl-relay-privacy v3.1.0 (<bench-checkout>/rust/shekyl-relay-privacy)
+   Compiling shekyl-relay v3.1.0 (<bench-checkout>/rust/shekyl-relay)
 # thermal 03:35:49 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling bincode-next v2.1.0
    Compiling rcgen v0.14.7
@@ -284,26 +284,26 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
    Compiling gungraun-runner v0.19.3
 # thermal 03:36:34 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling postcard v1.1.3
-   Compiling shekyl-levin v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-levin)
+   Compiling shekyl-levin v3.1.0 (<bench-checkout>/rust/shekyl-levin)
 # thermal 03:36:49 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling rayon v1.11.0
 # thermal 03:37:04 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling plotters v0.3.7
 # thermal 03:37:19 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-pow-randomx v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-pow-randomx)
+   Compiling shekyl-pow-randomx v3.1.0 (<bench-checkout>/rust/shekyl-pow-randomx)
 # thermal 03:37:34 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling ciborium v0.2.2
-   Compiling shekyl-logging v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-logging)
+   Compiling shekyl-logging v3.1.0 (<bench-checkout>/rust/shekyl-logging)
 # thermal 03:37:50 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
    Compiling clap v4.6.0
-   Compiling shekyl-proofs v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-proofs)
+   Compiling shekyl-proofs v3.1.0 (<bench-checkout>/rust/shekyl-proofs)
    Compiling regex v1.12.3
 # thermal 03:38:05 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:38:20 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-chacha v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-chacha)
+   Compiling shekyl-chacha v3.1.0 (<bench-checkout>/rust/shekyl-chacha)
    Compiling tinytemplate v1.2.1
 # thermal 03:38:35 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-consensus v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-consensus)
+   Compiling shekyl-consensus v3.1.0 (<bench-checkout>/rust/shekyl-consensus)
    Compiling is-terminal v0.4.17
    Compiling anes v0.1.6
    Compiling fastrand v2.4.1
@@ -332,12 +332,12 @@ warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
 # thermal 03:43:36 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:43:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:44:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-fcmp v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp)
-   Compiling shekyl-tx-builder v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-tx-builder)
+   Compiling shekyl-fcmp v3.1.0 (<bench-checkout>/rust/shekyl-fcmp)
+   Compiling shekyl-tx-builder v3.1.0 (<bench-checkout>/rust/shekyl-tx-builder)
 # thermal 03:44:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:44:37 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:44:52 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
-   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+   Compiling shekyl-ffi v3.1.0 (<bench-checkout>/rust/shekyl-ffi)
 # thermal 03:45:07 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:45:22 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
 # thermal 03:45:37 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0

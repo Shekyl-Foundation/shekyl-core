@@ -250,3 +250,36 @@ set_property(TARGET blockchain_stats
 	OUTPUT_NAME "shekyl-blockchain-stats")
 install(TARGETS blockchain_stats DESTINATION bin)
 
+# DRS-E2 trace exporter — harvest shim, opt-in, dies with the daemon
+# (docs/design/DRS_E2_REPLAY_DRIVER.md §1.3, §3.9). Links the Rust FFI
+# through blockchain_db, the same way logical_state_digest.cpp does.
+if(BUILD_E2_TRACE_EXPORT)
+  set(shekyl_e2_trace_export_sources
+    shekyl_e2_trace_export.cpp
+    )
+
+  set(shekyl_e2_trace_export_private_headers)
+
+  monero_private_headers(shekyl_e2_trace_export
+    ${shekyl_e2_trace_export_private_headers})
+
+  shekyl_add_executable(shekyl_e2_trace_export
+    ${shekyl_e2_trace_export_sources}
+    ${shekyl_e2_trace_export_private_headers})
+
+  target_link_libraries(shekyl_e2_trace_export
+    PRIVATE
+      cryptonote_core
+      blockchain_db
+      version
+      epee
+      ${Boost_FILESYSTEM_LIBRARY}
+      ${Boost_SYSTEM_LIBRARY}
+      ${Boost_THREAD_LIBRARY}
+      ${CMAKE_THREAD_LIBS_INIT}
+      ${EXTRA_LIBRARIES})
+
+  set_property(TARGET shekyl_e2_trace_export
+    PROPERTY
+    OUTPUT_NAME "shekyl-e2-trace-export")
+endif()

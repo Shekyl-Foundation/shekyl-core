@@ -31,7 +31,7 @@ pub(crate) async fn refresh(
     let opts = RefreshOptions::default();
     let handle = Engine::start_refresh(engine.clone(), opts).await?;
     let summary = handle.join().await?;
-    let synced_height = engine.read().await.ledger().ledger.height();
+    let synced_height = engine.read().await.ledger().ledger.height().to_raw();
     let result = refresh_result(&summary, synced_height);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize refresh: {e}")))
@@ -45,9 +45,11 @@ pub(crate) async fn refresh(
 /// in-flight transactions whose spend record a replay cannot rebuild
 /// (`-29202`) — so a client that sees any of those knows the wallet is
 /// untouched. Errors from `join()` arrive after the reset is durable and
-/// map to `-29203 RESCAN_INCOMPLETE` for every producer failure class —
-/// never `-29201` (untouched) and never a catch-all `-32603` that would
-/// hide the durability claim from clients that only handle `-29203`.
+/// map to `-29203 RESCAN_INCOMPLETE`, except a rollback past finality,
+/// which is `-29211 RESYNC_REQUIRED` with `history_cleared` — the reset
+/// emptied history and left the curve-tree file. Never `-29201`
+/// (untouched) and never a catch-all `-32603` that would hide the
+/// durability claim from clients that only handle `-29203`.
 pub(crate) async fn rescan_blockchain(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -62,7 +64,7 @@ pub(crate) async fn rescan_blockchain(
         .join()
         .await
         .map_err(WalletRpcError::from_rescan_scan_failure)?;
-    let synced_height = engine.read().await.ledger().ledger.height();
+    let synced_height = engine.read().await.ledger().ledger.height().to_raw();
     // OpenAPI `RescanBlockchainResult` omits `reorg_fork_height`.
     let result = rescan_result(&summary, synced_height);
     serde_json::to_value(result)

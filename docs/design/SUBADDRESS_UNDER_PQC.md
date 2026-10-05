@@ -3,8 +3,9 @@
 **Status.** **Round 4 closed** (2026-06-09). Subaddress design series complete
 for V3.0 genesis wire; cooperative UX sequencing remains in Phase 2c/4b docs.
 **5-T-substrate adopted** (§6.4, 2026-05-31).
-**Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
-at launch; payment-request / meaningful-tag UX behind product flag (later).
+**Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel by
+default; real-label population ungated (R2-F8 flag retired 2026-06-15) and
+the payer-side echo landed 2026-09-28 (§5.7.11 Round-3 checklist).
 **FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
 §3.1 wire inventory, initial-sync gate); **close-out:**
 [`FA-6_CLOSEOUT.md`](../completed/FA-6_CLOSEOUT.md) (§8.7 fail → ship FA-6; §10.1 rejected;
@@ -190,7 +191,7 @@ caller-side `B'` lookup (`output.rs:631-636`).
 
 Per-output confidential data on wire is **`enc_amounts` only** (9 bytes per
 output in `CtSigBase`; amount XOR + `amount_tag` — no label slot).
-`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf hashes (`0x07`)
+`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf entries (`0x07`)
 — no encrypted memo tag in `ExtraField` (`rust/shekyl-scanner/src/extra.rs`).
 Payment-request labels are **net-new** surface; transport is **5-T**
 (§5.7.10–§5.7.11). Receiver recovers cleartext amount at scan;
@@ -895,7 +896,7 @@ read as calm ("Received 12.5 SHEKYL") instead of alarming.
 field on outputs today.** Per-output confidential payload is
 `enc_amounts` (9 bytes: 8-byte XOR-encrypted amount + 1-byte `amount_tag`;
 `CtSigBase`, `ct_types.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
-leaf hashes (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
+leaf entries (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
 request `label` is therefore **net-new wire surface** — which makes **where
 the label rides** the load-bearing Round-3 decision, not an afterthought (§
 below under "Wire: label transport").
@@ -947,8 +948,8 @@ pub struct PaymentRequest {
                                          // text — treat as sensitive local data
                                          // (Zeroizing<String>; file_kek at rest)
     pub amount_atomic: u64,
-    pub created_at: u64,                // wall or block height — product choice
-    pub expiry: Option<u64>,
+    pub created_at: u64,                // RTN-6: wall-clock Unix seconds (`Timestamp`); not block height
+    pub expiry: Option<u64>,            // RTN-6: wall-clock Unix seconds; absent = no expiry
     pub state: PaymentRequestState,      // Pending | Matched | Expired | Cancelled
     pub matched_tx_hash: Option<[u8; 32]>,
     pub matched_output_index: Option<u64>,
@@ -1034,8 +1035,9 @@ flowchart TD
 **Matching precedence (feature build — pin for FA-8).** When a cooperative
 `REQUEST` tag echoes a `rid` that matches exactly one `PaymentRequest`, **rid
 match overrides expiry** for auto-tier purposes: surface *"Matched to expired
-invoice … — confirm"* (not silent Tier 1). Sentinel-only launch never sees rid
-echo; S6 row applies. Re-validate in FA-8 implementation walkthrough.
+invoice … — confirm"* (not silent Tier 1). A payer that composed the send
+without a `rid` writes the sentinel; S6 row applies. Re-validate in FA-8
+implementation walkthrough.
 
 **Δt hint window:** product constant (e.g. 7 days) — not consensus. Hints
 never move funds or auto-close books; they reduce search only.
@@ -1353,7 +1355,7 @@ shape varies.
 | Requirement | Disposition |
 |-------------|-------------|
 | Bind slot in **tx hash** / transaction AAD | **Yes** — relay cannot strip or swap sentinel→tag in flight (integrity half of cooperative-label trust model). |
-| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, H(pqc_pk)}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
+| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, CM.x}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
 
 Confirm binding lands in the **tx-hash / RCT binding layer**, not the leaf.
 
@@ -1432,6 +1434,14 @@ not "unattributed" — only possible if wire were optional (rejected).
 - [x] V3.0 wallet posture — sentinel default; real-label population ungated
   (R2-F8 flag retired 2026-06-15, see *Gate retirement* above). GUI tooling
   emitting `rid` URIs is the de-facto feature boundary.
+- [x] Payer-side plumbing (2026-09-28): `TxRecipient::rid` →
+  `OutputDestination::rid` → `outbound_label::label_plaintext_for_recipient`
+  → `construct_output_with_label_plaintext`, exposed as the contract's
+  `TxRecipient.rid`; a `rid` the u48 field cannot carry is refused at
+  build, never downgraded. The desktop wallet passes a pasted link's `rid`
+  through. Proven as two halves meeting at the plaintext (sign-bridge
+  recovery of `Request(rid)`; attribution match of a recovered
+  `Request(rid)`); no single test yet crosses payer to payee.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
 - [x] `enc_label` wire field in `CtSigBase` (+ 1-byte `label_tag` parallel to amount).
 - [x] Tx-hash binding via `serialize_ctsig_base`; FCMP++ leaf explicitly excluded.
@@ -1650,7 +1660,7 @@ the standard; third-party wallets will parse these names. **Pinned now:**
 | `amount` | Atomic units (piconoins / smallest unit) | Same as Monero-style atomic; document in user-facing copy |
 | `rid` | Opaque `u64` decimal in URI | Random assignment; never sequential |
 | `label` | URL-encoded UTF-8 | Bookkeeping only; sensitive at rest |
-| `expiry` | Product-defined (height or unix) | Not consensus |
+| `expiry` | Unix seconds (RTN-6) | Not consensus; CLI also accepts relative durations |
 
 Optional future params (`tx_description`, `recipient_name`, …) require an
 explicit spec amendment — do not bolt on ad hoc aliases at first integration.
@@ -2074,7 +2084,7 @@ surface emerges (substrate change per `21-reversion-clause-discipline.mdc`).
 | R2-F1 | **Address reuse is on-chain-private** — per-output `ho` + hybrid gating; holds with zero subaddresses. User-facing principle: lead with reusable address, not rotation anxiety. | Product/docs (FA-4); reframes why End-state 5 is simpler than Bitcoin/Monero habits. |
 | R2-F2 | **Payment-request attribution UX** — §5.7.9: confidence tiers 1–4; `shekyl-proofs` dispute floor; gate walkthroughs (a)–(d) + S1–S6. | **CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**; End-state 5 minimal; sign-off §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. |
 | R2-F9 | **Address-knowledge / phishing** — leaked receive address; dust oracle; FCMP++ vs Monero ring class; ranked threats; T6 harvest cross-link (§5.7.12). | **CLOSED** (pin). FA-9 propagation + FA-6 T6 scoping remain. |
-| R2-F8 | Label transport: optional-at-wire fatal (§4.9). **5-T adopted** §6.4; logical tag system §5.7.11; per-output slot; sentinel-only launch. | **Pin + tag spec closed** — RCT/KAT implementation (FA-11) remains. |
+| R2-F8 | Label transport: optional-at-wire fatal (§4.9). **5-T adopted** §6.4; logical tag system §5.7.11; per-output slot; sentinel-only launch — superseded 2026-09-28: the payer-side echo landed, sentinel is the default for a send that answers no request, not the ceiling. | **Pin + tag spec closed** — RCT/KAT implementation (FA-11) remains. |
 | R2-F3 | **End-state 5** drops subaddress machinery; J2→`shekyl:?label=`; J1→accounts if T2; deletes `AuditSubaddressSecret` thread. Supersedes End-state 1 as impl target. | Provisional disposition §6; amend `WALLET_REWRITE_PLAN` (FA-7). |
 | R2-F4 | URI **labels ≠ V3 payment IDs** — advisory; value routing unchanged. Tx proofs for dispute tier. | Round 3: `enc_label` in hybrid payload if **5-T**; never cleartext `tx_extra` payment id. |
 | R2-F5 | **T2 pinned out of mandatory scope** via `00-mission.mdc` pit-of-success reading (§4.6). Counterparty collusion = deliberate, not casual accident. Priority 2 binds unconditional on-chain privacy; not behavior-dependent J1. | End-state 5 minimal unblocked; multi-account → §7.4 P3. |
@@ -2104,6 +2114,7 @@ From `docs/FOLLOWUPS.md`, checked at **design closure** (after Round 4):
   `docs/design/R2_F2_WALKTHROUGH.md` §6 (2026-05-31)
 - [x] (e′) R2-F9: address-knowledge / phishing pin — §5.7.12 (2026-05-31)
 - [x] (f) R2-F8: §6.4 **5-T adopted**; §5.7.11 logical tags; sentinel-only launch
+  (superseded 2026-09-28: payer-side echo landed; sentinel is the default, not the ceiling)
 - [x] (g) FA-11: RCT + HKDF + verifier + KATs for `enc_label`
 - [x] Round 3 adversarial record — §10 (FA-6 close-out, FA-6b wire pin, 5-T + FA-11)
 - [x] Round 4 adversarial record — §10.1 (FA-9/FA-10/FA-4 propagation;

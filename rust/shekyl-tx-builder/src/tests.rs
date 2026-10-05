@@ -14,6 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 
 fn dummy_leaf_entry() -> LeafEntry {
@@ -21,7 +22,7 @@ fn dummy_leaf_entry() -> LeafEntry {
         output_key: [1u8; 32],
         key_image_gen: [2u8; 32],
         commitment: [3u8; 32],
-        h_pqc: [4u8; 32],
+        cm_x: [4u8; 32],
     }
 }
 
@@ -34,7 +35,6 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
         spend_key_x: [5u8; 32],
         spend_key_y: [6u8; 32],
         commitment_mask: [7u8; 32],
-        h_pqc: [4u8; 32],
         combined_ss: vec![0u8; 64],
         output_index: 0,
         leaf_chunk: vec![dummy_leaf_entry()],
@@ -87,8 +87,8 @@ fn dummy_output(amount: u64) -> OutputInfo {
 
 fn dummy_tree() -> TreeContext {
     TreeContext {
-        reference_block: [30u8; 32],
-        tree_root: [31u8; 32],
+        reference_block: BlockHash::from_bytes([30u8; 32]),
+        tree_root: CurveTreeRoot::from_bytes([31u8; 32]),
         tree_depth: 2,
     }
 }
@@ -98,7 +98,7 @@ fn dummy_tree() -> TreeContext {
 #[test]
 fn test_no_inputs() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -111,7 +111,7 @@ fn test_no_inputs() {
 fn test_too_many_inputs() {
     let inputs: Vec<SpendInput> = (0..=MAX_INPUTS).map(|_| dummy_spend_input(100)).collect();
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -123,7 +123,7 @@ fn test_too_many_inputs() {
 #[test]
 fn test_no_outputs() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[],
         AtomicUnits::ZERO,
@@ -136,7 +136,7 @@ fn test_no_outputs() {
 fn test_too_many_outputs() {
     let outputs: Vec<OutputInfo> = (0..=MAX_OUTPUTS).map(|_| dummy_output(100)).collect();
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100 * (MAX_OUTPUTS as u64 + 1))],
         &outputs,
         AtomicUnits::ZERO,
@@ -148,7 +148,7 @@ fn test_too_many_outputs() {
 #[test]
 fn test_zero_input_amount() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(0)],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -163,7 +163,7 @@ fn test_zero_input_amount() {
 #[test]
 fn test_zero_output_amount() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(0)],
         AtomicUnits::ZERO,
@@ -179,7 +179,7 @@ fn test_zero_output_amount() {
 fn test_input_amount_overflow() {
     let inputs = vec![dummy_spend_input(u64::MAX), dummy_spend_input(1)];
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -192,7 +192,7 @@ fn test_input_amount_overflow() {
 fn test_output_amount_overflow() {
     let outputs = vec![dummy_output(u64::MAX), dummy_output(1)];
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &outputs,
         AtomicUnits::ZERO,
@@ -204,7 +204,7 @@ fn test_output_amount_overflow() {
 #[test]
 fn test_output_plus_fee_overflow() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &[dummy_output(u64::MAX)],
         AtomicUnits::from_raw(1),
@@ -216,7 +216,7 @@ fn test_output_plus_fee_overflow() {
 #[test]
 fn test_insufficient_funds() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(50)],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -231,7 +231,7 @@ fn test_insufficient_funds() {
 #[test]
 fn test_insufficient_funds_with_fee() {
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
         AtomicUnits::from_raw(1),
@@ -248,7 +248,7 @@ fn test_empty_leaf_chunk() {
     let mut input = dummy_spend_input(100);
     input.leaf_chunk.clear();
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -266,7 +266,7 @@ fn test_leaf_chunk_too_large() {
     let width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
     input.leaf_chunk = vec![dummy_leaf_entry(); width + 1];
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -283,7 +283,7 @@ fn test_zero_tree_depth() {
     let mut tree = dummy_tree();
     tree.tree_depth = 0;
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -299,7 +299,7 @@ fn test_branch_layer_mismatch() {
     input.c1_layers = vec![vec![[10u8; 32]], vec![[11u8; 32]]];
     input.c2_layers = vec![];
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -316,7 +316,7 @@ fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
     input.combined_ss = vec![0u8; 10]; // wrong length
     let result = sign_transaction(
-        [0u8; 32],
+        PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
         AtomicUnits::ZERO,
@@ -330,7 +330,10 @@ fn test_invalid_combined_ss_length() {
 
 #[test]
 fn test_sign_pqc_length_mismatch() {
-    let result = sign_pqc_auths(&[[0u8; 32]; 2], &[dummy_spend_input(100)]);
+    let result = sign_pqc_auths(
+        &[SigningPayloadHash::from_bytes([0u8; 32]); 2],
+        &[dummy_spend_input(100)],
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::PqcSignError { index: 0, .. })
@@ -361,7 +364,6 @@ fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
         spend_key_x: [5u8; 32],
         spend_key_y: [6u8; 32],
         commitment_mask: [7u8; 32],
-        h_pqc: [4u8; 32],
         combined_ss: vec![0u8; 64],
         output_index: 0,
         leaf_chunk: vec![dummy_leaf_entry()],
@@ -372,8 +374,8 @@ fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
 
 fn dummy_tree_at_depth(depth: u8) -> TreeContext {
     TreeContext {
-        reference_block: [30u8; 32],
-        tree_root: [31u8; 32],
+        reference_block: BlockHash::from_bytes([30u8; 32]),
+        tree_root: CurveTreeRoot::from_bytes([31u8; 32]),
         tree_depth: depth,
     }
 }
@@ -542,4 +544,63 @@ fn extra_output_term_raises_required_total() {
         &tree,
     )
     .is_ok());
+}
+
+/// Leaf-chunk selection under duplicate `(O, C)` pairs (`PL-D3`).
+///
+/// Consensus does not reject two chunk entries with the same output key and
+/// commitment; only `CM.x` names the spent leaf. The selection must therefore
+/// prefer the entry whose `CM.x` matches this spend's own derivation — a
+/// first-match lookup would pick the wrong duplicate and falsely refuse with
+/// `PqcLeafMismatch`. The three legs pin the settled semantics:
+/// `(O, C, derived CM.x)` present → proceed; only `(O, C)` present →
+/// `PqcLeafMismatch`; neither → `SpentOutputNotInLeafChunk`.
+#[test]
+fn duplicate_o_c_pair_selects_the_openable_leaf() {
+    use crate::sign::prove_input_from_spend;
+    use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
+    use shekyl_fcmp::PqcLeafScalar;
+
+    let inp = dummy_spend_input(100);
+    let combined: [u8; 64] = inp.combined_ss[..64].try_into().unwrap();
+    let derived = derive_pqc_leaf(&combined, inp.output_index).expect("fixture leaf derives");
+    let derived_cm_x = PqcLeafScalar::from_commitment_point(&derived.point)
+        .expect("derived commitment decompresses")
+        .0;
+
+    let wrong_duplicate = LeafEntry {
+        cm_x: [0xEE; 32],
+        ..dummy_leaf_entry()
+    };
+    let openable = LeafEntry {
+        cm_x: derived_cm_x,
+        ..dummy_leaf_entry()
+    };
+
+    // Wrong-CM.x duplicate FIRST: ordering is the discriminating axis — a
+    // first-match lookup stops at it and refuses.
+    let mut with_both = dummy_spend_input(100);
+    with_both.leaf_chunk = vec![wrong_duplicate.clone(), openable.clone()];
+    let prove_input = prove_input_from_spend(0, &with_both, [0u8; 32])
+        .expect("the openable duplicate must be selected");
+    assert_eq!(prove_input.pqc_leaf_commitment, derived.point);
+
+    // Same (O, C) present but no entry opens: present-but-unopenable.
+    let mut unopenable = dummy_spend_input(100);
+    unopenable.leaf_chunk = vec![wrong_duplicate];
+    assert!(matches!(
+        prove_input_from_spend(0, &unopenable, [0u8; 32]),
+        Err(TxBuilderError::PqcLeafMismatch { index: 0 })
+    ));
+
+    // No (O, C) match at all: absent.
+    let mut absent = dummy_spend_input(100);
+    absent.leaf_chunk = vec![LeafEntry {
+        output_key: [9u8; 32],
+        ..openable
+    }];
+    assert!(matches!(
+        prove_input_from_spend(0, &absent, [0u8; 32]),
+        Err(TxBuilderError::SpentOutputNotInLeafChunk { index: 0 })
+    ));
 }

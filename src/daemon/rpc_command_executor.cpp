@@ -30,7 +30,6 @@
 
 #include "string_tools.h"
 #include "common/scoped_message_writer.h"
-#include "common/pruning.h"
 #include "daemon/rpc_command_executor.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -155,12 +154,11 @@ t_rpc_command_executor::~t_rpc_command_executor()
   }
 }
 
-bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit, bool pruned_only) {
-  std::vector<std::string> argv{"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
-    std::to_string(limit)};
-  if (pruned_only)
-    argv.emplace_back("pruned");
-  return run_rust_console(argv);
+bool t_rpc_command_executor::print_peer_list(bool white, bool gray, size_t limit) {
+  // No `pruned` selector: per-peer pruning state left with the stripe engine
+  // (PDM-Q7), so the Rust console has nothing to filter on.
+  return run_rust_console({"print_peer_list", white && gray ? "both" : (white ? "white" : "gray"),
+    std::to_string(limit)});
 }
 
 bool t_rpc_command_executor::print_peer_list_stats() {
@@ -1063,7 +1061,10 @@ bool t_rpc_command_executor::print_bans()
     {
         for (auto i = res.bans.begin(); i != res.bans.end(); ++i)
         {
-            tools::msg_writer() << i->host << " banned for " << i->seconds << " seconds";
+            if (i->permanent)
+              tools::msg_writer() << i->host << " banned permanently";
+            else
+              tools::msg_writer() << i->host << " banned for " << i->seconds << " seconds";
         }
     }
     else 
@@ -1163,7 +1164,9 @@ bool t_rpc_command_executor::banned(const std::string &address)
         }
     }
 
-    if (res.banned)
+    if (res.banned && res.permanent)
+      tools::msg_writer() << address << " is banned permanently";
+    else if (res.banned)
       tools::msg_writer() << address << " is banned for " << res.seconds << " seconds";
     else
       tools::msg_writer() << address << " is not banned";
@@ -1198,45 +1201,6 @@ bool t_rpc_command_executor::flush_txpool(const std::string &txid)
     }
 
     tools::success_msg_writer() << "Pool successfully flushed";
-    return true;
-}
-
-bool t_rpc_command_executor::output_histogram(const std::vector<uint64_t> &amounts, uint64_t min_count, uint64_t max_count)
-{
-    cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::request req;
-    cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.amounts = amounts;
-    req.min_count = min_count;
-    req.max_count = max_count;
-    req.unlocked = false;
-    req.recent_cutoff = 0;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "get_output_histogram", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_get_output_histogram(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    std::sort(res.histogram.begin(), res.histogram.end(),
-        [](const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e1, const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e2)->bool { return e1.total_instances < e2.total_instances; });
-    for (const auto &e: res.histogram)
-    {
-        tools::msg_writer() << e.total_instances << "  " << cryptonote::print_money(e.amount);
-    }
-
     return true;
 }
 
@@ -1291,8 +1255,7 @@ bool t_rpc_command_executor::print_blockchain_dynamic_stats(uint64_t nblocks)
   // RK-5b: `get_fee_estimate` and `get_block_headers_range` are served from
   // Rust, and the whole command renders there. The `hard_fork_info` leg is
   // gone rather than moved: its only use was choosing between "byte" and
-  // "kB", and `HF_VERSION_PER_BYTE_FEE` is 1 on a chain whose HardFork is
-  // constructed with original_version 1, so the "kB" arm was unreachable.
+  // "kB", and the "kB" arm was unreachable from genesis.
   return run_rust_console({"print_blockchain_dynamic_stats", std::to_string(nblocks)});
 }
 
@@ -1355,71 +1318,6 @@ bool t_rpc_command_executor::pop_blocks(uint64_t num_blocks)
   tools::success_msg_writer() << "new height: " << res.height;
 
   return true;
-}
-
-bool t_rpc_command_executor::prune_blockchain()
-{
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::request req;
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.check = false;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "prune_blockchain", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_prune_blockchain(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    tools::success_msg_writer() << "Blockchain pruned";
-    return true;
-}
-
-bool t_rpc_command_executor::check_blockchain_pruning()
-{
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::request req;
-    cryptonote::COMMAND_RPC_PRUNE_BLOCKCHAIN::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.check = true;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "prune_blockchain", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_prune_blockchain(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    if (res.pruning_seed)
-    {
-      tools::success_msg_writer() << "Blockchain is pruned";
-    }
-    else
-    {
-      tools::success_msg_writer() << "Blockchain is not pruned";
-    }
-    return true;
 }
 
 bool t_rpc_command_executor::flush_cache(bool bad_blocks)

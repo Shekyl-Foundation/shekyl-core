@@ -38,8 +38,8 @@
 //! makes that move a non-event. So the inventory is an invariant this crate
 //! maintains rather than a check it passed once:
 //!
-//! - Zone state — peer fluff queues, the stem map, the epoch role, and the
-//!   noise schedule — is owned **here**, mutated only through `&mut Zone`.
+//! - Relay state — peer fluff queues, the stem map, the epoch role, and the
+//!   noise schedule — is owned **here**, mutated only through `&mut Relay`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
 //!   owner. Noise **schedule** is owned here. Noise **buffers** live here
 //!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ enables the carrier
@@ -60,7 +60,7 @@
 //!
 //! # Sync core, driven from outside
 //!
-//! [`Zone`] is a plain `&mut self` state machine that returns deadlines —
+//! [`Relay`] is a plain `&mut self` state machine that returns deadlines —
 //! deliberately the same shape as [`shekyl_relay_privacy::schedule`]. Nothing
 //! here spawns, sleeps, or awaits. The production driver arms a timer against
 //! the returned deadline; a test drives the same steps directly, which is how
@@ -72,18 +72,15 @@ pub mod floor_diag;
 mod noise_queue;
 pub mod stem_watch;
 pub mod zone;
-pub mod zone_route;
 
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
-pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
+pub use shekyl_relay_privacy::SlotIndex;
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
 pub use zone::{
-    FluffReach, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan, TxBlob, Zone, ZoneNewError,
-};
-pub use zone_route::{
-    is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
-    originated_zone_from_anonymity_roll, r1_coherence_keeps_origin, NetZone, RelayMethod,
-    ZoneRouteDecision,
+    address_hidden_from_peer, any_hides_address_from_peer, any_link_encrypted, any_open_link,
+    cover_class, link_encrypted, longest_measured_transit, measured_transit_ms, ConnectorId,
+    CoverClass, NodeSync, PeerFluff, Relay, RelayCarrier, RelayDispatch, RelayNewError, RelayPlan,
+    TxBlob,
 };

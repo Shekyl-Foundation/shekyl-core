@@ -574,10 +574,10 @@ impl PinnedServeSet {
         }
 
         let tip = self.reader.sync_tip_height()?;
-        let Some(lag) = tip.0.checked_sub(self.minted_at_tip.0) else {
+        let Some(lag) = tip.to_raw().checked_sub(self.minted_at_tip.to_raw()) else {
             return Ok(Staleness::RolledBack {
-                minted_at_tip: self.minted_at_tip.0,
-                tip: tip.0,
+                minted_at_tip: self.minted_at_tip.to_raw(),
+                tip: tip.to_raw(),
             });
         };
         Ok(if lag > bound.get() {

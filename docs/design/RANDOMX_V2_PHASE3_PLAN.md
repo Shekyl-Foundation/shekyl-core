@@ -6,15 +6,15 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Phase 3a + 3b **landed** (2026-06; see §13). The Phase 3c v1-machinery deletion **landed in PR #235** (2026-07: `rx-slow-hash.c` deleted, v1 `randomx` lib unlinked, seed-epoch schedule ported to Rust); `slow-hash.c` (CryptoNight, wallet2/RPC-payment-blocked) and the Phase 4 abstraction deletions remain **deferred** (§15, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)). The §7 Hole-1 gate is **CI-wired** (test-regime hardening PR-1, 2026-07: daily/weekly cron + corpus-pin re-check + miner-KAT provenance + `nm` symbol isolation). This doc is now the record of the landed cutover plus the deferred-work tracker, not an open design. |
+| Status | Phase 3a + 3b **landed** (2026-06; see §13). The Phase 3c v1-machinery deletion **landed in PR #235** (2026-07: `rx-slow-hash.c` deleted, v1 `randomx` lib unlinked, seed-epoch schedule ported to Rust). Phase 4 (`IPowSchema`/`pow_registry`/`RX_BLOCK_VERSION` deletion) and `slow-hash.c` (CryptoNight KDF) **landed 2026-09-15**. The §7 Hole-1 gate is **CI-wired** (test-regime hardening PR-1, 2026-07: daily/weekly cron + corpus-pin re-check + miner-KAT provenance + `nm` symbol isolation). This doc is the record of the landed cutover. |
 | Parent plan | [`docs/design/RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — Track B Phase 3 (`phase3-*` todos). |
 | Spec authority | [`docs/design/RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §5 (FFI surface), §6 (no-prewarm), §13 (non-goals), §16 (genesis seedhash), §17 (error taxonomy). This doc **cites**; it does not re-derive. |
 | Sibling plans | [`RANDOMX_V2_PHASE2C_PLAN.md`](../completed/RANDOMX_V2_PHASE2C_PLAN.md) §5.11.6 (typed-array-pointer FFI), §5.11.7 (sticky-eviction DoS), §14 Round 5 (C-header form); [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (differential harness — light-vs-light only). |
 | Base commit | `e63701676` (`dev` tip at survey time; all line numbers in §2 are against this commit). |
-| Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — the library miners run; the byte-for-byte parity target for the Hole-1 gate (§7). `external/randomx` (v1, `102f8acf`) is the **outgoing** consensus path. |
+| Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — the library miners run; the byte-for-byte parity target for the Hole-1 gate (§7). `external/randomx` (v1) was the **outgoing** consensus path at this plan's pin; 3c deleted the configured CMake target / consensus linkage. The gitlink at `102f8acf` remains in `.gitmodules`. |
 | Working branch | `feat/randomx-v2-genesis-cutover` (off `dev`). |
 | Scope | Consensus PoW cutover only: v1-C → v2-Rust for verification, CryptoNight removed from the consensus path, genesis flipped to RandomX v2. See §1. |
-| Out of scope (deferred, with reversion clauses) | (a) RPC-payment subsystem deletion — §1.2 #1, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) item. (b) `rx-slow-hash.c` **deleted in PR #235** (2026-07, with the whole v1 machinery); `slow-hash.c` physical deletion remains deferred (still blocked by `wallet2.cpp` + RPC-payment). (c) `IPowSchema` / `pow_registry` abstraction deletion + `RX_BLOCK_VERSION` `#define` deletion — Phase 4. (d) `shekyl_pow_randomx_v2_seedheight` FFI export — the §5 reopening criterion **fired and closed in PR #235** (the export + `…_next_seedheight` landed with the Rust seed-epoch port; the C++ schedule half was deleted). (e) Worst-case per-hash latency gate — **discharged by the test-regime hardening runtime-mode change** (2026-07): T6 adversarial-ratio (≤5.0× − noise-margin per-recipe, in-mode hard gate) runs weekly in `randomx-v2-adversarial-ratio.yml`, and the T5 ≤3.0× median-latency gate runs on the daily cron in `randomx-v2-differential.yml`. |
+| Originally out of scope — **all LANDED** (as of 2026-09-15) | (a) RPC-payment subsystem deletion — **LANDED** (wallet2 cutover; §1.2 #1). (b) `rx-slow-hash.c` **deleted in PR #235** (2026-07, with the whole v1 machinery); `slow-hash.c` **deleted 2026-09-15** (wallet2 gone; CN-KDF callers were test-only). (c) `IPowSchema` / `pow_registry` / `RX_BLOCK_VERSION` **deleted 2026-09-15** (Phase 4; dispatch is `hash_pow_randomx`). (d) `shekyl_pow_randomx_v2_seedheight` FFI export — the §5 reopening criterion **fired and closed in PR #235** (the export + `…_next_seedheight` landed with the Rust seed-epoch port; the C++ schedule half was deleted). (e) Worst-case per-hash latency gate — **discharged by the test-regime hardening runtime-mode change** (2026-07): T6 adversarial-ratio (≤5.0× − noise-margin per-recipe, in-mode hard gate) runs weekly in `randomx-v2-adversarial-ratio.yml`, and the T5 ≤3.0× median-latency gate runs on the daily cron in `randomx-v2-differential.yml`. |
 
 ## 0. Why this document exists
 
@@ -64,44 +64,27 @@ CryptoNight from the consensus path:
 Each deferral carries an explicit reopening criterion per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
 
-1. **RPC-payment subsystem deletion.** `wallet_rpc_payments.cpp`,
-   `rpc_payment.{cpp,h}` and their RPC registrations are dead
-   Monero-legacy awaiting deletion (spec §15 "RPC Payments
-   Disposition — Delete"). They are the **only** remaining
-   non-consensus callers of `crypto::rx_slow_hash`
-   (`wallet_rpc_payments.cpp:158`, `rpc_payment.cpp:240`) and of the
-   `RX_BLOCK_VERSION` `#define` (`wallet_rpc_payments.cpp:156`,
-   `rpc_payment.cpp:237`). **No forcing function** drags them into
-   the cutover: 3b leaves the `#define` and the C `rx_slow_hash`
-   alive (both already staying until 3c), so this dead code compiles
-   untouched. Disposition: leave untouched; record a FOLLOWUPS
-   deletion item (target V3.0 pre-genesis). *Reopen criterion:* the
-   dedicated RPC-payment deletion PR (or Phase 4) lands; deleting it
-   unblocks the `RX_BLOCK_VERSION` `#define` deletion and narrows the
-   3c `rx-slow-hash.c` deletion.
-2. **`rx-slow-hash.c` / `slow-hash.c` physical deletion (Phase 3c).**
-   Blocked: `rx-slow-hash.c` is still referenced by RPC-payment (item
-   1) and provides the `rx_seedheight`/`rx_seedheights` the consensus
-   callers keep using (§5); `slow-hash.c`'s `cn_slow_hash` is still
-   used by `wallet2.cpp` (cache-key derivation / legacy file
-   encryption — a Phase 5 wallet target). *Reopen criterion:*
-   RPC-payment deleted **and** `wallet2.cpp` migrated.
+1. **RPC-payment subsystem deletion — LANDED** (wallet2 cutover).
+   `wallet_rpc_payments.cpp` and `rpc_payment.{cpp,h}` are gone.
+   At pin `e63701676` they were the only non-consensus callers of
+   `crypto::rx_slow_hash` and of `RX_BLOCK_VERSION`. *Reopen criterion:*
+   discharged.
+2. **`rx-slow-hash.c` / `slow-hash.c` physical deletion — LANDED 2026-09-15
+   (3c + Phase 4).** `rx-slow-hash.c` deleted in PR #235 (2026-07).
+   `slow-hash.c` deleted 2026-09-15: wallet2 is gone and the remaining
+   `cn_slow_hash` callers were test-only (`account_base::encrypt_keys`,
+   `generate_chacha_key*`). *Reopen criterion:* discharged.
 3. **`IPowSchema` / `pow_registry` abstraction + `RX_BLOCK_VERSION`
-   `#define` deletion (Phase 4).** 3b collapses the *dispatch* to
-   RandomX-only and deletes the CryptoNight *implementation*
-   (`pow_cryptonight.cpp`), but keeps the registry abstraction and
-   the `#define`. Full abstraction deletion is the parent plan's
-   Phase 4 (its own design/review). *Reopen criterion:* Phase 4
-   opens.
-4. **`shekyl_pow_randomx_v2_seedheight` FFI export.** Discretionary
-   per spec §5 ("only if the caller survey proves the call cannot be
-   eliminated or moved to a Rust caller cleanly"). The survey (§5)
-   finds the C `rx_seedheight` serves every site and stays until 3c.
-   *Reopen criterion:* 3c deletes `rx-slow-hash.c`; the seedheight
-   export then lands per spec §16's formula + spec-vector test.
-5. **Worst-case (≤5.0×) per-hash latency gate.** Post-2g adversarial
-   corpus round per parent §6 line 241. 3a still activates the
-   per-PR **average** (≤3.0×) gate per parent §6 line 246.
+   `#define` deletion (Phase 4) — LANDED 2026-09-15.** Dispatch is the
+   free function `hash_pow_randomx`. CEN-D2 fail-closed injection is
+   `set_pow_hash_override_for_tests`. *Reopen criterion:* discharged.
+4. **`shekyl_pow_randomx_v2_seedheight` FFI export — LANDED in PR #235.**
+   The §5 reopening criterion fired: 3c deleted `rx-slow-hash.c` and
+   the export landed with the Rust seed-epoch port. *Reopen criterion:*
+   discharged.
+5. **Worst-case (≤5.0×) per-hash latency gate — discharged 2026-07.**
+   T6 adversarial-ratio runs weekly; T5 median-latency runs on the
+   daily cron. *Reopen criterion:* discharged.
 
 ### 1.3 Why `07-consensus-atomic-cutovers` does not bind
 
@@ -129,8 +112,8 @@ greped-and-assumed. Line numbers are against `e63701676`.
 | File:line | Function | Disposition |
 |-----------|----------|-------------|
 | `src/crypto/pow_randomx.cpp:16` | `RandomXPowSchema::hash` | swap → FFI hash |
-| `src/cryptonote_basic/cryptonote_format_utils.cpp:1488` | `get_block_longhash` (blobdata overload) | swap → FFI hash |
-| `src/cryptonote_core/cryptonote_tx_utils.cpp:869` | `get_altblock_longhash` | swap → FFI hash |
+| `src/cryptonote_core/cryptonote_tx_utils.cpp:257` (was `cryptonote_format_utils.cpp:1488` at plan time; re-anchored 2026-09-23) | `get_block_longhash` (blobdata overload) | swap → FFI hash |
+| `src/cryptonote_core/cryptonote_tx_utils.cpp` (line 869 at pin `e63701676`; now `:755`) | `get_altblock_longhash` | swap → FFI hash |
 
 Dead (RPC-payment, **left untouched** per §1.2 #1):
 `wallet_rpc_payments.cpp:158`, `rpc_payment.cpp:240`.
@@ -144,14 +127,15 @@ rx_set_main_seedhash(seed.data, threads);`. The call is replaced by
 `shekyl_pow_randomx_v2_set_canonical(&seed)` (§4); the guard is
 dropped in 3b. The `max_dataset_init_threads` argument is **dropped**
 — there is no background dataset build (§4.4). Declaration:
-`src/crypto/hash-ops.h:101`.
+`src/crypto/hash-ops.h` (line 101 at pin `e63701676`; declaration deleted 2026-09-15).
 
-### 2.3 `rx_seedheight` / `rx_seedheights` sites (stay C++; guard-only in 3b)
+### 2.3 `rx_seedheight` / `rx_seedheights` sites (pin-era: stay C++; 3c/Phase 4 LANDED)
 
 These compute seed **heights** for block validation; they do not hash
-and do not manage the cache. They keep calling the C functions (which
-stay until 3c). In 3b only their `RX_BLOCK_VERSION` guards are
-removed.
+and do not manage the cache. At this pin they still called the C
+functions (until 3c). In 3b only their `RX_BLOCK_VERSION` guards were
+removed. **LANDED:** PR #235 exported `shekyl_pow_randomx_v2_seedheight`;
+Phase 4 deleted the C decls.
 
 - `rx_seedheight`: `cryptonote_tx_utils.cpp:888`;
   `blockchain.cpp:589, 711, 1399, 2323, 5577`.
@@ -164,7 +148,7 @@ removed.
 
 ### 2.4 `RX_BLOCK_VERSION` classification
 
-`#define RX_BLOCK_VERSION 12` at `src/crypto/hash-ops.h:95`. Three
+`#define RX_BLOCK_VERSION 12` at `src/crypto/hash-ops.h` (line 95 at pin `e63701676`; `#define` deleted 2026-09-15). Three
 buckets:
 
 | Bucket | Sites | 3b action |
@@ -174,8 +158,8 @@ buckets:
 | Dead CryptoNight-variant RPC | `core_rpc_server.cpp:2031` | **delete branch** (rule 60) |
 | Dead RPC-payment | `wallet_rpc_payments.cpp:156`, `rpc_payment.cpp:237` | **leave** (§1.2 #1) |
 
-The `#define` itself **stays** in 3b (RPC-payment still references
-it); its deletion bundles with §1.2 #1 / Phase 4.
+The `#define` itself **stayed** in 3b (RPC-payment still referenced
+it at this pin); its deletion **LANDED 2026-09-15** with Phase 4.
 
 ### 2.5 The two `202612` fossils (delete, rule 60)
 
@@ -188,7 +172,7 @@ it); its deletion bundles with §1.2 #1 / Phase 4.
 - `cryptonote_format_utils.cpp:1481-1485` — the `height == 202612`
   branch returning the same constant.
 
-### 2.6 Registry / schema / CryptoNight deletion surface (3b)
+### 2.6 Registry / schema / CryptoNight deletion surface (3b pin; Phase 4 LANDED 2026-09-15)
 
 - `src/crypto/pow_registry.cpp` — `get_pow_for_height` collapses to
   always return `get_randomx_pow_schema()`; delete
@@ -200,13 +184,11 @@ it); its deletion bundles with §1.2 #1 / Phase 4.
   not gated). Independent of `slow-hash.c` (it only *calls*
   `cn_slow_hash`; deleting the caller doesn't require deleting the
   callee).
-- `src/crypto/pow_randomx.cpp` — **kept** (the RandomX schema); its
-  `rx_slow_hash` call is swapped in 3a. Its
-  `prepare_miner_thread`/`rx_set_miner_thread` (line 22) is
-  miner-lifecycle, not verification-consensus, and is **not** an FFI
-  export (spec §5); it is vestigial post-cutover but harmless and is
-  removed with the `IPowSchema` abstraction in Phase 4.
-- `src/crypto/pow_schema.h` (`IPowSchema`) — **kept** (Phase 4).
+- `src/crypto/pow_randomx.cpp` — **kept** as `hash_pow_randomx` (the
+  RandomX schema wrapper is gone). `rx_slow_hash` was swapped in 3a;
+  `prepare_miner_thread`/`rx_set_miner_thread` were already gone with 3c.
+- `src/crypto/pow_schema.h` (`IPowSchema`) — **DELETED 2026-09-15**
+  (Phase 4).
 
 ### 2.7 Corpus errata caught during the survey
 
@@ -576,13 +558,14 @@ exists.)
 ## 11. Forward-actions / deferred (A5)
 
 - **FOLLOWUPS additions:** RPC-payment subsystem deletion (V3.0
-  pre-genesis); `RX_BLOCK_VERSION` `#define` deletion (bundled with
-  RPC-payment / Phase 4); `shekyl_pow_randomx_v2_seedheight` export +
-  `shekyl-pow-randomx::consensus` module (3c); `rx-slow-hash.c` /
-  `slow-hash.c` deletion (3c, blocked by RPC-payment + `wallet2.cpp`).
+  pre-genesis). `RX_BLOCK_VERSION` `#define` deletion **landed 2026-09-15**
+  with Phase 4. `shekyl_pow_randomx_v2_seedheight` export **landed in PR
+  #235**. `rx-slow-hash.c` **deleted in PR #235**; `slow-hash.c` **deleted
+  2026-09-15**.
 - **Spec amendments (§12):** `RANDOMX_V2_RUST.md` §5/§6/§13 per §4.5.
-- **Phase 4:** `IPowSchema`/`pow_registry` abstraction deletion;
-  `prepare_miner_thread`/`rx_set_miner_thread` removal.
+- **Phase 4 — LANDED 2026-09-15:** `IPowSchema`/`pow_registry` abstraction
+  deletion. `prepare_miner_thread`/`rx_set_miner_thread` were already gone
+  with 3c.
 
 ## 12. Documentation updates (final task)
 
@@ -596,11 +579,11 @@ Per [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-af
   version.
 - `USER_GUIDE` / `DESIGN_CONCEPTS` PoW sections — only if touched.
 
-## 13. Status — landed (2026-06)
+## 13. Status — 3a/3b landed 2026-06; 3c PR #235; Phase 4 landed 2026-09-15
 
 The consensus PoW cutover (3a + 3b) is complete. The 3c v1-machinery
-deletion landed in PR #235 (2026-07); `slow-hash.c` remains deferred
-(front-matter (b)).
+deletion landed in PR #235 (2026-07); `slow-hash.c` and Phase 4
+(`IPowSchema` / `pow_registry` / `RX_BLOCK_VERSION`) **landed 2026-09-15**.
 
 **3a — FFI export + Hole-1 gate (flag-gated):**
 - `shekyl-pow-randomx` dep + `pow_randomx_ffi.rs`; `shekyl_ffi.h` decls
@@ -648,23 +631,17 @@ under C-full-dataset, plus the miner-KAT provenance test). The
 symbol-isolation `nm` gate **landed in the same job**
 (`scripts/ci/check_randomx_symbol_isolation.sh`: §7.1 banned list +
 DAA-family absence + verifier-presence checks against the linked
-`shekyld`). The seedheight spec-vector remains deferred with the
-`slow-hash.c` deletion.
+`shekyld`). The seedheight FFI export **landed in PR #235**; it is
+not blocked on `slow-hash.c`.
 
-**3c — deferred** (blocked by RPC-payment subsystem deletion +
-`wallet2.cpp` PoW touchpoints; tracked in `docs/FOLLOWUPS.md`): delete
-`rx-slow-hash.c` + `slow-hash.c`, drop the `cncrypto` randomx C linkage,
-export `shekyl_pow_randomx_v2_seedheight` + add the
-`shekyl-pow-randomx::consensus` module (`SEEDHASH_EPOCH_BLOCKS`/`_LAG`),
-and add the CI symbol-isolation invariant.
-
-> **Update (2026-06-22): the 3c blocker is gone.** The RPC-payment subsystem
-> was deleted on `chore/rpc-payment-deletion`
-> ([`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](../completed/LEGACY_POW_CLEANUP_PLAN.md);
-> `[Unreleased]` `### Removed`). That re-split the remaining 3c/Phase-4 work and
-> corrected this section's `rx-slow-hash.c` + `slow-hash.c` bundling: **RandomX
-> v1 (`rx-slow-hash.c`) is now retained** as the consensus rollback hatch (with
-> a reversion clause), so the `seedheight` export rides v1 deletion, **not** 3c;
-> only CryptoNight `slow-hash.c` (gated on the C++ KDF→argon2id migration) and
-> the `IPowSchema`/`pow_registry` + `RX_BLOCK_VERSION` `#define` cleanup remain.
-> The updated FOLLOWUPS "Phase 3c / Phase 4" cluster is authoritative.
+**3c — LANDED in PR #235 (2026-07).** Deleted `rx-slow-hash.c`, dropped
+the `cncrypto` randomx C linkage, exported
+`shekyl_pow_randomx_v2_seedheight` + `shekyl-pow-randomx::consensus`
+(`SEEDHASH_EPOCH_BLOCKS`/`_LAG`), and added the CI symbol-isolation
+invariant. RPC-payment / wallet2 were already gone; they were not a
+remaining 3c blocker. `slow-hash.c` and `IPowSchema`/`pow_registry` /
+`RX_BLOCK_VERSION` were Phase 4 and **landed 2026-09-15**. The
+FOLLOWUPS "Phase 3c / Phase 4" cluster for those deletions is closed.
+The v1 gitlink at `102f8acf` remains; 3c deleted the configured CMake
+target, not the submodule. Fallback is a CMake-target re-add, not a
+SHA flip (`RANDOMX_V1_FALLBACK.md`).

@@ -1,0 +1,8 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+codec = shard_id
+fixed_width = 8
+[fixtures]
+zero = 0000000000000000
+distinct = 0807060504030201

@@ -1,0 +1,62 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-block-template"
+description = "Block-template assembly: a candidate block whose coinbase and header satisfy the census by construction, pure over a caller-supplied context (TXE-F8, DRS-E6 slice 6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# What is *absent* here is the crate's defining property, as it is for
+# `shekyl-chain-rules`: no `redb`, no `shekyl-chain-store`, directly or
+# transitively, in any dependency section. The template computes nothing it
+# could read from a store — every operand (tip, tree root, emission
+# prefix sums, median weight, volume window) arrives in the
+# `TemplateContext`, composed by the caller from the owner crates
+# (CONSENSUS_C2_R8_STORE_PLACEMENT.md principle 3: the store persists
+# consensus facts computed by owner crates; it never computes them).
+# `check_chain_rules_no_store.sh` (rust-audit-test.yml) refuses either
+# package anywhere in this crate's resolved `cargo tree` closure.
+
+[dependencies]
+# The wire format: `Block`, `BlockHeader`, `Transaction`, the coinbase
+# `tx_extra` grammar's one constructor (`build_coinbase_extra`, TXE-Q6′).
+shekyl-wire = { path = "../shekyl-wire" }
+# Header/hash newtypes (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`,
+# `BlockHeight`, `BlockCount`, `Timestamp`, `TxHash`).
+shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
+# The reward's owners: penalised emission (`paid_block_reward`), the
+# miner/staker split (`compute_emission_split`), the fee burn
+# (`compute_fee_burn`), and their operand newtypes.
+shekyl-economics = { path = "../shekyl-economics" }
+# Output construction — the hybrid-KEM output the coinbase pays
+# (`construct_output`: output key, commitment, encrypted amount/label,
+# KEM ciphertexts, PQC leaf entry).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# CEN-C1's own predicate (`is_timestamp_below_ftl`, `FTL_SECONDS`): the
+# header timestamp is checked against the future limit with the rule's
+# function, not a restatement of it.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The tx public key is `r·G` for the caller's tx secret `r`; the same
+# derivation `shekyl-genesis-tool::txkey::tx_pubkey` performs.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+# The coinbase secret `r` is held in a `Zeroizing<[u8; 32]>` (rule 35) and the
+# reduced scalar in a `Zeroizing<Scalar>` — the dalek `zeroize` feature above
+# is what gives `Scalar` its `Zeroize` impl.
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The validator is the falsifier: a template is judged by `form → validate`
+# over the negative-fixture harness, and by nothing the template crate
+# itself asserts about the census. Dev-only, so the production edge stays
+# template → wire/economics/crypto with no path back into the rules crate.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+
+[lints]
+workspace = true

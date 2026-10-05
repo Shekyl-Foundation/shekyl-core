@@ -167,7 +167,7 @@ consensus-layer fix would require a chain-anchored group registry
 
 | Attack | Mitigation |
 |---|---|
-| Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.5 indirect binding via leaf hash + `pqc_auth` size check; `expected_scheme_id` for defense in depth (the `expected_group_id` leg is deleted — §5.3) |
+| Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.5 indirect binding via the leaf commitment opening (`PL-D3`) + `pqc_auth` size check; `expected_scheme_id` for defense in depth (the `expected_group_id` leg is deleted — §5.3) |
 | Key substitution within a group | Existing `verify_multisig` Check 8 (key uniqueness) |
 | Signer index manipulation | Existing `verify_multisig` Checks 6 and 7 (range, ascending) |
 | Blob truncation/padding | Strict size checks in `tx_pqc_verify.cpp` |
@@ -567,8 +567,9 @@ def construct_multisig_output(
         spend_auth_pubkeys:   spend_auth_pubkeys,
     }
 
-    # 4th leaf scalar covers the full container
-    h_pqc = multisig_pqc_leaf_hash(leaf_container)
+    # 4th leaf scalar: CM.x, with CM = k*G_k + r*J and k over the full container (PL-D3)
+    k = pqc_key_scalar(leaf_container_bytes)          # one derivation, no multisig shim
+    (cm, record) = pqc_leaf_commitment(combined_ss, index, leaf_container)
 
     return OutputConstruction {
         output_pubkey:     O,
@@ -576,7 +577,7 @@ def construct_multisig_output(
         kem_ciphertexts,
         view_tag_hints,
         spend_auth_pubkeys,    # published separately in tx_extra
-        h_pqc,
+        pqc_leaf: (cm, record),   # the 64-byte 0x07 entry
         leaf_container,
         assigned_prover_index: assigned_prover,
     }
@@ -628,7 +629,7 @@ Per multisig-recipient output, the tx_extra includes:
 | Tag | Name | Payload |
 |---|---|---|
 | 0x06 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | N × 1120 B |
-| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 32 B (hash of full container) |
+| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 64 B (`CM ‖ record`; `CM` commits to `k = H_ℓ(full container)`, `PL-D3`) |
 | 0x09 | `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` | N × 1 B |
 | **0x0A** | `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS` | **1 + N × 32 B** (version byte + N Y_i) |
 
@@ -642,40 +643,50 @@ in design §0.5 — `B` + `Y_group` + N×KEM once MSW-8 lands).
 outputs. Wallets MUST reject any single-sig-shaped output that contains
 this tag.
 
-**Reserved tags (do not use in V3.1):**
+**Reserved tags (do not use):**
 
 | Tag | Reserved for |
 |---|---|
-| 0x08 | `TX_EXTRA_TAG_MULTISIG_MIGRATION` (V3.2 group rotation / migration tx) |
+| 0x08 | `TX_EXTRA_TAG_MULTISIG_MIGRATION` — the group-rotation / migration transaction, producer undesigned. **RESERVED in this table only** (rule 23, 2026-09-22): the code constant, struct and variant are deleted, and the byte parses as unknown until the producer's design mints them. |
+
+**Retired tag:** `0x05` (`TX_EXTRA_TAG_PQC_OWNERSHIP`, a per-output
+`(scheme_id, group_id)` entry) is **REJECTED 2026-09-22** — no producer, no
+reader; superseded by `PL-D3`'s in-circuit leaf-commitment binding (§7.5) and
+by the address fingerprint as group identity (§5.3). The byte stays retired
+in `shekyl-wire/src/tx_extra.rs` (the one codec since 2026-09-23) beside
+`0x03` / `0xDE`.
 
 ### 7.5 Spend-time consensus binding
 
-The spend-time binding works through the existing FCMP++ leaf hash check
-combined with the `pqc_auth` size check, both already in V3 consensus.
-With the Solution C receiving model in place, the binding chain is:
+The spend-time binding works through the FCMP++ in-circuit leaf-commitment
+opening (`PL-D3`) combined with the `pqc_auth` size check, both in V3
+consensus. With the Solution C receiving model in place, the binding chain is:
 
 1. Output committed at receive time with `O = spend_auth_pubkeys[assigned]`
-2. Leaf scalar `h_pqc = H(MultisigKeyContainer)` binds the full container
-   including spend_auth_pubkeys
+2. Leaf scalar `CM.x`, `CM = k·G_k + r·J` with `k = H_ℓ(MultisigKeyContainer)`,
+   binds the full container including spend_auth_pubkeys
 3. At spend time, the spender presents `pqc_auths[i].hybrid_public_key`
    containing the canonical `MultisigKeyContainer` (byte-identical to the
    one committed)
-4. `blockchain.cpp:3720` computes `shekyl_fcmp_pqc_leaf_hash(blob)` and
-   the FCMP++ proof confirms this leaf is in the curve tree
+4. The verifier computes `k = shekyl_fcmp_pqc_key_scalar(blob)`, derives
+   `K = k·G_k`, and the FCMP++ proof confirms a leaf whose commitment opens
+   to `K` is in the curve tree
 5. The FCMP++ proof verifies the key image derives from `O`
 6. Honest signers (pre-signing, §2.7 I5) verify
    `O == spend_auth_pubkeys[rotating_prover_index(...)]` — confirming
    the proof was constructed by the assigned prover
 
-Any blob other than the canonical container fails leaf hash matching;
-the proof rejects. Size check at `tx_pqc_verify.cpp:206-211` rejects
+Any blob other than the canonical container yields a point the leaf's
+commitment does not open to; the proof rejects. Size check at `tx_pqc_verify.cpp:206-211` rejects
 scheme_id=1 against multisig-shaped blobs.
 
 **Defense-in-depth wiring fixes** (no consensus rule change, but explicit
 enforcement of rules already implicitly guaranteed):
 
-- `blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
-  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`
+- ~~`blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
+  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`~~ —
+  **retired 2026-09-22:** tag `0x05` is deleted (§7.4, *Retired tag*); the
+  scheme is bound by the leaf commitment, not by a per-output entry.
 - ~~`rust/shekyl-ffi/src/lib.rs` SHOULD pass `expected_group_id` to
   `verify_multisig` when `scheme_id == 2`~~ — **retired (§5.3):** the
   `expected_group_id` parameter and check 9 are deleted; group identity
@@ -1600,8 +1611,8 @@ A stale member receiving a `CounterProof` MUST verify, in order:
    (if local chain lacks this block, wait for sync; do not reject)
 2. `tx_hash` appears at `tx_position` in that block
 3. `tx.pqc_auths[i].scheme_id == 2` for all inputs (multisig spend)
-4. `multisig_pqc_leaf_hash(tx.pqc_auths[i].hybrid_public_key)` matches
-   the leaf hash of an output tracked in local state with matching
+4. `pqc_key_scalar(tx.pqc_auths[i].hybrid_public_key)` matches
+   the tracked key scalar of an output in local state with matching
    `group_id`
 5. The `consumed_inputs` listed in CounterProof match the tx's actual
    input key images exactly (no loose matching)
@@ -1728,7 +1739,7 @@ stream**, not as "same privacy as solo at small volume."
 | `group_version = 0x01` | V3.1; higher values for future rotated groups |
 | `spend_auth_version = 0x02` | **Option E′** (15.4a threshold classical SAL on `y`). **`0x01` never issued.** Higher values only for a later mutually-distrusting / lattice-auth path — do not overload `0x02`. |
 | HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
-| `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
+| `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | migration transactions — reserved slot in §7.4's table, no code symbol until designed |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
 
 > **Superseded by group_id deletion (2026-07-18, MS-5 PR-B).** Items 1–3
@@ -1847,9 +1858,9 @@ Classical exposure lives in the **FCMP++ layer**, not in multisig:
 - SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x02`; `0x01`
   never issued — the never-shipped Option-D scaffold value;
   `SpendAuthAndLinkability` in `shekyl-fcmp`, compiled unconditionally).
-- Leaf `{O.x, I.x, C.x, H(pqc_pk)}` for every output on the chain.
+- Leaf `{O.x, I.x, C.x, CM.x}` for every output on the chain.
 - **Solo has the identical posture** — classical membership/SAL +
-  hybrid PQC auth bound through `h_pqc`. Multisig adds **zero**
+  hybrid PQC auth bound through the leaf commitment opening. Multisig adds **zero**
   classical exposure; it carries M hybrid signatures instead of one.
 
 **Quantum degradation of the SAL is graceful for funds, not for
@@ -2012,10 +2023,13 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.2 New tx_extra tags
 
-`src/cryptonote_basic/tx_extra.h`:
+`rust/shekyl-wire/src/tx_extra.rs` (the C++ `tx_extra.h` mirror was deleted
+2026-09-23 with the C++ parser, `TX_EXTRA_RUST_CUTOVER.md`; both tags are
+STAGED with the multisig receive path as producer, and are **not** in the
+coinbase grammar `CEN-I20`):
 - `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS = 0x09`
 - `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS = 0x0A`
-- Reserved: `TX_EXTRA_TAG_MULTISIG_MIGRATION = 0x08`
+- Reserved (spec table only, no code symbol — §7.4): `0x08`
 
 ### 16.3 Defense-in-depth wiring fixes
 
@@ -2024,16 +2038,19 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 > outright, not exempted). Its *stated* purpose (a cross-input
 > scheme-downgrade defense) was vacuous: `expected_scheme` was derived
 > from `pqc_auths[0]` itself (self-referential), and per-output scheme
-> binding is the leaf hash `h_pqc = H(hybrid_public_key)`, not this
+> binding is the leaf commitment opening (`PL-D3`; formerly the leaf hash
+> `h_pqc = H(hybrid_public_key)`), not this
 > check. Its *actual* effect was to foreclose a
-> solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
-> txs are unlinkable, so co-spending is the only proof of common control
-> across key models. That belongs in the wallet, not consensus, on two
-> grounds: **(1) no externality** — the two co-spent outputs are one-time
-> keys and the FCMP++ proof ranges over the whole tree, so no other
-> party's anonymity set shrinks (contrast a small ring, which poisons
-> others' decoys — the reason ring size *is* consensus); it is pure
-> self-harm; **(2)** Shekyl already permits exactly this opt-in class — a
+> solo(1)/multisig(2) **cross-model linkage** — co-spending proves common
+> control across key models (the 2026-09-11 reading added "the only proof,
+> since separate FCMP++ txs are unlinkable"; that premise was false under
+> `PL-D1` and holds again since `PL-D3`, 2026-09-14). That belongs in the wallet, not consensus. **Re-based
+> 2026-09-14 (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)):**
+> the first of the two grounds recorded here — *"no externality: the FCMP++
+> proof ranges over the whole tree, so no other party's anonymity set
+> shrinks"* — was struck while every FCMP++ spend identified its input by
+> the public 4th leaf scalar (`PL-D1`); `PL-D3` (2026-09-14) restored it.
+> In the interval the conclusion stood on the remaining ground alone: **(2)** Shekyl already permits exactly this opt-in class — a
 > `scheme_id=2` spend provably marks the spender, shipped as a disclosed
 > opt-in cost — so refusing an opt-in cross-model link while permitting
 > the multisig mark would be incoherent. It is therefore a **wallet

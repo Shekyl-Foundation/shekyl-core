@@ -168,12 +168,16 @@ consequences, neither disturbing the SJ-DQ-1 decision. (1) Honesty:
 request-linkage is *not* journal-unique — it is conditionally
 replay-recoverable, and the condition (a candidate address) is exactly
 what the decided full row stores, so the decision is self-consistent
-with its own recoverability story. (2) PR-SJ-1: the journal stores the
-echoed rid **directly at dispatch** (the send path computes it —
-`encode_request_plaintext` behind the FFI URI-pay path; a dispatch
-fact under C2's ownership), so surfacing "paid request #N" never
-requires the trial re-derivation; the derivation chain is the *replay*
-story, not the read path.
+with its own recoverability story. (2) PR-SJ-1 ruled that the journal stores the
+echoed rid **directly at dispatch** so surfacing "paid request #N" never
+requires the trial re-derivation. The plaintext helper is
+`outbound_label::label_plaintext_for_recipient`
+(`encode_request_plaintext`); since 2026-09-28 the sign pass calls it for a
+`TxRecipient` that carries a `rid` (the contract's `TxRecipient.rid`), and
+every other output encrypts the sentinel. The dispatch writer exists the
+same day: `SendRecipient::rid` (send-journal block version 4) stores the
+echoed `rid` per recipient, so the derivation chain is the *replay* story
+only, never the read path.
 
 ## 2. Binding constraints (inputs to the round, not open questions)
 

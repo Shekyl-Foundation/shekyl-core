@@ -79,9 +79,9 @@ use crate::engine::pending::TxHash;
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
 /// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
 /// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`3` per
-/// `V3_WALLET_DECISION_LOG.md`) and its single `quantization_mask`
-/// is stored once on [`Self::quantization_mask`]. This guarantees the
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`) and
+/// its single `quantization_mask` is stored once on
+/// [`Self::quantization_mask`]. This guarantees the
 /// tier band and the
 /// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
 /// mask all derive from the same daemon view, with no tier-vs-tier
@@ -238,6 +238,16 @@ pub(crate) struct DaemonHealth {
     /// The daemon's network-estimated target height (`0` when synced —
     /// the info surface's convention).
     pub target_height: u64,
+    /// The daemon's own `synchronized` flag (`core_rpc_server.cpp:248`,
+    /// from `check_core_ready()`).
+    ///
+    /// **Not decoration on top of the heights.** A daemon that has just
+    /// started with no peers reports `target_height == 0` *and*
+    /// `synchronized == false`: the height comparison alone reads that as
+    /// synced, at a genesis-adjacent height. That is the rebuilt-database
+    /// case `WSS-25` is about, so both halves are required —
+    /// `SyncedChainFacts` is where the two are combined.
+    pub synchronized: bool,
 }
 
 /// Engine-side view of the daemon RPC surface (§2.5).
@@ -428,4 +438,23 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     fn get_health(
         &self,
     ) -> impl std::future::Future<Output = Result<DaemonHealth, Self::Error>> + Send;
+
+    /// Confirm this daemon is one the wallet can use (`VC-4`), before work
+    /// that reads from it.
+    ///
+    /// Every request is already refused on a mismatch; this lets an
+    /// orchestrator ask first, so the typed verdict reaches it on its own
+    /// error path. The refresh producer's error carries no daemon data
+    /// (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6), so an identity refusal
+    /// must be settled before the producer runs, not reported by it.
+    ///
+    /// # Default implementation
+    ///
+    /// An implementor with no identity handshake (the test daemons) is
+    /// trivially confirmed. [`DaemonClient`] runs, or reuses, its handshake.
+    ///
+    /// [`DaemonClient`]: super::super::DaemonClient
+    fn verify_identity(&self) -> impl std::future::Future<Output = Result<(), RpcError>> + Send {
+        std::future::ready(Ok(()))
+    }
 }

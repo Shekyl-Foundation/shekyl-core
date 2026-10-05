@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
+use shekyl_types::{ArchivalLength, BlockHash, PrunableHash};
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction, TxPrefix};
 
 const GATE2_FIXTURE: &str =
@@ -45,8 +46,8 @@ fn hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn hex_str(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+fn hex_str(b: impl AsRef<[u8]>) -> String {
+    b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn manifest(rel: &str) -> PathBuf {
@@ -69,7 +70,7 @@ fn build_tx(kept: Vec<u8>, pruned: Vec<u8>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -105,12 +106,13 @@ fn regenerate_serve_credit_tx_parity_fixture() {
     let tx = build_tx(kept.clone(), pruned.clone());
     tx.validate().expect("the parity tx must validate");
     let doc = serde_json::json!({
-        "format_version": 1,
-        "description": "Serve-credit full-transaction byte-parity KAT (RF-D1/RF-D9). Blobs are the gate-2 integration section's; tx_hex is shekyl-wire's serialization of the transaction built around them. The C++ leg (archival_serve_credit_integration.cpp) must serialize the same transaction to these bytes and parse them back.",
+        "format_version": 2,
+        "description": "Serve-credit full-transaction byte-parity KAT (RF-D1/RF-D9; SHT-Q2). Blobs are the gate-2 integration section's; tx_hex is shekyl-wire's serialization of the transaction built around them; archival_len is its prunable region's bytes (it has no pqc_auths), which the txid binds. The C++ leg (archival_serve_credit_integration.cpp) must serialize the same transaction to these bytes, parse them back, and reproduce the hash.",
         "kept_wire_hex": hex_str(&kept),
         "pruned_hex": hex_str(&pruned),
-        "tx_hex": hex_str(&tx.serialize()),
-        "tx_hash_hex": hex_str(&tx.hash()),
+        "tx_hex": hex_str(tx.serialize()),
+        "archival_len": tx.archival_len().to_raw(),
+        "tx_hash_hex": hex_str(tx.hash()),
     });
     std::fs::write(
         manifest(PARITY_FIXTURE),
@@ -138,7 +140,7 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     let bytes = tx.serialize();
     assert_eq!(hex_str(&bytes), pin["tx_hex"].as_str().unwrap(), "tx bytes");
     assert_eq!(
-        hex_str(&tx.hash()),
+        hex_str(tx.hash()),
         pin["tx_hash_hex"].as_str().unwrap(),
         "tx hash"
     );
@@ -147,13 +149,14 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     let back = Transaction::from_bytes(&bytes).expect("parse");
     assert_eq!(back, tx);
 
-    // The PRUNED identity on the 3-part (empty-`pqc_auths`) arm: the prunable
-    // region is the full form's tail after the pruned prefix, and mixing its
-    // digest back in via `hash_with_supplied_prunable` must reproduce the
-    // pinned hash — the same recomputation the engine performs on a pruned
-    // reply, against the txid the C++ leg also asserts
-    // (`get_pruned_transaction_hash`, same fixture). The 4-part spend arm has
-    // its own pin (`pruned_tx_hash_parity_v1.json`).
+    // The PRUNED identity on the arm with no `pqc_auths` component: the
+    // prunable region is the full form's tail after the pruned prefix, and
+    // mixing its digest and the archival length back in via
+    // `hash_with_supplied_prunable` must reproduce the pinned hash — the same
+    // recomputation the engine performs on a pruned reply, against the txid
+    // the C++ leg also asserts (same fixture). With no `pqc_auths`, the
+    // archival length is the region's own length. The spend arm has its own
+    // pin (`pruned_tx_hash_parity_v1.json`).
     let pruned_form = {
         let mut t = build_tx(kept, pruned);
         let Ct::Fcmp { prunable, .. } = &mut t.ct else {
@@ -166,10 +169,48 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
         bytes.starts_with(&pruned_form),
         "the pruned form must be a prefix of the full form"
     );
-    let digest = shekyl_crypto_hash::keccak256(&bytes[pruned_form.len()..]);
+    let region = &bytes[pruned_form.len()..];
+    let digest = shekyl_crypto_hash::keccak256(region);
+    let archival_len =
+        ArchivalLength::from_raw(pin["archival_len"].as_u64().expect("archival_len"));
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        archival_len.to_raw(),
+        u64::try_from(region.len()).expect("fits"),
+        "a serve-credit transaction's archival length is its prunable region"
+    );
+    assert_eq!(tx.archival_len(), archival_len, "measured archival length");
+
+    // The mix, spelled out here instead of asked of the mixer. Four words —
+    // this form has no `pqc_auths` component: the digests of the prefix, the
+    // ct base and the prunable region, then the length as a little-endian
+    // `u64` in a zeroed word.
+    let mut ct_section = Vec::new();
+    tx.ct.write(&mut ct_section).expect("Vec write");
+    let (prefix, ct) = bytes.split_at(bytes.len() - ct_section.len());
+    let base = &ct[..ct.len() - region.len()];
+    let mut length_word = [0u8; 32];
+    length_word[..8].copy_from_slice(&archival_len.to_raw().to_le_bytes());
+    let preimage = [
+        shekyl_crypto_hash::keccak256(prefix),
+        shekyl_crypto_hash::keccak256(base),
+        digest,
+        length_word,
+    ]
+    .concat();
+    assert_eq!(
+        preimage.len(),
+        4 * 32,
+        "a serve-credit txid mixes four words"
+    );
+    assert_eq!(
+        hex_str(shekyl_crypto_hash::keccak256(&preimage)),
         pin["tx_hash_hex"].as_str().unwrap(),
-        "pruned identity (supplied digest) diverged from the pinned hash"
+        "the txid is not the four-word mix"
+    );
+
+    assert_eq!(
+        hex_str(tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest), archival_len)),
+        pin["tx_hash_hex"].as_str().unwrap(),
+        "pruned identity (supplied digest and length) diverged from the pinned hash"
     );
 }

@@ -28,28 +28,15 @@ weaker, and silently-diverging claim. The two networks stop being
 tests of each other and become analogs that must be kept in sync or
 rot.
 
-## Where this has already bitten (verified at source, C2-R1)
+## The tell
 
-Both checkpoint mechanisms in the inherited tree had the same shape —
-`if (nettype == MAINNET) { do the real thing }` with nothing in the
-`else`:
-
-- **The per-block-checkpoint fast-sync path** (deleted, C2-R1a): its
-  trust-root check was `if (m_nettype == MAINNET)`, so mainnet
-  sha-verified the compiled blob while testnet/stagenet loaded it with
-  **zero verification** — the mechanism's own safety check had no
-  pre-production rehearsal surface.
-- **The operator-override checkpoint path** (to be re-homed by C2-R1b, which cites this rule): the
-  *entire* init block — including `set_checkpoints_file_path` — sat
-  inside `if (m_nettype == MAINNET)` (`cryptonote_core.cpp:332`), so
-  off mainnet `m_checkpoints_path` stayed `""` and the JSON loader
-  silently no-opped. The checkpoint-forced-rollback mechanism was
-  **unreachable by construction** on the very networks where an
-  operator would rehearse it.
-
-The general failure is not "mainnet and testnet have different data" —
-different genesis, magic bytes, and difficulty targets are necessary
-and fine. It is nettype selecting a code path instead of a parameter.
+`if (nettype == MAINNET) { do the real thing }` with an empty else means
+testnet never rehearses the check. Both inherited checkpoint paths had
+that shape: mainnet sha-verified a compiled blob while testnet loaded it
+with no verification, and an operator-override init lived entirely inside
+the mainnet branch so the rehearsal network could not reach it. Different
+genesis, magic bytes, and difficulty targets are data, and they are fine.
+Nettype selecting a code path is the defect.
 
 ## The rule
 
@@ -83,8 +70,8 @@ and fine. It is nettype selecting a code path instead of a parameter.
    `check_network_uniformity.sh` gate flags any *new* public-nettype
    equality **or inequality** branch in the fenced directories against
    an annotated allowlist (`!= MAINNET` guards control flow exactly as
-   `== MAINNET` does — the live `update_checkpoints` guard is the
-   worked instance) (rule 47 shape — every allowlist entry names its
+   `== MAINNET` does — the since-deleted `core::update_checkpoints` guard
+   is the worked instance) (rule 47 shape — every allowlist entry names its
    disposition and its owner). The positive side (stronger, owed by
    the round that touches the surface): the same validator tests run
    against **all** network parameter sets — a parameterized suite

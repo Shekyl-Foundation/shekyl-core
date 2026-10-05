@@ -54,7 +54,7 @@ proves equivalence. Always compare against XMRig's **full-dataset** hash.
 
 ## Provenance
 
-- **XMRig**: `/home/torvaldsl/shekyl/xmrig` @ `b2ca7248` (v6.26.0).
+- **XMRig**: a local clone at `$XMRIG_DIR` @ `b2ca7248` (v6.26.0).
 - **Fork / canonical**: `external/randomx-v2` @ `aaafe71` (v2.0.1); pins in
   `rust/shekyl-randomx-differential/src/canonical_outputs.rs`, carried to C++ via
   `parity_corpus.dat` (SHA-256 `713d5702…03ba`, = `PARITY_CORPUS_FILE_SHA256`).
@@ -66,7 +66,7 @@ proves equivalence. Always compare against XMRig's **full-dataset** hash.
 ## Reproduce
 
 ```bash
-XMRIG_DIR=/home/torvaldsl/shekyl/xmrig ./build.sh
+XMRIG_DIR=/path/to/xmrig ./build.sh
 ./xmrig_parity --rx0        # must print the v1 reference vector (build faithful)
 ./xmrig_parity --kat-full   # must equal 34f8b017…
 ./xmrig_parity /path/to/parity_corpus.dat   # 1024/1024, full-dataset (~15 min, 32× 2 GiB inits)

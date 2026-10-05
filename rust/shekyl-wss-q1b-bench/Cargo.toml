@@ -1,0 +1,80 @@
+[package]
+name = "shekyl-wss-q1b-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WSS-Q1(b) grading harness: spend-edge delta and open-edge refetch, measured at the ruled prover boundary"
+# Stamps the git revision into the run record's `prover_pin`. §6.3.4 re-grades
+# on a material prover-pin change, and a pin that names only the crate version
+# cannot tell a later reader whether an old record still applies.
+build = "build.rs"
+
+[dependencies]
+# Scratch store for the population. Already a normal dependency of six
+# workspace crates (`shekyl-engine-file`, `shekyl-cli`, `shekyl-p-host`,
+# `shekyl-wallet-rpc`, `shekyl-tor-control-daemon`, `shekyl-sp-t3-spike`), so
+# this adds no crate to the tree and inherits their vetting (rule 17).
+tempfile = "3"
+
+# The prover the denominator is defined as (`WALLET_SIDE_STORE.md` §6.3.4:
+# "Path in, proof bytes out"). `proof::prove` here is the same function
+# `shekyl-tx-builder/src/sign.rs:171` calls in production -- the boundary is a
+# type boundary, so the harness cannot drift off it without a signature change.
+# Also the one home for the tree widths and `outputs_per_node`, which the depth
+# ladder is derived from rather than restated.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+# `W`'s two summands (`SPENDABLE_AGE_BLOCKS` + `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`)
+# and `REFERENCE_BLOCK_MIN_AGE`, which together fix the replay window. Read from
+# their owners, never re-pinned: the window is the measurement's scale factor.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# `COINBASE_LOCK_WINDOW` -- the 60 blocks the held buffer extends below `F`
+# (§6.3.2 row 2's amendment).
+shekyl-consensus = { path = "../shekyl-consensus" }
+# `MIN_BLOCK_WEIGHT` (the full-reward zone) and `TX_WEIGHT_LIMIT`: the block
+# policy half of the worst-case leaf rate, from its single Rust owner (the same
+# reason `shekyl-economics-sim` depends on this crate).
+shekyl-wire = { path = "../shekyl-wire" }
+# `block_weight_limit` (2 x max(median, zone)) and `BLOCK_WEIGHT_SURGE_FACTOR`.
+# The leaf rate is computed by CALLING these, not by deriving a ceiling from the
+# constants JSON -- which does not carry one (`WSS_Q1B_BENCH_SPEC.md` §4).
+shekyl-economics = { path = "../shekyl-economics" }
+# Minimum weight of a leaf-producing transaction, through the single-sourced
+# structural predictor the wallet fee path uses -- never by counting bytes here.
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+# The wallet's own PQC leaf derivation (`derive_pqc_leaf`) -- the corpus's real
+# leaves are built by the production path, not by a fixture that mimics it.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `T`, the SAL output-key generator, for building `O = xG + yT`.
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The curve types the prover's witness is expressed in. Same pins `shekyl-fcmp`
+# carries, so no new supply-chain surface (`17-dependency-discipline`).
+dalek-ff-group = "0.5"
+ciphersuite = { version = "0.4", default-features = false, features = ["std", "ed25519"] }
+rand_core = "0.6"
+serde = { workspace = true }
+serde_json = "1"
+# The open edge measures the PRODUCTION fetch path -- `DaemonClient::fetch_scannable_block`,
+# which resolves to `engine::block_fetch` -- rather than a replica of it. A
+# replica would measure a second implementation's round-trip shape.
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+# The `Rpc` trait, for timing a single minimal round trip (the floor the
+# attribution needs).
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+# Also the canonical endpoint classifier (`network_posture::host_of` /
+# `is_loopback_host`): the local-posture grading gate delegates to the wallet's
+# one answer rather than hand-parsing a URL, which is how the first version
+# came to accept the hostname `127.0.0.1.evil.com`.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# The SHARED get_block request/response types -- the same ones `block_fetch.rs`
+# uses, for the reason its own comment gives: a hand-rolled params object plus a
+# walk over an untyped reply is a second definition of one shape, and the one
+# the daemon cannot see is the one that drifts.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# `hex`: decoding the block blob to reach its non-miner transaction hashes, so
+# byte accounting covers the bodies the production fetch downloads separately.
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+clap = { version = "4", features = ["derive"] }
+

@@ -59,61 +59,15 @@ In each case, the bundling case is real but operates on a different
 axis than validation. Bundle on the validation axis only when the
 validation surface is shared.
 
-## Worked examples
+## The tell
 
-### Pre-genesis: the "M3b.1 bundle" (perf interim PR)
-
-An earlier conversation framed three items as a single bundle:
-the `populate_engine_handle_fields` O(n)→O(k) refactor, the
-async-path-skip fix, and wallet-birthday plumbing. The shared
-feature topic was "refresh pipeline." Applying the guard:
-
-- **O(k) refactor.** Validation surface: the post-pass walks
-  `inserted` rather than the full ledger. Property: O(k)
-  instruction count; test: 100 unrelated transfers + 1 new
-  insert exercises only the inserted index.
-- **Async-path-skip fix.** Validation surface: the post-pass runs
-  on the async refresh path. Property: post-merge transfers have
-  their `output_handle` populated. Test: drive `start_refresh` and
-  assert merged transfers have populated handles.
-- **Wallet-birthday plumbing.** Validation surface: the producer's
-  start-height honors `refresh_from_block_height`. Property: a
-  wallet with a non-zero birthday does not scan blocks before it.
-  Test: set birthday to height N, drive refresh, assert no block
-  below N is scanned.
-
-Three independent properties, three independent tests. Bundling
-under "refresh pipeline" is the (3) case; the items unbundle
-correctly into the perf interim PR (item 1) and PR 4 deferrals
-(items 2 and 3) per `docs/FOLLOWUPS.md`'s V3.0 entries.
-
-### Pre-genesis: PR 4 design round 1 (likely)
-
-PR 4's α/β/γ producer-redesign question will tempt bundling on
-the topic "refresh." Items in the temptation surface:
-
-- The α/β/γ consumer-pattern decision.
-- Wallet-birthday plumbing.
-- FMD design discussion.
-- Bandwidth FOLLOWUP.
-- The async-path-skip fix.
-
-All five are "about refresh." Validation surfaces:
-
-- Consumer pattern: a contract about how `RefreshEngine` exposes
-  scan results to consumers.
-- Birthday plumbing: a property about which blocks are scanned.
-- FMD design: a privacy property about scan-on-third-party-server.
-- Bandwidth: a perf/economics tradeoff about producer batching.
-- Async-skip: a correctness property about post-merge transfer
-  state.
-
-Each is its own validation surface. The consumer-pattern decision
-shapes the others (it constrains how birthday/FMD/bandwidth/skip
-plumbing is structured), but it does not validate them. PR 4's
-Round 1 settles the consumer pattern; subsequent PR 4 rounds (or
-follow-up PRs) deliver the dependent items, each as its own
-validation surface.
+Three items framed as one "refresh pipeline" bundle — an O(k) walk, an
+async-path correctness fix, and a birthday start-height — are three
+properties and three tests. Sharing a topic does not make one surface's
+validation cover the others. A consumer-pattern decision can constrain
+how the others are structured. It does not validate them. Settle the
+shared contract in one PR. Deliver each dependent property as its own
+surface.
 
 ## How to apply the guard during PR pre-flight
 

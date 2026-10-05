@@ -101,6 +101,7 @@ use super::drain_orchestrator::{
 };
 use super::emission_source::EmissionSourceError;
 use super::fee_policy::FeeEstimatorError;
+use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::prpc::LocalNodeRpc;
@@ -233,11 +234,8 @@ pub enum UnstakeError {
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry (the shared `-29102` remedy shape `drain` and
     /// `collect_unstaked` already use).
-    #[error("exit fee estimate failed: {detail}")]
-    FeeEstimate {
-        /// The query failure's rendering.
-        detail: String,
-    },
+    #[error("exit fee estimate failed: {0}")]
+    FeeEstimate(FeeEstimatorError),
     /// The daemon *answered* the fee query and the wallet refused the
     /// answer (sanity ceiling) — retrying the connection does not help (the
     /// shared `-29109` remedy shape). Carries the violation's public chain
@@ -379,11 +377,8 @@ pub enum CollectUnstakedError {
     },
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry.
-    #[error("sweep fee estimate failed: {detail}")]
-    FeeEstimate {
-        /// The query failure's rendering.
-        detail: String,
-    },
+    #[error("sweep fee estimate failed: {0}")]
+    FeeEstimate(FeeEstimatorError),
     /// The daemon *answered* the fee query and the wallet refused the
     /// answer (sanity ceiling) — retrying the connection does not help.
     #[error("sweep fee estimate refused by the wallet's sanity ceiling ({reason})")]
@@ -814,9 +809,7 @@ where
                     let daemon = { engine.read().await.daemon().clone() };
                     let quoted =
                         p_lane_floor_fee(daemon.get_fee_estimates().await.map_err(|e| {
-                            CollectUnstakedError::FeeEstimate {
-                                detail: e.into().to_string(),
-                            }
+                            CollectUnstakedError::FeeEstimate(map_daemon_engine_fee_error(e))
                         })?)
                         .map_err(|e| match e {
                             FeeEstimatorError::DaemonFeeUnreasonable(v) => {
@@ -826,9 +819,7 @@ where
                                     bound: v.bound(),
                                 }
                             }
-                            other => CollectUnstakedError::FeeEstimate {
-                                detail: other.to_string(),
-                            },
+                            other => CollectUnstakedError::FeeEstimate(other),
                         })?;
                     fee = Some(quoted);
                     quoted
@@ -937,6 +928,15 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
     match e {
         ReleaseRequestError::NotStaker => UnstakeError::NotStaker,
         ReleaseRequestError::NoBondRecord => UnstakeError::NoBondRecord,
+        // Lands on the existing resyncing disposition rather than a new one:
+        // the operator remedy is identical ("wait for the daemon, retry"),
+        // and the public surface already speaks that word. The distinction
+        // the crate-internal variant keeps — daemon-behind-network versus
+        // tree-behind-daemon — is a diagnostic the `detail` carries, not a
+        // second thing for a caller to branch on.
+        ReleaseRequestError::DaemonSyncing => UnstakeError::Resyncing {
+            detail: e.to_string(),
+        },
         ReleaseRequestError::ReleasePending => UnstakeError::ExitInProgress,
         // NOT ExitInProgress: a confirming bond post is
         // not an exit, and the remedies point at different verbs — wait then
@@ -980,9 +980,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
                 bound: v.bound(),
             }
         }
-        ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate {
-            detail: e.to_string(),
-        },
+        ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
         // The fetch's inner class decides the disposition: a
         // connection/status failure is a reachable daemon outage (retryable),
         // a malformed response is an untrusted-input rejection (internal).

@@ -20,6 +20,8 @@
 //! state, so an implementation *cannot* reach `check_tx_inputs` or any
 //! lock-taking C++ path.
 
+use std::fmt;
+
 use crate::submit::facts::SubmitFacts;
 use crate::submit::phase_a::ParsedSubmission;
 use shekyl_rpc_types::RejectCause;
@@ -28,7 +30,10 @@ use shekyl_rpc_types::RejectCause;
 ///
 /// The closed set of causes a verifier may emit — constraining the seam so
 /// an implementation cannot smuggle identity or transport dispositions
-/// into a verification failure.
+/// into a verification failure. This is the wire-cause: [`From`] maps it
+/// onto [`RejectCause`] with no remainder (CB-5). The operator-facing
+/// leg name lives on [`VerifyReject`]; a cause without a reason is not a
+/// [`TxVerifier`] error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyFailure {
     /// Proof/balance/auth/shape failure that is deterministic for these
@@ -58,19 +63,112 @@ impl From<VerifyFailure> for RejectCause {
     }
 }
 
+/// A Phase-C refusal: the wire-cause plus the daemon-side diagnostic.
+///
+/// Mirrors [`crate::submit::PhaseAReject`]: the reason never crosses the
+/// RPC boundary (§2.2 / CB-5 — a submitter learns only [`RejectCause`]);
+/// operators read the engine's one `info` line. Constructors are the only
+/// construction sites, and they refuse an empty reason, so a silent
+/// `Malformed` is unrepresentable at this seam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyReject {
+    cause: VerifyFailure,
+    reason: String,
+}
+
+impl VerifyReject {
+    /// Shape / proof / auth failure, named.
+    pub fn malformed(reason: impl fmt::Display) -> Self {
+        Self::new(VerifyFailure::Malformed, reason)
+    }
+
+    /// Snapshot-tree inconsistency a rebuild against a fresh root fixes.
+    pub fn stale_root(reason: impl fmt::Display) -> Self {
+        Self::new(VerifyFailure::StaleRoot, reason)
+    }
+
+    /// Consumed archival claim slot.
+    pub fn double_spend(reason: impl fmt::Display) -> Self {
+        Self::new(VerifyFailure::DoubleSpendConflict, reason)
+    }
+
+    /// Wrap a scripted cause (mocks). Still requires a reason.
+    pub fn from_cause(cause: VerifyFailure, reason: impl fmt::Display) -> Self {
+        Self::new(cause, reason)
+    }
+
+    fn new(cause: VerifyFailure, reason: impl fmt::Display) -> Self {
+        let reason = reason.to_string();
+        assert!(
+            !reason.is_empty(),
+            "VerifyReject reason must name the failing leg (programmer invariant)"
+        );
+        Self { cause, reason }
+    }
+
+    /// The wire-cause this refusal maps to.
+    pub fn cause(&self) -> VerifyFailure {
+        self.cause
+    }
+
+    /// Operator-facing diagnostic, logged daemon-side only.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+impl fmt::Display for VerifyReject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}: {}", self.cause, self.reason)
+    }
+}
+
+impl std::error::Error for VerifyReject {}
+
+impl From<VerifyReject> for VerifyFailure {
+    fn from(reject: VerifyReject) -> Self {
+        reject.cause
+    }
+}
+
+impl From<VerifyReject> for RejectCause {
+    fn from(reject: VerifyReject) -> Self {
+        reject.cause.into()
+    }
+}
+
 /// The Phase-C cryptographic battery.
 pub trait TxVerifier {
     /// Verify `parsed` against the snapshot facts (root, tree depth,
     /// archival facts). Success is the engine's license to mint the
     /// [`crate::submit::VerificationCertificate`]; failure maps to a
-    /// [`RejectCause`] via [`VerifyFailure`].
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure>;
+    /// [`RejectCause`] via [`VerifyReject::cause`]. The reason is for
+    /// the operator log, never the wire.
+    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject>;
 }
 
 // Forwarding impl, mirroring the `SubmitStateShim` one: shared-verifier
 // ownership (engine + assertion handle) without orphan-rule friction.
 impl<T: TxVerifier + ?Sized> TxVerifier for std::sync::Arc<T> {
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
+    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
         (**self).verify(parsed, facts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "must name the failing leg")]
+    fn a_reject_without_a_reason_is_unrepresentable() {
+        let _ = VerifyReject::malformed("");
+    }
+
+    #[test]
+    fn from_strips_the_reason_at_the_wire() {
+        let reject = VerifyReject::malformed("O6: degenerate output commitment");
+        assert_eq!(reject.cause(), VerifyFailure::Malformed);
+        assert_eq!(RejectCause::from(reject), RejectCause::Malformed);
     }
 }

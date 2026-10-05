@@ -60,6 +60,7 @@ pub mod kem;
 pub mod key_image;
 pub mod keys;
 pub mod label;
+pub mod leaf_commitment;
 pub mod message_signing;
 pub mod montgomery;
 pub mod multisig;
@@ -70,6 +71,9 @@ pub mod rng;
 pub mod schnorr;
 pub mod signature;
 pub mod wallet_envelope;
+
+#[doc(hidden)]
+pub mod test_support;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;

@@ -90,13 +90,11 @@ Two things the grounding corrected, recorded because both were wrong in the
   and the JSON vectors all agree. Copying it verbatim would have enshrined a
   spec that misaligns every input after the first.
 
-**Still open — the other half of step 1.** `fill_construct_tx_rct_stub` keeps
-its name. Its caller `construct_tx_with_tx_key` has no production caller either
-(the 2026-08-21 claim that it had one was wrong; corrected in
-[`FOLLOWUPS.md`](../FOLLOWUPS.md)), but the `construct_tx*` chain is the C++
-consensus oracle's transaction factory, reached from `tests/core_tests/` and
-`tests/performance_tests/`. Retiring it is oracle work, not naming work.
-Tracked in [`FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0).
+**Step 1's deletion half is done.** `genRctFcmpPlusPlus` was deleted
+2026-08-22. `fill_construct_tx_rct_stub` and its caller
+`construct_tx_with_tx_key` are gone too (no symbol under `src/` or `tests/`,
+verified 2026-10-01). What `cryptonote_tx_utils` still holds is the miner-tx
+and block-hash oracle, not a second spend builder.
 
 **Surviving `rct`-spelled long tail — outside this pin's scope, and named
 here so §6 is not misread.** The sweep's subject was this pin's: the
@@ -125,8 +123,9 @@ verifier rename target.
 
 **Tracked in.** [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — the tracking entry
 ("Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after `wallet2`
-cutover") is marked **[Done 2026-08-21]**; the surviving open item is the §5
-step-1 deletion of `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub`.
+cutover") is marked **[Done 2026-08-21]**. §5 step 1's two construction
+functions are deleted as well (`genRctFcmpPlusPlus` 2026-08-22;
+`fill_construct_tx_rct_stub` gone by 2026-10-01, no remaining symbol).
 
 ---
 
@@ -167,7 +166,7 @@ One inherited module name covers two roles. They diverge at rename time.
 | `rctSigs.h` / `.cpp` | **Semantics verification** | **Done** — `ct_semantics.h` / `.cpp` |
 | `rct::rctSig` (field type) | Passive wire container | **Done** — `ct::CtSig`; the `ct_signatures` alias was deleted (dead after the 2026-07-11 field rename) |
 | `genRctFcmpPlusPlus` | Legacy C++ construction | **Done — deleted 2026-08-22** (no caller) |
-| `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with the chaingen / test-construction migration — do not rename |
+| `fill_construct_tx_rct_stub` | Legacy C++ construction | **Done — deleted** (no symbol under `src/` or `tests/`, verified 2026-10-01) |
 | `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **DELETED (standalone pre-sweep PR)** (see below) |
 
 **`rctSigBase::pseudoOuts` — DELETED in a standalone pre-sweep PR
@@ -306,10 +305,10 @@ binding trigger**, not upstream cherry-pick calendar.
 **At cutover (separate PRs, scoped):**
 
 1. Delete `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` (if not already
-   gone). **Half landed** — `genRctFcmpPlusPlus` deleted 2026-08-22 (it had no
-   caller); `fill_construct_tx_rct_stub` remains, blocked on the C++
-   test-construction harness. Step 2 landed before either, which §5 permits;
-   see the 2026-08-22 UPDATE.
+   gone). **Done.** `genRctFcmpPlusPlus` deleted 2026-08-22 (it had no
+   caller); `fill_construct_tx_rct_stub` has no remaining symbol (verified
+   2026-10-01). Step 2 landed before either, which §5 permits; see the
+   2026-08-22 UPDATE.
 2. C++ namespace/module rename (`rct::` → `ct::`, `rctSigs` → `ct_semantics`,
    etc.) — rename-only, gated on tx blob round-trip / determinism CI. **Scope
    note:** `rctSigBase::pseudoOuts` no longer exists — it was deleted in the
@@ -340,9 +339,9 @@ Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clau
 - **Accretion (ARMED 2026-08-21).** With the sweep landed there is no
   remaining licence for the old spelling: any new production Rust module or
   C++ surface named `rctSigs` / `rct::` / `rctSig*` is a regression → immediate
-  rename PR, not further deferral. The one deliberate survivor is the
-  remaining §5 step-1 deletion target, `fill_construct_tx_rct_stub`, and it is
-  not precedent.
+  rename PR, not further deferral. The one named survivor,
+  `fill_construct_tx_rct_stub`, is deleted (verified 2026-10-01); it was never
+  precedent for a new `rct`-spelled surface.
 - **Substrate:** *moot* — this criterion existed to shrink the rename PR's
   scope if verifier logic migrated to Rust before Phase 5. The rename has
   landed, so there is no scope left to shrink. Verifier migration continues on

@@ -227,15 +227,17 @@ pub struct WalletHandle {
     pub restore_height_hint: Option<i64>,
 }
 
-/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`).
-pub type AtomicUnitsString = String;
+/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`): the
+/// one wire newtype, shared with the desktop wallet's Tauri edge.
+pub use shekyl_units::AtomicUnitsString;
 
 /// `get_balance` result.
 ///
-/// As of WI-RPC-5 the staking fields carry live values projected from the
-/// same authoritative staking view `get_staked_balance` reads (see
-/// `project::get_balance_result`). For a non-staker wallet they are a
-/// genuine `"0"` — nothing is staked — never a placeholder.
+/// As of WI-RPC-5 the staking fields carry the engine's
+/// [`shekyl_engine_core::BalanceView`] (see `project::get_balance_result`),
+/// projected from the same staking read `get_staked_balance` uses. For a
+/// non-staker wallet they are a genuine `"0"` — nothing is staked — never
+/// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
     /// Spendable liquid balance (maps from unlocked until staking splits
@@ -255,6 +257,10 @@ pub struct GetBalanceResult {
     pub staked: Option<AtomicUnitsString>,
     /// Unlocked / spendable now.
     pub unlocked: AtomicUnitsString,
+    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
+    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
+    /// Always present; `"0"` is a true zero.
+    pub unspendable: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
@@ -343,63 +349,10 @@ pub enum TransferDirection {
     Outgoing,
 }
 
-/// Transfer confirmation state (OpenAPI `Transfer.state`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TransferState {
-    /// Network-exposed spend awaiting confirmation (or still unsettled).
-    Pending,
-    /// Confirmed on chain, unspent (receive) or observed spent-on-chain (send).
-    Confirmed,
-    /// Spent (receive-side output consumed).
-    Spent,
-    /// Terminal failure: daemon refused the dispatch; the tx never mined
-    /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).
-    Failed,
-    /// The network no longer holds the send: the watchdog's
-    /// confirmed-absent horizon released the input locks, so the funds
-    /// are spendable again and the send can be re-made (OUTGOING journal
-    /// `PresumedDead` only).
-    ///
-    /// Distinct from [`Self::Pending`] because the wallet has stopped
-    /// waiting — reporting PENDING would contradict the balance the
-    /// same wallet reports — and distinct from [`Self::Failed`] because
-    /// nothing proved the send was refused: a late confirmation still
-    /// flips this row to CONFIRMED (rule 82).
-    Dropped,
-    /// The user abandoned the send (`abandon_tx`; OUTGOING journal
-    /// `Abandoned` only).
-    ///
-    /// Distinct from [`Self::Dropped`] because the release came from
-    /// user intent, not confirmed-absent evidence — the carried input
-    /// locks may still be held until the watchdog resolves — and, as
-    /// with DROPPED, a late confirmation still flips this row to
-    /// CONFIRMED loudly rather than staying wrong (rule 82 / P3-4).
-    Abandoned,
-}
-
-impl TransferState {
-    /// OpenAPI / JSON-RPC wire string (`SCREAMING_SNAKE_CASE`). Single
-    /// owner of that vocabulary so error data and `get_transfers` never
-    /// diverge.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "PENDING",
-            Self::Confirmed => "CONFIRMED",
-            Self::Spent => "SPENT",
-            Self::Failed => "FAILED",
-            Self::Dropped => "DROPPED",
-            Self::Abandoned => "ABANDONED",
-        }
-    }
-}
-
-impl std::fmt::Display for TransferState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// Transfer confirmation state (OpenAPI `Transfer.state`). Owned by the
+/// contract crate, beside the journal → wire projection and the error that
+/// carries it.
+pub use shekyl_wallet_contract::TransferState;
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,6 +446,12 @@ pub struct TransferView {
     /// Height at which the output was spent, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
+    /// Why the output is `UNSPENDABLE` (present exactly when `state` is
+    /// `UNSPENDABLE`): `PQC_LEAF_MISMATCH` — the published leaf entry is not
+    /// this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the transaction
+    /// carries no entry for the output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unspendable_reason: Option<String>,
     /// Receive attribution (WI-RPC-4).
     ///
     /// Present on INCOMING rows only. Receive attribution answers "which
@@ -702,9 +661,9 @@ pub struct PaymentRequestView {
     pub label: String,
     /// Requested amount.
     pub amount: AtomicUnitsString,
-    /// Block height at creation (the request clock is block height).
+    /// Wall-clock Unix seconds at creation (UTC).
     pub created_at: i64,
-    /// Absolute expiry height, if any.
+    /// Absolute expiry as Unix seconds (UTC), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
     /// Lifecycle state.
@@ -756,7 +715,7 @@ pub struct ParseUriResult {
     /// `rid` query parameter (decimal string), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rid: Option<String>,
-    /// `expiry` query parameter (absolute block height), if present.
+    /// `expiry` query parameter (Unix seconds, UTC), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
 }

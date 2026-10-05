@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -339,6 +340,42 @@ bool Daemon::run(bool interactive)
         false,
         mp_internals->rpcs.front().server.get()));
       rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));
+    }
+
+    // RPC listeners are open now, and each server has a connection budget
+    // that is not yet open. Re-derive so both are inside the ceiling.
+    // `init` already derived once, before these sockets existed.
+    std::uint64_t rpc_reserved = 0;
+    for (auto const & rpc : mp_internals->rpcs)
+    {
+      const std::uint64_t cap = static_cast<std::uint64_t>(rpc.server->get_rpc_max_connections());
+      if (rpc_reserved > std::numeric_limits<std::uint64_t>::max() - cap)
+        rpc_reserved = std::numeric_limits<std::uint64_t>::max();
+      else
+        rpc_reserved += cap;
+    }
+    mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
+
+    // Every daemon runtime is on the ledger by here: the transport pool
+    // is built at bind, Tor control at its start, and the RPC pools just
+    // above. The D5 pin of those counts is still ahead of any measurement.
+    // The report returns its full length. One retry covers a row that
+    // appeared between the probe and the fill. A second short fill is
+    // not printed.
+    {
+      const std::size_t needed = shekyl_thread_ledger_report(nullptr, 0);
+      std::string budget(needed + 1, '\0');
+      std::size_t full = shekyl_thread_ledger_report(budget.data(), budget.size());
+      if (full >= budget.size())
+      {
+        budget.assign(full + 1, '\0');
+        full = shekyl_thread_ledger_report(budget.data(), budget.size());
+      }
+      if (full < budget.size())
+      {
+        budget.resize(full);
+        MGINFO(budget);
+      }
     }
 
     MGINFO("Starting p2p net loop...");

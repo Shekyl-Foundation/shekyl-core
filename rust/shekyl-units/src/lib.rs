@@ -41,7 +41,17 @@
 //! (test assertions in `src/tests.rs` hardcode expected values, as tests
 //! should).
 
-use std::fmt;
+#![no_std]
+
+// `alloc`, not `std` (the `shekyl-types` posture, adopted 2026-09-29 so that
+// crate can depend on this one): the SKL string forms need `String`; nothing
+// here needs `std`. Tests take `std` explicitly.
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::string::String;
+use core::fmt;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -69,7 +79,9 @@ const _: () = assert!(ATOMIC_UNITS_PER_SKL == 10u64.pow(DISPLAY_DECIMAL_POINT as
 /// posture this replaces. Secret hygiene stays at the container level
 /// (`OutputClaim` is `ZeroizeOnDrop`; this type is [`Zeroize`] so that keeps
 /// compiling).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Zeroize, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Zeroize, Serialize, Deserialize,
+)]
 #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
 #[serde(transparent)]
 #[repr(transparent)]
@@ -146,7 +158,7 @@ impl AtomicUnits {
         let whole = self.0 / ATOMIC_UNITS_PER_SKL;
         let frac = self.0 % ATOMIC_UNITS_PER_SKL;
         let width = usize::from(DISPLAY_DECIMAL_POINT);
-        format!("{whole}.{frac:0width$}")
+        alloc::format!("{whole}.{frac:0width$}")
     }
 
     /// Parse a SKL decimal string into atomic units.
@@ -277,11 +289,13 @@ impl fmt::Display for ParseAmountError {
     }
 }
 
-impl std::error::Error for ParseAmountError {}
+impl core::error::Error for ParseAmountError {}
 
 pub mod banded_pl;
+pub mod wire;
 
 pub use banded_pl::{curve_milli, mul_div_floor, BandedCurveParams};
+pub use wire::{AtomicUnitsString, ParseAtomicUnitsStringError};
 
 #[cfg(test)]
 mod tests;

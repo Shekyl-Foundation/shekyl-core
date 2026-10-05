@@ -9,6 +9,9 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+# RTN-5: leftover `Difficulty(pub u128)` is deleted in favour of the
+# transform-shaped types owned by shekyl-difficulty.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 
 [lints]
 workspace = true

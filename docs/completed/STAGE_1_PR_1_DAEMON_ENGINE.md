@@ -135,7 +135,7 @@ Inherited `Rpc` methods are *not* duplicated on `DaemonEngine`; consumers reach 
 
 **1. Define the trait.** New module `rust/shekyl-engine-core/src/engine/traits/daemon.rs` (or extend an existing `traits` module if one exists; verify in clean chat). Visibility `pub(crate)` per §2 preamble Round 4a Item 13 (the seven traits ship `pub(crate)` until JSON-RPC server cutover at V3.2).
 
-**2. Implement `DaemonEngine` for the existing `DaemonClient`.** [`rust/shekyl-engine-core/src/engine/daemon.rs`](../../rust/shekyl-engine-core/src/engine/daemon.rs) — add the impl block. The `submit_transaction` and `get_fee_estimates` methods either delegate to existing `DaemonClient` methods (if they exist) or wrap the underlying `SimpleRequestRpc` calls. Verify what's already on `DaemonClient` versus what needs new method bodies.
+**2. Implement `DaemonEngine` for the existing `DaemonClient`.** [`rust/shekyl-engine-core/src/engine/daemon/mod.rs`](../../rust/shekyl-engine-core/src/engine/daemon/mod.rs) — add the impl block. The `submit_transaction` and `get_fee_estimates` methods either delegate to existing `DaemonClient` methods (if they exist) or wrap the underlying `SimpleRequestRpc` calls. Verify what's already on `DaemonClient` versus what needs new method bodies.
 
 **3. Generic-ize `Engine<S>`.** [`rust/shekyl-engine-core/src/engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs):
 

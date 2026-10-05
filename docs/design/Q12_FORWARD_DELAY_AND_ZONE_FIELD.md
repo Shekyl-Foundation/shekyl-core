@@ -87,7 +87,7 @@ open item. **This round decides whether it dies.**
 
 [`cryptonote_core.cpp:1091`](../../src/cryptonote_core/cryptonote_core.cpp#L1091)
 sends the `stem_req` batch — where `forward` entries land — with
-`epee::net_utils::zone::public_` **as a literal**. Not a policy choice: the
+the public-zone enumerator **as a literal**. Not a policy choice: the
 txpool stores no origin zone, and the pool loop runs long after the moment that
 knew it. The coherence branch keys on `send_txs`'s `origin`, whose only
 real-arrival callers are the immediate-relay sites, so it never sees these.
@@ -860,9 +860,36 @@ construction, proving nothing about the storage format.
 
 **Not tested:** no test drives a transaction through `add_tx` end to end with a
 non-`invalid` zone. The seam is compiler-verified and both its endpoints are
-tested, but the arrival→pool path is not exercised behaviourally. That needs a
-real pool-insertion fixture, which is where Q12-U2 lives, and is recorded here
-rather than left for a reader to assume from "the parts pass".
+tested, but the arrival→pool path is not exercised behaviourally — recorded
+here rather than left for a reader to assume from "the parts pass".
+
+**The blocker is NOT the pool-insertion fixture, and this paragraph used to say
+it was** (attempted 2026-09-11). `ShimFixture` in
+[`daemon_submit_shims.cpp`](../../tests/unit_tests/daemon_submit_shims.cpp)
+already stands up a blockchain, a pool and a test DB, and it is where the tree's
+only `add_tx` call lives. Extending it is a few lines. What stops the test is
+that `add_tx` reaches `check_tx_inputs`, and the fixture's `make_fcmp_shape_tx`
+builds a structurally-valid, cryptographically-empty transaction: the attempt
+failed with `tvc.m_invalid_input = true`. **Reaching the arrival path needs a
+transaction whose inputs verify against the fixture's curve-tree root — real
+proofs — which is a materially larger harness than pool insertion.**
+
+**There are two `set_origin_zone` sites in `add_tx`, and they are not equally
+reachable.** `tx_pool.cpp:336` sits in the `kept_by_block` branch, which
+*ignores* a failed input check ("may become valid again"), so it is reachable
+with today's fixture. `tx_pool.cpp:490` is the arrival path proper, behind
+verifying inputs. **Driving the first one with a non-`invalid` zone would pass
+and prove nothing worth having:** `kept_by_block` means block-sourced, whose
+zone is `invalid` by that site's own comment, so the test would assert a state
+production never produces and could stay green while the arrival path is broken.
+That is the shape to avoid here, not the shortcut to take.
+
+**A second property at `:490` is also uncovered, and belongs to the same
+fixture:** *first arrival wins* — `if (!existing_tx) meta.set_origin_zone(...)`.
+A Dandelion++ re-delivery must not overwrite the provenance with the second
+peer's zone. `txpool_origin_zone.cpp`'s `upgrade_relay_method_does_not_revert`
+covers the *method* surviving an upgrade, not the *origin*, so whoever builds
+the real-proof fixture should drive both.
 
 `is_forwarding` was live when this paragraph was first written. Q12-U4, in the
 same PR, deleted the class and kept the bit as reserved padding so
@@ -1104,7 +1131,14 @@ it legible. An origin-classified tally is **strictly more
 disclosive** than what is there now. The extension must inherit that gate, and
 any proposal to move it to the restricted listener answers §55 first.
 
-### Q12-D5a — RULED: once-at-origin. 2026-08-12
+### Q12-D5a — RULED 2026-08-12: once-at-origin — MOOT under Design A (2026-10-01)
+
+> **MOOT under Design A, 2026-10-01.** The one-way absorption this
+> section analysed is per-hop re-rolling composed with coherence that
+> holds a stem on its arrival zone. That coherence is reversed
+> (relay-lane acceptance, criterion 4): after hop 0 the draw is uniform
+> over every outbound edge. The 2026-08-12 ruling stays as the record
+> of the process it analysed. It is not the process that runs.
 
 **The redundancy is the defect.** Per-hop rolling and coherence are two
 mechanisms doing the same job. Coherence says *the zone is decided and held*; a

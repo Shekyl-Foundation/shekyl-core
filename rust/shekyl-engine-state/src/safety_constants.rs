@@ -34,6 +34,7 @@
 //! wallet safety policy is wallet-state concern.
 
 use shekyl_address::Network;
+use shekyl_types::{BlockCount, BlockHeight};
 
 /// Per-network wallet safety defaults.
 ///
@@ -42,8 +43,9 @@ use shekyl_address::Network;
 /// willing to spend from. That is exactly why they are baked into the
 /// binary and not persisted anywhere a non-root attacker could reach.
 ///
-/// The struct is `Copy` to make dispatch at call sites cheap; callers
-/// typically do:
+/// The struct is `Copy` to make dispatch at call sites cheap. The
+/// reorg-depth override is `Option<BlockCount>`, the same span as
+/// [`Self::max_reorg_depth`], so the overlay is `unwrap_or`:
 ///
 /// ```rust,ignore
 /// let base = NetworkSafetyConstants::for_network(network);
@@ -58,7 +60,7 @@ pub struct NetworkSafetyConstants {
     /// rejected; higher values merely delay UX. See
     /// `docs/WALLET_PREFS.md` §3.3 — this field accepts a CLI-ephemeral
     /// override (`--max-reorg-depth N`) but is never persisted.
-    pub max_reorg_depth: u64,
+    pub max_reorg_depth: BlockCount,
 
     /// Key-reuse mitigation v2 (defensive derivation that hardens the
     /// wallet against view-key-reuse linkability attacks). Invariant:
@@ -73,23 +75,23 @@ pub struct NetworkSafetyConstants {
     /// `SafetyOverrides::skip_to_height` (§3.3). Once the scanner has
     /// produced a `SyncStateBlock` the stored `restore_from_height`
     /// takes over and this field becomes irrelevant.
-    pub default_skip_to_height: u64,
+    pub default_skip_to_height: BlockHeight,
 
     /// Default refresh cursor when reopening a wallet whose
     /// `SyncStateBlock` is absent (the lost-`.wallet` recovery path).
     /// Same structure as `default_skip_to_height`; the CLI override is
     /// `SafetyOverrides::refresh_from_block_height` (§3.3).
-    pub default_refresh_from_block_height: u64,
+    pub default_refresh_from_block_height: BlockHeight,
 }
 
 impl NetworkSafetyConstants {
     /// Mainnet defaults.
     pub const fn mainnet() -> Self {
         Self {
-            max_reorg_depth: 10,
+            max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -98,10 +100,10 @@ impl NetworkSafetyConstants {
     /// concern.
     pub const fn testnet() -> Self {
         Self {
-            max_reorg_depth: 6,
+            max_reorg_depth: BlockCount::from_raw(6),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -110,10 +112,10 @@ impl NetworkSafetyConstants {
     /// non-production value.
     pub const fn stagenet() -> Self {
         Self {
-            max_reorg_depth: 10,
+            max_reorg_depth: BlockCount::from_raw(10),
             key_reuse_mitigation2: true,
-            default_skip_to_height: 0,
-            default_refresh_from_block_height: 0,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
         }
     }
 
@@ -148,15 +150,15 @@ const _: () = assert!(
     "key_reuse_mitigation2 must be true on stagenet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::mainnet().max_reorg_depth >= 1,
+    !NetworkSafetyConstants::mainnet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on mainnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::testnet().max_reorg_depth >= 1,
+    !NetworkSafetyConstants::testnet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on testnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::stagenet().max_reorg_depth >= 1,
+    !NetworkSafetyConstants::stagenet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on stagenet",
 );
 
@@ -202,8 +204,8 @@ mod tests {
     fn import_hint_defaults_are_zero_on_every_network() {
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
             let k = NetworkSafetyConstants::for_network(net);
-            assert_eq!(k.default_skip_to_height, 0);
-            assert_eq!(k.default_refresh_from_block_height, 0);
+            assert_eq!(k.default_skip_to_height, BlockHeight::ZERO);
+            assert_eq!(k.default_refresh_from_block_height, BlockHeight::ZERO);
         }
     }
 

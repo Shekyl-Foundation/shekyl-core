@@ -3,39 +3,38 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Per-shard retention-commitment horizon `bond_duration(age)` (gate-4 §4.4;
-//! `ARCHIVAL_TIMING_CONSTANTS.md` §1; `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 3 / P2B-8 Q3).
+//! Integer retention horizon `bond_duration(age)`: epochs from a
+//! [`ShardAgeAtAdd`].
 //!
-//! A held shard is **ineligible for voluntary `HoldingsUpdate`-drop** until its
-//! retention-commitment horizon elapses:
+//! **No production caller.** Only this file's tests call [`bond_duration`].
+//! The staking sim has its own `bond_duration` and does not call this one.
+//! Delete the function, or keep it as the frozen integer artifact of that
+//! model: enumerated, not ruled, at `PRINCIPAL_STAKE_LIFECYCLE.md` §5.3.2
+//! row 8. The age-realization invariant below stays either way, because the
+//! reward path consumes `shard_age_milli`.
 //!
-//! ```text
-//! drop-eligible(s)  ⇔  current_epoch − add_epoch(s)  ≥  bond_duration(ShardAgeAtAdd(s))
-//! ```
-//!
-//! Both operands are powered by the **one** v3.0 per-shard add-epoch record field
-//! (the "two dependencies are one" collapse): the tenure LHS is
-//! `current_epoch − add_epoch`, and the age inside `bond_duration` is derived from
-//! the same `add_epoch` (plus the shard's segment freeze height).
+//! *Records-was:* the function gated voluntary `HoldingsUpdate`-drop
+//! eligibility, `current_epoch − add_epoch ≥ bond_duration(ShardAgeAtAdd)`.
+//! That kind is REJECTED 2026-09-20. The formula is not a present consensus
+//! check. Both operands were read from the one per-shard add-epoch field.
 //!
 //! ## The age-realization invariant (GENESIS-FROZEN)
 //!
 //! The `age ∈ [0,1]` here is the **same age normalization the reward curve
 //! consumes**, realized as [`shard_age_milli`](crate::consensus_state::shard_age_milli)
 //! (relative tree-depth fraction, milli-scaled to `[0, WORK_MILLI_SCALE]`). The sim
-//! feeds one age variable into both the scarcity/reward curve and the retention lock
-//! (`agent.rs`), and consensus already realizes that age as `shard_age_milli` in the
-//! reward path — so retention uses the same realization; forking a separate age
-//! would split a normalization the sim never split.
+//! feeds one age variable into both the scarcity/reward curve and its own retention
+//! lock (`agent.rs`). The reward path already realizes that age as `shard_age_milli`.
+//! These constraints say what [`ShardAgeAtAdd`] can express. They do not describe
+//! a live drop check.
 //!
 //! Two consensus properties are made **unrepresentable at the type**, not
 //! tested-against:
 //!
-//! - **Reference time is age-at-ADD, not age-at-drop.** The sim arms the lock only
-//!   on fresh acquisition and counts it down (`agent.rs:275-280`), so the horizon is
-//!   fixed at acquisition. [`ShardAgeAtAdd`] can only be constructed from the add
-//!   epoch, so evaluating at drop time (a rising target as the shard ages) cannot be
-//!   expressed.
+//! - **Reference time is age-at-add.** The sim arms its lock only on fresh
+//!   acquisition and counts it down (`agent.rs:275-280`), so the horizon is fixed
+//!   at acquisition. [`ShardAgeAtAdd`] can only be constructed from the add epoch,
+//!   so a later age (a rising target as the shard ages) cannot be expressed.
 //! - **The close reference is `H_close(add_epoch)`, not a raw within-epoch height.**
 //!   The reward path feeds `shard_age_milli` the settlement-close height, and its
 //!   `floor((close − freeze)/SEB)` numerator shifts by an epoch-unit depending on
@@ -43,10 +42,10 @@
 //!   `close = H_close(add_epoch) = (add_epoch + 1)·SEB` itself, so a raw block height
 //!   cannot be passed — one normalization, shared with reward, by construction.
 //!
-//! The counting-down↔fixed-threshold equivalence is exact: the sim's lock
-//! (`bond_duration(age)` at add, decrementing) reaches zero at `add_epoch + D`; the
-//! consensus predicate `current_epoch − add_epoch ≥ D` fires at `add_epoch + D` — the
-//! same epoch, no drift.
+//! *Records-was, the equivalence the drop check relied on:* the sim's lock
+//! (`bond_duration(age)` at add, decrementing) reaches zero at `add_epoch + D`,
+//! and `current_epoch − add_epoch ≥ D` fires at the same epoch. No verify reads
+//! that predicate now.
 //!
 //! ## `bond_duration` is the frozen artifact; the sim's f64 is the model
 //!
@@ -61,6 +60,8 @@
 //! are no half-boundary cases (`SCALE·age_milli ≡ WORK_MILLI_SCALE/2 (mod
 //! WORK_MILLI_SCALE)` has no integer solution), so the sweep passes clean; the KAT is
 //! the tripwire if a constant re-pin ever introduces one.
+
+use shekyl_types::BlockHeight;
 
 use crate::bond_floor::{BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS};
 use crate::consensus_state::{epoch_close_height, shard_age_milli};
@@ -120,7 +121,11 @@ impl ShardAgeAtAdd {
         let age_milli = if freeze_height >= close {
             WORK_MILLI_SCALE
         } else {
-            shard_age_milli(close, freeze_height, seb)
+            shard_age_milli(
+                BlockHeight::from_raw(close),
+                BlockHeight::from_raw(freeze_height),
+                seb,
+            )
         };
         Self { age_milli }
     }
@@ -236,7 +241,11 @@ mod tests {
         let add_epoch = 3u64;
         let freeze_height = 5_000u64;
         let close = (add_epoch + 1) * seb;
-        let expected = shard_age_milli(close, freeze_height, seb);
+        let expected = shard_age_milli(
+            BlockHeight::from_raw(close),
+            BlockHeight::from_raw(freeze_height),
+            seb,
+        );
         assert_eq!(
             ShardAgeAtAdd::from_add(add_epoch, freeze_height).age_milli(),
             expected

@@ -19,15 +19,16 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use shekyl_daemon_rpc::submit::{
     BondProbe, CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault,
     SubmitFacts, SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
+    VerifyReject,
 };
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
 pub const FIXTURE_ROOT: [u8; 32] = [0xAA; 32];
 /// The fixture reference-block hash carried by the synthetic spends.
-pub const FIXTURE_REF_BLOCK: [u8; 32] = [0x44; 32];
+pub const FIXTURE_REF_BLOCK: BlockHash = BlockHash::from_bytes([0x44; 32]);
 
 /// `n` valid key images — distinct prime-order, non-identity points
 /// (basepoint multiples), ordered **strictly descending** by compressed
@@ -156,7 +157,7 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -209,7 +210,6 @@ pub fn emission_vin_bytes() -> Vec<u8> {
         backing: MembershipOnlyBacking {
             proof: vec![0xEE; 512],
             pseudo_out: [0x22; 32],
-            pqc_pk_hash: [0x33; 32],
             backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
             tree_depth: 3,
         },
@@ -315,7 +315,7 @@ pub struct SnapshotRecord {
     pub reference_block: BlockHash,
     /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
     /// only).
-    pub bond_p_canonical_id: Option<[u8; 32]>,
+    pub bond_p_canonical_id: Option<PCanonicalId>,
     /// Which archival-bond question the engine asked (§8.7.1 BP3 vs
     /// §8.7.1.1): the debit arm needs the record's contents, not just its
     /// presence, and asking the wrong one is invisible in the id alone.
@@ -425,7 +425,7 @@ impl SubmitStateShim for MockShim {
 /// Deterministic [`TxVerifier`]: scripted pass/fail, call-counted.
 #[derive(Debug)]
 pub struct MockVerifier {
-    pub result: Result<(), VerifyFailure>,
+    pub result: Result<(), VerifyReject>,
     pub calls: AtomicUsize,
 }
 
@@ -439,7 +439,10 @@ impl MockVerifier {
 
     pub fn failing(failure: VerifyFailure) -> Arc<Self> {
         Arc::new(Self {
-            result: Err(failure),
+            result: Err(VerifyReject::from_cause(
+                failure,
+                "mock verifier: scripted Phase C refusal",
+            )),
             calls: AtomicUsize::new(0),
         })
     }
@@ -450,19 +453,15 @@ impl MockVerifier {
 }
 
 impl TxVerifier for MockVerifier {
-    fn verify(
-        &self,
-        _parsed: &ParsedSubmission,
-        _facts: &SubmitFacts,
-    ) -> Result<(), VerifyFailure> {
+    fn verify(&self, _parsed: &ParsedSubmission, _facts: &SubmitFacts) -> Result<(), VerifyReject> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.result
+        self.result.clone()
     }
 }
 
 /// The `tx_extra` a transaction with `n` outputs must carry (CEN-I19,
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of `1120·n` bytes and
-/// one `0x07` of `32·n`, and neither when `n == 0`. Payloads are filler — the
+/// one `0x07` of `64·n`, and neither when `n == 0`. Payloads are filler — the
 /// shape rule reads counts and lengths only. A fixture must be a *valid*
 /// transaction in every respect but the one under test; before this rule these
 /// built transactions with outputs and an empty `extra`, a shape no builder has
@@ -477,11 +476,34 @@ pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
             shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES
                 * n_outputs
         ]),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(vec![
-            0x7b;
-            shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES
-                * n_outputs
-        ]),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(
+            shekyl_wire::tx_extra::conforming_pqc_leaf_blob(n_outputs),
+        ),
     ])
     .expect("conforming PQC tx_extra serializes")
+}
+
+/// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
+/// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
+/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// `n == 0`. A coinbase fixture that carries only the I19 pair fails the wire
+/// validator on the grammar before it reaches the refusal under test.
+pub fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
+    use shekyl_wire::tx_extra::{
+        self, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, TX_EXTRA_PUBKEY_LEN,
+    };
+    let kem = vec![0x6au8; HYBRID_KEM_CT_BYTES * n_outputs];
+    let leaf = if n_outputs == 0 {
+        Vec::new()
+    } else {
+        tx_extra::conforming_pqc_leaf_blob(n_outputs)
+    };
+    tx_extra::build_coinbase_extra(
+        [0x11; TX_EXTRA_PUBKEY_LEN],
+        &[0; COINBASE_NONCE_BYTES],
+        n_outputs,
+        &kem,
+        &leaf,
+    )
+    .expect("conforming coinbase tx_extra builds")
 }

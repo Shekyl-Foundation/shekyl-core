@@ -13,10 +13,10 @@ license.workspace = true
 
 # Lean, wallet-side crate. It deliberately does NOT depend on
 # `shekyl-scanner`: the `tx_extra 0x07` *parse* (raw extra bytes ->
-# leaf-hash blob) is owned by `shekyl_scanner::extra::Extra` and runs
+# leaf-entry blob) is owned by `shekyl_scanner::extra::Extra` and runs
 # at the block-decode boundary (CT-3). This crate consumes the already
 # parsed blob and owns only the daemon-parity post-parse validation
-# (`recon::extract_leaf_hashes`). Keeping scanner's heavy dependency
+# (`recon::extract_leaf_commitments`). Keeping scanner's heavy dependency
 # fan-in (rpc, crypto-pq, staking, ...) out of the curve-tree client
 # matches `20-rust-vs-cpp-policy.mdc` / `25-rust-architecture.mdc`
 # layering and the wallet/mobile consumption surface.
@@ -28,15 +28,26 @@ redb = { workspace = true }
 # through FFI, so leaf construction cannot diverge (CT2_DRAIN_ORDER.md
 # §3.2).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Single owner of the `0x07` entry's 32/32 byte split
+# (`PQC_LEAF_POINT_LEN` / `PQC_LEAF_RECORD_LEN`). Already in this crate's
+# production graph transitively (`shekyl-fcmp` re-exports its
+# `PQC_LEAF_ENTRY_LEN`), so the direct edge adds no dependency weight —
+# it replaces a hand-copied `32` with the owning constant
+# (`17-dependency-discipline.mdc`).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Consensus maturity constants: `DEFAULT_LOCK_WINDOW` (+10) and
 # `COINBASE_LOCK_WINDOW` (+60). Sourced from the low-level protocol
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-consensus = { path = "../shekyl-consensus" }
+# Vocabulary crate for `BlockHeight` / `GlobalOutputIndex` / `BlockHash` /
+# `CurveTreeRoot`. Local tuple-struct copies of those types are retired
+# (RTN-4); this crate keeps only `TreePosition` (tree-local) and the
+# redb key wrapper `GindexKey` (orphan rule).
+shekyl-types = { path = "../shekyl-types" }
 # The workspace varint used by the served-frame header (`served_frame.rs`).
 # The same encoder/decoder the archival wire modules use, so one length has
 # one encoding across every Shekyl format.
 shekyl-curve-io = { path = "../shekyl-curve-io" }
-
 # Reads `config/consensus_constants.json` to emit the FCMP++
 # reference-block age constants (`build.rs`). Mirrors
 # `rust/shekyl-difficulty`'s build-time JSON read so the wallet's

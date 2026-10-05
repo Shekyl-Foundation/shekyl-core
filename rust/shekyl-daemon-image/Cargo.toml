@@ -23,6 +23,7 @@ crate-type = ["staticlib"]
 [dependencies]
 shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
 
 [lints]
 workspace = true

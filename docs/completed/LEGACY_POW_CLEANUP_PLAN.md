@@ -70,7 +70,7 @@ invocations, the `m_rpc_payment` / `m_rpc_payment_allow_free_loopback` members
 
 | # | Unit | Blocker / surface | Disposition |
 |---|------|-------------------|-------------|
-| **D1** | **CryptoNight implementation** — `src/crypto/slow-hash.c`, the `cn_slow_hash` / `cn_slow_hash_prehashed` / `cn_variant1_check` decls (`hash.h`, `hash-ops.h`), and the CryptoNight tests (`tests/hash/main.cpp`, `tests/crypto/cnv4-jit.c`, `tests/performance_tests/cn_slow_hash.*`). | **Blocked by live C++ KDF callers** that are *not* PoW: `src/crypto/chacha.h:69-80` (`generate_chacha_key`) and `src/cryptonote_basic/cryptonote_format_utils.cpp:1452,1460` (passphrase `encrypt_key`/`decrypt_key`). Replacing `cn_slow_hash`-KDF with argon2id is a **crypto-contract change touching secrets** → Rust, own design doc + review (`20-rust-vs-cpp-policy.mdc` "migration is a planning activity"; `36-secret-locality.mdc`). | Separate PR (KDF→Rust migration), *then* delete `slow-hash.c`. |
+| **D1** | **CryptoNight implementation** — `src/crypto/slow-hash.c`, the `cn_slow_hash` / `cn_slow_hash_prehashed` / `cn_variant1_check` decls (`hash.h`, `hash-ops.h`), and the CryptoNight tests (`tests/hash/main.cpp`, `tests/crypto/cnv4-jit.c`, `tests/performance_tests/cn_slow_hash.*`). | **SUPERSEDED 2026-09-15/16 — CLEARED.** The live-C++-KDF blocker (`src/crypto/chacha.h` `generate_chacha_key`, passphrase `encrypt_key`/`decrypt_key`) is gone: C++ `chacha.h` and the CN-KDF are deleted; wallet AEAD is Rust XChaCha20-Poly1305. `slow-hash.c` was deleted with Phase 4. | Separate PR (KDF→Rust migration), *then* delete `slow-hash.c`. **Executed:** Phase 4 + follow-on, not a KDF-migration PR. |
 | **D2** | **PoW abstraction layer** — `pow_schema.h` (`IPowSchema`), `pow_registry.{h,cpp}`, the `rust/shekyl-consensus` crate, and the dead `shekyl_rust_init` / `shekyl_active_consensus_module` FFI exports. **Plus `RX_BLOCK_VERSION` `#define` removal** (see §1.3). | **Different validation surface** (consensus *dispatch* + Rust crate + FFI), not dead code: `get_pow_for_height` is **live** (`miner.cpp:582`, `cryptonote_tx_utils.cpp:886`). Collapsing it inlines RandomX into those consensus sites. `70-modular-consensus.mdc` + `19-validation-surface-discipline.mdc`. | Separate "PoW-abstraction collapse" PR. |
 | **D3** | `shekyl_pow_randomx_v2_seedheight` FFI export + `shekyl-pow-randomx::consensus` module. | C `rx_seedheight` cleanly serves every caller while v1 stays (`RANDOMX_V2_PHASE3_PLAN.md` §5). | Stays deferred (task-directed). Reopens with D4. |
 | **D4** | RandomX **v1** physical deletion — `rx-slow-hash.c`, the `rx_*` C surface, cncrypto RandomX linkage. | **HARD RETENTION** — rollback escape hatch (§4). | Reversion-clause-shaped (§4); reopens only when the v2 rollback window formally closes. |
@@ -156,20 +156,19 @@ same PR. D1, D2, D3/D4 are strictly downstream and out of this PR's scope.
 | `src/rpc/rpc_payment.cpp:237` (`RX_BLOCK_VERSION` guard) | deleted with file |
 | `src/wallet/wallet_rpc_payments.cpp:156` (`RX_BLOCK_VERSION` guard) | deleted with file |
 
-### 3.2 Why `slow-hash.c` cannot be deleted in this PR (D1 blocker)
+### 3.2 Why `slow-hash.c` cannot be deleted in this PR (D1 blocker) — SUPERSEDED 2026-09-15/16, CLEARED
 
-Live, non-PoW `cn_slow_hash` callers remain after RPC-payment is gone:
+**Records-was (2026-06-22):** live, non-PoW `cn_slow_hash` callers remained after RPC-payment was gone:
 
 | Site | Role |
 |------|------|
-| `src/crypto/chacha.h:69,71,78,80` | `generate_chacha_key` — wallet password→key KDF (legacy C++ wallet) |
-| `src/cryptonote_basic/cryptonote_format_utils.cpp:1452,1460` | passphrase hashing in `encrypt_key`/`decrypt_key` (also does scalar arithmetic on secrets) |
+| `src/crypto/chacha.h` `generate_chacha_key` | wallet password→key KDF (legacy C++ wallet) — **DELETED 2026-09-16** with C++ chacha |
+| `src/cryptonote_basic/cryptonote_format_utils.cpp` passphrase `encrypt_key`/`decrypt_key` | also did scalar arithmetic on secrets — CN-KDF path **DELETED with Phase 4** |
 
-These are live in the C++ legacy wallet keystore. Migrating them off
-`cn_slow_hash` (to argon2id, per the maintainer's note that Shekyl KDF is
-argon2id+bip39 in Rust) is a crypto-contract change requiring its own design
-doc and review cycle. Until then `slow-hash.c` + the `cn_slow_hash` decls + the
-CryptoNight tests stay.
+These were live in the C++ legacy wallet keystore at plan time. The
+blocker is **CLEARED**: C++ `chacha.h` has no remaining caller, wallet AEAD
+is Rust, and `slow-hash.c` is gone. This section is the 2026-06-22
+rationale, not a live gate.
 
 ### 3.3 Why the PoW abstraction is a separate surface (D2)
 

@@ -21,6 +21,7 @@
 //! itself; the earlier same-PR C++ twin was deleted with the crossing.
 
 use crate::consts::{FTL_SECONDS, MTP_WINDOW_USIZE};
+use shekyl_types::Timestamp;
 
 /// Verdict of the ruled block-timestamp rule (C2-R3,
 /// `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3).
@@ -63,8 +64,8 @@ pub enum TimestampRuleVerdict {
 /// consumer-status note). The shared-vector u64-boundary rows pin the
 /// saturating shape.
 #[must_use]
-pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
-    incoming.saturating_sub(local_clock) <= FTL_SECONDS
+pub fn is_timestamp_below_ftl(incoming: Timestamp, local_clock: Timestamp) -> bool {
+    incoming.to_raw().saturating_sub(local_clock.to_raw()) <= FTL_SECONDS
 }
 
 /// Returns `true` when `incoming` is strictly greater than the median
@@ -85,7 +86,7 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// order-dependent choice) remains with the outermost caller. This
 /// predicate takes the assembled 11-window.
 ///
-/// The `&[u64; MTP_WINDOW_USIZE]` const-sized-array reference is the
+/// The `&[Timestamp; MTP_WINDOW_USIZE]` const-sized-array reference is the
 /// consensus-property-preserving baseline per §2.5: a window of
 /// length other than `MTP_WINDOW` cannot satisfy the MTP rule, and
 /// pushing that invariant into the type system catches off-by-one
@@ -100,7 +101,7 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// const-eval `assert!` in `consts.rs`, so the array length cannot
 /// drift from the JSON authority without a build failure.
 #[must_use]
-pub fn is_above_mtp(incoming: u64, previous_window: &[u64; MTP_WINDOW_USIZE]) -> bool {
+pub fn is_above_mtp(incoming: Timestamp, previous_window: &[Timestamp; MTP_WINDOW_USIZE]) -> bool {
     // The strict `>` has exactly this one site; `mtp_median` owns the
     // median definition.
     incoming > mtp_median(previous_window)
@@ -110,7 +111,7 @@ pub fn is_above_mtp(incoming: u64, previous_window: &[u64; MTP_WINDOW_USIZE]) ->
 /// 11-element window (C2-R3-Q1 sub-c — stated by the ruling, not
 /// inherited from any library's odd-window behavior).
 #[must_use]
-pub fn mtp_median(previous_window: &[u64; MTP_WINDOW_USIZE]) -> u64 {
+pub fn mtp_median(previous_window: &[Timestamp; MTP_WINDOW_USIZE]) -> Timestamp {
     // Copy because we cannot mutate the caller's window.
     let mut window = *previous_window;
     window.sort_unstable();
@@ -143,13 +144,13 @@ pub fn mtp_median(previous_window: &[u64; MTP_WINDOW_USIZE]) -> u64 {
 /// then `AboveFtl`, then `NotAboveMedian`.
 #[must_use]
 pub fn check_timestamp_rule(
-    candidate_ts: u64,
-    window: &[u64],
-    genesis_ts: u64,
-    local_clock: u64,
-) -> (TimestampRuleVerdict, u64) {
+    candidate_ts: Timestamp,
+    window: &[Timestamp],
+    genesis_ts: Timestamp,
+    local_clock: Timestamp,
+) -> (TimestampRuleVerdict, Timestamp) {
     if window.len() > MTP_WINDOW_USIZE {
-        return (TimestampRuleVerdict::WindowTooWide, 0);
+        return (TimestampRuleVerdict::WindowTooWide, Timestamp::from_raw(0));
     }
 
     let mut padded = [genesis_ts; MTP_WINDOW_USIZE];

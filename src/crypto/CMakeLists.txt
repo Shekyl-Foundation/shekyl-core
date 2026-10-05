@@ -26,74 +26,26 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(crypto_hash_sources
-  blake256.c
-  groestl.c
+set(crypto_sources
   hash.c
-  hash-extra-blake.c
-  hash-extra-groestl.c
-  hash-extra-jh.c
-  hash-extra-skein.c
-  hmac-keccak.c
-  jh.c
   keccak.c
-  skein.c
-  tree-hash.c)
-
-set(crypto_ops_sources
-  aesb.c
+  tree-hash.c
   crypto-ops-data.c
   crypto-ops.c
-  oaes_lib.c
-  random.c)
-
-set(crypto_slowhash_sources
-  slow-hash.c)
-
-
-# CryptonightR_JIT.c contains x86 JIT code that is entirely dead on MSVC
-# (returns -1).  Its heavyweight includes trigger an MSVC ICE in the PDB
-# type server (CloseTypeServerPDB, confirmed on 14.44 and 14.50).  Use a
-# minimal stub on MSVC that provides the same -1 return path.
-set(crypto_jit_sources)
-if(MSVC)
-  list(APPEND crypto_jit_sources CryptonightR_JIT_stub.c)
-else()
-  list(APPEND crypto_jit_sources CryptonightR_JIT.c)
-  if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
-    list(APPEND crypto_jit_sources CryptonightR_template.S)
-  endif()
-endif()
-
-set(crypto_cpp_sources
+  random.c
   crypto.cpp
   generators.cpp
-  pow_randomx.cpp
-  pow_registry.cpp)
+  pow_randomx.cpp)
 
 set(crypto_headers)
 
 monero_find_all_headers(crypto_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Split into small OBJECT libraries.  On MSVC this avoids an ICE in the PDB
-# type server (CloseTypeServerPDB); on other compilers it's harmless.
 monero_private_headers(cncrypto
   ${crypto_private_headers})
 
-set(_cncrypto_obj_targets)
-foreach(_group hash ops slowhash jit cpp)
-  set(_target obj_cncrypto_${_group})
-  add_library(${_target} OBJECT
-    ${crypto_${_group}_sources} ${crypto_headers} ${crypto_private_headers})
-  target_compile_definitions(${_target}
-    PRIVATE $<TARGET_PROPERTY:cncrypto,INTERFACE_COMPILE_DEFINITIONS>)
-  if(MSVC)
-    target_compile_options(${_target} PRIVATE /MP1)
-  endif()
-  list(APPEND _cncrypto_obj_targets $<TARGET_OBJECTS:${_target}>)
-endforeach()
-
-add_library(cncrypto ${_cncrypto_obj_targets})
+add_library(cncrypto
+  ${crypto_sources} ${crypto_headers} ${crypto_private_headers})
 set_property(TARGET cncrypto PROPERTY FOLDER "libs")
 
 target_link_libraries(cncrypto
@@ -103,29 +55,6 @@ target_link_libraries(cncrypto
     ${SODIUM_LIBRARY}
   PRIVATE
     ${EXTRA_LIBRARIES})
-
-if (ARM)
-  option(NO_OPTIMIZED_MULTIPLY_ON_ARM
-	   "Compute multiply using generic C implementation instead of ARM ASM" OFF)
-  if(NO_OPTIMIZED_MULTIPLY_ON_ARM)
-    message(STATUS "Using generic C implementation for multiply")
-    set_property(SOURCE slow-hash.c
-      PROPERTY COMPILE_DEFINITIONS "NO_OPTIMIZED_MULTIPLY_ON_ARM")
-  endif()
-endif()
-
-# Because of the way Qt works on android with JNI, the code does not live in the main android thread
-# So this code runs with a 1 MB default stack size. 
-# This will force the use of the heap for the allocation of the scratchpad
-if (ANDROID OR IOS)
-  if( BUILD_GUI_DEPS )
-    add_definitions(-DFORCE_USE_HEAP=1)
-  endif()
-endif()
-
-# cheat because cmake and ccache hate each other
-set_property(SOURCE CryptonightR_template.S PROPERTY LANGUAGE C)
-set_property(SOURCE CryptonightR_template.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
 
 # Must be done last, because it references libraries in this directory
 add_subdirectory(wallet)

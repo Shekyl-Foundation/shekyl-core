@@ -19,7 +19,9 @@
 #![warn(missing_docs)]
 
 pub mod auth;
-pub mod error;
+/// The contract's error vocabulary and the engine-error mapping onto it,
+/// owned by `shekyl-wallet-contract` so embedders answer with the same codes.
+pub use shekyl_wallet_contract::error;
 pub mod fees;
 pub mod handlers;
 pub mod lifecycle;

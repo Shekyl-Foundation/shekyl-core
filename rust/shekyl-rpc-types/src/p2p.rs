@@ -103,7 +103,7 @@ const fn is_false(b: &bool) -> bool {
 ///
 /// `host` means three different things depending on the address arm the
 /// daemon built it from — the ip string for ipv4, the bare host for ipv6, and
-/// the whole `address:port` rendering for anything else (tor, i2p). That
+/// the whole `address:port` rendering for Tor. That
 /// branch is resolved daemon-side, so this type carries a string and no
 /// discriminator; `ip` and `port` are zero on the arms that do not carry
 /// them.
@@ -120,17 +120,6 @@ pub struct Peer {
     pub ip: u32,
     pub port: u16,
     pub last_seen: u64,
-    /// `OPT(0)`: absent for an unpruned peer.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub pruning_seed: u32,
-}
-
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if hands the field by reference"
-)]
-const fn is_zero_u32(v: &u32) -> bool {
-    *v == 0
 }
 
 /// Response of `GET|POST /get_peer_list`.
@@ -238,7 +227,6 @@ pub struct ConnectionInfo {
     pub connection_id: String,
     /// The peer's claimed blockchain height.
     pub height: u64,
-    pub pruning_seed: u32,
     /// epee address type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
 }
@@ -287,12 +275,10 @@ pub struct SyncInfoResponse {
     pub status: RpcStatus,
     /// Chain height: top block height plus one.
     pub height: u64,
-    /// `0` when the node considers itself synchronized.
+    /// The core's target count. `0` when the core reported none. A
+    /// synchronized node reports the target the core named. `get_info`
+    /// still writes `0` when synchronized; this method does not.
     pub target_height: u64,
-    /// The wire name is a **misnomer carried on purpose**: the value is a
-    /// pruning *stripe*, not a seed. Renaming it is RK-W's business, where
-    /// wire cleanup happens with a version bump and every client in one PR.
-    pub next_needed_pruning_seed: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<SyncInfoPeer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

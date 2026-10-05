@@ -10,13 +10,18 @@ use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_compute, epoch_close_height,
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, BadInterval, CreditPair,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    HoldingsKind, LastServedScan, RewardCommit, ShardClose, ShardSet,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_peer_policy::DropVerdict;
+use shekyl_types::BlockHeight;
+use std::ffi::CStr;
 use std::ptr;
+
+/// The serving endpoint every JoinMarket call site passes (EU-D3: mandatory).
+static TEST_ENDPOINT: [u8; 32] = [0x4E; 32];
 
 #[test]
 fn emission_vin_drop_verdict_classifies_form_and_does_not_sever_on_our_state() {
@@ -77,6 +82,11 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
         SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE
     ))
     .is_internal_failure());
+    // SHT-11: a padded path is the sender's wire, not our state — it severs.
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_NON_CANONICAL_PATH
+    ))
+    .severs());
     assert!(
         !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
@@ -85,18 +95,73 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
     );
     assert!(
         !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REINSTATE_ON_COMPLETE_TREE
         ))
         .severs()
     );
     assert!(!DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(255)).severs());
+    assert!(
+        DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST
+        ))
+        .is_internal_failure()
+    );
+}
+
+fn bond_post_err(code: u8) -> &'static str {
+    let p = shekyl_archival_bond_post_err_string(code);
+    assert!(!p.is_null(), "err_string({code}) was null");
+    // SAFETY: the FFI returns a static NUL-terminated string, never null
+    // (asserted above).
+    unsafe { CStr::from_ptr(p) }
+        .to_str()
+        .expect("operator strings are UTF-8")
+}
+
+#[test]
+fn bond_post_err_string_covers_the_assigned_code_space() {
+    // 0..=51 is the assigned bond-post verify space (51 = NOT_COLD_AUTHORITY_POST).
+    // A new code must extend this range or it ships as "unknown" in the log.
+    for code in 0..=SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST {
+        assert_ne!(
+            bond_post_err(code),
+            "unknown bond-post verify code",
+            "code {code} is assigned and must have a reason string"
+        );
+    }
+    assert_eq!(bond_post_err(255), "unknown bond-post verify code");
+}
+
+#[test]
+fn cold_authority_ffi_unknown_kind_is_post_kind_not_a_guessed_row() {
+    let key = vec![7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
+    let rc = unsafe {
+        shekyl_archival_cold_authority_pin(99, 0, key.as_ptr(), key.len(), key.as_ptr(), key.len())
+    };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+}
+
+#[test]
+fn cold_authority_ffi_credit_kind_is_not_rescued_by_matching_keys() {
+    let key = vec![7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
+    let rc = unsafe {
+        shekyl_archival_cold_authority_pin(
+            0, // JoinMarket
+            0,
+            key.as_ptr(),
+            key.len(),
+            key.as_ptr(),
+            key.len(),
+        )
+    };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST);
 }
 
 #[test]
 fn ffi_constants_match_timing_cluster() {
     assert_eq!(SETTLEMENT_EPOCH_BLOCKS, 10_000);
     assert_eq!(shekyl_archival_epoch_open_height(100), 1_000_000);
-    assert_eq!(shekyl_archival_epoch_close_height(100), 1_009_999);
+    assert_eq!(shekyl_archival_epoch_last_block(100), 1_009_999);
 }
 
 #[test]
@@ -205,6 +270,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
             shard_len,
             spend_pk.as_ptr(),
             spend_pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             total,
             credit,
             debit,
@@ -216,9 +283,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
         verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
         SHEKYL_ARCHIVAL_BOND_POST_OK
     );
-    // A conforming Rebond vin carries NO key (§9.11), so the post-kind
-    // verdict is asserted with an empty one; Rebond WITH a key is the
-    // coupling case at the bottom.
+    // This entry is JoinMarket-only: a Reinstate byte is the post-kind verdict,
+    // whether or not the caller also handed an endpoint or a spend key.
     assert_eq!(
         unsafe {
             shekyl_archival_verify_join_market_bond_post(
@@ -228,6 +294,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                0,
                 floor,
                 floor,
                 0,
@@ -235,6 +303,49 @@ fn bond_post_ffi_maps_each_reject_reason() {
             )
         },
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+    );
+    // JoinMarket missing its endpoint: the EU-D3 coupling refuses at the marshal.
+    assert_eq!(
+        unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                0,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
+                std::ptr::null(),
+                0,
+                floor,
+                floor,
+                0,
+                0,
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
+    );
+    // JoinMarket with the all-zero endpoint: the bond record encodes "no
+    // endpoint" as the zero key, so the verify refuses it (EndpointZero) and
+    // the mapping reports it under the coupling code, not a distinct verdict.
+    let zero_endpoint = [0u8; 32];
+    assert_eq!(
+        unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                0,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
+                zero_endpoint.as_ptr(),
+                zero_endpoint.len(),
+                floor,
+                floor,
+                0,
+                0,
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
     );
     assert_eq!(
         verify(0, 0, None, 1, floor, floor, 0, 0),
@@ -283,6 +394,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 pk.as_ptr()
             },
             pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             floor,
             floor,
             0,
@@ -297,11 +410,11 @@ fn bond_post_ffi_maps_each_reject_reason() {
         coupling(&spend_pk[..HYBRID_PUBKEY_CANONICAL_BYTES - 1]),
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
     );
-    // ...and the inverse direction: a non-JoinMarket kind (Rebond) carrying
-    // a key refuses at the marshaler, before the post-kind verdict.
+    // A non-JoinMarket kind at this entry is the post-kind verdict; the
+    // spend-pk coupling is a JoinMarket-operand check, not a kind check.
     assert_eq!(
         verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
     );
     // A null key pointer with a positive length is the caller bug, not coupling.
     assert_eq!(
@@ -313,6 +426,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 HYBRID_PUBKEY_CANONICAL_BYTES,
+                TEST_ENDPOINT.as_ptr(),
+                TEST_ENDPOINT.len(),
                 floor,
                 floor,
                 0,
@@ -586,9 +701,9 @@ fn release_ffi_rejects_oversize_holdings_masquerading_as_empty() {
 }
 
 #[test]
-fn rebond_ffi_rejects_oversize_post_at_the_marshal_boundary() {
+fn reinstate_ffi_rejects_oversize_post_at_the_marshal_boundary() {
     use shekyl_archival_retention::{BondPostKind, HoldingsKind};
-    // The finding this closes: a >4096-shard Rebond post on a
+    // The finding this closes: a >4096-shard Reinstate post on a
     // terminal-slashed record (bonded 0) collapsed bond_floor to 0, so the
     // zero-credit terms verified and the connect then aborted block apply
     // at the record encode. The marshal cap makes the oversize set
@@ -596,12 +711,12 @@ fn rebond_ffi_rejects_oversize_post_at_the_marshal_boundary() {
     let shards: Vec<u64> = (0..4097u64).collect();
     let intervals = [5u64, u64::MAX]; // one open interval (slashed record)
     let code = unsafe {
-        shekyl_archival_verify_rebond_bond_post(
-            BondPostKind::Rebond as u8,
+        shekyl_archival_verify_reinstate_bond_post(
+            BondPostKind::Reinstate as u8,
             HoldingsKind::ShardSetCompact as u8,
             shards.as_ptr(),
             shards.len(),
-            std::ptr::null(), // bond_spend_pk (§9.11: never on Rebond)
+            std::ptr::null(), // bond_spend_pk (§9.11: never on Reinstate)
             0,
             0, // bonded_total_atomic — the floor-collapse masquerade
             0, // bond_credit — zero collateral demanded
@@ -635,6 +750,8 @@ fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
             dup.len(),
             std::ptr::null(),
             0,
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             0,
@@ -893,16 +1010,18 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
 }
 
-// The both / neither bond-term rigidity is unrepresentable inside the core
-// `BondTerm`, so it is enforced (and tested) here at the `(credit, debit) ->
-// BondTerm` FFI conversion — the boundary where the untrusted u64s enter.
+// Both-terms is unrepresentable inside `BondTerm`; zero/zero is Unmoved.
+// The FFI conversion is `BondTerm::from_credit_debit` — tested here at the
+// untrusted u64 edge.
 #[test]
-fn bond_ct_balance_ffi_rejects_neither_bond_term() {
-    // credit = debit = 0 (empty balance) → NO_BOND_TERM, not OK.
+fn bond_ct_balance_ffi_unmoved_closes_empty() {
+    // credit = debit = 0, empty commitments, fee 0 → Unmoved, OK.
     let code = unsafe {
         shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0)
     };
-    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM);
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK);
+    // Retired-assigned: zero-money used to return this. Number 5 stays.
+    assert_eq!(SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM, 5);
 }
 
 #[test]
@@ -1152,8 +1271,7 @@ fn epoch_close_compute_ffi_full_pipeline() {
     ];
     let rust_shards = [EpochCloseShard {
         shard_id: 7,
-        has_segment: true,
-        freeze_height: 0,
+        close: ShardClose::ClosedAt(BlockHeight::from_raw(0)),
     }];
     let rust_pairs: Vec<CreditPair> = (0..4)
         .map(|bond_idx| CreditPair {
@@ -1359,7 +1477,7 @@ fn emission_epoch_work_sums_to_persisted_sigma() {
 
 /// The close-processing boundary wrapper single-sources
 /// `consensus_state::epoch_close_height`: `(E+1)·SEB`, one above the
-/// settlement close height, 0 for the overflowing epoch.
+/// epoch's last block, 0 for the overflowing epoch.
 #[test]
 fn epoch_close_processing_height_wrapper() {
     assert_eq!(
@@ -1372,7 +1490,7 @@ fn epoch_close_processing_height_wrapper() {
     );
     assert_eq!(
         shekyl_archival_epoch_close_processing_height(5),
-        shekyl_archival_epoch_close_height(5) + 1
+        shekyl_archival_epoch_last_block(5) + 1
     );
     assert_eq!(shekyl_archival_epoch_close_processing_height(u64::MAX), 0);
 }
@@ -1534,7 +1652,6 @@ use shekyl_archival_retention::{
     reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking, ShardWorkEntry,
     WorkEpochClaim,
 };
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
 const EM_EPOCH: u64 = 5;
@@ -1580,13 +1697,11 @@ impl EmissionFfiFixture {
         let shards = [
             EpochCloseShard {
                 shard_id: EM_SHARD_A,
-                has_segment: true,
-                freeze_height: close - 5_000,
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 5_000)),
             },
             EpochCloseShard {
                 shard_id: EM_SHARD_B,
-                has_segment: true,
-                freeze_height: close - 8_000,
+                close: ShardClose::ClosedAt(BlockHeight::from_raw(close - 8_000)),
             },
         ];
         let pairs = [
@@ -1649,7 +1764,6 @@ impl EmissionFfiFixture {
             backing: MembershipOnlyBacking {
                 proof: vec![0xAB; 64],
                 pseudo_out: [0x22; 32],
-                pqc_pk_hash: [0; 32],
                 backing_pubkey: b_pk.to_canonical_bytes().expect("canonical backing pubkey"),
                 tree_depth: 3,
             },
@@ -1657,7 +1771,6 @@ impl EmissionFfiFixture {
             auth_backing: vec![0x55; SINGLE_SIG_CANONICAL_LEN],
             auth_claim: vec![0x66; SINGLE_SIG_CANONICAL_LEN],
         };
-        vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
         assert_eq!(vin.p_pubkey.len(), SINGLE_KEY_CANONICAL_LEN);
 
         let commits = [RewardCommit {
@@ -1710,10 +1823,13 @@ impl EmissionFfiFixture {
                 .collect(),
             ffi_shards: shards
                 .iter()
-                .map(|s| ShekylArchivalEpochCloseShard {
-                    shard_id: s.shard_id,
-                    freeze_height: s.freeze_height,
-                    has_segment: 1,
+                .map(|s| {
+                    let wire = s.close.to_wire();
+                    ShekylArchivalEpochCloseShard {
+                        shard_id: s.shard_id,
+                        freeze_height: wire.freeze_height,
+                        has_segment: u8::from(wire.has_segment),
+                    }
                 })
                 .collect(),
             ffi_pairs: pairs

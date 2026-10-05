@@ -71,7 +71,22 @@
 # ELIDED path written in prose. The `..` parts guard does not catch `...`, so
 # the token resolves to no file and counts as rot. It is not a claim about a
 # tree path at all, which is the same disposition that guard already encodes.
-dead-citations: 54
+# Lowered 54 -> 49 on 2026-09-15 (RandomX Phase 4 / PR #755): live
+# citations to deleted CryptoNight / IPowSchema / wallet_rpc_payments /
+# pow_registry paths were re-anchored or marked records-was. Rot was
+# repaired, so the ratchet tightens.
+# Lowered 49 -> 47 on 2026-09-16 (PR #758 review): STRUCTURAL_TODO no
+# longer cites deleted tests/hash/main.cpp:192 as a live target;
+# F.C++-3 census dropped deleted wallet2.cpp path:line claims.
+# Lowered 47 -> 45 on 2026-09-23 (tx_extra cutover, PR #837): the PL blast-radius
+# census, which declares every file:line a records-was claim at a pinned sha
+# and forbids re-anchoring in place, moved from docs/design/ to
+# docs/audit_trail/ — the directory this gate reads as records-was — taking
+# its two already-dead rows out of the live count. The cutover's own six
+# breakages (CEN-D2's longhash anchors, the RandomX phase-3 swap table, and
+# four census rows citing the deleted C++ codec/builder/tests) were
+# re-anchored or travelled with that move; none was absorbed into the figure.
+dead-citations: 45
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a
@@ -91,3 +106,4 @@ dead-citations: 54
 # adding a leg costs one line here — the same deliberate act as everything
 # else in this file, and the gate prints the exact line to paste.
 declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range:DRS-W,sections,series:DRS-W,series:R
+declares: docs/design/HEIGHT_SEMANTICS.md citations

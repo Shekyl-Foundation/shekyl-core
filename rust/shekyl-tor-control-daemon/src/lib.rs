@@ -10,7 +10,8 @@
 //! **Ephemeral, daemon-held, per boot** — the default overlay-endpoint posture
 //! ruled in `docs/design/P2P_2_ENDPOINT_ROUND.md` (PWD-E7, signed 2026-09-06):
 //! the daemon mints a v3 onion service key **in memory** at startup, publishes
-//! it over a control connection it owns with `Flags=DiscardPK`, uses the
+//! it over a control connection it owns with `Flags=DiscardPK` and
+//! proof-of-work enabled (D10.4), uses the
 //! returned `ServiceID` as its overlay inbound address, and tears the service
 //! down with the process. Restarting the daemon yields a **new key and a new
 //! address**. Nothing is persisted; there is no durable name to seize, and no
@@ -52,6 +53,7 @@ pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartErro
 pub use ephemeral::{
     DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
 };
+pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the FFI crate's probe/start seam names one crate (this one)
 // rather than reaching around it to the client for the error type alone.
 pub use shekyl_tor_control_client::binary::TorBinaryError;

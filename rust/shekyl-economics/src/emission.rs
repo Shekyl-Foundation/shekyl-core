@@ -23,28 +23,11 @@ pub enum EmissionError {
     BlockTooBig,
 }
 
-/// Effective emission speed factor for the configured DAA target block time.
-///
-/// Returned as `u64` because its sole consumer is the right-shift in
-/// `base_block_reward` (`remaining >> esf`), and Rust shifts accept a `u64`
-/// shift amount directly. Keeping the value in `u64` avoids a gratuitous
-/// narrowing cast.
-#[inline]
-pub fn emission_speed_factor(params: &EconomicParams) -> u64 {
-    debug_assert_eq!(
-        params.daa_target_seconds % 60,
-        0,
-        "DAA target must be a multiple of 60 seconds"
-    );
-    let target_minutes = params.daa_target_seconds / 60;
-    params.emission_speed_factor_per_minute - (target_minutes - 1)
-}
-
 /// Tail (minimum) subsidy per block in atomic units.
 ///
-/// `pub` (with [`emission_speed_factor`]) since the FL round: the fee-ladder
-/// instrument's degenerate pins consume both, and a local re-derivation
-/// there was a third undeclared drift pair (FL round review round 3).
+/// `pub` since the FL round: the fee-ladder instrument's degenerate pins
+/// consume it, and a local re-derivation there was a third undeclared drift
+/// pair (FL round review round 3).
 #[inline]
 pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionError> {
     params
@@ -64,7 +47,7 @@ fn curve_emission(already_generated_coins: u64, params: &EconomicParams) -> u64 
     params
         .emission_curve_asymptote
         .saturating_sub(already_generated_coins)
-        >> emission_speed_factor(params)
+        >> params.emission_speed_factor_per_block
 }
 
 /// The M_r-neutral emission view: `max(curve, TAIL)` (0h).
@@ -109,6 +92,15 @@ pub fn effective_emission(
     Ok(modulated.max(tail_subsidy_per_block(params)?))
 }
 
+/// The heaviest block weight the penalty pays in full: `median_weight`,
+/// raised to [`EconomicParams::full_reward_zone`] when the median sits
+/// below it. The paid amount does not enter. A caller that has not priced
+/// an emission yet asks this, not a method on one.
+#[must_use]
+pub fn penalty_free_weight(median_weight: u64, params: &EconomicParams) -> u64 {
+    median_weight.max(params.full_reward_zone)
+}
+
 /// The quadratic median-weight penalty applied to an already-composed
 /// PAID amount (FL-R12′'s ordering rule: **floors belong to emission;
 /// penalties apply to the paid quantity**). Applying this before the tail
@@ -117,17 +109,19 @@ pub fn effective_emission(
 /// penalty is the LAST operator, not an emission stage.
 ///
 /// Shape (per the C2a port, arithmetic unchanged): the effective median is
-/// `max(median_weight, full_reward_zone)`; at or below it no penalty;
-/// above twice it the block is rejected ([`EmissionError::BlockTooBig`]);
-/// otherwise `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow.
+/// [`penalty_free_weight`]; at or below it no penalty; above twice it the
+/// block is rejected ([`EmissionError::BlockTooBig`]); otherwise
+/// `amount·(2m − c)·c/m²` in `u128`, fail-closed on overflow. The zone is
+/// read from `params`, never taken from the caller: a consensus constant a
+/// caller could vary per call is a second source (E6 slice 4 §3.1 S8 — the
+/// C++ used to supply it on every call).
 pub(crate) fn apply_weight_penalty(
     amount: u64,
     median_weight: u64,
     current_block_weight: u64,
-    full_reward_zone: u64,
+    params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    // "make it soft" — a median below the free zone is raised to it.
-    let median = median_weight.max(full_reward_zone);
+    let median = penalty_free_weight(median_weight, params);
 
     if current_block_weight <= median {
         return Ok(amount);
@@ -173,35 +167,94 @@ pub fn paid_block_reward(
     median_weight: u64,
     current_block_weight: u64,
     already_generated_coins: u64,
-    full_reward_zone: u64,
     tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
-    apply_weight_penalty(
-        effective_emission(already_generated_coins, tx_volume, params)?,
+    PrePenaltyEmission::of(already_generated_coins, tx_volume, params)?.penalised(
         median_weight,
         current_block_weight,
-        full_reward_zone,
+        params,
     )
 }
 
-/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+/// The paid emission of one block before the weight penalty — the first
+/// factor of [`paid_block_reward`], and the only value the penalty is ever
+/// applied to.
 ///
-/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
-pub fn projected_already_generated(
-    height: u64,
+/// It depends on the block's supply and volume, not on its weight, so a
+/// producer weighing many candidate bodies for one block prices it once and
+/// penalises it at each weight ([`Self::penalised`]). The type is what keeps
+/// FL-R12′'s order: no other amount can reach the penalty, so a floor can
+/// never be applied after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrePenaltyEmission(u64);
+
+impl PrePenaltyEmission {
+    /// [`effective_emission`] at the block's operands.
+    ///
+    /// # Errors
+    ///
+    /// [`effective_emission`]'s.
+    pub fn of(
+        already_generated_coins: u64,
+        tx_volume: TxVolume,
+        params: &EconomicParams,
+    ) -> Result<Self, EmissionError> {
+        effective_emission(already_generated_coins, tx_volume, params).map(Self)
+    }
+
+    /// The paid reward at `current_block_weight` under `median_weight`.
+    ///
+    /// # Errors
+    ///
+    /// [`EmissionError::BlockTooBig`] above twice the median;
+    /// [`EmissionError::Overflow`] where the penalty's product leaves `u128`.
+    pub fn penalised(
+        self,
+        median_weight: u64,
+        current_block_weight: u64,
+        params: &EconomicParams,
+    ) -> Result<u64, EmissionError> {
+        apply_weight_penalty(self.0, median_weight, current_block_weight, params)
+    }
+
+    /// The amount, atomic units.
+    #[must_use]
+    pub fn to_raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// Where [`walk_neutral`] stopped: at the caller's predicate, or at tail
+/// entry with the per-block tail every later block adds.
+enum NeutralWalk {
+    Stopped { height: u64, ag: u64 },
+    Tail { height: u64, ag: u64, tail: u64 },
+}
+
+/// The neutral trajectory under interpretation (A) (0h′): `already_generated`
+/// accrues `base_block_reward` block by block from genesis with no release
+/// multiplier, until `stop(height, ag)` holds or the curve reaches the tail.
+///
+/// The one walk both directions of the projection share, so the recurrence
+/// and its stationary arm have one copy.
+fn walk_neutral(
     params: &EconomicParams,
-) -> Result<u64, EmissionError> {
+    stop: impl Fn(u64, u64) -> bool,
+) -> Result<NeutralWalk, EmissionError> {
     let tail = tail_subsidy_per_block(params)?;
-    let mut ag = 0u64;
-    let mut h = 0u64;
-    while h < height {
+    let (mut height, mut ag) = (0u64, 0u64);
+    loop {
+        if stop(height, ag) {
+            return Ok(NeutralWalk::Stopped { height, ag });
+        }
         let base = base_block_reward(ag, params)?;
         if base == tail {
-            // STATIONARY FROM HERE — close the form rather than iterate.
-            // `curve_emission` is non-increasing in `already_generated`
-            // and `ag` only grows, so once the curve has fallen to the
-            // tail floor every remaining block adds exactly `tail`.
+            // STATIONARY FROM HERE — the caller closes the form rather than
+            // iterating. `curve_emission` is non-increasing in
+            // `already_generated` and `ag` only grows, so once the curve has
+            // fallen to the tail floor every remaining block adds exactly
+            // `tail`.
             //
             // This is not tidying a loop that would have finished. The
             // `ag >= emission_curve_asymptote` early return that FL-R12′ retired with
@@ -211,18 +264,63 @@ pub fn projected_already_generated(
             // FL-R14 headroom, ≈ 89 750 years of tail — adding the same
             // number to itself before reporting `Overflow`, which is a
             // hang in a public projection rather than an answer.
-            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
-                .map_err(|_| EmissionError::Overflow)?;
-            return ag.checked_add(added).ok_or(EmissionError::Overflow);
+            return Ok(NeutralWalk::Tail { height, ag, tail });
         }
         // No saturation at the asymptote (FL-R12′): the neutral trajectory
         // keeps accruing the perpetual tail past it, exactly as consensus
         // does. The FL-R14 build assertion in `params.rs` documents why
         // this cannot overflow on any realistic horizon.
         ag = ag.checked_add(base).ok_or(EmissionError::Overflow)?;
-        h += 1;
+        height += 1;
     }
-    Ok(ag)
+}
+
+/// Neutral-trajectory `already_generated` at `height` under interpretation (A) (0h′).
+///
+/// Sum of `base_block_reward` for blocks `0..height` with no release multiplier.
+pub fn projected_already_generated(
+    height: u64,
+    params: &EconomicParams,
+) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |h, _| h >= height)? {
+        NeutralWalk::Stopped { ag, .. } => Ok(ag),
+        NeutralWalk::Tail {
+            height: h,
+            ag,
+            tail,
+        } => {
+            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
+                .map_err(|_| EmissionError::Overflow)?;
+            ag.checked_add(added).ok_or(EmissionError::Overflow)
+        }
+    }
+}
+
+/// The inverse of [`projected_already_generated`]: the first height `h` at
+/// which the neutral trajectory has emitted at least `target`, so
+/// `projected_already_generated(h) >= target` and, for `h > 0`,
+/// `projected_already_generated(h - 1) < target`.
+///
+/// One walk, where bisecting the projection replays it from genesis on
+/// every probe. Past tail entry the answer is closed-form, as the
+/// projection's is. `Overflow` when no height's projection both fits `u64`
+/// and reaches `target`: a zero tail leaves the trajectory short of it
+/// forever, and a tail step can pass `u64::MAX` without landing on it.
+pub fn neutral_height_reaching(target: u64, params: &EconomicParams) -> Result<u64, EmissionError> {
+    match walk_neutral(params, |_, ag| ag >= target)? {
+        NeutralWalk::Stopped { height, .. } => Ok(height),
+        NeutralWalk::Tail { tail: 0, .. } => Err(EmissionError::Overflow),
+        // The walk stopped short of `target`, so `ag < target`. The height
+        // is an answer only if the projection there exists.
+        NeutralWalk::Tail { height, ag, tail } => {
+            let blocks = (target - ag).div_ceil(tail);
+            blocks
+                .checked_mul(tail)
+                .and_then(|added| ag.checked_add(added))
+                .ok_or(EmissionError::Overflow)?;
+            height.checked_add(blocks).ok_or(EmissionError::Overflow)
+        }
+    }
 }
 
 /// Neutral base subsidy at `height`: `base_block_reward(projected_already_generated(h))`.
@@ -242,14 +340,12 @@ pub fn block_reward_with_penalty(
     median_weight: u64,
     current_block_weight: u64,
     already_generated_coins: u64,
-    full_reward_zone: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
     paid_block_reward(
         median_weight,
         current_block_weight,
         already_generated_coins,
-        full_reward_zone,
         TxVolume::per_block(params.tx_volume_baseline),
         params,
     )
@@ -262,8 +358,8 @@ pub fn block_reward_with_penalty(
 /// clamp and risking a message that disagrees with the decision.
 /// Saturating: the true limit above `u64::MAX / 2` is unrepresentable, and a
 /// saturated value is only ever used for diagnostics.
-pub fn block_weight_limit(median_weight: u64, full_reward_zone: u64) -> u64 {
-    median_weight.max(full_reward_zone).saturating_mul(2)
+pub fn block_weight_limit(median_weight: u64, params: &EconomicParams) -> u64 {
+    median_weight.max(params.full_reward_zone).saturating_mul(2)
 }
 
 /// Advance `already_generated_coins` by a block reward.
@@ -279,8 +375,105 @@ pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::params::EconomicParams;
+
+    /// Genesis block on the design curve: `2³² · 10⁹ >> 22` = 1 024 SKL.
+    const GENESIS_BLOCK_REWARD: u64 = 1_024_000_000_000;
+    /// `2²² · ln 2`. First height at which the neutral trajectory has
+    /// emitted half the asymptote.
+    const HALF_EMITTED_HEIGHT: u64 = 2_907_270;
+    /// `2²² · ln 5`. First height at which it has emitted 80 %.
+    const EIGHTY_PCT_EMITTED_HEIGHT: u64 = 6_750_472;
+    /// Bracket around [`HALF_EMITTED_HEIGHT`]. A factor rescaled by the
+    /// block time misses it.
+    const HALF_WINDOW: (u64, u64) = (2_900_000, 2_915_000);
+    /// Bracket around [`EIGHTY_PCT_EMITTED_HEIGHT`].
+    const EIGHTY_WINDOW: (u64, u64) = (6_740_000, 6_765_000);
+
+    /// Plain sum of `base_block_reward` at each probe, one walk from genesis.
+    /// The projection and its inverse are not called: this is their oracle.
+    fn accumulated_supply_at(params: &EconomicParams, probes: &[u64]) -> BTreeMap<u64, u64> {
+        let mut wanted = probes.to_vec();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut supply = BTreeMap::new();
+        let mut already_generated = 0u64;
+        let mut next = 0usize;
+        let horizon = *wanted.last().expect("at least one probe");
+        for height in 0..=horizon {
+            if wanted[next] == height {
+                supply.insert(height, already_generated);
+                next += 1;
+                if next == wanted.len() {
+                    break;
+                }
+            }
+            already_generated = already_generated
+                .checked_add(base_block_reward(already_generated, params).expect("base reward"))
+                .expect("neutral supply fits in u64 through the probed horizon");
+        }
+        supply
+    }
+
+    /// The design's emission curve (`DESIGN_CONCEPTS.md` §3, §13): an
+    /// emission speed factor of **22 per block**, which puts the first
+    /// block at `2³² · 10⁹ >> 22` = 1 024 SKL, half the asymptote emitted
+    /// near year 11 (`2²² · ln 2` ≈ 2 907 270 blocks) and 80 % near year
+    /// 25.7 (`2²² · ln 5` ≈ 6 750 472 blocks). Pinned at the owner so a
+    /// convention that rescales the factor by the block time fails here.
+    #[test]
+    fn the_curve_is_the_designs_esf_22_per_block() {
+        let p = EconomicParams::default();
+        assert_eq!(
+            p.emission_speed_factor_per_block, 22,
+            "the factor is per block"
+        );
+        let genesis = base_block_reward(0, &p).expect("genesis reward");
+        assert_eq!(
+            genesis,
+            p.emission_curve_asymptote >> p.emission_speed_factor_per_block,
+            "the first block pays the asymptote shifted by the factor"
+        );
+        assert_eq!(genesis, GENESIS_BLOCK_REWARD);
+        let half = p.emission_curve_asymptote / 2;
+        let eighty = p.emission_curve_asymptote / 5 * 4;
+        let supply = accumulated_supply_at(
+            &p,
+            &[
+                HALF_WINDOW.0,
+                HALF_EMITTED_HEIGHT - 1,
+                HALF_EMITTED_HEIGHT,
+                HALF_WINDOW.1,
+                EIGHTY_WINDOW.0,
+                EIGHTY_PCT_EMITTED_HEIGHT - 1,
+                EIGHTY_PCT_EMITTED_HEIGHT,
+                EIGHTY_WINDOW.1,
+            ],
+        );
+        let at = |height: u64| supply[&height];
+        assert!(
+            at(HALF_WINDOW.0) < half && half < at(HALF_WINDOW.1),
+            "half emitted near year 11"
+        );
+        assert!(
+            at(EIGHTY_WINDOW.0) < eighty && eighty < at(EIGHTY_WINDOW.1),
+            "80 % near year 25.7"
+        );
+        // The inverse lands on the same heights by its own walk. The supply
+        // map is the independent sum, so a shared bug in the walk cannot
+        // satisfy both.
+        for (target, expected) in [
+            (half, HALF_EMITTED_HEIGHT),
+            (eighty, EIGHTY_PCT_EMITTED_HEIGHT),
+        ] {
+            let height = neutral_height_reaching(target, &p).expect("reachable");
+            assert_eq!(height, expected);
+            assert!(at(height - 1) < target && target <= at(height));
+        }
+    }
 
     /// A height past tail entry must TERMINATE, not walk the tail one
     /// block at a time.
@@ -307,14 +500,16 @@ mod tests {
     /// approximation that happens to be close.
     #[test]
     fn the_fast_forward_agrees_with_the_naive_walk_across_tail_entry() {
-        // Canonical parameters put tail entry ~65 years out, where a naive
+        // Canonical parameters put tail entry ~119 years out, where a naive
         // comparison is not runnable, so shrink the emission-speed factor
         // and the supply until the curve crosses within a few dozen
         // blocks. Only the crossing's POSITION moves; the recurrence and
         // the stationarity being asserted are the shipped ones.
-        let mut p = EconomicParams::default();
-        p.emission_speed_factor_per_minute = (p.daa_target_seconds / 60) + 3;
-        let esf = emission_speed_factor(&p);
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
+        let esf = p.emission_speed_factor_per_block;
         let tail = tail_subsidy_per_block(&p).expect("tail");
         p.emission_curve_asymptote = (tail << esf) * 4;
 
@@ -347,17 +542,122 @@ mod tests {
         }
     }
 
+    /// The inverse must name the first height the walk reaches a target,
+    /// on both sides of tail entry — the walked arm and the closed form.
     #[test]
-    fn base_block_reward_matches_cpp_first_values() {
+    fn the_inverse_agrees_with_the_naive_search_across_tail_entry() {
+        let mut p = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            ..EconomicParams::default()
+        };
+        let esf = p.emission_speed_factor_per_block;
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        p.emission_curve_asymptote = (tail << esf) * 4;
+
+        // The oracle is a plain accumulation of `base_block_reward`, not the
+        // projection: the projection shares the walk under test. Targets up
+        // to `at(crossing)` are the walked arm; past it, the closed form.
+        let mut prefix = vec![0u64];
+        let mut crossing: Option<usize> = None;
+        while prefix.len() < 100_000 {
+            let ag = *prefix.last().expect("non-empty");
+            let base = base_block_reward(ag, &p).expect("base");
+            if base == tail && crossing.is_none() {
+                crossing = Some(prefix.len() - 1);
+            }
+            prefix.push(ag + base);
+            if crossing.is_some_and(|c| prefix.len() > c + 64) {
+                break;
+            }
+        }
+        let crossing = crossing.expect("setup reaches the tail");
+        assert!(crossing > 1, "setup must start above the tail, not on it");
+        let at = |h: usize| prefix[h];
+        let naive_first = |target: u64| {
+            let h = prefix
+                .iter()
+                .position(|&ag| ag >= target)
+                .expect("within the prefix");
+            u64::try_from(h).expect("small height")
+        };
+        let at_crossing = at(crossing);
+        for target in [
+            0,
+            1,
+            at(1),
+            at(1) + 1,
+            at_crossing - 1,
+            at_crossing,
+            at_crossing + 1,
+            at_crossing + tail,
+            at_crossing + 37 * tail - 1,
+        ] {
+            assert_eq!(
+                neutral_height_reaching(target, &p).expect("reachable"),
+                naive_first(target),
+                "inverse and naive search must agree at target {target} (crossing at {crossing})"
+            );
+        }
+    }
+
+    /// A height is returned only where the projection exists. A tail whose
+    /// third step passes `u64::MAX` reaches twice itself at height 2 and
+    /// reaches nothing above that: the projection at height 3 overflows.
+    #[test]
+    fn the_inverse_never_names_a_height_the_projection_cannot_represent() {
+        let p = EconomicParams {
+            emission_curve_asymptote: 0,
+            final_subsidy_per_minute: u64::MAX / 4,
+            ..EconomicParams::default()
+        };
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        assert!(tail.checked_mul(3).is_none() && tail.checked_mul(2).is_some());
+        assert_eq!(neutral_height_reaching(2 * tail, &p), Ok(2));
+        assert_eq!(projected_already_generated(2, &p), Ok(2 * tail));
+        for target in [2 * tail + 1, u64::MAX] {
+            assert!(matches!(
+                neutral_height_reaching(target, &p),
+                Err(EmissionError::Overflow)
+            ));
+        }
+        assert!(matches!(
+            projected_already_generated(3, &p),
+            Err(EmissionError::Overflow)
+        ));
+    }
+
+    /// A target the trajectory never reaches is an error, not a hang or a
+    /// division by zero: a zero tail leaves the curve short of the
+    /// asymptote forever.
+    #[test]
+    fn an_unreachable_target_is_an_error() {
+        let mut zero_tail = EconomicParams {
+            emission_speed_factor_per_block: 4,
+            final_subsidy_per_minute: 0,
+            ..EconomicParams::default()
+        };
+        zero_tail.emission_curve_asymptote = 1 << 12;
+        assert!(matches!(
+            neutral_height_reaching(zero_tail.emission_curve_asymptote, &zero_tail),
+            Err(EmissionError::Overflow)
+        ));
+    }
+
+    /// First values of the curve at ESF 22 per block, minted from the closed
+    /// form `max((asymptote − ag) >> 22, tail)` outside this crate (the same
+    /// script reproduces the ESF-21 pins this test carried before
+    /// 2026-10-04: 2 048 000 000 000, 2 047 999 023 437, 733 629 392 416).
+    #[test]
+    fn base_block_reward_first_values_on_the_design_curve() {
         let p = EconomicParams::default();
-        assert_eq!(base_block_reward(0, &p).unwrap(), 2_048_000_000_000_u64);
+        assert_eq!(base_block_reward(0, &p).unwrap(), 1_024_000_000_000_u64);
         assert_eq!(
             base_block_reward(2_048_000_000_000, &p).unwrap(),
-            2_047_999_023_437_u64
+            1_023_999_511_718_u64
         );
         assert_eq!(
             base_block_reward(2_756_434_948_434_199_641, &p).unwrap(),
-            733_629_392_416_u64
+            366_814_696_208_u64
         );
     }
 
@@ -414,7 +714,10 @@ mod tests {
         // loop's projection-fed limb depends on it: the trajectory must
         // actually pass the asymptote for that limb to probe the far
         // side.
-        let past_boundary = 19_200_000;
+        // ≈ 146 y at the design's ESF 22 per block: the curve meets the tail
+        // near 31 M blocks and the trajectory passes the asymptote about 4 M
+        // blocks of tail later. (19.2 M served the ESF-21 curve.)
+        let past_boundary = 38_400_000;
         let ag_proj = projected_already_generated(past_boundary, &p).unwrap();
         assert!(
             ag_proj > s,
@@ -461,7 +764,7 @@ mod tests {
             // arm: FL-R16a): TAIL exactly, on this rail as on the other.
             for ag in [s - tail + 1, s, s + tail] {
                 assert_eq!(
-                    paid_block_reward(zone, zone, ag, zone, TxVolume::per_block(v), &p).unwrap(),
+                    paid_block_reward(zone, zone, ag, TxVolume::per_block(v), &p).unwrap(),
                     tail,
                     "paid reward != TAIL on the {rail} rail at already_generated={ag}"
                 );
@@ -477,7 +780,7 @@ mod tests {
             };
             assert_eq!(expected, 450_000_000);
             assert_eq!(
-                paid_block_reward(median, weight, s, zone, TxVolume::per_block(v), &p).unwrap(),
+                paid_block_reward(median, weight, s, TxVolume::per_block(v), &p).unwrap(),
                 expected,
                 "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
                  penalty must compose AFTER the floor"
@@ -486,7 +789,7 @@ mod tests {
             // Leg 4's paid limb — the projection-fed state pays the same
             // rail-independent TAIL contract.
             assert_eq!(
-                paid_block_reward(zone, 1, ag_proj, zone, TxVolume::per_block(v), &p).unwrap(),
+                paid_block_reward(zone, 1, ag_proj, TxVolume::per_block(v), &p).unwrap(),
                 tail,
                 "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
             );
@@ -496,7 +799,7 @@ mod tests {
         // everywhere, mid-curve included (weight = 1 ⇒ no penalty).
         for ag in [0, s / 2, s - tail + 1, s, s + tail] {
             assert_eq!(
-                paid_block_reward(zone, 1, ag, zone, TxVolume::per_block(dormancy_v), &p).unwrap(),
+                paid_block_reward(zone, 1, ag, TxVolume::per_block(dormancy_v), &p).unwrap(),
                 effective_emission(ag, TxVolume::per_block(dormancy_v), &p).unwrap(),
                 "pre-penalty paid quantity != effective_emission at ag={ag}"
             );
@@ -544,7 +847,7 @@ mod tests {
         // `base_block_reward`. A shift/floor regression in the production curve
         // diverges from this oracle, so the assertion is non-tautological.
         let p = EconomicParams::default();
-        let esf = p.emission_speed_factor_per_minute - (p.daa_target_seconds / 60 - 1);
+        let esf = p.emission_speed_factor_per_block;
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
         let grid = [
             0_u64,
@@ -686,83 +989,89 @@ mod tests {
     /// `expect_ok` is false.
     #[test]
     fn c2a_prime_layer1_weight_penalty_pinned_vectors() {
-        const ZONE: u64 = 300_000; // CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
+        // The zone is `p.full_reward_zone` (config/consensus_constants.json);
+        // the vectors were minted at 300 000 and the pin below says so. The
+        // reward column was re-minted on 2026-10-04 for the per-block ESF 22
+        // by the penalty spec's closed form, run outside this crate; the same
+        // script reproduces all 81 ESF-21 pins it replaced.
+        let p = EconomicParams::default();
+        assert_eq!(p.full_reward_zone, 300_000, "vectors minted at the V5 zone");
         const VECTORS: &[(u64, u64, u64, bool, u64)] = &[
-            (0, 150000, 0, true, 2048000000000),
-            (0, 150000, 2048000000000, true, 2047999023437),
-            (0, 150000, 2756434948434199641, true, 733629392416),
-            (0, 300000, 0, true, 2048000000000),
-            (0, 300000, 2048000000000, true, 2047999023437),
-            (0, 300000, 2756434948434199641, true, 733629392416),
-            (0, 300001, 0, true, 2047999999977),
-            (0, 300001, 2048000000000, true, 2047999023414),
-            (0, 300001, 2756434948434199641, true, 733629392407),
-            (0, 337500, 0, true, 2016000000000),
-            (0, 337500, 2048000000000, true, 2015999038695),
-            (0, 337500, 2756434948434199641, true, 722166433159),
-            (0, 450000, 0, true, 1536000000000),
-            (0, 450000, 2048000000000, true, 1535999267577),
-            (0, 450000, 2756434948434199641, true, 550222044312),
-            (0, 562500, 0, true, 480000000000),
-            (0, 562500, 2048000000000, true, 479999771118),
-            (0, 562500, 2756434948434199641, true, 171944388847),
-            (0, 599999, 0, true, 13653310),
-            (0, 599999, 2048000000000, true, 13653304),
-            (0, 599999, 2756434948434199641, true, 4890854),
+            (0, 150000, 0, true, 1024000000000),
+            (0, 150000, 2048000000000, true, 1023999511718),
+            (0, 150000, 2756434948434199641, true, 366814696208),
+            (0, 300000, 0, true, 1024000000000),
+            (0, 300000, 2048000000000, true, 1023999511718),
+            (0, 300000, 2756434948434199641, true, 366814696208),
+            (0, 300001, 0, true, 1023999999988),
+            (0, 300001, 2048000000000, true, 1023999511706),
+            (0, 300001, 2756434948434199641, true, 366814696203),
+            (0, 337500, 0, true, 1008000000000),
+            (0, 337500, 2048000000000, true, 1007999519347),
+            (0, 337500, 2756434948434199641, true, 361083216579),
+            (0, 450000, 0, true, 768000000000),
+            (0, 450000, 2048000000000, true, 767999633788),
+            (0, 450000, 2756434948434199641, true, 275111022156),
+            (0, 562500, 0, true, 240000000000),
+            (0, 562500, 2048000000000, true, 239999885558),
+            (0, 562500, 2756434948434199641, true, 85972194423),
+            (0, 599999, 0, true, 6826655),
+            (0, 599999, 2048000000000, true, 6826652),
+            (0, 599999, 2756434948434199641, true, 2445427),
             (0, 600000, 0, true, 0),
             (0, 600000, 2048000000000, true, 0),
             (0, 600000, 2756434948434199641, true, 0),
             (0, 600001, 0, false, 0),
             (0, 600001, 2048000000000, false, 0),
             (0, 600001, 2756434948434199641, false, 0),
-            (300000, 150000, 0, true, 2048000000000),
-            (300000, 150000, 2048000000000, true, 2047999023437),
-            (300000, 150000, 2756434948434199641, true, 733629392416),
-            (300000, 300000, 0, true, 2048000000000),
-            (300000, 300000, 2048000000000, true, 2047999023437),
-            (300000, 300000, 2756434948434199641, true, 733629392416),
-            (300000, 300001, 0, true, 2047999999977),
-            (300000, 300001, 2048000000000, true, 2047999023414),
-            (300000, 300001, 2756434948434199641, true, 733629392407),
-            (300000, 337500, 0, true, 2016000000000),
-            (300000, 337500, 2048000000000, true, 2015999038695),
-            (300000, 337500, 2756434948434199641, true, 722166433159),
-            (300000, 450000, 0, true, 1536000000000),
-            (300000, 450000, 2048000000000, true, 1535999267577),
-            (300000, 450000, 2756434948434199641, true, 550222044312),
-            (300000, 562500, 0, true, 480000000000),
-            (300000, 562500, 2048000000000, true, 479999771118),
-            (300000, 562500, 2756434948434199641, true, 171944388847),
-            (300000, 599999, 0, true, 13653310),
-            (300000, 599999, 2048000000000, true, 13653304),
-            (300000, 599999, 2756434948434199641, true, 4890854),
+            (300000, 150000, 0, true, 1024000000000),
+            (300000, 150000, 2048000000000, true, 1023999511718),
+            (300000, 150000, 2756434948434199641, true, 366814696208),
+            (300000, 300000, 0, true, 1024000000000),
+            (300000, 300000, 2048000000000, true, 1023999511718),
+            (300000, 300000, 2756434948434199641, true, 366814696208),
+            (300000, 300001, 0, true, 1023999999988),
+            (300000, 300001, 2048000000000, true, 1023999511706),
+            (300000, 300001, 2756434948434199641, true, 366814696203),
+            (300000, 337500, 0, true, 1008000000000),
+            (300000, 337500, 2048000000000, true, 1007999519347),
+            (300000, 337500, 2756434948434199641, true, 361083216579),
+            (300000, 450000, 0, true, 768000000000),
+            (300000, 450000, 2048000000000, true, 767999633788),
+            (300000, 450000, 2756434948434199641, true, 275111022156),
+            (300000, 562500, 0, true, 240000000000),
+            (300000, 562500, 2048000000000, true, 239999885558),
+            (300000, 562500, 2756434948434199641, true, 85972194423),
+            (300000, 599999, 0, true, 6826655),
+            (300000, 599999, 2048000000000, true, 6826652),
+            (300000, 599999, 2756434948434199641, true, 2445427),
             (300000, 600000, 0, true, 0),
             (300000, 600000, 2048000000000, true, 0),
             (300000, 600000, 2756434948434199641, true, 0),
             (300000, 600001, 0, false, 0),
             (300000, 600001, 2048000000000, false, 0),
             (300000, 600001, 2756434948434199641, false, 0),
-            (2100000, 1050000, 0, true, 2048000000000),
-            (2100000, 1050000, 2048000000000, true, 2047999023437),
-            (2100000, 1050000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100000, 0, true, 2048000000000),
-            (2100000, 2100000, 2048000000000, true, 2047999023437),
-            (2100000, 2100000, 2756434948434199641, true, 733629392416),
-            (2100000, 2100001, 0, true, 2047999999999),
-            (2100000, 2100001, 2048000000000, true, 2047999023436),
-            (2100000, 2100001, 2756434948434199641, true, 733629392415),
-            (2100000, 2362500, 0, true, 2016000000000),
-            (2100000, 2362500, 2048000000000, true, 2015999038695),
-            (2100000, 2362500, 2756434948434199641, true, 722166433159),
-            (2100000, 3150000, 0, true, 1536000000000),
-            (2100000, 3150000, 2048000000000, true, 1535999267577),
-            (2100000, 3150000, 2756434948434199641, true, 550222044312),
-            (2100000, 3937500, 0, true, 480000000000),
-            (2100000, 3937500, 2048000000000, true, 479999771118),
-            (2100000, 3937500, 2756434948434199641, true, 171944388847),
-            (2100000, 4199999, 0, true, 1950475),
-            (2100000, 4199999, 2048000000000, true, 1950474),
-            (2100000, 4199999, 2756434948434199641, true, 698694),
+            (2100000, 1050000, 0, true, 1024000000000),
+            (2100000, 1050000, 2048000000000, true, 1023999511718),
+            (2100000, 1050000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100000, 0, true, 1024000000000),
+            (2100000, 2100000, 2048000000000, true, 1023999511718),
+            (2100000, 2100000, 2756434948434199641, true, 366814696208),
+            (2100000, 2100001, 0, true, 1023999999999),
+            (2100000, 2100001, 2048000000000, true, 1023999511717),
+            (2100000, 2100001, 2756434948434199641, true, 366814696207),
+            (2100000, 2362500, 0, true, 1008000000000),
+            (2100000, 2362500, 2048000000000, true, 1007999519347),
+            (2100000, 2362500, 2756434948434199641, true, 361083216579),
+            (2100000, 3150000, 0, true, 768000000000),
+            (2100000, 3150000, 2048000000000, true, 767999633788),
+            (2100000, 3150000, 2756434948434199641, true, 275111022156),
+            (2100000, 3937500, 0, true, 240000000000),
+            (2100000, 3937500, 2048000000000, true, 239999885558),
+            (2100000, 3937500, 2756434948434199641, true, 85972194423),
+            (2100000, 4199999, 0, true, 975237),
+            (2100000, 4199999, 2048000000000, true, 975237),
+            (2100000, 4199999, 2756434948434199641, true, 349347),
             (2100000, 4200000, 0, true, 0),
             (2100000, 4200000, 2048000000000, true, 0),
             (2100000, 4200000, 2756434948434199641, true, 0),
@@ -771,12 +1080,11 @@ mod tests {
             (2100000, 4200001, 2756434948434199641, false, 0),
         ];
 
-        let p = EconomicParams::default();
         let mut penalty_bearing = 0usize;
         let mut rejected = 0usize;
 
         for &(median, current, ag, expect_ok, expect_reward) in VECTORS {
-            match block_reward_with_penalty(median, current, ag, ZONE, &p) {
+            match block_reward_with_penalty(median, current, ag, &p) {
                 Ok(reward) => {
                     assert!(
                         expect_ok,
@@ -816,6 +1124,33 @@ mod tests {
     /// "Never panics" — not "always exact". Past the exact domain the
     /// function reports `Overflow`; the last case pins that, and pins that it
     /// is an error rather than a panic or a wrap.
+    /// [`penalty_free_weight`] is the boundary the penalty keys on: paid
+    /// whole at it, less one byte past it — and the zone stands in for a
+    /// lower median.
+    #[test]
+    fn penalty_free_weight_is_the_last_weight_paid_whole() {
+        let p = EconomicParams::default();
+        let zone = p.full_reward_zone;
+        let emission = PrePenaltyEmission::of(0, TxVolume::per_block(p.tx_volume_baseline), &p)
+            .expect("genesis emission");
+        for median in [0, zone / 2, zone, zone + 12_345, 3 * zone] {
+            let full = penalty_free_weight(median, &p);
+            assert_eq!(full, median.max(zone), "median {median}");
+            assert_eq!(
+                emission.penalised(median, full, &p),
+                Ok(emission.to_raw()),
+                "whole at the full weight, median {median}"
+            );
+            assert!(
+                emission
+                    .penalised(median, full + 1, &p)
+                    .expect("within the limit")
+                    < emission.to_raw(),
+                "penalised one byte past it, median {median}"
+            );
+        }
+    }
+
     #[test]
     fn block_reward_with_penalty_never_panics_at_u64_extremes() {
         let p = EconomicParams::default();
@@ -827,20 +1162,17 @@ mod tests {
         // not rejected. A u64 doubling would wrap to 0 here and reject every
         // block instead, so this pins the u128 comparison specifically.
         let huge = u64::MAX / 2 + 1;
-        assert_eq!(
-            block_reward_with_penalty(huge, u64::MAX, 0, ZONE, &p).unwrap(),
-            0
-        );
+        assert_eq!(block_reward_with_penalty(huge, u64::MAX, 0, &p).unwrap(), 0);
 
         // One weight above the doubled median IS rejected, and computing that
         // boundary must not wrap either. `huge * 2 == u64::MAX + 1`, so no u64
         // current can exceed it: the whole domain is accepted at this median.
-        assert!(block_reward_with_penalty(huge - 1, u64::MAX, 0, ZONE, &p).is_err());
+        assert!(block_reward_with_penalty(huge - 1, u64::MAX, 0, &p).is_err());
 
         // Maximum median with maximum weight: current <= median, so the base
         // reward is returned untouched. No panic, no overflow.
         assert_eq!(
-            block_reward_with_penalty(u64::MAX, u64::MAX, 0, ZONE, &p).unwrap(),
+            block_reward_with_penalty(u64::MAX, u64::MAX, 0, &p).unwrap(),
             base_block_reward(0, &p).unwrap()
         );
 
@@ -848,7 +1180,7 @@ mod tests {
         // perpetual-tail state, not an error — the old error arm was the
         // build-blocking dead-letter. Totalized: pays the tail.
         assert_eq!(
-            block_reward_with_penalty(0, ZONE, u64::MAX, ZONE, &p).unwrap(),
+            block_reward_with_penalty(0, ZONE, u64::MAX, &p).unwrap(),
             tail_subsidy_per_block(&p).unwrap()
         );
 
@@ -858,7 +1190,7 @@ mod tests {
         // observed, not reasoned about. Now it fails closed.
         let m: u64 = 1 << 48;
         assert_eq!(
-            block_reward_with_penalty(m, m + m / 2, 0, ZONE, &p),
+            block_reward_with_penalty(m, m + m / 2, 0, &p),
             Err(EmissionError::Overflow)
         );
     }
@@ -880,7 +1212,6 @@ mod tests {
     #[test]
     fn c2a_prime_layer1_penalty_diverges_from_the_legacy_u64_wrap() {
         let p = EconomicParams::default();
-        const ZONE: u64 = 300_000;
 
         // 2^33 median, block at 1.5x: the legacy multiplicand is
         // 0.75 * 2^66, which is exactly 0 modulo 2^64 — the most legible
@@ -899,7 +1230,7 @@ mod tests {
         assert_eq!(legacy_reward, 0, "the legacy path pays nothing here");
 
         // Exact: (2m - c) * c = 0.5m * 1.5m = 0.75 m^2, so reward = 0.75 base.
-        let exact = block_reward_with_penalty(m, c, 0, ZONE, &p).unwrap();
+        let exact = block_reward_with_penalty(m, c, 0, &p).unwrap();
         assert_eq!(exact, base / 4 * 3);
         assert_ne!(exact, legacy_reward, "this test exists to pin a divergence");
     }
@@ -913,7 +1244,6 @@ mod tests {
     #[test]
     fn block_reward_with_penalty_exact_domain_boundary() {
         let p = EconomicParams::default();
-        const ZONE: u64 = 300_000;
         let base_u64 = base_block_reward(0, &p).unwrap();
         let base = u128::from(base_u64);
 
@@ -925,7 +1255,7 @@ mod tests {
             let c: u64 = m + m / 2;
             let multiplicand = (u128::from(m) * 2 - u128::from(c)) * u128::from(c);
             let fits = base.checked_mul(multiplicand).is_some();
-            let got = block_reward_with_penalty(m, c, 0, ZONE, &p);
+            let got = block_reward_with_penalty(m, c, 0, &p);
             if fits {
                 assert!(got.is_ok(), "median 2^{shift} should be exact");
                 assert_eq!(got.unwrap(), base_u64 / 4 * 3, "2^{shift}");
@@ -942,10 +1272,11 @@ mod tests {
 
     #[test]
     fn block_weight_limit_reports_the_effective_double_median() {
-        assert_eq!(block_weight_limit(0, 300_000), 600_000);
-        assert_eq!(block_weight_limit(2_100_000, 300_000), 4_200_000);
+        let p = EconomicParams::default();
+        assert_eq!(block_weight_limit(0, &p), 600_000);
+        assert_eq!(block_weight_limit(2_100_000, &p), 4_200_000);
         // Saturating rather than wrapping — diagnostics only.
-        assert_eq!(block_weight_limit(u64::MAX, 300_000), u64::MAX);
+        assert_eq!(block_weight_limit(u64::MAX, &p), u64::MAX);
     }
 
     /// FL-R12′: the accumulator advances THROUGH the emission-curve
@@ -998,17 +1329,15 @@ mod tests {
     fn fl_r24_exact_window_mean_moves_the_reward_off_the_truncated_value() {
         let p = EconomicParams::default();
         let ag = p.emission_curve_asymptote / 2;
-        let zone = 300_000;
-        let paid =
-            |v: TxVolume| paid_block_reward(0, 1, ag, zone, v, &p).expect("mid-curve reward");
+        let paid = |v: TxVolume| paid_block_reward(0, 1, ag, v, &p).expect("mid-curve reward");
 
         // 40.5 per block, exact.
-        assert_eq!(paid(TxVolume::window(29_160, 720)), 829_440_000_000);
+        assert_eq!(paid(TxVolume::window(29_160, 720)), 414_720_000_000);
         // What the floored operand paid for the same chain state (old).
-        assert_eq!(paid(TxVolume::per_block(40)), 819_200_000_000);
+        assert_eq!(paid(TxVolume::per_block(40)), 409_600_000_000);
         // 49.5 per block, exact / floored.
-        assert_eq!(paid(TxVolume::window(35_640, 720)), 1_013_760_000_000);
-        assert_eq!(paid(TxVolume::per_block(49)), 1_003_520_000_000);
+        assert_eq!(paid(TxVolume::window(35_640, 720)), 506_880_000_000);
+        assert_eq!(paid(TxVolume::per_block(49)), 501_760_000_000);
 
         // The two forms agree exactly when the mean is whole: the window
         // form is a strict superset, not a different curve.
@@ -1018,6 +1347,6 @@ mod tests {
         );
         // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
         assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
-        assert_eq!(paid(TxVolume::ZERO), 819_200_000_000);
+        assert_eq!(paid(TxVolume::ZERO), 409_600_000_000);
     }
 }

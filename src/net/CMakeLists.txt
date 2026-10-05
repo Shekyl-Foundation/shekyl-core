@@ -27,8 +27,8 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(net_sources error.cpp i2p_address.cpp parse.cpp
-    socks.cpp socks_connect.cpp tor_address.cpp)
+set(net_sources error.cpp parse.cpp
+    socks.cpp tor_address.cpp)
 monero_find_all_headers(net_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_add_library(net ${net_sources} ${net_headers})

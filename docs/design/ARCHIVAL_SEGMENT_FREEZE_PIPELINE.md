@@ -1,5 +1,34 @@
 # Segment-freeze pipeline — the production writer for `m_archival_shard_segment`
 
+**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — live in code until
+E4 / S-ARCH.** The specification below remains live consensus until the code
+is deleted; it is no longer a plan for anything to be built. Archive-or-contract
+(rule 95) is owned by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) and lands
+with that round's deletion increment. The original round-1 status is retained
+at its own heading below. See the retirement notice that follows.
+
+> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) — LIVE IN CODE UNTIL
+> E4 / S-ARCH.** The pipeline this document specifies is retired by
+> `PDM-Q12` ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md));
+> read the ruling there for the argument — it is not restated here.
+> **"Retired by ruling" and "retired in code" are different states, and this
+> is the first:** the C++ half dies at `DRS-E*` under `PDM-Q-S0`, the Rust
+> half at **E4 / S-ARCH** with the serve-credit verifier's re-key (`PDM-Q6`
+> item 4, row 1). Until then O-1…O-3 and the first-crossing rule below remain
+> **live consensus** and this document remains their specification.
+>
+> **One consumer the retirement does not name**, recorded so it is not lost
+> with the pipeline: the wallet-side store's `root_at_count` reads
+> `frozen_segments.r_k` as a root-composition cache on the *proving* path, not
+> only the serving one — `WSS-4` in
+> [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md), with `WSS-9` on what that
+> does and does not settle (the read has a recompute fallback and nothing
+> prunes in production, so whether any subroot cache survives is that round's
+> `WSS-Q2`, not a consequence of this retirement).
+>
+> **Archive-or-contract (rule 95) is owned by that round** and lands with its
+> deletion increment — when the code goes, not before.
+
 > **⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346).** This document
 > was opened as an obligation of the M1 reward-gate design round and
 > describes the freeze writer as feeding "the M1 gate". **That gate is
@@ -350,9 +379,12 @@ described here rather than by reference) (the value is *not*
 provisional — it is derived from pinned production widths):
 `config/consensus_constants.json` entry, `build.rs` emission,
 `SEGMENT_LEAF_COUNT: u64 = 25_992` with a compile-time assert tying
-it to the width product (`38 * 18 * 38`) so a width change cannot
-silently strand it, and doc-comment rationale (level-2 per gate-2's
-sizing provisional; `CURVE_TREE_CLIENT.md` §7.2.2).
+it to the partition derivation `shekyl_fcmp::tree::leaves_per_segment()`
+(since 2026-09-18; to the width product `38 * 18 * 38` directly before
+that) so a width change cannot silently strand it, and doc-comment
+rationale (level 2 — gate-2's provisional sizing, pinned by this round;
+the reversion criteria are the clause below, and `CURVE_TREE_CLIENT.md`
+§7.2.2 / status item 8 record the closure).
 
 **Reversion clause (rule 21).** Rejected: making `E` a per-row-only
 value with no global constant ("flexibility" for future re-sizing).
@@ -448,6 +480,12 @@ a materialized chunk store *with* a designed writer); or profiling
 showing the 38-leaf gather is a verify-path bottleneck (it is one
 LMDB range read of ~4.9 KB — not credible, named only to be
 dismissable with evidence).
+
+**UPDATE 2026-09-12:** that design round is now
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+(`PDM-Q`). The criteria are unchanged; they are that round's to
+discharge or refine. Implementation of whatever it rules waits on
+the daemon C++→Rust cutover (`DRS-E*`, `PDM-Q-S0`).
 
 ### 6.3 Explicitly out of scope
 

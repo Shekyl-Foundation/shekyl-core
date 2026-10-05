@@ -8,7 +8,9 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use shekyl_curve_tree::{select_reference_height, BlockHeight, ReferenceBlock};
+use shekyl_curve_tree::{
+    select_reference_height, BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock,
+};
 use shekyl_engine_state::LedgerBlock;
 
 use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
@@ -63,11 +65,11 @@ where
             .with_wallet_ledger(submit_watchdog::held_submits)
     }
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         self.ledger.with_ledger_block(LedgerBlock::height)
     }
 
-    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -120,18 +122,16 @@ where
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
         // Refusals that need no network and no permit run first: an
-        // empty recipient list is a malformed request, and a tripped
+        // empty recipient list or an unechoable rid is a malformed
+        // request (`TxRequest::check_recipients`), and a tripped
         // F28/F37 loop breaker exists precisely to refuse *fast*
         // (§2.5 — the alarm was raised at trip time and only operator
         // acknowledgment re-enables building). Queueing either behind a
         // concurrent build's `AssembleTx` round-trip would make the
         // breaker cost a full build's latency per refused attempt, and
         // would make the sync `Engine::build_pending_tx` wrapper report
-        // permit contention (`CannotSign`) instead of the real error.
-        if request.recipients.is_empty() {
-            let err = SendError::InvalidRecipient {
-                reason: "TxRequest must carry at least one recipient",
-            };
+        // permit contention (`BuildInvariant`) instead of the real error.
+        if let Err(err) = request.check_recipients() {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -145,7 +145,7 @@ where
             let tripped = self
                 .state
                 .lock()
-                .map_err(|_| SendError::CannotSign {
+                .map_err(|_| SendError::BuildInvariant {
                     reason: "pending-tx state lock poisoned",
                 })?
                 .loop_breaker
@@ -199,9 +199,7 @@ where
                         map_curve_tree_handle_error_for_send(&err),
                     )
                 })?;
-                TreeSpendGate::Enforced {
-                    covered_through: covered_through.map(|bh| bh.0),
-                }
+                TreeSpendGate::Enforced { covered_through }
             }
         };
         // CT-5b §3.2 / CT-5c: bind the reference block the proof anchors to and
@@ -226,10 +224,8 @@ where
                             TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
                         ) =>
                     {
-                        let (curve_tree_root, depth) = handle
-                            .reference_root_and_depth(BlockHeight(rh))
-                            .await
-                            .map_err(|err| {
+                        let (curve_tree_root, depth) =
+                            handle.reference_root_and_depth(rh).await.map_err(|err| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
                                     map_curve_tree_handle_error_for_send(&err),
@@ -241,16 +237,16 @@ where
                             .ok_or_else(|| {
                                 fail_build_after_attempted(
                                     self.sink.as_ref(),
-                                    SendError::CannotSign {
+                                    SendError::BuildInvariant {
                                         reason: "reference-height block hash missing from ledger",
                                     },
                                 )
                             })?;
                         (
                             Some(ReferenceBlock {
-                                height: BlockHeight(rh),
-                                curve_tree_root,
-                                block_hash,
+                                height: rh,
+                                curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+                                block_hash: BlockHash::from_bytes(block_hash),
                             }),
                             depth,
                         )
@@ -278,7 +274,7 @@ where
         let handle = self.curve_tree.as_ref().ok_or_else(|| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "curve tree required to assemble a membership proof",
                 },
             )
@@ -286,7 +282,7 @@ where
         let reference = reference.ok_or_else(|| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "no reference block resolved for membership assembly",
                 },
             )
@@ -310,7 +306,7 @@ where
         if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
-                SendError::CannotSign {
+                SendError::BuildInvariant {
                     reason: "assembled tree depth diverged from the fee estimate",
                 },
             ));
@@ -385,7 +381,7 @@ where
             ConsumerHeldEntry {
                 created_at: Instant::now(),
                 snapshot_id: SnapshotId([0u8; 16]),
-                built_at_height: 0,
+                built_at_height: shekyl_types::BlockHeight::ZERO,
                 built_at_tip_hash: [0u8; 32],
                 tx_bytes: Vec::new(),
                 request: TxRequest {
@@ -393,9 +389,9 @@ where
                     priority: super::super::pending::FeePriority::Standard,
                 },
                 reference: ReferenceBlock {
-                    height: BlockHeight(0),
-                    curve_tree_root: [0u8; 32],
-                    block_hash: [0u8; 32],
+                    height: BlockHeight::from_raw(0),
+                    curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+                    block_hash: BlockHash::NULL,
                 },
                 content_gen: 0,
                 fingerprint: ContentFingerprint::from_build(

@@ -10,14 +10,27 @@
 //! `shekyl-ffi`) so that `libshekyl_ffi.a` does not pull in daemon-specific
 //! symbols that reference `core_rpc_ffi_*`.
 
+use std::num::NonZeroUsize;
 use std::os::raw::c_char;
+
+use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
+
+/// Structural floor, the same pair the transport runtime is built with.
+/// Tokio's unset worker count and its 512 blocking cap are the defaults
+/// D5 refuses. These are not a measured budget; the D5 pin replaces them.
+fn daemon_rpc_budget() -> RuntimeBudget {
+    RuntimeBudget {
+        workers: NonZeroUsize::new(2).expect("workers"),
+        blocking: NonZeroUsize::new(1).expect("blocking"),
+    }
+}
 
 /// Opaque handle returned to C++ for a running daemon RPC server.
 #[repr(C)]
 pub struct ShekylDaemonRpcHandle {
     /// Level-triggered stop signal for every acceptor on this handle.
     shutdown: *const tokio::sync::watch::Sender<bool>,
-    rt: *const tokio::runtime::Runtime,
+    rt: *const Pool,
     /// The serve task's join handle. `shekyl_daemon_rpc_stop` blocks on it so
     /// the graceful-shutdown drain of in-flight handlers (which hold live
     /// references into the C++ core) completes before the runtime — and, on
@@ -159,11 +172,11 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         }
     };
 
-    let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("daemon-rpc")
-        .build()
-    else {
+    let Ok(name) = ThreadName::new("daemon-rpc") else {
+        tracing::error!("daemon-rpc: thread name refused");
+        return std::ptr::null_mut();
+    };
+    let Ok(rt) = runtime(daemon_rpc_budget(), &name) else {
         tracing::error!("daemon-rpc: failed to build the tokio runtime");
         return std::ptr::null_mut();
     };
@@ -404,12 +417,10 @@ pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_check(
 #[allow(clippy::cast_possible_truncation)]
 fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
     crate::ffi::FeeEstimateFactsFfi {
-        fees: [
-            submit_facts_field_value(seed, 0),
-            submit_facts_field_value(seed, 1),
-            submit_facts_field_value(seed, 2),
-            submit_facts_field_value(seed, 3),
-        ],
+        // Field indices 4 and 5 below are not fee-slot indexes: they seed a
+        // distinct value per POD field. Re-indexing them would move every
+        // expected value in the harness for no gain.
+        fees: std::array::from_fn(|i| submit_facts_field_value(seed, i as u64)),
         quantization_mask: submit_facts_field_value(seed, 4),
         fee_count: submit_facts_field_value(seed, 5) as u8,
         reserved: [0; 7],

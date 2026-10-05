@@ -281,8 +281,9 @@ measures the wrong thing — this is evidence validity.
   sim/production formula parity), and the `:1663` stale-comment fix. Numerically
   inert at genesis (`stake_ratio = 0 ⇒ ×1`).
 - **Stage 2 — the sim arm (needs Stage 1).** `shekyl-economics-sim` budget arm:
-  sweep shard-count trajectories against both decay curves (emission `>>21`,
-  staker share `×0.9/yr`) and answer whether a 25%-floor + shard-indexed lift
+  sweep shard-count trajectories against both decay curves (emission `>>22`
+  per block — written as `>>21`, the per-minute convention, corrected
+  2026-10-04 — staker share `×0.9/yr`) and answer whether a 25%-floor + shard-indexed lift
   clears the archival burden in the fee era, or whether burn runs out first.
   **Extend scope to the distributional shift (W6):** the D1 fix moves ex-zero
   archivers into `Σwork`, shrinking scarce-holders' shares of a fixed budget —
@@ -345,6 +346,9 @@ argument for it over a participation-derived signal:
 
 > **⚠️ Amended by §12.10 (A6, Stage 2) — "cannot be moved in a burst" is measured,
 > and it is not quite true. Three layers, separated by what excludes each:**
+> *(The slew figures below are the leaf-era measurement. Byte-keyed (§12.13,
+> 2026-10-01) the same ceiling moves the share **0.05 / 0.10 pts/epoch**; the
+> structure of the argument is unchanged.)*
 >
 > 1. **Reversal and oscillation: structurally excluded — unchanged, and this is
 >    the property that actually matters here.** This section's scope is *swings*:
@@ -1071,12 +1075,12 @@ models (each cell links its section).
 
 | Arm | Verdict | Result |
 | --- | --- | --- |
-| **A1** clearance | ✅ **clears** | Escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. A non-event while emission dominates. |
+| **A1** clearance | ~~✅ **clears**~~ → 🔴 **scenario 9 uncleared, byte-keyed (§12.13, 2026-10-01)** | *Leaf-era (J-segment) measurement, records-was:* escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. **Re-measured in the operand the validator consumes (closed byte shards): flat 0.06×, best 0.21× at 2 %, 0.04× at 10 % — no candidate in the band clears; the bond term is ~40× per unit of traffic. §12.13.** |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). |
-| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts. Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
+| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). *Leaf-era figures; byte-keyed re-measurement (8-in / 1-out shape, `fee×→1` 0.8→2.0) in §12.13.* |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB (12.3 GB byte-keyed, §12.13) by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts (leaf-era; byte-keyed **0.0036** / slew **0.05–0.10 pts/epoch**, §12.13). Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -1252,7 +1256,7 @@ stay bonded**, post-slash holding *"still bonded on remaining shards"*
 (`FOUNDATION_GENESIS_IDENTITY_SET.md` §3.2, per-shard bonds). Only the
 foundation's **`CompleteTree`** kind takes the *whole* bond ("floor-or-whole").
 The record-level bad interval `[E_slash, ∞)` is the **serve-credit** consequence
-(it blocks `good_through` until `Rebond`) — **not** the collateral scope; the two
+(it blocks `good_through` until `Reinstate`) — **not** the collateral scope; the two
 are separate. **This correction is aggregate-neutral for the margin**, and the
 reason is scope-matching: the margin weighs a *full holding* proxied vs held, and
 each of the `MAX_HOLDINGS_SHARDS` shards is challenged and slashed
@@ -2148,3 +2152,355 @@ bit-identical to the flat constant at every `n`, pinned by
 provisional-until-testnet under the §11.4 ceremony (adversary-advantage
 argument committed *before* the number; PoRep branch ⇒ A1 re-runs with sealing
 costs first). Nothing in 3a/3b weakens or advances that gate.
+
+### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01
+
+**Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md))
+re-keyed the D2 operand: `n` is the count of archival shards **closed** by
+cumulative archival length — `|pqc_auths| + |prunable|` per transaction,
+`W = 3,000,000 B` (PROVISIONAL) per shard, `shekyl_types::shard_of` — read by
+the Rust validator as `shekyl_chain_rules::closed_shards_before` (CEN-F17). The
+sweep that produced every §12.4.1 verdict ran in the **retired** unit: J-segments
+of 25,992 leaves, `SHARD_BYTES = 3.33e6` restated in the sim. Per `SCC-Q2`
+([`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](ARCHIVAL_SHARD_COUNT_CUTOVER.md) §G) the knee
+is **re-derived in the new unit by the sweep, not converted**, and per rule 05 the
+sim now calls the production partition and predictors — `shard_of`,
+`SHARD_LENGTH`, `shekyl_tx_weight::predict_weight` / `predict_archival_len` — and
+never divides by `W` itself. The leaf-era rows above are **records-was**; this
+section is what the same arms measure in the operand the validator consumes.
+
+**The unit change is a ~40× burden change.** A J-segment counted one 128-B leaf
+per output (two per normal transaction); a byte shard counts ~10–12.6 KB of
+archival per transaction. The same traffic closes ~43× as many byte shards as it
+froze segments, and the §6.2 coupled bond (`0.75 SKL` per shard) scales with it.
+Nothing in the escalation changed; what the bond term *costs* per unit of traffic
+did.
+
+**Trajectories (closed shards at horizon).** baseline 10 y **523,841**
+(1,572 GB); boom/bust 877,228; sustained-growth 20 y **10,279,293** (30.8 TB);
+late-chain tail 1,236,719; high-history / low-activity 60 y 4,886,932.
+
+**`KNEE_BAND` re-derived: `[500_000, 2_250_000, 10_000_000]` closed shards** —
+baseline `n` at ~10 y, sustained-growth's final `n`, their geometric mean
+(≈ 2.32 M). The sim pinned the band to those anchors
+(`stage2::knee_band_brackets_the_sweep_trajectories`) until ESR-6
+(2026-10-03), when the production fill rule moved the baseline's `n` at 10 y
+to 229,864 and the test did its job; the anchors are now definitions
+evaluated on the current fold
+(`stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`,
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.7). On the design's emission curve (2026-10-04) the band's high is
+2,079,614 and the shipped knee is above it; it is held there, not
+re-pinned, while the escalation is flat (`docs/FOLLOWUPS.md`). The config now carries
+the middle, `shekyl_escalation_knee_n = 2250000`, provisional and
+behaviour-neutral while flat; the consensus-constants digest re-pinned
+(`885f700d… → 05a1ba28…`). The ceremony still picks the knee with the asymptote.
+
+**Arm results in the byte unit** (each row is the current measurement; the
+§12.4.1 row it supersedes is marked there):
+
+| Arm | Byte-keyed result (2026-10-01) | Change from the leaf-era row |
+| --- | --- | --- |
+| **A1** clearance | 🔴 **high-history / low-activity is cleared by NO candidate in the band**: flat-25 **0.06×**, best (90 % / 2.25 M) **0.21×** at 2 %/yr, **0.04×** at the binding 10 %. Read as replicas rather than a ratio (both burden terms are linear in `R`, so `R_sustained = 6 · ratio` exactly): at 10 % the budget carries **0.07** of a replica flat, **0.26** best — a quarter of one copy where the model wants six; even at 2 % the best candidate sustains 1.3 copies. Every other scenario clears at every rate **within its own horizon** (sustained-growth best 7.45×, late tail 8.50× at 10 %); run to 60 y, every constant-traffic world fails at 10 % by year 28 (§12.14). **Within the shipped horizons there is no scenario where best clears and flat does not** — see *The finding* below. | Was ✅ "scenario 9 flat 0.66× / best 2.36×". Fails on the bond term alone — ~40× the leaf-era bond per unit of traffic. **For the design owner:** the §6.0 band (asymptote ≤ 90 %) cannot clear the quadrant §11.2 added for exactly this purpose; the lever that would is the bond floor, `W`, or the tail floor named below — not the share curve. |
+| **A4** stuffing (W9) | Shape **searched, not asserted**: the max-archival-per-fee shape is **8-in / 1-out** at every depth (inputs carry the PQC auth + FCMP share the operand counts; outputs carry unprunable prefix it does not) — the reverse of the leaf era's 1-in / 16-out, which inflated an output count the operand no longer measures. Cost per shard **0.93 SKL** one-shot, **1.00–1.03 SKL** output-conserving sustained; Monero-anchor ≈ 1,026 shards' worth. Realistic-end ROI 0.81–1.90× (`fee×→1` spread **0.8→2.0×**, was 2.8→17.8×); `prem ≈ 1.0` unchanged. (Re-measured 2026-10-02 with the campaign's transaction count rounded once rather than per shard — the per-shard ceiling had overstated attacker fees by < 1 %; and with each transaction priced at the tree depth it is built against, integrated across any layer boundary the campaign's own outputs cross (`calibration::stuffer_campaign`) — the sweep's printed figures did not move: at the binding rows a crossing either does not occur or moves the fee below print precision. The shape search for the **physical** ceiling is separate, see A6.) | §12.11's no-exclusivity closure is an accounting argument independent of the unit and **stands**; the profit figures here are the historical gate re-measured, not a reopening. |
+| **A5** proxy (W10) | Unchanged in substance — the opening artifact and the test≡job payload are payload questions, not operand ones. Holding = `4096 · W` ≈ **12.3 GB** (was 13.6). | Numeric only. |
+| **A6** swing | Flood ceiling ≈ 3,800 shards/epoch at the surge limit (the ceiling is the **max-bytes-per-block shape search** over every builder-legal shape, not the fee-optimal 8-in / 1-out — whole transactions in a finite block, and 6-in / 1-out packs ≈ 3 % more; corrected 2026-10-02 from 3,719); worst adversarial slew **0.05 pts/epoch** penalty-free, **0.10** at the legal 2× limit, reorg down-swing **0.0036 pts**. | Was 1.41 / 2.82 / 0.1014. The drop is the knee moving from 10⁵ segments to 2.25 × 10⁶ shards while an epoch's flood still closes only a few thousand units: a steepest-candidate ramp 22× longer in its own unit. §12.11.1's structural closure stands. |
+
+**The finding (2026-10-01): in the byte unit the escalation does no
+discriminating work across the Stage-2 set.** Every scenario either clears
+flat or clears for no candidate. The nearest clearing scenario (sustained
+growth: flat **2.16×** at 10 %) and the failing one (**0.01×**) sit two orders
+of magnitude apart, and no trajectory lands between them — the knee band was
+swept against trajectories that never enter the region where flat fails and
+best clears, so the sweep cannot say whether that region exists, let alone
+where the knee should sit inside it. The A1 report prints this verdict
+(`NO DISCRIMINATING SCENARIO AT THIS HORIZON`) whenever the D2 case is empty.
+**MEASURED 2026-10-01, §12.14: this finding is a statement about the
+scenarios' horizons, not about the lever.** The "next row" that was to solve
+for the region ran the same nine scenarios to 60 years instead of sweeping a
+new axis, and the region opens on its own once the staker emission leg has
+decayed under the bond burden: at 2 %/yr flat-25 fails baseline at year 37 and
+the best candidate never does; at the binding 10 % no candidate clears any
+constant-traffic world past year 28. The lever is not dead; it is a four-to-ten
+year delay at 10 % and the difference between failing and clearing at 2–5 %.
+The region's shape, the onset years, and what each other lever buys are in
+§12.14.
+
+**Why scenario 9 fails, structurally.** It is not the escalation and it is not
+the traffic alone. The staker emission share decays by `0.9` per whole year
+(`shekyl_staker_emission_decay = 900000`, applied in
+`rust/shekyl-economics/src/emission_share.rs:62-87` — verified at source, not
+read from the parameter's name): `0.15 · 0.9^40 ≈ 0.0022` of emission at year
+40, and scenario 9 runs to 60 with its emission near the tail (the curve still
+mints ≈ 1.04 SKL/block at year 60 against the 2³² SKL asymptote at ESF 21; the
+0.6 SKL/block floor binds from ≈ year 64 — "exhausted" was wrong at source,
+corrected 2026-10-01. Those are the per-minute convention's 21; at the
+design's 22 per block, corrected 2026-10-04, the curve mints ≈ 23.9 SKL/block
+at year 60 and the floor binds from ≈ year 119. The decay's conclusion holds
+— `0.15 · 0.9^60` of either is negligible — but this section's run figures are
+the ESF-21 curve's until re-run on the design's, `EUP-4`).
+**Stakers are decayed out of the perpetual tail by design**, so a settled chain's archival budget is the fee leg alone, and
+15 tx/block of fees cannot carry a bond on 4.9 M shards at any share ≤ 90 %.
+~~The only lever that matches the failure is a staker floor on the tail~~ —
+**REFUTED 2026-10-01 (design owner, §12.14 *Ruling*): the tail is a constant
+flow and the bond burden is a stock that grows with the corpus, so a tail floor
+has the fee share's shape with a longer fuse; no flow funds a fixed-per-shard
+bond held forever on a corpus that grows forever. The operand to question is
+the bond, not the funding leg.** A1's 🔴 remains the model telling the truth
+about the parameters as frozen; what it is the truth *about* is in §12.14.
+
+**The binding rate, justified for this scenario.** The 10 %/yr opportunity
+cost on bonded SKL is exogenous to the model (`burden::OPP_COST_RATE_BAND`,
+F-G). It is the right binding member for busy scenarios, where a staker has
+alternatives for the capital. It is the *least grounded* in exactly scenario 9
+— decades of bonded SKL in a settled chain whose own activity is 15 tx/block —
+where the assumption that 10 % is available elsewhere is doing a great deal of
+work. The band is kept and all three columns are printed; the choice of binding
+member for the ceremony is the owner's, and the A1 footer says so. Note that
+the finding above does not depend on it: scenario 9 fails for every candidate
+at **2 %** as well.
+
+**The knee is an archival length in disguise.** `KNEE_BAND[1] · W` is the
+quantity the ceremony is actually choosing — **6.75 TB** of archival
+(`escalation::KNEE_ARCHIVAL_LEN_BYTES`, printed in the A1 header) — and the
+shard count is that divided by the provisional `W`. A `W` re-pin that leaves
+`shekyl_escalation_knee_n` at 2,250,000 silently moves the knee's physical
+meaning; `escalation::knee_is_an_archival_length_pinned_against_a_w_repin`
+fails when `knee · W` moves, and
+`stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat` prints
+the band its definitions give on the current fold and where the shipped knee
+stands against it on every run, and fails when the knee is outside the band
+and the asymptote is no longer the floor — the one state in which the knee
+moves consensus. Re-deriving the knee is GF-7's, after ESR-10
+(`docs/FOLLOWUPS.md`).
+
+**Depth direction, corrected.** The leaf-era text said stuffing is "cheapest
+early" and the flood "harder to move over time". Byte-keyed, the FCMP proof that
+grows with depth is archival good the stuffer is *buying*, so depth moves only the
+archival/weight ratio: one-shot cost per shard **+1.3 %** and sustained **−2.6 %**
+from depth 1 to 6; the flood ceiling **−4 %**. Noise, not a lever; the sim's tests
+pin a bound, not a direction.
+
+**Unit discrepancy, disclosed for the escalation owner (`SCC-Q1`).** `SCC-Q1`'s
+answer names the burden count as *"transactions below the discard frontier"*, and
+`SCC-Q2` says the band is swept in that unit. What the validator **consumes** is
+closed shards at parent state (`closed_shards_before`; `economics_params.json`'s
+own comment since 2026-09-30), and that is the unit this sweep ran in — the sim
+measures the operand the chain reads. The two differ by the retention window (a
+closed shard is below the frontier only after its bodies leave ordinary daemons)
+and by unit (shards of bytes vs transactions). Either `SCC-Q1`'s answer is
+superseded by the landed operand, or `closed_shards_before` owes a frontier lag;
+that is a ruling, not a sim finding, and the knee's re-derivation holds under
+either reading because the band was swept, not selected. **Recommended
+reading (2026-10-01, from the #929 review): supersede `SCC-Q1`'s answer.** The
+burden the escalation compensates is, under F-G, **locked capital**, and
+capital locks at close + freeze — the moment the shard's bond is posted —
+which is *before* discard, not after. A frontier lag would count the burden
+from the moment bodies leave ordinary daemons; `closed_shards_before` counts
+it from the moment it is borne, which is the right moment. The operand stays
+a pure fold with no frontier term. **RULED 2026-10-01 (design owner): superseded
+on the locked-capital reason; the operand stays a pure fold.** The `SCC` §G row
+carries the ruling of record.
+
+**Assumption carried.** The sustained stuffer model prices the cheapest
+output-conserving producer/consumer cycle (a campaign that must mint its own
+inputs). Whether an adversary with a large pre-existing output set is the right
+worst case for the ceremony is the owner's call; the one-shot (binding) figure
+does not depend on it.
+
+### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01
+
+**Why.** A1's verdict is a **minimum** over sustained years, and a minimum
+hides *when* a failure arrives. The #929 review modelled §12.13's equations by
+hand and read three eras off them — emission carries everything early; the
+staker emission leg (half-life ≈ 2.9 y under the `0.9`/yr decay) crosses the
+linearly growing bond burden mid-life; and in the fee era, for constant traffic,
+fees `∝ V` and the corpus `∝ V·t`, so a fee *flow* can fund only the most
+recent `H` traffic-years of a bond *stock* — with `V` cancelling outright for a
+share of **all** fees, and only up to the `√V` of `burn_pct` for a share of the
+**burn** (measured below, (iv)). It predicted
+the gap opens around years 18–25 in *every* constant-traffic world, while the
+chain is still minting 5–10 SKL/block. The sim now measures that instead of
+taking it from the hand model: two arms in `rust/shekyl-economics-sim/src/onset.rs`,
+**A1-T** (onset) and **A1-L** (levers), fold the one per-year clearance function
+A1's minimum folds (`stage2::a1_year_clearance_ratio`; `onset::shipped_lever_reproduces_a1`
+pins that the shipped lever *is* A1's budget, atomic-for-atomic).
+
+**A1-T: every Stage-2 scenario run to 60 years.** The schedule past each
+scenario's own horizon is its own closure (constant, cyclic, or growing).
+`xover` is the first year the staker **emission leg alone** falls below the bond
+opportunity cost at 10 %; `onset` is the first sustained year the shipped budget
+(burn × share, flat-25 or the best band candidate) fails to clear; `*` marks a
+cyclic schedule that clears again later.
+
+| Scenario | `n` at 60 y | xover | flat @2 % | best @2 % | flat @5 % | best @5 % | flat @10 % | best @10 % | flat-25 ratio @10 % at y10 / 20 / 30 / 40 / 50 / 60 |
+| --- | ---: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
+| baseline steady state | 3.28 M | y23 | y37 | never | y28 | y48 | **y24** | y28 | 38.7 · 2.17 · 0.34 · 0.17 · 0.13 · 0.11 |
+| boom / bust cycle | 5.44 M | y20 | y26\* | y28\* | y22\* | y24\* | y20\* | y20\* | 17.0 · 0.81 · 0.07 · 0.02 · 0.01 · 0.01 |
+| sustained growth (shape only) | 1.56 × 10¹⁰ | y16 | y39 | y40 | y39 | y39 | y39 | y39 | 16.1 · 2.16 · 2.04 · 0.00 · 0.00 · 0.00 |
+| stuffing attack | 3.30 M | y23 | y37 | never | y28 | y48 | y24 | y28 | 37.4 · 2.13 · 0.34 · 0.17 · 0.13 · 0.11 |
+| stake concentration | 3.28 M | y23 | y37 | never | y28 | y48 | y24 | y28 | as baseline |
+| mass unstaking | 3.28 M | y23 | y37 | never | y28 | y48 | y24 | y28 | as baseline |
+| chain bootstrap | 4.71 M | y21 | y43 | never | y27 | never | y22 | y33 | 41.3 · 1.58 · 0.34 · 0.22 · 0.17 · 0.14 |
+| late-chain tail | 14.6 M | y3 | y59 | never | y24 | never | y12 | y43 | 1.19 · 0.59 · 0.39 · 0.30 · 0.24 · 0.20 |
+| high-history / low-activity | 4.89 M | y16 | y21 | y21 | y21 | y21 | **y18** | y21 | 9.84 · 0.60 · 0.03 · 0.02 · 0.01 · 0.01 |
+
+Sustained growth's `1.2^year` to 60 y is unphysical (block weight caps it; 15.6
+billion shards is 47 PB) and is read for shape only — including its collapse to
+`0.00` from y40: by ≈ y38 the cumulative fee burn has destroyed the circulating
+supply (the burn is a fraction of fees that grow `1.2^year`; the supply is
+bounded by the `2³²` SKL asymptote), so `calc_burn_pct`'s supply ratio → 0,
+`burn_pct → 0`, and the fee leg vanishes while fees keep growing. That is the
+model behaving honestly on an impossible input, not arithmetic failing — the
+sim's year aggregates are `u128` so that a year of those fees (past `u64::MAX`
+from ≈ y52) is carried, never clipped
+(`onset::growth_schedule_year_fees_exceed_u64_so_the_aggregate_is_u128`). The
+late-chain tail starts with most of the supply already emitted, hence its early
+crossover.
+
+**Reading.** The hand model holds. (i) **The three eras are real and dated:**
+the emission leg alone stops covering the bond at **y20–23** in every
+constant-traffic world, and the shipped budget fails at **y18–24** at the
+binding rate — baseline at y24, scenario 9 at y18 — while the chain is still
+minting. The 20-year horizons §12.13 ran to end four years before the
+baseline's onset, which is why §12.13 saw eight clearing scenarios and one
+failing one with nothing between: the gap was not in the trajectories, it was
+past the horizon. (ii) **The escalation is not a dead lever;** it is a
+*delay* at 10 % (baseline y24 → y28, bootstrap y22 → y33, late tail y12 → y43),
+twenty years at 5 % on the baseline (y28 → y48; bootstrap and the late tail go
+from failing to clearing-to-60), and the difference between failing and
+clearing-to-60 at 2 % (flat y37, best never, for every steady scenario). The
+discriminating region §12.13 scheduled a sweep for is simply the low-rate,
+post-crossover quadrant of the existing scenarios; it did not need a tenth
+axis. (iii) **At 10 % nothing in the band clears any constant-traffic world
+past y28**, and (iv) **in the fee era the failure is a horizon `H` in
+traffic-years**, printed in closed form from the production constants
+(`fee 0.1 SKL`, `W = 3 MB`, bond `0.75 SKL × R6`, 12,627 archival B/tx deep,
+and the burn fraction read from `calc_burn_pct` with the supply emitted — not
+restated):
+
+`H = fee · base · share · W / (bond · R · rate · bytes_per_tx)`
+
+`V` cancels between fees and corpus **only through the factors written there**.
+For a share of **all** fees (`base = 1`) `H` is therefore traffic-independent.
+For a share of the **burn**, `base = burn_pct`, which rises as `√V` until
+`burn_cap` binds — at `V = 162 tx/block`, found by asking `calc_burn_pct`
+upward from the baseline, not by inverting it — so a burn lever's `H` rises
+with traffic up to the cap (`burn_cap / burn_base = 0.9 / 0.5 = 1.8×` the
+baseline figure) and is flat above it:
+
+| Fee leg | `V` (tx/block) | `burn_pct` | `H` @2 % | @5 % | @10 % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| burn × flat 25 % | 15 (scen. 9 tail) | 0.27 | 18 y | 7 y | 4 y |
+| burn × flat 25 % | 50 (baseline) | 0.50 | 33 y | 13 y | **7 y** |
+| burn × flat 25 % | 162 (at `burn_cap`) | 0.90 | 59 y | 24 y | 12 y |
+| burn × 100 % | 15 | 0.27 | 72 y | 29 y | 14 y |
+| burn × 100 % | 50 | 0.50 | 132 y | 53 y | 26 y |
+| burn × 100 % | 162 | 0.90 | 238 y | 95 y | 48 y |
+| **all** fees × 100 % | any | — | 264 y | 106 y | 53 y |
+
+Corpus older than `H` is unfunded by fees, and past the cap no amount of
+traffic moves `H`; a busier chain crosses the same line later only because its
+corpus is younger (`onset::fee_horizon_closed_form_matches_the_fold_on_the_baseline`
+checks the closed form against the fold at y60 on the baseline;
+`onset::burn_horizon_rises_with_sqrt_traffic_until_the_cap` pins the `√V`
+rise, the cap, and the all-fees invariance). This is the `√V` damper's second
+job made visible: the damper is monetary gentleness for the burn and, as a
+side effect, scales the archival pool as `V^1.5` (not `V`) against a burden
+`∝ V·t` below the cap, and as `V` above it — the traffic-independence the
+hand model stated holds exactly for all-fees levers and only at the cap for
+burn levers.
+
+**A1-L: the levers, priced.** Min ratio over sustained years to 60 y at the
+three rates, `R` sustained at 10 %, and the onset year at 10 %, for the two
+scenarios that bracket the question — the settled chain (scenario 9) and the
+busy steady chain (baseline). Every row is a budget formed with production's
+integer ops (`mul_scale`'s floor on the `u128` year aggregate —
+`stage2::year_share_atomic`, pinned equal to `mul_scale` across the `u64`
+range — and `calc_effective_emission_share` for the decay rows) and folded
+through the same clearance function; **priced, not proposed** —
+every one of them is a genesis-frozen or ceremony-gated number.
+
+| Lever | scen. 9 @2 % | @5 % | @10 % | R @10 % | onset | baseline @2 % | @5 % | @10 % | R @10 % | onset |
+| --- | ---: | ---: | ---: | ---: | :-: | ---: | ---: | ---: | ---: | :-: |
+| shipped: burn × flat 25 % | 0.06 | 0.02 | 0.01 | 0.07 | y18 | 0.54 | 0.22 | 0.11 | 0.66 | y24 |
+| burn × best band cand. (90 % / 2.25 M) | 0.21 | 0.09 | 0.04 | 0.26 | y21 | 1.95 | 0.79 | 0.40 | 2.38 | y28 |
+| burn × 100 % | 0.24 | 0.10 | 0.05 | 0.29 | y21 | 2.17 | 0.88 | 0.44 | 2.64 | y30 |
+| all fees × 25 % | 0.22 | 0.09 | 0.04 | 0.27 | y18 | 1.09 | 0.44 | 0.22 | 1.33 | y26 |
+| all fees × 100 % (the PoW budget) | 0.88 | 0.36 | 0.18 | 1.07 | y21 | 4.36 | 1.76 | 0.89 | 5.32 | y54 |
+| flat + non-decaying tail floor 15 % | 0.16 | 0.07 | 0.03 | 0.20 | y24 | 0.70 | 0.28 | 0.14 | 0.85 | y38 |
+| flat + tail floor 50 % | 0.41 | 0.17 | 0.08 | 0.50 | y35 | 1.06 | 0.43 | 0.21 | 1.29 | y46 |
+| flat + the **whole** tail (100 %) | 0.76 | 0.31 | 0.16 | 0.93 | y42 | 1.57 | 0.64 | 0.32 | 1.92 | y51 |
+| flat + decay 0.95/yr | 0.06 | 0.03 | 0.01 | 0.08 | y21 | 0.55 | 0.22 | 0.11 | 0.67 | y29 |
+| flat + no decay | 0.16 | 0.07 | 0.03 | 0.20 | y24 | 0.70 | 0.28 | 0.14 | 0.85 | y38 |
+
+**What the table says.** (i) **Share-of-burn is capped at the burn.** Band top
+→ 100 % of the burn is +11 % (0.26 → 0.29 replicas on scenario 9): the lever the
+ceremony is sizing has its ceiling eleven percent above where the band already
+reaches. (ii) **Taking the share of all fees** rather than of the burn recovers
+the `√V` factor — ×2 on the baseline (`burn_pct = 0.5` there) and ×3.7 on
+scenario 9, whose 15 tx/block puts `burn_pct` at 0.27 — and 100 % of all fees
+is the only share-shaped row that holds the baseline to year 54 at 10 %.
+That row is the miner's income, i.e. the fee-era PoW security budget, and is
+listed so the owner sees the ceiling, not as a candidate: reaching into it is a
+security trade (`00-mission` priority 1) that needs its own wargame. (iii) **A
+non-decaying staker floor on the tail is not a structural answer either** (the
+owner's correction, below): the **whole** perpetual tail — 157,680 SKL/yr,
+every SKL of terminal subsidy to archival — funds the bond opportunity cost of
+**1.75 M shards at 2 %, 0.70 M at 5 %, 0.35 M at 10 %**, against scenario 9's
+4.9 M and the baseline's 3.3 M at 60 y (it pushes scenario 9's onset from y18
+to y42 and leaves it at 0.93 replicas at 10 %), and the corpus keeps growing
+(≈ 16.6 k shards/yr at 15 tx/block, +7.5 k SKL/yr of burden at 10 %) while the
+tail does not. The table's whole-tail row reads 0.76 at 2 % because at year 60
+the curve still mints ≈ 274 k SKL/yr above the tail; from ≈ year 64 the tail
+alone is the leg (the ESF-21 curve's figures, as in the note above: at 22
+per block the year-60 curve mints ≈ 6 M SKL/yr above the tail, which
+binds from ≈ year 119; re-run under `EUP-4`), and against scenario 9's year-60 burden (2.2 M SKL/yr at
+10 %, 440 k at 2 %) it clears only at 2 % and only at `R ≤ 2`. A constant flow
+against an unbounded stock: the fee share's shape with a longer fuse.
+(iv) **Re-pinning the decay** is worth little: `0.95` moves nothing visible, and
+no decay at all equals the 15 % floor (by construction — the shipped share *is*
+15 %) at 0.20 replicas. The decay constant is not where the failure is. (v) So,
+past every share and every tail, **the lever shaped like the whole burden is the
+bond itself** — `0.75 SKL` locked per 3 MB shard, times `R = 6`, forever, under
+an exogenous 10 %. Scenario 9's burden is 0.45 SKL per shard-year at 10 %; the
+figure the ceremony frozen-lists as the §6.2 bond floor is the operand every
+row above divides by.
+
+**Ruling (2026-10-01, design owner): the burden model is the thing to
+question, not the funding.** What the arithmetic says is that **no flow of any
+kind — fee share, burn share, tail floor — can fund a bond that is a fixed
+amount per shard, held forever, on a corpus that grows forever.** So the
+question is not "which flow" but **what the bond is for**:
+
+- If the bond is the **slash deterrent** — the cartel arm's inequality,
+  `free_epochs × reward` against `bond_at_risk + friction`
+  (`rust/shekyl-economics-sim/src/cartel.rs`; `ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`
+  §10.4, TJ-4) — it need only exceed what cheating on *that shard* would earn,
+  which is proportional to the shard's **current reward**. A bond proportional
+  to expected reward has an opportunity cost proportional to `reward × rate`,
+  and A1's ratio becomes `≈ 1/rate`: it clears at every age, every traffic
+  level, forever, with no escalation. **The `1/rate` result is conditional**:
+  it holds only if the bond's second job (below) does not exist or is priced
+  separately. If TJ-4's Round 2 finds the fixed floor is doing admission or
+  anti-sybil work, `1/rate` survives for the deterrent portion only, and the
+  fixed portion carries a burden of its own shape that this table has already
+  priced.
+- A fixed `0.75 SKL` per 3 MB makes sense only if the bond is doing a
+  **second job** — admission cost, anti-sybil floor — in which case that job is
+  **named and priced on its own**, not carried implicitly by the deterrent.
+
+Reframed, the retention question answers itself: a settled, low-activity
+chain is meant to retain archivers **if the bond asked of them tracks what
+serving is worth**. Under the current fixed-per-shard bond the honest answer to
+"do we expect archivers on a dead chain" is **no**, and the Foundation
+`CompleteTree` is the posture **by design** — a legitimate choice that must be
+*stated* as one. Under that statement scenario 9 is not a FAIL; it is the
+**backstop case**. This is a bond-floor design question (TJ-4 territory, sized
+against the cartel arm), not an escalation question and not a #929 item. The
+sim pass it owes is **bond sizing vs per-shard reward** — whether a working
+escalation band exists under the current bond, and under a reward-proportional
+one — scheduled in `docs/FOLLOWUPS.md` so the next pass is not spent on the
+flow question this section has closed. The 10 % binding rate is kept and all
+three columns are printed; it is least grounded precisely in the settled-chain
+row (§12.13 *The binding rate*).

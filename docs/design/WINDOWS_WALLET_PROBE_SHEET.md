@@ -542,7 +542,7 @@ reading them:
   the obvious test cannot discriminate: an RFC 5737 TEST-NET-1 host
   (`192.0.2.1`) fails the SMB connect at **~26.7 s** — *before* the 30 s bound,
   so it would never fire the timeout and a "verified" off it would be false; an
-  in-subnet ARP-hole (`10.10.12.253`) stalls to **~31.2 s** and does. Injected as
+  in-subnet ARP-hole (an unused address on the prober's own subnet) stalls to **~31.2 s** and does. Injected as
   the first `transport_hosts()` entry, the run took the `recv_timeout` arm
   (confirmed by its distinct "did not measure … reported nothing within 30s"
   message, since **30.3 s** wall against **31.2 s** stall is inside timing

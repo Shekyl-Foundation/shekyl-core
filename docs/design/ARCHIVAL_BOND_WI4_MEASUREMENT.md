@@ -778,7 +778,8 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 > observer*. The spread is therefore **live defense-in-depth only against an
 > off-chain-anchored adversary** — someone who knows the principal and saw them
 > act at time `T` — and **dead against the chain observer**, which is exactly
-> the non-certified posture. Its single execution site is `due_height` in
+> the non-certified posture. Its single execution site is `due_count`
+> (was `due_height`) in
 > `shekyl-engine-core`'s `pscan/dispatch.rs`
 > (`due = anchor_t0 + bond_post_offset_blocks`) — the claim is checkable there,
 > not prose.
@@ -903,16 +904,19 @@ bound at posture.
 - **Block-unit `dispersal > 0`:** a **coarse-tick counterfactual**, not the
   realistic operating point. The live driver's dispersal is `U[0, 60s)`
   (`DEFAULT_PSCAN_CADENCE`), well under one block; and the emitted
-  `BondPostDispatched { at }` records the **due-check tip block, captured
-  before the dispersal sleep** (`pscan/dispatch.rs`), so the dispersal is
-  invisible at block granularity. The realistic block-time gate therefore
-  sits at `dispersal = 0`.
+  `BondPostDispatched { at }` records the **due-check claimed count, captured
+  before the dispersal sleep** (`pscan/dispatch.rs`; 2026-07 named this the
+  "due-check tip block"; the quantity was always COUNT — on a three-block
+  chain `at` is 3, not ordinal tip 2), so the dispersal is invisible at
+  block granularity. The realistic block-time gate therefore sits at
+  `dispersal = 0`.
 
 ### 13.3 Reconvergence leg (b): the wall-clock channel is the primary open uncertainty
 
 The block-time sealing re-run is **confirmatory by construction**: because
-the live `BondPostDispatched.at` is the due block (dispersal is sub-block,
-never enters `at`), the live block-time timeline reproduces the sim's
+the live `BondPostDispatched.at` is the due-check count (dispersal is
+sub-block, never enters `at`; 2026-07 named this the "due block"), the
+live block-time timeline reproduces the sim's
 `dispersal = 0` surface — already evidenced by the engine emission test
 `gf7_emits_bond_post_dispatched_per_submit` (`pscan/dispatch.rs`, feature
 `gf7-hooks`).
@@ -3412,7 +3416,7 @@ enumeration is extended to name these as heterogeneity axes. Rides the
 ### 18.4 Linkability accumulates over a persona's lifetime — the gate grades per-instant
 
 Every WI-4 number is per-post; an adversary correlates over a persona's
-**entire observable history** (each bond, rebond, serve-credit response,
+**entire observable history** (each bond, reinstate, serve-credit response,
 reward emission, drain is an observation), so cumulative exposure is
 `1 − (1 − p)^events`, growing monotonically with lifetime. A per-post
 `p ≈ 0.19` is not the exposure of a persona observed across dozens of
@@ -4633,13 +4637,13 @@ On-chain / P2P-visible events for one archival persona `P`
 | Serve-credit response | `txin_archival_serve_credit_response`, one per `(shard, epoch)` | yes | **beacon window** |
 | Reward emission | `txin_archival_reward_emission` — self-service mint, not coinbase | yes (cleartext amount) | **wallet** (claim choice, ≤15-epoch batch, `W = 26`) |
 | Slash | **no tx** (consensus-internal mutation) | yes (public event) | consensus |
-| Rebond | bond post; credit zero legal-and-common; self-funded from `P`'s reward lineage (Gate-6 Decision 4) | yes | wallet |
+| Reinstate | bond post; credit zero legal-and-common; self-funded from `P`'s reward lineage (Gate-6 Decision 4) | yes | wallet |
 | Release | bond post; event names `P`; **no identifiable refund output** | yes | wallet (cooldown-gated) |
 | Drain (`P`→principal) | ordinary FCMP++ spend | **no** (F-W10) | wallet |
 
 Wallet-clock-timed, `P`-attributed transactions per persona lifetime:
 `2 + E + H (+ R)` — JoinMarket, Release, `E` emission claims
-(`⌈L/15⌉ ≤ E ≤ L`), `H ≥ 0` holdings changes, `R` rebonds. Minimum
+(`⌈L/15⌉ ≤ E ≤ L`), `H ≥ 0` holdings changes, `R` reinstates. Minimum
 realistic lifetime: **3**.
 
 #### 19.10.2 The foreclosure

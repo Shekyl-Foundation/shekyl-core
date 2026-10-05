@@ -41,6 +41,7 @@
 //!   confidential-staking sweep.)
 
 use serde::{Deserialize, Serialize};
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use crate::{error::WalletLedgerError, transfer::TransferDetails};
@@ -75,11 +76,20 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   spend-quadruple leg (F-9): the confirmed spending txid recorded so
 ///   `tx_meta.tx_keys` retention stays I-2-live for no-change outbound
 ///   transactions.
-/// - Version `10` (this version) removes
+/// - Version `10` removes
 ///   `TransferDetails::awaiting_confirmation` (PR-SJ-1b,
 ///   `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a journal-derived
 ///   fact (`SendJournalBlock::spend_locks`), no longer persisted on the
 ///   scan-derived row.
+/// - Version `11` adds `TransferDetails::unspendable` — the
+///   scan-time received-but-unspendable classification (`PL-D3`,
+///   `FCMP_SPEND_LINKABILITY.md` §6.2): the output's published `0x07`
+///   entry did not open to the wallet's own derivation.
+/// - Version `12` (this version) retypes [`BlockchainTip::synced_height`]
+///   and [`ReorgBlocks`] heights from bare `u64` to [`BlockHeight`]
+///   (height-semantics Phase 2e, C2; postcard bytes of the transparent
+///   `u64` are identical; the schema type-name change still bumps per
+///   rule 42). Pre-genesis: refuse, don't migrate.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -87,18 +97,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 10;
-
-/// Maximum number of `(height, hash)` pairs the scanner should keep in
-/// [`ReorgBlocks`]. The value is informational — the persistence layer
-/// does not truncate; it is enforced by the scanner before serializing.
-/// Pinned here so both the producer and the consumer read the same
-/// constant.
-///
-/// Sized to comfortably exceed the deepest reorg ever observed on
-/// Monero mainnet (~6) while staying below Shekyl V3's conservative
-/// scan-safety `max_reorg_depth` default (10) with headroom.
-pub const DEFAULT_REORG_BLOCKS_CAPACITY: usize = 32;
+pub const LEDGER_BLOCK_VERSION: u32 = 12;
 
 /// Pointer to the most recently scanned block — "where the wallet is"
 /// on the chain.
@@ -109,8 +108,9 @@ pub const DEFAULT_REORG_BLOCKS_CAPACITY: usize = 32;
 /// disk corruption, not a reorg, and is handled by the orchestrator).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BlockchainTip {
-    /// Highest block height the scanner has processed.
-    pub synced_height: u64,
+    /// Highest block height the scanner has processed — the newest
+    /// ingested block's own height (an inclusive ordinal), not a count.
+    pub synced_height: BlockHeight,
     /// Block hash at `synced_height`. `None` on a fresh wallet that
     /// has never ingested a block (the Rust wallet's bootstrap state
     /// — `synced_height = 0` and no tip hash is known yet).
@@ -120,7 +120,7 @@ pub struct BlockchainTip {
 impl BlockchainTip {
     /// Construct a tip from a height + hash. Use
     /// [`BlockchainTip::default`] for the unscanned state.
-    pub fn new(synced_height: u64, tip_hash: [u8; 32]) -> Self {
+    pub fn new(synced_height: BlockHeight, tip_hash: [u8; 32]) -> Self {
         Self {
             synced_height,
             tip_hash: Some(tip_hash),
@@ -129,7 +129,7 @@ impl BlockchainTip {
 
     /// `true` when the wallet has never scanned any block.
     pub fn is_unscanned(&self) -> bool {
-        self.synced_height == 0 && self.tip_hash.is_none()
+        self.synced_height.is_zero() && self.tip_hash.is_none()
     }
 }
 
@@ -137,22 +137,22 @@ impl BlockchainTip {
 /// detection. Sorted strictly ascending by height; duplicates at a
 /// given height are *not* allowed.
 ///
-/// The scanner trims this to [`DEFAULT_REORG_BLOCKS_CAPACITY`] entries
-/// before serializing; this module does not enforce the cap at
-/// deserialize-time so that a wallet written by a future scanner with
-/// a larger window still loads under this block version. Monotonicity
-/// is likewise the scanner's invariant — `LedgerBlock::check_version`
-/// verifies only the version field, so a corrupt or non-monotonic
-/// sequence will be caught by the runtime's `check_invariants`.
+/// How long the window is is the caller's policy
+/// ([`Self::retain_recent`]). This module does not truncate on load, so
+/// a record written under a larger window still opens under this block
+/// version, and the next successful merge trims it. Monotonicity is the
+/// writer's invariant — `LedgerBlock::check_version` verifies only the
+/// version field, so a corrupt or non-monotonic sequence will be caught
+/// by the runtime's `check_invariants`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct ReorgBlocks {
     /// The `(height, block_hash)` pairs. Strictly ascending by height.
-    pub blocks: Vec<(u64, [u8; 32])>,
+    pub blocks: Vec<(BlockHeight, [u8; 32])>,
 }
 
 impl ReorgBlocks {
     /// The highest `(height, hash)` pair, or `None` if empty.
-    pub fn last(&self) -> Option<&(u64, [u8; 32])> {
+    pub fn last(&self) -> Option<&(BlockHeight, [u8; 32])> {
         self.blocks.last()
     }
 
@@ -164,6 +164,24 @@ impl ReorgBlocks {
     /// `true` when no blocks have been recorded.
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
+    }
+
+    /// Keep the newest `window` entries. `window == 0` clears the record.
+    ///
+    /// `window` is a block count. A count this process cannot index is
+    /// longer than any `Vec`, so the record is kept whole.
+    ///
+    /// The entries are strictly ascending, so the tail is the newest.
+    /// The length is the caller's policy; this type does not know the
+    /// finality window.
+    pub fn retain_recent(&mut self, window: u64) {
+        let Some(keep) = usize::try_from(window).ok() else {
+            return;
+        };
+        let overflow = self.blocks.len().saturating_sub(keep);
+        if overflow > 0 {
+            self.blocks.drain(..overflow);
+        }
     }
 }
 
@@ -185,9 +203,9 @@ pub struct LedgerBlock {
     /// Current scan pointer.
     pub tip: BlockchainTip,
 
-    /// Rolling `(height, hash)` window used by the scanner for reorg
-    /// detection. The scanner caps this at
-    /// [`DEFAULT_REORG_BLOCKS_CAPACITY`] before write.
+    /// Rolling `(height, hash)` window used for reorg detection. The
+    /// refresh trims it with [`ReorgBlocks::retain_recent`] after a
+    /// successful merge.
     pub reorg_blocks: ReorgBlocks,
 }
 
@@ -282,16 +300,23 @@ impl LedgerBlock {
     // -- Read-only queries (moved from RuntimeWalletState) -----------------
 
     /// The current synced **tip height** (== `tip.synced_height`) — the
-    /// newest ingested block's own height (an instant, set alongside that
-    /// block's `tip_hash`), NOT a block count. Contrast the `P`-scan
-    /// cursor's same-named `synced_height`, which is a **count** (its last
-    /// verified block is `synced_height − 1`): the two conventions coexist
-    /// in this crate, so consumers anchoring reference heights or
-    /// spendability off this value can use it as the tip directly (the
-    /// transfer path's `chain_tip` does), while count-shaped values belong
-    /// in `shekyl_types::ChainCount`. Audited 2026-07-11 (claim-builder
-    /// PR-3 review follow-through: the count/height unit family).
-    pub fn height(&self) -> u64 {
+    /// newest ingested block's own height (an inclusive ordinal, set
+    /// alongside that block's `tip_hash`), NOT a block count.
+    ///
+    /// Contrast the `P`-scan cursor's same-named `synced_height`, which
+    /// is an **exclusive-end ordinal** (C6 `next_height`: last verified
+    /// block is `block[synced_height − 1]`, covered range `[0,
+    /// synced_height)`). Both fields are [`BlockHeight`] after
+    /// height-semantics Phase 2e; they are not interchangeable. A
+    /// consumer anchoring spendability off this value uses it as the
+    /// tip directly (the transfer path's `chain_tip` does).
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: ledger tip is ordinal, not a count.
+    /// fn needs_count(_: shekyl_types::ChainCount) {}
+    /// needs_count(shekyl_engine_state::LedgerBlock::empty().height());
+    /// ```
+    pub fn height(&self) -> BlockHeight {
         self.tip.synced_height
     }
 
@@ -307,7 +332,7 @@ impl LedgerBlock {
 
     /// Get the stored block hash for the given height, if it is
     /// inside the reorg window.
-    pub fn block_hash_at(&self, height: u64) -> Option<&[u8; 32]> {
+    pub fn block_hash_at(&self, height: BlockHeight) -> Option<&[u8; 32]> {
         self.reorg_blocks
             .blocks
             .iter()
@@ -345,7 +370,7 @@ impl LedgerBlock {
     /// [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
-        current_height: u64,
+        current_height: BlockHeight,
         min_amount: Option<AtomicUnits>,
         spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<(usize, &TransferDetails)> {
@@ -415,14 +440,35 @@ mod tests {
 
     use crate::{payment_id::PaymentId, transfer::SPENDABLE_AGE};
 
+    #[test]
+    fn retain_recent_keeps_the_newest_tail() {
+        let mut window = ReorgBlocks {
+            blocks: (0u8..5)
+                .map(|h| (BlockHeight::from_raw(u64::from(h)), [h; 32]))
+                .collect(),
+        };
+        window.retain_recent(2);
+        assert_eq!(
+            window.blocks,
+            vec![
+                (BlockHeight::from_raw(3), [3u8; 32]),
+                (BlockHeight::from_raw(4), [4u8; 32]),
+            ]
+        );
+        window.retain_recent(10);
+        assert_eq!(window.len(), 2);
+        window.retain_recent(0);
+        assert!(window.is_empty());
+    }
+
     fn sample_transfer(seed: u8) -> TransferDetails {
         let tx_hash = [seed; 32];
         let internal_output_index = u64::from(seed);
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-            internal_output_index,
-            global_output_index: 1_000 + u64::from(seed),
-            block_height: 100,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(internal_output_index),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(100),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
@@ -450,8 +496,9 @@ mod tests {
                 &tx_hash,
                 internal_output_index,
             )),
-            eligible_height: 100 + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
         }
@@ -466,14 +513,21 @@ mod tests {
         assert_eq!(back.block_version, LEDGER_BLOCK_VERSION);
         assert!(back.transfers.is_empty());
         assert_eq!(back.tip, BlockchainTip::default());
-        assert_eq!(back.reorg_blocks.blocks, Vec::<(u64, [u8; 32])>::new());
+        assert_eq!(
+            back.reorg_blocks.blocks,
+            Vec::<(BlockHeight, [u8; 32])>::new()
+        );
     }
 
     #[test]
     fn populated_block_is_byte_stable() {
-        let tip = BlockchainTip::new(500, [0xAA; 32]);
+        let tip = BlockchainTip::new(BlockHeight::from_raw(500), [0xAA; 32]);
         let reorg = ReorgBlocks {
-            blocks: vec![(498, [0x10; 32]), (499, [0x20; 32]), (500, [0xAA; 32])],
+            blocks: vec![
+                (BlockHeight::from_raw(498), [0x10; 32]),
+                (BlockHeight::from_raw(499), [0x20; 32]),
+                (BlockHeight::from_raw(500), [0xAA; 32]),
+            ],
         };
         let transfers = vec![sample_transfer(1), sample_transfer(2), sample_transfer(3)];
 
@@ -493,7 +547,7 @@ mod tests {
         let transfers = vec![sample_transfer(7), sample_transfer(8)];
         let block = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(10, [1u8; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(10), [1u8; 32]),
             ReorgBlocks::default(),
         );
 
@@ -565,9 +619,9 @@ mod tests {
     fn truncated_postcard_input_is_refused() {
         let b = LedgerBlock::new(
             vec![sample_transfer(1)],
-            BlockchainTip::new(7, [7; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(7), [7; 32]),
             ReorgBlocks {
-                blocks: vec![(7, [7; 32])],
+                blocks: vec![(BlockHeight::from_raw(7), [7; 32])],
             },
         );
         let bytes = b.to_postcard_bytes().expect("serialize");
@@ -581,7 +635,7 @@ mod tests {
     #[test]
     fn tip_unscanned_predicate() {
         assert!(BlockchainTip::default().is_unscanned());
-        assert!(!BlockchainTip::new(1, [0; 32]).is_unscanned());
+        assert!(!BlockchainTip::new(BlockHeight::from_raw(1), [0; 32]).is_unscanned());
     }
 
     proptest! {
@@ -594,10 +648,14 @@ mod tests {
             tip_hash in any::<Option<[u8; 32]>>(),
             reorg in proptest::collection::vec((any::<u64>(), any::<[u8; 32]>()), 0..16),
         ) {
+            let reorg: Vec<(BlockHeight, [u8; 32])> = reorg
+                .into_iter()
+                .map(|(h, hash)| (BlockHeight::from_raw(h), hash))
+                .collect();
             let block = LedgerBlock::new(
                 Vec::new(),
                 BlockchainTip {
-                    synced_height: synced,
+                    synced_height: BlockHeight::from_raw(synced),
                     tip_hash,
                 },
                 ReorgBlocks { blocks: reorg.clone() },
@@ -605,7 +663,7 @@ mod tests {
             let bytes = block.to_postcard_bytes().expect("serialize");
             let back = LedgerBlock::from_postcard_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(back.block_version, LEDGER_BLOCK_VERSION);
-            prop_assert_eq!(back.tip.synced_height, synced);
+            prop_assert_eq!(back.tip.synced_height, BlockHeight::from_raw(synced));
             prop_assert_eq!(back.tip.tip_hash, tip_hash);
             prop_assert_eq!(back.reorg_blocks.blocks, reorg);
             prop_assert!(back.transfers.is_empty());
@@ -624,7 +682,10 @@ mod tests {
             let transfers = (0..n).map(sample_transfer).collect();
             let block = LedgerBlock::new(
                 transfers,
-                BlockchainTip { synced_height: synced, tip_hash },
+                BlockchainTip {
+                    synced_height: BlockHeight::from_raw(synced),
+                    tip_hash,
+                },
                 ReorgBlocks::default(),
             );
             let bytes1 = block.to_postcard_bytes().expect("serialize1");

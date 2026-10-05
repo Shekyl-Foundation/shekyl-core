@@ -36,19 +36,10 @@
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
   - [x] encoded transaction size impact measured (5389 bytes `pqc_auth` per input via `pqc_auth_weight()`)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
-- [ ] Ledger integration (deferred to v1.1)
-  - [x] FCMP++ device abstraction stubs in place (`device_ledger.cpp`)
-  - [ ] Ledger app updated with FCMP++ proof generation support
-  - [ ] Ledger Shekyl app (or Monero-compatible app) update available
-- [ ] Trezor integration (deferred to v1.1)
-  - [x] FCMP++ device abstraction defaults inherited (unsupported, returns false)
-  - [ ] Trezor cold-signing protocol updated for FCMP++ transactions
-  - [ ] Trezor firmware update available (if needed)
+- [x] Ledger integration — **deleted 2026-10-01** (`docs/HARDWARE_WALLETS.md`). There is no in-tree backend to finish. Reopen only when a device ships the V4 primitives that doc names.
+- [x] Trezor integration — **deleted 2026-08-18** (`docs/HARDWARE_WALLETS.md`). Same reopen criterion. The software device is the key helper the daemon calls, and it does not carry FCMP offload hooks.
 
-**Software wallets only for v1.0 launch. Hardware support (Ledger/Trezor) targeted for v1.1.**
-The device abstraction layer (`device.hpp`) exposes `fcmp_prepare`, `fcmp_proof_start`,
-and `fcmp_proof_add_input` so that hardware wallet implementations can be added without
-further changes to the interface.
+**Software wallets only.** Hardware support reopens against the Rust wallet when a device ships the V4 primitives `docs/HARDWARE_WALLETS.md` names.
 
 - [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice
@@ -94,7 +85,6 @@ further changes to the interface.
   - [ ] CI fuzz smoke gate passed (required harness inventory check in `.github/workflows/build.yml`)
   - [ ] Per-output PQC key derivation tested
   - [ ] Bech32m address encoding/decoding tested
-  - [ ] Transaction pruning mode tested (`--prune-blockchain`)
   - [ ] Block header `curve_tree_root` commitment validated
   - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
@@ -108,7 +98,7 @@ further changes to the interface.
   - [ ] Update the other two pin records so no copy drifts: the "Current pin" paragraph in `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md` (move the old pin to its "Superseded pin" note **with** its tarball hash) and the "Current pin" line below.
   - [ ] Re-verify: run `SHEKYL_TEST_PINNED_TOR_BINARY=<new extracted tor> cargo test -p shekyl-tor-control-client --lib binary -- --ignored` — `bundled_tor_matches_recorded_pin` must pass against the new binary. (The test is not `cfg`-gated: on a target missing its pin arm it fails loudly instead of reporting a vacuous 0-test green.) The `tor-pin-verify` workflow (`.github/workflows/tor-pin-verify.yml`, manual dispatch) runs the same download → GPG-verify → re-verify chain in CI, and against that one verified binary also runs the SP-T0 `--lib` live lifecycle tests (actor + supervisor) — dispatch it after a bump.
   - Current pin: **Expert Bundle 15.0.19 (tor 0.4.9.11)**, recorded 2026-08-06 (see `CURRENT_PIN` for the gate value — code is canonical; this line is a pointer, not a second source of truth). The extracted-binary digest is **unchanged from the 15.0.17 pin** — same tor version, byte-identical binary — so this bump moved the label and not the gate.
-  - **No `linux-aarch64` pin, and the reason is upstream:** the stable line publishes only `linux-i686` and `linux-x86_64` (the aarch64 builds are `android-` and `macos-`). `linux-aarch64` first appears in the **16.0a1 alpha**. So the rule-76 floor device cannot obtain a `VerifiedTorBinary` today; `discover_and_verify` fails closed with `Unpinned`, which is correct. Revisit when 16.0 goes stable — see `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md`.
+  - Current `linux-aarch64` pin: **Expert Bundle 16.0a12 (tor 0.4.9.12)**, recorded 2026-09-29. **This is an alpha, and it is pinned on purpose.** The stable line publishes only `linux-i686` and `linux-x86_64` (the aarch64 builds are `android-` and `macos-`), so the alpha line is the only `linux-aarch64` build there is, and the rule-76 floor device needs a `VerifiedTorBinary` to take the transport cutover's Tor deadline distribution under the managed posture (`P2P_TRANSPORT_LAYER.md` D9). Verified the same way as the stable pin: Good signature under the key above, extracted-binary digest into the `aarch64` `cfg` arm. **Reopen:** re-pin to the first **stable** bundle that ships `linux-aarch64`, and until then the alpha-line advisories are part of the watch above — see `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md`.
 - [ ] CLI released
   - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website

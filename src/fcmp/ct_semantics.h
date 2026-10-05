@@ -58,17 +58,8 @@ extern "C" {
 #define DP(x)
 #endif
 
-namespace hw {
-    class device;
-}
-
-
 namespace ct {
 
-    /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
-    void fill_construct_tx_rct_stub(CtSig &rv, const key &message, xmr_amount txnFee,
-        const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
-        const std::vector<xmr_amount> &outamounts, const keyV &destinations);
     bool verCtSemanticsSimple(const CtSig & rv);
     bool verCtSemanticsSimple(const std::vector<const CtSig*> & rv);
     // Fee-only RCT (empty FCMP++ proof and pseudo-outs); used by archival serve-credit.
@@ -81,7 +72,10 @@ namespace ct {
     // inputs are optional: the FCMP++ proof is present iff fee_input_count > 0
     // (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4).
     bool verCtSemanticsEmission(const CtSig &rv, uint64_t total_reward, size_t fee_input_count);
-    key get_tx_prehash(const CtSig &rv, hw::device &hwdev);
+    // Transcript hash of the message, the CtSig base (enc_labels included),
+    // and the Bulletproof+ points. No caller yet: consensus rejection of a
+    // tampered base is the unwired check (SUBADDRESS_UNDER_PQC.md §5.7.11).
+    key get_tx_prehash(const CtSig &rv);
 }
 #endif  /* CT_SEMANTICS_H */
 

@@ -50,6 +50,7 @@ use super::drain_dispatch::DrainRequestError;
 use super::drain_orchestrator::DrainIntent;
 use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
 use super::fee_policy::FeeEstimatorError;
+use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::start::pending_post_store_for_engine;
@@ -159,11 +160,8 @@ pub enum DrainToPrincipalError {
     },
     /// The daemon fee-estimate query failed — check the daemon connection and
     /// retry (the `-29102` remedy shape).
-    #[error("drain fee estimate failed: {detail}")]
-    FeeEstimate {
-        /// The query failure's rendering.
-        detail: String,
-    },
+    #[error("drain fee estimate failed: {0}")]
+    FeeEstimate(FeeEstimatorError),
     /// The daemon *answered* the fee query and the wallet refused the answer
     /// (`ValidatedFeeEstimates` ceiling) — retrying the connection does not
     /// help (the `-29109` remedy shape). Carries the violation's public
@@ -352,20 +350,19 @@ where
 
         // Canonical P-lane floor fee — the same function the bond post
         // quotes, preserving the -29109 vs -29102 remedy split.
-        let fee = p_lane_floor_fee(daemon.get_fee_estimates().await.map_err(|e| {
-            DrainToPrincipalError::FeeEstimate {
-                detail: e.into().to_string(),
-            }
-        })?)
+        let fee = p_lane_floor_fee(
+            daemon
+                .get_fee_estimates()
+                .await
+                .map_err(|e| DrainToPrincipalError::FeeEstimate(map_daemon_engine_fee_error(e)))?,
+        )
         .map_err(|e| match e {
             FeeEstimatorError::DaemonFeeUnreasonable(v) => DrainToPrincipalError::FeeUnreasonable {
                 reason: v.reason(),
                 rate: v.rate(),
                 bound: v.bound(),
             },
-            other => DrainToPrincipalError::FeeEstimate {
-                detail: other.to_string(),
-            },
+            other => DrainToPrincipalError::FeeEstimate(other),
         })?;
 
         // Production prune witness (SP-R0), minted exactly as the bond
@@ -608,7 +605,7 @@ mod tests {
                         funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(42)],
                         state: PendingPostState::Pending,
                     },
-                    shekyl_types::BlockHeight::from_raw(1),
+                    shekyl_types::ChainCount::from_raw(1),
                     g,
                 ) == SealAdmission::Admit;
                 (admitted, admitted)

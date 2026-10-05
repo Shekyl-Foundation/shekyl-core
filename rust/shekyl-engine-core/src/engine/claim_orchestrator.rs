@@ -16,7 +16,7 @@
 //! that gathers those operands from their authoritative sources and hands
 //! them to the actor:
 //!
-//! 1. **Fetch** ([`fetch_emission_claim_source`]) — the single-field `p_id`
+//! 1. **Fetch** ([`fetch_vouched_claim_source`]) — the single-field `p_id`
 //!    query (§7.2: the request shape is identical for every claimant),
 //!    over a [`PersonaIsolatedTransport`] **only** (the §7.4 transport pin,
 //!    structural: the principal's daemon session does not implement the
@@ -73,17 +73,20 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHeight as TreeBlockHeight, Gindex,
-    ReferenceBlock, TwoSidedRefusal,
+    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, Gindex, ReferenceBlock,
+    TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+#[cfg(test)]
+use shekyl_types::BlockCount;
 use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
 use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
-use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
+use super::daemon::synced_chain_facts::TimelineBreak;
+use super::emission_source::{fetch_vouched_claim_source, EmissionSourceError};
 use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
@@ -125,6 +128,19 @@ pub(crate) enum ClaimOrchestrationError {
     /// The actor refused or failed the assembly itself.
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
+    /// The daemon reports it is still synchronizing (`WSS-Q14`), so the
+    /// record it would answer with is not a settled view of the chain.
+    ///
+    /// `R-B`: while the daemon reports syncing the answer is **unknown** — do
+    /// not erase, post or sign. A claim assembled here would be signed against
+    /// a gather tip the network has not agreed to, so the lane declines and
+    /// retries on its cadence. Distinct from [`Self::ReferenceUnanchorable`],
+    /// which is about the *tree* lagging the daemon; this is the daemon
+    /// lagging the network, the axis `WSS-25` found nothing was measuring.
+    #[error(
+        "the daemon's chain facts cannot be vouched for ({0:?}); no claim can be assembled yet"
+    )]
+    Unvouchable(TimelineBreak),
 }
 
 /// The read-side operands of one claim assembly, borrowed from their owners
@@ -183,8 +199,8 @@ fn last_confirmed_sweep_height(posts: &[BondPostRecord], persona: &PCanonicalId)
 /// anchor (the tip) and the reference anchor come from one derivation.
 fn claim_reference_height(
     chain_height: ChainCount,
-    ingested_tip: Option<u64>,
-) -> Result<(BlockHeight, u64), ClaimOrchestrationError> {
+    ingested_tip: Option<BlockHeight>,
+) -> Result<(BlockHeight, BlockHeight), ClaimOrchestrationError> {
     let tip = chain_height
         .tip()
         .ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
@@ -193,17 +209,16 @@ fn claim_reference_height(
     let ingested = ingested_tip.ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
         detail: "curve tree has not ingested any block yet",
     })?;
-    let reference_height =
-        two_sided_reference_height(tip.to_raw(), ingested).map_err(|refusal| {
-            ClaimOrchestrationError::ReferenceUnanchorable {
-                detail: match refusal {
-                    TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
-                    TwoSidedRefusal::TreeTooFarBehind => {
-                        "tree too far behind the daemon tip to anchor a submittable reference"
-                    }
-                },
-            }
-        })?;
+    let reference_height = two_sided_reference_height(tip, ingested).map_err(|refusal| {
+        ClaimOrchestrationError::ReferenceUnanchorable {
+            detail: match refusal {
+                TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
+                TwoSidedRefusal::TreeTooFarBehind => {
+                    "tree too far behind the daemon tip to anchor a submittable reference"
+                }
+            },
+        }
+    })?;
     Ok((tip, reference_height))
 }
 
@@ -213,11 +228,11 @@ fn claim_reference_height(
 /// Borrows: the designation and the sweep clone only what they select.
 fn provable_records(
     records: &[PFundingOutputRecord],
-    reference_height: u64,
+    reference_height: BlockHeight,
 ) -> Vec<&PFundingOutputRecord> {
     records
         .iter()
-        .filter(|r| r.spendable_height.to_raw() <= reference_height)
+        .filter(|r| r.spendable_height <= reference_height)
         .collect()
 }
 
@@ -233,26 +248,49 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     rpc: &R,
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
-    block_hash_at: impl Fn(u64) -> Option<[u8; 32]>,
+    block_hash_at: impl Fn(BlockHeight) -> Option<[u8; 32]>,
 ) -> Result<AssembledEmissionClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
     //    structural pin; decode enforces the settled/height invariant at
     //    the untrusted boundary) and read the tree's ingested tip — two
     //    independent awaits, joined.
-    let (source, ingested) = tokio::join!(
-        fetch_emission_claim_source(rpc, ctx.p_canonical_id.as_bytes()),
+    //    The sync witness rides the same join: `R-B` forbids signing on an
+    //    unsynchronized view, and the claim is signed inside the stake actor
+    //    further down, so the refusal has to happen before assembly rather
+    //    than at dispatch. Unlike the release gate, the witness does **not**
+    //    supply this lane's clock — the record's own `chain_height` is the
+    //    gather tip the handler's same-tip check compares against, so
+    //    substituting the witness's tip would break that invariant. Its role
+    //    here is narrower and worth naming: may this lane act at all.
+    //    The two RPCs are ordered inside `fetch_vouched_claim_source` —
+    //    witness first, awaited, then the record — so a record height below
+    //    the witness is a rollback rather than a race. They are NOT joined
+    //    with each other: joining them destroys that ordering while reading
+    //    as though it had been kept, which is the defect this replaced. The
+    //    join that remains is against the *tree* read, which is local and
+    //    independent, so the ordering that matters is untouched.
+    let (vouched, ingested) = tokio::join!(
+        fetch_vouched_claim_source(rpc, ctx.p_canonical_id.as_bytes()),
         ctx.tree.ingested_tip_height()
     );
-    let source = source?;
+    let vouched = vouched?;
     let ingested = ingested.map_err(ClaimOrchestrationError::Tree)?;
+    // This lane SIGNS against the record's own gather tip further down, so
+    // it needs the record to be actionable, not merely the daemon to have
+    // been synced at some moment. `actionable` refuses a rolled-back read
+    // for that reason: no choice of clock repairs contents drawn from a
+    // view the chain has abandoned.
+    vouched
+        .actionable()
+        .map_err(ClaimOrchestrationError::Unvouchable)?;
+    let source = vouched.into_source();
 
     // 2b. Anchor: the gather tip ([`ChainCount::tip`] — typed, so the count
     //    cannot be laundered into a height) and the reference height (the
     //    shared two-sided gate over gather tip × ingested tip), from one
     //    derivation.
-    let (gather_tip, reference_height) =
-        claim_reference_height(source.chain_height, ingested.map(|h| h.0))?;
+    let (gather_tip, reference_height) = claim_reference_height(source.chain_height, ingested)?;
 
     // Provability pre-filter (module docs): only outputs drained into the
     // tree at the reference height can carry a membership proof.
@@ -287,24 +325,24 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     // 5. One reference snapshot, every membership path against it.
     let (curve_tree_root, _depth) = ctx
         .tree
-        .reference_root_and_depth(TreeBlockHeight(reference_height))
+        .reference_root_and_depth(reference_height)
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
     let block_hash =
         block_hash_at(reference_height).ok_or(ClaimOrchestrationError::MissingBlockHash {
-            height: reference_height,
+            height: reference_height.to_raw(),
         })?;
     let reference = ReferenceBlock {
-        height: TreeBlockHeight(reference_height),
-        curve_tree_root,
-        block_hash,
+        height: reference_height,
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
         .map(|r| AssembleInput {
-            gindex: Gindex(r.gindex.to_raw()),
-            output_key: r.output_key,
-            commitment: r.commitment,
+            gindex: Gindex::from_raw(r.gindex.to_raw()),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
         })
         .collect();
     let paths = ctx
@@ -389,14 +427,22 @@ mod tests {
 
         // Happy: tree synced to the tip; count 30_001 → tip 30_000.
         assert_eq!(
-            claim_reference_height(count(30_001), Some(30_000)).expect("anchorable"),
-            (BlockHeight::from_raw(30_000), 30_000 - REF_ANCHOR_AGE)
+            claim_reference_height(count(30_001), Some(BlockHeight::from_raw(30_000)))
+                .expect("anchorable"),
+            (
+                BlockHeight::from_raw(30_000),
+                BlockHeight::from_raw(30_000) - REF_ANCHOR_AGE,
+            )
         );
         // Happy, tree one block behind: the min-arm anchors off the tree;
         // the gather tip stays the chain's.
         assert_eq!(
-            claim_reference_height(count(30_001), Some(29_999)).expect("anchorable"),
-            (BlockHeight::from_raw(30_000), 29_999 - REF_ANCHOR_AGE)
+            claim_reference_height(count(30_001), Some(BlockHeight::from_raw(29_999)))
+                .expect("anchorable"),
+            (
+                BlockHeight::from_raw(30_000),
+                BlockHeight::from_raw(29_999) - REF_ANCHOR_AGE,
+            )
         );
 
         // Refusal: no ingest.
@@ -407,22 +453,28 @@ mod tests {
         // Refusal: chain shorter than the anchor age (and the empty chain,
         // where `ChainCount::tip()` itself is None).
         assert!(matches!(
-            claim_reference_height(count(REF_ANCHOR_AGE), Some(REF_ANCHOR_AGE - 1)),
+            claim_reference_height(
+                count(REF_ANCHOR_AGE.to_raw()),
+                Some(BlockHeight::from_raw(REF_ANCHOR_AGE.to_raw() - 1)),
+            ),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         assert!(matches!(
-            claim_reference_height(ChainCount::ZERO, Some(0)),
+            claim_reference_height(
+                ChainCount::ZERO,
+                Some(shekyl_types::BlockHeight::from_raw(0))
+            ),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         // Refusal: the tree so far behind that the anchored reference is
         // already at the re-anchor threshold. Boundary-exact: one block
         // inside the threshold anchors, at the threshold refuses.
-        let tip = 30_000u64;
+        let tip = BlockHeight::from_raw(30_000);
         let rebuild_at = shekyl_curve_tree::REBUILD_AT;
-        let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + 1;
-        assert!(claim_reference_height(count(tip + 1), Some(barely_ok)).is_ok());
+        let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + BlockCount::ONE;
+        assert!(claim_reference_height(count(tip.to_raw() + 1), Some(barely_ok)).is_ok());
         assert!(matches!(
-            claim_reference_height(count(tip + 1), Some(barely_ok - 1)),
+            claim_reference_height(count(tip.to_raw() + 1), Some(barely_ok - BlockCount::ONE)),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
     }
@@ -449,7 +501,7 @@ mod tests {
         );
         later.spendable_height = BlockHeight::from_raw(at.spendable_height.to_raw() + 1);
 
-        let reference_height = at.spendable_height.to_raw();
+        let reference_height = at.spendable_height;
         let records = [at, later];
         let kept = provable_records(&records, reference_height);
         assert_eq!(
@@ -481,7 +533,7 @@ mod tests {
             snapshot, source_at_count, source_json,
         };
         use crate::engine::stake_engine::test_fixtures::{
-            constructed_record, derive_bundle, spawn_over,
+            constructed_record_with_entry, derive_bundle, spawn_over,
         };
         use crate::engine::stake_engine::PSlot;
 
@@ -489,16 +541,68 @@ mod tests {
         /// real `json_rpc_call` envelope path (the trait's default impl runs
         /// unmocked — only the transport is canned).
         #[derive(Clone)]
-        struct ClaimSourceDaemon(Arc<Value>);
+        /// The canned claim source, plus the sync state the daemon reports.
+        ///
+        /// `synchronized` is the lever the `WSS-Q14` bite pulls; every other
+        /// test in this module wants the default (synced), because they were
+        /// written against a daemon whose record is authoritative.
+        struct ClaimSourceDaemon(Arc<Value>, bool);
+
+        impl ClaimSourceDaemon {
+            fn synced(source: Arc<Value>) -> Self {
+                Self(source, true)
+            }
+            fn syncing(source: Arc<Value>) -> Self {
+                Self(source, false)
+            }
+        }
 
         impl Rpc for ClaimSourceDaemon {
+            /// The bracket's re-read, from the same derivation `get_info`'s
+            /// top hash below comes from, so the witness stands on its own
+            /// block. The default would ride `post` and be answered with the
+            /// claim source.
+            fn get_block_hash(
+                &self,
+                number: usize,
+            ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+                async move {
+                    Ok(crate::engine::test_support::test_block_hash_at(
+                        number as u64,
+                    ))
+                }
+            }
+
+            /// Dispatches on the JSON-RPC method: the orchestrator now reads
+            /// `get_info` for the sync witness alongside the claim source, so
+            /// answering every method with the claim source would decode as a
+            /// reply with no `height` and refuse the whole lane.
             fn post(
                 &self,
                 route: &str,
-                _body: Vec<u8>,
+                body: Vec<u8>,
             ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-                let reply = serde_json::to_vec(&json!({ "result": *self.0 }))
-                    .expect("fixture result encodes");
+                let is_get_info = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
+                    .is_some_and(|m| m == "get_info");
+                let synced = self.1;
+                let result = if is_get_info {
+                    json!({
+                        "height": 10_000,
+                        "target_height": if synced { 0 } else { 1_000_000 },
+                        "synchronized": synced,
+                        "top_block_hash": hex::encode(
+                            crate::engine::test_support::test_block_hash_at(9_999),
+                        ),
+                        "outgoing_connections_count": 8,
+                        "incoming_connections_count": 0,
+                    })
+                } else {
+                    (*self.0).clone()
+                };
+                let reply =
+                    serde_json::to_vec(&json!({ "result": result })).expect("fixture encodes");
                 let ok = route == "json_rpc";
                 async move {
                     if ok {
@@ -558,7 +662,7 @@ mod tests {
 
             // Two REAL P-paid outputs mined at `owned_block` as the chain's
             // only outputs, so gindex == chain position (0: backing, 1: fee).
-            let (backing_record, backing_leaf) = constructed_record(
+            let (backing_record, backing_leaf, backing_entry) = constructed_record_with_entry(
                 &keys,
                 0,
                 owned_block,
@@ -566,7 +670,7 @@ mod tests {
                 0,
                 MintLineageOutput::BondPostChange,
             );
-            let (fee_record, fee_leaf) = constructed_record(
+            let (fee_record, fee_leaf, fee_entry) = constructed_record_with_entry(
                 &keys,
                 1,
                 owned_block,
@@ -579,16 +683,24 @@ mod tests {
 
             // Ingest the whole chain into a real (ephemeral-store) client —
             // maturity drain, gindex threading, root reconstruction all real.
-            let leaf_blob: Vec<u8> = [backing_leaf.h_pqc, fee_leaf.h_pqc].concat();
+            // One 64-byte `0x07` entry per output (PL-D3); the client takes
+            // the commitment point from each.
+            let leaf_blob: Vec<u8> = [backing_entry, fee_entry].concat();
             let raw_outputs = vec![
                 RawOutput {
-                    output_key: backing_leaf.output_key,
-                    commitment: Some(backing_leaf.commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
+                        backing_leaf.output_key,
+                    ),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        backing_leaf.commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 },
                 RawOutput {
-                    output_key: fee_leaf.output_key,
-                    commitment: Some(fee_leaf.commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(fee_leaf.output_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        fee_leaf.commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 },
             ];
@@ -598,7 +710,7 @@ mod tests {
                     let txs: Vec<TxLeafInputs<'_>> = if h == owned_block {
                         vec![TxLeafInputs {
                             is_miner: false,
-                            leaf_hash_blob: Some(&leaf_blob),
+                            leaf_entry_blob: Some(&leaf_blob),
                             outputs: &raw_outputs,
                         }]
                     } else {
@@ -606,7 +718,7 @@ mod tests {
                     };
                     client
                         .ingest_block(BlockLeaves {
-                            height: TreeBlockHeight(h),
+                            height: BlockHeight::from_raw(h),
                             txs: &txs,
                         })
                         .expect("fixture chain ingests");
@@ -626,12 +738,62 @@ mod tests {
                 post_kind: 0,
             }];
 
-            let expected_reference = tip - REF_ANCHOR_AGE;
+            let expected_reference = BlockHeight::from_raw(tip) - REF_ANCHOR_AGE;
             let funding_records = vec![backing_record, fee_record];
             let reserved = BTreeSet::new();
             let pruned = SpentRecordsDurablyPruned::for_test();
             let fee = 10_000u64;
-            let rpc = ClaimSourceDaemon(Arc::new(source_json(&source)));
+            let canned = Arc::new(source_json(&source));
+
+            // ── WSS-Q14 class-B refusal bite ────────────────────────────
+            //
+            // The claim is SIGNED inside the stake actor further down this
+            // same call, so `R-B`'s "do not sign" has to bite here rather
+            // than at the dispatch stamp. Same substrate, same operands, one
+            // lever moved: the daemon says it is still catching up.
+            //
+            // The edit that turns this red is deleting the `DaemonSyncing`
+            // early return in `orchestrate_emission_claim`. It bites against
+            // assembling a claim on a resyncing view; it does **not** cover a
+            // daemon that lies "synchronized".
+            {
+                let syncing = ClaimSourceDaemon::syncing(Arc::clone(&canned));
+                // Its own handle: `PersonaHandle` is deliberately one-shot,
+                // and a refused lane must not consume the one the assertion
+                // path below needs.
+                let bite_handle = stake
+                    .mint_handle(PSlot::from_raw(0))
+                    .await
+                    .expect("slot 0 held");
+                let err = orchestrate_emission_claim(
+                    &syncing,
+                    bite_handle,
+                    ClaimAssemblyContext {
+                        stake: &stake,
+                        tree: &tree,
+                        pruning_landed: &pruned,
+                        funding_records: &funding_records,
+                        bond_posts: &bond_posts,
+                        reserved: &reserved,
+                        p_canonical_id: p_id,
+                        fee,
+                        fee_floor: 0,
+                    },
+                    |_| panic!("a refused lane must not reach the block-hash lookup"),
+                )
+                .await
+                .expect_err("a syncing daemon cannot ground a claim");
+                assert!(
+                    matches!(
+                        err,
+                        ClaimOrchestrationError::Unvouchable(TimelineBreak::DaemonSyncing)
+                    ),
+                    "must refuse as Unvouchable(DaemonSyncing) — not ReferenceUnanchorable, \
+                     which is the tree lagging the daemon, the other axis: {err:?}"
+                );
+            }
+
+            let rpc = ClaimSourceDaemon::synced(canned);
 
             let reply = orchestrate_emission_claim(
                 &rpc,
@@ -678,7 +840,7 @@ mod tests {
             // leaf gate, and both auths against the root and depth the tree
             // reports at the anchored reference.
             let (root, depth) = tree
-                .reference_root_and_depth(TreeBlockHeight(expected_reference))
+                .reference_root_and_depth(expected_reference)
                 .await
                 .expect("reference root resolves");
             let mut cursor: &[u8] = reply.bound_tx.bytes();
@@ -699,7 +861,7 @@ mod tests {
                 .expect("vin blob parses");
             tx.prefix.inputs.remove(emission_index);
             let signable = tx.prefix_hash();
-            emission_vin_verify_backing(&vin, &root, depth, signable)
+            emission_vin_verify_backing(&vin, &root, depth, signable.to_bytes())
                 .expect("backing leg verifies against the REAL tree root and depth");
         }
     }

@@ -121,4 +121,4 @@ refresh-driver split was designed to remove.
 | Wallet state management | ✅ Complete with reorg handling |
 | Balance computation | ✅ Complete (no staking bucket; that is engine-core) |
 | Coin selection | ✅ Complete |
-| FCMP++ path precompute | ⬜ Needs daemon RPC for `/get_curve_tree_path` |
+| FCMP++ membership path | ✅ Assembled wallet-side from the block-derived leaf stream (`shekyl-curve-tree::assemble_path`); no daemon path RPC exists (`SOK-10` Q7 → A, spend-revealing) |

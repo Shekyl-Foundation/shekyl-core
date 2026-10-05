@@ -12,6 +12,7 @@
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
 use super::*;
+use shekyl_rpc_client::RpcError;
 
 use proptest::prelude::*;
 use shekyl_crypto_pq::account::{
@@ -25,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::diagnostics::{AssertionSink, PanickingSink, PanickingSinkTrigger};
 use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
 use crate::engine::view_material::ViewMaterial;
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 /// Real wallet master seed (64 bytes). Drives `rederive_account`
 /// against the same key-derivation path `Engine::create` uses
@@ -61,12 +63,17 @@ fn make_local_refresh() -> LocalRefresh {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    LocalRefresh::new(vm, 0)
+    LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0))
 }
 
-fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
+fn snapshot_at_anchor(synced: u64, hash: BlockHash) -> LedgerSnapshot {
     let mut ledger = LedgerBlock::empty();
-    crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash).expect("test anchor");
+    crate::engine::scan_floor::anchor_ledger_block(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(synced),
+        hash,
+    )
+    .expect("test anchor");
     LedgerSnapshot::from_ledger(&ledger)
 }
 
@@ -97,6 +104,7 @@ fn test_bond_tx(
         keys,
         shekyl_wire::transaction::BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
+            endpoint: [0xEE; 32],
         },
     )
 }
@@ -117,7 +125,7 @@ fn test_bond_tx_kind(
                     .hybrid_bond_id()
                     .to_canonical_bytes()
                     .expect("encode hybrid id"),
-                p_canonical_id: test_persona_id(keys).to_bytes(),
+                p_canonical_id: test_persona_id(keys),
                 kind,
                 holdings: Holdings::CompleteTree,
                 bonded_total_atomic: 1_000,
@@ -152,17 +160,23 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     // the P-scan's confirmation set, so the two consumers agree on the
     // post-kind byte). Mutate BEFORE reading hashes so the parent
     // chaining stays consistent.
-    let b0 = make_synthetic_block(0, [0u8; 32]);
+    let b0 = make_synthetic_block(0, BlockHash::NULL);
     let mut b1 = make_synthetic_block(1, b0.block.hash());
     b1.transactions.push(test_bond_tx(&mine));
-    b1.block.transaction_hashes.push([0xA1; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA1; 32]));
     b1.transactions.push(test_bond_tx(&stranger));
-    b1.block.transaction_hashes.push([0xA2; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA2; 32]));
     b1.transactions.push(test_bond_tx_kind(
         &mine,
         shekyl_wire::transaction::BondPostKind::Other(0x7F),
     ));
-    b1.block.transaction_hashes.push([0xA3; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA3; 32]));
 
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![b0.clone(), b1.clone()]);
     let snapshot = snapshot_at_anchor(0, b0.block.hash());
@@ -175,7 +189,7 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     )
     .expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
-    let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
+    let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
 
     let sink = AssertionSink::new();
     let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -200,7 +214,10 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
         result.bond_sightings[0].slot, 4,
         "slot-resolved from the watch"
     );
-    assert_eq!(result.bond_sightings[0].block_height, 1);
+    assert_eq!(
+        result.bond_sightings[0].block_height,
+        shekyl_types::BlockHeight::from_raw(1)
+    );
 }
 
 /// An intra-attempt reorg discards abandoned-fork bond sightings with the
@@ -220,12 +237,14 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     // Chain A built by hand so the injected bond tx is inside the hash
     // chaining (mutate BEFORE reading each block's hash).
     let mut chain_a = Vec::new();
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::NULL;
     for h in 0..TIP {
         let mut b = make_synthetic_block(h, parent);
         if h == FORK {
             b.transactions.push(test_bond_tx(&mine));
-            b.block.transaction_hashes.push([0xB0; 32]);
+            b.block
+                .transaction_hashes
+                .push(TxHash::from_bytes([0xB0; 32]));
         }
         parent = b.block.hash();
         chain_a.push(b);
@@ -244,7 +263,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     .expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
     let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
-    let refresh = LocalRefresh::with_bond_watch(vm, 0, watch);
+    let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
 
     let sink = AssertionSink::new();
     let (progress_tx, _progress_rx) = fresh_progress_channel();
@@ -278,7 +297,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
 fn linear_chain(n: u64) -> Vec<ScannableBlock> {
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::NULL;
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();
@@ -350,7 +369,7 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -382,7 +401,7 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // locate it precisely.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(SYNCED + 1),
+        Some(shekyl_types::BlockHeight::from_raw(SYNCED + 1)),
         "intra-attempt straddle must be detected and rewound"
     );
 
@@ -390,11 +409,19 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // below the fork, B at and above it. No old-chain block above
     // the fork survives — the pre-fix behavior (A6/A7 spliced
     // against B8..B11) is exactly what this rules out.
-    let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK)
-        .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK)
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                chain_a[usize::try_from(h).unwrap()].block.hash(),
+            )
+        })
         .chain((FORK..TIP).map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (h, tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         }))
         .collect();
     assert_eq!(
@@ -433,7 +460,7 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     let tail_b = divergent_tail(&chain_a, FORK, TIP);
@@ -463,17 +490,20 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     // one above it — the seam is rewound through, not spliced around.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(FORK),
+        Some(shekyl_types::BlockHeight::from_raw(FORK)),
         "a fork at exactly synced_height must rewind to it, not splice"
     );
 
     // Every height from the fork up carries the B-chain hash — including
     // height 4 itself (the window-top block the reorg replaced) and
     // heights 5/6 (fetched as A before the swap, purged, refetched as B).
-    let expected: Vec<(u64, [u8; 32])> = (FORK..TIP)
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (FORK..TIP)
         .map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
-            (h, tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         })
         .collect();
     assert_eq!(
@@ -517,7 +547,7 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, 0);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
 
     let chain_a = linear_chain(TIP);
     // Chain B: A below FORK1, divergent tail at/above it.
@@ -560,7 +590,7 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // boundary — the merge rolls persisted state back to it and re-ingests.
     assert_eq!(
         result.reorg_rewind.map(|r| r.fork_height),
-        Some(SYNCED + 1),
+        Some(shekyl_types::BlockHeight::from_raw(SYNCED + 1)),
         "the second intra-attempt straddle must also rewind, not slip through"
     );
 
@@ -568,15 +598,26 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // below FORK1, B between the forks, C at and above FORK2. The pre-fix
     // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
     // exactly what this rules out.
-    let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK1)
-        .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+    let expected: Vec<(shekyl_types::BlockHeight, BlockHash)> = (SYNCED + 1..FORK1)
+        .map(|h| {
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                chain_a[usize::try_from(h).unwrap()].block.hash(),
+            )
+        })
         .chain((FORK1..FORK2).map(|h| {
             let idx = usize::try_from(h - FORK1).unwrap();
-            (h, tail_b[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_b[idx].block.hash(),
+            )
         }))
         .chain((FORK2..TIP).map(|h| {
             let idx = usize::try_from(h - FORK2).unwrap();
-            (h, tail_c[idx].block.hash())
+            (
+                shekyl_types::BlockHeight::from_raw(h),
+                tail_c[idx].block.hash(),
+            )
         }))
         .collect();
     assert_eq!(
@@ -673,7 +714,7 @@ fn is_error_class(event: &RefreshDiagnostic) -> bool {
 }
 
 /// True iff `event` is a [`RefreshDiagnostic::DaemonProtocolError`].
-/// Used by the `LocalRefreshError::Io` coherence check.
+/// Used by the daemon-failure coherence checks.
 fn is_daemon_protocol_error(event: &RefreshDiagnostic) -> bool {
     matches!(event, RefreshDiagnostic::DaemonProtocolError { .. })
 }
@@ -700,7 +741,7 @@ async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, FLOOR);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));
     let chain = linear_chain(TIP);
     let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -721,8 +762,14 @@ async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
         .await
         .expect("anchored birthday scan succeeds");
 
-    assert_eq!(result.processed_height_range.start, FLOOR);
-    assert_eq!(result.processed_height_range.end, TIP);
+    assert_eq!(
+        result.processed_height_range.start,
+        shekyl_types::BlockHeight::from_raw(FLOOR)
+    );
+    assert_eq!(
+        result.processed_height_range.end,
+        shekyl_types::BlockHeight::from_raw(TIP)
+    );
     assert_eq!(
         result.block_hashes.len(),
         usize::try_from(TIP - FLOOR).unwrap()
@@ -745,7 +792,7 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
     .expect("rederive_account against fakechain raw32 seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
-    let refresh = LocalRefresh::new(vm, FLOOR);
+    let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));
     let chain = linear_chain(TIP);
     let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -766,7 +813,10 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
         .await
         .expect("incremental scan past floor succeeds");
 
-    assert_eq!(result.processed_height_range, (SYNCED + 1)..TIP);
+    assert_eq!(
+        result.processed_height_range,
+        shekyl_types::BlockHeight::from_raw(SYNCED + 1)..shekyl_types::BlockHeight::from_raw(TIP)
+    );
 }
 
 // ── Coherence: clean path (Ok → no error-class events) ─────
@@ -817,7 +867,7 @@ async fn coherence_clean_chain_returns_ok_with_no_error_events() {
 /// Persistent `get_height` failure: the producer's first daemon
 /// call fails with `RpcError::ConnectionError`. `get_height` has
 /// no retry loop at the producer; the failure surfaces directly
-/// as `LocalRefreshError::Io`, preceded by exactly one
+/// as `LocalRefreshError::DaemonUnreachable`, preceded by exactly one
 /// `DaemonProtocolError { kind: ConnectionError }` emission.
 ///
 /// Pins the §5.4.6 coherence contract on the `Io` branch from
@@ -849,12 +899,12 @@ async fn coherence_get_height_failure_emits_protocol_error_then_returns_io() {
         .await;
 
     match &result {
-        Err(LocalRefreshError::Io) => {}
+        Err(LocalRefreshError::DaemonUnreachable) => {}
         Err(e) => {
-            panic!("get_height failure should surface as LocalRefreshError::Io, got Err({e:?})")
+            panic!("get_height failure should surface as LocalRefreshError::DaemonUnreachable, got Err({e:?})")
         }
         Ok(_) => {
-            panic!("get_height failure should surface as LocalRefreshError::Io, got Ok(_)")
+            panic!("get_height failure should surface as LocalRefreshError::DaemonUnreachable, got Ok(_)")
         }
     }
     let recorded = sink.recorded();
@@ -887,7 +937,7 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // Mark height 1 as persistently malformed: every fetch at
     // height 1 returns `RpcError::InvalidNode`. The producer's
     // `fetch_block_with_retry` runs MAX_BLOCK_FETCH_RETRIES
-    // attempts (all fail) and surfaces `LocalRefreshError::Io`
+    // attempts (all fail) and surfaces `LocalRefreshError::DaemonProtocol`
     // with one DaemonProtocolError per attempt (rate-limited by
     // the per-block ceiling + F13-S latch).
     //
@@ -898,7 +948,7 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // is the corresponding helper but it's not in scope here at C7. The
     // RPC-classified malformed path goes through `DaemonProtocolError`
     // (not `DaemonMalformed`), so this test covers the RPC-side
-    // coherence at the fetch-failure → `Io` branch.
+    // coherence at the fetch-failure → `DaemonProtocol` branch.
     daemon.set_block_returns_malformed(1);
     let snapshot = empty_snapshot();
     let sink = AssertionSink::new();
@@ -919,16 +969,17 @@ async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed
     // The RPC-classified malformed path: TestDaemon returns
     // `RpcError::InvalidNode` for every fetch at height 1. The
     // fetch-with-retry loop exhausts its budget and returns
-    // `LocalRefreshError::Io` with one DaemonProtocolError per
+    // `LocalRefreshError::DaemonProtocol` — a reply that broke the
+    // contract, not an outage — with one DaemonProtocolError per
     // attempt (subject to the per-class rate-limit).
     match &result {
-        Err(LocalRefreshError::Io) => {}
+        Err(LocalRefreshError::DaemonProtocol) => {}
         Err(e) => panic!(
-            "RPC-classified malformed at height 1 should surface as Io \
+            "RPC-classified malformed at height 1 should surface as DaemonProtocol \
                  (fetch_with_retry-exhausted), got Err({e:?})"
         ),
         Ok(_) => panic!(
-            "RPC-classified malformed at height 1 should surface as Io \
+            "RPC-classified malformed at height 1 should surface as DaemonProtocol \
                  (fetch_with_retry-exhausted), got Ok(_)"
         ),
     }
@@ -1043,11 +1094,11 @@ enum InjectionScenario {
     /// `Ok(_)` with no error-class diagnostics.
     Clean,
     /// One-shot `RpcError::ConnectionError` on `get_height`.
-    /// Coherence requires `Err(Io)` with ≥1 `DaemonProtocolError`.
+    /// Coherence requires `Err(DaemonUnreachable)` with ≥1 `DaemonProtocolError`.
     GetHeightFails,
     /// Persistently-malformed block at height 1 (every fetch
     /// returns `RpcError::InvalidNode`). Coherence requires
-    /// `Err(Io)` (fetch-with-retry exhausted) with ≥1
+    /// `Err(DaemonProtocol)` (fetch-with-retry exhausted) with ≥1
     /// `DaemonProtocolError`.
     BlockFetchFails,
 }
@@ -1143,17 +1194,17 @@ fn coherence_property_holds(chain_length: u64, scenario: InjectionScenario) {
             }
             // get_height failure: Io required with ≥1
             // DaemonProtocolError (coherence pin).
-            (InjectionScenario::GetHeightFails, Err(LocalRefreshError::Io)) => {
+            (InjectionScenario::GetHeightFails, Err(LocalRefreshError::DaemonUnreachable)) => {
                 assert!(
                     recorded.iter().any(is_daemon_protocol_error),
-                    "GetHeightFails scenario, chain_length={chain_length}: Io return \
+                    "GetHeightFails scenario, chain_length={chain_length}: DaemonUnreachable return \
                          MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
                 );
             }
             (InjectionScenario::GetHeightFails, _) => {
                 panic!(
                     "GetHeightFails scenario, chain_length={chain_length}: expected \
-                         Err(Io), got {result_summary:?}. Recorded: {recorded:?}",
+                         Err(DaemonUnreachable), got {result_summary:?}. Recorded: {recorded:?}",
                 );
             }
             // BlockFetchFails with chain_length < 2: scan range
@@ -1166,19 +1217,19 @@ fn coherence_property_holds(chain_length: u64, scenario: InjectionScenario) {
                 );
             }
             // BlockFetchFails with chain_length ≥ 2: producer
-            // exhausts MAX_BLOCK_FETCH_RETRIES and returns Io
+            // exhausts MAX_BLOCK_FETCH_RETRIES and returns DaemonProtocol
             // with ≥1 DaemonProtocolError.
-            (InjectionScenario::BlockFetchFails, Err(LocalRefreshError::Io)) => {
+            (InjectionScenario::BlockFetchFails, Err(LocalRefreshError::DaemonProtocol)) => {
                 assert!(
                     recorded.iter().any(is_daemon_protocol_error),
-                    "BlockFetchFails scenario, chain_length={chain_length}: Io return \
+                    "BlockFetchFails scenario, chain_length={chain_length}: DaemonProtocol return \
                          MUST be preceded by ≥1 DaemonProtocolError. Recorded: {recorded:?}",
                 );
             }
             (InjectionScenario::BlockFetchFails, _) => {
                 panic!(
                     "BlockFetchFails scenario, chain_length={chain_length}: expected \
-                         Err(Io) (or Ok for short chains), got {result_summary:?}. \
+                         Err(DaemonProtocol) (or Ok for short chains), got {result_summary:?}. \
                          Recorded: {recorded:?}",
                 );
             }
@@ -1300,7 +1351,7 @@ async fn panic_safety_panicking_sink_on_scan_progress_unwinds_cleanly() {
 /// call fails (injected `ConnectionError`); the producer emits
 /// `DaemonProtocolError` for the §5.4.7 R6 classification; the
 /// sink panics. The panic propagates out before the producer
-/// reaches the `return Err(LocalRefreshError::Io)` line — i.e.,
+/// reaches the daemon-failure `return Err(..)` line — i.e.,
 /// the §5.4.6 emission/return coherence contract is consistent
 /// with the panic-safety contract (emission happens before the
 /// return; a sink that panics on emit prevents the typed
@@ -1481,8 +1532,52 @@ fn is_daemon_malformed_classifies_event_correctly() {
     };
     assert!(is_daemon_malformed(&event));
     let non_malformed = RefreshDiagnostic::ScanProgress {
-        height: 1,
+        height: BlockHeight::from_raw(1),
         candidates: 0,
     };
     assert!(!is_daemon_malformed(&non_malformed));
+}
+
+/// Run one refresh attempt over a 3-block chain whose first fetched block
+/// (height 1) fails once with `injected`, then serves normally.
+async fn refresh_after_one_fetch_failure(
+    injected: RpcError,
+) -> Result<ScanResult, LocalRefreshError> {
+    let refresh = make_local_refresh();
+    let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
+    daemon.inject_block_fetch_failure(1, injected);
+    let (progress_tx, _progress_rx) = fresh_progress_channel();
+    refresh
+        .produce_scan_result(
+            empty_snapshot(),
+            &daemon,
+            RefreshOptions::default(),
+            CancellationToken::new(),
+            progress_tx,
+            &AssertionSink::new(),
+        )
+        .await
+}
+
+/// An identity refusal is not retried: the client caches its verdict, so
+/// every retry would repeat it. One queued failure discriminates — a
+/// retried attempt would find the queue drained and succeed.
+#[tokio::test(start_paused = true)]
+async fn an_identity_refusal_stops_the_fetch_without_retrying() {
+    let wrong_network = RpcError::IdentityMismatch(shekyl_rpc_client::IdentityMismatch::Network {
+        ours: shekyl_rpc_client::DaemonNetwork::Mainnet,
+        theirs: shekyl_rpc_client::DaemonNetwork::Testnet,
+    });
+    assert_eq!(
+        refresh_after_one_fetch_failure(wrong_network).await.err(),
+        Some(LocalRefreshError::DaemonProtocol),
+    );
+    // The control: the same single failure, as an outage, is retried and
+    // the attempt completes.
+    assert!(
+        refresh_after_one_fetch_failure(RpcError::ConnectionError("flaky".into()))
+            .await
+            .is_ok(),
+        "a transient outage is retried within the budget"
+    );
 }

@@ -4,7 +4,7 @@ mod sal;
 use rand_core::OsRng;
 
 use ciphersuite::{
-    group::{ff::Field, Group, GroupEncoding},
+    group::{Group, GroupEncoding},
     Ciphersuite,
 };
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
@@ -12,14 +12,50 @@ use ec_divisors::{DivisorCurve, ScalarDecomposition};
 use helioselene::{Helios, Selene};
 use multiexp::multiexp_vartime;
 
-use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_curve_generators::{
+    FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J, T,
+};
 
 use crate::{
-    fcmps::{Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path, TreeRoot},
+    fcmps::{
+        Branches, CBlind, Fcmp, IBlind, IBlindBlind, KBlind, OBlind, OutputBlinds, Path, TreeRoot,
+    },
     sal::*,
     FcmpPlusPlus, InputVerification, Output, FCMP_PARAMS, HELIOS_FCMP_GENERATORS,
     SELENE_FCMP_GENERATORS, SELENE_HASH_INIT,
 };
+
+/// A random `PL-D3` leaf commitment: `K = k·G_k`, blind `r`, `CM = K + r·J`, and
+/// `CM.x` as the Selene leaf scalar.
+#[allow(non_snake_case)]
+pub(crate) struct PqcLeaf {
+    pub K: EdwardsPoint,
+    pub blind: Scalar,
+    pub cm: EdwardsPoint,
+    pub x: <Selene as Ciphersuite>::F,
+}
+
+#[allow(non_snake_case)]
+pub(crate) fn random_pqc_leaf() -> PqcLeaf {
+    let k = Scalar::random(&mut OsRng);
+    let r = Scalar::random(&mut OsRng);
+    let K = EdwardsPoint(*PQC_LEAF_COMMITMENT_G_K) * k;
+    let cm = K + (EdwardsPoint(*PQC_LEAF_COMMITMENT_J) * r);
+    PqcLeaf {
+        K,
+        blind: r,
+        cm,
+        x: <Ed25519 as Ciphersuite>::G::to_xy(cm).unwrap().0,
+    }
+}
+
+/// The blind for a leaf's commitment opening leg.
+pub(crate) fn k_blind(leaf: &PqcLeaf) -> KBlind<EdwardsPoint> {
+    KBlind::new(
+        EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
+        ScalarDecomposition::new(leaf.blind).unwrap(),
+    )
+}
 
 #[test]
 fn test() {
@@ -45,10 +81,11 @@ fn test() {
         (input, spend_auth_and_linkability)
     };
 
-    let (tree, fcmp, h_pqc) = {
+    let (tree, fcmp, pqc) = {
         let leaves = vec![output];
-        let h_pqc = <Selene as Ciphersuite>::F::random(&mut OsRng);
-        let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> = vec![vec![h_pqc]];
+        let pqc = random_pqc_leaf();
+        let h_pqc = pqc.x;
+        let leaves_cm_x: Vec<<Selene as Ciphersuite>::F> = vec![h_pqc];
 
         let tree = TreeRoot::<Selene, Helios>::C1(
             *SELENE_HASH_INIT
@@ -73,9 +110,9 @@ fn test() {
 
         let path = Path {
             output,
-            output_extra_scalars: vec![h_pqc],
+            output_cm: pqc.cm,
             leaves,
-            leaves_extra_scalars,
+            leaves_cm_x,
             curve_2_layers: vec![],
             curve_1_layers: vec![],
         };
@@ -100,13 +137,14 @@ fn test() {
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerandomized_output.c_blind()).unwrap(),
             ),
+            k_blind(&pqc),
         );
 
         let blinded_branches = branches.blind(vec![output_blinds], vec![], vec![]).unwrap();
         (
             tree,
             Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded_branches).unwrap(),
-            h_pqc,
+            pqc,
         )
     };
 
@@ -127,7 +165,7 @@ fn test() {
             [0; 32],
             vec![InputVerification {
                 key_image: L,
-                pqc_pk_hash: h_pqc,
+                pqc_key_point: pqc.K,
             }],
         )
         .unwrap();
@@ -149,7 +187,7 @@ fn test() {
             [0; 32],
             vec![InputVerification {
                 key_image: L,
-                pqc_pk_hash: h_pqc,
+                pqc_key_point: pqc.K,
             }],
         )
         .unwrap();

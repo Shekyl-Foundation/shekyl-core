@@ -11,30 +11,98 @@ use std::sync::Arc;
 use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES};
+use crate::segment::{
+    leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES,
+    SEGMENT_FREEZE_REORG_MARGIN_BLOCKS,
+};
 use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
-use crate::types::{BlockHeight, Gindex, LeafEntry, TargetKind, TreePosition};
+use crate::types::{
+    BlockHeight, BlockHeightKey, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition,
+    TreePositionKey,
+};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
-const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
-const LEAF_META_TABLE: TableDefinition<TreePosition, &[u8; 192]> =
+const LEAVES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> = TableDefinition::new("leaves");
+const LEAF_META_TABLE: TableDefinition<TreePositionKey, &[u8; 192]> =
     TableDefinition::new("leaf_meta");
 const FROZEN_SEGMENTS_TABLE: TableDefinition<SegmentId, &[u8; 56]> =
     TableDefinition::new("frozen_segments");
-const OWNED_IDENTITIES_TABLE: TableDefinition<TreePosition, &[u8; 128]> =
+const OWNED_IDENTITIES_TABLE: TableDefinition<TreePositionKey, &[u8; 128]> =
     TableDefinition::new("owned_identities");
 const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
     TableDefinition::new("pinned_segments");
+/// Captured chunks (`CT-6` increment 5), keyed by the leaf position at which
+/// the chunk **closed** — its finality coordinate.
+///
+/// ## Why the key is `end_leaf` and not `(layer, index)`
+///
+/// A chunk's identity is its layer and index, but keying on that pair buys
+/// nothing and costs two things. It does not fit: at layer 0 the index
+/// reaches ~1.0e17 against the 2^56 a packed `(u8, u56)` leaves, and every
+/// other key in this store is a `u64` newtype. And it would need its own
+/// truncation rule, because the coordinate a rollback speaks in is a
+/// position.
+///
+/// `end_leaf` is **derivable** from what a reader already has — for an owned
+/// leaf at `p` and layer `L`, the chunk is `p / outputs_per_node(L)` and ends
+/// at `(index + 1) * outputs_per_node(L) - 1` — so a spend-time lookup is a
+/// direct key read rather than a scan. And truncation becomes the *same*
+/// `delete_pos_keys_batched(start)` call every other position-keyed table
+/// here uses: captures roll back in the ring's own transaction, by the same
+/// mechanism, rather than by a second rule that has to be kept in step.
+///
+/// Several layers close on one leaf when a fold cascades, so the value holds
+/// every chunk that closed at this position — which is also why they share a
+/// key naturally.
+///
+/// **Plaintext, deliberately, and pre-genesis only.** These rows mark which
+/// leaves are the wallet's. They are here rather than in the sealed ledger so
+/// capture's reorg behaviour can be audited with a redb dump while it is new
+/// — a bug found in a readable table is far cheaper than one found behind a
+/// seal. Nothing but testnet exists to expose. `FOLLOWUPS.md` carries the row
+/// that retires this table for sealed persistence before genesis; it is a
+/// tracked promise, not a mechanism, and it is deleted rather than migrated
+/// when that lands (rule 15).
+const CAPTURED_CHUNKS_TABLE: TableDefinition<TreePositionKey, &[u8]> =
+    TableDefinition::new("captured_chunks");
 // Pending (created but not yet drained) leaves, keyed by global output
 // index. Value = 128-byte leaf || 192-byte leaf-meta payload (the same
 // encoders as `LEAVES_TABLE`/`LEAF_META_TABLE` — one layout, two tables),
 // so a pending row migrates to/from the drained tables without
 // re-encoding. Rows enter on block ingest, leave on drain
 // (`append_block_deltas`) or on the rollback creation-height filter.
-const PENDING_TABLE: TableDefinition<Gindex, &[u8; 320]> = TableDefinition::new("pending");
+const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::new("pending");
+// CT-6 increment 4's snapshot ring: the curve-tree frontier as it stood
+// after each ingested block, keyed by that block's height. Variable-width —
+// a frontier is its partial chunks, which are shorter than their capacities
+// until they fold — so the value is `&[u8]` rather than a fixed array, and
+// `Frontier::max_encoded_len` is the bound rather than the size.
+//
+// The ring is TOTAL over `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` and bounded by
+// it: `append_block_with_snapshot` writes the height it ingests and, in the
+// same transaction, removes what has fallen out of the horizon. There is no
+// eviction policy to hold, because the write and the removal are one step
+// (CT-6 Q1, RULED 2026-09-28). The run it keeps is `[h - horizon, h]` —
+// closed at the bottom, because the deepest legal reorg's FORK sits at
+// `h - horizon` and that is the row a rewind restores from
+// (`write_frontier_snapshot_in_txn`).
+//
+// A store that has none of these rows — a freshly re-synced one — needs no
+// migration: the ring is a cache (C8), a missing row falls through to
+// `root_at_count`, and the ring refills as blocks arrive.
+//
+// That is not backward compatibility. A pre-ring (≤5) store is **refused at
+// open** and re-synced; the ring bumped `SCHEMA_VERSION` to 6 precisely so it
+// would be (the capture table bumped it again, to 7, below), because a
+// pre-ring **writer** cannot see this table and can roll back and replay
+// while leaving rows above the new tip in place, where a stale row can hold
+// the expected leaf count over the abandoned branch's root. A binding
+// replaces a check only per direction.
+const FRONTIER_SNAPSHOTS_TABLE: TableDefinition<BlockHeightKey, &[u8]> =
+    TableDefinition::new("frontier_snapshots");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
 // values convert to `BlockHeight`/counts at the API boundary. This is the
 // one legitimate raw-`u64` value site in the store.
@@ -69,10 +137,45 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// retires that shape with a typed error. Version 4 retires the claim-era
 /// `StakedKey` target (tag 2 in the `leaf_meta` target byte + its
 /// `lock_blocks` extra at bytes 114..122): a ≤3 store may contain tag-2
-/// rows this build cannot represent. Pre-genesis disposition for any
-/// mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
+/// rows this build cannot represent. Version 5 is `PL-D3`
+/// (`FCMP_SPEND_LINKABILITY.md` §6.2): **byte-identical layout to version
+/// 4**, but the leaf's 4th scalar is now the x-coordinate of the output's
+/// PQC leaf commitment and `leaf_meta[81..113)` holds the published
+/// commitment point, not the key hash — every leaf, layer hash and root a
+/// ≤4 store holds came from a derivation no current build reproduces, and
+/// would resume into a baffling root mismatch. Pre-genesis disposition for
+/// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 4;
+///
+/// **6** adds the CT-6 increment-4 frontier snapshot ring. **A ≤5 store is
+/// refused at open and must be re-synced** — [`Self::check_schema_version`]
+/// runs before `init_tables`, so no ≤5 store ever reaches the code that would
+/// create this table. That is C8's `refuse-and-resync`, and it is the whole
+/// upgrade path; there is no one-way migration and none is wanted pre-genesis
+/// (rule 15).
+///
+/// What the ring being a **cache** buys is not compatibility but the *absence
+/// of migration code*: after the resync the table starts empty, every height
+/// falls through to `root_at_count`, and the ring refills as blocks arrive. No
+/// row has to be reconstructed from anything.
+///
+/// The bump to 6 exists to stop a ≤5 **writer**: a pre-ring binary does not
+/// know [`FRONTIER_SNAPSHOTS_TABLE`], so it can roll back and replay without
+/// truncating it, and a stale row left at a replayed height can carry the
+/// expected leaf count while composing the abandoned branch's root. Nothing
+/// in-band can stop a writer that cannot see the table, so the version cell
+/// is the only mechanism that closes it, and refusing the store is exactly
+/// C8's `refuse-and-resync`.
+///
+/// **7 is the same hazard, one table along.** A ≤6 writer does not know
+/// [`CAPTURED_CHUNKS_TABLE`], so it can truncate the leaves and the ring
+/// while leaving captures that are no longer final — and a surviving capture
+/// is worse than a stale ring row, because the ring is consulted against an
+/// expected leaf count while a capture is read as a path's branches. The
+/// store is a cache either way, so the bump buys the absence of migration
+/// code rather than compatibility: after the resync the table starts empty
+/// and refills as blocks arrive.
+const SCHEMA_VERSION: u64 = 7;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -474,6 +577,21 @@ pub enum StoreError {
     /// store's declared posture forbids, and must learn it here rather
     /// than at the first failed challenge.
     PruneDisabledPosture,
+    /// Two different contents were offered for one `(end_leaf, layer)`
+    /// capture (`CT-6` §11.8).
+    ///
+    /// A chunk's contents are fixed by the leaves under it, so one coordinate
+    /// has exactly one correct value. Re-offering the same bytes is fine and
+    /// expected — reconciliation recomputes what is already there. *Different*
+    /// bytes mean two sources disagree about the tree, which is the condition
+    /// a capture exists to be trusted against, so it is refused rather than
+    /// resolved in either direction.
+    ConflictingCapture {
+        /// The coordinate offered twice.
+        end_leaf: u64,
+        /// The layer whose contents disagreed.
+        layer: u8,
+    },
     /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
     /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
     /// construction bug in whatever built the serve-set, not a freeze race.
@@ -556,6 +674,23 @@ pub enum StoreError {
         /// Version this build reads and writes.
         expected: u64,
     },
+    /// A frontier snapshot was offered for a height strictly below the store's
+    /// `sync_tip`.
+    ///
+    /// [`LeafStore::append_block_deltas`] tolerates a non-monotonic
+    /// `tip_height` for the freeze clock (`effective_tip` takes the max).
+    /// A snapshot does not: [`LeafStore::append_block_with_snapshot`] refuses
+    /// `tip_height < sync_tip`. Equality stays legal because the cell is
+    /// born at `0`, and block 0 is a real first capture — `<=` would refuse
+    /// genesis. A height below the tip would land under the retention floor
+    /// and still widen `frontier_snapshot_span`. Refused rather than evicted
+    /// around: eviction would hide the caller bug that produced the row.
+    SnapshotBelowSyncTip {
+        /// The height the snapshot was offered for.
+        tip: u64,
+        /// The store's current sync tip.
+        sync_tip: u64,
+    },
 }
 
 impl StoreError {
@@ -573,6 +708,66 @@ impl StoreError {
     pub fn is_already_open(&self) -> bool {
         matches!(self, StoreError::Redb(e) if matches!(**e, redb::Error::DatabaseAlreadyOpen))
     }
+
+    /// What this failure means to whoever has to act on a store that would
+    /// not open ([`StoreOpenFault`]). Exhaustive over this enum, so a new
+    /// variant has to be placed before it compiles; the arms a caller's own
+    /// operation raises (a bad truncate, a posture refusal, a rollback above
+    /// the tip) are [`StoreOpenFault::Internal`], since an open reaches them
+    /// only through a bug.
+    #[must_use]
+    pub fn open_fault(&self) -> StoreOpenFault {
+        match self {
+            StoreError::Redb(e) => match **e {
+                redb::Error::DatabaseAlreadyOpen => StoreOpenFault::LockedElsewhere,
+                redb::Error::Io(_) | redb::Error::PreviousIo => StoreOpenFault::Io,
+                redb::Error::UpgradeRequired(_) => StoreOpenFault::Unsupported,
+                redb::Error::Corrupted(_) => StoreOpenFault::Corrupt,
+                // `redb::Error` is foreign and `#[non_exhaustive]`: the rest
+                // are transaction, savepoint and table-shape misuse, which an
+                // open does not produce.
+                _ => StoreOpenFault::Internal,
+            },
+            StoreError::SchemaVersionMismatch { .. } => StoreOpenFault::Unsupported,
+            StoreError::CorruptMeta(_)
+            | StoreError::MixedComposition(_)
+            | StoreError::InvalidLeafBytes { .. }
+            | StoreError::PendingRowMissing { .. }
+            | StoreError::DuplicateGindex { .. }
+            | StoreError::FrozenSegmentRecordMissing { .. }
+            | StoreError::FrozenSegmentRkMismatch { .. } => StoreOpenFault::Corrupt,
+            StoreError::InvalidTruncate { .. }
+            | StoreError::ConflictingCapture { .. }
+            | StoreError::LeafCountOutOfBounds { .. }
+            | StoreError::TruncatedIntoPrunedRange { .. }
+            | StoreError::FrozenSegmentPruned { .. }
+            | StoreError::PruneDisabledPosture
+            | StoreError::UnrepresentableShardId { .. }
+            | StoreError::InvalidRollback { .. }
+            | StoreError::PendingGindexCollision { .. }
+            | StoreError::SnapshotBelowSyncTip { .. } => StoreOpenFault::Internal,
+        }
+    }
+}
+
+/// Why a leaf store could not be opened, as far as the remedy goes — what
+/// the person who has to act on it needs to know, not the store's own
+/// diagnosis (which stays in the error for the log).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreOpenFault {
+    /// Another process holds the store's single-writer lock: the wallet is
+    /// open somewhere else.
+    LockedElsewhere,
+    /// The store's contents contradict themselves. Remedy: delete the store
+    /// and let the wallet rebuild it.
+    Corrupt,
+    /// The store was written by a different schema, or in a shape this
+    /// build cannot resume.
+    Unsupported,
+    /// The filesystem failed underneath the store.
+    Io,
+    /// Not an open-time outcome: only a programming error reaches it here.
+    Internal,
 }
 
 impl From<redb::Error> for StoreError {
@@ -674,6 +869,8 @@ impl LeafStore {
         txn.open_table(OWNED_IDENTITIES_TABLE)?;
         txn.open_table(PINNED_SEGMENTS_TABLE)?;
         txn.open_table(PENDING_TABLE)?;
+        txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        txn.open_table(CAPTURED_CHUNKS_TABLE)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             if meta.get(META_LEAF_COUNT)?.is_none() {
@@ -703,9 +900,14 @@ impl LeafStore {
         txn.delete_table(FROZEN_SEGMENTS_TABLE)?;
         txn.delete_table(OWNED_IDENTITIES_TABLE)?;
         txn.delete_table(PINNED_SEGMENTS_TABLE)?;
+        // Captures are derived from the leaves being wiped here.
+        txn.delete_table(CAPTURED_CHUNKS_TABLE)?;
         // A missed table here leaves stale pending rows that would corrupt
         // a subsequent `from_blocks` rebuild — pinned by the clear test.
         txn.delete_table(PENDING_TABLE)?;
+        // The ring is derived from the leaves being wiped here; a surviving
+        // row would answer a height the rebuilt chain has not reached.
+        txn.delete_table(FRONTIER_SNAPSHOTS_TABLE)?;
         txn.delete_table(META_TABLE)?;
         txn.commit()?;
         self.init_tables()
@@ -722,7 +924,7 @@ impl LeafStore {
     pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        Ok(BlockHeight(
+        Ok(BlockHeight::from_raw(
             meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0),
         ))
     }
@@ -869,7 +1071,7 @@ impl LeafStore {
             let (id, _) = row?;
             let id = id.value();
             let start = u64::from(id.0) * e;
-            if leaves.get(TreePosition(start))?.is_none() {
+            if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                 pruned.push(u64::from(id.0));
             }
         }
@@ -978,12 +1180,81 @@ impl LeafStore {
     ///
     /// All-empty deltas still advance the tip and freeze clock, exactly
     /// like the empty [`Self::append_drained`] of CT-1/CT-2.
+    ///
+    /// This write does not touch the snapshot ring. Production ingest, which
+    /// captures a frontier at every height, uses
+    /// [`Self::append_block_with_snapshot`]. A caller that passed an optional
+    /// snapshot here could omit it and leave a hole the ring's totality
+    /// depends on not existing.
     pub fn append_block_deltas(
         &self,
         drained: &[LeafEntry],
         pending_added: &[LeafEntry],
         pending_removed: &[Gindex],
         tip_height: BlockHeight,
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            None,
+            &[],
+        )
+    }
+
+    /// [`Self::append_block_deltas`] plus one frontier snapshot, in the same
+    /// transaction.
+    ///
+    /// `frontier_snapshot` is required. The height this method commits is a
+    /// height the ring covers. Callers that populate only the segment tier
+    /// — the verify-edge baseline, the segment-freeze tests — stay on
+    /// [`Self::append_block_deltas`], which cannot write a ring row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::SnapshotBelowSyncTip`] when `tip_height` is strictly
+    /// below the store's sync tip, plus every error of
+    /// [`Self::append_block_deltas`]. The refusal happens before any write.
+    /// `captures` are the chunks that finalized during this block, keyed by
+    /// the position each closed at. They are written **inside this block's
+    /// transaction**, beside the leaves and the ring snapshot, so a crash
+    /// cannot separate a fold from its capture on the normal path. Pass an
+    /// empty slice when nothing was captured, which is every block for a
+    /// wallet that owns nothing in the chunks that closed.
+    pub fn append_block_with_snapshot(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+        frontier_snapshot: &[u8],
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
+    ) -> Result<(), StoreError> {
+        self.write_block_deltas(
+            drained,
+            pending_added,
+            pending_removed,
+            tip_height,
+            Some(frontier_snapshot),
+            captures,
+        )
+    }
+
+    /// Shared body of [`Self::append_block_deltas`] and
+    /// [`Self::append_block_with_snapshot`].
+    ///
+    /// `frontier_snapshot` is `Some` only on the snapshot method, whose
+    /// argument is required. The leaf and pending writes are one
+    /// implementation so the two doors cannot drift.
+    fn write_block_deltas(
+        &self,
+        drained: &[LeafEntry],
+        pending_added: &[LeafEntry],
+        pending_removed: &[Gindex],
+        tip_height: BlockHeight,
+        frontier_snapshot: Option<&[u8]>,
+        captures: &[(TreePosition, Vec<CapturedChunk>)],
     ) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         let mut leaf_count = {
@@ -998,7 +1269,7 @@ impl LeafStore {
                 if !leaf_bytes_are_canonical(&entry.leaf) {
                     return Err(StoreError::InvalidLeafBytes { batch_index });
                 }
-                let pos = TreePosition(leaf_count);
+                let pos = TreePositionKey::from_raw(leaf_count);
                 leaves.insert(pos, &entry.leaf)?;
                 leaf_meta.insert(pos, &encode_leaf_meta(entry))?;
                 leaf_count += 1;
@@ -1007,8 +1278,10 @@ impl LeafStore {
         if !pending_removed.is_empty() || !pending_added.is_empty() {
             let mut pending = txn.open_table(PENDING_TABLE)?;
             for &gindex in pending_removed {
-                if pending.remove(gindex)?.is_none() {
-                    return Err(StoreError::PendingRowMissing { gindex: gindex.0 });
+                if pending.remove(GindexKey::from(gindex))?.is_none() {
+                    return Err(StoreError::PendingRowMissing {
+                        gindex: gindex.to_raw(),
+                    });
                 }
             }
             for (offset, entry) in pending_added.iter().enumerate() {
@@ -1017,23 +1290,44 @@ impl LeafStore {
                         batch_index: drained.len() + offset,
                     });
                 }
-                if pending.get(entry.gindex)?.is_some() {
+                if pending.get(GindexKey::from(entry.gindex))?.is_some() {
                     return Err(StoreError::PendingGindexCollision {
-                        gindex: entry.gindex.0,
+                        gindex: entry.gindex.to_raw(),
                     });
                 }
-                pending.insert(entry.gindex, &encode_pending(entry))?;
+                pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
         }
-        let effective_tip = {
+        let (sync_tip, effective_tip) = {
             let meta = txn.open_table(META_TABLE)?;
             let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
-            tip_height.0.max(sync_tip)
+            (sync_tip, tip_height.to_raw().max(sync_tip))
         };
+        // The ring is keyed by the height it captures, so a snapshot offered
+        // below the tip would land under the retention floor and still widen
+        // the span. Checked before anything is written, so the refusal leaves
+        // the store untouched.
+        if frontier_snapshot.is_some() && tip_height.to_raw() < sync_tip {
+            return Err(StoreError::SnapshotBelowSyncTip {
+                tip: tip_height.to_raw(),
+                sync_tip,
+            });
+        }
+
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &leaf_count)?;
             meta.insert(META_SYNC_TIP, &effective_tip)?;
+        }
+        // Captures ride the block's own transaction, beside the ring. A
+        // crash between the fold and its capture is then not a state the
+        // normal path can reach, which leaves reconciliation a net under the
+        // mechanism rather than the mechanism itself.
+        for (end_leaf, chunks) in captures {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
+        }
+        if let Some(bytes) = frontier_snapshot {
+            Self::write_frontier_snapshot_in_txn(&txn, tip_height, bytes)?;
         }
         let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, effective_tip, leaf_count)?;
         {
@@ -1042,6 +1336,121 @@ impl LeafStore {
         }
         txn.commit()?;
         Ok(())
+    }
+
+    /// Write `height`'s frontier snapshot and drop everything that has
+    /// fallen below the horizon, inside the caller's transaction.
+    ///
+    /// The horizon **is** [`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`] — read from
+    /// the one JSON authority through the constant, never restated (C4). The
+    /// removal is the whole of the ring's bound: after writing `h`, the rows
+    /// present are exactly `[h - horizon, h]`, so the row count is a
+    /// consequence of this pair of statements rather than of a policy
+    /// something else has to enforce.
+    ///
+    /// **Why the run is closed at the bottom, and it is not an off-by-one to
+    /// tidy away.** A reorg of depth `horizon` *replaces* that many blocks,
+    /// so its fork height is `h - horizon` — the block the replaced ones
+    /// build on — and `rollback_to_fork` restores the live frontier from the
+    /// row **at** the fork. A half-open `(h - horizon, h]` drops exactly that
+    /// row, and the deepest legal rewind — the one case the bound exists for
+    /// — would take the fold path instead. So the covered run is one height
+    /// per replaceable block *plus* the one they fork from.
+    ///
+    /// A range delete rather than a single `remove` of `h - horizon - 1`,
+    /// because exactly one row leaves only when the ring was already full and
+    /// contiguous. After a rollback the tip re-advances over heights whose
+    /// rows this call overwrites, and after a resume onto a store written by
+    /// a build without the table there is no row at all — in both cases a
+    /// point delete would leave rows the horizon no longer covers.
+    fn write_frontier_snapshot_in_txn(
+        txn: &redb::WriteTransaction,
+        height: BlockHeight,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        ring.insert(BlockHeightKey::from(height), bytes)?;
+        let Some(first_covered) = height
+            .to_raw()
+            .checked_sub(SEGMENT_FREEZE_REORG_MARGIN_BLOCKS)
+        else {
+            return Ok(());
+        };
+        // `first_covered` is `h - horizon`, the deepest legal reorg's fork
+        // height — kept. The delete is strictly below it.
+        ring.retain_in(
+            ..BlockHeightKey::from(BlockHeight::from_raw(first_covered)),
+            |_, _| false,
+        )?;
+        Ok(())
+    }
+
+    /// The frontier snapshot the ring holds for `height`, if the ring covers
+    /// it.
+    ///
+    /// `None` is "outside the ring", never "the tier failed": a store error
+    /// stays an error. The caller decides what an uncovered height falls
+    /// through to; this method does not fall back, because a fallback here
+    /// would make a ring that never captured anything indistinguishable from
+    /// one that is working.
+    pub fn frontier_snapshot_at(&self, height: BlockHeight) -> Result<Option<Vec<u8>>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        Ok(ring
+            .get(BlockHeightKey::from(height))?
+            .map(|v| v.value().to_vec()))
+    }
+
+    /// Replace one ring row, or remove it when `bytes` is `None`.
+    ///
+    /// The discriminator CT-6 increment 4's consumer tests need: correct
+    /// capture and correct restore produce the same bytes either way, so
+    /// only a row the test *changed* can show which one a reader used.
+    /// Test-only, and not behind a feature: nothing outside this crate's own
+    /// test build can reach it.
+    #[cfg(test)]
+    pub(crate) fn test_set_frontier_snapshot(
+        &self,
+        height: BlockHeight,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            match bytes {
+                Some(bytes) => {
+                    ring.insert(BlockHeightKey::from(height), bytes)?;
+                }
+                None => {
+                    ring.remove(BlockHeightKey::from(height))?;
+                }
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Heights the ring currently covers, as `(lowest, highest)`, or `None`
+    /// when it holds no rows.
+    ///
+    /// The span is read off the rows rather than computed from the tip, so a
+    /// caller that asks whether the ring covers a height is answered by what
+    /// the ring **has**. Deriving the span from `sync_tip - horizon` would
+    /// claim coverage for every height in the window including the ones a
+    /// pre-ring store never wrote.
+    pub fn frontier_snapshot_span(&self) -> Result<Option<(BlockHeight, BlockHeight)>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+        let Some(first) = ring.first()? else {
+            return Ok(None);
+        };
+        let last = ring
+            .last()?
+            .ok_or(StoreError::CorruptMeta("ring has a first row but no last"))?;
+        Ok(Some((
+            BlockHeight::from(first.0.value()),
+            BlockHeight::from(last.0.value()),
+        )))
     }
 
     /// All pending (not yet drained) leaves, in gindex order — the resume
@@ -1058,7 +1467,7 @@ impl LeafStore {
         for row in pending.iter()? {
             let (key, value) = row?;
             let entry = decode_pending(value.value())?;
-            if entry.gindex != key.value() {
+            if entry.gindex != Gindex::from(key.value()) {
                 return Err(StoreError::CorruptMeta(
                     "pending row gindex disagrees with its key",
                 ));
@@ -1170,9 +1579,9 @@ impl LeafStore {
             let r_k = recompute_segment_r_k(&seg_leaves).map_err(store_mixed_root_err)?;
             let record = FrozenSegmentRecord {
                 r_k,
-                end_tree_pos: TreePosition(end_tree_pos),
-                end_block_height: BlockHeight(end_block_height),
-                frozen_at_height: BlockHeight(tip_height),
+                end_tree_pos: TreePosition::from_raw(end_tree_pos),
+                end_block_height: BlockHeight::from_raw(end_block_height),
+                frozen_at_height: BlockHeight::from_raw(tip_height),
             };
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             frozen.insert(segment_id, &encode_frozen_segment(&record))?;
@@ -1192,7 +1601,8 @@ impl LeafStore {
             let v = meta.get(META_LEAF_COUNT)?;
             v.map(|g| g.value()).unwrap_or(0)
         };
-        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height.0, leaf_count)?;
+        let next_freeze_seg =
+            Self::maybe_freeze_segments_in_txn(&txn, tip_height.to_raw(), leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
@@ -1259,7 +1669,17 @@ impl LeafStore {
     /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
-        Self::truncate_internals(&txn, pos, BlockHeight(0))?;
+        Self::truncate_internals(&txn, pos, BlockHeight::from_raw(0))?;
+        {
+            // This entry point resets the tip to 0 while leaving `pos`
+            // leaves in place, so even the row at height 0 would describe a
+            // leaf count the store no longer has. The ring goes entirely,
+            // rather than down to the new tip: sync is invalidated here, and
+            // a ring that survived it would answer heights this store can no
+            // longer place on a chain.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            ring.retain(|_, _| false)?;
+        }
         txn.commit()?;
         Ok(())
     }
@@ -1276,7 +1696,7 @@ impl LeafStore {
         pos: TreePosition,
         new_tip: BlockHeight,
     ) -> Result<(), StoreError> {
-        let pos = pos.0;
+        let pos = pos.to_raw();
         // Bounds check inside the write txn (one snapshot); the caller
         // dropping the uncommitted txn on error aborts it.
         let current_leaf_count = {
@@ -1296,7 +1716,7 @@ impl LeafStore {
                 let leaves = txn.open_table(LEAVES_TABLE)?;
                 let seg_start = ((pos - 1) / e) * e;
                 for p in seg_start..pos {
-                    if leaves.get(TreePosition(p))?.is_none() {
+                    if leaves.get(TreePositionKey::from_raw(p))?.is_none() {
                         return Err(StoreError::TruncatedIntoPrunedRange { pos: p });
                     }
                 }
@@ -1305,7 +1725,7 @@ impl LeafStore {
         {
             let mut leaves = txn.open_table(LEAVES_TABLE)?;
             let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
-            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePosition(pos))?;
+            delete_pos_range_batched(&mut leaves, &mut leaf_meta, TreePositionKey::from_raw(pos))?;
         }
         {
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -1329,7 +1749,20 @@ impl LeafStore {
         }
         {
             let mut owned = txn.open_table(OWNED_IDENTITIES_TABLE)?;
-            delete_pos_keys_batched(&mut owned, TreePosition(pos))?;
+            delete_pos_keys_batched(&mut owned, TreePositionKey::from_raw(pos))?;
+        }
+        {
+            // A capture is final only while every leaf under it survives, and
+            // its key IS the position of its last leaf — so the rule is the
+            // same batched delete as above, on the same coordinate, in the
+            // same transaction. A chunk whose `end_leaf >= pos` lost a child
+            // and is dropped; one whose `end_leaf < pos` is untouched.
+            //
+            // Keying on the owned leaf's own position would keep stale
+            // chunks: leaf 100 survives a cut to 150 while its layer-1 chunk
+            // (0..683) does not.
+            let mut captures = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            delete_pos_keys_batched(&mut captures, TreePositionKey::from_raw(pos))?;
         }
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
@@ -1350,11 +1783,26 @@ impl LeafStore {
                 }
             }
         }
+        {
+            // Every snapshot above the new tip describes a tree state this
+            // truncation has just removed. They go in the SAME transaction,
+            // so no committed store ever holds a ring row for a height it
+            // has rolled back past.
+            let mut ring = txn.open_table(FRONTIER_SNAPSHOTS_TABLE)?;
+            let above = BlockHeightKey::from(new_tip);
+            ring.retain_in(
+                (
+                    core::ops::Bound::Excluded(above),
+                    core::ops::Bound::Unbounded,
+                ),
+                |_, _| false,
+            )?;
+        }
         let next_freeze_seg = recompute_next_freeze_seg(txn, pos)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &pos)?;
-            meta.insert(META_SYNC_TIP, &new_tip.0)?;
+            meta.insert(META_SYNC_TIP, &new_tip.to_raw())?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
         }
         Ok(())
@@ -1382,19 +1830,22 @@ impl LeafStore {
     /// an empty table to `leaf_count` — an empty search range.
     fn present_suffix_start(
         txn: &redb::WriteTransaction,
-        leaf_meta: &impl ReadableTable<TreePosition, &'static [u8; 192]>,
+        leaf_meta: &impl ReadableTable<TreePositionKey, &'static [u8; 192]>,
         leaf_count: u64,
     ) -> Result<u64, StoreError> {
         let e = leaves_per_segment() as u64;
         let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
         for row in frozen.iter()?.rev() {
             let seg_start = u64::from(row?.0.value().0) * e;
-            if leaf_meta.get(TreePosition(seg_start))?.is_none() {
+            if leaf_meta
+                .get(TreePositionKey::from_raw(seg_start))?
+                .is_none()
+            {
                 return Ok(seg_start + e);
             }
         }
         Ok(match leaf_meta.iter()?.next().transpose()? {
-            Some((key, _)) => key.value().0,
+            Some((key, _)) => key.value().to_raw(),
             None => leaf_count,
         })
     }
@@ -1449,9 +1900,9 @@ impl LeafStore {
             let count = meta.get(META_LEAF_COUNT)?.map(|v| v.value()).unwrap_or(0);
             (tip, count)
         };
-        if fork_height.0 > sync_tip {
+        if fork_height.to_raw() > sync_tip {
             return Err(StoreError::InvalidRollback {
-                fork_height: fork_height.0,
+                fork_height: fork_height.to_raw(),
                 sync_tip,
             });
         }
@@ -1462,12 +1913,10 @@ impl LeafStore {
             let leaves = txn.open_table(LEAVES_TABLE)?;
             let frontier = Self::present_suffix_start(&txn, &leaf_meta, leaf_count)?;
             let maturity_at = |pos: u64| -> Result<u64, StoreError> {
-                let row = leaf_meta
-                    .get(TreePosition(pos))?
-                    .ok_or(StoreError::CorruptMeta(
-                        "hole in present suffix during partition search",
-                    ))?;
-                Ok(decode_stored_leaf_meta(row.value())?.maturity.0)
+                let row = leaf_meta.get(TreePositionKey::from_raw(pos))?.ok_or(
+                    StoreError::CorruptMeta("hole in present suffix during partition search"),
+                )?;
+                Ok(decode_stored_leaf_meta(row.value())?.maturity.to_raw())
             };
             // partition_point over [frontier, leaf_count): first present
             // position with maturity > drained_through(fork). Maturity is
@@ -1475,7 +1924,7 @@ impl LeafStore {
             // equal-maturity run (F7). Height 0 saturates at cutoff 0; no
             // real leaf has maturity 0, so genesis rollback still truncates
             // the whole drained tree.
-            let drain_cutoff = fork_height.0.saturating_sub(1);
+            let drain_cutoff = fork_height.to_raw().saturating_sub(1);
             let mut lo = frontier;
             let mut hi = leaf_count;
             while lo < hi {
@@ -1495,7 +1944,7 @@ impl LeafStore {
             let mut migrated = Vec::with_capacity(
                 usize::try_from(leaf_count - partition).expect("suffix fits usize"),
             );
-            for pos in (partition..leaf_count).map(TreePosition) {
+            for pos in (partition..leaf_count).map(TreePositionKey::from_raw) {
                 let meta_row = leaf_meta
                     .get(pos)?
                     .ok_or(StoreError::CorruptMeta("missing leaf meta in suffix"))?;
@@ -1515,18 +1964,18 @@ impl LeafStore {
         };
 
         // Step 3: shared truncation core (F9 freeze-aware), tip = fork.
-        Self::truncate_internals(&txn, TreePosition(partition), fork_height)?;
+        Self::truncate_internals(&txn, TreePosition::from_raw(partition), fork_height)?;
 
         // Steps 4–5: migrate to pending, then the uniform class-(a) filter.
         {
             let mut pending = txn.open_table(PENDING_TABLE)?;
             for entry in &migrated {
-                if pending.get(entry.gindex)?.is_some() {
+                if pending.get(GindexKey::from(entry.gindex))?.is_some() {
                     return Err(StoreError::PendingGindexCollision {
-                        gindex: entry.gindex.0,
+                        gindex: entry.gindex.to_raw(),
                     });
                 }
-                pending.insert(entry.gindex, &encode_pending(entry))?;
+                pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
             let mut orphaned = Vec::new();
             for row in pending.iter()? {
@@ -1611,7 +2060,7 @@ impl LeafStore {
                     // transaction, so the first position is an exact
                     // pruned/present discriminant — no full-segment scan.
                     let start = u64::from(id.0) * leaves_per_segment() as u64;
-                    if leaves.get(TreePosition(start))?.is_none() {
+                    if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                         SegmentPin::AlreadyPruned
                     } else {
                         SegmentPin::PinnedServable
@@ -1777,8 +2226,11 @@ impl LeafStore {
     /// never a silent no-op: under that posture every frozen byte is owed,
     /// and a caller that wanted to prune anyway must find out here.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
-        let owned: std::collections::BTreeSet<TreePosition> =
-            owned_positions.iter().copied().collect();
+        let owned: std::collections::BTreeSet<TreePositionKey> = owned_positions
+            .iter()
+            .copied()
+            .map(TreePositionKey::from)
+            .collect();
         let txn = self.db.begin_write()?;
         // Posture check inside the same write transaction that would
         // mutate, so a concurrent declaration cannot land between the
@@ -1815,7 +2267,7 @@ impl LeafStore {
                 }
                 let start = u64::from(seg_id.0) * e;
                 let end = start + e;
-                for pos in (start..end).map(TreePosition) {
+                for pos in (start..end).map(TreePositionKey::from_raw) {
                     let leaf_bytes = match leaves.get(pos)? {
                         Some(leaf) => *leaf.value(),
                         None => continue,
@@ -1830,6 +2282,227 @@ impl LeafStore {
         }
         txn.commit()?;
         Ok(())
+    }
+
+    /// Merge several capture rows in **one** transaction.
+    ///
+    /// The batch counterpart to [`Self::put_captured_chunks`], for the
+    /// backfill: reconciliation computes every missing chunk first and then
+    /// commits them together, so a failure part-way through the computation
+    /// leaves the store untouched rather than half-reconciled. Merge
+    /// semantics are [`Self::put_captured_chunks`]'s, because both go
+    /// through `merge_captured_chunks`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ConflictingCapture`] if any layer already holds
+    /// different bytes; [`StoreError`] on a read or write failure. Either
+    /// way the whole batch is abandoned.
+    pub fn merge_captured_chunk_rows(
+        &self,
+        rows: &[(TreePosition, Vec<CapturedChunk>)],
+    ) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let txn = self.db.begin_write()?;
+        for (end_leaf, chunks) in rows {
+            merge_captured_chunks(&txn, *end_leaf, chunks)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Remove the leaf **and** meta rows at `position`, leaving
+    /// `leaf_count` alone.
+    ///
+    /// Test-only, and narrow on purpose: it reproduces the exact shape
+    /// [`Self::prune_frozen`] leaves behind — a position the store still
+    /// counts whose rows are gone — without the frozen segment and the
+    /// one-way posture flag that method needs. Both rows, because
+    /// `prune_frozen` removes both; dropping only the leaf row produces a
+    /// *different* refusal, [`Self::read_drained_range`]'s key-set
+    /// asymmetry, which is a corrupt store rather than a pruned one.
+    ///
+    /// The client's refusal `ClientError::CaptureIdentitiesIncomplete` has
+    /// no other reachable producer, since `prune_frozen` has no production
+    /// caller, and a refusal shown only by mutating the code it guards is
+    /// not covered.
+    #[cfg(test)]
+    pub(crate) fn drop_leaf_rows_for_test(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut leaf_meta = txn.open_table(LEAF_META_TABLE)?;
+            for raw in start.to_raw()..=end.to_raw() {
+                let key = TreePositionKey::from_raw(raw);
+                leaves.remove(key)?;
+                drop(leaf_meta.remove(key)?);
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Overwrite the capture row at `end_leaf` with `chunks`, verbatim.
+    ///
+    /// Test-only: the merge refuses conflicting bytes and sorts what it
+    /// writes, so a row carrying bytes the reader must refuse — a node that
+    /// is not a curve point, a repeated layer — cannot be produced through
+    /// the production writer. The decoders are graded against rows this
+    /// writes.
+    #[cfg(test)]
+    pub(crate) fn replace_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            table.insert(
+                TreePositionKey::from(end_leaf),
+                encode_captured_chunks(chunks).as_slice(),
+            )?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Delete the capture row at `end_leaf`.
+    ///
+    /// Test-only: the one way to produce a closed chunk whose capture is
+    /// absent on a client that resolved the position, which is the state
+    /// `ClientError::CaptureMissing` names. Nothing in production removes a
+    /// row except a truncation, and that also drops the position.
+    #[cfg(test)]
+    pub(crate) fn drop_capture_row_for_test(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+            drop(table.remove(TreePositionKey::from(end_leaf))?);
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Add chunks that closed at `end_leaf`, **merging by layer**.
+    ///
+    /// A fold cascade closes several layers on one leaf, and they share a
+    /// finality coordinate: they became final at one instant and a rollback
+    /// un-finalizes them at one instant. But they do not always arrive
+    /// together, and that is why this merges rather than replaces.
+    ///
+    /// # Why replacing would lose data
+    ///
+    /// An earlier revision inserted, on the reasoning that "the set is a
+    /// property of the leaf count, so a second write means the same chunks
+    /// recomputed". That is false: the set is a property of the leaf count
+    /// **and of which outputs are owned**, and ownership can be learned after
+    /// the fold. Cascade coordinates are shared between layers — layer-0
+    /// chunk 17 and layer-1 chunk 0 both end at leaf 683 — so an output
+    /// discovered late, whose layer-0 chunk ends there, would have **silently
+    /// erased** another output's layer-1 chunk already at that key. Latent
+    /// only until the backfill exists, which is exactly what triggers it.
+    ///
+    /// Re-offering identical bytes is a no-op, so reconciliation may recompute
+    /// freely. Offering *different* bytes for one `(end_leaf, layer)` is
+    /// refused: a chunk's contents are fixed by the leaves under it, so two
+    /// sources disagreeing is a defect rather than a merge to resolve.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ConflictingCapture`] if a layer already holds different
+    /// bytes; [`StoreError`] on a read or write failure.
+    pub fn put_captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+        chunks: &[CapturedChunk],
+    ) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        merge_captured_chunks(&txn, end_leaf, chunks)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Drained entries at positions `start..=end`, in position order.
+    ///
+    /// The ranged counterpart to [`Self::read_drained_entries`], which walks
+    /// every row. Capture needs one layer-0 chunk's worth of identities —
+    /// `SELENE_CHUNK_WIDTH` of them — and reading the whole table to find 38
+    /// adjacent rows would reintroduce, inside the thing meant to remove it,
+    /// the `O(n)` pass capture exists to delete.
+    ///
+    /// Short rows are not an error: a range that runs past the drained tail
+    /// returns what exists, so a caller sizing a chunk against a partial tail
+    /// sees the partial tail.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the two position-keyed tables disagree
+    /// about which rows exist, which is the invariant
+    /// [`Self::read_drained_entries`] checks across the whole table and this
+    /// checks across the range it reads.
+    pub fn read_drained_range(
+        &self,
+        start: TreePosition,
+        end: TreePosition,
+    ) -> Result<Vec<LeafEntry>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let meta = txn.open_table(LEAF_META_TABLE)?;
+        let mut out = Vec::new();
+        for raw in start.to_raw()..=end.to_raw() {
+            let pos = TreePositionKey::from_raw(raw);
+            match (leaves.get(pos)?, meta.get(pos)?) {
+                (Some(leaf), Some(meta_row)) => {
+                    let stored = decode_stored_leaf_meta(meta_row.value())?;
+                    out.push(LeafEntry {
+                        gindex: stored.gindex,
+                        maturity: stored.maturity,
+                        creation_height: stored.creation_height,
+                        leaf: *leaf.value(),
+                        identity: stored.identity,
+                    });
+                }
+                // Absence of BOTH is the end of the drained range, which a
+                // caller sizing a chunk against a partial tail should see.
+                (None, None) => break,
+                // One table holding a position the other does not is the
+                // asymmetry `read_drained_entries` refuses across the whole
+                // table; this refuses it across the range it reads.
+                _ => {
+                    return Err(StoreError::CorruptMeta(
+                        "leaves/leaf_meta key-set asymmetry",
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The chunks that closed at `end_leaf`, empty when none were captured.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] if the stored row does not decode.
+    pub fn captured_chunks(
+        &self,
+        end_leaf: TreePosition,
+    ) -> Result<Vec<CapturedChunk>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+        match table.get(TreePositionKey::from(end_leaf))? {
+            Some(v) => decode_captured_chunks(v.value()),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Read frozen segment record, if present.
@@ -1879,7 +2552,7 @@ impl LeafStore {
             }
             let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?.get(id)?.is_some();
             let leaves = txn.open_table(LEAVES_TABLE)?;
-            if leaves.get(TreePosition(start))?.is_none() {
+            if leaves.get(TreePositionKey::from_raw(start))?.is_none() {
                 return Err(if pinned {
                     StoreError::CorruptMeta("pinned frozen segment is missing leaf bytes")
                 } else {
@@ -1938,12 +2611,132 @@ impl LeafStore {
     }
 }
 
+/// One captured chunk: the layer whose node it is the child set of, and the
+/// chunk's bytes.
+///
+/// Two value shapes share this type, and the layer says which:
+///
+/// - **layer 0** — the leaf chunk, stored as its siblings' *identities*
+///   (`O ‖ C ‖ CM.x`, 96 B each). Not the frontier's scalars: a path needs the
+///   siblings as compressed points, and `O.x` is a one-way projection of `O`.
+///   `I` is **not stored** — it is `Hp(O)`, derived at assembly, because a
+///   stored copy of a recomputable value is a second copy that can disagree.
+/// - **layer >= 1** — the node chunk as the frontier folded it, 32 B per
+///   child.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CapturedChunk {
+    /// Absolute tree layer of the node these children belong to.
+    pub layer: u8,
+    /// The chunk's bytes, in the shape the layer implies.
+    pub bytes: Vec<u8>,
+}
+
+/// Merge `chunks` into the row at `end_leaf`, inside the caller's
+/// transaction.
+///
+/// Factored out of [`LeafStore::put_captured_chunks`] so the ingest can write
+/// captures in the **block's own transaction**, beside the leaves and the
+/// ring snapshot. A crash then cannot separate a fold from its capture on the
+/// normal path, which leaves reconciliation a net under the mechanism rather
+/// than the mechanism itself.
+///
+/// Merge semantics are [`LeafStore::put_captured_chunks`]'s, because they are
+/// this function: identical bytes are a no-op, different bytes for one
+/// `(end_leaf, layer)` are [`StoreError::ConflictingCapture`].
+fn merge_captured_chunks(
+    txn: &redb::WriteTransaction,
+    end_leaf: TreePosition,
+    chunks: &[CapturedChunk],
+) -> Result<(), StoreError> {
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let key = TreePositionKey::from(end_leaf);
+    let mut table = txn.open_table(CAPTURED_CHUNKS_TABLE)?;
+    let mut merged = match table.get(key)? {
+        Some(v) => decode_captured_chunks(v.value())?,
+        None => Vec::new(),
+    };
+    for incoming in chunks {
+        match merged.iter().find(|held| held.layer == incoming.layer) {
+            Some(held) if held.bytes == incoming.bytes => {}
+            Some(_) => {
+                return Err(StoreError::ConflictingCapture {
+                    end_leaf: end_leaf.to_raw(),
+                    layer: incoming.layer,
+                })
+            }
+            None => merged.push(incoming.clone()),
+        }
+    }
+    // Deterministic order, so one set of chunks has one encoding however it
+    // arrived.
+    merged.sort_unstable_by_key(|c| c.layer);
+    let encoded = encode_captured_chunks(&merged);
+    table.insert(key, encoded.as_slice())?;
+    Ok(())
+}
+
+/// `layer ‖ len ‖ bytes`, repeated. Self-describing, because a cascade writes
+/// a variable number of chunks of two different shapes under one key and a
+/// reader must be able to walk them without consulting the fold schedule.
+fn encode_captured_chunks(chunks: &[CapturedChunk]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        out.push(chunk.layer);
+        let len = u32::try_from(chunk.bytes.len()).expect("a captured chunk fits u32 bytes");
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&chunk.bytes);
+    }
+    out
+}
+
+/// Inverse of [`encode_captured_chunks`], refusing anything it did not write.
+fn decode_captured_chunks(mut raw: &[u8]) -> Result<Vec<CapturedChunk>, StoreError> {
+    const HEADER: usize = 1 + 4;
+    let mut out: Vec<CapturedChunk> = Vec::new();
+    while !raw.is_empty() {
+        if raw.len() < HEADER {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk header is truncated",
+            ));
+        }
+        let layer = raw[0];
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&raw[1..HEADER]);
+        let len = usize::try_from(u32::from_le_bytes(len_bytes))
+            .expect("a captured chunk length fits usize");
+        let end = HEADER
+            .checked_add(len)
+            .ok_or(StoreError::CorruptMeta("captured chunk length overflows"))?;
+        if raw.len() < end {
+            return Err(StoreError::CorruptMeta("captured chunk body is truncated"));
+        }
+        // One chunk per `(end_leaf, layer)`, written in ascending layer order
+        // — every writer sorts after merging. A row that repeats a layer or
+        // runs backwards was not written by this code, and a reader that took
+        // the first of two layer-`L` bodies would be choosing between two
+        // conflicting persisted values silently.
+        if out.last().is_some_and(|prev| prev.layer >= layer) {
+            return Err(StoreError::CorruptMeta(
+                "captured chunk layers are not strictly increasing",
+            ));
+        }
+        out.push(CapturedChunk {
+            layer,
+            bytes: raw[HEADER..end].to_vec(),
+        });
+        raw = &raw[end..];
+    }
+    Ok(out)
+}
+
 fn delete_pos_keys_batched<V: redb::Value>(
-    table: &mut redb::Table<'_, TreePosition, V>,
-    start: TreePosition,
+    table: &mut redb::Table<'_, TreePositionKey, V>,
+    start: TreePositionKey,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<TreePosition> = table
+        let batch: Vec<TreePositionKey> = table
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -1959,12 +2752,12 @@ fn delete_pos_keys_batched<V: redb::Value>(
 }
 
 fn delete_pos_range_batched(
-    leaves: &mut redb::Table<'_, TreePosition, &[u8; 128]>,
-    leaf_meta: &mut redb::Table<'_, TreePosition, &[u8; 192]>,
-    start: TreePosition,
+    leaves: &mut redb::Table<'_, TreePositionKey, &[u8; 128]>,
+    leaf_meta: &mut redb::Table<'_, TreePositionKey, &[u8; 192]>,
+    start: TreePositionKey,
 ) -> Result<(), StoreError> {
     loop {
-        let batch: Vec<TreePosition> = leaves
+        let batch: Vec<TreePositionKey> = leaves
             .range(start..)?
             .take(TRUNCATE_DELETE_BATCH)
             .map(|r| r.map(|(k, _)| k.value()))
@@ -2066,10 +2859,10 @@ fn leaf_bytes_are_canonical(leaf: &[u8; 128]) -> bool {
 fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64, StoreError> {
     let meta = txn.open_table(LEAF_META_TABLE)?;
     let m = meta
-        .get(TreePosition(tree_pos))?
+        .get(TreePositionKey::from_raw(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
-    Ok(stored.maturity.0.saturating_add(1))
+    Ok(stored.maturity.to_raw().saturating_add(1))
 }
 
 /// Metadata persisted in `LEAF_META_TABLE` (leaf bytes live in `LEAVES_TABLE`).
@@ -2083,7 +2876,7 @@ struct StoredLeafMeta {
 
 /// What a hole in a leaf range means everywhere except the serving read's
 /// servability check: store corruption, naming the position.
-fn missing_leaf(_pos: TreePosition) -> StoreError {
+fn missing_leaf(_pos: TreePositionKey) -> StoreError {
     StoreError::CorruptMeta("missing leaf")
 }
 
@@ -2096,10 +2889,10 @@ fn missing_leaf(_pos: TreePosition) -> StoreError {
 /// accumulate — a leaf array for root recomposition, flat bytes for the
 /// wire — so there is one loop and no second copy of the hole logic.
 fn scan_leaf_range(
-    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    leaves: &impl ReadableTable<TreePositionKey, &'static [u8; 128]>,
     start: u64,
     end: u64,
-    missing: impl Fn(TreePosition) -> StoreError,
+    missing: impl Fn(TreePositionKey) -> StoreError,
     mut take: impl FnMut(&[u8; 128]),
 ) -> Result<(), StoreError> {
     // A range walk *skips* absent keys rather than yielding a `None`, so
@@ -2107,23 +2900,23 @@ fn scan_leaf_range(
     // expected names the missing position exactly, and a walk that ends
     // short names the first missing tail position.
     let mut expected = start;
-    for row in leaves.range(TreePosition(start)..TreePosition(end))? {
+    for row in leaves.range(TreePositionKey::from_raw(start)..TreePositionKey::from_raw(end))? {
         let (key, value) = row?;
-        if key.value().0 != expected {
-            return Err(missing(TreePosition(expected)));
+        if key.value().to_raw() != expected {
+            return Err(missing(TreePositionKey::from_raw(expected)));
         }
         take(value.value());
         expected += 1;
     }
     if expected != end {
-        return Err(missing(TreePosition(expected)));
+        return Err(missing(TreePositionKey::from_raw(expected)));
     }
     Ok(())
 }
 
 /// Bulk leaf read into a leaf array, for the root/recompute paths.
 fn read_leaf_bytes_range_in(
-    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    leaves: &impl ReadableTable<TreePositionKey, &'static [u8; 128]>,
     start: u64,
     end: u64,
 ) -> Result<Vec<[u8; 128]>, StoreError> {
@@ -2151,9 +2944,9 @@ fn read_leaf_bytes_range_read(
 fn encode_frozen_segment(rec: &FrozenSegmentRecord) -> [u8; 56] {
     let mut buf = [0u8; 56];
     buf[..32].copy_from_slice(&rec.r_k);
-    buf[32..40].copy_from_slice(&rec.end_tree_pos.0.to_be_bytes());
-    buf[40..48].copy_from_slice(&rec.end_block_height.0.to_be_bytes());
-    buf[48..56].copy_from_slice(&rec.frozen_at_height.0.to_be_bytes());
+    buf[32..40].copy_from_slice(&rec.end_tree_pos.to_raw().to_be_bytes());
+    buf[40..48].copy_from_slice(&rec.end_block_height.to_raw().to_be_bytes());
+    buf[48..56].copy_from_slice(&rec.frozen_at_height.to_raw().to_be_bytes());
     buf
 }
 
@@ -2162,36 +2955,43 @@ fn decode_frozen_segment(buf: &[u8; 56]) -> FrozenSegmentRecord {
     r_k.copy_from_slice(&buf[..32]);
     FrozenSegmentRecord {
         r_k,
-        end_tree_pos: TreePosition(u64::from_be_bytes(buf[32..40].try_into().expect("8 bytes"))),
-        end_block_height: BlockHeight(u64::from_be_bytes(buf[40..48].try_into().expect("8 bytes"))),
-        frozen_at_height: BlockHeight(u64::from_be_bytes(buf[48..56].try_into().expect("8 bytes"))),
+        end_tree_pos: TreePosition::from_raw(u64::from_be_bytes(
+            buf[32..40].try_into().expect("8 bytes"),
+        )),
+        end_block_height: BlockHeight::from_raw(u64::from_be_bytes(
+            buf[40..48].try_into().expect("8 bytes"),
+        )),
+        frozen_at_height: BlockHeight::from_raw(u64::from_be_bytes(
+            buf[48..56].try_into().expect("8 bytes"),
+        )),
     }
 }
 
 fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     let mut buf = [0u8; 192];
-    buf[0..8].copy_from_slice(&entry.gindex.0.to_be_bytes());
-    buf[8..16].copy_from_slice(&entry.maturity.0.to_be_bytes());
-    buf[16..48].copy_from_slice(&entry.identity.output_key);
+    buf[0..8].copy_from_slice(&entry.gindex.to_raw().to_be_bytes());
+    buf[8..16].copy_from_slice(&entry.maturity.to_raw().to_be_bytes());
+    buf[16..48].copy_from_slice(entry.identity.output_key.as_bytes());
     match entry.identity.commitment {
         Some(c) => {
             buf[48] = 1;
-            buf[49..81].copy_from_slice(&c);
+            buf[49..81].copy_from_slice(c.as_bytes());
         }
         None => buf[48] = 0,
     }
-    buf[81..113].copy_from_slice(&entry.identity.h_pqc);
+    buf[81..113].copy_from_slice(&entry.identity.cm);
     buf[113] = encode_target(&entry.identity.target);
     // Schema v2: creation_height in the formerly-free range. The value
     // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
     // schema_version cell exists — redb cannot see this layout change.
-    buf[122..130].copy_from_slice(&entry.creation_height.0.to_be_bytes());
+    buf[122..130].copy_from_slice(&entry.creation_height.to_raw().to_be_bytes());
     buf
 }
 
 fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError> {
-    let gindex = Gindex(u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes")));
-    let maturity = BlockHeight(u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes")));
+    let gindex = Gindex::from_raw(u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes")));
+    let maturity =
+        BlockHeight::from_raw(u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes")));
     let mut output_key = [0u8; 32];
     output_key.copy_from_slice(&buf[16..48]);
     let commitment = match buf[48] {
@@ -2203,10 +3003,10 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         }
         _ => return Err(StoreError::CorruptMeta("invalid leaf commitment tag")),
     };
-    let mut h_pqc = [0u8; 32];
-    h_pqc.copy_from_slice(&buf[81..113]);
+    let mut cm = [0u8; 32];
+    cm.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
-    let creation_height = BlockHeight(u64::from_be_bytes(
+    let creation_height = BlockHeight::from_raw(u64::from_be_bytes(
         buf[122..130].try_into().expect("8 bytes"),
     ));
     Ok(StoredLeafMeta {
@@ -2214,9 +3014,9 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         maturity,
         creation_height,
         identity: crate::types::OutputIdentity {
-            output_key,
-            commitment,
-            h_pqc,
+            output_key: crate::types::OneTimePubkey::from_bytes(output_key),
+            commitment: commitment.map(crate::types::CommitmentBytes::from_bytes),
+            cm,
             target,
         },
     })
@@ -2286,6 +3086,48 @@ fn decode_target(tag: u8, _extra: &[u8]) -> Result<TargetKind, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store already open in this process refuses a second open with
+    /// redb's lock error, and that is "locked elsewhere" — the remedy the
+    /// wallet names — not a generic failure.
+    #[test]
+    fn a_store_held_open_is_locked_elsewhere() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tree.redb");
+        let _held = LeafStore::open(&path).expect("first open");
+        let second = LeafStore::open(&path).expect_err("the lock is held");
+        assert!(second.is_already_open(), "{second:?}");
+        assert_eq!(second.open_fault(), StoreOpenFault::LockedElsewhere);
+    }
+
+    /// The remedy each store arm names, for the arms a test can build.
+    #[test]
+    fn store_open_faults_follow_the_remedy() {
+        let redb = |e: redb::Error| StoreError::Redb(Box::new(e));
+        let cases = [
+            (
+                redb(redb::Error::Corrupted("x".into())),
+                StoreOpenFault::Corrupt,
+            ),
+            (
+                redb(redb::Error::UpgradeRequired(1)),
+                StoreOpenFault::Unsupported,
+            ),
+            (
+                redb(redb::Error::Io(std::io::Error::other("disk"))),
+                StoreOpenFault::Io,
+            ),
+            (redb(redb::Error::PreviousIo), StoreOpenFault::Io),
+            (
+                StoreError::CorruptMeta("leaf_count"),
+                StoreOpenFault::Corrupt,
+            ),
+            (StoreError::PruneDisabledPosture, StoreOpenFault::Internal),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.open_fault(), expected, "{err:?}");
+        }
+    }
     use crate::segment::leaves_per_segment;
     use crate::types::OutputIdentity;
     use ciphersuite::{
@@ -2298,16 +3140,16 @@ mod tests {
 
     fn sample_entry(gindex: u64, maturity: u64) -> LeafEntry {
         LeafEntry {
-            gindex: Gindex(gindex),
-            maturity: BlockHeight(maturity),
+            gindex: Gindex::from_raw(gindex),
+            maturity: BlockHeight::from_raw(maturity),
             // Coinbase-shaped offset; tests that exercise the rollback
             // creation-height filter construct entries explicitly.
-            creation_height: BlockHeight(maturity.saturating_sub(60)),
+            creation_height: BlockHeight::from_raw(maturity.saturating_sub(60)),
             leaf: [1u8; 128],
             identity: OutputIdentity {
-                output_key: [1u8; 32],
-                commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                output_key: crate::types::OneTimePubkey::from_bytes([1u8; 32]),
+                commitment: Some(crate::types::CommitmentBytes::from_bytes([2u8; 32])),
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }
@@ -2321,7 +3163,7 @@ mod tests {
         let mut bad = sample_entry(1, 0);
         bad.leaf = [0xff; 128];
         let err = store
-            .append_drained(&[sample_entry(0, 0), bad], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0), bad], BlockHeight::from_raw(1))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -2332,7 +3174,7 @@ mod tests {
             0,
             "aborted batch must not partially land"
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -2343,11 +3185,11 @@ mod tests {
         // this value, so a silent zero here would misclassify every leaf
         // as genesis-created.
         let mut entry = sample_entry(7, 130);
-        entry.creation_height = BlockHeight(70);
+        entry.creation_height = BlockHeight::from_raw(70);
         let stored = decode_stored_leaf_meta(&encode_leaf_meta(&entry)).unwrap();
-        assert_eq!(stored.gindex, Gindex(7));
-        assert_eq!(stored.maturity, BlockHeight(130));
-        assert_eq!(stored.creation_height, BlockHeight(70));
+        assert_eq!(stored.gindex, Gindex::from_raw(7));
+        assert_eq!(stored.maturity, BlockHeight::from_raw(130));
+        assert_eq!(stored.creation_height, BlockHeight::from_raw(70));
         assert_eq!(stored.identity, entry.identity);
     }
 
@@ -2358,7 +3200,7 @@ mod tests {
         pending
             .iter()
             .unwrap()
-            .map(|row| row.unwrap().0.value().0)
+            .map(|row| Gindex::from(row.unwrap().0.value()).to_raw())
             .collect()
     }
 
@@ -2371,24 +3213,68 @@ mod tests {
         let a = sample_entry(3, 70);
         let b = sample_entry(4, 71);
         store
-            .append_block_deltas(&[], &[a, b], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![3, 4]);
         assert_eq!(store.leaf_count().unwrap(), 0);
 
         store
-            .append_block_deltas(&[a], &[], &[Gindex(3)], BlockHeight(70))
+            .append_block_deltas(&[a], &[], &[Gindex::from_raw(3)], BlockHeight::from_raw(70))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
+    }
+
+    #[test]
+    fn a_snapshot_below_the_sync_tip_is_refused_and_leaves_the_ring_alone() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let snapshot = b"a frontier's bytes".as_slice();
+        store
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(100), snapshot, &[])
+            .unwrap();
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the control write must land, or the refusal below proves nothing"
+        );
+
+        // A non-monotonic append is tolerated for the freeze clock, so this
+        // call would otherwise succeed and insert a row at height 90 —
+        // widening the span downward past what the ring's own bound placed.
+        let err = store
+            .append_block_with_snapshot(&[], &[], &[], BlockHeight::from_raw(90), snapshot, &[])
+            .expect_err("a snapshot below the sync tip is a caller bug");
+        assert!(
+            matches!(
+                err,
+                StoreError::SnapshotBelowSyncTip {
+                    tip: 90,
+                    sync_tip: 100
+                }
+            ),
+            "expected SnapshotBelowSyncTip(tip=90, sync_tip=100), got: {err:?}"
+        );
+        assert_eq!(
+            store.frontier_snapshot_span().unwrap(),
+            Some((BlockHeight::from_raw(100), BlockHeight::from_raw(100))),
+            "the refusal must leave the ring exactly as it was"
+        );
+
+        // The same stale height WITHOUT a snapshot still works: the freeze
+        // clock's tolerance is untouched, so this refusal is scoped to the
+        // ring rather than narrowing the append contract.
+        store
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(90))
+            .expect("a snapshot-free stale append is still legal");
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
 
     #[test]
     fn block_deltas_reject_pending_gindex_collision_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         // Colliding insert rides with a drained append: the whole txn must
         // abort — the drained leaf cannot land either.
@@ -2397,7 +3283,7 @@ mod tests {
                 &[sample_entry(1, 61)],
                 &[sample_entry(5, 99)],
                 &[],
-                BlockHeight(11),
+                BlockHeight::from_raw(11),
             )
             .unwrap_err();
         assert!(matches!(
@@ -2405,17 +3291,17 @@ mod tests {
             StoreError::PendingGindexCollision { gindex: 5 }
         ));
         assert_eq!(store.leaf_count().unwrap(), 0, "aborted txn left no trace");
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(10));
     }
 
     #[test]
     fn block_deltas_reject_missing_pending_removal_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         let err = store
-            .append_block_deltas(&[], &[], &[Gindex(8)], BlockHeight(11))
+            .append_block_deltas(&[], &[], &[Gindex::from_raw(8)], BlockHeight::from_raw(11))
             .unwrap_err();
         assert!(matches!(err, StoreError::PendingRowMissing { gindex: 8 }));
         assert_eq!(
@@ -2431,7 +3317,12 @@ mod tests {
         let mut bad = sample_entry(2, 70);
         bad.leaf = [0xFFu8; 128];
         let err = store
-            .append_block_deltas(&[sample_entry(1, 61)], &[bad], &[], BlockHeight(10))
+            .append_block_deltas(
+                &[sample_entry(1, 61)],
+                &[bad],
+                &[],
+                BlockHeight::from_raw(10),
+            )
             .unwrap_err();
         // batch_index counts drained first, then pending_added.
         assert!(matches!(
@@ -2445,9 +3336,9 @@ mod tests {
     fn block_deltas_all_empty_advance_tip_and_freeze_clock() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight(42))
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(42));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(42));
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(pending_gindexes(&store).is_empty());
     }
@@ -2456,7 +3347,7 @@ mod tests {
     fn clear_empties_pending_table() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![9]);
         store.clear().unwrap();
@@ -2474,7 +3365,7 @@ mod tests {
         let drained = [sample_entry(0, 60), sample_entry(1, 61)];
         let pending = [sample_entry(5, 90), sample_entry(3, 80)];
         store
-            .append_block_deltas(&drained, &pending, &[], BlockHeight(61))
+            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61))
             .unwrap();
 
         assert_eq!(store.read_drained_entries().unwrap(), drained.to_vec());
@@ -2493,7 +3384,10 @@ mod tests {
         // search that assumes sortedness.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 70), sample_entry(1, 61)], BlockHeight(70))
+            .append_drained(
+                &[sample_entry(0, 70), sample_entry(1, 61)],
+                BlockHeight::from_raw(70),
+            )
             .unwrap();
         let err = store.read_drained_entries().unwrap_err();
         assert!(matches!(err, StoreError::CorruptMeta(_)));
@@ -2507,13 +3401,16 @@ mod tests {
         // directly to prove the detector fires.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 60), sample_entry(1, 61)], BlockHeight(61))
+            .append_drained(
+                &[sample_entry(0, 60), sample_entry(1, 61)],
+                BlockHeight::from_raw(61),
+            )
             .unwrap();
         {
             let txn = store.db.begin_write().unwrap();
             {
                 let mut meta = txn.open_table(LEAF_META_TABLE).unwrap();
-                meta.remove(TreePosition(1)).unwrap();
+                meta.remove(TreePositionKey::from_raw(1)).unwrap();
             }
             txn.commit().unwrap();
         }
@@ -2525,7 +3422,7 @@ mod tests {
     /// two-class partition filters on it).
     fn entry_created_at(gindex: u64, maturity: u64, created: u64) -> LeafEntry {
         let mut entry = sample_entry(gindex, maturity);
-        entry.creation_height = BlockHeight(created);
+        entry.creation_height = BlockHeight::from_raw(created);
         entry
     }
 
@@ -2551,11 +3448,11 @@ mod tests {
                 ],
                 &[entry_created_at(3, 150, 90), entry_created_at(4, 162, 102)],
                 &[],
-                BlockHeight(161),
+                BlockHeight::from_raw(161),
             )
             .unwrap();
 
-        store.rollback_to_fork(BlockHeight(100)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
 
         let drained = store.read_drained_entries().unwrap();
         assert_eq!(drained, vec![entry_created_at(0, 70, 10)]);
@@ -2564,7 +3461,7 @@ mod tests {
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(1, 101, 40), entry_created_at(3, 150, 90)]
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
         assert_eq!(store.leaf_count().unwrap(), 1);
     }
 
@@ -2576,20 +3473,24 @@ mod tests {
                 &[entry_created_at(0, 69, 10)],
                 &[entry_created_at(1, 150, 60)],
                 &[],
-                BlockHeight(70),
+                BlockHeight::from_raw(70),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1);
         assert_eq!(store.read_pending_candidates().unwrap().len(), 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
     }
 
     #[test]
     fn rollback_above_tip_is_invalid() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[], BlockHeight(50)).unwrap();
-        let err = store.rollback_to_fork(BlockHeight(51)).unwrap_err();
+        store
+            .append_drained(&[], BlockHeight::from_raw(50))
+            .unwrap();
+        let err = store
+            .rollback_to_fork(BlockHeight::from_raw(51))
+            .unwrap_err();
         assert!(matches!(
             err,
             StoreError::InvalidRollback {
@@ -2643,10 +3544,10 @@ mod tests {
                 ],
                 &[],
                 &[],
-                BlockHeight(120),
+                BlockHeight::from_raw(120),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(100)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1, "cut at first of the run");
         assert_eq!(
             store.read_drained_entries().unwrap(),
@@ -2658,7 +3559,7 @@ mod tests {
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect::<Vec<_>>(),
             vec![1, 2, 3, 4]
         );
@@ -2675,12 +3576,12 @@ mod tests {
                 &[entry_created_at(0, 60, 0), entry_created_at(1, 65, 5)],
                 &[],
                 &[],
-                BlockHeight(65),
+                BlockHeight::from_raw(65),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
         assert_eq!(
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(0, 60, 0)]
@@ -2695,11 +3596,11 @@ mod tests {
         // fork 0 ≤ tip 0 passes validation and every step degenerates to a
         // no-op on empty tables.
         let store = LeafStore::open_ephemeral().unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
-        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
+        store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(store.read_pending_candidates().unwrap().is_empty());
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -2714,17 +3615,17 @@ mod tests {
                 &[entry_created_at(0, 50, 0)],
                 &[entry_created_at(1, 140, 80), entry_created_at(2, 130, 20)],
                 &[],
-                BlockHeight(100),
+                BlockHeight::from_raw(100),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1, "no truncation");
         assert_eq!(
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(2, 130, 20)],
             "orphaned-creation pending row filtered, prefix row kept"
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
     }
 
     #[test]
@@ -2737,21 +3638,28 @@ mod tests {
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let mut entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 10)).collect();
         entries.push(entry_created_at(e, 5_000, 4_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(
             store.frozen_segment(SegmentId(0)).unwrap().is_some(),
             "segment 0 must be frozen for the prune to bite"
         );
         store.prune_frozen(&[]).unwrap();
 
-        let err = store.rollback_to_fork(BlockHeight(40)).unwrap_err();
+        let err = store
+            .rollback_to_fork(BlockHeight::from_raw(40))
+            .unwrap_err();
         assert!(matches!(
             err,
             StoreError::TruncatedIntoPrunedRange { pos } if pos == e
         ));
         // Error-before-write: the store is untouched.
         assert_eq!(store.leaf_count().unwrap(), e + 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
+        assert_eq!(
+            store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(10_000)
+        );
     }
 
     #[test]
@@ -2763,10 +3671,12 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 100, 10)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
 
-        store.rollback_to_fork(BlockHeight(50)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(50)).unwrap();
         assert!(
             store.frozen_segment(SegmentId(0)).unwrap().is_none(),
             "freeze record rolled back with its segment"
@@ -2780,7 +3690,9 @@ mod tests {
         // Cursor rewind, observed through the production freeze path:
         // re-draining a full segment must freeze it again. A stale cursor
         // would skip segment 0 silently.
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -2791,7 +3703,9 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         let mut record = store
             .frozen_segment(SegmentId(0))
             .unwrap()
@@ -2824,7 +3738,9 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         let txn = store.db.begin_write().unwrap();
         {
@@ -2854,7 +3770,7 @@ mod tests {
                 &[entry_created_at(0, 50, 0)],
                 &[entry_created_at(5, 140, 80)],
                 &[],
-                BlockHeight(90),
+                BlockHeight::from_raw(90),
             )
             .unwrap();
         let before = logical_snapshot(&store);
@@ -2865,8 +3781,8 @@ mod tests {
             .append_block_deltas(
                 &[entry_created_at(1, 95, 35)],
                 &[bad],
-                &[Gindex(5)],
-                BlockHeight(95),
+                &[Gindex::from_raw(5)],
+                BlockHeight::from_raw(95),
             )
             .unwrap_err();
         assert!(matches!(
@@ -2892,8 +3808,8 @@ mod tests {
     fn random_entry(rng: &mut ChaCha20Rng, gindex: u64, maturity: u64, creation: u64) -> LeafEntry {
         let mut output_key = [0u8; 32];
         rng.fill_bytes(&mut output_key);
-        let mut h_pqc = [0u8; 32];
-        rng.fill_bytes(&mut h_pqc);
+        let mut cm = [0u8; 32];
+        rng.fill_bytes(&mut cm);
         let commitment = if rng.next_u32().is_multiple_of(2) {
             let mut c = [0u8; 32];
             rng.fill_bytes(&mut c);
@@ -2907,14 +3823,14 @@ mod tests {
             _ => TargetKind::Other,
         };
         LeafEntry {
-            gindex: Gindex(gindex),
-            maturity: BlockHeight(maturity),
-            creation_height: BlockHeight(creation),
+            gindex: Gindex::from_raw(gindex),
+            maturity: BlockHeight::from_raw(maturity),
+            creation_height: BlockHeight::from_raw(creation),
             leaf: random_canonical_leaf(rng),
             identity: OutputIdentity {
-                output_key,
-                commitment,
-                h_pqc,
+                output_key: crate::types::OneTimePubkey::from_bytes(output_key),
+                commitment: commitment.map(crate::types::CommitmentBytes::from_bytes),
+                cm,
                 target,
             },
         }
@@ -2963,7 +3879,12 @@ mod tests {
             let store = LeafStore::open_ephemeral().unwrap();
             for b in blocks.iter().filter(|b| b.height <= fork) {
                 store
-                    .append_block_deltas(&b.drained, &b.added, &b.removed, BlockHeight(b.height))
+                    .append_block_deltas(
+                        &b.drained,
+                        &b.added,
+                        &b.removed,
+                        BlockHeight::from_raw(b.height),
+                    )
                     .unwrap();
             }
             store
@@ -2974,13 +3895,13 @@ mod tests {
                 .read_drained_entries()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             let pending: std::collections::BTreeSet<u64> = store
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             assert!(drained.is_disjoint(&pending));
         }
@@ -2998,7 +3919,7 @@ mod tests {
                 let lock = locks[(rng.next_u32() as usize) % locks.len()];
                 let entry = random_entry(&mut rng, next_gindex, height + lock, height);
                 next_gindex += 1;
-                live_pending.insert(entry.gindex.0, entry);
+                live_pending.insert(entry.gindex.to_raw(), entry);
                 added.push(entry);
             }
             // Production drain convention (CT-2 KAT, owned by
@@ -3009,8 +3930,8 @@ mod tests {
             // until a random pattern put a maturity on a fork height.
             let due: Vec<u64> = live_pending
                 .values()
-                .filter(|e| e.maturity.0 + 1 == height)
-                .map(|e| e.gindex.0)
+                .filter(|e| e.maturity.to_raw() + 1 == height)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             let drained: Vec<LeafEntry> = due
                 .iter()
@@ -3018,7 +3939,7 @@ mod tests {
                 .collect();
             let removed: Vec<Gindex> = drained.iter().map(|e| e.gindex).collect();
             store
-                .append_block_deltas(&drained, &added, &removed, BlockHeight(height))
+                .append_block_deltas(&drained, &added, &removed, BlockHeight::from_raw(height))
                 .unwrap();
             blocks.push(SimBlock {
                 height,
@@ -3036,13 +3957,13 @@ mod tests {
         // First rollback, then a second deeper one on the same store —
         // sequential reorgs compose.
         for fork in [55u64, 21] {
-            store.rollback_to_fork(BlockHeight(fork)).unwrap();
+            store.rollback_to_fork(BlockHeight::from_raw(fork)).unwrap();
             let fresh = replay_prefix(&blocks, fork);
             let a = logical_snapshot(&store);
             let b = logical_snapshot(&fresh);
             if a != b {
                 // Set-level diff: a raw Snapshot assert is unreadable.
-                let g = |v: &[LeafEntry]| v.iter().map(|e| e.gindex.0).collect::<Vec<_>>();
+                let g = |v: &[LeafEntry]| v.iter().map(|e| e.gindex.to_raw()).collect::<Vec<_>>();
                 eprintln!("fork={fork}");
                 eprintln!("drained rollback={:?} replay={:?}", g(&a.0), g(&b.0));
                 eprintln!("pending rollback={:?} replay={:?}", g(&a.1), g(&b.1));
@@ -3065,10 +3986,15 @@ mod tests {
     fn append_and_truncate_round_trip() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0), sample_entry(1, 0)], BlockHeight(1))
+            .append_drained(
+                &[sample_entry(0, 0), sample_entry(1, 0)],
+                BlockHeight::from_raw(1),
+            )
             .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2);
-        store.truncate_from_tree_position(TreePosition(1)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(1))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1);
     }
 
@@ -3131,7 +4057,7 @@ mod tests {
             .is_none());
 
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         let body = serve_body(&store, SegmentId(0));
         assert_eq!(body.len(), leaves_per_segment() * LEAF_BYTES);
@@ -3163,7 +4089,7 @@ mod tests {
             .map(|i| {
                 let gindex = u64::try_from(i).expect("index fits u64");
                 let mut entry = sample_entry(gindex, created + 60);
-                entry.creation_height = BlockHeight(created);
+                entry.creation_height = BlockHeight::from_raw(created);
                 entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
                 entry
             })
@@ -3176,7 +4102,7 @@ mod tests {
     fn releasing_a_pin_lets_the_prune_reclaim_the_segment() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
         assert_eq!(store.pinned_shard_ids().unwrap(), vec![0]);
@@ -3208,7 +4134,7 @@ mod tests {
     fn releasing_an_unpinned_shard_is_idempotent() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(store.release_pins(&[0]).unwrap(), 0);
         store.pin_serve_set(&[0]).unwrap();
@@ -3223,7 +4149,7 @@ mod tests {
     fn pinned_shard_ids_reports_what_no_current_record_would_mention() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.pin_serve_set(&[0, 1]).unwrap();
         let mut pinned = store.pinned_shard_ids().unwrap();
@@ -3260,7 +4186,10 @@ mod tests {
     fn a_rollback_drops_the_pins_the_staleness_tripwire_reads() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
 
         // Segment 0 is frozen and pinned; the tripwire sees nothing missing.
@@ -3274,7 +4203,7 @@ mod tests {
         );
 
         // A chain reorg takes the tree back below the leaves' creation height.
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
 
         assert_eq!(
             store.members_missing_pins(&[0]).unwrap(),
@@ -3294,16 +4223,22 @@ mod tests {
     fn re_pinning_after_a_rollback_clears_the_dropped_pin() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
         assert_eq!(store.members_missing_pins(&[0]).unwrap(), vec![0]);
 
         // Re-ingest past the fork and re-pin, exactly as the serving host's
         // unconditional refresh does.
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
         assert!(
@@ -3321,7 +4256,7 @@ mod tests {
         // which of them is disqualifying.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             store.pin_serve_set(&[0, 1]).unwrap(),
@@ -3334,7 +4269,7 @@ mod tests {
 
         let pruned = Arc::new(LeafStore::open_ephemeral().unwrap());
         pruned
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         pruned.prune_frozen(&[]).unwrap();
         assert_eq!(
@@ -3348,7 +4283,7 @@ mod tests {
         // runs, so a bad set cannot leave the store half-pinned.
         let refused = Arc::new(LeafStore::open_ephemeral().unwrap());
         refused
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         let bad = u64::from(u32::MAX) + 1;
         assert!(matches!(
@@ -3384,7 +4319,9 @@ mod tests {
         let e = leaves_per_segment() as u64;
         let mut entries = distinct_segment_entries();
         entries.push(sample_entry(e, 5_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 1);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_none());
@@ -3392,7 +4329,9 @@ mod tests {
         // Segment 1 completes and is buried: the cursor crosses the
         // boundary and the table crosses with it.
         let more: Vec<LeafEntry> = (e + 1..2 * e).map(|g| sample_entry(g, 5_000)).collect();
-        store.append_drained(&more, BlockHeight(20_000)).unwrap();
+        store
+            .append_drained(&more, BlockHeight::from_raw(20_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
@@ -3400,13 +4339,17 @@ mod tests {
         // Segment 2 completes but is NOT yet buried (recent maturity):
         // the cursor must not advance on completion alone…
         let tail: Vec<LeafEntry> = (2 * e..3 * e).map(|g| sample_entry(g, 19_900)).collect();
-        store.append_drained(&tail, BlockHeight(20_000)).unwrap();
+        store
+            .append_drained(&tail, BlockHeight::from_raw(20_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
 
         // …and advances through the public wrapper once burial is deep
         // enough, table agreeing at the new boundary.
-        store.maybe_freeze_segments(BlockHeight(30_000)).unwrap();
+        store
+            .maybe_freeze_segments(BlockHeight::from_raw(30_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 3);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(3)).unwrap().is_none());
@@ -3421,7 +4364,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+                .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
                 .unwrap();
             assert_eq!(store.next_freeze_seg().unwrap(), 1);
         }
@@ -3438,11 +4381,14 @@ mod tests {
     fn next_freeze_seg_agrees_after_rollback_recompute() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 1);
 
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
         assert_eq!(
             store.next_freeze_seg().unwrap(),
             0,
@@ -3535,7 +4481,9 @@ mod tests {
         let e = leaves_per_segment() as u64;
         let mut entries = distinct_segment_entries();
         entries.push(sample_entry(e, 5_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
 
         assert!(
             store.pruned_frozen_segments().unwrap().is_empty(),
@@ -3559,7 +4507,7 @@ mod tests {
     fn prune_frozen_refuses_typed_under_the_declared_posture() {
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.set_prune_disabled().unwrap();
 
@@ -3581,7 +4529,7 @@ mod tests {
         // the misconfiguration as a typed error instead of a silent miss.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.prune_frozen(&[]).unwrap();
         assert!(matches!(
@@ -3592,7 +4540,7 @@ mod tests {
         // Pinned: the same sequence keeps the segment fully servable.
         let pinned = Arc::new(LeafStore::open_ephemeral().unwrap());
         pinned
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             pinned.pin_segment_for_serving(SegmentId(0)).unwrap(),
@@ -3615,7 +4563,7 @@ mod tests {
         // — and the persona would learn that from a slash.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.prune_frozen(&[]).unwrap();
         assert_eq!(
@@ -3640,7 +4588,7 @@ mod tests {
         // bond is slashed.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             store.pin_segment_for_serving(SegmentId(0)).unwrap(),
@@ -3652,7 +4600,7 @@ mod tests {
         let txn = store.db.begin_write().unwrap();
         {
             let mut leaves = txn.open_table(LEAVES_TABLE).unwrap();
-            drop(leaves.remove(TreePosition(0)).unwrap());
+            drop(leaves.remove(TreePositionKey::from_raw(0)).unwrap());
         }
         txn.commit().unwrap();
 
@@ -3660,6 +4608,59 @@ mod tests {
             store.open_frozen_segment_body(SegmentId(0)),
             Err(StoreError::CorruptMeta(_))
         ));
+    }
+
+    /// `read_drained_range` returns the positions asked for, in order, and
+    /// stops at the drained tail rather than erring.
+    ///
+    /// Capture needs one chunk's identities — 38 adjacent rows — and the
+    /// whole-table read would reintroduce, inside the mechanism meant to
+    /// remove it, the `O(n)` pass capture exists to delete. So the range read
+    /// is the subject: it must agree with the full read over the same window,
+    /// which is what makes it a narrowing rather than a second reader.
+    #[test]
+    fn a_ranged_read_agrees_with_the_full_read_and_stops_at_the_tail() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        let count = 50_u64;
+        seed_leaves(&store, count);
+
+        let all = store.read_drained_entries().unwrap();
+        assert_eq!(all.len() as u64, count);
+
+        // A window strictly inside the drained range.
+        let got = store
+            .read_drained_range(TreePosition::from_raw(10), TreePosition::from_raw(19))
+            .unwrap();
+        assert_eq!(got.len(), 10, "a ten-position window returns ten rows");
+        assert_eq!(
+            got.iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            all[10..20].iter().map(|e| e.gindex).collect::<Vec<_>>(),
+            "the ranged read must be the full read's slice, in the same order"
+        );
+
+        // A window that runs past the tail returns what exists. A caller
+        // sizing a chunk against a partial tail has to see the partial tail,
+        // which is exactly the last chunk before the frontier.
+        let past = store
+            .read_drained_range(
+                TreePosition::from_raw(count - 3),
+                TreePosition::from_raw(count + 10),
+            )
+            .unwrap();
+        assert_eq!(
+            past.len(),
+            3,
+            "a range past the tail is short, not an error"
+        );
+
+        // A window entirely past the tail is empty, not an error.
+        assert!(store
+            .read_drained_range(
+                TreePosition::from_raw(count + 1),
+                TreePosition::from_raw(count + 5)
+            )
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -3679,7 +4680,9 @@ mod tests {
         // design and would not exercise the search).
         entries.push(entry_created_at(2 * e, 100, 20));
         entries.push(entry_created_at(2 * e + 1, 5_000, 4_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(
             store.frozen_segment(SegmentId(1)).unwrap().is_some(),
             "both segments must freeze for segment 0 to become an island"
@@ -3691,13 +4694,246 @@ mod tests {
         );
         store.prune_frozen(&[]).unwrap();
 
-        store.rollback_to_fork(BlockHeight(4_500)).unwrap();
+        store
+            .rollback_to_fork(BlockHeight::from_raw(4_500))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2 * e + 1);
         assert_eq!(
             serve_body(&store, SegmentId(0)).len(),
             leaves_per_segment() * LEAF_BYTES,
             "the pinned shard stays servable across the reorg — the point of the pin"
         );
+    }
+
+    /// A late capture at a cascade key must not erase the chunk already there.
+    ///
+    /// This is the sequence an `insert` would have lost, and it is reachable
+    /// as soon as ownership can be learned after a fold. Cascade coordinates
+    /// are shared between layers: layer-0 chunk 17 and layer-1 chunk 0 both
+    /// end at leaf **683**. So an output owned early contributes the layer-1
+    /// chunk there, and an output discovered *late* in layer-0 chunk 17
+    /// contributes a layer-0 chunk at the same key. Replacing the row would
+    /// have dropped the first silently — no error, no missing key, just a
+    /// path that cannot be built later.
+    #[test]
+    fn a_late_layer_zero_capture_does_not_erase_the_layer_one_chunk() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // 683 is the first coordinate a layer-0 and a layer-1 chunk share.
+        let at = TreePosition::from_raw(683);
+
+        let upper = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+        let lower = CapturedChunk {
+            layer: 0,
+            bytes: vec![0xBB; 96 * 38],
+        };
+
+        // Owned early: the cascade's upper chunk lands first.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&upper))
+            .unwrap();
+        // Discovered late: the backfill contributes only layer 0.
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&lower))
+            .unwrap();
+
+        let held = store.captured_chunks(at).unwrap();
+        assert_eq!(
+            held,
+            vec![lower, upper],
+            "both layers must survive, ordered by layer; a replace would leave only the \
+             late one and the loss would be silent"
+        );
+    }
+
+    /// Re-offering identical bytes is a no-op, so reconciliation may
+    /// recompute freely; different bytes for one coordinate are refused.
+    #[test]
+    fn an_identical_recapture_is_idempotent_and_a_conflicting_one_refuses() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        let at = TreePosition::from_raw(683);
+        let chunk = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xAA; 32 * 18],
+        };
+
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        store
+            .put_captured_chunks(at, std::slice::from_ref(&chunk))
+            .unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk.clone()],
+            "recomputing the same chunk must not duplicate it"
+        );
+
+        let disagreeing = CapturedChunk {
+            layer: 1,
+            bytes: vec![0xCC; 32 * 18],
+        };
+        match store.put_captured_chunks(at, &[disagreeing]) {
+            Err(StoreError::ConflictingCapture { end_leaf, layer }) => {
+                assert_eq!((end_leaf, layer), (683, 1));
+            }
+            other => panic!(
+                "two contents for one coordinate is a defect, not a merge to resolve; \
+                 got {other:?}"
+            ),
+        }
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            vec![chunk],
+            "a refused write must leave the held chunk untouched"
+        );
+    }
+
+    /// The truncation fencepost, asserted on **both** sides of the edge.
+    ///
+    /// A chunk is final only while every leaf under it survives, and its key
+    /// is the position of its last leaf. So the boundary is exact: a cut
+    /// whose first removed position **is** `end_leaf` takes that leaf away
+    /// and must drop the capture; a cut at `end_leaf + 1` leaves the chunk
+    /// whole and must keep it.
+    ///
+    /// Both sides, because one side alone cannot tell `<` from `<=`. A
+    /// scenario deep inside the region — leaf 100 against a cut to 150 —
+    /// passes under either inequality, which is the flat-region failure this
+    /// round has been bitten by before.
+    #[test]
+    fn a_capture_survives_a_cut_above_its_end_and_not_at_it() {
+        let end = 40_u64;
+        let chunks = vec![CapturedChunk {
+            layer: 1,
+            bytes: vec![7u8; 32],
+        }];
+
+        // Above the edge: the chunk's last leaf survives, so the chunk does.
+        let keep = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&keep, end + 2);
+        keep.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        keep.truncate_from_tree_position(TreePosition::from_raw(end + 1))
+            .unwrap();
+        assert_eq!(
+            keep.captured_chunks(TreePosition::from_raw(end)).unwrap(),
+            chunks,
+            "a cut whose first removed position is end_leaf + 1 leaves the chunk whole"
+        );
+
+        // At the edge: the chunk's last leaf is removed, so the chunk is not
+        // final any more.
+        let drop = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&drop, end + 2);
+        drop.put_captured_chunks(TreePosition::from_raw(end), &chunks)
+            .unwrap();
+        drop.truncate_from_tree_position(TreePosition::from_raw(end))
+            .unwrap();
+        assert!(
+            drop.captured_chunks(TreePosition::from_raw(end))
+                .unwrap()
+                .is_empty(),
+            "a cut whose first removed position IS end_leaf takes the chunk's last leaf, \
+             so the capture must go"
+        );
+    }
+
+    /// A cascade's chunks share a key, and the codec round-trips both value
+    /// shapes under it.
+    #[test]
+    fn a_cascade_round_trips_both_value_shapes() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        seed_leaves(&store, 8);
+        // Layer 0 is identities (96 B per sibling); above it, nodes (32 B).
+        let chunks = vec![
+            CapturedChunk {
+                layer: 0,
+                bytes: vec![1u8; 96 * 38],
+            },
+            CapturedChunk {
+                layer: 1,
+                bytes: vec![2u8; 32 * 18],
+            },
+            CapturedChunk {
+                layer: 2,
+                bytes: vec![3u8; 32 * 38],
+            },
+        ];
+        let at = TreePosition::from_raw(5);
+        store.put_captured_chunks(at, &chunks).unwrap();
+        assert_eq!(
+            store.captured_chunks(at).unwrap(),
+            chunks,
+            "the value is self-describing, so a cascade of mixed shapes walks back out"
+        );
+        assert!(
+            store
+                .captured_chunks(TreePosition::from_raw(6))
+                .unwrap()
+                .is_empty(),
+            "a position with no capture reads empty, not an error"
+        );
+    }
+
+    /// A truncated row is refused rather than read as a short chunk.
+    /// A row that repeats a layer, or runs backwards, is refused.
+    ///
+    /// Every writer sorts after merging and holds one chunk per
+    /// `(end_leaf, layer)`, so such a row was not written by this code. A
+    /// reader that took the first of two layer-`L` bodies would be choosing
+    /// between two conflicting persisted values with no refusal — the
+    /// condition `ConflictingCapture` exists to make loud at write time.
+    #[test]
+    fn a_capture_row_with_a_repeated_or_unordered_layer_is_refused() {
+        let chunk = |layer: u8| CapturedChunk {
+            layer,
+            bytes: vec![layer; 32],
+        };
+        assert!(
+            decode_captured_chunks(&encode_captured_chunks(&[chunk(0), chunk(1), chunk(2)]))
+                .is_ok(),
+            "ascending layers decode"
+        );
+        for row in [
+            vec![chunk(1), chunk(1)],
+            vec![chunk(2), chunk(1)],
+            vec![chunk(0), chunk(2), chunk(2)],
+        ] {
+            let layers: Vec<u8> = row.iter().map(|c| c.layer).collect();
+            assert!(
+                decode_captured_chunks(&encode_captured_chunks(&row)).is_err(),
+                "layers {layers:?} must refuse: repeated or out of order"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_capture_row_is_refused() {
+        let full = encode_captured_chunks(&[CapturedChunk {
+            layer: 1,
+            bytes: vec![9u8; 64],
+        }]);
+        for cut in [1_usize, 3, 5, full.len() - 1] {
+            assert!(
+                decode_captured_chunks(&full[..cut]).is_err(),
+                "a row cut at {cut} bytes must refuse, not decode short"
+            );
+        }
+        assert!(decode_captured_chunks(&full).is_ok());
+    }
+
+    /// Leaves so a truncation has something to partition; the capture rows
+    /// are the subject, the leaves are only the setup.
+    fn seed_leaves(store: &LeafStore, count: u64) {
+        let entries: Vec<_> = (0..count).map(|i| sample_entry(i, 0)).collect();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
     }
 
     #[test]
@@ -3707,9 +4943,13 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
     }
@@ -3721,11 +4961,18 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(100)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        store
+            .append_drained(&entries, BlockHeight::from_raw(100))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
-        store.append_drained(&[], BlockHeight(10_000)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
+        store
+            .append_drained(&[], BlockHeight::from_raw(10_000))
+            .unwrap();
+        assert_eq!(
+            store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(10_000)
+        );
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -3736,15 +4983,21 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         store.pin_segment_for_serving(SegmentId(0)).unwrap();
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        store.append_drained(&entries, BlockHeight(20_000)).unwrap();
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(20_000))
+            .unwrap();
         store.prune_frozen(&[]).unwrap();
         let txn = store.db.begin_read().unwrap();
         let leaves = txn.open_table(LEAVES_TABLE).unwrap();
         assert!(
-            leaves.get(TreePosition(0)).unwrap().is_none(),
+            leaves.get(TreePositionKey::from_raw(0)).unwrap().is_none(),
             "stale pin must not block prune"
         );
     }
@@ -3753,11 +5006,13 @@ mod tests {
     fn truncate_invalidates_sync_tip() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(500))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(500))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(500));
-        store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(500));
+        store
+            .truncate_from_tree_position(TreePosition::from_raw(0))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -3767,11 +5022,13 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         store.prune_frozen(&[]).unwrap();
         let pos_in_seg = e / 2;
         let err = store
-            .truncate_from_tree_position(TreePosition(
+            .truncate_from_tree_position(TreePosition::from_raw(
                 u64::try_from(pos_in_seg).expect("position fits u64"),
             ))
             .unwrap_err();
@@ -3786,18 +5043,20 @@ mod tests {
     fn append_drained_sync_tip_is_monotonic() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(100))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(100))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
-        store.append_drained(&[], BlockHeight(50)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
+        store
+            .append_drained(&[], BlockHeight::from_raw(50))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
 
     #[test]
     fn root_at_count_rejects_request_beyond_stored() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let err = store.root_at_count(2).unwrap_err();
         assert!(matches!(
@@ -3813,10 +5072,10 @@ mod tests {
     fn truncate_beyond_leaf_count_rejects() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let err = store
-            .truncate_from_tree_position(TreePosition(2))
+            .truncate_from_tree_position(TreePosition::from_raw(2))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -3860,9 +5119,8 @@ mod tests {
             }
         }
 
-        check_u64::<TreePosition>(TreePosition);
-        check_u64::<BlockHeight>(BlockHeight);
-        check_u64::<Gindex>(Gindex);
+        check_u64::<TreePositionKey>(TreePositionKey::from_raw);
+        check_u64::<GindexKey>(|v| GindexKey::from(Gindex::from_raw(v)));
 
         // SegmentId wraps u32; same parity properties against the u32 impl.
         let samples = [0u32, 1, 2, u32::MAX - 1, u32::MAX];
@@ -3893,12 +5151,12 @@ mod tests {
     /// not silent cross-keyed reads.
     #[test]
     fn typed_key_table_type_guard_fires() {
-        const WRONG_KEY_LEAVES: TableDefinition<Gindex, &[u8; 128]> =
+        const WRONG_KEY_LEAVES: TableDefinition<GindexKey, &[u8; 128]> =
             TableDefinition::new("leaves");
 
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let txn = store.db.begin_read().unwrap();
         let err = txn.open_table(WRONG_KEY_LEAVES).unwrap_err();
@@ -3944,7 +5202,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         {
@@ -3994,7 +5252,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             assert_eq!(store.leaf_count().unwrap(), 1);
-            assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(1));
+            assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(1));
         }
 
         std::fs::remove_file(&path).unwrap();
@@ -4021,7 +5279,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         {
@@ -4069,7 +5327,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         const PRIOR_V3: u64 = 3;

@@ -266,7 +266,9 @@ bool fill_release_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   // None of this is a verdict. Every clause only causes LESS work: Rust runs
   // the same pins itself and issues the refusal, and the skipped flag makes it
   // refuse rather than fold an unread slice into the permissive "never served".
-  const uint8_t pin_rc = shekyl_archival_debit_auth_pin(
+  // Kind is Release: this gather exists only for that path.
+  const uint8_t pin_rc = shekyl_archival_cold_authority_pin(
+    static_cast<uint8_t>(archival_bond_post_kind::Release), bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
@@ -419,7 +421,7 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
 
   facts.fee_per_byte = bc.get_current_fee_per_byte();
   facts.fee_quantization_mask = Blockchain::get_fee_quantization_mask();
-  facts.weight_limit = get_transaction_weight_limit(bc.get_current_hard_fork_version());
+  facts.weight_limit = get_transaction_weight_limit();
   facts.chain_height = bc.get_current_blockchain_height();
 }
 
@@ -871,26 +873,12 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
 
-    // The exact dispatch the deleted legacy on_send_raw_tx handler used
-    // (§9.3): relay_method::local arms the Dandelion++ embargo machinery.
-    //
-    // Q12-D5a once-at-origin: this is the one roll. `true` → `invalid`,
-    // which `send_txs` fail-closes onto the anonymity zone. `false` →
-    // `public_`, which `send_txs` sends on clearnet *by design* — not as
-    // a fallback from an unusable chosen zone. Pool re-relays of `local`
-    // keep passing `invalid` and do not come through this function, so
-    // they cannot re-roll. A missed nudge is a second chooser (the pool
-    // then first-decides always-anon) — D5a in miniature, FOLLOWUPS —
-    // not a reason to roll on the pool path.
+    // relay_method::local. Hop 0 is the relay's construction bit.
+    // A missed nudge takes the same path from the pool. There is no
+    // second roll here.
     NOTIFY_NEW_TRANSACTIONS::request r;
     r.txs.push_back(std::move(txblob));
-    protocol.relay_transactions(
-      r,
-      boost::uuids::nil_uuid(),
-      /* One crossing: the roll and its zone mapping both live in Rust
-         (rule 40). Byte contract static_asserted in enums.h. */
-      static_cast<epee::net_utils::zone>(shekyl_relay_zone_roll_originated_zone()),
-      relay_method::local);
+    protocol.relay_transactions(r, boost::uuids::nil_uuid(), relay_method::local);
     return SHEKYL_SUBMIT_OK;
   }
   catch (const std::exception& e)

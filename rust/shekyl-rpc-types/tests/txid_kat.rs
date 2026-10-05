@@ -23,9 +23,9 @@
 
 use shekyl_wire::Transaction;
 
-fn hex32(bytes: &[u8; 32]) -> String {
+fn hex32(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(64);
-    for b in bytes {
+    for b in bytes.as_ref() {
         s.push_str(&format!("{b:02x}"));
     }
     s
@@ -42,11 +42,11 @@ const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     (
         include_bytes!("vectors/regtest_coinbase_h0.tx"),
         // mainnet genesis miner_tx (regtest h0 shares GENESIS_TX)
-        "4de2da89098b1cf31ffdbee52c10c3720cb8168f85f468ef407a94f9377b192f",
+        "7b3b02dd6fd3a4fd9aebfe17703f1b5261bc8a19d22812aa8e9a7726056bd8c0",
     ),
     (
         include_bytes!("vectors/regtest_coinbase_h1.tx"),
-        "02a5dd69ed4dfc68d40da0e7f12470dd7b7cf445de54524d43822bd081a766fb",
+        "45c431774933021ac5b82cc423a30071999950df8ddfb8f8a14a37c7347de335",
     ),
 ];
 
@@ -56,7 +56,7 @@ fn engine_txid_equals_cpp_get_transaction_hash_over_oracle_blobs() {
         let tx = Transaction::from_bytes(blob)
             .unwrap_or_else(|e| panic!("oracle blob {i} must parse: {e}"));
         assert_eq!(
-            hex32(&tx.hash()),
+            hex32(tx.hash()),
             *cpp_txid,
             "oracle blob {i}: shekyl-wire txid diverged from C++ get_transaction_hash — \
              the §3.4 txid authority equivalence is broken"

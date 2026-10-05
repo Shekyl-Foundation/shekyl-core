@@ -199,6 +199,11 @@ pub(crate) mod curve_tree_decode;
 /// candidates exclusively through it and owns the Q11 fee-exclusion
 /// (`DesignatedBacking::fee_sweep`).
 pub(crate) mod backing_set;
+pub mod balance_view;
+/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
+/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
+/// affordability check only — a guarded module the M1 import-check arm keeps
+/// blind to the per-output reward vector.
 pub(crate) mod block_fetch;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 /// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
@@ -230,10 +235,6 @@ pub(crate) mod claim_dispatch;
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
-/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
-/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
-/// affordability check only — a guarded module the M1 import-check arm keeps
-/// blind to the per-output reward vector.
 pub(crate) mod drain_amount;
 /// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
 /// value-out transaction builder. Produces a **transfer-shaped** tx (two
@@ -358,9 +359,11 @@ pub mod refresh;
 pub(crate) mod refresh_slot;
 /// Track-2 end-to-end FAKECHAIN regtest (C++↔Rust FCMP++ verify parity). Spawns
 /// a real `shekyld --regtest` and drives the production [`Engine`] against it;
-/// all tests are `#[ignore]`d and require `SHEKYLD_BIN`.
+/// every live-daemon test is `#[ignore]`d and requires `SHEKYLD_BIN`.
 #[cfg(test)]
 mod regtest_e2e;
+/// Finality comparison shared by the producer fork walk and curve-tree ingest.
+pub(crate) mod reorg_finality;
 /// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
 pub(crate) mod rescan;
 #[cfg(test)]
@@ -440,8 +443,8 @@ pub use diagnostics::{
     TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
-    ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
-    RefreshError, SendError, SubmitError, TxError,
+    ChangePasswordError, CurveTreeIngestFault, IoError, KeyError, OpenError, PendingTxError,
+    PersistenceError, RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 // `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
@@ -510,11 +513,9 @@ use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_engine_state::WalletLedger;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::key_actor::{HandleDerivationViewSecret, KeyEngineHandle};
-use crate::engine::local_ledger::LedgerState;
 use crate::engine::stake_engine::StakeEngineHandle;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -963,47 +964,8 @@ impl<
     }
 }
 
-/// RAII guard returned by [`Engine::ledger`]: holds a read lock on
-/// the wallet's [`LocalLedger`] and derefs transparently to
-/// [`WalletLedger`].
-///
-/// The guard is opaque: external callers cannot observe the
-/// crate-private `LedgerState` aggregate or the `LedgerIndexes`
-/// half — the [`Deref`] impl projects to `WalletLedger`, the only
-/// type the public surface exposes. The `inner` field is private,
-/// so even though its type names the `pub(crate)` `LedgerState`,
-/// the `private_interfaces` lint does not fire (the type only
-/// appears in private positions). The lint *would* fire if the
-/// field were `pub`; it is deliberately not. Source compatibility
-/// with the pre-Stage-1 `&WalletLedger` accessor is preserved by
-/// the [`Deref`] impl, so calls of the form
-/// `engine.ledger().some_wallet_ledger_method()` continue to compile
-/// and behave identically.
-///
-/// A future refactor may project directly to `WalletLedger` via
-/// `std::sync::RwLockReadGuard::map` (currently
-/// `mapped_lock_guards`-feature-gated) or `parking_lot::RwLock`,
-/// which would remove `LedgerState` from the field type entirely
-/// and eliminate the rustdoc "private item" warning on the doc
-/// comment below. Tracked under V3.x in `docs/FOLLOWUPS.md` →
-/// "`LedgerReadGuard` field type leaks crate-private `LedgerState`".
-///
-/// Hold the guard for the minimum span necessary; concurrent writers
-/// (`apply_scan_result` and the [`pending`]-module mutators) cannot
-/// acquire the write lock while any reader is live.
-///
-/// [`Deref`]: std::ops::Deref
-pub struct LedgerReadGuard<'a> {
-    inner: std::sync::RwLockReadGuard<'a, LedgerState>,
-}
-
-impl std::ops::Deref for LedgerReadGuard<'_> {
-    type Target = WalletLedger;
-
-    fn deref(&self) -> &WalletLedger {
-        &self.inner.ledger
-    }
-}
+mod ledger_read_guard;
+pub use ledger_read_guard::LedgerReadGuard;
 
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in this file.

@@ -26,6 +26,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use shekyl_curve_io::*;
+use shekyl_rpc_types::core_rpc_version_string;
+use shekyl_types::ChainCount;
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
@@ -69,6 +71,133 @@ pub enum RpcError {
     /// The priority intended for use wasn't usable.
     #[error("invalid priority")]
     InvalidPriority,
+    /// The daemon answered the identity handshake (`VC-4`), and it is not a
+    /// daemon this wallet can use: another RPC contract, rule set, network or
+    /// chain. Typed, so a caller names the axis and its remedy from the value;
+    /// the message is this wallet's own wording of it.
+    #[error("{}", identity_refusal(.0))]
+    IdentityMismatch(IdentityMismatch),
+}
+
+/// What a daemon RPC failure means for whoever has to act on it.
+///
+/// Classified once, where the failure is raised ([`RpcError::fault`]), so
+/// every layer above reads the remedy from this value rather than from a
+/// message. Fixed-size and `Copy`: it carries no text the daemon supplied,
+/// so it can cross boundaries that must not carry any (the refresh
+/// producer's error, `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonFault {
+    /// The daemon could not be reached, or did not answer. Retry, or check
+    /// the daemon address.
+    Unreachable,
+    /// The daemon answered the identity handshake and is not one this wallet
+    /// can use. Retrying the same daemon cannot succeed.
+    Identity(IdentityMismatch),
+    /// The daemon answered with something that breaks the RPC contract: a
+    /// malformed, inconsistent or pruned reply. Another daemon may answer
+    /// correctly.
+    Protocol,
+    /// The daemon's fee estimate was unusable.
+    FeeResponse,
+    /// A failure on this side of the connection: a request this wallet could
+    /// not encode, or a priority with no fee tier. A bug, not a daemon fault.
+    Internal,
+}
+
+impl core::fmt::Display for DaemonFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unreachable => f.write_str("the daemon did not answer"),
+            Self::Identity(mismatch) => {
+                write!(f, "the daemon was refused on its {}", mismatch.axis())
+            }
+            Self::Protocol => f.write_str("the daemon's reply broke the RPC contract"),
+            Self::FeeResponse => f.write_str("the daemon's fee estimate was unusable"),
+            Self::Internal => f.write_str("the request failed on this side of the connection"),
+        }
+    }
+}
+
+impl DaemonFault {
+    /// Whether retrying against the same daemon can succeed. An identity
+    /// refusal is cached by the client and repeats on every request.
+    #[must_use]
+    pub const fn is_retryable(self) -> bool {
+        !matches!(self, Self::Identity(_))
+    }
+}
+
+impl RpcError {
+    /// What this failure means for the remedy. Exhaustive: a new variant
+    /// does not compile until its remedy is named.
+    #[must_use]
+    pub const fn fault(&self) -> DaemonFault {
+        match self {
+            Self::ConnectionError(_) => DaemonFault::Unreachable,
+            Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
+            Self::InvalidNode(_)
+            | Self::TransactionsNotFound(_)
+            | Self::PrunedTransaction
+            | Self::InvalidTransaction(_) => DaemonFault::Protocol,
+            Self::InvalidFee => DaemonFault::FeeResponse,
+            Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
+        }
+    }
+}
+
+/// This wallet's wording of an identity refusal, one sentence per axis.
+///
+/// The console words the same verdict its own way
+/// (`shekyl-daemon-rpc`'s `console_identity_message`); the axes themselves
+/// are compared once, in [`shekyl_rpc_types::IdentityExpectation::check`].
+fn identity_refusal(mismatch: &IdentityMismatch) -> String {
+    match *mismatch {
+        IdentityMismatch::Wire { ours, theirs } => {
+            let older = if theirs < ours {
+                "daemon"
+            } else {
+                "this wallet"
+            };
+            format!(
+                "{axis} mismatch: this wallet is {}, the daemon is {} — the {older} is the \
+                 older one; update it. Refusing before any wallet operation.",
+                core_rpc_version_string(ours),
+                core_rpc_version_string(theirs),
+                axis = IdentityAxis::Wire,
+            )
+        }
+        IdentityMismatch::WireUnreadable { ours } => format!(
+            "this daemon's `get_version` does not match the RPC contract this wallet \
+             was built against, so the two are on different RPC versions. This wallet \
+             is {}. The reply could not be read, so the daemon's version cannot be \
+             named here; align the two builds.",
+            core_rpc_version_string(ours),
+        ),
+        IdentityMismatch::Rules { ours, theirs } => format!(
+            "{axis} mismatch: this wallet's digest is {ours}, the daemon's is {theirs}. The \
+             RPC contract matches, so neither side is a stale release — the two were built \
+             from different consensus configurations, which is a different rule set rather \
+             than a version skew. Balances read from it would be computed under rules this \
+             wallet does not implement.",
+            axis = IdentityAxis::Rules,
+        ),
+        IdentityMismatch::Network { ours, theirs } => format!(
+            "{axis} mismatch: this wallet is a {ours} wallet, the daemon runs {theirs}. \
+             Connect to a {ours} daemon; this one is refused before anything is scanned.",
+            axis = IdentityAxis::Network,
+        ),
+        IdentityMismatch::Genesis {
+            ours,
+            theirs,
+            network,
+        } => format!(
+            "{axis} mismatch: this daemon's chain starts at {theirs}, this wallet's \
+             {network} genesis is {ours}. Whatever else agrees, that is a different \
+             chain.",
+            axis = IdentityAxis::Genesis,
+        ),
+    }
 }
 
 /// A struct containing a fee rate.
@@ -182,8 +311,6 @@ pub enum FeePriority {
     Unimportant,
     /// The `Normal` priority, as defined by Monero.
     Normal,
-    /// The `Elevated` priority, as defined by Monero.
-    Elevated,
     /// The `Priority` priority, as defined by Monero.
     Priority,
     /// A custom priority.
@@ -200,7 +327,6 @@ impl FeePriority {
         match self {
             FeePriority::Unimportant => 1,
             FeePriority::Normal => 2,
-            FeePriority::Elevated => 3,
             FeePriority::Priority => 4,
             FeePriority::Custom { priority, .. } => *priority,
         }
@@ -209,18 +335,14 @@ impl FeePriority {
 
 /// Which fee tier a caller's priority buys.
 ///
-/// The mapping the local index arithmetic encoded, named: priority `0` and
-/// `1` both take the lowest tier (the old code reached that by
-/// `saturating_sub(1)` on a `u32`), `2` and `3` step up, and anything `>= 4`
-/// — including a `Custom` priority of a million — takes the highest. Every
-/// `u32` maps to a tier, so the out-of-range `InvalidPriority` this function
-/// used to be able to return is not merely unused: it is unreachable, which
-/// is why the bounds check went with the index.
+/// Priority `0` and `1` both take the lowest tier (the old index arithmetic
+/// reached that by `saturating_sub(1)` on a `u32`), `2` takes the middle,
+/// and anything `>= 3` — including a `Custom` priority of a million — takes
+/// the highest. Every `u32` maps to a tier.
 fn fee_tier_for(priority: FeePriority) -> shekyl_rpc_types::FeeTier {
     match priority.fee_priority() {
         0 | 1 => shekyl_rpc_types::FeeTier::Low,
         2 => shekyl_rpc_types::FeeTier::Normal,
-        3 => shekyl_rpc_types::FeeTier::Medium,
         _ => shekyl_rpc_types::FeeTier::High,
     }
 }
@@ -249,6 +371,11 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
 // typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
 pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
+// The identity verdict [`RpcError::IdentityMismatch`] and
+// [`DaemonFault::Identity`] carry, with the types inside it, for the same
+// reason: a consumer that names the verdict reaches it through this crate.
+pub use shekyl_rpc_types::{DaemonNetwork, HashHex, IdentityAxis, IdentityMismatch};
+
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
 /// `application/octet-stream`; everything else (JSON-RPC and plain JSON routes) is
@@ -269,7 +396,7 @@ pub fn content_type_for(route: &str) -> &'static str {
 /// An RPC connection to a Monero daemon.
 ///
 /// This is abstract such that users can use an HTTP library (which being their choice), a
-/// Tor/i2p-based transport, or even a memory buffer an external service somehow routes.
+/// Tor-based transport, or even a memory buffer an external service somehow routes.
 ///
 /// While no implementors are directly provided here, the first-party
 /// `shekyl-rpc-transport` crate (a hyper transport with optional SOCKS5h) is recommended.
@@ -387,8 +514,35 @@ pub trait Rpc: Sync + Clone {
     /// Get the height of the Shekyl blockchain.
     ///
     /// The height is defined as the amount of blocks on the blockchain. For a blockchain with only
-    /// its genesis block, the height will be 1.
-    fn get_height(&self) -> impl Send + Future<Output = Result<usize, RpcError>> {
+    /// its genesis block, the height will be 1. Typed [`ChainCount`] at this
+    /// decode (`HEIGHT_SEMANTICS.md` C2); the method name is kept (C7).
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: `get_height` is a count, not `usize`.
+    /// fn wants_usize_fut<F>(_: F)
+    /// where
+    ///     F: core::future::Future<Output = Result<usize, shekyl_rpc_client::RpcError>>,
+    /// {
+    /// }
+    /// fn check<R: shekyl_rpc_client::Rpc>(rpc: &R) {
+    ///     wants_usize_fut(rpc.get_height());
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: `get_height` is not an ordinal.
+    /// fn wants_height_fut<F>(_: F)
+    /// where
+    ///     F: core::future::Future<
+    ///         Output = Result<shekyl_types::BlockHeight, shekyl_rpc_client::RpcError>,
+    ///     >,
+    /// {
+    /// }
+    /// fn check<R: shekyl_rpc_client::Rpc>(rpc: &R) {
+    ///     wants_height_fut(rpc.get_height());
+    /// }
+    /// ```
+    fn get_height(&self) -> impl Send + Future<Output = Result<ChainCount, RpcError>> {
         async move {
             // The wire type is `shekyl-rpc-types`'s (RK-D1): one definition for
             // the daemon that serves it and the wallet that reads it.
@@ -403,14 +557,12 @@ pub trait Rpc: Sync + Clone {
                     reply.status.0
                 )));
             }
-            let res = usize::try_from(reply.height)
-                .map_err(|_| RpcError::InvalidNode("height does not fit usize".to_string()))?;
-            if res == 0 {
-                Err(RpcError::InvalidNode(
+            if reply.height == 0 {
+                return Err(RpcError::InvalidNode(
                     "node responded with 0 for the height".to_string(),
-                ))?;
+                ));
             }
-            Ok(res)
+            Ok(ChainCount::from_raw(reply.height))
         }
     }
 
@@ -481,12 +633,10 @@ pub trait Rpc: Sync + Clone {
             // The pre-2021-scaling fallback is gone with the field it read.
             // It multiplied the scalar by one of `[1, 5, 25, 1000]` when the
             // daemon sent no `fees` array — a Monero wallet2 path for a
-            // daemon Shekyl has never had, since the estimator resizes to
-            // exactly four tiers on every network and `FeeTiers` is a fixed
-            // `[u64; 4]`, so "no tiers" is now unrepresentable rather than
-            // merely unreachable (rule 60). It also carried the only
-            // unchecked multiply in this function, on a daemon-supplied
-            // number.
+            // daemon Shekyl has never had. `FeeTiers` is a fixed `[u64; 3]`,
+            // so "no tiers" is unrepresentable rather than merely
+            // unreachable (rule 60). It also carried the only unchecked
+            // multiply in this function, on a daemon-supplied number.
             FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
         }
     }
@@ -597,8 +747,99 @@ pub trait Rpc: Sync + Clone {
 
 #[cfg(test)]
 mod tests {
-    use super::{fee_tier_for, FeePriority};
+    use super::{
+        fee_tier_for, DaemonFault, DaemonNetwork, FeePriority, HashHex, IdentityMismatch, RpcError,
+    };
     use shekyl_rpc_types::FeeTier;
+
+    /// Each failure's remedy class, named once. The identity verdict rides
+    /// through unchanged; nothing is classified by its message.
+    #[test]
+    fn every_failure_is_classified_by_its_remedy() {
+        let wrong_network = IdentityMismatch::Network {
+            ours: DaemonNetwork::Mainnet,
+            theirs: DaemonNetwork::Testnet,
+        };
+        for (err, fault) in [
+            (
+                RpcError::ConnectionError("refused".into()),
+                DaemonFault::Unreachable,
+            ),
+            (
+                RpcError::IdentityMismatch(wrong_network),
+                DaemonFault::Identity(wrong_network),
+            ),
+            (RpcError::InvalidNode("bad".into()), DaemonFault::Protocol),
+            (
+                RpcError::TransactionsNotFound(vec![[0; 32]]),
+                DaemonFault::Protocol,
+            ),
+            (RpcError::PrunedTransaction, DaemonFault::Protocol),
+            (RpcError::InvalidTransaction([0; 32]), DaemonFault::Protocol),
+            (RpcError::InvalidFee, DaemonFault::FeeResponse),
+            (
+                RpcError::InternalError("encode".into()),
+                DaemonFault::Internal,
+            ),
+            (RpcError::InvalidPriority, DaemonFault::Internal),
+        ] {
+            assert_eq!(err.fault(), fault, "{err:?}");
+            assert_eq!(
+                fault.is_retryable(),
+                !matches!(fault, DaemonFault::Identity(_)),
+                "only an identity refusal is certain to repeat: {err:?}"
+            );
+        }
+    }
+
+    /// The typed variant is the contract. Consumers that still recognise an
+    /// identity refusal by its wording (`shekyl-gui-wallet`'s
+    /// `engine_errors.rs`) rely on these stems, so they are pinned here
+    /// until those consumers read the type.
+    #[test]
+    fn an_identity_refusal_keeps_its_axis_wording() {
+        let digest = |b| HashHex::from_bytes([b; 32]);
+        for (mismatch, stems) in [
+            (
+                IdentityMismatch::Wire {
+                    ours: 0x0003_001d,
+                    theirs: 0x0003_001c,
+                },
+                &["RPC contract mismatch:", "the daemon is the older one"][..],
+            ),
+            (
+                IdentityMismatch::WireUnreadable { ours: 0x0003_001d },
+                &["does not match the RPC contract", "cannot be named here"][..],
+            ),
+            (
+                IdentityMismatch::Rules {
+                    ours: digest(1),
+                    theirs: digest(2),
+                },
+                &["consensus constants mismatch:"][..],
+            ),
+            (
+                IdentityMismatch::Network {
+                    ours: DaemonNetwork::Mainnet,
+                    theirs: DaemonNetwork::Testnet,
+                },
+                &["network mismatch:", "the daemon runs testnet"][..],
+            ),
+            (
+                IdentityMismatch::Genesis {
+                    ours: digest(3),
+                    theirs: digest(4),
+                    network: DaemonNetwork::Mainnet,
+                },
+                &["genesis block mismatch:", "different chain"][..],
+            ),
+        ] {
+            let message = RpcError::IdentityMismatch(mismatch).to_string();
+            for stem in stems {
+                assert!(message.contains(stem), "{stem:?} in {message}");
+            }
+        }
+    }
 
     /// Every priority maps to the tier the deleted index arithmetic gave it.
     ///
@@ -617,44 +858,23 @@ mod tests {
         assert_eq!(fee_tier_for(custom(1)), FeeTier::Low);
         assert_eq!(fee_tier_for(FeePriority::Normal), FeeTier::Normal);
         assert_eq!(fee_tier_for(custom(2)), FeeTier::Normal);
-        assert_eq!(fee_tier_for(FeePriority::Elevated), FeeTier::Medium);
-        assert_eq!(fee_tier_for(custom(3)), FeeTier::Medium);
+        assert_eq!(fee_tier_for(custom(3)), FeeTier::High);
         assert_eq!(fee_tier_for(FeePriority::Priority), FeeTier::High);
         assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
         assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
     }
 
-    /// An `Elevated` caller pays the STANDARD rate, and that is the point
-    /// of the RK-5 bridge rather than an accident of the mapping.
-    ///
-    /// `Elevated` maps to [`FeeTier::Medium`], which indexes slot 2 — the
-    /// old `Fm`. FL-R17 signed three tiers, and the daemon keeps the
-    /// vector four wide until the RPC cutover by serving slot 2 as a
-    /// mirror of standard. So a wallet2-transliterated `Elevated` caller
-    /// is priced with the majority instead of self-marking on a rung of
-    /// its own, which is the anonymity-set claim the bridge exists to
-    /// make.
-    ///
-    /// Asserted end to end — mapping *and* slot semantics — because each
-    /// half is separately true and harmless while together they carry the
-    /// claim. The producer's side is pinned in `shekyl-economics`
-    /// (`FeeLadder::as_slots`) and at the FFI boundary; this is the
-    /// consumer's.
+    /// Every named tier buys a different rate. A mapping that collapsed two
+    /// of them would make the tier choice unobservable in every other test.
     #[test]
-    fn an_elevated_caller_is_priced_at_the_standard_rate_by_the_bridge() {
-        // A reply shaped as the daemon emits it: slot 2 mirrors slot 1.
-        let served = shekyl_rpc_types::FeeTiers([10, 20, 20, 40]);
-        let elevated = served.get(fee_tier_for(FeePriority::Elevated));
-        let standard = served.get(fee_tier_for(FeePriority::Normal));
-        assert_eq!(
-            elevated, standard,
-            "the bridge must price Elevated with standard; a distinct slot-2 \
-             rate would put those callers in a cohort of their own"
-        );
-        assert_ne!(
-            elevated,
-            served.get(fee_tier_for(FeePriority::Priority)),
-            "and it must not silently become the priority rate either"
+    fn each_named_tier_buys_a_distinct_rate() {
+        let served = shekyl_rpc_types::FeeTiers([10, 20, 40]);
+        let low = served.get(fee_tier_for(FeePriority::Unimportant));
+        let normal = served.get(fee_tier_for(FeePriority::Normal));
+        let high = served.get(fee_tier_for(FeePriority::Priority));
+        assert!(
+            low < normal && normal < high,
+            "tiers must ascend and differ: {low}, {normal}, {high}"
         );
     }
 }

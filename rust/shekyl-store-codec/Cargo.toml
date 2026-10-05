@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-store-codec"
+description = "The redb value contract both Shekyl stores share: `Canonical`, `CodecError`, the four value shapes, and the codecs for types neither store owns (CTS-Q2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# The value shapes are `redb::Value` impls; that is what makes them a table's
+# declared value type rather than a convention.
+redb = { workspace = true }
+# CTS-13 (PR #776 review): with `Canonical` foreign to both stores, the codecs
+# for vocabulary types can live only where the trait lives — the vocabulary
+# crates are `no_std` and must not depend on `redb`. So this crate depends on
+# the vocabulary and hosts those codecs once, for both stores.
+shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
+
+[lints]
+workspace = true

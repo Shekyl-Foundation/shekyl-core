@@ -5,8 +5,8 @@
 //! - [`keccak256`] / [`tree_hash`] — **Keccak-256, for existing pinned contracts
 //!   only.** Two caller classes, both closed: (a) outputs that must be
 //!   byte-identical to the Monero-descended C++ daemon — `prefix_hash`,
-//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
-//!   `multisig_pqc_leaf_hash`; (b) cross-party multisig contracts with no C++
+//!   `tree_hash`, block IDs, `pqc_signing_payload_hashes`; (b) cross-party
+//!   multisig contracts with no C++
 //!   mirror but multiple independent signers pinned to these bytes by spec —
 //!   `intent_hash` / the chain-state fingerprint (`shekyl-multisig/src/intent.rs`).
 //!   Class (b) migrates to cSHAKE only via its owning spec, never unilaterally

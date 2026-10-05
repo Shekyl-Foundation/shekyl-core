@@ -191,9 +191,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 g.refresh.scan_start_floor(),
             )
         };
-        if let Err(e) =
-            crate::engine::scan_floor::ensure_birthday_anchor(&ledger, &daemon, floor).await
-        {
+        if let Err(e) = crate::engine::scan_floor::prepare_refresh(&ledger, &daemon, floor).await {
             _ = completion.send(Err(e));
             return;
         }
@@ -312,7 +310,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         let merge_height = summary
             .processed_height_range
             .end
-            .saturating_sub(1)
+            .saturating_sub_count(shekyl_types::BlockCount::ONE)
             .max(current_synced);
 
         // Pre-merge cancel checkpoint. The producer returned a valid
@@ -461,8 +459,8 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 debug!(
                     attempt,
                     max_retries = opts.max_retries,
-                    wallet,
-                    result,
+                    wallet = wallet.to_raw(),
+                    result = result.to_raw(),
                     "run_refresh_task: snapshot race, retrying with fresh snapshot",
                 );
                 // Re-baseline progress with current_synced and zeroed

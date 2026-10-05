@@ -1,0 +1,90 @@
+---
+description: Worktree hygiene. The tested tree and the shipped tree are the same object, by construction, not by inspection.
+alwaysApply: true
+---
+
+# Worktree hygiene — the tested tree is the shipped tree
+
+Concurrent lanes each work in their own `git worktree` (`06-branching.mdc`).
+A tracked file rewritten on disk while an editor buffer holds it — by
+`cargo fmt`, or by a script that reads the file and writes it back whole —
+reverts to the buffer's older bytes at a later flush. Nothing announces
+the flush. The interval is arbitrary. `git status` after the rewrite is
+what catches it.
+
+The dangerous case is a drift followed by `git add -A` or `git commit -a`.
+The stale bytes are committed, and the tree that was tested is not the
+tree that ships. What gets committed is the text the verification existed
+to remove.
+
+## Two constraints
+
+1. **Stage explicit paths.** Never `git add -A`, `git add .`, `git add -u`,
+   or `git commit -a` in a worktree left open between edits. Every commit
+   names the files it carries. If a file you did not edit shows as
+   modified, read the diff. Restore it from `HEAD` (`git checkout -- <path>`)
+   when it is a drift. Before staging a file you did edit, diff it against
+   `HEAD` and read every hunk you did not make. Explicit paths are not
+   enough: a file that is legitimately in the commit can still be carrying
+   a reverted hunk.
+
+2. **Verify from a fresh checkout of the pushed SHA, not from the worktree.**
+   Before reporting a PR head as green, and before resolving review
+   findings against it, run the gates in a checkout that contains only
+   what was pushed. The verified SHA is the tip you are asking to merge.
+   Re-run after any merge that resolved a conflict: a conflict resolution
+   is code neither parent contains, so neither parent's green covers it.
+   State the SHA the run covered.
+
+   ```bash
+   git clone -q --no-checkout --shared <repo> /tmp/verify-<pr>
+   cd /tmp/verify-<pr> && git fetch -q origin <branch> && git checkout -q <sha>
+   git submodule update --init --recursive -q
+   env -u CARGO_TARGET_DIR cargo clippy --workspace --all-targets -- -D warnings
+   env -u CARGO_TARGET_DIR cargo test ...
+   ```
+
+   The clone's build must be the clone's. A shared `CARGO_TARGET_DIR`
+   compiles the clone into the worktree's artifacts. `env -u CARGO_TARGET_DIR`
+   on every cargo invocation in the clone is the isolation. Check
+   `echo ${CARGO_TARGET_DIR:-unset}` before trusting a clone result.
+
+   A number quoted from a run comes from that run's own log. Two runs
+   writing one log, or a `grep` over an interleaved file, produce a figure
+   that is green and wrong. One run, one log. When a gate's figure is
+   quoted, name the gate and the commit that landed it the first time.
+
+## The edit form that notices
+
+An anchored edit — `StrReplace` with enough context to be unique, a script
+that asserts its old text occurs once — fails when the file is not the
+text it was written against, and writes nothing. A line-number edit or a
+wholesale write succeeds against whatever is there, including a drifted
+file, and succeeds silently.
+
+- Anchor every edit to the text it expects. Prefer the edit tool over
+  line-addressed or whole-file writes for a file that has been sitting in
+  a worktree. When a wholesale write is unavoidable, diff the result
+  against `HEAD` and read every hunk you did not intend.
+- A script that reads a tracked file and writes it back whole is an
+  out-of-editor rewrite even when the replacement is anchored. Check
+  `git status` after it, as after `cargo fmt`.
+- Untracked files drift the same way and have no `HEAD` to restore from.
+  The reverted text is simply what is there.
+- An anchored edit that fails to match is a finding. Do not widen the
+  anchor or retarget against whatever is there now. Run `git diff` first.
+  If the current text differs from `HEAD` in lines you did not touch this
+  session, restore the file, then edit.
+
+A green gate is evidence the tree is well-formed. It is not evidence the
+tree is the one you edited. A drifted-but-valid file still compiles.
+
+CI runs on the pushed SHA, so a drift that breaks a gate fails there.
+This rule covers the drift that passes gates while being wrong, and the
+window between "I ran the tests" and "CI is green."
+
+## Related rules
+
+`06-branching.mdc` (what may be pushed), `90-commits.mdc` (a commit's
+scope is the paths it names), `91-documentation-after-plans.mdc` (a drift
+that restores a stale claim is the failure those sweeps exist to catch).

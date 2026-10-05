@@ -10,7 +10,44 @@
 //! miner_emission  = block_emission - staker_emission
 //! ```
 
-use crate::params::SCALE;
+use crate::params::{BLOCKS_PER_YEAR, SCALE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE};
+
+/// The miner and staker legs of one block's emission (CEN-F16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmissionSplit {
+    /// What the coinbase may pay (the only leg it may pay).
+    pub miner_emission: u64,
+    /// What accrues to the staker pool (CEN-G11's accrual operand).
+    pub staker_emission: u64,
+}
+
+/// The emission split (CEN-F16): the effective share at `current_height`,
+/// measured from `epoch`, then [`split_block_emission`].
+///
+/// The share constants are this crate's generated params, not caller
+/// arguments. `epoch` is CEN-F21's `genesis_ng_height` (1 on every shipped
+/// network). Zero emission is the split at zero: both legs are zero,
+/// because [`split_block_emission`] returns the emission unchanged and a
+/// zero staker leg when the emission is zero.
+#[must_use]
+pub fn compute_emission_split(
+    block_emission: u64,
+    current_height: u64,
+    epoch: u64,
+) -> EmissionSplit {
+    let effective_share = calc_effective_emission_share(
+        current_height,
+        epoch,
+        STAKER_EMISSION_SHARE,
+        STAKER_EMISSION_DECAY,
+        BLOCKS_PER_YEAR,
+    );
+    let (miner_emission, staker_emission) = split_block_emission(block_emission, effective_share);
+    EmissionSplit {
+        miner_emission,
+        staker_emission,
+    }
+}
 
 /// Compute the effective staker emission share at a given block height.
 ///
@@ -81,6 +118,46 @@ pub fn split_block_emission(block_emission: u64, effective_share: u64) -> (u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Zero emission is the split at zero: both legs are zero.
+    #[test]
+    fn zero_emission_splits_to_nothing() {
+        let split = compute_emission_split(0, 1_000_000, 1);
+        assert_eq!(
+            split,
+            EmissionSplit {
+                miner_emission: 0,
+                staker_emission: 0
+            }
+        );
+    }
+
+    /// The composition the C++ shim owned (S6): the effective share at the
+    /// height feeds the split; the legs sum to the emission; the staker leg
+    /// decays with the height (CEN-F16 as the shipped constants define it).
+    #[test]
+    fn emission_split_composes_the_share_at_the_height() {
+        let emission = 1_638_400_000_000;
+        let at_genesis = compute_emission_split(emission, 1, 1);
+        assert_eq!(
+            at_genesis.miner_emission + at_genesis.staker_emission,
+            emission
+        );
+        assert_eq!(
+            at_genesis.staker_emission,
+            split_block_emission(emission, STAKER_EMISSION_SHARE).1,
+            "at the epoch the share is the initial share"
+        );
+        let a_decade_on = compute_emission_split(emission, 1 + 10 * BLOCKS_PER_YEAR, 1);
+        assert!(
+            a_decade_on.staker_emission < at_genesis.staker_emission,
+            "the staker leg decays"
+        );
+        assert_eq!(
+            a_decade_on.miner_emission + a_decade_on.staker_emission,
+            emission
+        );
+    }
 
     const INITIAL_SHARE: u64 = 150_000; // 15%
     const ANNUAL_DECAY: u64 = 900_000; // 0.90

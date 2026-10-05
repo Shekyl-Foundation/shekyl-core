@@ -19,6 +19,7 @@ use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked, WalletOutput,
 };
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use super::{
@@ -34,7 +35,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     let scalar = Scalar::from_bytes_mod_order(bytes);
     let key = &scalar * ED25519_BASEPOINT_TABLE;
     let base = WalletOutput::new_for_test(
-        [seed; 32],
+        shekyl_types::TxHash::from_bytes([seed; 32]),
         0,
         global_index,
         key,
@@ -58,12 +59,21 @@ fn populate(
 ) {
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger,
+        BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ = indexes.process_scanned_outputs(ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 }
 
@@ -72,6 +82,7 @@ fn standard_request(amount: u64) -> TxRequest {
         recipients: vec![TxRecipient {
             address: "test_address".to_string(),
             amount_atomic_units: AtomicUnits::from_raw(amount),
+            rid: None,
         }],
         priority: FeePriority::Standard,
     }
@@ -91,7 +102,7 @@ fn build_reserves_outputs_and_advances_id_counter() {
         ],
         20,
     );
-    assert_eq!(ledger.height(), 20);
+    assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(20));
 
     let mut reservations = std::collections::BTreeMap::new();
     let mut next_id = 0u64;
@@ -107,7 +118,10 @@ fn build_reserves_outputs_and_advances_id_counter() {
     assert_eq!(pending.id.raw(), 0);
     assert_eq!(next_id, 1);
     assert_eq!(pending.fee_atomic_units, STUB_FEE_ATOMIC_UNITS);
-    assert_eq!(pending.built_at_height, 20);
+    assert_eq!(
+        pending.built_at_height,
+        shekyl_types::BlockHeight::from_raw(20)
+    );
     assert!(
         pending.tx_bytes.is_empty(),
         "the reference body leaves tx_bytes empty; production fills it"
@@ -211,7 +225,7 @@ fn build_rejects_when_no_block_ingested_yet() {
         &standard_request(1),
     )
     .unwrap_err();
-    assert!(matches!(err, SendError::CannotSign { .. }));
+    assert!(matches!(err, SendError::NotSynced), "{err:?}");
 }
 
 #[test]
@@ -283,8 +297,12 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
     // Testnet's max_reorg_depth = 6.
     for h in 21..=40 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 
     let err =
@@ -296,9 +314,9 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
             current,
             max_reorg,
         } => {
-            assert_eq!(built, 20);
-            assert_eq!(current, 40);
-            assert_eq!(max_reorg, 6);
+            assert_eq!(built, shekyl_types::BlockHeight::from_raw(20));
+            assert_eq!(current, shekyl_types::BlockHeight::from_raw(40));
+            assert_eq!(max_reorg, shekyl_types::BlockCount::from_raw(6));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -325,8 +343,12 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     // cutoff so the output qualifies).
     for h in 6..=15 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
     let pending = build_pending_tx_in_state(
         &ledger,
@@ -335,16 +357,23 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
         &standard_request(1_000),
     )
     .expect("build");
-    assert_eq!(pending.built_at_height, 15);
+    assert_eq!(
+        pending.built_at_height,
+        shekyl_types::BlockHeight::from_raw(15)
+    );
 
     // Reorg: rewind to fork height 15, replay 15..=20 with new
     // hashes. After rewind, `block_hash_at(15)` differs from
     // `pending.built_at_tip_hash`.
-    indexes.handle_reorg(&mut ledger, 15);
+    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(15));
     for h in 15..=20 {
         let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 
     let err =
@@ -352,7 +381,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
             .unwrap_err();
     match err {
         PendingTxError::ChainStateChanged { height } => {
-            assert_eq!(height, 15);
+            assert_eq!(height, shekyl_types::BlockHeight::from_raw(15));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -460,6 +489,7 @@ fn priority_custom_is_accepted_and_preserved() {
         recipients: vec![TxRecipient {
             address: "addr".into(),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
+            rid: None,
         }],
         priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
     };
@@ -467,4 +497,33 @@ fn priority_custom_is_accepted_and_preserved() {
         build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
     let r = reservations.get(&pending.id).unwrap();
     assert!(matches!(r.priority, FeePriority::Custom(_)));
+}
+
+/// The request's own refusals hold on every build path: the production
+/// `LocalPendingTx::build` and `build_select_sync` call
+/// `TxRequest::check_recipients` before any selection or proving, as the
+/// free helper does.
+#[test]
+fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
+    use shekyl_engine_state::payment_request::PAYMENT_REQUEST_RID_U48_MAX;
+    use shekyl_engine_state::PaymentRequestId;
+    let mut req = standard_request(1_000);
+    assert!(req.check_recipients().is_ok());
+    req.recipients[0].rid = Some(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX));
+    assert!(req.check_recipients().is_ok(), "the largest echoable rid");
+    for raw in [0, PAYMENT_REQUEST_RID_U48_MAX + 1, u64::MAX] {
+        req.recipients[0].rid = Some(PaymentRequestId(raw));
+        assert!(
+            matches!(
+                req.check_recipients(),
+                Err(SendError::InvalidRecipient { .. })
+            ),
+            "rid {raw} must be refused"
+        );
+    }
+    req.recipients.clear();
+    assert!(matches!(
+        req.check_recipients(),
+        Err(SendError::InvalidRecipient { .. })
+    ));
 }

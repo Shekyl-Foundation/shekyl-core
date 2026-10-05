@@ -10,7 +10,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_units::AtomicUnits;
+use shekyl_engine_state::PaymentRequestId;
 
 use crate::error::WalletRpcError;
 
@@ -61,35 +61,23 @@ pub(crate) fn parse_optional_object<T: for<'de> Deserialize<'de> + Default>(
     }
 }
 
-/// Parse a client-supplied decimal atomic-units amount string.
+/// Parse a `rid` param (the contract's `PaymentRequestId`): its canonical
+/// grammar `^[1-9][0-9]*$` and the u48 wire bound, through the id type's
+/// own `FromStr`; anything else is rejected rather than silently dropped.
 ///
-/// One home for the amount-string contract shared by the receiving and send
-/// surfaces (`create_payment_request` / `make_uri` / `build_pending_tx`): a
-/// bare decimal `u64` of atomic units, rejected as `InvalidParams` otherwise.
-///
-/// The error message is stable and never reflects the client-supplied
-/// string: an attacker-sized value would otherwise echo into the error
-/// response and server logs.
-pub(crate) fn parse_atomic_units(s: &str) -> Result<AtomicUnits, WalletRpcError> {
-    let raw: u64 = s.parse().map_err(|_| {
-        WalletRpcError::InvalidParams("amount must be a decimal atomic-units string".into())
-    })?;
-    Ok(AtomicUnits::from_raw(raw))
+/// One home for the rid-string contract shared by `make_uri` and
+/// `build_pending_tx`. The messages are stable and never reflect the
+/// client-supplied string.
+pub(crate) fn parse_rid(s: &str) -> Result<PaymentRequestId, WalletRpcError> {
+    s.parse::<PaymentRequestId>()
+        .map_err(|e| WalletRpcError::InvalidParams(e.to_string()))
 }
 
-/// Parse a contract `Hex32` value (exactly 64 **lowercase** hex chars) into
-/// its 32 bytes.
+/// Parse a contract `Hex32` value into its 32 bytes.
 ///
-/// One home for the canonical-hex rule shared by the txid params surface
-/// (`proofs::parse_txid`) and the transfer-id format
-/// (`project::parse_transfer_id`). Returns `None` on any non-canonical
-/// form; callers shape their own error per surface (the messages there are
-/// load-bearing and stable).
+/// The rule lives in [`shekyl_wallet_contract::canonical_hex`]; this is
+/// the name the RPC params surface already calls. Returns `None` on any
+/// non-canonical form; callers shape their own error per surface.
 pub(crate) fn parse_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-        return None;
-    }
-    let mut bytes = [0u8; 32];
-    hex::decode_to_slice(s, &mut bytes).ok()?;
-    Some(bytes)
+    shekyl_wallet_contract::canonical_hex::parse_lowercase_hex32(s)
 }

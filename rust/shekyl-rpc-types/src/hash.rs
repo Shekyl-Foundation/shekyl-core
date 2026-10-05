@@ -16,11 +16,14 @@
 //! a transaction identity, two Merkle-ish roots, and a proof-of-work hash —
 //! so typing the wire field as any one of them (`BlockHash`, say) would
 //! recreate on the wire exactly the confusion `shekyl-types`' `hash32!`
-//! newtypes exist to prevent. Rule 18 already settles this: wire structs
-//! store the raw bytes and convert at their edge, which is why
-//! `shekyl-wire::BlockHeader` types both roots as `[u8; 32]`. A consumer that
-//! knows which kind it is holding names it there — `BlockHash::from_bytes(h.to_bytes())`
-//! — and that knowledge stays where it is actually available.
+//! newtypes exist to prevent. Rule 18 already settles this: *RPC* wire
+//! structs store the raw bytes and convert at their edge. (The consensus
+//! header in `shekyl-wire` types those fields — `previous` is `BlockHash`,
+//! `curve_tree_root` is `CurveTreeRoot`, `attestation_root` is
+//! `AttestationRoot` — because that crate *does* know which kind each
+//! field is.) A consumer that knows which kind a `HashHex` holds names it
+//! there — `BlockHash::from_bytes(h.to_bytes())` — and that knowledge stays
+//! where it is actually available.
 //!
 //! Not needing a **domain** crate to describe a wire field is the other half
 //! of the same decision, and it still holds: this crate depends on the

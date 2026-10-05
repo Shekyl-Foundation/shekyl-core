@@ -144,6 +144,22 @@ immediately" will fail validation.
 modern hardware), but the path is exercised. There is no separate
 "skip PoW" toggle.
 
+**PoW is the Rust RandomX v2 light-mode verifier, in the daemon and in
+`generateblocks`.** Since the Phase 3/4 cutover
+([`design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §2)
+`shekyld` links only the Rust verifier (`shekyl_pow_randomx_v2_hash`);
+`find_nonce_for_given_block` and the built-in `start_mining` miner hash
+through that same light-mode path, so harness hashrate expectations
+should be set against a verifier, not a miner. The default daemon build
+does **not** compile or link the RandomX v2 C library.
+`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` / `-DBUILD_RANDOMX_V2_MINER_LIB=ON`
+are opt-in harness and out-of-process-miner reference builds and never
+change what `shekyld` links (`scripts/ci/check_randomx_symbol_isolation.sh`
+is the gate). A harness that needs fast block production on a real
+difficulty uses an external miner over this node's `get_block_template`
+/ `submitblock` RPC — a miner that speaks another coin's template
+dialect will not produce accepted blocks.
+
 **Regtest hard-fork table.**
 `src/cryptonote_core/cryptonote_core.cpp:674–678` defines
 `regtest_hard_forks` to force HF1 at height 0, then jump to the latest
@@ -224,38 +240,35 @@ Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 `src/rpc/core_rpc_server.cpp:2987–3008`. Because Shekyl's
 `HF_VERSION_2021_SCALING` is `1` (i.e., Shekyl genesis is already in
 the post-2021-scaling regime — confirmed in `cryptonote_config.h`),
-the `fees` vector is **always** populated with the four tiers by
-`get_dynamic_base_fee_estimate_2021_scaling`. The legacy
+the `fees` vector is **always** populated with the three priced tiers
+by `get_dynamic_base_fee_estimate_2021_scaling`. The legacy
 single-`fee` branch is dead code on Shekyl from genesis.
 
-**Wallet-side consequence (2026-08-17, PR #490).** The wallet no
-longer accepts a scalar-only reply. It previously synthesized a tier
-band from `fee` as `(×1, ×5, ×1000)` when `fees` was absent — an
-invented ladder with no daemon behind it, whose `×1000` priority
+**Wallet-side consequence (2026-08-17, PR #490; arity FL-R25).** The
+wallet no longer accepts a scalar-only reply. It previously synthesized
+a tier band from `fee` as `(×1, ×5, ×1000)` when `fees` was absent —
+an invented ladder with no daemon behind it, whose `×1000` priority
 exceeded the wallet's absolute fee cap for any base fee above 100 and
 so got the *whole* snapshot refused, Economy included. A reply without
-a `fees` array of at least four numeric tiers is now a malformed
-estimate (`RpcError::InvalidFee` / `InvalidPriority`). **A daemon
-serving this wallet must emit `fees[]`** — every `shekyld` does, by the
-paragraph above; the requirement is stated here so a future non-
-`shekyld` implementer is not left to infer it. Extra tiers beyond the
-fourth are ignored, not rejected (rule 75).
+a `fees` array of **exactly three** numeric tiers is now a malformed
+estimate (`RpcError::InvalidFee`). **A daemon serving this wallet must
+emit `fees[]` of length 3** — every `shekyld` does, by the paragraph
+above; the requirement is stated here so a future non-`shekyld`
+implementer is not left to infer it. A four-slot reply is refused,
+not read as a longer three-slot answer.
 
 ### Tier semantics
 
-`src/cryptonote_core/blockchain.cpp:3853–3857`:
+`src/cryptonote_core/blockchain.cpp` marshals
+`shekyl_economics::FeeLadder::as_slots`:
 
-```cpp
-fees.resize(4);
-fees[0] = round_money_up(Fl, ROUNDING_PLACES);   // lowest
-fees[1] = round_money_up(Fn, ROUNDING_PLACES);
-fees[2] = round_money_up(Fm, ROUNDING_PLACES);
-fees[3] = round_money_up(Fh, ROUNDING_PLACES);   // highest
+```text
+fees[0] = economy     // Fl
+fees[1] = standard    // Fn
+fees[2] = priority    // Fh
 ```
 
-The four entries correspond to the 2021-scaling document's `Fl`,
-`Fn`, `Fm`, `Fh` tiers; they are **not** wallet-priority-named on the
-wire.
+The three entries are **not** wallet-priority-named on the wire.
 
 ### Existing wallet-side mapping
 
@@ -294,24 +307,25 @@ included in the Phase 5 deletion sweep along with the rest of
 
 **No `shekyld` change required for Phase 2a to start.** The Rust
 wallet's `Wallet::send` can call `get_fee_estimate` and consume
-`fees[0..3]` directly. The wallet-side decision log already records
-the priority-name binding: `Economy = fees[0]`, `Standard = fees[1]`,
-`Priority = fees[3]`, with a `Custom(u64)` escape hatch for explicit
-per-byte fee in atomic units. (The plan's prior wording referred to
-"named per-bucket fee estimates from the daemon"; this audit confirms
-that names are wallet-side, not wire-side. The decision is unchanged
-in substance — daemon supplies the numbers, wallet supplies the
-names — but the implementation now binds names to known positional
-indices rather than parsing them from a daemon-supplied map.)
+`fees[0..2]` directly. The live priority-name binding is
+`Economy = fees[0]`, `Standard = fees[1]`, `Priority = fees[2]`, with
+a `Custom(u64)` escape hatch for explicit per-byte fee in atomic
+units. (The plan's prior wording referred to "named per-bucket fee
+estimates from the daemon"; this audit confirms that names are
+wallet-side, not wire-side. The decision is unchanged in substance —
+daemon supplies the numbers, wallet supplies the names — but the
+implementation now binds names to known positional indices rather
+than parsing them from a daemon-supplied map.)
 
 The wallet-side sanity ceiling
 (`FeeEstimatorError::DaemonFeeUnreasonable`) remains binding: a
 non-monotonic `fees[]` band, or any `fees[i]` whose effective
 weight-1 charge (mask rounding included) exceeds the derived
-era-maximum cap (`absolute_fee_rate_cap()` — the daemon-rounded
-genesis-condition `Fh`, 14,000,000 atomic-units/weight), causes the
+era-maximum cap (`absolute_fee_rate_cap()` — the structural bound, every
+factor at its own extreme: 218,453,333 atomic-units/weight at canonical
+parameters), causes the
 wallet to refuse the build (and the fee quote) with a typed error. The ceiling is wallet
-policy, not daemon config. An intra-snapshot 10× `fees[3]/fees[0]`
+policy, not daemon config. An intra-snapshot 10× `fees[2]/fees[0]`
 lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.
 
 ---

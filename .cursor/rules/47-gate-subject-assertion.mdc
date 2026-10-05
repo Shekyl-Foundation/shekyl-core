@@ -19,7 +19,7 @@ reported it as a clean signal.
 ## Where this has already bitten
 
 Promoted from the RandomX v2 T18 mutation-regime round
-([`docs/design/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/design/RANDOMX_V2_MUTATION_REGIME.md)
+([`docs/completed/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/completed/RANDOMX_V2_MUTATION_REGIME.md)
 §13), which found six instances of the shape and three more in its own
 proposed fixes:
 
@@ -39,6 +39,23 @@ over an empty set. None was caught by noticing it was wrong on its own
 terms. Each was caught by asking **"does the thing this acts on
 exist?"** — which is cheap, mechanical, and was not part of the process
 until it had cost five sessions.
+
+### A sweep is a gate run once, by hand, over the set the sweeper could see
+
+A sweep's conclusion outlives its subject. "C2-complete" is a claim about
+the tree. What was checked was the census — the sites the campaign
+enumerated — and the two read identically afterwards. A review-borne rule
+whose campaign reads *complete* is one nobody re-checks, because the word
+has already answered the question.
+
+The tell: the sweep walked one side of a boundary (the wallet, or the
+validator's inputs) and the defects landed on the side it did not walk
+(the daemon store, the producer's read-back). State the set the sweep ran
+over **in the result**, in the same sentence as the verdict ("complete
+over the census of §2–§3.3", not "complete"). Then ask what instrument
+holds the property after the sweeper has left. If the answer is "the next
+sweep", the property is not held. A gate with an exact-hit, shrink-only
+grandfather list re-asks the question on every push.
 
 ## The rule
 
@@ -68,6 +85,23 @@ not separate tricks:
   [`46-shell-gate-exits`](46-shell-gate-exits.mdc). A swallowed exit
   status is this same failure at the last step: the gate ran, judged,
   and the judgement never reached anyone.
+
+## Run the "cannot fail" test against the adversarial input space
+
+The converse question — *is this a gate that can never go red?* — has a
+trap in it. A refusal that is unreachable on every **valid** input is not
+dead. Refusals exist for the **invalid** input space. Ask "can this fail?"
+over the inputs an adversary, a corrupt store, or a non-conforming peer
+can produce, not over the inputs a correct system produces.
+
+So the two tests are different and both apply. A gate must be able to go
+red when its **subject is absent**. A refusal must be judged reachable or
+dead over the **inputs it exists to refuse**, never over the happy path
+alone. A floor that makes a refusal unreachable on a conforming chain does
+not make it dead: a non-conforming view (no work across a full window, a
+corrupt store) is the input the arm exists for. A check that truly cannot
+fail over that space is the thing to fold into a type. One that cannot
+fail only over the valid space is a refusal, and stays.
 
 ## Scope, and what this is not
 

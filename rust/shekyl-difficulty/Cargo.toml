@@ -11,11 +11,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Leaf crate per DAA_LWMA1.md §2.1: zero internal workspace
-# dependencies. The build script reads `config/consensus_constants.json`
-# directly (mirroring `rust/shekyl-engine-core/build.rs`) so the JSON
-# authority is consumed without routing through another Shekyl crate.
+# Leaf crate: no *external* runtime crates. First-party `shekyl-types` is
+# the shared vocabulary (`BlockHeight`, `Timestamp`) so this crate does
+# not redefine them as `u64`. `DAA_LWMA1.md` §2.1's "zero internal
+# workspace dependencies" is the 2026-06 cycle-ban that produced that
+# redefinition; RTN-5 restores the types. The build script still reads
+# `config/consensus_constants.json` directly.
 [dependencies]
+shekyl-types = { path = "../shekyl-types" }
 
 [build-dependencies]
 serde_json = "1"

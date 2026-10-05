@@ -151,6 +151,16 @@ ordinary transaction (§2 step 4) and the guard needs no change.
 
 ## 1. The invariant this round must not break, which nothing currently protects
 
+> **UPDATE 2026-10-02.** The second path described below no longer exists.
+> `calculate_transaction_prunable_hash` hands the blob's tail to Rust
+> (`shekyl_tx_prunable_hash`) and has no re-serialize path, so the two cannot
+> diverge. This section is the round's reasoning as ruled on 2026-08-18, kept as
+> written, and its line links point at the code of that date. The invariant
+> stands for a different reason: the region's other reader, `shekyl-wire`, parses
+> a `Prunable` and nothing after it, so the ruling in §3.1 — inside
+> `serialize_ctsig_prunable`, never appended — is unchanged, and
+> `tx_prunable_region_sole_occupant.cpp` still guards it.
+
 [`calculate_transaction_prunable_hash`](../../src/cryptonote_basic/cryptonote_format_utils.cpp#L1135)
 computes the prunable-region hash two ways:
 
@@ -454,5 +464,6 @@ vacuously ([a seal is not coverage](../../.cursor/rules/50-testing.mdc)).
   already ruled on pool grinding, an edge gated behind a discarded-block cost
   and dismissed on the merits. Test it; the disposition is likely the same, and
   citing the precedent keeps it from being re-litigated as novel.
-- **The settlement-outcome table schema** (§9.7 item 9) and **`EndpointUpdate`
-  on the bond wire** — separate PRs, separate validation surfaces.
+- **The settlement-outcome table schema** (§9.7 item 9) — a separate PR,
+  a separate validation surface. (`EndpointUpdate` on the bond wire, listed
+  here as the other exclusion, was REJECTED 2026-09-13.)

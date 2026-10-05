@@ -28,7 +28,6 @@ pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
             get_volume: Box::new(move |_block, _bpy| baseline),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -52,7 +51,6 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -73,7 +71,6 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -99,7 +96,6 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 200_000),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -118,7 +114,6 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 300_000),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -151,7 +146,6 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -190,7 +184,6 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -217,7 +210,6 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.95,
         // ~year 30 in the configured chain timing (derived, not a literal —
         // byte-identical at the default 262_800; see `fee_era` in
@@ -227,18 +219,32 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
     }
 }
 
+/// Scenario 9's tail traffic, in transactions per block — the "low activity"
+/// half of its name. Named so the A1 report can state the regime the binding
+/// opportunity-cost rate is being asserted over.
+pub const SCENARIO_9_TAIL_TX_PER_BLOCK: u64 = 15;
+
 /// Scenario 9 — high history / low activity (§11.2, the missing sim quadrant):
 /// large `n`, low *current* volume, the post-boom settled chain. An early boom
-/// (years 0–20, ~250 tx/block) accretes ~120k shards, then a long low-activity
-/// tail (years 20–60, 15 tx/block). Run to **60 years** so the emission leg is
-/// exhausted (`0.9^60 ≈ 0.002` of the initial staker-emission share, and most
-/// supply emitted) — the only regime where the fee leg is the primary budget and
-/// escalation is decisive (A1's binding case; F-G). None of scenarios 1–8 reach
-/// it (`scenario_8` is high-history but *busy* and only 5 years long).
+/// (years 0–20, ~250 tx/block) accretes the shard corpus (~4.9 M byte shards
+/// at 60 y), then a long low-activity tail (years 20–60,
+/// [`SCENARIO_9_TAIL_TX_PER_BLOCK`] tx/block). Run to **60 years** so the
+/// **staker** emission leg has decayed to ≈ 0.002 of its initial share
+/// (`0.9^60`), the regime where the fee leg is the stakers' primary budget
+/// and escalation is decisive (A1's binding case; F-G). None of scenarios
+/// 1–8 reach it (`scenario_8` is high-history but *busy* and only 5 years
+/// long).
+///
+/// The curve itself is not near its tail in this run: at 22 per block it has
+/// emitted ≈ 97.7 % by year 60, still mints ≈ 24 SKL/block, and reaches the
+/// 0.6 SKL/block floor near year 119. The scenario was sized when the code
+/// ran 21 per block (≈ 1 SKL/block at year 60, the floor from ≈ year 64).
+/// Its purpose is the fee era, so its horizon is to follow the tail out,
+/// with the assessment's run set (`ECONOMY_UMBRELLA_PLAN.md` §4.1).
 pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "high_history_low_activity".into(),
-        description: "post-boom settled chain: ~120k shards accreted in an early boom, then a low-activity fee-era tail over 60 years (emission exhausted) — the §11.2 quadrant where escalation is decisive".into(),
+        description: "post-boom settled chain: a large shard corpus accreted in an early boom, then a low-activity tail over 60 years (the staker emission leg decayed to ~0.002 of its share; the curve still mints ~24 SKL/block at year 60) — the §11.2 quadrant where escalation is decisive".into(),
         sim_years: 60,
         volume: VolumeSchedule {
             get_volume: Box::new(|block, blocks_per_year| {
@@ -249,14 +255,13 @@ pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConf
                     5..=14 => 250,
                     15..=19 => 120,
                     // Long low-activity tail: few txs, thin fee leg.
-                    _ => 15,
+                    _ => SCENARIO_9_TAIL_TX_PER_BLOCK,
                 }
             }),
         },
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,
@@ -330,7 +335,6 @@ fn gate7_scenario(
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 0),
         },
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: Some(model),
@@ -377,7 +381,6 @@ fn gate7_asserted_comparator(
         sim_years: GATE7_YEARS,
         volume: VolumeSchedule { get_volume },
         stake: default_stake_schedule(),
-        fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.0,
         genesis_height_offset: 0,
         archival_lock: None,

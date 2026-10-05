@@ -13,10 +13,39 @@
 //! SHEKYL_SPIKE_TOR=/path/to/tor \
 //! SHEKYL_SPIKE_SHARD=/path/to/shard.bin \
 //! SHEKYL_SPIKE_OUT=/path/to/observations.tsv \
+//! SHEKYL_SPIKE_PERSONAS=P \
 //! SHEKYL_SPIKE_COLD=N SHEKYL_SPIKE_WARM=N SHEKYL_SPIKE_CONC=N \
 //! SHEKYL_SPIKE_HOURS=H \
+//! SHEKYL_SPIKE_POW=off|on|tuned:<rate>:<burst>[,…] \
 //!   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 //! ```
+//!
+//! `SHEKYL_SPIKE_PERSONAS` (default 4) is the width of the concurrency
+//! sweep: that many personas come up, **each behind its own tor**, plus the
+//! client tor every fetch dials through. The sweep runs widths
+//! `1, 2, 4, …` up to `P` (and `P` itself if not a power of two), `CONC`
+//! rounds each; every round is `NEWNYM` then `width` fetches at once, with
+//! the starting persona rotating by round so every width samples every
+//! persona. Its table is the client-side circuit-churn input `SF-D7` names
+//! as the upper bound on `N`. The box's uplink is shared across every tor
+//! here, which biases the sweep *pessimistic* — named in the report, not
+//! hidden.
+//!
+//! # What it prints for the two pins
+//!
+//! - **`N` (`SF-D7`):** the churn table — per width: `n`, p50, p99, p99 as
+//!   a ratio to width 1, circuit-failure rate, `D*`, and the memory term
+//!   `width × max_body_bytes()`. The binary does **not** pick the knee; a
+//!   threshold it invented would be exactly the kind of number the `L`
+//!   note's falsifier was rewritten to avoid. The reader takes the largest
+//!   width that is not churning *and* whose memory term fits the Pi 4
+//!   floor, and pins that.
+//! - **`L` (`SF-D8`):** the cold arm's p99 against the PROVISIONAL note's
+//!   two thresholds (under two minutes → drop to 3; over six → tighten the
+//!   `SF-D6` retry budget, do not raise `L`), and how many attempts of that
+//!   p99 fit under six minutes. Single-attempt, stated as such: retry is
+//!   the scheduler's, so "fetch-plus-retry" is this p99 times whatever
+//!   `TJ-D` budgets.
 //!
 //! # What it writes, and what it refuses to write
 //!
@@ -30,14 +59,19 @@
 //! synthetic fallback anywhere in this crate, because a measurement that quietly
 //! substituted its payload would be worse than no measurement.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_sp_t3_spike::fixture::ShardFixture;
-use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
+use shekyl_p_fetch::max_body_bytes;
+use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
+use shekyl_sp_t3_spike::harness::{posture_tag, postures_from_env, Apparatus};
 use shekyl_sp_t3_spike::measure::{
-    summarize, warmup_drift, DStar, FailureKind, Observation, Q_RISK_STAR,
+    attempts_within_budget, churn_table, format_row, l_verdict, p99, summarize,
+    sweep_round_indices, warmup_drift, DStar, LVerdict, Observation, Summary, SweepPoint,
+    L_BUDGET_TOO_GENEROUS_ABOVE, L_DROP_BELOW, Q_RISK_STAR, ROW_HEADER,
 };
+use shekyl_tor_control_client::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)
@@ -50,23 +84,174 @@ fn env_usize(key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// One arm's rows, appended as they are produced so a run killed mid-flight
-/// still leaves the observations it earned.
-fn append_rows(out: &mut Option<std::fs::File>, arm: &str, obs: &[Observation]) {
-    use std::io::Write as _;
-    let Some(f) = out.as_mut() else { return };
-    for o in obs {
-        let outcome = match o.failure {
-            None => "ok",
-            Some(FailureKind::Timeout) => "timeout",
-            Some(FailureKind::Circuit) => "circuit",
-            Some(FailureKind::Truncated) => "truncated",
-            Some(FailureKind::Transport) => "transport",
-        };
-        // arm, elapsed_ms, outcome. Nothing else — see the module doc.
-        writeln!(f, "{arm}\t{}\t{outcome}", o.elapsed.as_millis()).ok();
+/// The observation files: **one per posture**. A run with one posture writes
+/// `SHEKYL_SPIKE_OUT` itself. A run that interleaves postures writes
+/// `<stem>.<posture>.tsv` beside it for each, so every file holds one
+/// posture's observations and `pd-f2-diff` compares two of them directly —
+/// a row itself carries no posture, as it carries no other context (§6.4).
+struct Outputs {
+    /// One per distinct posture, in first-appearance order.
+    files: Vec<Option<std::fs::File>>,
+    /// Persona `i` writes to `files[of_persona[i]]`.
+    of_persona: Vec<usize>,
+}
+
+impl Outputs {
+    fn open(base: Option<&Path>, distinct: &[OnionPow], of_persona: Vec<usize>) -> Self {
+        use std::io::Write as _;
+        let files = distinct
+            .iter()
+            .map(|&pow| {
+                let path = base.map(|b| {
+                    if distinct.len() == 1 {
+                        b.to_path_buf()
+                    } else {
+                        b.with_extension(format!("{}.tsv", posture_tag(pow)))
+                    }
+                })?;
+                let mut f = std::fs::File::create(&path).ok()?;
+                writeln!(f, "{ROW_HEADER}").ok();
+                println!("observations for {}: {}", posture_tag(pow), path.display());
+                Some(f)
+            })
+            .collect();
+        Self { files, of_persona }
     }
-    f.flush().ok();
+
+    /// One arm's rows from `persona`, appended as they are produced so a run
+    /// killed mid-flight still leaves the observations it earned.
+    fn append(&mut self, persona: usize, arm: &str, obs: &[Observation]) {
+        use std::io::Write as _;
+        let Some(f) = self.files[self.of_persona[persona]].as_mut() else {
+            return;
+        };
+        for o in obs {
+            // arm, elapsed_ms, outcome. Nothing else — see the module doc.
+            writeln!(f, "{}", format_row(arm, o)).ok();
+        }
+        f.flush().ok();
+    }
+}
+
+/// The widths the sweep visits: powers of two up to `personas`, plus
+/// `personas` itself when it is not one.
+fn sweep_widths(personas: usize) -> Vec<usize> {
+    let mut widths: Vec<usize> = std::iter::successors(Some(1usize), |w| w.checked_mul(2))
+        .take_while(|&w| w <= personas)
+        .collect();
+    if widths.last() != Some(&personas) && personas >= 1 {
+        widths.push(personas);
+    }
+    widths
+}
+
+fn fmt_opt_secs(d: Option<Duration>) -> String {
+    d.map_or_else(
+        || "   —    ".to_owned(),
+        |d| format!("{:>8.2}", d.as_secs_f64()),
+    )
+}
+
+/// The `SF-D7` churn table, with the memory term beside each row.
+fn report_churn(points: &[SweepPoint]) {
+    println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
+    println!("(one client tor; `width` cold fetches to `width` personas at once, start rotating by round; shared uplink → pessimistic)");
+    println!(
+        "(one PFetchClient per persona on purpose: the SPIKE-PIN admission semaphore this \
+         sweep exists to replace is NOT in the path; a production daemon has one client)"
+    );
+    println!(
+        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  valid",
+        "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
+    );
+    let per_body = max_body_bytes();
+    let rows = churn_table(points);
+    let void_rows = rows.iter().filter(|r| r.is_void()).count();
+    for row in &rows {
+        let d_star = match row.d_star {
+            DStar::At(d) => format!("{:>10.2}", d.as_secs_f64()),
+            DStar::Unbounded => " UNBOUNDED".to_owned(),
+            DStar::Undefined => "     undef".to_owned(),
+        };
+        // `width × max_body_bytes()` is the resident term SF-D7 caps
+        // against the Pi 4 floor; integer bytes, shown to a tenth of a MB.
+        let mem_bytes = u64::try_from(row.width)
+            .expect("width fits u64")
+            .saturating_mul(per_body);
+        let mem_mb = format!(
+            "{}.{}",
+            mem_bytes / 1_000_000,
+            (mem_bytes % 1_000_000) / 100_000
+        );
+        let valid = match (row.cap_refusals, row.refused) {
+            (0, 0) => "ok".to_owned(),
+            (shed, 0) => format!("VOID ({shed} shed at the serve-side cap)"),
+            (0, refused) => format!("VOID ({refused} refused by the client)"),
+            (shed, refused) => format!("VOID ({shed} shed, {refused} refused)"),
+        };
+        println!(
+            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}  {valid}",
+            row.width,
+            row.n,
+            fmt_opt_secs(row.p50),
+            fmt_opt_secs(row.p99),
+            row.p99_over_width_1
+                .map_or_else(|| "—".to_owned(), |r| format!("{r:.2}×")),
+            row.circuit_rate * 100.0,
+        );
+    }
+    if void_rows != 0 {
+        println!(
+            "{void_rows} row(s) VOID: the serve-side placeholder cap shed connections while they \
+             ran, or the client refused a completed exchange (404 / malformed / bad \
+             countersignature — the apparatus disagreeing with itself), so their churn is not \
+             Tor's. Read N from the remaining rows only, or fix the cause and re-run the sweep."
+        );
+    }
+    println!(
+        "The pin is min(largest non-churning width, memory fit on the Pi 4 floor). \
+         This table does not pick it."
+    );
+}
+
+/// The `L` falsifier, read off the cold arm.
+fn report_l(cold: &Summary) {
+    println!("\n=== SF-D8 `L` falsifier (PROVISIONAL L = 4), from the cold arm ===");
+    match p99(cold) {
+        None => println!("no cold successes — the falsifier is undefined on this run"),
+        Some(p) => {
+            println!(
+                "single-attempt cold p99 = {:.1} s  (note thresholds: < {} s → drop to 3; > {} s → tighten SF-D6 budget, not L)",
+                p.as_secs_f64(),
+                L_DROP_BELOW.as_secs(),
+                L_BUDGET_TOO_GENEROUS_ABOVE.as_secs()
+            );
+            match l_verdict(cold) {
+                LVerdict::DropToThreeCandidate => println!(
+                    "verdict: DROP-TO-3 CANDIDATE — necessary, not sufficient: fetch-plus-retry must \
+                     also land under two minutes once TJ-D's retry budget is applied"
+                ),
+                LVerdict::DropRefutedBudgetOpen => println!(
+                    "verdict: DROP-TO-3 REFUTED (a fetch-plus-retry span starts at this attempt, \
+                     so it cannot land under two minutes); the six-minute branch is OPEN until \
+                     SF-D6's retry budget is applied to this tail — see the attempts line below"
+                ),
+                LVerdict::TightenRetryBudgetNotL => println!(
+                    "verdict: OVER SIX MINUTES ON ONE ATTEMPT — the note says tighten SF-D6's \
+                     retry budget, do not raise L; a single attempt this long also questions \
+                     the fetch itself"
+                ),
+                LVerdict::Undefined => unreachable!("p99 present"),
+            }
+            match attempts_within_budget(cold) {
+                Some(k) => println!(
+                    "attempts of this p99 that fit under six minutes: {k} — the most SF-D6 can \
+                     budget per witness attempt before L absorbs the budget"
+                ),
+                None => println!("attempts of this p99 that fit under six minutes: 0"),
+            }
+        }
+    }
 }
 
 fn report(arm: &str, obs: &[Observation]) {
@@ -110,16 +295,59 @@ fn report(arm: &str, obs: &[Observation]) {
     }
 }
 
+/// How many objects the arms rotate across.
+fn objects_len(shard_count: u64) -> usize {
+    usize::try_from(shard_count).expect("object count fits usize")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tor = env_path("SHEKYL_SPIKE_TOR")
         .ok_or("SHEKYL_SPIKE_TOR must point at the pinned Tor Expert Bundle binary")?;
     let shard_path = env_path("SHEKYL_SPIKE_SHARD")
         .ok_or("SHEKYL_SPIKE_SHARD must point at a real extracted shard fixture")?;
+    let personas = env_usize("SHEKYL_SPIKE_PERSONAS", 4).max(1);
     let cold_n = env_usize("SHEKYL_SPIKE_COLD", 100);
     let warm_n = env_usize("SHEKYL_SPIKE_WARM", 100);
     let conc_n = env_usize("SHEKYL_SPIKE_CONC", 50);
     let hours = env_usize("SHEKYL_SPIKE_HOURS", 0);
+    // The multi-size W₂ run (ARCHIVAL_SHARD_T_DERIVATION.md §4.1): serve the
+    // shard at 1×, ½× and ¼× and rotate the cold and soak arms across them, so
+    // every size meets the same Tor conditions over the same hours.
+    let ladder = env_usize("SHEKYL_SPIKE_SIZE_LADDER", 0) != 0;
+    // The personas' onion PoW postures, cycled across the personas: persona
+    // `i` publishes with `postures[i % len]`. Every posture gets as many
+    // personas, so no posture is measured through fewer onions' circuit
+    // placement than another. The run log names each persona's posture; the
+    // observations files carry no run-level context (§6.4).
+    let postures = postures_from_env()?;
+    if !personas.is_multiple_of(postures.len()) {
+        return Err(format!(
+            "SHEKYL_SPIKE_PERSONAS={personas} is not a multiple of the {} postures in \
+             SHEKYL_SPIKE_POW, so the postures would have unequal personas",
+            postures.len()
+        )
+        .into());
+    }
+    let persona_postures: Vec<OnionPow> = (0..personas)
+        .map(|i| postures[i % postures.len()])
+        .collect();
+    let mut distinct: Vec<OnionPow> = Vec::new();
+    for &pow in &persona_postures {
+        if !distinct.contains(&pow) {
+            distinct.push(pow);
+        }
+    }
+    if distinct.len() > 1 && conc_n > 0 {
+        return Err(
+            "the concurrency sweep mixes personas, so it cannot separate postures: \
+                    run it with one posture (SHEKYL_SPIKE_CONC=0 to interleave)"
+                .into(),
+        );
+    }
+    for (i, pow) in persona_postures.iter().enumerate() {
+        println!("persona {i}: onion PoW {}", posture_tag(*pow));
+    }
 
     // Loud, first: no synthetic fallback exists, so a missing fixture stops the
     // run here rather than producing a number about the wrong payload.
@@ -127,103 +355,251 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("shard fixture: {} bytes", fixture.len());
 
     let dir = tempfile::tempdir()?;
-    println!("bringing up 2 personas behind one tor (this includes a bootstrap)...");
-    let app = Apparatus::bring_up(tor, dir.path().join("tor-data"), 2, fixture.bytes()).await?;
+    println!(
+        "bringing up a client tor and {personas} personas, each behind its own tor ({} bootstraps, in parallel)...",
+        personas + 1
+    );
+    let objects = if ladder {
+        size_ladder(&fixture)
+    } else {
+        vec![fixture.bytes()]
+    };
+    let object_bytes: Vec<usize> = objects.iter().map(|o| o.len()).collect();
+    let shard_count = u64::try_from(objects.len())?;
+    let app = Arc::new(
+        Apparatus::bring_up_with_postures(
+            tor,
+            dir.path().join("tor-data"),
+            objects,
+            &persona_postures,
+        )
+        .await?,
+    );
+    // Rows name the arm, and in ladder mode the object's byte count with it;
+    // still no timestamp, ordinal, persona or circuit (module doc).
+    let label = |arm: &str, shard: u64| -> String {
+        if ladder {
+            let bytes = object_bytes[usize::try_from(shard).expect("shard fits usize")];
+            format!("{arm}@{bytes}")
+        } else {
+            arm.to_owned()
+        }
+    };
 
     // The expected body length is the apparatus's to know, not this binary's
     // to pass: it is derived from the payload through the production serving
     // contract (RF-D4's frame included), so no caller here can hand in a
     // number that the wire has since moved away from.
-    println!(
-        "served body: {} bytes (frame + shard)",
-        app.expected_body_len()
-    );
+    for shard in 0..shard_count {
+        println!(
+            "served body, shard {shard}: {} bytes (frame + object)",
+            app.expected_body_len_of(shard).expect("a served shard")
+        );
+    }
     let publish = app.await_reachable().await?;
     println!(
-        "personas reachable after {:.1} s (descriptor publication — EXCLUDED from every arm)",
+        "personas cold-reachable after {:.1} s (publication + HSDir propagation — EXCLUDED from every arm)",
         publish.as_secs_f64()
     );
 
-    let mut out = env_path("SHEKYL_SPIKE_OUT").and_then(|p| std::fs::File::create(p).ok());
-    if let Some(f) = out.as_mut() {
-        use std::io::Write as _;
-        writeln!(f, "arm\telapsed_ms\toutcome").ok();
-    }
+    let of_persona = persona_postures
+        .iter()
+        .map(|pow| distinct.iter().position(|d| d == pow).expect("listed"))
+        .collect();
+    let mut out = Outputs::open(
+        env_path("SHEKYL_SPIKE_OUT").as_deref(),
+        &distinct,
+        of_persona,
+    );
 
-    // --- Arm 1: cold circuit, single stream. A fresh client id per fetch, so
-    // circuit build + rendezvous are inside the timed path (§6.2). This is the
-    // faithful model of a drawn miner and is expected to dominate the tail.
-    let mut cold = Vec::new();
-    for i in 0..cold_n {
-        cold.push(app.timed_fetch(&cold_client_id(i as u64), 0).await);
+    // --- Arm 1: cold, single stream. `NEWNYM` to the client tor before each
+    // fetch, so descriptor fetch + intro + rendezvous are inside the timed path
+    // (§6.2). This is the faithful model of a drawn miner dialling a `P` it has
+    // never dialled, and is expected to dominate the tail. The ten-second
+    // NEWNYM spacing is paid *outside* the clock.
+    // In ladder mode the arm rotates across the objects, `cold_n` fetches of
+    // each; `cold` below keeps shard 0's rows, which the `L` verdict reads.
+    let mut cold_by_shard: Vec<Vec<Observation>> = (0..shard_count).map(|_| Vec::new()).collect();
+    for i in 0..cold_n * objects_len(shard_count) {
+        let shard = u64::try_from(i).expect("index fits u64") % shard_count;
+        app.rotate_client_circuits_retrying().await?;
+        let obs = app.timed_fetch_shard(0, shard).await;
+        out.append(0, &label("cold", shard), std::slice::from_ref(&obs));
+        cold_by_shard[usize::try_from(shard).expect("shard fits usize")].push(obs);
         if (i + 1) % 10 == 0 {
-            println!("  cold {}/{cold_n}", i + 1);
+            println!("  cold {}/{}", i + 1, cold_n * objects_len(shard_count));
         }
     }
-    append_rows(&mut out, "cold", &cold);
-    report("cold circuit, single stream", &cold);
+    for (shard, obs) in cold_by_shard.iter().enumerate().skip(1) {
+        report(
+            &format!(
+                "cold (NEWNYM before each), {}",
+                label("object", shard as u64)
+            ),
+            obs,
+        );
+    }
+    let cold = cold_by_shard.swap_remove(0);
+    report("cold (NEWNYM before each), single stream", &cold);
+    let cold_summary = summarize(&cold);
 
-    // --- Arm 2: warm circuit. One reused client id, so tor reuses the circuit
-    // and only the rendezvous/stream cost is paid — the optimistic case.
-    let warm_id = warm_client_id();
+    // --- Arm 2: warm. Back-to-back fetches to one persona with no signal in
+    // between, so the client tor reuses its rendezvous circuit and only the
+    // stream cost is paid — the organic fill scheduler's steady state against
+    // one `P`, and the optimistic case.
     let mut warm = Vec::new();
     for i in 0..warm_n {
-        warm.push(app.timed_fetch(&warm_id, 0).await);
+        warm.push(app.timed_fetch(0).await);
         if (i + 1) % 10 == 0 {
             println!("  warm {}/{warm_n}", i + 1);
         }
     }
-    append_rows(&mut out, "warm", &warm);
-    report("warm circuit, single stream", &warm);
+    out.append(0, "warm", &warm);
+    report("warm (reused circuit), single stream", &warm);
 
-    // --- Arm 3: two personas served concurrently. Doubles as the §5.2 contention
-    // datum: if serving A degrades B, it shows up as a widened tail here relative
-    // to the cold arm.
-    let mut conc = Vec::new();
-    for i in 0..conc_n {
-        let id_a = cold_client_id(1_000_000 + i as u64);
-        let id_b = cold_client_id(2_000_000 + i as u64);
-        let (ra, rb) = tokio::join!(app.timed_fetch(&id_a, 0), app.timed_fetch(&id_b, 1));
-        conc.push(ra);
-        conc.push(rb);
-        if (i + 1) % 10 == 0 {
-            println!("  concurrent {}/{conc_n}", i + 1);
+    // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
+    // `width` cold fetches to `width` distinct personas at once through the
+    // one client tor — `width` rendezvous circuits building together on the
+    // daemon's tor. The starting persona rotates by round so a width-1 row
+    // is not "always persona 0" and a width-8 row is not "the first eight
+    // plus whatever was added." (The recorded W₂ pin used the prefix; the
+    // N=8 pin already included every persona, so it is not re-run.) This is
+    // `SF-D7`'s client-side churn question, and the table it produces is
+    // the upper-bound input for `N`. (The serve-side contention datum the
+    // old two-persona arm doubled as is gone on purpose: the personas are
+    // on separate tors now, and serve-side load is SPIKE-F-11's, measured
+    // from other hosts.)
+    let mut sweep = Vec::new();
+    for width in sweep_widths(personas) {
+        let mut at_width = Vec::with_capacity(conc_n * width);
+        // The serve-side cap counter *before* this width, so the delta across
+        // it is this width's alone. A non-zero delta voids the row.
+        let refused_before = app.refused_total();
+        for i in 0..conc_n {
+            app.rotate_client_circuits_retrying().await?;
+            // One task per fetch, as a daemon's scheduler would issue them;
+            // joined in order so the round's observations land together.
+            // Starting persona rotates by round (`sweep_round_indices`).
+            let tasks: Vec<_> = sweep_round_indices(i, width, personas)
+                .into_iter()
+                .map(|p| {
+                    let app = Arc::clone(&app);
+                    tokio::spawn(async move { app.timed_fetch(p).await })
+                })
+                .collect();
+            for t in tasks {
+                at_width.push(t.await?);
+            }
+            if (i + 1) % 10 == 0 {
+                println!("  width {width}: round {}/{conc_n}", i + 1);
+            }
         }
+        // One posture when the sweep runs (checked at start): persona 0's
+        // file is every persona's.
+        out.append(0, &format!("conc{width}"), &at_width);
+        report(&format!("{width} in flight, cold client"), &at_width);
+        let cap_refusals = app.refused_total() - refused_before;
+        if cap_refusals != 0 {
+            println!(
+                "  width {width}: the serve-side cap shed {cap_refusals} connection(s) — \
+                 this row is VOID as an N input (the placeholder cap shaped it, not Tor)"
+            );
+        }
+        sweep.push(SweepPoint {
+            width,
+            observations: at_width,
+            cap_refusals,
+        });
     }
-    append_rows(&mut out, "concurrent", &conc);
-    report("2 personas concurrent", &conc);
 
     // --- Arm 4: the dispersion soak. Circuit-latency dispersion is the
     // load-bearing parameter (§8.3) and it is *time-varying*, so a one-hour
     // sample understates the tail. Runs for SHEKYL_SPIKE_HOURS wall-clock,
-    // cold-circuit, spaced out.
+    // cold-circuit, spaced out. Fetch `n` goes to persona `n mod P`, then the
+    // object advances every `P` fetches: with interleaved postures the posture
+    // alternates fetch by fetch, so every posture meets the same hours.
     if hours > 0 {
         println!("\nsoak arm: {hours} h of spaced cold fetches...");
         let until = Instant::now() + Duration::from_secs(hours as u64 * 3600);
-        let mut soak = Vec::new();
-        let mut seq = 5_000_000u64;
+        let persona_count = u64::try_from(personas)?;
+        let mut soak_by: Vec<Vec<Vec<Observation>>> = distinct
+            .iter()
+            .map(|_| (0..shard_count).map(|_| Vec::new()).collect())
+            .collect();
+        let mut n: u64 = 0;
         while Instant::now() < until {
-            soak.push(app.timed_fetch(&cold_client_id(seq), 0).await);
-            seq += 1;
+            let persona = usize::try_from(n % persona_count)?;
+            let shard = (n / persona_count) % shard_count;
+            n += 1;
+            app.rotate_client_circuits_retrying().await?;
+            let obs = app.timed_fetch_shard(persona, shard).await;
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
             // promises a killed run still leaves what it earned -- a 25-row
             // buffer would make that promise false by up to 24 observations plus
             // the whole summary.
-            append_rows(&mut out, "soak", &soak[soak.len() - 1..]);
-            if soak.len() % 25 == 0 {
-                println!("  soak n={}", soak.len());
+            out.append(persona, &label("soak", shard), std::slice::from_ref(&obs));
+            soak_by[out.of_persona[persona]][usize::try_from(shard).expect("shard fits usize")]
+                .push(obs);
+            if n.is_multiple_of(25) {
+                println!("  soak n={n}");
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
-        report("soak (>=24h target)", &soak);
+        for (pow, by_shard) in distinct.iter().zip(&soak_by) {
+            for (shard, obs) in by_shard.iter().enumerate() {
+                report(
+                    &format!(
+                        "soak (>=24h target), {}, {}",
+                        posture_tag(*pow),
+                        label("object", shard as u64)
+                    ),
+                    obs,
+                );
+            }
+        }
     }
 
     // Apparatus cross-check: the endpoints must have served what the client leg
     // believes it fetched. A mismatch means some "success" came from somewhere
     // else, which would invalidate every number above.
     println!("\nendpoints served {} requests total", app.served_total());
+    // The run-wide serve-side cap total. Per-width deltas already voided the
+    // sweep rows they fell in; this is the whole-run figure for the record,
+    // and any count outside the sweep (cold/warm/soak are single-stream, so
+    // it should be zero there) is the apparatus disagreeing with itself.
+    println!(
+        "endpoints shed {} connections at the serve-side cap over the whole run",
+        app.refused_total()
+    );
+    // An apparatus count, like the two above: an unanswered `NEWNYM` was
+    // retried before its fetch, so it is in no arm's rows.
+    println!(
+        "client NEWNYMs unanswered and retried over the whole run: {}",
+        app.newnym_unanswered()
+    );
 
+    // The two pin inputs this run exists to produce, last so they are what
+    // the operator sees at the bottom of the log.
+    report_churn(&sweep);
+    report_l(&cold_summary);
+
+    let app = Arc::try_unwrap(app).map_err(|_| "a fetch task still holds the apparatus")?;
     app.shutdown().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sweep_widths;
+
+    #[test]
+    fn sweep_visits_powers_of_two_and_the_top() {
+        assert_eq!(sweep_widths(1), vec![1]);
+        assert_eq!(sweep_widths(4), vec![1, 2, 4]);
+        // A non-power-of-two persona count is still visited at full width,
+        // or the sweep would never measure the apparatus it brought up.
+        assert_eq!(sweep_widths(6), vec![1, 2, 4, 6]);
+        assert_eq!(sweep_widths(8), vec![1, 2, 4, 8]);
+    }
 }

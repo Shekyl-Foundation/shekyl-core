@@ -169,6 +169,21 @@ interaction has never been written down.
 **This is the highest-value item in the census.** It needs a ruling, not a
 port.
 
+**UPDATE 2026-09-19 (S-TX pre-flight, [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md)
+STX-1 / STX-9):** the `:2681` residue is now **transitively callerless** —
+`get_tx_unlock_time`'s only caller is `get_output_key_mask_unlocked`, which
+has no caller of its own (SOK-7). The redb store keeps writing
+`TxIndex.unlock_time` (no layout move) and holds the invariant **no public
+read type under `store/` has an `unlock_time` field** (S-TX STX-9, gated
+from its commit 1). *Corrected 2026-09-19 (S-TX round 3):* the first form
+of this note said the store "projects it on no read", which was false —
+S-OUT-KI's `RecordedOutput.unlock_time` (`store/output_reads.rs:72`) was
+the one Rust projection, consumer-less; S-TX's first increment commit
+removed it (landed 2026-09-19; the gate
+`check_store_unlock_time_projection.py` is green and asserts the codec rows
+still declare the field). So this ruling, when made, finds no Rust consumer
+to unwind. The field's fate stays this item's.
+
 ### U-3 — Alt-chain / reorg handling (HIGH: large, unexamined, safety-critical)
 
 `switch_to_alternative_blockchain` at `:1386`, 42 `alt_chain` references,
@@ -230,17 +245,31 @@ Whether `NOTIFY_NEW_BLOCK` traversed zones the same way was a question the
 census meant to force; **PWD-B6 dissolved it rather than answering it** by
 deleting 2001, so there is one block path and Design A describes all of it.
 
-### U-7 — Output histogram / distribution (LOW: RPC-only, but consensus-adjacent)
+### U-7 — Output histogram / distribution (LOW: RPC-only, but consensus-adjacent) — histogram DELETED 2026-09-18
 
-`get_output_histogram` / `get_output_distribution` exist and are RPC-exposed
-(`core_rpc_server.cpp:1872`). In Monero these serve **decoy selection**. With
-FCMP++ there is no decoy selection. `blockchain.cpp:2686-2688` still contains
-`// rct outputs don't exist before v4` and a `HF_VERSION_DYNAMIC_FEE` height
-lookup.
+`get_output_histogram` is **DELETED 2026-09-18** (RPC route, handler, wire
+struct, the `shekyld` CLI command `output_histogram`, the python-rpc helper,
+the rlwrap completion entry, and the callerless `Blockchain` /
+`BlockchainDB` / `BlockchainLMDB` chain; `CORE_RPC_VERSION` 3.33) by PR #782
+under SOK-Q3 B (`DRS_E1_SOUT_KI.md`), on **privacy** grounds rather than
+tidiness: on a chain without rings, per-amount output counts over
+caller-chosen unlock and recency windows are a statistical disclosure
+surface with no consumer, and "dies at cutover" is a schedule, not a
+mitigation while the C++ daemon runs testnet. `get_output_distribution`
+remains unrouted C++ (no `on_get_output_distribution`; only caller
+`tests/unit_tests/output_distribution.cpp`) and is *not ported* (SOK-5); it
+dies with the LMDB path.
 
-Under RT-9's precedent (`--public-node` removed because an affordance is what
-people reach for), an endpoint whose only purpose was ring selection is a
-candidate for deletion rather than maintenance.
+**UPDATE 2026-09-18 (S-OUT-KI pre-flight, records-was at `51d7f2416`):** at
+that pin only `get_output_histogram` was routed (`core_rpc_server.cpp:1160`,
+plus the `shekyld` CLI command `output_histogram`); `get_output_distribution`
+had **no RPC route**. Neither was ported to the redb store. In Monero these
+served **decoy selection**. With FCMP++ there is no decoy selection.
+`blockchain.cpp:2686-2688` still contains `// rct outputs don't exist before
+v4` and a `HF_VERSION_DYNAMIC_FEE` height lookup. Under RT-9's precedent
+(`--public-node` removed because an affordance is what people reach for), an
+endpoint whose only purpose was ring selection was a candidate for deletion
+rather than maintenance — closed above.
 
 ### U-8 — Timestamp validation (MEDIUM: partially Shekyl, partially inherited)
 
@@ -286,8 +315,8 @@ work rather than duplicating it.
 
 ### L-2 — `DEFAULT_MAX_PACKET_SIZE = 100 MB` (`header.rs:27`)
 
-100 MB per packet, versus a 256 KiB pre-handshake limit. A 100 MB allocation
-ceiling on a post-handshake peer is a memory-amplification lever: a handful of
+100 MB per packet, versus a 256 KiB limit before the Levin handshake completes. A 100 MB allocation
+ceiling on a peer with an established session is a memory-amplification lever: a handful of
 peers each claiming a large payload can exhaust a node. `fragment.rs:30` checks
 the claim *before* allocation, which is the right shape — but the ceiling
 itself is inherited, not derived. It should be **derived from the largest

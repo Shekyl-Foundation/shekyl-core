@@ -5,27 +5,19 @@
 
 //! Settlement-epoch schedule and challenge-timing FFI.
 
+// The epoch geometry (`H_open` / `H_close` / `H_slash_deadline`) has one
+// home, `shekyl_archival_retention::consensus_state`; this module marshals
+// it across the C edge and computes none of it.
 use shekyl_archival_retention::{
     challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
-    challenge_seal_on_chain, effective_settlement_epoch_blocks, empty_attestation_root,
-    epoch_close_height, frozen_segment_count, p_canonical_id_from_hybrid_pubkey,
-    ATTESTATION_HEADER_LEN, CHALLENGE_RESOLUTION_BLOCKS, MAX_ATTESTATION_RECORDS,
+    challenge_seal_on_chain, empty_attestation_root, epoch_close_height, frozen_segment_count,
+    p_canonical_id_from_hybrid_pubkey, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
     MAX_ATTESTATION_WITNESS_BYTES,
 };
-
-pub fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(effective_settlement_epoch_blocks())
-}
-
-#[must_use]
-pub fn settlement_epoch_close_height(e: u64) -> u64 {
-    settlement_epoch_open_height(e.saturating_add(1)).saturating_sub(1)
-}
-
-#[must_use]
-pub fn settlement_epoch_slash_deadline_height(e: u64) -> u64 {
-    settlement_epoch_close_height(e).saturating_add(CHALLENGE_RESOLUTION_BLOCKS)
-}
+pub use shekyl_archival_retention::{
+    settlement_epoch_last_block, settlement_epoch_open_height,
+    settlement_epoch_slash_deadline_height,
+};
 
 /// Recompute `P_canonical_id` from hybrid pubkey bytes (gate-4 §3.4 / emission §6.1).
 ///
@@ -114,7 +106,7 @@ pub extern "C" fn shekyl_archival_attestation_header_bytes() -> u64 {
 }
 
 /// The EXACT maximum canonical byte length of a block's attestation witness
-/// (`count ‖ MAX records × HybridSignature`).
+/// (`count ‖ MAX records × (nonce ‖ anchor_height_le ‖ HybridSignature)`, `SF-D8` v2).
 ///
 /// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` is defined as this same
 /// quantity and C++ asserts equality. Below it, C++ would reject on the wire a
@@ -126,10 +118,12 @@ pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
     MAX_ATTESTATION_WITNESS_BYTES as u64
 }
 
-/// Last block of settlement epoch `E` (`H_close`, credit deadline).
+/// Last block of settlement epoch `E` — `(E+1)·SEB − 1`, the credit
+/// deadline `H_close`. One below [`shekyl_archival_epoch_close_processing_height`];
+/// the two were once both named "close height" and were confused for it.
 #[no_mangle]
-pub extern "C" fn shekyl_archival_epoch_close_height(settlement_epoch: u64) -> u64 {
-    settlement_epoch_close_height(settlement_epoch)
+pub extern "C" fn shekyl_archival_epoch_last_block(settlement_epoch: u64) -> u64 {
+    settlement_epoch_last_block(settlement_epoch)
 }
 
 /// The close-**processing** boundary for settlement epoch `E` — `(E+1)·SEB`,
@@ -144,13 +138,12 @@ pub extern "C" fn shekyl_archival_epoch_close_processing_height(settlement_epoch
     epoch_close_height(settlement_epoch).unwrap_or(0)
 }
 
-/// Slash grace after `H_close` (`CHALLENGE_RESOLUTION_BLOCKS`).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_challenge_resolution_blocks() -> u64 {
-    CHALLENGE_RESOLUTION_BLOCKS
-}
-
-/// Last block before slash may fire for settlement epoch `E` (`H_slash_deadline`).
+/// Last block before slash may fire for settlement epoch `E`
+/// (`H_slash_deadline = last_block(E + SLASH_GRACE_EPOCHS)`, one epoch of
+/// grace under the process-latched schedule). The grace itself has no C
+/// entry: it was `shekyl_archival_challenge_resolution_blocks`, a block
+/// count no C++ site ever called, deleted with the constant (DRS-E4
+/// commit 5); C++ reads the deadline, never the operand.
 #[no_mangle]
 pub extern "C" fn shekyl_archival_epoch_slash_deadline_height(settlement_epoch: u64) -> u64 {
     settlement_epoch_slash_deadline_height(settlement_epoch)
@@ -216,7 +209,14 @@ pub unsafe extern "C" fn shekyl_attestation_root_empty(out_ptr: *mut u8) -> bool
 ///
 /// Both daemon hooks (the `add_block` freeze processor and the
 /// `pop_block` revert) call this; C++ never performs the boundary
-/// division inline (division-one-site tripwire, pipeline doc §8).
+/// division inline (division-one-site tripwire, pipeline doc §8). It is
+/// also the C++ validator's CEN-F17 operand
+/// (`Blockchain::parent_frozen_segment_count`): LMDB keeps no archival
+/// fold, so the C++ cannot count `SHT-Q2`'s `W`-shards, and the Rust
+/// validator's `n` — `shekyl_chain_rules::closed_shards_before`, the
+/// closed archival shards of the parent's `cumulative_archival_len` — is
+/// a ruled divergence (CEN-L10), bit-identical while the escalation ships
+/// flat and closed by the cutover that deletes this entry (E4 §3.9).
 #[no_mangle]
 pub extern "C" fn shekyl_archival_frozen_segment_count(leaf_count: u64) -> u64 {
     frozen_segment_count(leaf_count)

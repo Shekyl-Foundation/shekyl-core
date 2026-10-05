@@ -45,11 +45,9 @@ pub(crate) const STALENESS_BOUND_REFRESHES: u64 = 10;
 pub(crate) const CAUGHT_UP_SLACK_BLOCKS: u64 = 64;
 
 /// Virtual port the persona's onion publishes — the port a witness dials.
-///
-/// 80 because it is the onion-service convention and carries no information: a
-/// non-default port is a per-operator distinguisher on an address whose whole
-/// purpose is to be indistinguishable. Not a setting, for that reason.
-pub(crate) const SERVING_VIRTUAL_PORT: u16 = 80;
+/// Declared once in `shekyl_curve_tree::serving_route` so the fetch client
+/// dials the port the persona publishes by construction (`SF-D4`, `SF-D5`).
+pub(crate) use shekyl_curve_tree::serving_route::SERVING_VIRTUAL_PORT;
 
 /// Per-rendezvous-circuit stream cap. **Carried placeholder (SPIKE-PIN-1), not
 /// a derivation** — the W₂ rig chooses it, and the value here is the one the
@@ -568,8 +566,8 @@ where
 /// Both operands come off the witness: `as_of_height` is the chain height the
 /// bond record was read at, `sync_tip_height` is what this wallet has ingested.
 fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
-    let chain = pinned.serve_set().as_of_height().0;
-    let ingested = pinned.reader().sync_tip_height().ok()?.0;
+    let chain = pinned.serve_set().as_of_height().to_raw();
+    let ingested = pinned.reader().sync_tip_height().ok()?.to_raw();
     Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
 }
 
@@ -644,7 +642,7 @@ mod lifecycle_tests {
                     shard_ids: Vec::new(),
                     outcomes: Vec::new(),
                 },
-                as_of_height: BlockHeight(0),
+                as_of_height: BlockHeight::from_raw(0),
                 reader: ServingReader::new(Arc::clone(&self.store)),
             })
         }
@@ -678,6 +676,17 @@ mod lifecycle_tests {
             identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
             virtual_port: SERVING_VIRTUAL_PORT,
             max_streams: SERVING_MAX_STREAMS,
+            key: std::sync::Arc::new(shekyl_p_host::NoResidentKey),
+            // Stamped, so these lifecycle cases exercise a persona whose
+            // gate can answer. What the gate does with an unstamped cache is
+            // `signer`'s and `daemon_tip`'s to assert, not this suite's.
+            tip: {
+                let tip = std::sync::Arc::new(shekyl_p_host::DaemonTipCache::new(
+                    Duration::from_secs(3_600),
+                ));
+                tip.stamp_synced(BlockHeight::from_raw(9_000));
+                tip
+            },
         }
     }
 

@@ -152,7 +152,11 @@ pub const SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH: u8 = 10;
 pub const SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH: u8 = 11;
 /// Step 5 (loud inflation check): Σ rewards != reward vout sum.
 pub const SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH: u8 = 12;
-/// Step 6: revealed backing pubkey does not hash to the committed leaf.
+/// **Retired (`PL-D3`, 2026-09-14): never emitted.** Was "revealed backing
+/// pubkey does not hash to the committed leaf"; the leaf hash left the wire
+/// and the binding moved into the membership-only proof (a wrong key now
+/// rejects as `SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED`). The number stays
+/// reserved so no later code is misread by a caller built against this table.
 pub const SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF: u8 = 13;
 /// Step 6: membership-only proof rejected.
 pub const SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED: u8 = 14;
@@ -218,7 +222,6 @@ pub(crate) fn map_emission_vin_error(err: &EmissionVerifyError) -> u8 {
             SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH
         }
         E::VoutSumMismatch { .. } => SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH,
-        E::BackingLeafMismatch => SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF,
         E::BackingRejected(_) => SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED,
         E::AuthMalformed { .. } => SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED,
         E::AuthRejected { .. } => SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED,

@@ -33,12 +33,14 @@ one of these rules, stop and ask the human first.
    and 141-commit dev drift before being merged, and the merge itself
    became a multi-day project. Do not recreate this pattern.
 
-3. **Never merge `dev` into a feature branch to "keep it current".**
+3. **Never continuously merge `dev` into a feature branch to "keep it current".**
    This is the failure pattern that produces orphaned branches. If a
    feature branch is falling behind dev, the answer is to land it on dev
    sooner, not to repeatedly merge dev into it. If the branch isn't ready
    to land, the work is too large and must be broken into smaller pieces
    that can each land on dev behind a feature flag or in disabled state.
+   This does NOT mean that merging cannot be done to fix a problem or just prior 
+   to opening a PR to ensure you are on the current dev branch.
 
 4. **Never push to `dev` without the user's explicit instruction for that
    specific push.** "Run the tests and push" is not a standing instruction.
@@ -96,6 +98,33 @@ If a PR appears to need the exception, the test is *not* "is this
 analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
 named criteria in `07-consensus-atomic-cutovers.mdc`?" The exception
 is auditable mechanically against the criteria, not by precedent.
+
+## The merge queue tests the merge result
+
+`dev` merges through GitHub's merge queue. A PR's CI runs on the PR's own
+head merged onto the `dev` of the moment it was pushed. The queue reruns
+the required checks on the **actual merge result** just before it lands.
+That is the only check that sees a semantic conflict: two PRs each green
+alone, broken together. The mechanism is the workflows' `merge_group:`
+trigger — every PR gate carries one; a gate that runs on the PR but not
+on the group has a hole exactly where this class lives — plus the `dev`
+ruleset. Consequences:
+
+- **A stacked PR cannot enter the queue until its base merges and it
+  re-targets `dev`.** That was already the discipline; the queue makes it
+  load-bearing. Expect it, do not fight it.
+- **"Require branches to be up to date" is not the cheaper alternative.**
+  It tests the same thing by making every author rebase and re-run CI after
+  every other merge — with six lanes open, each merge invalidates the other
+  five. The queue does the rebase-and-test once, on the group.
+- **`merge_group` takes no `paths` filter.** A path-filtered gate runs on
+  every group; the cheap gates carry the trigger anyway, the expensive
+  non-gate workflows (the depends cross-compiles, the RandomX differential
+  lane, the benchmark comparator) do not, and are named as such in their
+  files.
+- **A failure in the queue is `dev`'s finding, not the PR's** (the PR was
+  green on its own head): read the group's diff against the base, find the
+  other lane's change, fix on the PR, re-queue.
 
 ## When to ask the user instead of proceeding
 

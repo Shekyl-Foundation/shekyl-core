@@ -17,11 +17,13 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
+use shekyl_types::{PrefixHash, SigningPayloadHash};
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -49,12 +51,11 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the curve tree root from the
-///   block header's `curve_tree_root` field (the topmost-layer node, whose
-///   curve depends on tree depth), **not** the block hash. Passing the block
-///   hash will produce an invalid proof that the verifier rejects.
+/// - [`TreeContext::tree_root`] is a [`shekyl_types::CurveTreeRoot`] (the
+///   header field). The proof crate takes those bytes at this call; a
+///   [`shekyl_types::BlockHash`] cannot be passed in its place.
 pub fn sign_transaction(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -82,7 +83,7 @@ pub fn sign_transaction(
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
 pub fn sign_transaction_with_terms(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -163,15 +164,17 @@ pub fn sign_transaction_with_terms(
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
         .enumerate()
-        .map(|(i, inp)| prove_input_from_spend(inp, pseudo_masks[i].to_bytes()))
-        .collect();
+        .map(|(i, inp)| prove_input_from_spend(i, inp, pseudo_masks[i].to_bytes()))
+        .collect::<Result<_, _>>()?;
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
     let prove_result = proof::prove(
         &prove_inputs,
-        &tree.tree_root,
+        // Proof-crate boundary: both the root and the signable hash are
+        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        tx_prefix_hash,
+        tx_prefix_hash.to_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
@@ -216,16 +219,17 @@ pub fn sign_transaction_with_terms(
 ///
 /// This is Phase 2 of the signing pipeline. The caller must:
 /// 1. Insert the proofs from [`sign_transaction`] into the transaction
-/// 2. Compute `get_transaction_signed_payload` for each input
-/// 3. Hash each payload with Keccak-256 to get `payload_hashes`
-/// 4. Call this function with those hashes and the corresponding secret keys
+/// 2. Derive every input's signing hash with
+///    [`crate::phase1_payload_hashes`] (`shekyl_wire::PqcSigningPreimage`'s
+///    `signed_hash(i)`, one [`SigningPayloadHash`] per input)
+/// 3. Call this function with those hashes and the corresponding secret keys
 ///
 /// # Errors
 ///
 /// Returns [`TxBuilderError::PqcSignError`] if any individual signing
 /// operation fails (e.g., malformed secret key).
 pub fn sign_pqc_auths(
-    payload_hashes: &[[u8; 32]],
+    payload_hashes: &[SigningPayloadHash],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -261,7 +265,7 @@ pub fn sign_pqc_auths(
             &ss,
             inp.output_index,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            hash,
+            hash.as_bytes(),
         )
         .map_err(|e| TxBuilderError::PqcSignError {
             index: i,
@@ -317,19 +321,19 @@ pub struct MembershipOnlyProof {
 pub fn prove_backing_membership(
     input: &SpendInput,
     tree: &TreeContext,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: PrefixHash,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
     // comes from the context-bound rerandomization inside the prover.
-    let prove_input = prove_input_from_spend(input, [0u8; 32]);
+    let prove_input = prove_input_from_spend(0, input, [0u8; 32])?;
 
     let result = proof::prove_membership_only(
         &[prove_input],
-        &tree.tree_root,
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        signable_tx_hash,
-        &tree.tree_root,
+        signable_tx_hash.to_bytes(),
+        tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
@@ -354,13 +358,70 @@ pub fn prove_backing_membership(
 /// full-path signer (step 6, per-input balanced blind) and the
 /// membership-only backing leg (zero blind), so the leaf-chunk/branch-layer
 /// marshaling cannot drift between the two proving paths.
-fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> ProveInput {
+///
+/// Re-derives the input's own PQC leaf commitment and blind (`PL-D3`) from
+/// `combined_ss` / `output_index` — the derivation that produced the
+/// output's `0x07` entry — and refuses with
+/// [`TxBuilderError::PqcLeafMismatch`] when the chain's leaf (this output's
+/// entry in `leaf_chunk`) is not that derivation: a proof over an unopenable
+/// leaf would only fail later, at the verifier, with no diagnosis.
+pub(crate) fn prove_input_from_spend(
+    index: usize,
+    input: &SpendInput,
+    pseudo_out_blind: [u8; 32],
+) -> Result<ProveInput, TxBuilderError> {
+    let combined64: Zeroizing<[u8; 64]> = Zeroizing::new(
+        input
+            .combined_ss
+            .get(..64)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| TxBuilderError::PqcLeafDerivation {
+                index,
+                detail: format!(
+                    "combined_ss must be at least 64 bytes, got {}",
+                    input.combined_ss.len()
+                ),
+            })?,
+    );
+    let pqc_leaf = derive_pqc_leaf(&combined64, input.output_index).map_err(|e| {
+        TxBuilderError::PqcLeafDerivation {
+            index,
+            detail: e.to_string(),
+        }
+    })?;
+    let derived_x = PqcLeafScalar::from_commitment_point(&pqc_leaf.point).ok_or_else(|| {
+        TxBuilderError::PqcLeafDerivation {
+            index,
+            detail: "derived commitment is not a decompressible point".into(),
+        }
+    })?;
+    // Consensus does not forbid duplicate (O, C) pairs in a chunk; only
+    // `CM.x` names the spent leaf. Prefer the matching opening, and only
+    // then fall back to "present but unopenable".
+    let mut saw_output = false;
+    let mut saw_openable = false;
+    for e in &input.leaf_chunk {
+        if e.output_key == input.output_key && e.commitment == input.commitment {
+            saw_output = true;
+            if e.cm_x == derived_x.0 {
+                saw_openable = true;
+                break;
+            }
+        }
+    }
+    if !saw_output {
+        return Err(TxBuilderError::SpentOutputNotInLeafChunk { index });
+    }
+    if !saw_openable {
+        return Err(TxBuilderError::PqcLeafMismatch { index });
+    }
+
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = input
         .leaf_chunk
         .iter()
         .map(|e| (e.output_key, e.key_image_gen, e.commitment))
         .collect();
-    let leaf_h_pqc: Vec<[u8; 32]> = input.leaf_chunk.iter().map(|e| e.h_pqc).collect();
+    let leaf_cm_x: Vec<[u8; 32]> = input.leaf_chunk.iter().map(|e| e.cm_x).collect();
 
     let c1_branch_layers: Vec<BranchLayer> = input
         .c1_layers
@@ -377,20 +438,21 @@ fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> Pro
         })
         .collect();
 
-    ProveInput {
+    Ok(ProveInput {
         output_key: input.output_key,
         key_image_gen: compute_key_image_gen(&input.output_key),
         commitment: input.commitment,
-        h_pqc: PqcLeafScalar(input.h_pqc),
+        pqc_leaf_commitment: pqc_leaf.point,
+        pqc_leaf_blind: pqc_leaf.blind,
         spend_key_x: input.spend_key_x,
         spend_key_y: input.spend_key_y,
         commitment_mask: input.commitment_mask,
         pseudo_out_blind,
         leaf_chunk_outputs: leaf_outputs,
-        leaf_chunk_h_pqc: leaf_h_pqc,
+        leaf_chunk_cm_x: leaf_cm_x,
         c1_branch_layers,
         c2_branch_layers,
-    }
+    })
 }
 
 /// Compute the key image generator Hp(O) for a given output key O.

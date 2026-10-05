@@ -25,7 +25,8 @@
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
 //! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
-//! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
+//! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
+//! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
@@ -56,14 +57,16 @@ pub mod emission_wire;
 pub mod error;
 pub mod failure_window;
 pub mod hash;
+pub mod held_at_height;
 pub mod id;
+pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod segment_freeze;
-pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod settlement_row;
+pub mod shard_coverage;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -76,36 +79,38 @@ pub use attestation::{
     settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
 };
 pub use attestation_wire::{
-    attestation_nonce, attestation_root, empty_attestation_root,
-    pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
-    AttestationHeaderError, BlockAttestationWitness, PassRecord, WitnessError, WitnessPairingError,
-    ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION, ATTESTATION_ROOT_CUSTOMIZATION,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_PREFIX_LEN,
+    attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
+    verify_pass_countersignature, verify_pass_transcript, AttestationHeader,
+    AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError, PassRecord,
+    PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
+    ATTESTATION_ROOT_CUSTOMIZATION, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
-    clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop, release_connect,
-    release_pop, slash_open_interval_to_append, HoldingsUpdateAddConnect,
-    HoldingsUpdateConnectError, HoldingsUpdateDropConnect, HoldingsUpdatePopError, RebondConnect,
-    RebondConnectError, RebondPopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
+    clean_interval_close, is_clean_interval_close, reinstate_connect, reinstate_pop,
+    release_connect, release_pop, slash_open_interval_to_append, ReinstateConnect,
+    ReinstateConnectError, ReinstatePopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
     MAX_BOND_BAD_INTERVALS,
 };
-pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
+pub use bond_ct_balance::{
+    verify_bond_post_ct_balance, BondCtBalanceError, BondTerm, BondTermError,
+};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
-    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
-    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
+    bond_floor, ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    ARCHIVAL_REORG_DEPTH_BLOCKS, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE,
+    BOND_DURATION_BASE_EPOCHS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
     bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,
-    release_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_rebond_bond_post, verify_release_bond_post, BondPostError,
+    release_vin_statics, verify_join_market_bond_post, verify_reinstate_bond_post,
+    verify_release_bond_post, BondPostError,
 };
 pub use bond_wire::{
-    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
-    MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
+    encode_holdings_descriptor, ArchivalBondPostVin, BondKind, BondPostKind, HoldingsDescriptor,
+    HoldingsKind, HoldingsKindScan, LastServedScan, ShardSet, ShardSetError,
+    WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
+    VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
@@ -124,26 +129,40 @@ pub use claimed_epochs::{
 pub use consensus_state::{
     as_of_e_served_work, credited_work_milli, epoch_close_compute, epoch_close_due_at_height,
     epoch_close_height, good_through, last_settled_epoch_as_of_parent, market_member_at_epoch,
-    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height, shard_age_milli,
-    shard_contribution_micro, shard_work_micro, sigma_work_milli, BadInterval,
-    CreditIndexOutOfRange, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseResult,
-    EpochCloseShard, ServeCreditRow, ServedWork, FOUNDATION_EXCLUDED_FROM_MARKET,
+    prune_below_epoch_at_height, r_market_count, settlement_epoch_at_height,
+    settlement_epoch_last_block, settlement_epoch_open_height,
+    settlement_epoch_slash_deadline_height, shard_age_milli, shard_contribution_micro,
+    shard_work_micro, sigma_work_milli, BadInterval, CreditIndexOutOfRange, CreditPair,
+    EpochCloseBond, EpochCloseInputs, EpochCloseResult, EpochCloseShard, ServeCreditRow,
+    ServedWork, SettlementEpochBlocks, SettlementSchedule, ShardClose, ShardCloseWire,
+    FOUNDATION_EXCLUDED_FROM_MARKET,
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
-    arm_settlement_epoch_override_for_regtest, effective_settlement_epoch_blocks,
-    parse_settlement_epoch_override, settlement_epoch_blocks_overridden,
-    settlement_epoch_override_ignored, settlement_epoch_override_present,
-    SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
-    CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    arm_settlement_epoch_override_for_regtest, effective_archival_reorg_depth_blocks,
+    effective_settlement_epoch_blocks, parse_reorg_cap_override, parse_settlement_epoch_override,
+    settlement_epoch_override_floor, settlement_epoch_override_ignored,
+    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH,
+    CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    SLASH_GRACE_EPOCHS,
 };
-pub use debit_auth::{debit_auth_pin, DebitAuthError};
+pub use debit_auth::{
+    cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
+};
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,
     emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
     BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
     EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
+};
+pub use pass_anchor::{
+    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
+    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
+    PASS_REQUEST_HEADER_LEN,
 };
 pub use settlement_row::{
     RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,
@@ -164,6 +183,7 @@ pub use failure_window::{
     failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
     FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
 };
+pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use path::{
     challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, CHALLENGED_LEAF_LEN,
@@ -178,13 +198,10 @@ pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
     LeafChunkBounds, SEGMENT_LEAF_COUNT,
 };
-pub use serve_credit_decisions::{
-    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
-    serve_credit_gate_decision, serve_credit_key_be, serve_credit_preblock_duplicate,
-    BlockUniqueVerdict, GateReject, GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
-    SERVE_CREDIT_KEY_LEN,
-};
 pub use serve_eligibility::serve_credit_epoch_ok;
+pub use shard_coverage::{
+    join_scarcity_micro, order_shard_coverage, ShardCoverageIn, ShardCoverageOut,
+};
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,
     ArchivalServeCreditResponse, WireError, ED25519_COUNTERSIGNATURE_LEN,

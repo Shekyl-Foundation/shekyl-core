@@ -98,11 +98,11 @@ verify_stale_subsidy_regex_probes() {
 }
 
 verify_build_artifact_layout() {
-  # Layer jobs consume the build/ tarball from the build job. The CALIBRATION
-  # build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS defaults OFF
-  # (CMakeLists.txt:608-612 flips it ON only for Debug). Internal libraries are
-  # therefore static .a archives with no internal .so files — which is why the
-  # tarball can exclude *.a and *.o and still ship working binaries.
+  # Layer jobs consume the build/ tarball from the build job. Internal
+  # libraries are always static .a archives (CMakeLists.txt refuses
+  # BUILD_SHARED_LIBS under the single-Rust-image contract), so there are no
+  # internal .so files — which is why the tarball can exclude *.a and *.o and
+  # still ship working binaries.
   #
   # "No internal .so" is NOT "self-contained", and reading it that way is what
   # made this gate vacuous for its whole life. The binaries still carry a

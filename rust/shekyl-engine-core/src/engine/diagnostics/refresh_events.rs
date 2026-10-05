@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use shekyl_types::BlockHeight;
+
 /// Classification of a producer-side malformed-block detection.
 ///
 /// Maps to scanner-rejection causes today
@@ -146,6 +148,13 @@ pub enum ProtocolErrorKind {
     /// block has been pruned from the daemon's database and
     /// cannot be served.
     PrunedTransaction,
+
+    /// The daemon answered the identity handshake (`VC-4`) and is not
+    /// one this wallet can use. The orchestrator settles identity before
+    /// the producer runs, so the producer should never see it; tagged on
+    /// its own so a stream that ever shows one reads "wrong daemon", not
+    /// "bad envelope".
+    IdentityMismatch,
 }
 
 /// Bounded enumeration of the [`RefreshDiagnostic`] classes that
@@ -274,7 +283,7 @@ pub enum RefreshDiagnostic {
     ReorgObserved {
         /// Block height where the fork was detected (relative to
         /// the snapshot tip). Not projected — see the F9 contract.
-        fork_height: u64,
+        fork_height: BlockHeight,
 
         /// Reorganization depth in blocks. Projected as a
         /// bucketed label.
@@ -288,7 +297,7 @@ pub enum RefreshDiagnostic {
     ScanProgress {
         /// Current scan height. Not projected — see the F9
         /// contract (wallet-activity correlation closure).
-        height: u64,
+        height: BlockHeight,
 
         /// Number of matched outputs observed at this height.
         /// Projected as a bucketed label.

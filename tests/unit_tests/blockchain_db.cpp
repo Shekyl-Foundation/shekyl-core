@@ -44,6 +44,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
+#include "tx_blob.h"
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;
@@ -88,8 +89,8 @@ void print_block(const block& blk, const std::string& prefix = "")
 // from std::string, this might break.
 bool compare_txs(const transaction& a, const transaction& b)
 {
-  auto ab = tx_to_blob(a);
-  auto bb = tx_to_blob(b);
+  auto ab = shekyl_test_fixtures::tx_blob(a);
+  auto bb = shekyl_test_fixtures::tx_blob(b);
 
   return ab == bb;
 }
@@ -207,57 +208,43 @@ TYPED_TEST(BlockchainDBTest, OpenAndClose)
   ASSERT_NO_THROW(this->m_db->close());
 }
 
-// Q12-U1: the origin zone must survive a REAL persistence round trip.
-//
-// The struct-level tests in txpool_origin_zone.cpp prove the two bits encode
-// and decode. They cannot prove the value reaches the database and comes back,
-// because they never touch one -- and a stub DB that stores the whole struct
-// would round-trip it by construction, proving nothing about the storage
-// format. This uses LMDB, which is what the daemon actually writes.
-//
-// The claim under test is the one the round rests on: an anonymity-arrived
-// transaction is still known to be anonymity-arrived after a restart. If the
-// zone were dropped at the storage boundary the symptom would be silent --
-// the pool would simply see `invalid` and route it as origin-unknown.
-TYPED_TEST(BlockchainDBTest, TxpoolOriginZoneSurvivesPersistence)
+TYPED_TEST(BlockchainDBTest, AddBlockRefusesAMinerTxThatDoesNotSerialize)
 {
   boost::filesystem::path tempPath = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-  const std::string dirPath = tempPath.string();
+  std::string dirPath = tempPath.string();
+
   this->set_prefix(dirPath);
   ASSERT_NO_THROW(this->m_db->open(dirPath));
   this->get_filenames();
+  this->init_hard_fork();
 
-  for (const epee::net_utils::zone z : {epee::net_utils::zone::public_,
-                                        epee::net_utils::zone::i2p,
-                                        epee::net_utils::zone::tor,
-                                        epee::net_utils::zone::invalid})
-  {
-    crypto::hash txid = crypto::null_hash;
-    // Distinct id per zone so the entries do not overwrite each other and a
-    // read cannot accidentally observe the previous iteration's value.
-    reinterpret_cast<char*>(&txid)[0] = static_cast<char>(static_cast<uint8_t>(z) + 1);
+  db_wtxn_guard guard(this->m_db);
 
-    cryptonote::txpool_tx_meta_t in{};
-    in.set_relay_method(cryptonote::relay_method::stem);
-    in.set_origin_zone(z);
-    const cryptonote::blobdata blob = "not-a-real-tx";
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[0], this->m_block_weights[0], this->m_block_weights[0], t_diffs[0], t_coins[0], 0, {}, this->m_txs[0]));
+  ASSERT_EQ(1u, this->m_db->height());
 
-    this->m_db->block_wtxn_start();
-    ASSERT_NO_THROW(this->m_db->add_txpool_tx(txid, cryptonote::blobdata_ref{blob}, in));
-    this->m_db->block_wtxn_stop();
+  // Named while whole, then damaged: the base serializer refuses a
+  // transaction whose encrypted-amount count is not its output count.
+  std::pair<block, blobdata> damaged = this->m_blocks[1];
+  const crypto::hash named = get_block_hash(damaged.first);
+  ASSERT_FALSE(damaged.first.miner_tx.vout.empty());
+  damaged.first.miner_tx.ct_signatures.enc_amounts.clear();
 
-    cryptonote::txpool_tx_meta_t out{};
-    ASSERT_TRUE(this->m_db->get_txpool_tx_meta(txid, out))
-      << "the entry was not stored at all";
-    EXPECT_EQ(z, out.get_origin_zone())
-      << "origin zone did not survive the LMDB round trip";
-    EXPECT_EQ(cryptonote::relay_method::stem, out.get_relay_method())
-      << "the relay method was disturbed by the origin zone sharing its byte";
-  }
+  // The fixture is what it claims: refused by the serializer, still named.
+  blobdata fragment;
+  ASSERT_FALSE(tx_to_blob(damaged.first.miner_tx, fragment));
+  ASSERT_TRUE(damaged.first.is_hash_valid());
+  ASSERT_HASH_EQ(named, get_block_hash(damaged.first));
 
-  ASSERT_NO_THROW(this->m_db->close());
+  EXPECT_THROW(this->m_db->add_block(damaged, this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]), DB_ERROR);
+
+  // Nothing of it was written, and the store still takes the whole block.
+  EXPECT_EQ(1u, this->m_db->height());
+  EXPECT_FALSE(this->m_db->block_exists(named));
+  ASSERT_NO_THROW(this->m_db->add_block(this->m_blocks[1], this->m_block_weights[1], this->m_block_weights[1], t_diffs[1], t_coins[1], 0, {}, this->m_txs[1]));
+  EXPECT_EQ(2u, this->m_db->height());
+  EXPECT_TRUE(this->m_db->block_exists(named));
 }
-
 TYPED_TEST(BlockchainDBTest, AddBlock)
 {
 

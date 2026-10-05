@@ -44,6 +44,26 @@ KEYS_INTEGER = {
     "daa_ftl_seconds": "u64",
     "daa_mtp_window": "u64",
     "daa_genesis_difficulty": "u64",
+    # Short-term block-weight surge factor S. u64 because the clamp
+    # multiplies it by a u64 median; the value is small but the product
+    # is not. Rust owner: shekyl-economics::effective_median.
+    "block_weight_short_term_surge_factor": "u64",
+    # Penalty-free block-weight zone (bytes): the median is soft-raised to
+    # it before the weight penalty and the block-weight limit is twice it
+    # (CEN-F14b, CEN-G6b). Was the hand-written
+    # CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 in cryptonote_config.h —
+    # a consensus constant with no Rust home, supplied to shekyl-economics
+    # as an argument on every call (CHAIN_RULES_SLICE_4.md §3.1 S8). Rust
+    # owner: shekyl-economics::EconomicParams::full_reward_zone.
+    "block_weight_full_reward_zone_bytes": "u64",
+    # The two block-weight medians' windows (CEN-G6; CHAIN_RULES_SLICE_7.md
+    # Q6). C++-only #defines until slice 7 (CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_
+    # WINDOW_SIZE, CRYPTONOTE_REWARD_BLOCKS_WINDOW), now defined from these
+    # macros. Rust owner: shekyl-economics::params::{BLOCK_WEIGHT_LONG_TERM_
+    # WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW}; the medians are built in
+    # shekyl_chain_rules::rules::block_weight.
+    "block_weight_long_term_window_blocks": "u64",
+    "block_weight_short_term_window_blocks": "u64",
     # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
     "archival_bond_floor_atomic": "u64",
     # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
@@ -52,6 +72,13 @@ KEYS_INTEGER = {
     # src/blockchain_db/shekyl_types.h. Rust mirror:
     # rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
     "max_claim_age_w": "u64",
+    # Max shard ids in one compact holdings set: a list-size bound on one
+    # bond record and one transaction, not bond-size policy (L2 RULED
+    # 2026-09-27). C++ consumer: ArchivalBondValue::kMaxHoldings in
+    # src/blockchain_db/shekyl_types.h, which the three revert-value
+    # mirrors static_assert against. Rust mirror:
+    # rust/shekyl-types/build.rs (MAX_HOLDINGS_SHARDS).
+    "archival_max_holdings_shards": "u64",
     # Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
     # level-2 subtree leaf count, 38 * 18 * 38. C++ consumer: the freeze
     # writer's row value field ONLY — the boundary division lives solely
@@ -189,6 +216,31 @@ def main() -> int:
 #define SHEKYL_DAA_GENESIS_DIFFICULTY \
     {emit("daa_genesis_difficulty")}
 
+// Short-term block-weight surge factor S. The clamp itself is
+// shekyl_effective_block_weight_median; this macro is the C++ spelling
+// of the JSON key.
+#define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR \
+    {emit("block_weight_short_term_surge_factor")}
+
+// Penalty-free block-weight zone in bytes (CEN-F14b / G6b). The Rust owner
+// is shekyl-economics (EconomicParams::full_reward_zone); this macro is
+// the C++ spelling of the JSON key, and CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
+// in cryptonote_config.h is defined from it.
+#define SHEKYL_BLOCK_WEIGHT_FULL_REWARD_ZONE_BYTES \
+    {emit("block_weight_full_reward_zone_bytes")}
+
+// The two block-weight medians' windows (CEN-G6). The long-term effective
+// median is over the min(window, height) recorded long-term weights below
+// the connecting block; the short-term median over the last min(window,
+// height) weights, then clamped by shekyl_effective_block_weight_median.
+// cryptonote_config.h's CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE and
+// CRYPTONOTE_REWARD_BLOCKS_WINDOW are defined from these; the Rust owner is
+// shekyl-economics::params.
+#define SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS \
+    {emit("block_weight_long_term_window_blocks")}
+#define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_WINDOW_BLOCKS \
+    {emit("block_weight_short_term_window_blocks")}
+
 // Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
 // alongside the FCMP/DAA constants because genesis foundation identities and
 // market archiver registration consume the same cross-language authority.
@@ -205,6 +257,16 @@ def main() -> int:
 // rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
 #define SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W \
     {emit("max_claim_age_w")}
+
+// Max shard ids in one compact holdings set (`L2` RULED 2026-09-27,
+// ARCHIVAL_SHARD_T_DERIVATION.md §3): a LIST-SIZE bound on one bond
+// record and one transaction, not bond-size policy. C++ defines
+// `ArchivalBondValue::kMaxHoldings` from this macro and the three
+// revert-value structs static_assert against that one, so the four C++
+// codecs cannot drift from each other or from Rust. Rust mirror:
+// rust/shekyl-types/build.rs (MAX_HOLDINGS_SHARDS).
+#define SHEKYL_ARCHIVAL_MAX_HOLDINGS_SHARDS \\
+    {emit("archival_max_holdings_shards")}
 
 // Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
 // SEGMENT_LEAF_COUNT, the level-2 subtree leaf count under the

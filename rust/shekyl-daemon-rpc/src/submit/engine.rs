@@ -12,6 +12,7 @@
 //! before the FFI shims exist.
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_wire::transaction::Ct;
 
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
@@ -113,9 +114,14 @@ enum RefAgeWindow {
     TooOld,
 }
 
-/// `chain_height` is a block count; both bounds mirror the consensus check
-/// (blockchain.cpp:3745-3765 / 3658-3671).
-fn ref_age_window(chain_height: u64, ref_height: u64) -> RefAgeWindow {
+/// `chain_height` is a block **count**; `ref_height` is the reference
+/// block's **ordinal**. Both bounds mirror the consensus check
+/// (`blockchain.cpp:3745-3765` / `3658-3671`). The comparison itself is
+/// that inherited mix (COUNT-minus-span against ORDINAL), punched to raw
+/// at this one named site so inland callers cannot swap the operands.
+fn ref_age_window(chain_height: ChainCount, ref_height: BlockHeight) -> RefAgeWindow {
+    let chain_height = chain_height.to_raw();
+    let ref_height = ref_height.to_raw();
     if chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE
         || ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE
     {
@@ -161,7 +167,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         let parsed = match parse_submission(tx_hex) {
             Ok(parsed) => parsed,
             Err(reject) => {
-                tracing::debug!(reason = %reject.reason, "submit rejected at Phase A");
+                tracing::info!(reason = %reject.reason(), "submit rejected at Phase A");
                 return Ok(reject.verdict());
             }
         };
@@ -182,13 +188,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the credit arm triggers no scan, so gating it would spend a hybrid
         // verify to protect nothing.
         if parsed.bond_post_is_release() {
-            if let Err(failure) = verify_debit_slot_possession(&parsed) {
-                tracing::debug!(
+            if let Err(reject) = verify_debit_slot_possession(&parsed) {
+                tracing::info!(
+                    cause = ?reject.cause(),
+                    reason = %reject.reason(),
                     "submit rejected: release bond-post slot failed the possession \
                      pre-gate (no fact gather performed)"
                 );
                 return Ok(SubmitVerdict::Rejected {
-                    cause: failure.into(),
+                    cause: reject.into(),
                 });
             }
         }
@@ -351,7 +359,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                     return Ok(Err(RejectCause::ReferenceNotFound));
                 };
                 // Age-window arithmetic over the snapshot height.
-                match ref_age_window(facts.chain_height.to_raw(), reference.height.to_raw()) {
+                match ref_age_window(facts.chain_height, reference.height) {
                     RefAgeWindow::TooRecent => return Ok(Err(RejectCause::ReferenceTooRecent)),
                     RefAgeWindow::TooOld => return Ok(Err(RejectCause::StaleRoot)),
                     RefAgeWindow::InWindow => {}
@@ -416,8 +424,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
 
         // The crypto battery (FCMP++ membership, BP+, CT balance, PQC
         // hybrid auth, archival-arm checks) behind the seam.
-        if let Err(failure) = self.verifier.verify(parsed, facts) {
-            return Ok(Err(failure.into()));
+        if let Err(reject) = self.verifier.verify(parsed, facts) {
+            // `info`, not `debug`: the submitter only ever sees the
+            // coarse `RejectCause`, so this line is the operator's one
+            // record of what the daemon refused. The reason is on the
+            // reject — a cause without a named leg is unrepresentable.
+            tracing::info!(
+                kind = ?parsed.kind,
+                cause = ?reject.cause(),
+                reason = %reject.reason(),
+                "submit rejected at Phase C by the verifier"
+            );
+            return Ok(Err(reject.into()));
         }
 
         // Mint the witness (§3.3) — the only construction site in the
@@ -500,7 +518,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //
         //     Do not restore the older claim that these bytes "can never
         //     connect": a partial slash lowers the balance by one FLOOR and a
-        //     later Rebond credits the same FLOOR back, so it can return to
+        //     later Reinstate credits the same FLOOR back, so it can return to
         //     exactly the bound value. The hazard is bounded by the reference
         //     age window and by the wallet being the bytes' only holder (a
         //     rejected tx is never relayed) — see §8.7.1.1's UB2 note, which
@@ -554,7 +572,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 Some(reference) => {
                     reference.height != cert.ref_height()
                         || reference.root != *cert.root()
-                        || ref_age_window(fresh.chain_height.to_raw(), reference.height.to_raw())
+                        || ref_age_window(fresh.chain_height, reference.height)
                             != RefAgeWindow::InWindow
                 }
             };

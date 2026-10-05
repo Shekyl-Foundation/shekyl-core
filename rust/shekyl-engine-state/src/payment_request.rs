@@ -8,7 +8,7 @@
 //! Normative: `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.9, §5.7.11.
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::TxHash;
+use shekyl_types::{OutputIndexInTx, Timestamp, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::local_label::LocalLabel;
@@ -33,6 +33,19 @@ impl PaymentRequestId {
     #[must_use]
     pub const fn rid_fits_wire(rid: u64) -> bool {
         rid != 0 && rid <= PAYMENT_REQUEST_RID_U48_MAX
+    }
+
+    /// The one door for a `rid` that arrived from outside as a number:
+    /// `None` unless it is non-zero and fits the u48 LE wire encoding, so a
+    /// value the label cannot echo never becomes an id. Text goes through
+    /// [`str::parse`] instead, which also enforces the contract's grammar.
+    #[must_use]
+    pub const fn from_wire_rid(rid: u64) -> Option<Self> {
+        if Self::rid_fits_wire(rid) {
+            Some(Self(rid))
+        } else {
+            None
+        }
     }
 
     /// Generate a new opaque id from the OS CSPRNG.
@@ -65,6 +78,50 @@ impl PaymentRequestId {
     }
 }
 
+/// Why a `rid` string was refused. Carries nothing of the input, so it can
+/// ride into an error response or a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsePaymentRequestIdError {
+    /// Not the contract's `^[1-9][0-9]*$`: empty, a sign, a leading zero,
+    /// whitespace or any non-digit. `"0"` lands here too.
+    NotCanonicalDecimal,
+    /// A canonical decimal above the u48 wire encoding.
+    OutOfRange,
+}
+
+impl std::fmt::Display for ParsePaymentRequestIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotCanonicalDecimal => {
+                "rid must be a canonical decimal string (no sign, no leading zero)"
+            }
+            Self::OutOfRange => "rid must be non-zero and fit the u48 wire encoding",
+        })
+    }
+}
+
+impl std::error::Error for ParsePaymentRequestIdError {}
+
+impl std::str::FromStr for PaymentRequestId {
+    type Err = ParsePaymentRequestIdError;
+
+    /// The contract's `PaymentRequestId` grammar (`^[1-9][0-9]*$`), then
+    /// the wire bound. Rust's integer parser alone would accept `+1` and
+    /// `01`, which conforming clients and validators reject; one grammar
+    /// here keeps wallet-rpc, the desktop wallet and the URI codec agreeing.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let canonical =
+            !s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit());
+        if !canonical {
+            return Err(ParsePaymentRequestIdError::NotCanonicalDecimal);
+        }
+        let raw: u64 = s
+            .parse()
+            .map_err(|_| ParsePaymentRequestIdError::OutOfRange)?;
+        Self::from_wire_rid(raw).ok_or(ParsePaymentRequestIdError::OutOfRange)
+    }
+}
+
 /// Lifecycle state of an off-chain payment request.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, postcard_schema::Schema,
@@ -78,20 +135,27 @@ pub enum PaymentRequestState {
 }
 
 /// Off-chain invoice persisted in [`crate::bookkeeping_block::BookkeepingBlock`].
+///
+/// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). The
+/// postcard encoding is the same `u64` it was as a height, so
+/// [`crate::bookkeeping_block::BOOKKEEPING_BLOCK_VERSION`] does not bump
+/// (rule 42 type-only). Pre-genesis wallets that wrote a height here are
+/// wiped by the operator (`rm -rf ~/.shekyl`; rule 15) — there is no
+/// in-file format detector.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentRequest {
     pub id: PaymentRequestId,
     #[serde(with = "crate::serde_helpers::local_label")]
     pub label: LocalLabel,
     pub amount_atomic: AtomicUnits,
-    pub created_at: u64,
+    pub created_at: Timestamp,
     #[serde(default)]
-    pub expiry: Option<u64>,
+    pub expiry: Option<Timestamp>,
     pub state: PaymentRequestState,
     #[serde(default)]
     pub matched_tx_hash: Option<TxHash>,
     #[serde(default)]
-    pub matched_output_index: Option<u64>,
+    pub matched_output_index: Option<OutputIndexInTx>,
 }
 
 #[derive(postcard_schema::Schema)]
@@ -121,10 +185,28 @@ impl postcard_schema::Schema for PaymentRequest {
 }
 
 impl PaymentRequest {
-    /// True when `expiry` has passed at `current_height` (block-height clock).
+    /// True when `expiry` has passed at `now` (wall-clock Unix seconds).
+    ///
+    /// Off-chain invoices are human-set and travel to unsynced payers, so
+    /// the clock is [`Timestamp`], not [`shekyl_types::BlockHeight`]
+    /// (2026-06-14 decision log; RTN-6).
     #[must_use]
-    pub fn is_expired_at(&self, current_height: u64) -> bool {
-        self.expiry.is_some_and(|e| current_height > e)
+    pub fn is_expired_at(&self, now: Timestamp) -> bool {
+        self.expiry.is_some_and(|e| now > e)
+    }
+
+    /// Display and filter state at `now`.
+    ///
+    /// A still-[`PaymentRequestState::Pending`] request whose wall-clock
+    /// expiry has passed is [`PaymentRequestState::Expired`]
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.9 `Pending --> Expired`).
+    /// Matched / cancelled rows are unchanged — match overrides expiry.
+    #[must_use]
+    pub fn state_at(&self, now: Timestamp) -> PaymentRequestState {
+        match self.state {
+            PaymentRequestState::Pending if self.is_expired_at(now) => PaymentRequestState::Expired,
+            other => other,
+        }
     }
 }
 
@@ -158,6 +240,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rid_text_parses_only_the_contracts_canonical_grammar() {
+        use ParsePaymentRequestIdError as E;
+        assert_eq!("1".parse::<PaymentRequestId>(), Ok(PaymentRequestId(1)));
+        assert_eq!(
+            "281474976710655".parse::<PaymentRequestId>(),
+            Ok(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX))
+        );
+        for bad in [
+            "", "0", "01", "+1", "-1", " 1", "1 ", "1.0", "1e3", "abc", "0x10",
+        ] {
+            assert_eq!(
+                bad.parse::<PaymentRequestId>(),
+                Err(E::NotCanonicalDecimal),
+                "{bad:?}"
+            );
+        }
+        for big in [
+            "281474976710656",
+            "18446744073709551615",
+            "18446744073709551616",
+        ] {
+            assert_eq!(
+                big.parse::<PaymentRequestId>(),
+                Err(E::OutOfRange),
+                "{big:?}"
+            );
+        }
+        assert!(!E::OutOfRange.to_string().contains("1844"));
+    }
+
+    #[test]
     fn payment_request_id_never_zero_from_random() {
         for _ in 0..32 {
             let id = PaymentRequestId::new_random();
@@ -167,13 +280,42 @@ mod tests {
     }
 
     #[test]
+    fn pending_request_is_expired_once_the_clock_passes() {
+        let mut req = PaymentRequest {
+            id: PaymentRequestId(1),
+            label: LocalLabel::from_str("INV"),
+            amount_atomic: AtomicUnits::from_raw(1),
+            created_at: Timestamp::from_raw(1_000_000_000),
+            expiry: Some(Timestamp::from_raw(1_000_000_100)),
+            state: PaymentRequestState::Pending,
+            matched_tx_hash: None,
+            matched_output_index: None,
+        };
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_100)),
+            PaymentRequestState::Pending,
+            "expiry is exclusive: now == expiry is still pending"
+        );
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Expired
+        );
+        req.state = PaymentRequestState::Matched;
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Matched,
+            "match overrides expiry"
+        );
+    }
+
+    #[test]
     fn payment_request_postcard_roundtrip() {
         let req = PaymentRequest {
             id: PaymentRequestId(0x0000_1234_5678_9ABC),
             label: LocalLabel::from_str("INV-2026-0042"),
             amount_atomic: AtomicUnits::from_raw(150_000_000_000),
-            created_at: 100,
-            expiry: Some(200),
+            created_at: Timestamp::from_raw(100),
+            expiry: Some(Timestamp::from_raw(200)),
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
             matched_output_index: None,

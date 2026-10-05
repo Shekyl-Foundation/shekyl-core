@@ -83,6 +83,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 use shekyl_scanner::{BalanceSummary, WalletLedgerExt};
+use shekyl_types::BlockHeight;
 
 use super::{error::LedgerError, refresh::LedgerSnapshot, traits::LedgerEngine};
 
@@ -114,6 +115,16 @@ pub(crate) struct LedgerState {
     /// instead of leaving the wallet claiming staker-hood while every
     /// staking op fails. Empties naturally at reopen (fresh state).
     pub(crate) slots_adopted_this_session: std::collections::BTreeSet<u32>,
+}
+
+impl LedgerState {
+    /// Whether bond-watch adopted a slot this session.
+    ///
+    /// The only definition of `recovery_pending_reopen`: a non-empty
+    /// [`Self::slots_adopted_this_session`].
+    pub(crate) fn recovery_pending_reopen(&self) -> bool {
+        !self.slots_adopted_this_session.is_empty()
+    }
 }
 
 /// Stage 1 implementor of [`LedgerEngine`](super::traits::LedgerEngine).
@@ -327,7 +338,7 @@ impl LocalLedger {
 ///
 /// Each method acquires its own [`RwLock`] read guard for the
 /// duration of the call: the three read methods take a
-/// [`RwLockReadGuard`] and project owned values (`u64`,
+/// [`RwLockReadGuard`] and project owned values (`BlockHeight`,
 /// [`LedgerSnapshot`], [`BalanceSummary`]). The trait carries no
 /// mutator — the ledger merge (snapshot fold plus the engine
 /// handle-field post-pass) lives on
@@ -340,7 +351,7 @@ impl LocalLedger {
 impl LedgerEngine for LocalLedger {
     type Error = LedgerError;
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         self.read().ledger.ledger.height()
     }
 
@@ -363,7 +374,7 @@ impl LedgerEngine for LocalLedger {
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
     type Error = L::Error;
 
-    fn synced_height(&self) -> u64 {
+    fn synced_height(&self) -> BlockHeight {
         (**self).synced_height()
     }
 

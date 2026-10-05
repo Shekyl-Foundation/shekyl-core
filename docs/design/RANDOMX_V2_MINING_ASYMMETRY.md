@@ -1,14 +1,14 @@
 # RandomX v2 — mining floor-vs-ceiling asymmetry investigation (pre-genesis-seal security disposition)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** OPEN (parked after Phase 0; Phases 1–3 not yet executed). See front-matter table.
 ## Front-matter
 
 | Field | Value |
 |-------|-------|
 | Status | **Measurement design — Phase 0 COMPLETE; Phases 1–3 not yet executed.** No timing number is a result until Appendix B is filled from a source-verified run. **Phase 0 is fully discharged (2026-07-06):** the constant diff shows no delta (§3.1) and the runtime byte-equality differential passes **1024/1024** — stock XMRig 6.26.0 `rx/2` full-dataset is byte-identical to Shekyl's canonical (§3.2), so the ceiling miner is **stock XMRig, no patch** (§3.3). Key nuance: XMRig's *light/verification* path is v2-incomplete; the ceiling must use its full-dataset (mining) mode. Artifact: [`tests/randomx_v2_parity/xmrig_ceiling/`](../../tests/randomx_v2_parity/xmrig_ceiling/). Revised after **red-team rounds 1–2** (§11 — F1–F7 structural: four-factor decomposition, aggregate-H/s basis, whale-produces-Shekyl-blocks gap, threshold arithmetic, two-ended range; R1–R4 polish: decomposition-is-an-aid-not-identity, hash-core-vs-block-framing layer split, §6.4-pinned prototype greenlight, confirmed-huge-page provenance; Intel-first / Ryzen-rig two-machine plan). |
 | Kind | Security investigation (consensus 51%-via-asymmetry, genesis shallow-work window). **Not** a performance-tuning exercise. |
-| Priority order | privacy > security > correctness > performance > features. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`00-mission`](../../.cursor/rules/00-mission.mdc), [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
+| Priority order | Cite [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc): security and quantum resilience are preconditions, then privacy, then longevity. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
 | Parent plan | [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) (Track B); [`RANDOMX_V2_PHASE3_PLAN.md`](./RANDOMX_V2_PHASE3_PLAN.md) (§7 Hole-1 gate, §9 test-gates table — the CI regime this study extends). |
 | Spec authority | [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §6 (no-prewarm / no-dataset decision — the thing disposition option (a) would revisit), §13 (non-goals). This doc **cites**; it does not re-derive. |
 | Sibling (harness) | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (the differential harness — **light-vs-light only**; the C-full and XMRig legs this study needs do not exist there). |
@@ -17,6 +17,7 @@
 | Working branch (doc) | `docs/randomx-mining-asymmetry` (off `dev`; design docs land on `dev` per branch policy). |
 | Working branch (code) | The bench legs, XMRig integration, whale harness, and any Rust-full prototype get **their own** branch off `dev` — this doc does not carry code. |
 | Reopen clause | §10 — "accept the gap" is itself a security choice with a threat model; recorded with a [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc) reopen criterion, not left implicit. |
+| Tracked in FOLLOWUPS (2026-09-16) | Two one-liners in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md): parked Phases 1–3 (falsify by Appendix B from a source-verified run; never-link falsifier is isolation check 1's §7.1 10-symbol C-ABI list) and the miner template conformance vector (§6.3; not gated on Appendix B). Disposition options (a)/(b)/(c) live in this document, not in the queue. |
 
 ---
 
@@ -56,7 +57,7 @@ Today's three-leg differential is **rust-light ≡ C-light ≡ canonical-pin** (
 So the "shared-corpus equivalence that licenses a ceiling number" is **new ground**. Phase 0 builds it by *reusing* the Hole-1 C-full path and *adding* an XMRig leg, without touching the equivalence-critical oracle.
 
 ### 1.4 A grounding leg reported anchors from an absent clone — caught, then re-verified
-The first recon leg reported precise `file:line` anchors from `/home/torvaldsl/shekyl/xmrig` ("`src/version.h:14` → 6.26.0", "`RxAlgo.cpp:35-36` → `RX_V2`") **while that directory did not exist on disk** (verified: `ls -ld` → *No such file or directory*). Those anchors came from the model's knowledge of XMRig's public source, **not** from a local clone — precisely the memory-not-source failure rule 0.1 forbids for a security claim. This is recorded, not scrubbed, as a live instance of why the rule exists.
+The first recon leg reported precise `file:line` anchors from `$XMRIG_DIR` ("`src/version.h:14` → 6.26.0", "`RxAlgo.cpp:35-36` → `RX_V2`") **while that directory did not exist on disk** (verified: `ls -ld` → *No such file or directory*). Those anchors came from the model's knowledge of XMRig's public source, **not** from a local clone — precisely the memory-not-source failure rule 0.1 forbids for a security claim. This is recorded, not scrubbed, as a live instance of why the rule exists.
 
 The clone was subsequently created (`b2ca7248 v6.26.0`) and the claim **re-verified at source in the local tree**: the `RX_V2` path (`src/crypto/rx/RxAlgo.cpp:35-36` → `RandomX_MoneroConfigV2`) selects `ProgramSize = 384` with the four v2 tweaks (`src/crypto/randomx/randomx.cpp:57-62`), and every Argon/cache/dataset/scratchpad/jump/program constant is byte-identical to `external/randomx-v2/src/configuration.h` (§3.1 table). So the conclusion "**stock XMRig 6.26.0 on `rx/2` needs no constant-level patch**" is now a **source-verified finding at the constant level** — but constant identity is *necessary, not sufficient* for byte-identical hashes. Two distinct things must still agree at runtime, **at two different layers** (R2 — do not blur them): (1) the **hash core** — the tweak code paths, proven at the **raw-blob layer** by the §3.2 differential (XMRig's `randomx_calculate_hash` / benchmark hash-dump fed the same bytes the C oracle gets); (2) the **block-hashing-blob framing** — how a Shekyl block serializes into the bytes that get hashed, a strictly larger question proven separately at the **block layer** (§6.3). The §3.2 hash-core proof licenses the **ceiling number**; the §6.3 framing work licenses the **whale**.
 
@@ -88,7 +89,7 @@ No H/s, ratio, or watt figure is admissible without **all** of the following rec
 **Purpose:** decide the ceiling artifact — is the ceiling miner "stock XMRig 6.26.0 on `rx/2`," "XMRig + small patch," or "XMRig + core fork"? A ceiling number from a miner that computes a *different* hash than Shekyl validates is not a ceiling — it is noise wearing a security label.
 
 ### 3.0 Prerequisite: pin the XMRig clone (DONE)
-Per §1.4 the clone was initially absent; it now exists at `/home/torvaldsl/shekyl/xmrig`, HEAD **`b2ca7248 v6.26.0`** (`src/version.h:14` → `APP_VERSION "6.26.0"`; RandomX source under `src/crypto/randomx/`). Treat it like the Tor Expert Bundle pin — a hash-pinned external artifact with a release-watch duty; record the SHA in Appendix A and re-pin deliberately on any bump. **Before any measurement, `git checkout b2ca7248` in the clone and confirm HEAD matches this pin.** A `git pull` is *watching upstream*, not adopting it; re-pinning is a deliberate act that **invalidates every prior ceiling number until it is re-run** (the ceiling is only meaningful against a fixed miner). Keep the clone; pin the checkout.
+Per §1.4 the clone was initially absent; it now exists at `$XMRIG_DIR`, HEAD **`b2ca7248 v6.26.0`** (`src/version.h:14` → `APP_VERSION "6.26.0"`; RandomX source under `src/crypto/randomx/`). Treat it like the Tor Expert Bundle pin — a hash-pinned external artifact with a release-watch duty; record the SHA in Appendix A and re-pin deliberately on any bump. **Before any measurement, `git checkout b2ca7248` in the clone and confirm HEAD matches this pin.** A `git pull` is *watching upstream*, not adopting it; re-pinning is a deliberate act that **invalidates every prior ceiling number until it is re-run** (the ceiling is only meaningful against a fixed miner). Keep the clone; pin the checkout.
 
 ### 3.1 The constant diff (DONE — no delta)
 Diffed Shekyl's fork (`external/randomx-v2` @ `aaafe71`, verified pristine tevador v2.0.1 — working tree clean, no `shekyl` markers in `src/`) against XMRig 6.26.0's `RX_V2` config, **at source in both local trees**. XMRig selects the v2 config at `src/crypto/rx/RxAlgo.cpp:35-36` (`RX_V2 → &RandomX_MoneroConfigV2`); the preset (`src/crypto/randomx/randomx.cpp:55-62`) overrides only `ProgramSize = 384` and the four tweaks, inheriting the base defaults (`randomx.cpp:124-133`, `randomx.h:70-76`). Every constant matches:
@@ -103,7 +104,7 @@ Diffed Shekyl's fork (`external/randomx-v2` @ `aaafe71`, verified pristine tevad
 | Jump bits / offset | 8 / 8 (`randomx.h:75-76`) | 8 / 8 (`:77,80`) | ✓ |
 | v2 tweaks (CFROUND/AES/PREFETCH/COMMITMENT) | all = 1 (`randomx.cpp:59-62`) | active under `FLAG_V2` (`program.hpp:57`) | ✓ |
 
-**No constant differs.** No constant-level patch to XMRig is required; the ceiling-artifact candidate is **stock XMRig 6.26.0 launched on algorithm `rx/2` (`RX_V2`)**. (The local `/home/torvaldsl/shekyl/RandomX` clone, HEAD `0720fe4d`, two dev-tooling commits atop `aaafe71`, has `configuration.h` byte-identical to the fork — a convenient cross-reference, but cite the fork, not it.)
+**No constant differs.** No constant-level patch to XMRig is required; the ceiling-artifact candidate is **stock XMRig 6.26.0 launched on algorithm `rx/2` (`RX_V2`)**. (The local `<randomx-checkout>` clone, HEAD `0720fe4d`, two dev-tooling commits atop `aaafe71`, has `configuration.h` byte-identical to the fork — a convenient cross-reference, but cite the fork, not it.)
 
 ### 3.2 The remaining Phase 0 task — hash-core byte-equality differential at the raw-blob layer (DONE — 1024/1024 byte-identical)
 Constant identity is **necessary, not sufficient**. What licenses a **ceiling number** is a runtime proof at the **hash-core / raw-blob layer**: XMRig's `randomx_calculate_hash` for a given `(seedhash, blob)` is **byte-identical** to Shekyl's canonical pins **fed the same raw bytes**. This is the layer *below* block framing — it proves the four v2 tweak code paths agree, which is exactly what a ceiling number needs and **all** it needs.
@@ -203,9 +204,9 @@ Symmetric with the ceiling, the floor is not a point. It spans a **portable rele
 | **Orphan rate** for light miners while the whale is present | fraction of honest blocks orphaned | block-submit path `on_submitblock` |
 | **Selfish-mining / block-withholding** feasibility at the observed ratio | can the whale withhold and win the race? | anti-selfish-mine vectors 6–7 |
 | **Time-to-restabilize** after the whale leaves | blocks/seconds until difficulty re-tracks honest hashrate | `lwma1.rs` window `N=90` |
-| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
+| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`; moved from the engine crate 2026-09-19); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
 
-Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1781-1835`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
+Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1653-1705`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
 
 **Optimistic-error guard (Phase 3):** the chain looks *safer than it is* if the whale is **under-injected** — i.e. if Phase 1 understated the ratio or Phase 2's tail was ignored. Guard: inject at the **pessimistic end** of the ceiling range (ASIC-tail-aware), not the software-reference end; and run the rollover-under-load case specifically, since a boundary stall is exactly where a marginal ratio becomes decisive.
 
@@ -329,10 +330,10 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 - regtest/fakechain `src/cryptonote_core/cryptonote_core.cpp:84-91,335-336,472-473`. RPC `src/rpc/core_rpc_server.cpp`: `getblocktemplate:1597`, `submitblock:1894`, `generateblocks:1953` (gated `:1963`), `get_info:368`. Stressnet `tests/stressnet/load_generator.py:60` (`DaemonRPC`).
 
 **Seed epoch**
-- `rust/shekyl-pow-randomx/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:46`, `LAG=64` `:48`, `seedheight` `:109`). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
+- `rust/shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:37`, `LAG=64` `:40`, `seedheight` `:49`; moved from `rust/shekyl-pow-randomx/src/seed_epoch.rs` 2026-09-19, E6 slice 2 — the validator adopts the schedule without depending on the engine). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
 
 **External artifacts (pins)**
-- `external/randomx-v2` @ `aaafe71` (v2.0.1, pristine tevador — working tree clean, no `shekyl` markers). `/home/torvaldsl/shekyl/RandomX` @ `0720fe4d` (dev-tooling atop `aaafe71`; `configuration.h` byte-identical). **XMRig @ `b2ca7248` (v6.26.0)** at `/home/torvaldsl/shekyl/xmrig` — present; `RX_V2` config `src/crypto/rx/RxAlgo.cpp:35-36` → `RandomX_MoneroConfigV2` (`src/crypto/randomx/randomx.cpp:55-62`), base defaults `randomx.cpp:124-133` / `randomx.h:70-76`. Constant delta vs fork = **none** (§3.1). Release-watch duty: re-pin deliberately on any bump.
+- `external/randomx-v2` @ `aaafe71` (v2.0.1, pristine tevador — working tree clean, no `shekyl` markers). `<randomx-checkout>` @ `0720fe4d` (dev-tooling atop `aaafe71`; `configuration.h` byte-identical). **XMRig @ `b2ca7248` (v6.26.0)** at `$XMRIG_DIR` — present; `RX_V2` config `src/crypto/rx/RxAlgo.cpp:35-36` → `RandomX_MoneroConfigV2` (`src/crypto/randomx/randomx.cpp:55-62`), base defaults `randomx.cpp:124-133` / `randomx.h:70-76`. Constant delta vs fork = **none** (§3.1). Release-watch duty: re-pin deliberately on any bump.
 
 ---
 

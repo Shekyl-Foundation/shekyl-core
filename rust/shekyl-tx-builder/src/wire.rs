@@ -9,6 +9,7 @@
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
+use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -45,7 +46,7 @@ pub struct WireEncodeInput {
     pub out_commitments: Vec<[u8; 32]>,
     pub pseudo_outs: Vec<[u8; 32]>,
     pub bulletproof: Bulletproof,
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
@@ -288,8 +289,11 @@ fn prefix_only_tx(
 
 /// Per-input PQC signing-preimage hashes — delegates to the canonical
 /// [`shekyl_wire::Transaction::pqc_signing_payload_hashes`]
-/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; C++ `get_transaction_signed_payload`).
-pub fn phase1_payload_hashes(input: &WireEncodeInput) -> Result<Vec<[u8; 32]>, TxBuilderError> {
+/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1). Typed to the signing call: the
+/// hash degrades to bytes only where the primitive takes its message.
+pub fn phase1_payload_hashes(
+    input: &WireEncodeInput,
+) -> Result<Vec<SigningPayloadHash>, TxBuilderError> {
     Ok(build_wire_tx(input)?.pqc_signing_payload_hashes())
 }
 
@@ -301,15 +305,15 @@ pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderErro
 
 /// The FCMP++ `signable_tx_hash` — the canonical prefix hash (§1.2), via shekyl-wire.
 ///
-/// Infallible by contract — it returns `[u8; 32]` because its callers (the spend
-/// signing path) require an unconditional hash. It panics only on a malformed
+/// Infallible by contract — it returns a [`PrefixHash`] because its callers (the
+/// spend signing path) require an unconditional hash. It panics only on a malformed
 /// [`WireEncodeInput`] the builder never constructs: either an output missing its
 /// view_tag, or an [`Input::ToKey`] in `extra_inputs` (spend inputs go through
 /// `key_images`; `extra_inputs` carries only non-`ToKey` prefix inputs such as an
 /// archival bond post). For a spend `extra_inputs` is empty, so only the view_tag
 /// arm is reachable. Callers that supply `extra_inputs` from unvalidated parts use
 /// the fallible [`tx_prefix_hash_from_parts_with_extra`] instead.
-pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
+pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> PrefixHash {
     // `prefix_hash` depends only on the prefix, so build a prefix-only tx — skips the
     // ct/Bp+ assembly and its unrelated failure modes (e.g. BpPlus parsing).
     prefix_only_tx(
@@ -333,7 +337,7 @@ pub fn tx_prefix_hash_from_parts(
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
-) -> [u8; 32] {
+) -> PrefixHash {
     let zero_amounts = vec![0u64; output_keys.len()];
     prefix_only_tx(
         key_images,
@@ -365,7 +369,7 @@ pub fn tx_prefix_hash_from_parts_with_extra(
     output_amounts: &[u64],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
-) -> Result<[u8; 32], TxBuilderError> {
+) -> Result<PrefixHash, TxBuilderError> {
     Ok(prefix_only_tx(
         key_images,
         extra_inputs,
@@ -403,7 +407,7 @@ mod tests {
                 )],
             )
             .expect("bp prove"),
-            reference_block: [0xAB; 32],
+            reference_block: BlockHash::from_bytes([0xAB; 32]),
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
                 auth_version: 1,
@@ -524,13 +528,15 @@ mod tests {
 
     /// A canonical-length wire bond post usable as an `extra_inputs` entry.
     fn synthetic_bond_post() -> Input {
+        use shekyl_types::PCanonicalId;
         use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
         use shekyl_wire::{BondPost, BondPostKind, Holdings};
         Input::BondPost(Box::new(BondPost {
             hybrid_public_key: vec![0xA1; PQC_HYBRID_SINGLE_KEY_LEN],
-            p_canonical_id: [0xB2; 32],
+            p_canonical_id: PCanonicalId::from_bytes([0xB2; 32]),
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: vec![0xC3; PQC_HYBRID_SINGLE_KEY_LEN],
+                endpoint: [0xEE; 32],
             },
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 500,
@@ -718,10 +724,28 @@ mod tests {
         // cheap tripwire that the old `shekyl_oxide::{transaction,fcmp}` coupling never
         // reappears. wire.rs is checked on its PRODUCTION half only (split off the test
         // module), so these very assertion strings don't self-match.
+        //
+        // The marker is the full `#[cfg(test)]\nmod tests {` and the split is
+        // `split_once`, for two separate reasons:
+        //
+        //  - `#[cfg(test)]` alone matches its FIRST occurrence, which today is
+        //    the tests module but need not stay that way. One `#[cfg(test)]`
+        //    attribute added to a production helper above it would silently
+        //    truncate the scanned region — here, from 55% of the file to
+        //    whatever precedes the new attribute — and the needles below would
+        //    stop seeing the code they exist to watch. Green, and narrower.
+        //  - `split(..).next()` cannot fail, so marker drift would instead
+        //    widen the text to the whole file. These needles are NEGATIVE, so
+        //    that direction is a false red rather than a false green — but a
+        //    gate should not depend on which way its own accident points.
+        //
+        // Same class as the seal-lock gate in `engine/pscan/dispatch_tests.rs`,
+        // fixed together: the defect is a marker that does not uniquely name
+        // the boundary it is splitting on.
         let wire_prod = include_str!("wire.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("wire.rs has a production section");
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("wire.rs carries the tests-module marker this split relies on")
+            .0;
         for (name, src) in [
             ("wire.rs", wire_prod),
             ("lib.rs", include_str!("lib.rs")),

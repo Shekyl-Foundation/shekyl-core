@@ -354,7 +354,7 @@ pub enum OutputSelectorError {
 pub enum SignerError {
     /// The signer has no spend-key material in scope (view-only
     /// wallet; hardware wallet not connected; signing actor not yet
-    /// started). Distinct from [`SendError::CannotSign`](super::SendError::CannotSign) because it
+    /// started). Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant) because it
     /// is the trait-method's outcome, not the engine's pre-build
     /// capability check.
     #[error("signer unavailable")]
@@ -387,6 +387,11 @@ impl From<KeyEngineError> for SignerError {
             },
             KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
                 reason: "source ciphertext re-decapsulation failed",
+            },
+            // Unreachable for a request `build_pending_tx` admitted (it
+            // refuses a rid the label cannot carry), kept total.
+            KeyEngineError::RidNotEncodable(_) => Self::RemoteFailure {
+                reason: "recipient payment request id cannot be echoed on the wire",
             },
             // Unreachable on the signing path (proofs never route through
             // `Signer`), but the conversion must stay total.

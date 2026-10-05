@@ -6,9 +6,9 @@
 //! Phase 2a's snapshot strategy is **clone-not-Arc**: every retry of
 //! the snapshot-merge loop pulls a fresh [`LedgerSnapshot`] by copying
 //! `synced_height` (`u64`) and the bounded
-//! `reorg_blocks: ReorgBlocks` (capped at the persistence-layer
-//! `DEFAULT_REORG_BLOCKS_CAPACITY`, currently 10 entries of 40 bytes
-//! each). The wallet's `transfers` vec is deliberately **not**
+//! `reorg_blocks: ReorgBlocks` (the production window is the finality
+//! hash window; this bench's fixture is 11 entries of 40 bytes each).
+//! The wallet's `transfers` vec is deliberately **not**
 //! snapshotted — the producer collects every spend-side key image
 //! unfiltered and `apply_scan_result_to_state` does the actual
 //! matching against the live (post-lock) state.
@@ -44,6 +44,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
+use shekyl_types::BlockHeight;
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced
@@ -67,9 +68,9 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         // keep the raw `[u8; 32]` local for the `derive_output_handle` call
         // below (crypto takes `&[u8; 32]`); wrap only at the typed field.
         tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-        internal_output_index,
-        global_output_index: 1_000 + seed,
-        block_height: 100,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(internal_output_index),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + seed),
+        block_height: shekyl_types::BlockHeight::from_raw(100),
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
@@ -89,27 +90,27 @@ fn sample_transfer(seed: u64) -> TransferDetails {
             &tx_hash,
             internal_output_index,
         )),
-        eligible_height: 100 + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
         frozen: false,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 
-/// Build a [`LedgerBlock`] with `n` transfers, a fixed 10-entry reorg
-/// window, and an arbitrary tip. The reorg window matches
-/// `shekyl-engine-state`'s `DEFAULT_REORG_BLOCKS_CAPACITY` so the bench
-/// reflects the snapshot a real wallet would produce; the transfer
-/// count varies to demonstrate the clone-cost decoupling.
+/// Build a [`LedgerBlock`] with `n` transfers, an 11-entry reorg
+/// window, and an arbitrary tip. The window is a bench fixture, not
+/// the production finality hash window; the transfer count varies to
+/// demonstrate the clone-cost decoupling.
 fn build_ledger(n: usize) -> LedgerBlock {
     let mut transfers = Vec::with_capacity(n);
     for i in 0..n {
         transfers.push(sample_transfer(i as u64));
     }
-    let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+    let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
     let reorg_blocks = ReorgBlocks {
         blocks: (999_990..=1_000_000)
-            .map(|h| (h, [(h & 0xff) as u8; 32]))
+            .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
             .collect(),
     };
     LedgerBlock::new(transfers, tip, reorg_blocks)

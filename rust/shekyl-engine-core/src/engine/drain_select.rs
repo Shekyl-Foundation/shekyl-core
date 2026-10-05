@@ -334,6 +334,20 @@ mod tests {
         let (src, _tests) = include_str!("drain_select.rs")
             .split_once("\n#[cfg(test)]")
             .expect("drain_select.rs has a #[cfg(test)] section to exclude from the scan");
+        // Rule 47: assert the subject before asserting anything about it. Every
+        // other needle here is negative, so an emptied or re-exporting
+        // `drain_select.rs` would satisfy all of them — the carve would read
+        // green while the per-output selection, and the forbidden types with
+        // it, lived in a sibling this gate never opens. Its twin in
+        // `drain_amount.rs` already pins its entry point; this is the parity.
+        // What it deliberately does NOT catch, and neither does the twin: a
+        // wrapper that keeps the name and delegates the body elsewhere.
+        assert!(
+            src.contains(concat!("fn select_for", "_drain(")),
+            "F-D1 carve unpinned: the select stage's entry point is no longer \
+             defined in this file, so the lineage-blindness needles below have \
+             nothing to be blind about (§12.3)"
+        );
         let record = concat!("PFundingOutput", "Record");
         let lineage = concat!("MintLineage", "Output");
         assert!(

@@ -1,0 +1,478 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Shared `connect` / `pop` test fixtures. One place with `facts` so the
+//! header root a candidate carries — [`root_going_into`] on a committed
+//! snapshot, [`batch_root_going_into`] inside a batch — cannot drift from
+//! the root the connect of the parent wrote.
+
+use core::convert::Infallible;
+
+use shekyl_chain_rules::harness::fixture;
+use shekyl_chain_rules::{
+    form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, PaidEmission,
+    RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
+};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_units::AtomicUnits;
+use shekyl_wire::{Block, BlockHeader, Input, Transaction};
+
+use super::store_tests::TestErr;
+use super::view::BatchView;
+use super::*;
+use crate::codec::Present;
+use crate::lmdb_order::LmdbHashKey;
+use crate::schema::SPENT_KEYS;
+
+/// The coinbase for `height`: the rules harness's, which satisfies every
+/// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
+/// a canonical key and a non-trivial mask, `unlock_time = height + 60`).
+/// One definition of "a valid coinbase" for every crate that judges one —
+/// a private copy here drifted from the rules the moment slice 4 landed
+/// F9/F10 (its keys were not points).
+pub(super) fn coinbase(height: u64) -> Transaction {
+    fixture::coinbase(height)
+}
+
+/// A spend-shaped listed transaction: the `key_image`-th table point in,
+/// `outputs` outputs out. The body is [`fixture::spend`] — one definition,
+/// shared with the rules harness and the ingest, so a point rule cannot
+/// refuse this crate's fixtures alone. Indices `9..=16` stay clear of the
+/// keys (`1..`) and masks (`2..`) that body draws. One per-input PQC auth
+/// makes the txid 4-part (`pqc_auth_hash: Some(_)`), the shape that writes
+/// a `txs_pqc_auth_hash` row (amendment A3, `PDM-Q-F26` leg 1). The auth
+/// and the proof are the harness's filler: no landed rule verifies either,
+/// and what the store records is the auth's count-prefixed digest.
+pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
+    fixture::spend(fixture::point(key_image), outputs)
+}
+
+/// A serve credit **with the record it credits**: the `JoinMarket` post
+/// that opens persona `p`'s `archival_bond` row (a spend of `key_image`
+/// funding the bond — 4-part, like every spend), then the credit for `p`
+/// (the one legal listed shape with no key image and no `pqc_auths`,
+/// CEN-H20 — 3-part). Since DRS-E4 commit 4 the validator refuses a credit
+/// for a persona with no record (CEN-L7, SI-15's first check), so a credit
+/// connects only behind its join — the rules harness's
+/// `TxShape::precedents`, restated for the store. The join spends, so the
+/// pair sits no lower than [`FIRST_SPEND_HEIGHT`], and it is listed in
+/// this order.
+///
+/// The credit is the harness's, in the **`RF-D1`** shape CEN-H20 requires:
+/// a prunable region holding one pruned pass record per serve-credit vin.
+/// Before that shape was required (`SHT-9`), a credit with no region
+/// connected and then halted the store ten heights later, on SI-7:
+/// its txid mixes the null hash where its `txs_prunable_hash` row is
+/// `keccak256("")`, so the drain's reconstruction named another
+/// transaction. `prune_tests` connects one past that age.
+pub(super) fn credited(key_image: usize, p: [u8; 32]) -> [Transaction; 2] {
+    [
+        fixture::join_market(fixture::point(key_image), p),
+        fixture::serve_credit_only(p),
+    ]
+}
+
+/// A candidate for a height **nothing has drained into**: its header carries
+/// the empty tree, which is what CEN-B5 requires while `root_at(height)` is
+/// `EMPTY` — every height below `mined_money_unlock_window` on a chain whose
+/// listed outputs (if any) are younger than `tx_spendable_age`. Since
+/// DRS-E3 the root is the validator's derivation, recorded by `connect`,
+/// so a fixture cannot compute it from the height alone: a candidate for a
+/// grown height reads the root off the store ([`root_going_into`] on a
+/// snapshot, [`batch_root_going_into`] inside a batch) and builds with
+/// [`candidate_over`]. [`connect_chain`] does exactly that per block.
+pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
+    candidate_over(CurveTreeRoot::EMPTY, height, previous, listed)
+}
+
+/// [`candidate`] whose header carries `root` — the tree state going into
+/// `height` as the store recorded it.
+pub(super) fn candidate_over(
+    root: CurveTreeRoot,
+    height: u64,
+    previous: BlockHash,
+    listed: Vec<Transaction>,
+) -> Candidate {
+    let block = Block {
+        header: BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 1_000 + height * 60,
+            previous,
+            nonce: 7,
+            curve_tree_root: root,
+            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+        },
+        miner_transaction: coinbase(height),
+        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
+    };
+    Candidate::new(block, listed)
+}
+
+/// `root_at(height)` as the root a header connecting there must carry
+/// (CEN-B5). `AboveTip` is a fixture bug: height 0 is the seal's empty
+/// tree, and every later height is the row the previous connect wrote.
+fn recorded_root(
+    at: Result<AtHeight<CurveTreeRoot>, StoreError>,
+    height: u64,
+) -> Result<CurveTreeRoot, StoreError> {
+    let AtHeight::Recorded(root) = at? else {
+        panic!("no root recorded going into height {height}");
+    };
+    Ok(root)
+}
+
+/// The root a header connecting at `height` must carry, as the committed
+/// store holds it. A read fault is a fixture bug.
+pub(super) fn root_going_into(store: &ChainStore, height: u64) -> CurveTreeRoot {
+    let snap = store.begin_read().expect("read");
+    recorded_root(snap.root_at(BlockHeight::from_raw(height)), height).expect("root read")
+}
+
+/// [`root_going_into`] read from the batch's view, which sees this batch's
+/// own connects. A store fault propagates; `AboveTip` is still a fixture bug.
+pub(super) fn batch_root_going_into(
+    view: &BatchView<'_, '_>,
+    height: u64,
+) -> Result<CurveTreeRoot, StoreError> {
+    recorded_root(view.root_at(BlockHeight::from_raw(height)), height)
+}
+
+/// The world the fixtures are judged in: a clock after every fixture
+/// timestamp (`candidate` stamps `1_000 + 60·h`), and a longhash of zeros,
+/// which satisfies every target. The store's tests are about the store;
+/// the substrate is the validation crate's subject and is mocked here as
+/// plainly as possible.
+pub(super) struct FixtureSubstrate;
+
+impl FixtureSubstrate {
+    pub(super) const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
+}
+
+impl Substrate for FixtureSubstrate {
+    type Fault = Infallible;
+
+    fn local_clock(&self) -> Result<Timestamp, Infallible> {
+        Ok(Self::CLOCK)
+    }
+
+    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Infallible> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+/// The seed CEN-D3 expects for a candidate on `view`'s tip — what an honest
+/// driver claims to `form`: the null hash at genesis admission, else the
+/// identity of the block at `shekyl_chain_rules::seed_height(connecting)`.
+/// Read from the same view the verdict will be minted against, as E2's
+/// replay driver will.
+fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
+    let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
+    let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) else {
+        return Ok(BlockHash::NULL);
+    };
+    Ok(match view.block_at(seed_height)? {
+        AtHeight::Recorded(block) => block.hash,
+        AtHeight::AboveTip => panic!("the seed height is below the tip"),
+    })
+}
+
+/// `candidate` with its coinbase paying what CEN-F18 owes it on `view` —
+/// the harness's one pricer, at the height the view says the candidate
+/// connects at. The view's own fault is the only error: a corrupt parent
+/// read is a fixture bug, not a block the test is asking to refuse.
+pub(super) fn priced<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+) -> Result<Candidate, StoreError> {
+    match fixture::priced(view, candidate) {
+        Ok(candidate) => Ok(candidate),
+        Err(ViewRead::View(fault)) => Err(fault),
+        Err(ViewRead::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt:?}"),
+    }
+}
+
+/// [`priced`] against the **committed** store — for a test that needs a
+/// block's identity (to build its child, to read it back) before the batch
+/// that connects it. Opens a batch that only reads.
+pub(super) fn priced_on(store: &ChainStore, candidate: Candidate) -> Candidate {
+    let out: Result<Candidate, TestErr> =
+        store.write(|batch| Ok(priced(&batch.chain_view(), candidate)?));
+    out.expect("pricing only reads")
+}
+
+/// The stateless stage over the fixture substrate, under `GENESIS`,
+/// claiming the seed `view` expects.
+pub(super) fn formed<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+) -> Result<StructurallyValid, V::Fault> {
+    formed_under(view, candidate, &RuleSet::GENESIS)
+}
+
+/// [`formed`] under an explicit rule set (a Fakechain set for tests that
+/// run a shortened schedule).
+pub(super) fn formed_under<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<StructurallyValid, V::Fault> {
+    let seed = expected_seed(view)?;
+    Ok(
+        match form(
+            candidate,
+            rules,
+            &FixtureSubstrate,
+            seed,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+            Err(never) => match never {},
+        },
+    )
+}
+
+/// Both stages; the store's own fault is the only one the fixtures expect
+/// to see in the outer position (a stale claim or a corrupt view would be
+/// a fixture bug, named as such).
+pub(super) fn judge<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    judge_under(view, candidate, &RuleSet::GENESIS)
+}
+
+/// [`judge`] under an explicit rule set.
+///
+/// The candidate's coinbase is **priced here**, against the view it is
+/// judged on, before the stateless stage: `candidate_over` builds a
+/// coinbase paying zero (no fixture can price without the chain), and
+/// CEN-F18 (E6 slice 7 wave B) refuses any block above genesis whose
+/// coinbase does not pay exactly what the block owes it. The harness's
+/// `priced_at` is the one pricer every crate's fixtures share. A
+/// consequence for the caller: a block's identity is known **after** it is
+/// judged, so a chain of fixtures takes each `previous` from the verdict
+/// ([`ChainValid::block`]), not from the unpriced candidate — except at
+/// genesis, whose configured coinbase stands as built.
+pub(super) fn judge_under<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    let candidate = priced(view, candidate)?;
+    match validate(
+        formed_under(view, candidate, rules)?,
+        view,
+        rules,
+        &Trust::UNANCHORED,
+    ) {
+        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+        Err(Fault::View(fault)) => Err(fault),
+        Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
+    }
+}
+
+/// Reach the SI-1 belt. CEN-I7 refuses a recorded key image at `validate`
+/// (slice 6 commit 4), so a double spend no longer walks through
+/// [`judge`] to the store; what the belt beneath the rule still guards is
+/// the table **moving under a judged token**. This judges `candidate`
+/// against the batch's view, then records its first listed input's key
+/// image as spent — the same `Present` row `connect` would write — and
+/// only then connects. Returns `connect`'s outcome: SI-1, poisoning the
+/// batch.
+pub(super) fn connect_with_image_planted_under_the_token(
+    store: &ChainStore,
+    candidate: Candidate,
+) -> Result<Connected, TestErr> {
+    let Some(Input::ToKey { key_image, .. }) = candidate
+        .transactions
+        .first()
+        .and_then(|tx| tx.prefix.inputs.first())
+    else {
+        panic!("the candidate's first listed transaction spends");
+    };
+    let planted = LmdbHashKey::from_bytes(*key_image);
+    store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, candidate)?;
+        batch
+            .open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?
+            .insert(planted, Present)?;
+        Ok(batch.connect(judged, RuleSet::GENESIS)?)
+    })
+}
+
+/// The first height at which a block may list a spend. CEN-I11 wants a
+/// spend's reference at least `REFERENCE_BLOCK_MIN_AGE` below the
+/// connecting height, and the youngest reference any chain has is genesis
+/// — so the first spend sits at height `MIN_AGE`, referencing block 0.
+/// Every chain here that lists a spend starts with this many coinbase-only
+/// blocks ([`spendable_prefix`]); a fixture chain listing a spend lower is
+/// asking the store to record what consensus refuses.
+pub(super) const FIRST_SPEND_HEIGHT: u64 = shekyl_chain_rules::REFERENCE_BLOCK_MIN_AGE.to_raw();
+
+/// A fixture height as an index into a hash list.
+pub(super) fn at(height: u64) -> usize {
+    usize::try_from(height).expect("a fixture height fits usize")
+}
+
+/// `FIRST_SPEND_HEIGHT` coinbase-only blocks, then `listed` — the listing a
+/// chain that carries spends is built from, so the spend heights in a test
+/// read as offsets from the first admissible one.
+pub(super) fn spendable_prefix(listed: &[Vec<Transaction>]) -> Vec<Vec<Transaction>> {
+    let mut all = vec![Vec::new(); usize::try_from(FIRST_SPEND_HEIGHT).expect("small")];
+    all.extend_from_slice(listed);
+    all
+}
+
+/// [`spend`], anchored for a block connecting at `height` on the chain
+/// whose block hashes are `hashes`: its reference is the block
+/// `REFERENCE_BLOCK_MIN_AGE` below — the newest CEN-I11 admits
+/// ([`fixture::newest_admissible_reference`]). One anchoring body with the
+/// rules harness's ([`fixture::referencing`]), so the store cannot anchor
+/// a spend differently from the crate that judges it.
+pub(super) fn spend_at(
+    hashes: &[BlockHash],
+    height: u64,
+    key_image: usize,
+    outputs: usize,
+) -> Transaction {
+    anchor(hashes, height, spend(key_image, outputs))
+}
+
+/// `tx` anchored for a block connecting at `height` (see [`spend_at`]):
+/// the harness's [`fixture::anchored_at`]. A serve credit stays as it is
+/// at any height. A spend or an emission — including an emission with no
+/// fee input, CEN-J21 — is anchored, and panics below
+/// `FIRST_SPEND_HEIGHT`.
+pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
+    fixture::anchored_at(hashes, height, tx)
+}
+
+/// Connect `listed` as consecutive blocks from genesis in one batch —
+/// `connect` is handed nothing but the verdict since E6 slice 7 wave B;
+/// everything `block_info` and the burn fold record is the validator's over
+/// the chain the fixture built. Every listed transaction is anchored on the
+/// chain as it is built ([`anchor`]), and every header carries the root
+/// the store recorded going into its height ([`batch_root_going_into`],
+/// the derived root of the previous connect — CEN-B5), so a caller lists bare
+/// [`spend`]s and the reference and the root are written where they are
+/// known. Returns each block's hash.
+pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
+    connect_chain_anchored(store, listed).0
+}
+
+/// A genesis coinbase amount large enough for CEN-F17's burn to register.
+/// The burn is `fees × base_rate × √(volume / baseline) × (supply /
+/// asymptote)`, and on a fixture chain the supply is a few blocks'
+/// rewards against an asymptote of `2³²` coins — a ratio that rounds to
+/// zero in the fixed point, so a fee-bearing body on such a chain destroys
+/// nothing. Genesis pays what it is configured to (CEN-F11), so a burning
+/// fixture endows it: a quarter of the asymptote, well under it (F13's
+/// curve still prices every later height) and enough for a one-coin fee to
+/// destroy a visible amount.
+pub(super) const GENESIS_ENDOWMENT: u64 = shekyl_economics::EMISSION_CURVE_ASYMPTOTE / 4;
+
+/// [`spend`] paying `fee` — the harness's [`fixture::paying_fee`]: the fee
+/// set and the pseudo-out re-formed so CEN-H18 still balances.
+pub(super) fn spend_paying(key_image: usize, outputs: usize, fee: u64) -> Transaction {
+    fixture::paying_fee(spend(key_image, outputs), fee)
+}
+
+/// [`connect_chain`] on an **endowed genesis** ([`GENESIS_ENDOWMENT`]),
+/// returning each block's hash and the burn the verdict derived for it
+/// (CEN-F17 / G11's `actually_destroyed` — what `connect` wrote as
+/// `block_burn[h]` and folded into `total_burned`). A test of the burn
+/// rows lists [`spend_paying`] bodies here and reads the expected fold off
+/// the verdicts, never off a planted figure.
+pub(super) fn connect_chain_burning(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+) -> (Vec<BlockHash>, Vec<AtomicUnits>) {
+    let mut hashes: Vec<BlockHash> = Vec::new();
+    let mut burns: Vec<AtomicUnits> = Vec::new();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut previous = BlockHash::NULL;
+        for (h, txs) in listed.iter().enumerate() {
+            let h = h as u64;
+            let txs: Vec<Transaction> = txs
+                .iter()
+                .map(|tx| anchor(&hashes, h, tx.clone()))
+                .collect();
+            let root = batch_root_going_into(&view, h)?;
+            let mut cand = candidate_over(root, h, previous, txs);
+            if h == 0 {
+                cand.block.miner_transaction.prefix.outputs[0].amount = GENESIS_ENDOWMENT;
+            }
+            let judged = judge(&view, cand)?;
+            previous = judged.block().hash();
+            hashes.push(previous);
+            burns.push(judged.block().emission().burned());
+            batch.connect(judged, RuleSet::GENESIS)?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+    (hashes, burns)
+}
+
+/// [`connect_chain`], also returning the listed transactions **as
+/// connected** — anchored — for a test that then reads them back by hash.
+pub(super) fn connect_chain_anchored(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+) -> (Vec<BlockHash>, Vec<Vec<Transaction>>) {
+    let mut hashes: Vec<BlockHash> = Vec::new();
+    let mut anchored = Vec::new();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let mut previous = BlockHash::NULL;
+        for (h, txs) in listed.iter().enumerate() {
+            let h = h as u64;
+            let txs: Vec<Transaction> = txs
+                .iter()
+                .map(|tx| anchor(&hashes, h, tx.clone()))
+                .collect();
+            anchored.push(txs.clone());
+            let root = batch_root_going_into(&view, h)?;
+            let cand = candidate_over(root, h, previous, txs);
+            let judged = judge(&view, cand)?;
+            // The identity is the priced block's (`judge_under` docs).
+            previous = judged.block().hash();
+            hashes.push(previous);
+            batch.connect(judged, RuleSet::GENESIS)?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+    (hashes, anchored)
+}
+
+pub(super) fn connect_genesis(store: &ChainStore) -> (Connected, Block) {
+    let (connected, block, _) = connect_genesis_judged(store);
+    (connected, block)
+}
+
+/// [`connect_genesis`], also returning what the verdict derived and
+/// `connect` recorded from it — the weights (CEN-G6/G6b) and the paid
+/// emission (CEN-F14b, G12) — for a test that reads `block_info` back and
+/// must know what the validator, not a fixture, said.
+pub(super) fn connect_genesis_judged(
+    store: &ChainStore,
+) -> (Connected, Block, (Weights, PaidEmission)) {
+    let cand = candidate(0, BlockHash::NULL, Vec::new());
+    let block = cand.block.clone();
+    let out: Result<(Connected, (Weights, PaidEmission)), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let valid = judge(&view, cand)?;
+        let derived = (*valid.block().weights(), *valid.block().emission());
+        Ok((batch.connect(valid, RuleSet::GENESIS)?, derived))
+    });
+    let (connected, derived) = out.expect("genesis connects");
+    (connected, block, derived)
+}

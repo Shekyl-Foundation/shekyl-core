@@ -28,7 +28,8 @@ use crate::submit::facts::{
     TxMeta,
 };
 use shekyl_archival_retention::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet,
+    BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardClose, ShardCloseWire,
+    ShardSet,
 };
 
 /// Production shim over the `shekyl_submit_*` FFI, sharing the daemon's
@@ -291,8 +292,10 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
             .iter()
             .map(|sh| EmissionShardFacts {
                 shard_id: sh.shard_id,
-                has_segment: sh.has_segment != 0,
-                freeze_height: sh.freeze_height,
+                close: ShardClose::from_wire(ShardCloseWire {
+                    has_segment: sh.has_segment != 0,
+                    freeze_height: sh.freeze_height,
+                }),
             })
             .collect();
         let credit_pairs = unsafe { slice(snap.credit_pairs, snap.credit_pairs_len) }?
@@ -382,7 +385,9 @@ impl SubmitStateShim for FfiSubmitShim {
                 const_ptr_or_null(key_images).cast::<u8>(),
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
-                bond_probe.map_or(std::ptr::null(), |probe| probe.p_canonical_id().as_ptr()),
+                bond_probe.map_or(std::ptr::null(), |probe| {
+                    probe.p_canonical_id().as_bytes().as_ptr()
+                }),
                 bond_probe_kind,
                 bond_probe.map_or(std::ptr::null(), |probe| probe.auth_pubkey().as_ptr()),
                 bond_probe.map_or(0, |probe| probe.auth_pubkey().len()),

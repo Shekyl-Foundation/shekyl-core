@@ -5,8 +5,9 @@
 
 //! Gate-4 §8 phase-1 lifecycle KAT (join → serve `E_first`, bonded-aggregation audit).
 //!
-//! Regenerate fixture:
-//! `cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
+//! Regenerate fixture (armed — cite the decision-log entry that authorizes it):
+//! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
 
 use std::io::Cursor;
 
@@ -15,12 +16,12 @@ use shekyl_archival_retention::{
     bond_floor, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
     challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk,
     hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, r_market_count,
-    serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
-    verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
-    BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
-    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
-    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    serve_credit_epoch_ok, settlement_epoch_last_block, settlement_epoch_open_height,
+    sigma_work_milli, verify_conservation_snapshot, verify_join_market_bond_post,
+    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditPruned,
+    ArchivalServeCreditResponse, BadInterval, BondPostError, ConservationError,
+    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -55,10 +56,6 @@ fn decode_hex128(s: &str) -> [u8; 128] {
     a
 }
 
-fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
-}
-
 fn build_gate4_document() -> Value {
     let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
     let integration = &gate2["integration"];
@@ -72,20 +69,19 @@ fn build_gate4_document() -> Value {
     // not key validity; the C++ integration auth KAT references this hex.
     let bond_spend_pk = vec![0xB5u8; hybrid_pk_bytes.len()];
 
-    let join_vin = ArchivalBondPostVin {
-        hybrid_public_key: hybrid_pk_bytes,
-        p_canonical_id: p_id,
-        post_kind: BondPostKind::JoinMarket,
-        bond_spend_pk: bond_spend_pk.clone(),
-        holdings: HoldingsDescriptor {
+    let join_vin = ArchivalBondPostVin::join_market(
+        hybrid_pk_bytes,
+        p_id,
+        bond_spend_pk.clone(),
+        [0x0Eu8; ENDPOINT_BYTES],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
                 .unwrap(),
         },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    };
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    );
     verify_join_market_bond_post(&join_vin, false).expect("join vin valid");
 
     json!({
@@ -209,8 +205,13 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
 }
 
 #[test]
-#[ignore = "writes tests/fixtures/gate4_lifecycle_kat_v1.json"]
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_gate4_lifecycle_fixture() {
+    // The fixture is a self-pinned tripwire (rule 50): the shared guard
+    // refuses to move it without a docs/V3_WALLET_DECISION_LOG.md citation.
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("the gate-4 lifecycle fixture");
+    eprintln!("regenerating the gate-4 lifecycle fixture under decision: {decision}");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/gate4_lifecycle_kat_v1.json");
     let doc = build_gate4_document();
@@ -346,7 +347,7 @@ fn gate4_lifecycle_kat_vectors() {
     verify_segment_path(&layer_scalars, leaf_offset, &pruned.path, &rk).expect("path verify");
 
     let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = h_open + SETTLEMENT_EPOCH_BLOCKS - 1;
+    let h_close = settlement_epoch_last_block(settlement_epoch);
     let seal_hash = decode_hex32(serve["block_hash_at_seal_hex"].as_str().expect("seal hash"));
     assert_eq!(
         challenge_seal_height(h_open),

@@ -38,10 +38,9 @@
 #include "common/expect.h"
 #include "net/net_utils_base.h"
 #include "net/tor_address.h"
-#include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 
-BOOST_CLASS_VERSION(nodetool::peerlist_entry, 5)
+BOOST_CLASS_VERSION(nodetool::peerlist_entry, 6)
 
 namespace boost
 {
@@ -78,9 +77,6 @@ namespace boost
           break;
         case net::tor_address::get_type_id():
           do_serialize<net::tor_address>(is_saving, a, na);
-          break;
-        case net::i2p_address::get_type_id():
-          do_serialize<net::i2p_address>(is_saving, a, na);
           break;
         case epee::net_utils::address_type::invalid:
         default:
@@ -143,20 +139,6 @@ namespace boost
     }
 
     template <class Archive, class ver_type>
-    inline void save(Archive& a, const net::i2p_address& na, const ver_type)
-    {
-      const size_t length = std::strlen(na.host_str());
-      if (length > 255)
-        MONERO_THROW(net::error::invalid_i2p_address, "i2p address too long");
-
-      const uint16_t port{na.port()};
-      const uint8_t len = length;
-      a & port;
-      a & len;
-      a.save_binary(na.host_str(), length);
-    }
-
-    template <class Archive, class ver_type>
     inline void load(Archive& a, net::tor_address& na, const ver_type)
     {
       uint16_t port = 0;
@@ -179,35 +161,7 @@ namespace boost
     }
 
     template <class Archive, class ver_type>
-    inline void load(Archive& a, net::i2p_address& na, const ver_type)
-    {
-      uint16_t port = 0;
-      uint8_t length = 0;
-      a & port;
-      a & length;
-
-      const size_t buffer_size = net::i2p_address::buffer_size();
-      if (length > buffer_size)
-        MONERO_THROW(net::error::invalid_i2p_address, "i2p address too long");
-
-      char host[buffer_size] = {0};
-      a.load_binary(host, length);
-      host[sizeof(host) - 1] = 0;
-
-      if (std::strcmp(host, net::i2p_address::unknown_str()) == 0)
-        na = net::i2p_address::unknown();
-      else
-        na = MONERO_UNWRAP(net::i2p_address::make(host));
-    }
-
-    template <class Archive, class ver_type>
     inline void serialize(Archive &a, net::tor_address& na, const ver_type ver)
-    {
-      boost::serialization::split_free(a, na, ver);
-    }
-
-    template <class Archive, class ver_type>
-    inline void serialize(Archive &a, net::i2p_address& na, const ver_type ver)
     {
       boost::serialization::split_free(a, na, ver);
     }
@@ -224,11 +178,11 @@ namespace boost
       // store bump). The floor also covers an interim-branch v8 store that
       // still carried v4 entries: it throws instead of desyncing, and
       // open() turns the throw into the default-config fallback.
-      if (ver < 5)
-        throw std::runtime_error("peerlist_entry version < 5: pre-current peerlist stores must be dropped by load_peers, not read");
+      // v6: pruning_seed is gone (PDM-Q7; folded into the v9 store bump).
+      if (ver < 6)
+        throw std::runtime_error("peerlist_entry version < 6: pre-current peerlist stores must be dropped by load_peers, not read");
       a & pl.adr;
       a & pl.last_seen;
-      a & pl.pruning_seed;
     }
   }
 }

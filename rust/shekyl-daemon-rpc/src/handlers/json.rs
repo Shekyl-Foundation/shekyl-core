@@ -143,11 +143,12 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
     }
 }
 /// What can go wrong inside `get_transactions`' blocking section: the facts
-/// shim refused, or the daemon could not render a body it had just read out of
-/// its own store. Distinct because they are distinct answers to the caller.
+/// shim refused, or the daemon could not project a body it had just read out
+/// of its own store — render it, or measure its archival length. Distinct
+/// because they are distinct answers to the caller.
 enum TxFault {
     Facts(i32),
-    Render(crate::methods::RenderFailed),
+    Projection(crate::methods::ProjectionFailed),
 }
 
 /// `GET|POST /get_transactions` (alias `/gettransactions`) — served natively
@@ -202,7 +203,7 @@ pub async fn get_transactions(
             chain_height,
             |blob, pruned| core.tx_to_json(blob, pruned),
         )
-        .map_err(TxFault::Render)
+        .map_err(TxFault::Projection)
     })
     .await;
     match result {
@@ -217,9 +218,13 @@ pub async fn get_transactions(
             tracing::warn!(rc, "get_transactions: facts unavailable");
             json_error("transaction facts unavailable")
         }
-        Ok(Err(TxFault::Render(f))) => {
+        Ok(Err(TxFault::Projection(crate::methods::ProjectionFailed::Render(f)))) => {
             tracing::warn!(txid = %f.txid, code = f.code, "get_transactions: tx could not be rendered");
             json_error("transaction could not be decoded to json")
+        }
+        Ok(Err(TxFault::Projection(crate::methods::ProjectionFailed::Length(f)))) => {
+            tracing::warn!(txid = %f.txid, "get_transactions: archival length could not be measured");
+            json_error("transaction archival length could not be measured")
         }
         Err(e) => {
             tracing::warn!(?e, "get_transactions: handler task did not complete");

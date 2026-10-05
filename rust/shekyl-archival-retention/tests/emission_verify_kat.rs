@@ -24,13 +24,13 @@ use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
     sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
+    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardClose, ShardSet, ShardWorkEntry,
     WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+use shekyl_types::BlockHeight;
 
 /// Claimed settlement epoch for the base fixture.
 const E: u64 = 5;
@@ -74,13 +74,15 @@ impl Fixture {
             shards: vec![
                 EpochCloseShard {
                     shard_id: shape.shard_a,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_a_freeze_offset,
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_a_freeze_offset,
+                    )),
                 },
                 EpochCloseShard {
                     shard_id: shape.shard_b,
-                    has_segment: true,
-                    freeze_height: close - shape.shard_b_freeze_offset,
+                    close: ShardClose::ClosedAt(BlockHeight::from_raw(
+                        close - shape.shard_b_freeze_offset,
+                    )),
                 },
             ],
             pairs: shape
@@ -166,7 +168,6 @@ fn honest_vin(fx: &Fixture) -> ArchivalRewardEmissionVin {
         backing: MembershipOnlyBacking {
             proof: vec![0xAB; 64],
             pseudo_out: [0x22; 32],
-            pqc_pk_hash: [0x33; 32],
             backing_pubkey: vec![0x44; SINGLE_KEY_CANONICAL_LEN],
             tree_depth: 3,
         },
@@ -571,20 +572,16 @@ fn economics_polarity() {
 // Step 6 — backing negative paths
 // ---------------------------------------------------------------------------
 
+/// Step 6 takes the revealed `backing_pubkey`'s key point as the proof's
+/// per-input public value (`PL-D3`); there is no separate leaf-hash gate any
+/// more, so a vin with garbage proof bytes rejects at the proof itself. The
+/// binding property (a proof over a leaf whose key is not `backing_pubkey`
+/// rejects) is the circuit's opening leg, pinned by the vendored
+/// `test_wrong_opening_fails` and the engine's real-tree claim tests.
 #[test]
-fn backing_rejects_leaf_mismatch_then_bad_proof() {
+fn backing_rejects_bad_proof() {
     let fx = Fixture::new(E);
-
-    // The revealed pubkey does not hash to the committed leaf scalar.
     let vin = honest_vin(&fx);
-    assert!(matches!(
-        emission_vin_verify_backing(&vin, &[0u8; 32], 3, [0u8; 32]).unwrap_err(),
-        EmissionVerifyError::BackingLeafMismatch
-    ));
-
-    // Leaf equality holds but the proof bytes are garbage → fcmp rejects.
-    let mut vin = honest_vin(&fx);
-    vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
     assert!(matches!(
         emission_vin_verify_backing(&vin, &[0u8; 32], 3, [0u8; 32]).unwrap_err(),
         EmissionVerifyError::BackingRejected(_)
@@ -647,7 +644,6 @@ fn authed_vin(
     let mut vin = honest_vin(fx);
     vin.p_pubkey = p_pk.to_canonical_bytes().expect("canonical P pubkey");
     vin.backing.backing_pubkey = b_pk.to_canonical_bytes().expect("canonical backing pubkey");
-    vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
 
     // The role messages span the vin body but not the auth fields themselves
     // (a signature cannot cover itself); the canonical-length placeholders
@@ -684,22 +680,6 @@ fn auth_accepts_honest_dual_signatures() {
     let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
 
     emission_vin_verify_auth(&vin, &commits, &tx_hash).expect("honest auths accept");
-}
-
-/// The Auth-B leaf gate fires before any signature work: a vin whose
-/// revealed backing pubkey does not hash to the committed leaf rejects even
-/// when both signatures are genuine over the correct messages.
-#[test]
-fn auth_rejects_backing_leaf_mismatch_before_signatures() {
-    let fx = Fixture::new(E);
-    let (commits, tx_hash) = auth_tx_context();
-    let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
-    vin.backing.pqc_pk_hash[0] ^= 0x01;
-
-    assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
-        EmissionVerifyError::BackingLeafMismatch
-    ));
 }
 
 /// Role separation: each signature only verifies under its own Q1

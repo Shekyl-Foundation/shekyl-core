@@ -280,7 +280,7 @@ const fn pi4(millis: f64, basis: TreeBasis, msg_bytes: u32) -> VerifyCell {
 /// slack.
 const NODE_CRYPTO_PASSES: f64 = 10.0;
 
-/// MEASURED floor AES-128-CTR on `skl-pi` (the reference Pi 4 Model B),
+/// MEASURED floor AES-128-CTR on the floor device (the reference Pi 4 Model B),
 /// 2026-08-21. Units: **decimal** bytes/sec. `openssl speed` reports "in 1000s
 /// of bytes per second"; the 8 KB-block figure was `138993.66k`, so
 /// `138_993.66 * 1000 = 138_993_660` B/s — used EXACTLY, not rounded to
@@ -342,11 +342,15 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     // n_in = 1 (the modal shape): genesis and depth-7 endpoints.
     // msg_bytes is NOTIFY_NEW_TRANSACTIONS + tx, including the 29-byte Levin
     // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
-    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_118));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 15_550));
+    // Re-derived 2026-09-14 under `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2:
+    // 64-byte `0x07` entries and the proof's opening leg moved every shape);
+    // the `millis` are still §85.3's pre-`PL-D3` measurements — the
+    // floor-device re-measurement is owed (rule 76; §12.1 of the round doc).
+    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));
+    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 14_783));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 59_344));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 63_761));
+    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 58_897));
+    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 62_097));
     SpecVerifyCost { cells }
 };
 
@@ -460,7 +464,36 @@ impl SpecVerifyCost {
 /// under-estimating shortens the embargo, the privacy-losing direction.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 
-/// The transit assumption for the **anonymity zones** (i2p/tor), in
+/// Row names for the flood instrument.
+///
+/// Not a connector identity. The privacy crate stays dependency-free, so it
+/// does not import `ConnectorId`, and these variants are not that enum's
+/// indexes. Production transit is `shekyl-relay`'s match on `ConnectorId`.
+/// A new measurement is a variant here; it does not by itself make a
+/// connector stemmable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MeasuredConnector {
+    /// [`ADOPTED_TRANSIT_ASSUMPTION_MS`].
+    Clearnet,
+    /// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`].
+    Tor,
+}
+
+impl MeasuredConnector {
+    /// Closed set of instrument rows. A new variant is a member here.
+    pub const ALL: [Self; 2] = [Self::Clearnet, Self::Tor];
+}
+
+/// Measured transit for one [`MeasuredConnector`].
+#[must_use]
+pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> f64 {
+    match connector {
+        MeasuredConnector::Clearnet => ADOPTED_TRANSIT_ASSUMPTION_MS,
+        MeasuredConnector::Tor => ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    }
+}
+
+/// The transit assumption for the **anonymity zones** (Tor), in
 /// milliseconds.
 ///
 /// # THE PREMISE THIS IS DERIVED ON — re-grounded 2026-08-23, see §89.8.4
@@ -472,8 +505,9 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// > `forward` class never reached `send_txs` at arrival, and the remaining
 /// > hops this constant spaces ran on a network it is not sized for.
 /// >
-/// > **Q12-U2 closed that path.** Arrivals now enter as `stem`, coherence
-/// > keeps them on the arrival zone (`KeepArrival`), and `set_relayed` draws
+/// > **Q12-U2 closed that path.** Arrivals enter as `stem`. Arrival-coherence
+/// > (`KeepArrival`) is deleted: the session's notifier stems a forward, and
+/// > `set_relayed` draws
 /// > the per-zone embargo — the zone is a parameter beside `tx_relay`, which
 /// > is the input §89.2 already had. Originated traffic still keeps `local`
 /// > and does not draw, by §89.8.3. The checklist at §89.8.4 is the current
@@ -563,7 +597,7 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal>
 /// prose, `hop` being transport-bound while the cost inside it is not.
 ///
 /// Callers pass [`ADOPTED_TRANSIT_ASSUMPTION_MS`] for clearnet or
-/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for i2p/tor; prefer
+/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for Tor; prefer
 /// [`crate::params::DandelionParams::adopted_for`] over calling this directly,
 /// so the zone chooses the constant rather than the call site.
 ///
@@ -787,6 +821,22 @@ mod tests {
             "worst-cell crypto fraction is {:.4} — outside the recorded \
              1.07 % band, so the arithmetic moved",
             worst.2
+        );
+    }
+
+    #[test]
+    fn measured_connector_rows_name_their_transit_assumptions() {
+        assert_eq!(
+            transit_ms_for_connector(MeasuredConnector::Clearnet).to_bits(),
+            ADOPTED_TRANSIT_ASSUMPTION_MS.to_bits()
+        );
+        assert_eq!(
+            transit_ms_for_connector(MeasuredConnector::Tor).to_bits(),
+            ANON_ZONE_TRANSIT_ASSUMPTION_MS.to_bits()
+        );
+        assert!(
+            transit_ms_for_connector(MeasuredConnector::Tor)
+                > transit_ms_for_connector(MeasuredConnector::Clearnet)
         );
     }
 }

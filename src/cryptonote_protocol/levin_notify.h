@@ -67,6 +67,21 @@ namespace levin
 
   using connections = epee::levin::async_protocol_handler_config<detail::p2p_context>;
 
+  //! One connector's Levin registry. The connector byte is the index the
+  //! relay and the floor watch already use (0 clearnet, 1 tor).
+  struct connector_registry
+  {
+    std::uint8_t connector;
+    std::shared_ptr<connections> registry;
+  };
+
+  //! A session found in one of those registries.
+  struct held_session
+  {
+    connections* registry;
+    std::uint8_t connector;
+  };
+
   /*! Turn the noise carrier on for ENCRYPTED zones built after this call.
       Development only; defaults off, and the default is shipped behaviour.
 
@@ -101,8 +116,11 @@ namespace levin
       , core_(nullptr)
     {}
 
-    //! Construct an instance with available notification `zones`.
-    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs, i_core_events& core);
+    //! One registry, one connector. Tests and the single-zone fixtures.
+    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, bool pad_txs, i_core_events& core);
+
+    //! One relay over every connector registry this node has.
+    explicit notify(boost::asio::io_context& service, std::vector<connector_registry> registries, std::uint32_t configured, bool pad_txs, i_core_events& core);
 
     notify(const notify&) = delete;
     notify(notify&&) = default;
@@ -115,10 +133,10 @@ namespace levin
     //! \return Status information for zone selection.
     status get_status() const noexcept;
 
-    //! Probe for new outbound connection - skips if not needed.
-    void new_out_connection();
+    //! `connector` is the connector discriminant that carried the session.
+    void on_session_established(const boost::uuids::uuid &id, bool is_income, std::uint8_t connector);
 
-    void on_handshake_complete(const boost::uuids::uuid &id, bool is_income);
+    static std::uint8_t connector_byte(epee::net_utils::connector_id connector) noexcept;
     void on_connection_close(const boost::uuids::uuid &id);
 
     //! Run the logic for the next epoch immediately. Only use in testing.
@@ -182,6 +200,8 @@ namespace levin
       std::uint64_t propagated;
       std::uint64_t silent;
       std::uint64_t distinct_sources;
+      std::uint8_t connector;
+      std::uint8_t pad[7];
     };
 
     //! §55: this zone's published stem-outcome rows. Two-call sizing on row
@@ -193,7 +213,8 @@ namespace levin
 
     //! §18.4 diagnostic for the admin snapshot: false until the zone has
     //! reported once. Never exposed on the public listener (§16.3).
-    bool floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const;
+    //! False until this connector has reported once.
+    bool floor_snapshot(std::uint8_t connector, std::uint32_t& achieved, std::uint32_t& floor, bool& below) const;
 
     //! §46: stem observations pending resolution. Reads a published atomic on
     //! the relay handle (same discipline as `live_stems` / get_status), so it
@@ -202,13 +223,10 @@ namespace levin
     std::size_t stem_in_flight() const;
   };
 
-  //! One stem-tally JSON object, including the zone it was collected from.
+  //! One stem-tally JSON object. The connector label is read from the row.
   //! Production `node_server::stem_tallies_json` and the unit table call this
-  //! so the label cannot drift from the merge. What edit reds the zone field:
-  //! omit `"zone"` here. `ShekylStemTallyRow` stays 40 bytes -- the zone is
-  //! known at C++ merge time, not on the FFI row.
-  std::string format_stem_tally_row_json(
-    const notify::stem_tally_row& row, epee::net_utils::zone z);
+  //! so the label cannot drift. An unknown connector byte renders `unnamed`.
+  std::string format_stem_tally_row_json(const notify::stem_tally_row& row);
 
   //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
   //! Parsed once at the fan-out boundary; blob bytes are not a stable identity

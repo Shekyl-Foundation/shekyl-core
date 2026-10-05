@@ -197,11 +197,24 @@ mod tests {
                 UserPendingPost::CollectUnstaked => "UserPendingPost::CollectUnstaked",
                 UserPendingPost::FirstStake => "UserPendingPost::FirstStake",
             };
-            // Variant path only: rustfmt may wrap the `enter(` call. The
-            // path is unique to this registration (docs use the type name,
-            // not the variant).
+            // ONE needle binding the variant to the call, not two unbound
+            // ones. `contains(token) && contains("ForegroundSession::enter")`
+            // asserts that both strings appear SOMEWHERE in a thousand-line
+            // file, never that they are the same site — so a file could hold
+            // the variant in an unrelated match arm and an `enter` call for a
+            // DIFFERENT variant and satisfy the pin with no registration for
+            // this one. That is live for `unstake_facade.rs`, which is pinned
+            // twice (Unstake and CollectUnstaked): under the old form, one
+            // surviving `enter` site covered both rows.
+            //
+            // It held only because the variant path happens to appear nowhere
+            // in these files except inside its own `enter(` call — a property
+            // of today's code, not of the gate. The original comment reasoned
+            // about DOC mentions ("docs use the type name, not the variant");
+            // a match arm is not a doc, and that is the gap this closes.
+            let enter_site = format!("ForegroundSession::enter({token}");
             assert!(
-                source.contains(token) && source.contains("ForegroundSession::enter"),
+                source.contains(&enter_site),
                 "{file}: `{token}` has no ForegroundSession::enter site — \
                  the cadence claim leg will race this user operation \
                  (ENGINE_CADENCE_DRIVER.md §3)"

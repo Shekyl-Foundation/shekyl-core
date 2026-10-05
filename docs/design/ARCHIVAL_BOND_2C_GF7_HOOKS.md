@@ -58,7 +58,7 @@ The entry-gap jitter that exists today (`shekyl-standoff::draw_entry_gap`,
 drawn in `stake_engine.rs`, unwired) decorrelates the bond-post from **`P`'s
 own observable funding/entry event only**. It does nothing about:
 
-- **(ii) `P`'s other broadcasts** — serve-credit claims, future rebond/top-up
+- **(ii) `P`'s other broadcasts** — serve-credit claims, future reinstate/top-up
   posts, anything else `P` puts on a wire on its own cadence; and
 - **(iii) the principal's lifecycle timeline** — the funding sends, drain
   operations, refresh cadence, and wallet-activity rhythm that an observer of
@@ -113,7 +113,7 @@ no serialization, no `std::time` (see §4).
 | --- | --- | --- |
 | **Principal lifecycle** | funding-send dispatched; drain/release dispatched; refresh-cycle marker; wallet-session marker | (iii) |
 | **`P` bond-post** | entry-gap draw consumed (`spread`, `bond_first`, `window` — the draw parameters, so the sim can grade the draw that actually ran, not a re-derivation); bond-post scheduled (target block/logical time); bond-post dispatched | (i) |
-| **`P` other broadcasts** | any other per-`P` submit through the `PerP` arm (serve-credit claims, rebond top-ups as they land in later slices) | (ii) |
+| **`P` other broadcasts** | any other per-`P` submit through the `PerP` arm (serve-credit claims as they land in later slices) | (ii) |
 
 **Event payload discipline (what the events must NOT carry):**
 

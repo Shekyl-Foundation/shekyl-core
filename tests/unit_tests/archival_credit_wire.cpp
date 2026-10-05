@@ -41,11 +41,11 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_config.h"
 #include "blockchain_utilities/bootstrap_serialization.h"
 #include "serialization/binary_archive.h"
 #include "serialization/binary_utils.h"
+#include "serialization/string.h"
 #include "shekyl/shekyl_ffi.h"
 
 // ARCHIVAL_CREDIT_WIRE.md §3: empty is attestation_root(&[]), never null_hash.
@@ -103,10 +103,38 @@ TEST(archival_credit_wire, block_boost_archive_round_trips_attestation_root)
   ASSERT_EQ(bl2.attestation_root, bl.attestation_root);
 }
 
-// Phase 1 wire: the coinbase tx_extra attestation carrier round-trips, and
-// sort_tx_extra handles the new tag (the pick<> exhaustiveness trap at
-// format_utils.cpp — a missing case makes every coinbase carrying it fail to sort).
-TEST(archival_credit_wire, tx_extra_attestation_round_trips_and_sorts)
+namespace
+{
+// One length-prefixed tx_extra field, laid out by hand: tag, varint length,
+// payload. The wire grammar's one encoder is shekyl-wire's; these tests are
+// about the C++ *reader* (parse_archival_attestation_from_extra over the
+// codec), so the bytes it reads are written here, where the bytes are the
+// subject.
+void raw_field(std::vector<uint8_t>& extra, uint8_t tag, const std::string& payload)
+{
+  extra.push_back(tag);
+  size_t n = payload.size();
+  while (n >= 0x80)
+  {
+    extra.push_back(static_cast<uint8_t>((n & 0x7f) | 0x80));
+    n >>= 7;
+  }
+  extra.push_back(static_cast<uint8_t>(n));
+  extra.insert(extra.end(), payload.begin(), payload.end());
+}
+
+void pubkey_field(std::vector<uint8_t>& extra, uint8_t fill)
+{
+  extra.push_back(SHEKYL_TX_EXTRA_TAG_PUBKEY);
+  extra.insert(extra.end(), 32, fill);
+}
+} // namespace
+
+// Phase 1 wire: the coinbase tx_extra attestation carrier reads back through
+// the codec byte-identically, wherever in the extra it sits (there is no
+// sorter any more; the coinbase grammar fixes the order and 0x0B's place in
+// it is the amendment its producer will bring).
+TEST(archival_credit_wire, tx_extra_attestation_reads_back_through_the_codec)
 {
   // 3 canonical headers (ARCHIVAL_ATTESTATION_HEADER_BYTES each), distinct per record.
   std::string blob;
@@ -114,55 +142,55 @@ TEST(archival_credit_wire, tx_extra_attestation_round_trips_and_sorts)
     blob.append(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, static_cast<char>(0x10 + i));
   ASSERT_EQ(blob.size(), 3 * config::ARCHIVAL_ATTESTATION_HEADER_BYTES);
 
-  // A mixed extra (pubkey + attestation) so the sort has to order the new tag.
-  std::vector<uint8_t> extra;
-  crypto::public_key pk;
-  memset(&pk, 0x22, sizeof(pk));
-  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, pk));
-  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(extra, blob));
+  // pubkey then attestation, and attestation then pubkey: the read is by tag.
+  for (bool attestation_first : {false, true})
+  {
+    std::vector<uint8_t> extra;
+    if (attestation_first)
+      raw_field(extra, SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob);
+    pubkey_field(extra, 0x22);
+    if (!attestation_first)
+      raw_field(extra, SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob);
 
-  // parse recognizes the new field.
-  std::vector<cryptonote::tx_extra_field> fields;
-  ASSERT_TRUE(cryptonote::parse_tx_extra(extra, fields));
-
-  // get round-trips the blob byte-identically.
-  std::string got;
-  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, got));
-  ASSERT_EQ(got, blob);
-
-  // sort must NOT hit "someone forgot to add a case", and the sorted extra still
-  // round-trips the blob.
-  std::vector<uint8_t> sorted;
-  ASSERT_TRUE(cryptonote::sort_tx_extra(extra, sorted));
-  std::string got_sorted;
-  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(sorted, got_sorted));
-  ASSERT_EQ(got_sorted, blob);
+    std::string got;
+    ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, got));
+    ASSERT_EQ(got, blob);
+    // And the codec read it came from, with its own code.
+    ShekylOwnedBuffer field;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &field.buf));
+    ASSERT_EQ(std::string(reinterpret_cast<const char*>(field.data()), field.size()), blob);
+  }
 }
 
 // The reader's tri-state contract: "parsed, tag absent" is true with an EMPTY blob (the committed
 // empty set) and "tx_extra unparseable" is false (headers UNREADABLE). Collapsing the two is the
 // admission bug the verify's HEADERS_UNREADABLE verdict exists to prevent -- a malformed coinbase
-// extra must never pass for the empty attestation set.
+// extra must never pass for the empty attestation set. The codec carries the split as two codes
+// (SHEKYL_TX_EXTRA_ABSENT / SHEKYL_TX_EXTRA_MALFORMED); the reader is the adapter.
 TEST(archival_credit_wire, attestation_reader_splits_absent_from_unreadable)
 {
   // Parsed extra with no attestation tag -> true, empty blob.
   std::vector<uint8_t> extra;
-  crypto::public_key pk;
-  memset(&pk, 0x22, sizeof(pk));
-  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, pk));
+  pubkey_field(extra, 0x22);
   std::string blob{"sentinel"};  // must be cleared, not left stale
   ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, blob));
   ASSERT_TRUE(blob.empty());
+  ShekylOwnedBuffer field;
+  ASSERT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
+      SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &field.buf));
 
   // An attestation tag followed by an unparseable tail -> false: the tag's bytes must NOT be
   // returned as if the extra were well-formed.
   std::string records(config::ARCHIVAL_ATTESTATION_HEADER_BYTES, '\x10');
   std::vector<uint8_t> malformed;
-  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(malformed, records));
-  malformed.push_back(0xFE);  // truncated/unknown trailing field -> parse_tx_extra fails
+  raw_field(malformed, SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, records);
+  malformed.push_back(0xFE);  // truncated/unknown trailing field -> the extra does not parse
   blob = "sentinel";
   ASSERT_FALSE(cryptonote::parse_archival_attestation_from_extra(malformed, blob));
   ASSERT_TRUE(blob.empty());
+  ASSERT_EQ(SHEKYL_TX_EXTRA_MALFORMED, shekyl_tx_extra_field(malformed.data(), malformed.size(),
+      SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &field.buf));
 }
 
 // The header length matches the Rust canonical record; the record cap is pinned.
@@ -266,21 +294,28 @@ TEST(archival_credit_wire, bootstrap_block_package_refuses_an_oversized_attestat
 // exactly one of the two goes red.
 TEST(archival_credit_wire, attestation_field_bytes_match_the_port)
 {
-  // Non-empty: tag 0x0B, varint length 3, then the blob.
-  std::vector<uint8_t> extra;
-  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(extra, std::string("\x01\x02\x03", 3)));
-  const std::vector<uint8_t> expected{0x0B, 0x03, 0x01, 0x02, 0x03};
-  ASSERT_EQ(extra, expected)
-      << "the 0x0B encoding must match shekyl-wire's byte for byte";
+  // Non-empty: tag 0x0B, varint length 3, then the blob. The C++ side no
+  // longer encodes 0x0B (the one encoder is shekyl-wire's, pinned to these
+  // same literals in tx_extra_roundtrip.rs); this leg pins that the daemon
+  // *reads* the pinned bytes back as that blob.
+  const std::vector<uint8_t> extra{0x0B, 0x03, 0x01, 0x02, 0x03};
+  std::string got;
+  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(extra, got));
+  ASSERT_EQ(got, std::string("\x01\x02\x03", 3))
+      << "the 0x0B encoding must be read back byte for byte";
 
   // Empty blob: a present tag with a zero-length payload encodes as two bytes.
   // That is a codec fact, not the reader's committed-empty-set — which is a
   // successful parse with the tag absent (see
   // attestation_reader_splits_absent_from_unreadable). Present-empty and absent
-  // both yield an empty blob at that API; they differ only on the wire.
-  std::vector<uint8_t> empty_extra;
-  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(empty_extra, std::string()));
-  const std::vector<uint8_t> expected_empty{0x0B, 0x00};
-  ASSERT_EQ(empty_extra, expected_empty)
-      << "a present-but-empty attestation is two bytes, not zero";
+  // both yield an empty blob at that API; they differ only on the wire, and
+  // the codec's own read tells them apart (OK with len 0 vs ABSENT).
+  const std::vector<uint8_t> empty_extra{0x0B, 0x00};
+  got = "sentinel";
+  ASSERT_TRUE(cryptonote::parse_archival_attestation_from_extra(empty_extra, got));
+  ASSERT_TRUE(got.empty());
+  ShekylOwnedBuffer field;
+  ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(empty_extra.data(), empty_extra.size(),
+      SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &field.buf));
+  ASSERT_EQ(0u, field.size()) << "a present-but-empty attestation is two bytes, not absent";
 }

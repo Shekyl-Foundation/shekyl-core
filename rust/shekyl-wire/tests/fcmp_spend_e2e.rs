@@ -58,7 +58,7 @@
 //! against real crypto-valued fields.
 
 mod common;
-use common::conforming_pqc_extra;
+use common::{conforming_pqc_extra, random_wallet};
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
@@ -67,22 +67,22 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::PqcKeyScalar;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
     TreeContext,
 };
+use shekyl_types::SigningPayloadHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
@@ -116,38 +116,6 @@ const TREE_OUTPUTS: usize = 700;
 /// ever promoted to a multi-case `proptest`, drop the fixed seed and let the
 /// proptest harness drive the witness draw per case.
 const RNG_SEED: u64 = 0x5368_656b_796c_3031; // "Shekyl01"
-
-/// A minimal spendable wallet: an Ed25519 spend keypair (`b`, `B = b*G`) plus a
-/// hybrid X25519 + ML-KEM-768 KEM keypair. The typed (non-FFI) analogue of the
-/// wallet in `shekyl-ffi`'s `signing_round_trip` test.
-struct Wallet {
-    /// Spend secret `b`.
-    spend_secret: [u8; 32],
-    /// Spend public `B = b*G` (compressed Ed25519).
-    spend_public: [u8; 32],
-    x25519_pk: [u8; 32],
-    x25519_sk: [u8; 32],
-    ml_kem_ek: Vec<u8>,
-    ml_kem_dk: Vec<u8>,
-}
-
-fn random_wallet(rng: &mut ChaCha20Rng) -> Wallet {
-    let b = Scalar::random(rng);
-    let spend_public = (ED25519_BASEPOINT_POINT * b).compress().to_bytes();
-    let (pk, sk) = HybridX25519MlKem
-        .keypair_generate()
-        .expect("hybrid KEM keypair generation");
-    Wallet {
-        spend_secret: b.to_bytes(),
-        spend_public,
-        x25519_pk: pk.x25519,
-        x25519_sk: sk.x25519,
-        ml_kem_ek: pk.ml_kem,
-        // `HybridKemSecretKey` is `ZeroizeOnDrop`; its `Vec` field can't be
-        // moved out, so clone the decapsulation key into the test wallet.
-        ml_kem_dk: sk.ml_kem.clone(),
-    }
-}
 
 /// A random valid prime-order compressed Ed25519 point (`r*G`). Used for decoy
 /// tree members: only the *spent* output needs recoverable secrets — the rest
@@ -246,23 +214,28 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 2. Build a real multi-layer curve tree ───────────────────────────
     // Genesis coinbase: the spent output at vout 0, then decoy members. Every
-    // output shares the spent output's (valid) `h_pqc`; they differ by their
-    // O/C points, so their leaf hashes still differ.
+    // output shares the spent output's (valid) 0x07 entry; they differ by
+    // their O/C points, so their leaves still differ.
+    let spent_entry = spent.pqc_leaf.entry_bytes();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
-    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 32);
+    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.h_pqc);
+    genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(&mut rng),
-            commitment: Some(random_point(&mut rng)),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(random_point(&mut rng)),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                random_point(&mut rng),
+            )),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&spent.h_pqc);
+        genesis_blob.extend_from_slice(&spent_entry);
     }
 
     // Heights must be ingested consecutively from 0; a single decoy coinbase
@@ -284,28 +257,30 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         } else {
             (
                 vec![RawOutput {
-                    output_key: filler_key,
-                    commitment: Some(filler_commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler_commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
-                spent.h_pqc.to_vec(),
+                spent_entry.to_vec(),
             )
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(BlockHeight(reference_height))
+        .root_and_depth_at(BlockHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert!(
         tree_depth >= 3,
@@ -314,14 +289,14 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 3. Assemble the membership path via the production client ─────────
     let reference = ReferenceBlock {
-        height: BlockHeight(reference_height),
+        height: BlockHeight::from_raw(reference_height),
         curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index), // genesis vout 0 → first drained leaf
-        output_key: spent.output_key,
-        commitment: spent.commitment,
+        gindex: Gindex::from_raw(spent_index), // genesis vout 0 → first drained leaf
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
     let path = client
         .assemble_path(&target, &reference)
@@ -341,10 +316,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            commitment: cl.commitment.to_bytes(),
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {
@@ -354,7 +329,6 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         spend_key_x: *ki.spend_secret_x, // x = ho + b
         spend_key_y: spent.y,            // O = x*G + y*T
         commitment_mask: spent.z,        // C = z*G + amount*H
-        h_pqc: spent.h_pqc,
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
@@ -414,10 +388,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // the production send path does (`sign_bridge.rs` via
     // `tx_prefix_hash_from_parts`): the FCMP++ signable hash is the Keccak hash
     // over the prefix fields assembled into `wire_tx` below — the key image, the
-    // two output keys + view tags, and the (empty) extra. Deriving it from the
-    // constructed parts rather than a fixed constant means mutating any of those
-    // prefix fields would invalidate the proof, so this oracle actually
-    // exercises the prefix-binding consensus rule (not just self-consistency).
+    // two output keys + view tags, and the conforming extra (the same bytes
+    // `wire_tx` and the encoder both carry; hashing an empty extra here would
+    // have bound the proof to bytes the transaction does not serialize — the
+    // defect #853's review found in this test's sibling, `input_cap_cost`).
+    // Deriving it from the constructed parts rather than a fixed constant means
+    // mutating any of those prefix fields would invalidate the proof, so this
+    // oracle actually exercises the prefix-binding consensus rule (not just
+    // self-consistency).
+    let extra = conforming_pqc_extra(2);
     let tx_prefix_hash = tx_prefix_hash_from_parts(
         &[*ki.key_image.as_bytes()],
         &[payment.output_key, change.output_key],
@@ -425,7 +404,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &extra,
     );
     let signed = sign_transaction(
         tx_prefix_hash,
@@ -447,15 +426,21 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         tree_depth: signed.tree_depth,
     };
     let key_images: [KeyImage; 1] = [ki.key_image];
-    let pqc_pk_hashes = [PqcLeafScalar(spent.h_pqc)];
+    // The verifier's per-input value is the scalar of the canonical hybrid key
+    // the spend reveals (`pqc_auths[i].hybrid_public_key`), PL-D3.
+    let revealed_pk =
+        shekyl_crypto_pq::derivation::derive_pqc_public_key(&combined_ss.0, spent_index)
+            .expect("derive hybrid pk");
+    let pqc_pk_hashes = [PqcKeyScalar::from_pqc_public_key(&revealed_pk)];
     let ok = proof::verify(
         &verifier_proof,
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_root,
+        tree_root.as_bytes(),
         signed.tree_depth,
-        tx_prefix_hash,
+        // Proof-crate boundary: the verifier takes the signable hash as bytes.
+        tx_prefix_hash.to_bytes(),
     )
     .expect("verify must not error");
     assert!(
@@ -472,6 +457,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // prefix and still verify.
     let mut mutated_output_keys = [payment.output_key, change.output_key];
     mutated_output_keys[0][0] ^= 0x01;
+    // Same extra as the signed prefix: the output key must be the ONLY
+    // field that differs, or the refusal could be the extra's and the
+    // property unexercised (#853 review).
     let mutated_prefix_hash = tx_prefix_hash_from_parts(
         &[*ki.key_image.as_bytes()],
         &mutated_output_keys,
@@ -479,16 +467,16 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &extra,
     );
     let mutated_result = proof::verify(
         &verifier_proof,
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_root,
+        tree_root.as_bytes(),
         signed.tree_depth,
-        mutated_prefix_hash,
+        mutated_prefix_hash.to_bytes(),
     );
     assert!(
         !matches!(mutated_result, Ok(true)),
@@ -536,8 +524,16 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // carries real, canonically-sized auth blobs. The signed message is the
     // prefix hash; the per-input message-binding semantics are exercised by the
     // dedicated `shekyl-ffi` signing test, not asserted here.
-    let pqc_auths = sign_pqc_auths(&[tx_prefix_hash], std::slice::from_ref(&spend_input))
-        .expect("Phase-2 PQC auth signing");
+    let pqc_auths = sign_pqc_auths(
+        // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
+        // payload (`phase1_payload_hashes`). These auths are never verified
+        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
+        // deliberate, visible un-typing and re-typing — both newtypes refuse
+        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
+        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
+        std::slice::from_ref(&spend_input),
+    )
+    .expect("Phase-2 PQC auth signing");
     assert_eq!(pqc_auths.len(), 1, "one PQC auth per input");
 
     // ── 11. shekyl-wire byte-identical round-trip (replaces the live KAT) ──
@@ -564,7 +560,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     view_tag: change.view_tag_prefilter,
                 },
             ],
-            extra: conforming_pqc_extra(2),
+            extra: extra.clone(),
         },
         ct: Ct::Fcmp {
             fee,
@@ -643,7 +639,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         // Same conforming 0x06/0x07 fields the hand-assembled tx above carries:
         // the two encoders are asserted byte-identical, so both sides must build
         // the transaction consensus would actually accept (CEN-I19).
-        tx_extra: conforming_pqc_extra(2),
+        tx_extra: extra,
         fee,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),

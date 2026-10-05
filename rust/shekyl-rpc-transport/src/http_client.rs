@@ -16,7 +16,7 @@
 //!
 //! # Why the proxy is SOCKS5**h**
 //!
-//! [`SocksConnector`] hands the proxy a `TargetAddr::Domain` (via `tokio-socks`),
+//! [`SocksConnector`] hands the proxy a hostname (`Destination::Name`),
 //! so the **proxy** resolves the daemon hostname, not the local resolver. A
 //! `socks5` (local-resolving) connector would hand the proxy an IP it resolved
 //! itself, leaking the hostname in cleartext DNS before the proxy is involved —
@@ -43,9 +43,9 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use shekyl_socks::{connect as socks_connect, Destination, Isolation};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio_socks::tcp::Socks5Stream;
 use tower_service::Service;
 
 /// Errors constructing or using the client.
@@ -69,14 +69,12 @@ impl std::fmt::Display for HttpError {
     }
 }
 
-/// Local newtype over a `tokio-socks` stream that grants it the two traits
-/// `hyper-util` needs from a connector's output but that a foreign type cannot
-/// carry: `Connection` (orphan rule — `Socks5Stream` is foreign, `Connection`
-/// is foreign) and, via `TokioIo`, `hyper::rt::{Read, Write}`. `TokioIo<T>`
-/// derives `Read`/`Write` from `T: AsyncRead/AsyncWrite` and `Connection` from
-/// `T: Connection`, so implementing all three on this wrapper makes
-/// `TokioIo<SocksStream>` a valid connector output.
-pub(crate) struct SocksStream(Socks5Stream<TcpStream>);
+/// Local newtype over the tunneled `TcpStream`. `hyper-util` needs
+/// `Connection` on the connector's output, and `TokioIo<T>` derives
+/// `Read`/`Write` from `T: AsyncRead/AsyncWrite` and `Connection` from
+/// `T: Connection`. The handshake has already finished; what remains is
+/// the TCP stream.
+pub(crate) struct SocksStream(TcpStream);
 
 impl AsyncRead for SocksStream {
     fn poll_read(
@@ -84,7 +82,6 @@ impl AsyncRead for SocksStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // `Socks5Stream<TcpStream>` is `Unpin` (it pins its inner socket itself).
         Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
@@ -160,8 +157,8 @@ impl SocksConnector {
         // `Authority` is the exact grammar of what may follow the scheme: the
         // parse rejects a path, query, fragment, or whitespace outright. It
         // accepts a missing port, so that is refused explicitly —
-        // `tokio-socks` dials literal `host:port` strings only (the old
-        // `contains(':')` check falsely accepted `[::1]`).
+        // The dial takes a literal `host:port` (the old `contains(':')`
+        // check falsely accepted `[::1]`).
         let authority: Authority = hostport.parse().map_err(|_| {
             HttpError::InvalidProxy(format!("expected host:port, got {hostport:?}"))
         })?;
@@ -197,11 +194,22 @@ impl Service<Uri> for SocksConnector {
                 Some("https") => 443,
                 _ => 80,
             });
-            // `(host, port)` → `TargetAddr::Domain` → the proxy resolves the
+            // `Destination::Name` is ATYP=DOMAIN: the proxy resolves the
             // name (SOCKS5h). Never pass a pre-resolved `SocketAddr` here.
-            let stream = Socks5Stream::connect(&*proxy, (host.as_str(), port))
-                .await
-                .map_err(|e| io::Error::other(format!("socks: {e}")))?;
+            // `Isolation::Principal` is this transport: no SOCKS
+            // authentication. A persona username belongs to
+            // `shekyl-p-transport`.
+            let mut stream = TcpStream::connect(&*proxy).await?;
+            socks_connect(
+                &mut stream,
+                Isolation::Principal,
+                Destination::Name {
+                    host: host.as_str(),
+                    port,
+                },
+            )
+            .await
+            .map_err(|err| io::Error::other(format!("socks: {err}")))?;
             Ok(TokioIo::new(SocksStream(stream)))
         })
     }
@@ -527,7 +535,7 @@ mod tests {
     /// 0x03) for the proxy to resolve — never an address it resolved
     /// locally (ATYP 0x01/0x04), which is the exact DNS leak this transport
     /// exists to close. A refactor that resolves before
-    /// `Socks5Stream::connect` fails here.
+    /// the SOCKS handshake fails here.
     #[tokio::test]
     async fn socks_connector_sends_the_hostname_for_the_proxy_to_resolve() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

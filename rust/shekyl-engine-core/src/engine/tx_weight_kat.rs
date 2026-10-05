@@ -8,12 +8,13 @@
 #[cfg(test)]
 pub(crate) mod support {
     use crate::engine::local_keys::LocalKeys;
-    use crate::engine::synthetic_tree::{consistent_synthetic_path, synthetic_h_pqc_bytes};
+    use crate::engine::synthetic_tree::consistent_synthetic_path;
     use curve25519_dalek::scalar::Scalar;
     use curve25519_dalek::EdwardsPoint;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
     use shekyl_curve_generators::biased_hash_to_point;
+    use shekyl_fcmp::PqcLeafScalar;
     use shekyl_tx_builder::{sign_transaction, LeafEntry, OutputInfo, SpendInput, TreeContext};
     use shekyl_units::AtomicUnits;
 
@@ -65,14 +66,18 @@ pub(crate) mod support {
                 .derive_primary_source_secrets_bundle(&ciphertext, i as u64)
                 .map_err(|e| format!("derive bundle: {e:?}"))?;
 
-            let h_pqc = synthetic_h_pqc_bytes(i as u64 + u64::from(tree_depth) * 1_000);
+            // The real leaf scalar: the signer re-derives the opening and
+            // checks it against this entry (PL-D3), so it must be honest.
+            let h_pqc = PqcLeafScalar::from_commitment_point(&constructed.pqc_leaf.point)
+                .expect("constructed leaf commitment decompresses")
+                .0;
             leaf_chunk.push(LeafEntry {
                 output_key: constructed.output_key,
                 key_image_gen: biased_hash_to_point(constructed.output_key)
                     .compress()
                     .to_bytes(),
                 commitment: constructed.commitment,
-                h_pqc,
+                cm_x: h_pqc,
             });
 
             spend_inputs.push(SpendInput {
@@ -82,7 +87,6 @@ pub(crate) mod support {
                 spend_key_x: *bundle.spend_key_x,
                 spend_key_y: *bundle.spend_key_y,
                 commitment_mask: *bundle.commitment_mask,
-                h_pqc: leaf_chunk[i].h_pqc,
                 combined_ss: bundle.combined_ss.to_vec(),
                 output_index: i as u64,
                 // Filled below with the one shared depth-consistent path.
@@ -130,7 +134,7 @@ pub(crate) mod support {
         };
 
         let tree = TreeContext {
-            reference_block: [0xD4; 32],
+            reference_block: shekyl_types::BlockHash::from_bytes([0xD4; 32]),
             tree_root,
             tree_depth,
         };

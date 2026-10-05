@@ -119,7 +119,11 @@ impl IdentityExpectation {
 }
 
 /// Why a `get_version` reply is not this build.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A fixed-size value with no text from the reply in it, so every error type
+/// on the way up can carry it, including the refresh producer's `Copy`-only
+/// error (`STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.7 R6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityMismatch {
     /// Packed `CORE_RPC_VERSION` disagrees; `theirs < ours` means the daemon
     /// is the older binary.
@@ -129,12 +133,12 @@ pub enum IdentityMismatch {
         /// The daemon's packed version.
         theirs: u32,
     },
-    /// The reply was not this build's `GetVersionResponse` (VC-D16).
+    /// The reply was not this build's `GetVersionResponse` (VC-D16). What
+    /// failed to parse is the daemon's own text, so it stays in the log of
+    /// the client that parsed it and is not carried here.
     WireUnreadable {
         /// This build's packed version, for the message that cannot name theirs.
         ours: u32,
-        /// Deserializer or envelope evidence; not shown as a version number.
-        evidence: String,
     },
     /// Digest disagrees. A hash has no ordering (`VC-D15`).
     Rules {
@@ -162,12 +166,12 @@ pub enum IdentityMismatch {
 }
 
 impl IdentityMismatch {
-    /// A reply that did not parse as this build's `get_version` shape.
+    /// A reply that did not parse as this build's `get_version` shape. The
+    /// caller logs what failed to parse; see [`Self::WireUnreadable`].
     #[must_use]
-    pub fn unreadable(evidence: impl std::fmt::Display) -> Self {
+    pub const fn unreadable() -> Self {
         Self::WireUnreadable {
             ours: CORE_RPC_VERSION,
-            evidence: evidence.to_string(),
         }
     }
 
@@ -215,11 +219,11 @@ const fn hex32(s: &[u8; 64]) -> [u8; 32] {
 /// `docs/GENESIS_ALLOCATIONS.md`, `mining_parity`'s `frozen_id`, and
 /// `shekyl-wire`'s `MAINNET_GENESIS_BLOCK_ID`.
 const MAINNET_GENESIS: [u8; 32] =
-    hex32(b"e623214c06d3ec19a8326c166ff4ee920fe85badbfadd67966c15a315ed7aa12");
+    hex32(b"16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3");
 const TESTNET_GENESIS: [u8; 32] =
-    hex32(b"7cbb852932d7c1b35991e5880c8158da2a36c9101e4daf2620139c0585663280");
+    hex32(b"52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8");
 const STAGENET_GENESIS: [u8; 32] =
-    hex32(b"82ccf33577a4833d0bfd0eef768de21130cc2a9b66f83b9d32c8a91e6cedf7b4");
+    hex32(b"65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0");
 
 /// The genesis block hash this build expects on `network`.
 ///
@@ -227,6 +231,9 @@ const STAGENET_GENESIS: [u8; 32] =
 /// `geblock block-id`), not `GENESIS_TX`. Fakechain shares mainnet's genesis
 /// (`cryptonote_config.h`: `FAKECHAIN` takes mainnet's configuration). Reminting
 /// genesis updates `GENESIS_TX` / nonce and these pins in the same change.
+/// The handshake network id is `network_id_from_genesis` of this pin, so that
+/// change rotates the id; the KAT in `shekyl-ffi`'s `network_id_ffi` fails
+/// until it is re-recorded.
 #[must_use]
 pub const fn genesis_hash_for(network: DaemonNetwork) -> [u8; 32] {
     match network {
@@ -352,15 +359,15 @@ mod tests {
         // not this file fails here.
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet)).to_string(),
-            "e623214c06d3ec19a8326c166ff4ee920fe85badbfadd67966c15a315ed7aa12"
+            "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3"
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Testnet)).to_string(),
-            "7cbb852932d7c1b35991e5880c8158da2a36c9101e4daf2620139c0585663280"
+            "52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8"
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Stagenet)).to_string(),
-            "82ccf33577a4833d0bfd0eef768de21130cc2a9b66f83b9d32c8a91e6cedf7b4"
+            "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0"
         );
         assert_eq!(
             genesis_hash_for(DaemonNetwork::Fakechain),
@@ -378,7 +385,7 @@ mod tests {
 
     #[test]
     fn unreadable_is_the_wire_axis() {
-        let m = IdentityMismatch::unreadable("missing field `nettype`");
+        let m = IdentityMismatch::unreadable();
         assert_eq!(m.axis(), IdentityAxis::Wire);
         assert!(matches!(m, IdentityMismatch::WireUnreadable { .. }));
     }

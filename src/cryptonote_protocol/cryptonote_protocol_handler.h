@@ -137,14 +137,14 @@ namespace cryptonote
     friend struct ::cryptonote_protocol_handler_test_seam;
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
-    void set_max_out_peers(epee::net_utils::zone zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
-    unsigned int get_max_out_peers(epee::net_utils::zone zone) const
+    void set_max_out_peers(epee::net_utils::connector_id zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
+    unsigned int get_max_out_peers(epee::net_utils::connector_id zone) const
     {
       CRITICAL_REGION_LOCAL(m_max_out_peers_lock);
       const auto it = m_max_out_peers.find(zone);
       if (it == m_max_out_peers.end())
       {
-        MWARNING(epee::net_utils::zone_to_string(zone) << " max out peers not set, using default");
+        MWARNING(epee::net_utils::connector_id_to_string(zone) << " max out peers not set, using default");
         return shekyl_p2p_default_out_peers();
       }
       return it->second;
@@ -152,8 +152,7 @@ namespace cryptonote
     bool no_sync() const { return m_no_sync; }
     void set_no_sync(bool value) { m_no_sync = value; }
     std::string get_peers_overview() const;
-    std::pair<uint32_t, uint32_t> get_next_needed_pruning_stripe() const;
-    bool needs_new_sync_connections(epee::net_utils::zone zone) const;
+    bool needs_new_sync_connections(epee::net_utils::connector_id zone) const;
     bool is_busy_syncing();
 
 #ifndef IN_UNIT_TESTS
@@ -171,15 +170,13 @@ namespace cryptonote
 		
     //----------------- i_bc_protocol_layout ---------------------------------------
     virtual bool relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context);
-    virtual bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, epee::net_utils::zone zone, relay_method tx_relay);
+    virtual bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, relay_method tx_relay);
     //----------------------------------------------------------------------------------
     //bool get_payload_sync_data(HANDSHAKE_DATA::request& hshd, cryptonote_connection_context& context);
-    bool should_drop_connection(cryptonote_connection_context& context, uint32_t next_stripe);
     bool request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span = false);
     size_t get_synchronizing_connections_count();
     bool on_connection_synchronized();
     bool should_download_next_span(cryptonote_connection_context& context, bool standby);
-    bool should_ask_for_pruned_data(cryptonote_connection_context& context, uint64_t first_block_height, uint64_t nblocks, bool check_block_weights) const;
     void drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans);
     void drop_connection_with_score(cryptonote_connection_context &context, unsigned int score, bool flush_all_spans);
     void drop_connection(const boost::uuids::uuid&);
@@ -189,7 +186,6 @@ namespace cryptonote
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
     void request_chain_history(cryptonote_connection_context &context);
-    void notify_new_stripe(cryptonote_connection_context &context, uint32_t stripe);
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);
     void hit_score(cryptonote_connection_context &context, int32_t score);
@@ -209,14 +205,13 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
-    std::unordered_map<epee::net_utils::zone, unsigned int> m_max_out_peers;
+    std::unordered_map<epee::net_utils::connector_id, unsigned int> m_max_out_peers;
     mutable epee::critical_section m_max_out_peers_lock;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
     uint64_t m_last_add_end_time;
     uint64_t m_sync_spans_downloaded, m_sync_old_spans_downloaded, m_sync_bad_spans_downloaded;
     uint64_t m_sync_download_chain_size, m_sync_download_objects_size;
     size_t m_block_download_max_size;
-    bool m_sync_pruned_blocks;
     size_t m_span_time;
     std::atomic<size_t> m_span_limit;
     std::atomic<size_t> m_bss;

@@ -31,10 +31,6 @@
 #include "checkpoints.h"
 
 #include "string_tools.h"
-#include "storages/portable_storage_template_helper.h" // epee json include
-#include "serialization/keyvalue_serialization.h"
-#include <boost/system/error_code.hpp>
-#include <boost/filesystem.hpp>
 #include <functional>
 #include <vector>
 
@@ -45,29 +41,6 @@ using namespace epee;
 
 namespace cryptonote
 {
-  /**
-   * @brief struct for loading a checkpoint from json
-   */
-  struct t_hashline
-  {
-    uint64_t height; //!< the height of the checkpoint
-    std::string hash; //!< the hash for the checkpoint
-        BEGIN_KV_SERIALIZE_MAP()
-          KV_SERIALIZE(height)
-          KV_SERIALIZE(hash)
-        END_KV_SERIALIZE_MAP()
-  };
-
-  /**
-   * @brief struct for loading many checkpoints from json
-   */
-  struct t_hash_json {
-    std::vector<t_hashline> hashlines; //!< the checkpoint lines from the file
-        BEGIN_KV_SERIALIZE_MAP()
-          KV_SERIALIZE(hashlines)
-        END_KV_SERIALIZE_MAP()
-  };
-
   //---------------------------------------------------------------------------
   checkpoints::checkpoints()
   {
@@ -168,42 +141,6 @@ namespace cryptonote
     // per-nettype no-op arms were structurally divergent while
     // behaviorally identical: the shape that rots.
     (void)nettype;
-    return true;
-  }
-
-  bool checkpoints::load_checkpoints_from_json(const std::string &json_hashfile_fullpath)
-  {
-    boost::system::error_code errcode;
-    if (! (boost::filesystem::exists(json_hashfile_fullpath, errcode)))
-    {
-      LOG_PRINT_L1("Blockchain checkpoints file not found");
-      return true;
-    }
-
-    LOG_PRINT_L1("Adding checkpoints from blockchain hashfile");
-
-    uint64_t prev_max_height = get_max_height();
-    LOG_PRINT_L1("Hard-coded max checkpoint height is " << prev_max_height);
-    t_hash_json hashes;
-    if (!epee::serialization::load_t_from_json_file(hashes, json_hashfile_fullpath))
-    {
-      MERROR("Error loading checkpoints from " << json_hashfile_fullpath);
-      return false;
-    }
-    for (std::vector<t_hashline>::const_iterator it = hashes.hashlines.begin(); it != hashes.hashlines.end(); )
-    {
-      uint64_t height;
-      height = it->height;
-      if (height <= prev_max_height) {
-	LOG_PRINT_L1("ignoring checkpoint height " << height);
-      } else {
-	std::string blockhash = it->hash;
-	LOG_PRINT_L1("Adding checkpoint height " << height << ", hash=" << blockhash);
-	ADD_CHECKPOINT(height, blockhash);
-      }
-      ++it;
-    }
-
     return true;
   }
 

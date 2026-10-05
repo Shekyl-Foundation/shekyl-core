@@ -13,7 +13,7 @@
 //!
 //! The `tx_extra 0x07` parse reuses `shekyl_scanner::extra::Extra` at this
 //! boundary (where blocks are already decoded); the parsed blob is then
-//! validated by [`crate::recon::extract_leaf_hashes`]. No second
+//! validated by [`crate::recon::extract_leaf_commitments`]. No second
 //! `tx_extra` parser is written.
 //!
 //! ## Boundary
@@ -23,8 +23,8 @@
 //! turn raw `tx_extra` into the `0x07` leaf-hash blob and extracts each
 //! output's `O`/`C`/target, then hands this client the reduced
 //! [`BlockLeaves`]. The client owns everything from there: `h_pqc`
-//! resolution ([`recon::extract_leaf_hashes`] + [`recon::per_output_h_pqc`]),
-//! leaf collection + global-index threading ([`recon::collect_block_leaves`]),
+//! resolution ([`crate::recon::extract_leaf_commitments`]), leaf
+//! collection + global-index threading ([`crate::recon::collect_block_leaves`]),
 //! the reference-height → drain-cutoff mapping, store-backed root
 //! reconstruction ([`LeafStore::root_at_count`], CT-1), and the integrity
 //! gate (§3.3): a reconstructed root that does not match the consensus header
@@ -45,8 +45,10 @@
 //!
 //! Membership-path assembly is CT-4 ([`crate::assemble`]); the cached
 //! frozen-`R_k` hot path and persistence are CT-1 ([`crate::store`]). The
-//! CT-2 replay oracle ([`recon::root_from_scalars`]) remains the KAT baseline;
-//! production root queries use the store hot path only.
+//! CT-2 replay oracle ([`crate::recon::root_from_scalars`]) remains the KAT baseline.
+//! Production root queries go through [`CurveTreeClient::root_and_depth_at`]:
+//! an in-horizon height answers from its frontier snapshot, and a miss falls
+//! through to the store's count-keyed hot path.
 //!
 //! See `docs/design/CURVE_TREE_CLIENT.md` §3 and
 //! `docs/design/CT2_DRAIN_ORDER.md` §7 (data flow).
@@ -55,13 +57,25 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::frontier::Frontier;
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
-use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
-use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
-use shekyl_fcmp::tree::selene_hash_init;
+use crate::store::{
+    LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError, StoreOpenFault,
+};
+use crate::types::{
+    BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
+    ReferenceBlock, TargetKind,
+};
+
+mod capture;
+
+pub(crate) use capture::{
+    ChunkSpan, CAPTURED_IDENTITY_BYTES, CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT,
+    CAPTURED_IDENTITY_OUTPUT_KEY_AT, CURVE_ELEMENT_BYTES, NODE_CHILD_BYTES,
+};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -70,24 +84,25 @@ use shekyl_fcmp::tree::selene_hash_init;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RawOutput {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment (`C`); `None` when the output has no commitment
     /// slot (`i >= outPk.size()`), which makes it leaf-ineligible.
-    pub commitment: Option<[u8; 32]>,
+    pub commitment: Option<CommitmentBytes>,
     /// Output target kind (decides maturity and leaf candidacy).
     pub target: TargetKind,
 }
 
-/// One transaction's leaf inputs, in `vout` order. The `0x07` leaf-hash
-/// blob is the raw payload from `shekyl_scanner::extra::Extra::pqc_leaf_hashes()`
-/// (`None` when the tag is absent); the client validates and slices it.
+/// One transaction's leaf inputs, in `vout` order. The `0x07` blob (one
+/// 64-byte `CM ‖ record` entry per output, `PL-D3`) is the raw payload from
+/// `shekyl_scanner::extra::Extra::pqc_leaf_entries()` (`None` when the tag is
+/// absent); the client slices it, and refuses the block if it cannot.
 #[derive(Clone, Copy, Debug)]
 pub struct TxLeafInputs<'a> {
     /// Whether this is the block's coinbase (`is_miner`).
     pub is_miner: bool,
     /// Parsed `tx_extra 0x07` blob, or `None` if the tag is absent.
-    pub leaf_hash_blob: Option<&'a [u8]>,
-    /// Per-output identities in `vout` order, `h_pqc` not yet resolved.
+    pub leaf_entry_blob: Option<&'a [u8]>,
+    /// Per-output identities in `vout` order, leaf commitment not yet resolved.
     pub outputs: &'a [RawOutput],
 }
 
@@ -110,9 +125,129 @@ pub enum ClientError {
         /// Reference height whose root failed to match.
         height: BlockHeight,
         /// Consensus header root the wallet must reproduce.
-        expected: [u8; 32],
+        expected: CurveTreeRoot,
         /// Root the client reconstructed from its leaves.
-        got: [u8; 32],
+        got: CurveTreeRoot,
+    },
+    /// An assembled path does not commit to the root it claims (`CT-6` §11.6).
+    ///
+    /// Raised after assembly, from `verify_path_against_its_branches`.
+    /// The store gate above it compares two store reads and cannot see this:
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated
+    /// reference, and the branches come from the route that assembled the
+    /// path — the capture table and the frontier snapshot, or the rebuild of
+    /// `entries`. [`crate::assemble::PathRootFault`] names which step refused.
+    /// [`crate::assemble::PathRootFault::ChildAbsent`] is the membership link.
+    /// [`crate::assemble::PathRootFault::RootDisagrees`] is the final
+    /// comparison. [`crate::assemble::PathRootFault::ShortPath`] and
+    /// [`crate::assemble::PathRootFault::LongPath`] are also how a rebuilt
+    /// layer count that disagrees with the gate's depth is reported.
+    ///
+    /// This is a defect, not a user condition: the wallet's two views of one
+    /// tree disagree. Refusing is the point — an inconsistent path yields a
+    /// proof that fails after the prover has run, or a transaction the daemon
+    /// rejects, and neither says what went wrong.
+    PathRootMismatch {
+        /// The root the path claimed, copied from the gated reference.
+        claimed: CurveTreeRoot,
+        /// Which step of the fold refused.
+        fault: crate::assemble::PathRootFault,
+    },
+    /// A registration names an output this client does not hold at that
+    /// `gindex`.
+    ///
+    /// The wallet says it owns `O` at `gindex`; the client's chain view has
+    /// a different output there. One of the two is reading a different
+    /// chain, which is the same inter-component invariant
+    /// [`ClientError::IdentityMismatch`] guards at assembly — raised here so
+    /// it surfaces at registration rather than at the spend that needed the
+    /// capture.
+    ///
+    /// Refused rather than stored: a registration this client cannot match
+    /// would capture nothing and report nothing, and the remedy is the
+    /// wallet's own rescan, which re-registers with the key its scan of the
+    /// current chain found (rule 82).
+    RegistrationIdentityMismatch {
+        /// The global output index the registration named.
+        gindex: Gindex,
+        /// The output key the registration carried.
+        expected: OneTimePubkey,
+        /// The output key this client holds at that `gindex`.
+        got: OneTimePubkey,
+    },
+    /// The reference height has no frontier snapshot, so the open chunks of
+    /// a captured path cannot be read at it.
+    ///
+    /// The ring holds `[tip - horizon, tip]` with the horizon at
+    /// `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (720), and the daemon rejects a
+    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks. A
+    /// reference past that horizon is one the daemon would refuse, and
+    /// rebuilding the tree from every drained leaf to serve it is not worth
+    /// the read. A miss *inside* the horizon is a hole: the height was
+    /// ingested, and reading it again does not write the row. Re-anchor
+    /// treats both as terminal. The unregistered route never reaches this
+    /// error; it rebuilds before the snapshot is consulted.
+    ReferenceOutsideSnapshotRing {
+        /// The reference height asked for.
+        height: BlockHeight,
+    },
+    /// A chunk a captured path needs has closed, and the capture table does
+    /// not hold it.
+    ///
+    /// The owned position was resolved, so every chunk over it should have
+    /// been written — by the fold as it closed, or by reconciliation for the
+    /// ones that closed before registration. One missing means that did not
+    /// happen, and the remedy is [`CurveTreeClient::reconcile_captures`],
+    /// which writes exactly what is due and absent. Not a fallback to the
+    /// rebuild: that would serve the spend while hiding that the mechanism
+    /// it relies on has a hole.
+    CaptureMissing {
+        /// Leaf position the chunk closed at — the capture row's key.
+        end_leaf: u64,
+        /// The layer the row lacks.
+        layer: u8,
+    },
+    /// A held owned position is not one the canonical drain order produces.
+    ///
+    /// `owned_positions` is written by the fold, leaf by leaf, as the
+    /// frontier counts. [`CurveTreeClient::reconcile_captures`] recomputes
+    /// the same set from `drained_sorted` — the order assembly resolves
+    /// against — and the two must agree, with the recomputed set a superset
+    /// (it also covers registrations the fold never saw). A held position
+    /// the recomputation does not produce means the two orders have
+    /// diverged, and every capture keyed on the fold's coordinate is then
+    /// keyed on the wrong leaf.
+    ///
+    /// Reported rather than repaired: reconciliation would otherwise
+    /// silently overwrite one order's coordinates with the other's, and
+    /// nothing says which is right.
+    ///
+    /// Classified [`StoreOpenFault::Internal`], not `Corrupt`. The store may
+    /// be sound — the disagreement is in memory — and `Corrupt`'s remedy is
+    /// to delete the store.
+    OwnedPositionDrift {
+        /// The held position the canonical order does not produce.
+        position: u64,
+    },
+    /// Capture needed the leaf identities under a closing layer-0 chunk and
+    /// the store did not hold all of them.
+    ///
+    /// The chunk's siblings come from the leaf rows at `end_leaf + 1 -
+    /// SELENE_CHUNK_WIDTH ..= end_leaf`: the rows below this block's first
+    /// drain from [`LeafStore::read_drained_range`], the rest from the block
+    /// being ingested. A short count means a leaf row is gone from a position
+    /// the store still counts — which only [`LeafStore::prune_frozen`]
+    /// produces, by dropping non-owned frozen leaf bytes. Resume already
+    /// refuses such a store ([`ClientError::ResumeFromPrunedStore`], F5);
+    /// this is the same refusal for a store pruned while open, and it refuses
+    /// the block rather than writing a short chunk the merge would accept.
+    CaptureIdentitiesIncomplete {
+        /// Leaf position at which the chunk closed — the capture row's key.
+        end_leaf: u64,
+        /// Siblings the chunk has, which is [`shekyl_fcmp::tree::SELENE_CHUNK_WIDTH`].
+        want: usize,
+        /// Siblings the leaf rows yielded.
+        got: usize,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
@@ -122,7 +257,7 @@ pub enum ClientError {
         /// desync or a caller passing a not-yet-drained output.
         gindex: Gindex,
         /// Compressed output key the caller supplied alongside `gindex`.
-        output_key: [u8; 32],
+        output_key: OneTimePubkey,
     },
     /// `gindex` resolved to a drained leaf whose `(output_key, commitment)`
     /// does not match the caller-supplied [`crate::AssembleInput`] (X3,
@@ -137,9 +272,9 @@ pub enum ClientError {
         /// Global output index whose resolved leaf failed the identity check.
         gindex: Gindex,
         /// Output key the caller expected at `gindex`.
-        expected_output_key: [u8; 32],
+        expected_output_key: OneTimePubkey,
         /// Output key actually found at `gindex` among the drained leaves.
-        got_output_key: [u8; 32],
+        got_output_key: OneTimePubkey,
         /// Whether the resolved leaf's amount commitment matched the expected
         /// one. The check is on the full `(output_key, commitment)` pair, so
         /// this disambiguates a commitment-only divergence (keys match,
@@ -221,6 +356,62 @@ pub enum ClientError {
     /// store on disk is authoritative at the fork height; recover by
     /// dropping this object and re-opening with [`CurveTreeClient::open`].
     Poisoned,
+    /// A transaction's `tx_extra 0x07` payload could not be sliced into one
+    /// leaf commitment per output. On an admitted chain this cannot happen
+    /// (the shape and content rules refuse such a transaction at relay and
+    /// connect), so it means the block feed handed the replica something the
+    /// daemon never stored — refused, never zero-filled (`PL-D3`, census
+    /// `d-3`).
+    LeafEntries {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// Transaction index within the block (coinbase is `0`).
+        tx_index: usize,
+        /// What was wrong with the payload.
+        source: crate::recon::LeafEntryError,
+    },
+    /// An output's published point (`O`, `C`, or the `0x07` leaf commitment
+    /// `CM`) failed Ed25519 decompression while building this block's
+    /// leaves. The point-content twin of [`ClientError::LeafEntries`]: on an
+    /// admitted chain the content rule refuses such a transaction, and the
+    /// daemon **aborts** on the same input at store time (`DB_ERROR`,
+    /// `src/blockchain_db/blockchain_db.cpp:617`) — both surfaces agree
+    /// fail-closed, so the replica refuses the block rather than omitting
+    /// the leaf and building a silently divergent tree.
+    LeafPoint {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// The offending output (by gindex) and the failing point.
+        source: crate::recon::LeafPointError,
+    },
+    /// The incremental frontier could not advance, close, or be decoded
+    /// from the snapshot ring (CT-6 increment 4).
+    ///
+    /// Every one of those is a refusal rather than a fallback. A frontier
+    /// that will not advance refuses its block, exactly as a bad published
+    /// point does; a snapshot that will not decode refuses its read rather
+    /// than quietly answering from the store, because a ring that silently
+    /// stopped being read is indistinguishable from a ring that works.
+    Frontier {
+        /// Height whose advance or read failed.
+        height: BlockHeight,
+        /// What the frontier refused on.
+        source: crate::frontier::FrontierError,
+    },
+    /// A ring snapshot's own leaf count is not the count the client holds
+    /// for that height — C3's pin, enforced on the production read.
+    ///
+    /// Root and depth are both taken from the snapshot's count, so a
+    /// snapshot built over a different `n` would answer with a root and a
+    /// depth that are self-consistent and wrong. Refused, never served.
+    SnapshotLeafCountMismatch {
+        /// Reference height that was read.
+        height: BlockHeight,
+        /// Leaf count the snapshot carries.
+        snapshot: u64,
+        /// Leaf count the client's drain index gives for that height.
+        expected: u64,
+    },
 }
 
 impl ClientError {
@@ -235,6 +426,57 @@ impl ClientError {
     #[must_use]
     pub fn is_already_open(&self) -> bool {
         matches!(self, ClientError::Store(e) if e.is_already_open())
+    }
+
+    /// What this failure means when [`CurveTreeClient::open`] raised it
+    /// ([`StoreOpenFault`]). An open reads nothing but the store, so what it
+    /// can raise is a store failure, a resume refusal, or the store's own
+    /// rows failing to rebuild — a ring snapshot that will not decode, or
+    /// whose leaf count disagrees with the drain index. Resume calls that
+    /// last case corruption (`rebuild_from_store`), and so does this. Every
+    /// other arm is raised by ingest or assembly, and seeing one at open is
+    /// a programming error. Exhaustive, so a new variant has to be placed
+    /// before it compiles.
+    #[must_use]
+    pub fn open_fault(&self) -> StoreOpenFault {
+        match self {
+            ClientError::Store(e) => e.open_fault(),
+            // Pruned-store resume is unbuilt (F5): a shape this build cannot
+            // resume, not a broken store.
+            ClientError::ResumeFromPrunedStore { .. }
+            // Same cause, same verdict: leaf bytes capture needs are gone
+            // from a position the store counts. Pruned-store *support* is
+            // F5 work, so this build cannot proceed over one.
+            | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
+            ClientError::ResumeFromCorruptStore { .. }
+            | ClientError::Frontier { .. }
+            | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
+            // Not `Corrupt`: that fault's stated remedy is *delete the
+            // store and let the wallet rebuild it*, and drift is the
+            // client's in-memory positions disagreeing with the canonical
+            // drain order — the store may be entirely sound. Destroying a
+            // good store over a memory defect is naming a remedy that costs
+            // more than the fault (rule 82). It is also not an open-time
+            // outcome at all, which is what `Internal` says here, exactly
+            // as `PathRootMismatch` does.
+            // A registration disagreeing with the chain view is the same
+            // family as `IdentityMismatch` below it: a caller-vs-client
+            // disagreement, not an open-time outcome.
+            ClientError::RegistrationIdentityMismatch { .. }
+            | ClientError::OwnedPositionDrift { .. }
+            | ClientError::ReferenceOutsideSnapshotRing { .. }
+            | ClientError::CaptureMissing { .. }
+            | ClientError::RootMismatch { .. }
+            | ClientError::PathRootMismatch { .. }
+            | ClientError::OutputNotDrained { .. }
+            | ClientError::IdentityMismatch { .. }
+            | ClientError::TooManyInputs { .. }
+            | ClientError::NonConsecutiveBlockHeight { .. }
+            | ClientError::ReferenceBeyondIngestedTip { .. }
+            | ClientError::Poisoned
+            | ClientError::LeafEntries { .. }
+            | ClientError::LeafPoint { .. } => StoreOpenFault::Internal,
+        }
     }
 }
 
@@ -256,7 +498,8 @@ pub struct CurveTreeClient {
     /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
     /// a second database beside a serving host that is still holding the
     /// first, and the read-only wrapper stays unable to mint a writer.
-    store: Arc<LeafStore>,
+    // `pub(crate)` for the sibling `assemble` module's capture reads.
+    pub(crate) store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -279,6 +522,110 @@ pub struct CurveTreeClient {
     /// (or [`Self::open`] a path when nothing else holds it). See the
     /// `rollback_to_fork` poison contract.
     poisoned: bool,
+    /// The live curve-tree frontier: the accumulator over exactly the
+    /// leaves the store has drained, which is the snapshot the ring holds
+    /// at [`Self::ingested_tip_height`].
+    ///
+    /// Kept in memory because the advance is the per-block hot path and a
+    /// decode per block would pay for the ring twice. It is not a second
+    /// source of truth: [`Self::ingest_block`] writes this exact value into
+    /// the ring in the block's own transaction, and every path that rebuilds
+    /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
+    /// re-derives it from the store rather than adjusting it.
+    frontier: Frontier,
+    /// Outputs whose membership-path material this client captures, as
+    /// `gindex -> O`.
+    ///
+    /// **Both halves, because a `gindex` is a name and not an identity.** It
+    /// is a position in the chain's output sequence, and a reorg re-derives
+    /// it: the same number can name a different output on the new chain. A
+    /// registry keyed on the number alone would then mark a stranger's leaf
+    /// as owned and capture its chunks, and no rule evaluated on the rebuilt
+    /// state can tell the two apart — see [`Self::rollback_to_fork`] for the
+    /// two inequalities that tried. `O` is a one-time key, so the pair names
+    /// one specific output and the question stops being answerable only in
+    /// hindsight.
+    ///
+    /// Registered by the wallet ([`Self::register_owned`]), never derived:
+    /// the curve-tree client sees every output on the chain and cannot tell
+    /// which are the wallet's — that is the scanner's knowledge, and keeping
+    /// it on this side would mean either a second view-key consumer or a
+    /// guess.
+    ///
+    /// **Session-scoped on purpose.** [`Self::resume`] starts empty, because
+    /// a registry persisted here would be a second copy of the wallet's own
+    /// output list — the thing that would silently rot when the two diverge.
+    /// The wallet re-registers what it holds; what that leaves owed is the
+    /// captures for chunks that closed before the registration, which
+    /// reconciliation discharges.
+    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
+    /// Drain positions of owned leaves, as the fold assigned them.
+    ///
+    /// Not derived from [`Self::owned_outputs`] on demand: a position is
+    /// the leaf's index in drain order, which is what the frontier counts as
+    /// it pushes. Recording it there is the one instrument; resolving it
+    /// again from the maturity index would be a second.
+    ///
+    /// Keyed by **position**, because the fold's intersection test is a
+    /// range over positions; the value is the gindex it resolved, which is
+    /// what assembly reverses to find an input's position. That reverse
+    /// lookup is a scan — the registry is the wallet's own output count and
+    /// a batch holds at most `MAX_INPUTS`.
+    ///
+    /// A rollback **retains** the positions below the surviving leaf count
+    /// and drops the rest — see [`Self::rollback_to_fork`].
+    pub(crate) owned_positions: BTreeMap<u64, Gindex>,
+}
+
+/// What registering an owned output means for the captures it needs
+/// ([`CurveTreeClient::register_owned`]).
+///
+/// The distinction is not cosmetic: capture rides the **fold**, and a fold
+/// happens once. Registering before the leaf drains puts every chunk over it
+/// on the capture path; registering after means the chunks that already
+/// closed were folded without a reason to keep them, and no future fold
+/// reports them again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OwnedRegistration {
+    /// The leaf has not drained at the ingested tip. Every chunk over it is
+    /// captured as the fold closes it; nothing is owed.
+    BeforeDrain,
+    /// The leaf had already drained. Chunks over it that closed before this
+    /// call are **not** captured, and are owed to reconciliation; chunks
+    /// that have yet to close are captured as normal.
+    ///
+    /// This is the state a resumed client leaves every held output in, since
+    /// the registry does not persist
+    /// ([`CurveTreeClient::register_owned`]).
+    AfterDrain,
+}
+
+/// What one [`CurveTreeClient::reconcile_captures`] call did.
+///
+/// Reported rather than returned as a bare count because the three numbers
+/// answer different questions: whether the call found work it did not know
+/// about, how many rows it touched, and how much it wrote. A reconcile that
+/// resolves positions but writes nothing is the normal steady state; one
+/// that writes on every call would mean the delta check is not working.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaptureReconciliation {
+    /// Owned positions this call resolved that were not already held — the
+    /// late registrations it picked up.
+    pub positions_resolved: usize,
+    /// Capture rows (`end_leaf` keys) written.
+    pub rows_written: usize,
+    /// Chunks written across those rows. Higher than `rows_written` wherever
+    /// a cascade put two layers under one key.
+    pub chunks_written: usize,
+    /// Leaves read and hashed to rebuild the missing chunks.
+    ///
+    /// The cost figure, and the one a caller should watch. **Zero** when
+    /// every due capture is already present, which is the normal resume —
+    /// reconciliation then costs a table read per due coordinate and no
+    /// hashing at all. A non-zero value is bounded by the spans of the
+    /// chunks actually missing (`outputs_per_node(layer)` each), never by
+    /// the chain's length.
+    pub leaves_rebuilt: u64,
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -365,6 +712,7 @@ struct RebuiltState {
     next_gindex: u64,
     entries_by_maturity: BTreeMap<BlockHeight, Vec<usize>>,
     ingested_tip_height: Option<BlockHeight>,
+    frontier: Frontier,
 }
 
 impl Default for CurveTreeClient {
@@ -384,6 +732,9 @@ impl CurveTreeClient {
             entries_by_maturity: BTreeMap::new(),
             ingested_tip_height: None,
             poisoned: false,
+            frontier: Frontier::new(),
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -573,6 +924,12 @@ impl CurveTreeClient {
             entries_by_maturity: rebuilt.entries_by_maturity,
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
+            frontier: rebuilt.frontier,
+            // A resumed client holds no registrations: the wallet's output
+            // list is the wallet's, and re-registering is what tells this
+            // client what to capture. See `owned_outputs`.
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -611,6 +968,45 @@ impl CurveTreeClient {
         let pending = store.read_pending_candidates().map_err(ClientError::from)?;
         let tip = store.sync_tip_height().map_err(ClientError::from)?;
 
+        // The live frontier comes from the ring's row at `tip` when there is
+        // one — an O(depth) decode instead of an O(leaves) fold, which is
+        // what makes an in-horizon rewind cost the fork height's snapshot
+        // plus the replay forward rather than a rebuild of the whole tree.
+        //
+        // A row whose leaf count is not the store's is **refused**, not
+        // quietly re-derived: the ring and the leaf tables are written in one
+        // transaction from a frontier already checked against the drain
+        // index, so a disagreement here is corruption, and C8's answer to
+        // corruption is refuse-and-resync rather than a repair that hides it.
+        //
+        // The fold below is the path for a store the ring does not cover: one
+        // written before the table existed, or one rolled back past the
+        // ring's span. It is correct and slow, which is the right way round.
+        let frontier = match Self::snapshot_at_in(store, tip)? {
+            Some(snapshot) => {
+                if snapshot.leaf_count() != stored {
+                    return Err(ClientError::SnapshotLeafCountMismatch {
+                        height: tip,
+                        snapshot: snapshot.leaf_count(),
+                        expected: stored,
+                    });
+                }
+                snapshot
+            }
+            None => {
+                let mut frontier = Frontier::new();
+                for entry in &drained {
+                    frontier
+                        .push_leaf(&entry.leaf)
+                        .map_err(|source| ClientError::Frontier {
+                            height: tip,
+                            source,
+                        })?;
+                }
+                frontier
+            }
+        };
+
         let mut entries: Vec<LeafEntry> = drained;
         entries.extend(pending);
         entries.sort_by_key(|entry| entry.gindex);
@@ -620,7 +1016,7 @@ impl CurveTreeClient {
             // mergeable state.
             if pair[1].gindex <= pair[0].gindex {
                 return Err(StoreError::DuplicateGindex {
-                    gindex: pair[1].gindex.0,
+                    gindex: pair[1].gindex.to_raw(),
                 }
                 .into());
             }
@@ -634,9 +1030,13 @@ impl CurveTreeClient {
                 .push(i);
         }
         let next_gindex = entries.last().map_or(0, |entry| {
-            entry.gindex.0.checked_add(1).expect("gindex fits u64")
+            entry
+                .gindex
+                .to_raw()
+                .checked_add(1)
+                .expect("gindex fits u64")
         });
-        let ingested_tip_height = if entries.is_empty() && tip == BlockHeight(0) {
+        let ingested_tip_height = if entries.is_empty() && tip == BlockHeight::from_raw(0) {
             None
         } else {
             Some(tip)
@@ -647,6 +1047,7 @@ impl CurveTreeClient {
             next_gindex,
             entries_by_maturity,
             ingested_tip_height,
+            frontier,
         })
     }
 
@@ -695,12 +1096,78 @@ impl CurveTreeClient {
         // client poisoned, which is the contract.
         self.poisoned = true;
         self.store.verify_frozen_tail().map_err(ClientError::from)?;
+        // Which registrations name an output this client holds *now* — read
+        // before the rebuild, because staleness is a set difference **across**
+        // the rollback and neither side alone answers it. See the retain
+        // below for why no inequality on `gindex` can.
+        let named_a_held_output: Vec<(Gindex, OneTimePubkey)> = self
+            .owned_outputs
+            .iter()
+            .filter(|(gindex, key)| Self::held_output(&self.entries, **gindex) == Some(**key))
+            .map(|(gindex, key)| (*gindex, *key))
+            .collect();
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
         self.next_gindex = rebuilt.next_gindex;
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        // The two holders a rollback has to trim, one event in two units.
+        //
+        // **Positions**, in drained-leaf coordinates: truncation deletes
+        // `range(start..)` and shifts nothing, so a surviving leaf keeps its
+        // position and a removed one re-resolves through the fold when it
+        // drains again. `start` is the surviving leaf count, which is the
+        // rebuilt frontier's — the same coordinate `FoldedChunk::end_leaf`
+        // is compared against.
+        let surviving = rebuilt.frontier.leaf_count();
+        self.owned_positions
+            .retain(|position, _| *position < surviving);
+
+        // **Registrations**, in `(gindex, O)`. This is now *cleanup*, not
+        // the correctness rule: ownership is tested by identity at the fold
+        // and in reconciliation, so a rebound gindex simply does not match
+        // and a stranger's chunks are never captured, whatever this does.
+        // What it buys is a registry that does not accumulate dead rows
+        // across reorgs.
+        //
+        // A registration is dropped iff the output it names *was* here and
+        // is now absent **or different** — the set difference taken above
+        // and below the rebuild, over the pair rather than the number. The
+        // identity half is load-bearing even here: a rollback that rebinds a
+        // gindex leaves it present, so a gindex-only difference keeps the
+        // dead row. Three rules were tried before this one, and the first
+        // two were not merely untidy but wrong:
+        //
+        // `gindex >= surviving_leaf_count` mixes units (a gindex is not a
+        // position; `TargetKind::Other` consumes one without draining a
+        // leaf) — `a_gindex_is_not_a_position`.
+        //
+        // `gindex < next_gindex && !entries.contains(gindex)` typechecks and
+        // still fails, in the case it was written for. A rollback removes
+        // the chain's tail, so every output it removes holds a gindex at or
+        // above the **rebuilt** `next_gindex`, which is `entries.last() + 1`
+        // over what survived. The clause meant to protect a registration for
+        // a not-yet-ingested output therefore protects every removed one too,
+        // and the rule drops nothing — `a_removed_gindex_sits_above_the_
+        // rebuilt_next_gindex`.
+        //
+        // *Candidate 3 — the same difference on `gindex` alone.* Shipped,
+        // then found to miss the rebinding case: a rollback that gives the
+        // gindex to a different output leaves it present, so the difference
+        // sees nothing gone.
+        //
+        // None of the three could answer the question from the rebuilt state,
+        // because a `gindex` is a name. Binding the registration to `O` at
+        // registration time is what makes it answerable at all — see
+        // `owned_outputs`. Nothing persists the registry (`resume` starts
+        // empty), so there is no stale trace to re-derive on a later open.
+        for (gindex, key) in named_a_held_output {
+            if Self::held_output(&self.entries, gindex) != Some(key) {
+                self.owned_outputs.remove(&gindex);
+            }
+        }
+        self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
     }
@@ -714,7 +1181,7 @@ impl CurveTreeClient {
         Ok(())
     }
 
-    /// Ingest one block, resolving `h_pqc` per output, threading the global
+    /// Ingest one block, resolving each output's leaf commitment, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
     /// ingested in strictly consecutive height order from genesis (`0`, `1`,
     /// `2`, …); gaps, duplicates, and rewinds return
@@ -722,8 +1189,10 @@ impl CurveTreeClient {
     ///
     /// **Store-write-before-commit (B5).** The block's full delta — newly
     /// drained bucket, newly created pending leaves, drained pending
-    /// removals, tip advance — lands in one ACID
-    /// [`LeafStore::append_block_deltas`] transaction *before* any
+    /// removals, tip advance, the frontier snapshot, and the path material
+    /// captured for registered outputs ([`Self::register_owned`]) — lands in
+    /// one ACID
+    /// [`LeafStore::append_block_with_snapshot`] transaction *before* any
     /// in-memory state changes. On `Err` the client is unchanged on both
     /// sides and the same block can be re-ingested; on `Ok` the in-memory
     /// commit is infallible. The store can therefore never lag memory; the
@@ -733,8 +1202,9 @@ impl CurveTreeClient {
     /// re-derives from the store.
     pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
         self.ensure_live()?;
-        let expected = self.ingested_tip_height.map_or(BlockHeight(0), |last| {
-            BlockHeight(last.0.checked_add(1).expect("chain height fits u64"))
+        let expected = self.ingested_tip_height.map_or(BlockHeight::ZERO, |last| {
+            last.checked_add(shekyl_types::BlockCount::ONE)
+                .expect("chain height fits u64")
         });
         if block.height != expected {
             return Err(ClientError::NonConsecutiveBlockHeight {
@@ -743,25 +1213,31 @@ impl CurveTreeClient {
             });
         }
 
-        // Resolve h_pqc per tx, then collect leaves. `identities` is kept
-        // alive across the `collect_block_leaves` call that borrows it.
-        let identities: Vec<Vec<OutputIdentity>> = block
-            .txs
-            .iter()
-            .map(|tx| {
-                let leaf_hashes = extract_leaf_hashes(tx.leaf_hash_blob);
+        // Resolve each output's published leaf commitment from the tx's
+        // `0x07` payload, then collect leaves. `identities` is kept alive
+        // across the `collect_block_leaves` call that borrows it. A payload
+        // an admitted chain cannot carry is an error, never a placeholder.
+        let mut identities: Vec<Vec<OutputIdentity>> = Vec::with_capacity(block.txs.len());
+        for (tx_index, tx) in block.txs.iter().enumerate() {
+            let commitments = extract_leaf_commitments(tx.leaf_entry_blob, tx.outputs.len())
+                .map_err(|source| ClientError::LeafEntries {
+                    height: block.height,
+                    tx_index,
+                    source,
+                })?;
+            identities.push(
                 tx.outputs
                     .iter()
-                    .enumerate()
-                    .map(|(i, raw)| OutputIdentity {
+                    .zip(commitments)
+                    .map(|(raw, cm)| OutputIdentity {
                         output_key: raw.output_key,
                         commitment: raw.commitment,
-                        h_pqc: per_output_h_pqc(&leaf_hashes, i),
+                        cm,
                         target: raw.target,
                     })
-                    .collect()
-            })
-            .collect();
+                    .collect(),
+            );
+        }
 
         let txs: Vec<TxOutputs<'_>> = block
             .txs
@@ -774,10 +1250,17 @@ impl CurveTreeClient {
             .collect();
 
         // Collect this block's leaves into a local vec — `self.entries` is
-        // untouched until the store transaction commits.
+        // untouched until the store transaction commits. A bad published
+        // point refuses the whole block (the local vec is discarded), so no
+        // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
         let next_gindex =
-            collect_block_leaves(block.height.0, &txs, self.next_gindex, &mut new_leaves);
+            collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves).map_err(
+                |source| ClientError::LeafPoint {
+                    height: block.height,
+                    source,
+                },
+            )?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never
@@ -790,15 +1273,40 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
-        // One ACID transaction for the whole block delta; the freeze clock
-        // (`META_SYNC_TIP`) advances to the ingested tip — the only height
-        // the freeze gate is ever driven by. An all-empty delta still
-        // advances the tip.
-        self.store
-            .append_block_deltas(&drained, &new_leaves, &removed, block.height)?;
+        // The frontier advances on a clone, and capture is collected with
+        // it, before the transaction opens. A hash failure or a short
+        // layer-0 read refuses the block with both sides untouched.
+        let mut advanced = self.frontier.clone();
+        let captured = self.fold_block_captures(block.height, &drained, &mut advanced)?;
+        // C3 in production, not only in a test: the snapshot this block
+        // captures must carry exactly the drain index's count for the
+        // cutoff, because root and depth are both read back off it.
+        let canonical = self.canonical_drained_count_on_ingest(through);
+        if advanced.leaf_count() != canonical {
+            return Err(ClientError::SnapshotLeafCountMismatch {
+                height: block.height,
+                snapshot: advanced.leaf_count(),
+                expected: canonical,
+            });
+        }
+        let snapshot = advanced.encode();
+
+        // One ACID transaction for the whole block delta — leaves, pending
+        // rows, the snapshot, and the freeze clock (`META_SYNC_TIP`, which
+        // advances to the ingested tip and is the only height the freeze gate
+        // is ever driven by). An all-empty delta still advances the tip, and
+        // still captures: a block that drains nothing has a frontier, and a
+        // ring that skipped it would have a hole at that height.
+        self.store.append_block_with_snapshot(
+            &drained,
+            &new_leaves,
+            &removed,
+            block.height,
+            &snapshot,
+            &captured.rows,
+        )?;
 
         // Store committed — the in-memory commit below is infallible.
-        let canonical = self.canonical_drained_count_on_ingest(through);
         let entry_base = self.entries.len();
         for (offset, entry) in new_leaves.iter().enumerate() {
             self.entries_by_maturity
@@ -809,6 +1317,8 @@ impl CurveTreeClient {
         self.entries.extend(new_leaves);
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
+        self.frontier = advanced;
+        self.owned_positions.extend(captured.pending_owned);
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -864,7 +1374,7 @@ impl CurveTreeClient {
     fn canonical_drained_count_on_ingest(&self, through: BlockHeight) -> u64 {
         let canonical = match self.drained_through_counts.last() {
             Some(&(t, count)) if t == through => count,
-            Some(&(t, count)) if t.0.checked_add(1) == Some(through.0) => {
+            Some(&(t, count)) if t.checked_add(shekyl_types::BlockCount::ONE) == Some(through) => {
                 let bucket = self.entries_by_maturity.get(&through).map_or(0, |indices| {
                     u64::try_from(indices.len()).expect("bucket fits u64")
                 });
@@ -876,12 +1386,12 @@ impl CurveTreeClient {
             canonical,
             self.drained_count_from_index(through),
             "incremental drained count diverged from the maturity index at through={}",
-            through.0
+            through.to_raw()
         );
         canonical
     }
 
-    fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
+    pub(crate) fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
         if let Ok(i) = self
             .drained_through_counts
             .binary_search_by_key(&through, |(t, _)| *t)
@@ -910,7 +1420,7 @@ impl CurveTreeClient {
     /// reference-height → drain-cutoff mapping.
     #[must_use]
     pub(crate) fn drained_through(reference_height: BlockHeight) -> BlockHeight {
-        BlockHeight(reference_height.0.saturating_sub(1))
+        reference_height.saturating_sub_count(shekyl_types::BlockCount::ONE)
     }
 
     /// The last block height passed to [`Self::ingest_block`] — or rebuilt by
@@ -918,7 +1428,7 @@ impl CurveTreeClient {
     /// is fresh (no blocks ingested).
     ///
     /// This is the **authoritative resume cursor** for a forward / backfill
-    /// ingest driver: the next block to ingest is `tip + 1` (`BlockHeight(0)`
+    /// ingest driver: the next block to ingest is `tip + 1` (`BlockHeight::from_raw(0)`
     /// when `None`), matching [`Self::ingest_block`]'s own consecutive-height
     /// expectation. The driver reads this cursor every iteration and holds **no**
     /// driver-local fetch-frontier of its own, so a reorg that rewinds the cursor
@@ -953,37 +1463,41 @@ impl CurveTreeClient {
     /// not `build_layers(&[])` (`CT2_DRAIN_ORDER.md` §5). Errors from the
     /// store propagate — there is no silent fallback to the replay oracle, so
     /// KATs and callers gate the CT-1 hot path rather than masking corruption.
-    pub fn root_at(&self, reference_height: BlockHeight) -> Result<[u8; 32], ClientError> {
+    pub fn root_at(&self, reference_height: BlockHeight) -> Result<CurveTreeRoot, ClientError> {
         // Single-source the reconstruction: defer to `root_and_depth_at` and
         // drop the depth (CT-5c Q1). Both the root-only read (this method, the
-        // §3.3 verify hot path) and the root+depth read go through the one
-        // `root_at_count(n)` call, so they cannot describe different tree
-        // states. The discarded depth is `layer_count_for_leaves`, a handful of
-        // integer divisions — negligible on the verify path.
+        // §3.3 verify hot path) and the root+depth read go through that one
+        // dispatcher — the snapshot ring when it covers the height, otherwise
+        // the count-keyed store path — so they cannot describe different tree
+        // states. The discarded depth is a handful of integer divisions.
         self.root_and_depth_at(reference_height)
             .map(|(root, _)| root)
     }
 
     /// Reconstruct the curve-tree root **and** its depth at `reference_height`,
-    /// both pinned to the same drained leaf count `n` (CT-5c Q1).
+    /// both pinned to the same drained leaf count `n` (CT-5c Q1, CT-6 C3).
     ///
-    /// The root is the [`LeafStore::root_at_count`] hot path; the depth is
-    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] over the same `n` (depth is
-    /// a pure function of the leaf count, so it needs no tree build). The two
-    /// reads share `n`, so the returned `(root, depth)` always describe the same
-    /// tree state — there is no cross-await window in which they could diverge.
+    /// When the snapshot ring covers the height, the root is [`Frontier::root`]
+    /// and the depth is [`Frontier::depth`], after checking the snapshot's own
+    /// leaf count against this height's `n`. A mismatch is
+    /// [`ClientError::SnapshotLeafCountMismatch`]: the row names a different
+    /// tree than the drain index, and serving around it would hide the capture.
+    /// A miss falls through to [`LeafStore::root_at_count`] for the root and
+    /// [`shekyl_fcmp::tree::layer_count_for_leaves`] for the depth, over that
+    /// same `n`. The two halves of a reading share one count, so they describe
+    /// the same tree.
     ///
     /// The CT-5c send path needs both before assembling: the depth sizes the
     /// FCMP++ proof weight for fee estimation (which runs *before* path
-    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
-    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
-    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
-    /// drift KAT, so the engine can assert their equality as a consistency
-    /// check that never fires benignly.
+    /// assembly), and the root binds the [`ReferenceBlock`]. Both assembly
+    /// routes stamp this depth onto `AssembledPath.tree.tree_depth`. The
+    /// rebuild compares it with `build_layers(..).len()` and refuses when
+    /// they disagree; the `layer_count_for_leaves` drift KAT is why that
+    /// comparison holds on a sound tree.
     pub fn root_and_depth_at(
         &self,
         reference_height: BlockHeight,
-    ) -> Result<([u8; 32], u8), ClientError> {
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
         self.ensure_live()?;
         let within_chain = self
             .ingested_tip_height
@@ -996,9 +1510,114 @@ impl CurveTreeClient {
         }
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
-        let root = self.store.root_at_count(n).map_err(ClientError::from)?;
-        let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
-        Ok((root, depth))
+        if let Some(snapshot) = self.snapshot_at(reference_height)? {
+            // C3: the snapshot answers with its own `n`, so the one thing
+            // that must be checked is that its `n` is this height's. A
+            // disagreement is refused rather than resolved in the store's
+            // favour: a ring row for the wrong height is a defect in the
+            // capture, and serving around it would hide it.
+            if snapshot.leaf_count() != n {
+                return Err(ClientError::SnapshotLeafCountMismatch {
+                    height: reference_height,
+                    snapshot: snapshot.leaf_count(),
+                    expected: n,
+                });
+            }
+            return Self::snapshot_reading(reference_height, &snapshot);
+        }
+        self.segment_tier_reading_at_count(n)
+    }
+
+    /// Root and depth off one snapshot, both taken from **its own** leaf
+    /// count (C3). The single place a `Frontier` becomes a reading, so the
+    /// production read above and the Q2 examiner below cannot be looking at
+    /// two different closures.
+    fn snapshot_reading(
+        height: BlockHeight,
+        snapshot: &Frontier,
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
+        let root = snapshot
+            .root()
+            .map_err(|source| ClientError::Frontier { height, source })?;
+        Ok((CurveTreeRoot::from_bytes(root), snapshot.depth()))
+    }
+
+    /// The **snapshot tier's** reading at `height`, or `None` where the ring
+    /// does not cover it — CT-6 Q2's second tier, as the increment-2
+    /// examiner consumes it.
+    ///
+    /// Root and depth both come from the snapshot's own leaf count. Taking
+    /// the depth from the client's drain index instead would weld this tier
+    /// to the segment tier on the depth axis, and the two could then never
+    /// disagree there — which is precisely the axis C3 pins.
+    ///
+    /// `None` means "outside the ring". A decode failure or a store error is
+    /// an `Err`: a tier that fails has no way to present itself as a gap.
+    ///
+    /// **Test-visible because only the examiner reads a tier in isolation.**
+    /// Production reads the *dispatcher*, [`Self::root_and_depth_at`]. This
+    /// is a delegation to the same two internals the dispatcher calls, not a
+    /// second read path — grading a path production does not run would grade
+    /// a shim.
+    #[cfg(test)]
+    pub(crate) fn snapshot_tier_reading(
+        &self,
+        height: BlockHeight,
+    ) -> Result<Option<(CurveTreeRoot, u8)>, ClientError> {
+        let Some(snapshot) = self.snapshot_at(height)? else {
+            return Ok(None);
+        };
+        Self::snapshot_reading(height, &snapshot).map(Some)
+    }
+
+    /// The **segment tier's** reading at `height`: the landed CT-1
+    /// composition (frozen `R_k` where the store holds them, recomputed
+    /// where it does not) over the drain index's count for that height.
+    /// Test-visible for the same reason as [`Self::snapshot_tier_reading`].
+    #[cfg(test)]
+    pub(crate) fn segment_tier_reading(
+        &self,
+        height: BlockHeight,
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
+        let n = self.drained_leaf_count_at(Self::drained_through(height));
+        self.segment_tier_reading_at_count(n)
+    }
+
+    fn segment_tier_reading_at_count(&self, n: u64) -> Result<(CurveTreeRoot, u8), ClientError> {
+        let root =
+            CurveTreeRoot::from_bytes(self.store.root_at_count(n).map_err(ClientError::from)?);
+        Ok((root, shekyl_fcmp::tree::layer_count_for_leaves(n)))
+    }
+
+    /// Decode the ring's row at `height`, if it has one.
+    pub(crate) fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
+        Self::snapshot_at_in(&self.store, height)
+    }
+
+    /// [`Self::snapshot_at`] against a store this client does not own yet —
+    /// the resume path, which runs before there is a `self`.
+    fn snapshot_at_in(
+        store: &LeafStore,
+        height: BlockHeight,
+    ) -> Result<Option<Frontier>, ClientError> {
+        let Some(bytes) = store
+            .frontier_snapshot_at(height)
+            .map_err(ClientError::from)?
+        else {
+            return Ok(None);
+        };
+        Frontier::decode(&bytes)
+            .map(Some)
+            .map_err(|source| ClientError::Frontier { height, source })
+    }
+
+    /// Heights the snapshot ring currently covers, or `None` when it is
+    /// empty — the snapshot tier's `HeightSpan`, read off the rows it has.
+    #[cfg(test)]
+    pub(crate) fn snapshot_span(&self) -> Result<Option<(BlockHeight, BlockHeight)>, ClientError> {
+        self.store
+            .frontier_snapshot_span()
+            .map_err(ClientError::from)
     }
 
     /// The root a block built on the current tip commits to
@@ -1026,19 +1645,20 @@ impl CurveTreeClient {
     /// the oracle the store KATs are pinned to) — linear in the drained
     /// leaves per call. A producer-side read (test generator, template
     /// construction on a store-less node), not the verify hot path.
-    pub fn next_block_root(&self) -> Result<[u8; 32], ClientError> {
+    pub fn next_block_root(&self) -> Result<CurveTreeRoot, ClientError> {
         self.ensure_live()?;
         let Some(tip) = self.ingested_tip_height else {
-            return Ok(selene_hash_init());
+            return Ok(CurveTreeRoot::EMPTY);
         };
         let n = self.drained_leaf_count_at(tip);
         let stored = self.store.leaf_count().map_err(ClientError::from)?;
         if n <= stored {
-            return self.store.root_at_count(n).map_err(ClientError::from);
+            return Ok(CurveTreeRoot::from_bytes(
+                self.store.root_at_count(n).map_err(ClientError::from)?,
+            ));
         }
-        Ok(root_from_scalars(&assemble_leaf_stream(
-            &self.entries,
-            tip.0,
+        Ok(CurveTreeRoot::from_bytes(root_from_scalars(
+            &assemble_leaf_stream(&self.entries, tip),
         )))
     }
 
@@ -1059,6 +1679,30 @@ impl CurveTreeClient {
         }
     }
 
+    /// Overwrite (or, with `None`, delete) the ring's row at `height`.
+    ///
+    /// Test-only. A correct capture and a correct restore write the same
+    /// bytes, so a test that wants to know **which** of them a reader
+    /// consulted has to change one of those bytes and look.
+    #[cfg(test)]
+    pub(crate) fn test_set_snapshot(
+        &self,
+        height: BlockHeight,
+        frontier: Option<&Frontier>,
+    ) -> Result<(), ClientError> {
+        let encoded = frontier.map(Frontier::encode);
+        self.store
+            .test_set_frontier_snapshot(height, encoded.as_deref())
+            .map_err(ClientError::from)
+    }
+
+    /// The live frontier's leaf count — what the next block's snapshot will
+    /// be captured over. Test-only; production reads the ring.
+    #[cfg(test)]
+    pub(crate) fn live_frontier_leaf_count(&self) -> u64 {
+        self.frontier.leaf_count()
+    }
+
     /// Number of leaves drained into the tree at `reference_height`.
     #[must_use]
     pub fn drained_leaf_count(&self, reference_height: BlockHeight) -> usize {
@@ -1073,67 +1717,29 @@ impl From<StoreError> for ClientError {
     }
 }
 
+// CT-6 increment 2. The oracle fixture and the Q2 examiner live in
+// `ct6_oracle` so this file does not absorb them. Increment 4's real-tier
+// passes live in `ct6_oracle::ring` and grade both tiers through
+// `examine_tier_readings`.
+#[cfg(test)]
+mod ct6_oracle;
+
+// The leaf fixtures every test under this module builds its chains from.
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures::{
+        coinbase_block, ingest_coinbase_blocks, ingest_outputs_at, leaf_blob_at, leaf_entry_at,
+        leaves_pairwise_distinct, raw_output_at, raw_outputs_at,
+    };
     use super::*;
     use crate::recon::{
         assemble_leaf_stream, drained_sorted, newly_drained_at_cutoff, root_from_scalars,
     };
+    use crate::types::{BlockHash, CurveTreeRoot};
     use shekyl_consensus::COINBASE_LOCK_WINDOW;
-    use shekyl_fcmp::tree::selene_hash_init;
-
-    /// Standard Ed25519 basepoint, compressed — a valid, torsion-free
-    /// point `construct_leaf` accepts for both `O` and `C`.
-    const ED25519_BASEPOINT: [u8; 32] = [
-        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-        0x66, 0x66,
-    ];
-
-    fn coinbase_raw() -> RawOutput {
-        RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
-            target: TargetKind::TaggedKey,
-        }
-    }
-
-    /// One coinbase tx carrying a per-output `0x07` hash blob of `n` × 32
-    /// bytes (one well-formed hash per output, as a V3 chain always emits).
-    fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
-        vec![TxLeafInputs {
-            is_miner: true,
-            leaf_hash_blob: Some(blob),
-            outputs,
-        }]
-    }
-
-    /// Ingest consecutive single-coinbase blocks at heights `from..=to` — the
-    /// production chain shape (every real block carries a coinbase).
-    fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
-        for height in from..=to {
-            let txs = coinbase_block(&outs, &blob);
-            client
-                .ingest_block(BlockLeaves {
-                    height: BlockHeight(height),
-                    txs: &txs,
-                })
-                .unwrap();
-        }
-    }
-
-    fn ingest_outputs_at(client: &mut CurveTreeClient, height: u64, outputs: &[RawOutput]) {
-        let blob = vec![0x07u8; outputs.len() * 32];
-        let txs = coinbase_block(outputs, &blob);
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
-                txs: &txs,
-            })
-            .unwrap();
-    }
 
     fn ingest_class_b_fixture_prefix(client: &mut CurveTreeClient, tip: u64) {
         for height in 0..=tip {
@@ -1143,81 +1749,97 @@ mod tests {
                 // = 124, far past the test's 66-block window). Post claim-era
                 // cutover the coinbase lock is the longest wire-real maturity,
                 // so a near-tip coinbase replaces the old staked fixture.
-                let outputs = [coinbase_raw(), coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 2));
             } else {
-                let outputs = [coinbase_raw()];
-                ingest_outputs_at(client, height, &outputs);
+                ingest_outputs_at(client, height, &raw_outputs_at(height, 1));
             }
         }
     }
 
     #[test]
     fn newly_drained_from_index_matches_oracle() {
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[
-            BlockLeaves {
-                height: BlockHeight(0),
-                txs: &txs0,
-            },
-            BlockLeaves {
-                height: BlockHeight(1),
-                txs: &txs1,
-            },
-        ])
-        .unwrap();
-        for through in 0..=61u64 {
+        // Two coinbase outputs (m = h+60) and two regular outputs (m = h+10)
+        // per block, so a maturity bucket holds leaves from two blocks and
+        // two leaves from each. A one-leaf bucket has one order, and neither
+        // side's ordering could be wrong on it.
+        let mut client = CurveTreeClient::new();
+        for height in 0..=80u64 {
+            let cb_outs = [raw_output_at(height, 0), raw_output_at(height, 1)];
+            let reg_outs = [raw_output_at(height, 2), raw_output_at(height, 3)];
+            let cb_blob = leaf_blob_at(height, 2);
+            let reg_blob: Vec<u8> = [leaf_entry_at(height, 2), leaf_entry_at(height, 3)].concat();
+            let txs = [
+                TxLeafInputs {
+                    is_miner: true,
+                    leaf_entry_blob: Some(&cb_blob),
+                    outputs: &cb_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    leaf_entry_blob: Some(&reg_blob),
+                    outputs: &reg_outs,
+                },
+            ];
+            client
+                .ingest_block(BlockLeaves {
+                    height: BlockHeight::from_raw(height),
+                    txs: &txs,
+                })
+                .unwrap();
+        }
+        let mut widest = 0;
+        for through in 0..=80u64 {
+            let from_index = client.newly_drained_from_index(BlockHeight::from_raw(through));
+            widest = widest.max(from_index.len());
             assert_eq!(
-                client.newly_drained_from_index(BlockHeight(through)),
-                newly_drained_at_cutoff(&client.entries, through),
+                from_index,
+                newly_drained_at_cutoff(&client.entries, BlockHeight::from_raw(through)),
                 "through={through}"
             );
         }
+        assert_eq!(
+            widest, 4,
+            "a bucket must hold both blocks' pairs, or no ordering was compared"
+        );
     }
 
     #[test]
     fn ingest_block_rejects_non_consecutive_heights() {
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let txs = coinbase_block(&outs, &blob);
         let block0 = BlockLeaves {
-            height: BlockHeight(0),
+            height: BlockHeight::from_raw(0),
             txs: &txs,
         };
         let block1 = BlockLeaves {
-            height: BlockHeight(1),
+            height: BlockHeight::from_raw(1),
             txs: &txs,
         };
         let mut client = CurveTreeClient::new();
 
         assert!(matches!(
             client.ingest_block(block1),
-            Err(ClientError::NonConsecutiveBlockHeight {
-                got: BlockHeight(1),
-                expected: BlockHeight(0),
-            })
+            Err(ClientError::NonConsecutiveBlockHeight { got, expected })
+                if got == BlockHeight::from_raw(1)
+                    && expected == BlockHeight::from_raw(0)
         ));
 
         client.ingest_block(block0).unwrap();
         assert!(matches!(
             client.ingest_block(block0),
-            Err(ClientError::NonConsecutiveBlockHeight {
-                got: BlockHeight(0),
-                expected: BlockHeight(1),
-            })
+            Err(ClientError::NonConsecutiveBlockHeight { got, expected })
+                if got == BlockHeight::from_raw(0)
+                    && expected == BlockHeight::from_raw(1)
         ));
         assert!(matches!(
             client.ingest_block(BlockLeaves {
-                height: BlockHeight(2),
+                height: BlockHeight::from_raw(2),
                 txs: &txs,
             }),
-            Err(ClientError::NonConsecutiveBlockHeight {
-                got: BlockHeight(2),
-                expected: BlockHeight(1),
-            })
+            Err(ClientError::NonConsecutiveBlockHeight { got, expected })
+                if got == BlockHeight::from_raw(2)
+                    && expected == BlockHeight::from_raw(1)
         ));
     }
 
@@ -1225,13 +1847,11 @@ mod tests {
     fn root_before_any_ingest_is_rejected() {
         let client = CurveTreeClient::new();
         assert!(matches!(
-            client.root_at(BlockHeight(0)),
-            Err(ClientError::ReferenceBeyondIngestedTip {
-                reference_height: BlockHeight(0),
-                ingested_tip: None,
-            })
+            client.root_at(BlockHeight::from_raw(0)),
+            Err(ClientError::ReferenceBeyondIngestedTip { reference_height, ingested_tip })
+                if reference_height == BlockHeight::from_raw(0) && ingested_tip.is_none()
         ));
-        assert_eq!(client.drained_leaf_count(BlockHeight(1000)), 0);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(1000)), 0);
     }
 
     #[test]
@@ -1240,8 +1860,11 @@ mod tests {
         // genesis is the empty-tree sentinel.
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 0);
-        assert_eq!(client.root_at(BlockHeight(0)).unwrap(), selene_hash_init());
-        assert_eq!(client.drained_leaf_count(BlockHeight(0)), 0);
+        assert_eq!(
+            client.root_at(BlockHeight::from_raw(0)).unwrap(),
+            CurveTreeRoot::EMPTY
+        );
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(0)), 0);
     }
 
     #[test]
@@ -1249,56 +1872,43 @@ mod tests {
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 0);
         assert!(matches!(
-            client.root_at(BlockHeight(1)),
-            Err(ClientError::ReferenceBeyondIngestedTip {
-                reference_height: BlockHeight(1),
-                ingested_tip: Some(BlockHeight(0)),
-            })
+            client.root_at(BlockHeight::from_raw(1)),
+            Err(ClientError::ReferenceBeyondIngestedTip { reference_height, .. })
+                if reference_height == BlockHeight::from_raw(1)
         ));
         // The rejected query left no trace in the store: the freeze clock
         // still sits at the ingested tip.
-        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(
+            client.store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(0)
+        );
     }
 
     #[test]
     fn duplicate_drained_through_updates_cache_in_place() {
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
-        let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight(0),
-                txs: &txs,
-            })
-            .unwrap();
-        client
-            .ingest_block(BlockLeaves {
-                height: BlockHeight(1),
-                txs: &txs,
-            })
-            .unwrap();
+        ingest_coinbase_blocks(&mut client, 0, 1);
         assert_eq!(client.drained_through_counts.len(), 1);
-        assert_eq!(client.drained_through_counts[0].0, BlockHeight(0));
+        assert_eq!(client.drained_through_counts[0].0, BlockHeight::from_raw(0));
         assert_eq!(
-            client.drained_leaf_count(BlockHeight(1)),
-            client.drained_leaf_count(BlockHeight(2))
+            client.drained_leaf_count(BlockHeight::from_raw(1)),
+            client.drained_leaf_count(BlockHeight::from_raw(2))
         );
     }
 
     #[test]
     fn drained_through_is_reference_minus_one() {
         assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight(0)),
-            BlockHeight(0)
+            CurveTreeClient::drained_through(BlockHeight::from_raw(0)),
+            BlockHeight::from_raw(0)
         );
         assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight(1)),
-            BlockHeight(0)
+            CurveTreeClient::drained_through(BlockHeight::from_raw(1)),
+            BlockHeight::from_raw(0)
         );
         assert_eq!(
-            CurveTreeClient::drained_through(BlockHeight(61)),
-            BlockHeight(60)
+            CurveTreeClient::drained_through(BlockHeight::from_raw(61)),
+            BlockHeight::from_raw(60)
         );
     }
 
@@ -1309,13 +1919,13 @@ mod tests {
         // cached cutoffs.
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 62);
-        assert_eq!(client.drained_leaf_count(BlockHeight(60)), 0);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(60)), 0);
         assert_eq!(
-            client.drained_leaf_count(BlockHeight(61)),
+            client.drained_leaf_count(BlockHeight::from_raw(61)),
             1,
             "only the genesis coinbase has drained by height 61"
         );
-        assert_eq!(client.drained_leaf_count(BlockHeight(62)), 2);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(62)), 2);
         for w in client.drained_through_counts.windows(2) {
             assert!(w[0].0 <= w[1].0, "drained_through cache must stay sorted");
         }
@@ -1328,38 +1938,33 @@ mod tests {
         // holds two entries from two different blocks. The O(1) incremental
         // count in ingest_block must agree with the maturity-index scan at
         // every cutoff (the ingest-path debug_assert also checks each step).
-        let cb = coinbase_raw();
-        let regular = RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
-            target: TargetKind::TaggedKey,
-        };
-        let blob = [0x07u8; 32];
-        let cb_outs = [cb];
-        let reg_outs = [regular];
         let mut client = CurveTreeClient::new();
         for height in 0..=100u64 {
+            let cb_outs = [raw_output_at(height, 0)];
+            let reg_outs = [raw_output_at(height, 1)];
+            let cb_blob = leaf_entry_at(height, 0);
+            let reg_blob = leaf_entry_at(height, 1);
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&cb_blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&reg_blob),
                     outputs: &reg_outs,
                 },
             ];
             client
                 .ingest_block(BlockLeaves {
-                    height: BlockHeight(height),
+                    height: BlockHeight::from_raw(height),
                     txs: &txs,
                 })
                 .unwrap();
         }
         for reference in 0..=100u64 {
-            let through = CurveTreeClient::drained_through(BlockHeight(reference));
+            let through = CurveTreeClient::drained_through(BlockHeight::from_raw(reference));
             assert_eq!(
                 client.drained_leaf_count_at(through),
                 client.drained_count_from_index(through),
@@ -1368,10 +1973,10 @@ mod tests {
         }
         // Both maturity schedules are live in the drained set.
         assert_eq!(
-            u64::try_from(client.drained_leaf_count(BlockHeight(100))).unwrap(),
-            client.drained_count_from_index(BlockHeight(99))
+            u64::try_from(client.drained_leaf_count(BlockHeight::from_raw(100))).unwrap(),
+            client.drained_count_from_index(BlockHeight::from_raw(99))
         );
-        assert!(client.drained_leaf_count(BlockHeight(100)) > 0);
+        assert!(client.drained_leaf_count(BlockHeight::from_raw(100)) > 0);
     }
 
     #[test]
@@ -1380,38 +1985,35 @@ mod tests {
         // lower-maturity regular output (m=11). Insertion order differs from
         // canonical `(maturity, gindex)` drain order; the store mirror must
         // produce the canonical-order root anyway.
-        let outs_cb = [coinbase_raw()];
-        let regular = RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
-            target: TargetKind::TaggedKey,
-        };
-        let blob0 = [0x01u8; 32];
-        let blob1_cb = [0x02u8; 32];
-        let blob1_reg = [0x03u8; 32];
-        let txs0 = coinbase_block(&outs_cb, &blob0);
+        let outs0 = [raw_output_at(0, 0)];
+        let outs1_cb = [raw_output_at(1, 0)];
+        let outs1_reg = [raw_output_at(1, 1)];
+        let blob0 = leaf_entry_at(0, 0);
+        let blob1_cb = leaf_entry_at(1, 0);
+        let blob1_reg = leaf_entry_at(1, 1);
+        let txs0 = coinbase_block(&outs0, &blob0);
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blob1_cb),
-                outputs: &outs_cb,
+                leaf_entry_blob: Some(&blob1_cb),
+                outputs: &outs1_cb,
             },
             TxLeafInputs {
                 is_miner: false,
-                leaf_hash_blob: Some(&blob1_reg),
-                outputs: &[regular],
+                leaf_entry_blob: Some(&blob1_reg),
+                outputs: &outs1_reg,
             },
         ];
         let mut client = CurveTreeClient::new();
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(0),
+                height: BlockHeight::from_raw(0),
                 txs: &txs0,
             })
             .unwrap();
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(1),
+                height: BlockHeight::from_raw(1),
                 txs: &txs1,
             })
             .unwrap();
@@ -1419,15 +2021,23 @@ mod tests {
 
         // At through=61 the drained set is m=11 (regular), m=60 (cb 0),
         // m=61 (cb 1) — none of the later coinbases.
-        let drained = drained_sorted(&client.entries, 61);
+        let drained = drained_sorted(&client.entries, BlockHeight::from_raw(61));
         assert_eq!(drained.len(), 3);
+        // The test observes its own setup. With identical leaves every
+        // ordering produces the same root, and the comparison below could
+        // not fail.
+        let drained_leaves: Vec<LeafEntry> = drained.iter().map(|entry| **entry).collect();
+        assert_eq!(leaves_pairwise_distinct(&drained_leaves), Ok(()));
         assert!(drained
             .windows(2)
             .all(|w| (w[0].maturity, w[0].gindex) <= (w[1].maturity, w[1].gindex)));
 
-        let oracle = root_from_scalars(&assemble_leaf_stream(&client.entries, 61));
+        let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+            &client.entries,
+            BlockHeight::from_raw(61),
+        )));
         assert_eq!(
-            client.root_at(BlockHeight(62)).unwrap(),
+            client.root_at(BlockHeight::from_raw(62)).unwrap(),
             oracle,
             "store mirror must follow canonical drain order, not insertion order"
         );
@@ -1437,10 +2047,10 @@ mod tests {
     fn historical_root_stable_as_chain_extends() {
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 61);
-        let root61 = client.root_at(BlockHeight(61)).unwrap();
+        let root61 = client.root_at(BlockHeight::from_raw(61)).unwrap();
         ingest_coinbase_blocks(&mut client, 62, 62);
-        assert_eq!(client.root_at(BlockHeight(61)).unwrap(), root61);
-        assert_eq!(client.drained_leaf_count(BlockHeight(61)), 1);
+        assert_eq!(client.root_at(BlockHeight::from_raw(61)).unwrap(), root61);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(61)), 1);
         for w in client.drained_through_counts.windows(2) {
             assert!(w[0].0 <= w[1].0, "drained_through cache must stay sorted");
         }
@@ -1453,74 +2063,86 @@ mod tests {
         ingest_coinbase_blocks(&mut client, 0, 61);
 
         // Empty through the maturity height itself...
-        assert_eq!(client.root_at(BlockHeight(60)).unwrap(), selene_hash_init());
-        assert_eq!(client.drained_leaf_count(BlockHeight(60)), 0);
+        assert_eq!(
+            client.root_at(BlockHeight::from_raw(60)).unwrap(),
+            CurveTreeRoot::EMPTY
+        );
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(60)), 0);
         // ...non-empty from the next block.
-        assert_ne!(client.root_at(BlockHeight(61)).unwrap(), selene_hash_init());
-        assert_eq!(client.drained_leaf_count(BlockHeight(61)), 1);
+        assert_ne!(
+            client.root_at(BlockHeight::from_raw(61)).unwrap(),
+            CurveTreeRoot::EMPTY
+        );
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(61)), 1);
         assert_eq!(COINBASE_LOCK_WINDOW as u64, 60);
     }
 
     #[test]
     fn gindex_threads_across_blocks() {
         // Two single-coinbase blocks: gindex must advance 0 then 1.
-        // The blob lands verbatim as the leaf's 4th scalar and the store
-        // validates pending rows at write time, so it must be canonical
-        // (top bit clear keeps it below the Selene modulus).
-        let outs = [coinbase_raw()];
-        let blob = [0x2Au8; 32];
-        let txs0 = coinbase_block(&outs, &blob);
-        let txs1 = coinbase_block(&outs, &blob);
+        // The entry's commitment point yields the leaf's 4th scalar (its
+        // x-coordinate, always a canonical Selene scalar) and the store
+        // validates pending rows at write time.
+        let (outs0, blob0) = (raw_outputs_at(0, 1), leaf_blob_at(0, 1));
+        let (outs1, blob1) = (raw_outputs_at(1, 1), leaf_blob_at(1, 1));
+        let txs0 = coinbase_block(&outs0, &blob0);
+        let txs1 = coinbase_block(&outs1, &blob1);
         let blocks = [
             BlockLeaves {
-                height: BlockHeight(0),
+                height: BlockHeight::from_raw(0),
                 txs: &txs0,
             },
             BlockLeaves {
-                height: BlockHeight(1),
+                height: BlockHeight::from_raw(1),
                 txs: &txs1,
             },
         ];
         let client = CurveTreeClient::from_blocks(&blocks).unwrap();
         assert_eq!(client.next_gindex, 2, "two coinbases consume indices 0,1");
         assert_eq!(client.entries.len(), 2);
-        assert_eq!(client.entries[0].gindex, Gindex(0));
-        assert_eq!(client.entries[1].gindex, Gindex(1));
+        assert_eq!(client.entries[0].gindex, Gindex::from_raw(0));
+        assert_eq!(client.entries[1].gindex, Gindex::from_raw(1));
     }
 
     #[test]
     fn ingest_resolves_h_pqc_from_blob() {
-        // The blob's per-output hash must land in the leaf's 4th scalar.
-        let outs = [coinbase_raw()];
-        let blob = [0x42u8; 32];
+        // The entry's commitment point must land in the leaf's 4th scalar as
+        // its Wei25519 x-coordinate (`construct_leaf` extracts it).
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
+        let mut cm = [0u8; 32];
+        cm.copy_from_slice(&blob[..32]);
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(0),
+                height: BlockHeight::from_raw(0),
                 txs: &txs,
             })
             .unwrap();
         assert_eq!(client.entries.len(), 1);
-        assert_eq!(&client.entries[0].leaf[96..128], &[0x42u8; 32]);
+        let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
+            .expect("fixture commitment point decompresses");
+        assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
+        assert_eq!(client.entries[0].identity.cm, cm);
     }
 
     #[test]
     fn other_target_consumes_index_but_is_not_a_leaf() {
         // [Other, valid]: the Other output advances gindex but is no leaf.
-        let mut other = coinbase_raw();
+        let mut other = raw_output_at(0, 0);
         other.target = TargetKind::Other;
-        let outs = [other, coinbase_raw()];
-        let blob = [0x01u8; 64]; // one hash per vout
+        let outs = [other, raw_output_at(0, 1)];
+        let blob = leaf_blob_at(0, 2); // one entry per vout
         let txs = coinbase_block(&outs, &blob);
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
-            height: BlockHeight(0),
+            height: BlockHeight::from_raw(0),
             txs: &txs,
         }])
         .unwrap();
         assert_eq!(client.next_gindex, 2, "both vouts consume an index");
         assert_eq!(client.entries.len(), 1, "only the valid output is a leaf");
-        assert_eq!(client.entries[0].gindex, Gindex(1));
+        assert_eq!(client.entries[0].gindex, Gindex::from_raw(1));
     }
 
     #[test]
@@ -1543,8 +2165,8 @@ mod tests {
         // from 61, where the first coinbase drains).
         for h in 0..=65u64 {
             assert_eq!(
-                rebuilt.root_at(BlockHeight(h)).unwrap(),
-                fresh.root_at(BlockHeight(h)).unwrap(),
+                rebuilt.root_at(BlockHeight::from_raw(h)).unwrap(),
+                fresh.root_at(BlockHeight::from_raw(h)).unwrap(),
                 "height {h}"
             );
         }
@@ -1556,16 +2178,16 @@ mod tests {
         ingest_coinbase_blocks(&mut rolled, 0, 70);
         // Populate the cache before rollback; rollback must clear it rather
         // than preserving stale cutoff answers from the orphaned suffix.
-        assert_eq!(rolled.drained_leaf_count(BlockHeight(70)), 10);
+        assert_eq!(rolled.drained_leaf_count(BlockHeight::from_raw(70)), 10);
         assert!(!rolled.drained_through_counts.is_empty());
 
-        rolled.rollback_to_fork(BlockHeight(65)).unwrap();
-        assert_eq!(rolled.ingested_tip_height, Some(BlockHeight(65)));
+        rolled.rollback_to_fork(BlockHeight::from_raw(65)).unwrap();
+        assert_eq!(rolled.ingested_tip_height, Some(BlockHeight::from_raw(65)));
         assert!(rolled.drained_through_counts.is_empty());
         assert_eq!(rolled.next_gindex, 66);
         assert_eq!(
             rolled.store.sync_tip_height().unwrap(),
-            BlockHeight(65),
+            BlockHeight::from_raw(65),
             "store tip is the rollback source of truth"
         );
 
@@ -1585,8 +2207,8 @@ mod tests {
         );
         for h in 0..=70u64 {
             assert_eq!(
-                rolled.root_at(BlockHeight(h)).unwrap(),
-                fresh.root_at(BlockHeight(h)).unwrap(),
+                rolled.root_at(BlockHeight::from_raw(h)).unwrap(),
+                fresh.root_at(BlockHeight::from_raw(h)).unwrap(),
                 "height {h}"
             );
         }
@@ -1600,10 +2222,10 @@ mod tests {
         let next_gindex = client.next_gindex;
         let pending = client.store.read_pending_candidates().unwrap();
 
-        client.rollback_to_fork(BlockHeight(10)).unwrap();
+        client.rollback_to_fork(BlockHeight::from_raw(10)).unwrap();
         assert_eq!(client.entries, entries);
         assert_eq!(client.next_gindex, next_gindex);
-        assert_eq!(client.ingested_tip_height, Some(BlockHeight(10)));
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight::from_raw(10)));
         assert_eq!(client.store.read_pending_candidates().unwrap(), pending);
         assert!(client.drained_through_counts.is_empty());
     }
@@ -1615,7 +2237,9 @@ mod tests {
         let entries = client.entries.clone();
         let next_gindex = client.next_gindex;
 
-        let err = client.rollback_to_fork(BlockHeight(6)).unwrap_err();
+        let err = client
+            .rollback_to_fork(BlockHeight::from_raw(6))
+            .unwrap_err();
         assert!(matches!(
             err,
             ClientError::Store(StoreError::InvalidRollback {
@@ -1625,13 +2249,16 @@ mod tests {
         ));
         assert_eq!(client.entries, entries);
         assert_eq!(client.next_gindex, next_gindex);
-        assert_eq!(client.ingested_tip_height, Some(BlockHeight(5)));
-        assert_eq!(client.store.sync_tip_height().unwrap(), BlockHeight(5));
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight::from_raw(5)));
+        assert_eq!(
+            client.store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(5)
+        );
         // The failure was before the store committed, so the client is not
         // poisoned: it stays fully usable.
         assert!(!client.poisoned);
-        client.root_at(BlockHeight(5)).unwrap();
-        client.rollback_to_fork(BlockHeight(3)).unwrap();
+        client.root_at(BlockHeight::from_raw(5)).unwrap();
+        client.rollback_to_fork(BlockHeight::from_raw(3)).unwrap();
     }
 
     #[test]
@@ -1646,23 +2273,23 @@ mod tests {
         client.poisoned = true;
 
         assert!(matches!(
-            client.root_at(BlockHeight(5)),
+            client.root_at(BlockHeight::from_raw(5)),
             Err(ClientError::Poisoned)
         ));
         assert!(matches!(
             client.verify_root(&ReferenceBlock {
-                height: BlockHeight(5),
-                curve_tree_root: [0u8; 32],
-                block_hash: [0u8; 32],
+                height: BlockHeight::from_raw(5),
+                curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+                block_hash: BlockHash::NULL,
             }),
             Err(ClientError::Poisoned)
         ));
         assert!(matches!(
-            client.rollback_to_fork(BlockHeight(3)),
+            client.rollback_to_fork(BlockHeight::from_raw(3)),
             Err(ClientError::Poisoned)
         ));
         let block = BlockLeaves {
-            height: BlockHeight(6),
+            height: BlockHeight::from_raw(6),
             txs: &[],
         };
         assert!(matches!(
@@ -1683,10 +2310,10 @@ mod tests {
 
         // `ingest_coinbase_blocks(from, to)` is inclusive: heights 0..=5.
         ingest_coinbase_blocks(&mut client, 0, 5);
-        assert_eq!(client.ingested_tip_height(), Some(BlockHeight(5)));
+        assert_eq!(client.ingested_tip_height(), Some(BlockHeight::from_raw(5)));
 
-        client.rollback_to_fork(BlockHeight(2)).unwrap();
-        assert_eq!(client.ingested_tip_height(), Some(BlockHeight(2)));
+        client.rollback_to_fork(BlockHeight::from_raw(2)).unwrap();
+        assert_eq!(client.ingested_tip_height(), Some(BlockHeight::from_raw(2)));
     }
 
     #[test]
@@ -1694,18 +2321,18 @@ mod tests {
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 10);
 
-        client.rollback_to_fork(BlockHeight(0)).unwrap();
+        client.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
         assert_eq!(client.entries.len(), 1);
-        assert_eq!(client.entries[0].gindex, Gindex(0));
+        assert_eq!(client.entries[0].gindex, Gindex::from_raw(0));
         assert_eq!(client.next_gindex, 1);
-        assert_eq!(client.ingested_tip_height, Some(BlockHeight(0)));
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight::from_raw(0)));
         assert_eq!(
             client.store.read_pending_candidates().unwrap(),
             vec![client.entries[0]]
         );
 
         ingest_coinbase_blocks(&mut client, 1, 1);
-        assert_eq!(client.ingested_tip_height, Some(BlockHeight(1)));
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight::from_raw(1)));
         assert_eq!(client.entries.len(), 2);
         assert_eq!(client.next_gindex, 2);
     }
@@ -1714,19 +2341,19 @@ mod tests {
     fn from_blocks_pending_matches_explicit_replay() {
         // CT-3c's fresh-build oracle is meaningful only because
         // from_blocks replays the same per-block delta path.
-        let out0 = [coinbase_raw()];
-        let blob0 = [0x07u8; 32];
+        let out0 = raw_outputs_at(0, 1);
+        let blob0 = leaf_blob_at(0, 1);
         let txs0 = coinbase_block(&out0, &blob0);
-        let out1 = [coinbase_raw(), coinbase_raw()];
-        let blob1 = [0x07u8; 64];
+        let out1 = raw_outputs_at(1, 2);
+        let blob1 = leaf_blob_at(1, 2);
         let txs1 = coinbase_block(&out1, &blob1);
         let blocks = [
             BlockLeaves {
-                height: BlockHeight(0),
+                height: BlockHeight::from_raw(0),
                 txs: &txs0,
             },
             BlockLeaves {
-                height: BlockHeight(1),
+                height: BlockHeight::from_raw(1),
                 txs: &txs1,
             },
         ];
@@ -1759,11 +2386,13 @@ mod tests {
                 .read_drained_entries()
                 .unwrap()
                 .iter()
-                .any(|entry| entry.maturity == BlockHeight(65)),
+                .any(|entry| entry.maturity == BlockHeight::from_raw(65)),
             "orphaned suffix must drain the class-(b) witness"
         );
 
-        orphaned.rollback_to_fork(BlockHeight(65)).unwrap();
+        orphaned
+            .rollback_to_fork(BlockHeight::from_raw(65))
+            .unwrap();
 
         let mut fresh_prefix = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut fresh_prefix, 65);
@@ -1778,12 +2407,12 @@ mod tests {
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .any(|entry| entry.maturity == BlockHeight(64 + COINBASE_LOCK_WINDOW as u64)),
+                .any(|entry| entry.maturity
+                    == BlockHeight::from_raw(64 + COINBASE_LOCK_WINDOW as u64)),
             "long-maturity coinbase row stays pending and directly compared"
         );
 
-        let output = [coinbase_raw()];
-        ingest_outputs_at(&mut orphaned, 66, &output);
+        ingest_outputs_at(&mut orphaned, 66, &raw_outputs_at(66, 1));
         let mut fresh_redrain = CurveTreeClient::new();
         ingest_class_b_fixture_prefix(&mut fresh_redrain, 66);
         assert_eq!(
@@ -1797,8 +2426,8 @@ mod tests {
             "drain order corroborates the pending-set proof"
         );
         assert_eq!(
-            orphaned.root_at(BlockHeight(66)).unwrap(),
-            fresh_redrain.root_at(BlockHeight(66)).unwrap(),
+            orphaned.root_at(BlockHeight::from_raw(66)).unwrap(),
+            fresh_redrain.root_at(BlockHeight::from_raw(66)).unwrap(),
             "root equality corroborates after re-drain"
         );
     }
@@ -1810,16 +2439,16 @@ mod tests {
 
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
-            height: BlockHeight(61),
-            curve_tree_root: client.root_at(BlockHeight(61)).unwrap(),
-            block_hash: [0u8; 32],
+            height: BlockHeight::from_raw(61),
+            curve_tree_root: client.root_at(BlockHeight::from_raw(61)).unwrap(),
+            block_hash: BlockHash::NULL,
         };
         assert!(client.verify_root(&good).is_ok());
 
         let bad = ReferenceBlock {
-            height: BlockHeight(61),
-            curve_tree_root: [0xFFu8; 32],
-            block_hash: [0u8; 32],
+            height: BlockHeight::from_raw(61),
+            curve_tree_root: CurveTreeRoot::from_bytes([0xFFu8; 32]),
+            block_hash: BlockHash::NULL,
         };
         match client.verify_root(&bad) {
             Err(ClientError::RootMismatch {
@@ -1827,9 +2456,9 @@ mod tests {
                 expected,
                 got,
             }) => {
-                assert_eq!(height, BlockHeight(61));
-                assert_eq!(expected, [0xFFu8; 32]);
-                assert_eq!(got, client.root_at(BlockHeight(61)).unwrap());
+                assert_eq!(height, BlockHeight::from_raw(61));
+                assert_eq!(expected, CurveTreeRoot::from_bytes([0xFFu8; 32]));
+                assert_eq!(got, client.root_at(BlockHeight::from_raw(61)).unwrap());
             }
             other => panic!("expected RootMismatch, got {other:?}"),
         }
@@ -1855,14 +2484,14 @@ mod tests {
         // canonical Selene scalar unique per gindex.
         leaf[0..8].copy_from_slice(&(gindex + 1).to_le_bytes());
         LeafEntry {
-            gindex: Gindex(gindex),
-            maturity: BlockHeight(maturity),
-            creation_height: BlockHeight(creation),
+            gindex: Gindex::from_raw(gindex),
+            maturity: BlockHeight::from_raw(maturity),
+            creation_height: BlockHeight::from_raw(creation),
             leaf,
             identity: OutputIdentity {
-                output_key: [1u8; 32],
-                commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                output_key: OneTimePubkey::from_bytes([1u8; 32]),
+                commitment: Some(CommitmentBytes::from_bytes([2u8; 32])),
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }
@@ -1905,14 +2534,15 @@ mod tests {
         assert!(client.entries.is_empty());
         assert_eq!(client.next_gindex, 0);
         assert!(matches!(
-            client.root_at(BlockHeight(0)),
-            Err(ClientError::ReferenceBeyondIngestedTip {
-                reference_height: BlockHeight(0),
-                ingested_tip: None,
-            })
+            client.root_at(BlockHeight::from_raw(0)),
+            Err(ClientError::ReferenceBeyondIngestedTip { reference_height, ingested_tip })
+                if reference_height == BlockHeight::from_raw(0) && ingested_tip.is_none()
         ));
         ingest_coinbase_blocks(&mut client, 0, 0);
-        assert_eq!(client.root_at(BlockHeight(0)).unwrap(), selene_hash_init());
+        assert_eq!(
+            client.root_at(BlockHeight::from_raw(0)).unwrap(),
+            CurveTreeRoot::EMPTY
+        );
         drop(client);
         std::fs::remove_file(&path).unwrap();
     }
@@ -1929,7 +2559,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_block_deltas(&drained, &pending, &[], BlockHeight(70))
+                .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(70))
                 .unwrap();
         }
 
@@ -1940,19 +2570,19 @@ mod tests {
             "entries must merge gindex-ascending, not table-grouped"
         );
         assert_eq!(client.next_gindex, 4);
-        assert_eq!(client.ingested_tip_height, Some(BlockHeight(70)));
+        assert_eq!(client.ingested_tip_height, Some(BlockHeight::from_raw(70)));
         assert!(client.drained_through_counts.is_empty());
 
         // Maturity index rebuilt from the sorted vec: cutoff 61 covers the
         // two drained rows; the pending maturities sit above it.
-        assert_eq!(client.drained_leaf_count(BlockHeight(62)), 2);
-        assert_eq!(client.drained_leaf_count(BlockHeight(0)), 0);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(62)), 2);
+        assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(0)), 0);
 
         // Root queries post-resume ride the maturity-index fallback and
         // must agree with the store's drained prefix.
         assert_eq!(
-            client.root_at(BlockHeight(62)).unwrap(),
-            client.store.root_at_count(2).unwrap()
+            client.root_at(BlockHeight::from_raw(62)).unwrap(),
+            CurveTreeRoot::from_bytes(client.store.root_at_count(2).unwrap())
         );
         drop(client);
         std::fs::remove_file(&path).unwrap();
@@ -1970,7 +2600,7 @@ mod tests {
                 &[store_entry(0, 60, 0)],
                 &[store_entry(0, 200, 0)],
                 &[],
-                BlockHeight(70),
+                BlockHeight::from_raw(70),
             )
             .unwrap();
         let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
@@ -1984,6 +2614,17 @@ mod tests {
         );
     }
 
+    /// A ring snapshot that will not decode at open is the store's own row
+    /// failing its check: corruption, as the resume path names it.
+    #[test]
+    fn an_undecodable_snapshot_at_open_is_corruption() {
+        let err = ClientError::Frontier {
+            height: BlockHeight::from_raw(10),
+            source: crate::frontier::FrontierError::InvalidNodeScalars,
+        };
+        assert_eq!(err.open_fault(), StoreOpenFault::Corrupt);
+    }
+
     #[test]
     fn resume_rejects_pruned_store() {
         // Pruned-store resume is F5 work; until it lands the client must
@@ -1993,7 +2634,9 @@ mod tests {
         let e = u64::try_from(crate::segment::leaves_per_segment()).expect("fits u64");
         let mut entries: Vec<LeafEntry> = (0..e).map(|i| store_entry(i, 50, 10)).collect();
         entries.push(store_entry(e, 5_000, 4_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         store.prune_frozen(&[]).unwrap();
 
         let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
@@ -2021,19 +2664,18 @@ mod tests {
         let mut resumed = CurveTreeClient::open(&path).unwrap();
         // Resume picks the persisted tip up directly: a genesis replay is
         // structurally rejected as a non-consecutive ingest.
-        assert_eq!(resumed.ingested_tip_height, Some(BlockHeight(70)));
-        let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        assert_eq!(resumed.ingested_tip_height, Some(BlockHeight::from_raw(70)));
+        let outs = raw_outputs_at(0, 1);
+        let blob = leaf_blob_at(0, 1);
         let genesis_txs = coinbase_block(&outs, &blob);
         assert!(matches!(
             resumed.ingest_block(BlockLeaves {
-                height: BlockHeight(0),
+                height: BlockHeight::from_raw(0),
                 txs: &genesis_txs,
             }),
-            Err(ClientError::NonConsecutiveBlockHeight {
-                got: BlockHeight(0),
-                expected: BlockHeight(71),
-            })
+            Err(ClientError::NonConsecutiveBlockHeight { got, expected })
+                if got == BlockHeight::from_raw(0)
+                    && expected == BlockHeight::from_raw(71)
         ));
         ingest_coinbase_blocks(&mut resumed, 71, 140);
 
@@ -2053,8 +2695,8 @@ mod tests {
         );
         for h in 0..=140u64 {
             assert_eq!(
-                resumed.root_at(BlockHeight(h)).unwrap(),
-                continuous.root_at(BlockHeight(h)).unwrap(),
+                resumed.root_at(BlockHeight::from_raw(h)).unwrap(),
+                continuous.root_at(BlockHeight::from_raw(h)).unwrap(),
                 "height {h}"
             );
         }

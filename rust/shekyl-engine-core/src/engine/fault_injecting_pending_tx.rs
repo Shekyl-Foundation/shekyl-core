@@ -208,14 +208,14 @@ mod tests {
             async {
                 Ok(PendingTx {
                     id: ReservationId::new(0),
-                    built_at_height: 0,
+                    built_at_height: shekyl_types::BlockHeight::from_raw(0),
                     built_at_tip_hash: [0u8; 32],
                     fee_atomic_units: shekyl_units::AtomicUnits::ZERO,
                     snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
                     tx_bytes: Vec::new(),
                     recipients: Vec::new(),
                     content_gen: 0,
-                    reference_height: 0,
+                    reference_height: shekyl_types::BlockHeight::from_raw(0),
                 })
             }
         }
@@ -255,6 +255,7 @@ mod tests {
             recipients: vec![super::super::pending::TxRecipient {
                 address: "addr".into(),
                 amount_atomic_units: shekyl_units::AtomicUnits::from_raw(1),
+                rid: None,
             }],
             priority: FeePriority::Standard,
         }
@@ -311,7 +312,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
+        wrapper.queue_build_failure(SendError::BuildInvariant { reason: "fifo-2" });
 
         assert!(matches!(
             wrapper.build(standard_request()).await,
@@ -319,7 +320,7 @@ mod tests {
         ));
         assert!(matches!(
             wrapper.build(standard_request()).await,
-            Err(SendError::CannotSign { .. })
+            Err(SendError::BuildInvariant { .. })
         ));
         assert!(wrapper.build(standard_request()).await.is_ok());
         assert_eq!(wrapper.queued_build_failures(), 0);
@@ -362,7 +363,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
+        wrapper.queue_build_failure(SendError::BuildInvariant { reason: "fifo-2" });
         assert_eq!(wrapper.queued_build_failures(), 2);
 
         assert!(wrapper.build(standard_request()).await.is_err());

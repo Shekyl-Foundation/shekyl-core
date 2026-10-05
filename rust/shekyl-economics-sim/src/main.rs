@@ -1,21 +1,29 @@
 mod admission;
+mod block_space;
 mod budget;
 mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod chain_cursor;
 mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
 mod fee_floor;
+mod fee_horizon;
 mod fee_ladder;
+mod fee_model;
+mod median_window;
+mod miner_stuffer;
 mod mn_feasibility;
+mod onset;
 mod population;
 mod proxy;
 mod redistribution;
 mod stranding;
 mod swing;
+mod volume_window;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
@@ -47,10 +55,20 @@ use std::io::Write;
 /// (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 disposition-(b) rule-21 reopen;
 /// `budget.rs`): measures how much `budget(E)` swings with tx volume under the
 /// shipped disposition (a) versus the demand-insulated (b) counterfactual.
+///
+/// `--control-flat-fee` runs any fee-consuming mode on the control arm: one
+/// flat fee per transaction, the fee the `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
+/// §12.13–§12.14 tables were measured on. Without it the run charges the
+/// production ladder (`fee_model.rs`). Every such report names its arm.
 fn main() {
-    let params = SimParams::default();
+    let params = if std::env::args().any(|a| a == "--control-flat-fee") {
+        SimParams::section_12_14_control()
+    } else {
+        SimParams::default()
+    };
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
+        eprintln!("{}", params.fee.label());
         run_fb1c_c2(&params);
         return;
     }
@@ -115,6 +133,7 @@ fn main() {
 
     let mut results: Vec<ScenarioResult> = Vec::new();
 
+    eprintln!("{}", params.fee.label());
     for config in configs {
         eprintln!("Running scenario: {} ...", config.name);
         let result = run_scenario(&params, &config);

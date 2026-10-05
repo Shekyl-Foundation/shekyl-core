@@ -61,7 +61,6 @@ inline uint64_t expected_full_subsidy(uint64_t already_generated)
       0,
       1,
       already_generated,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       /*tx_count_sum=*/0,
       /*window_blocks=*/0,
       &computed,

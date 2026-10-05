@@ -34,9 +34,10 @@
 //! Together the two findings met the
 //! `21-reversion-clause-discipline.mdc` reopening threshold for
 //! R1-D5; R1-D6 is reopened by structural analogy under R7-D2.
-//! Adversarial-corpus methodology design + implementation deferred
-//! to a post-2g design round tracked in `docs/FOLLOWUPS.md` V3.0
-//! pre-genesis queue.
+//! *RECORDS-WAS through 2g ship:* methodology deferred to a post-2g
+//! round. Phase 2h closed that round as a recipe corpus in
+//! `crate::adversarial` / `--mode=adversarial-ratio`. This module
+//! remains the empty 2g R7-D4 scaffold; it is not the live corpus.
 //!
 //! ## Module disposition through 2g ship
 //!
@@ -52,15 +53,14 @@
 //!   `iter_adversarial_data` yield zero pairs.
 //! - `ADVERSARIAL_CORPUS_SHA256` continues to assert the
 //!   empty-scaffold SHA-256.
-//! - The post-2g design round repurposes or replaces this module
-//!   under the new methodology; the class names below may not
-//!   survive the round (the V2-substrate-anchored methodology may
-//!   define a different class taxonomy entirely).
+//! - Phase 2h did **not** fill these arrays. The live methodology
+//!   uses a different class taxonomy (`crate::adversarial`); the
+//!   names below are historical R1-D5 / R1-D6 framing.
 //!
 //! The class taxonomy below is preserved as the historical R1-D5 /
 //! R1-D6 framing; it is **not** the active design surface. The
-//! active disposition is "no adversarial corpus ships at 2g; the
-//! post-2g round produces the methodology + implementation."
+//! 2g disposition was empty-scaffold; Phase 2h's live corpus is
+//! not this module.
 //!
 //! ## Class taxonomy (R1-D5 / R1-D6 historical framing; not the active design surface)
 //!
@@ -82,8 +82,8 @@
 //! Per §3.19 R7-D4, the per-class arrays do **not** grow at C5b.
 //! The historical "the class names are stable; the per-class
 //! arrays grow with C5b's grinding output" framing is superseded
-//! by R7-D1's reopening — the post-2g design round may redefine
-//! the class taxonomy under the V2-substrate-anchored methodology.
+//! by R7-D1's reopening. Phase 2h defined a different taxonomy in
+//! `crate::adversarial`; the names below stay as the empty 2g scaffold.
 
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
@@ -91,11 +91,9 @@ use shekyl_pow_randomx::Seedhash;
 /// (R1-D5 historical) Grinded seedhashes targeting ≥40% CFROUND
 /// opcode density.
 ///
-/// **Stays empty through 2g ship per §3.19 R7-D4** (R1-D5 reopened
-/// by R7-D1; methodology deferred to a post-2g design round). The
-/// class name is preserved for surface-contract continuity with the
-/// scaffolded-empty C5a shape; the post-2g round may redefine the
-/// taxonomy.
+/// **Stays empty** (R7-D4 2g scaffold). Phase 2h did not fill this
+/// array; the live recipe corpus lives in `crate::adversarial`.
+/// The class name is preserved so T10 still pins the empty scaffold.
 pub const CFROUND_SEEDHASHES: &[[u8; 32]] = &[];
 
 /// Grinded seedhashes targeting ≥40% FDIV_M opcode density.
@@ -131,14 +129,8 @@ pub const U128_TRUNC_HIGH_DATA: &[&[u8]] = &[];
 /// SHA-256 pin of the per-class arrays' canonical serialization,
 /// per §3.18 R6-D2 + §3.19 R7-D4.
 ///
-/// **Stays at C5a's empty-scaffold SHA-256 through 2g ship per
-/// §3.19 R7-D4** (the C5b refresh-against-grinded-bytes intent is
-/// superseded by R7-D1's reopening; the post-2g round produces the
-/// corpus and refreshes the pin). The constant is `pub` so T10 can
-/// re-derive the SHA-256 at runtime via
-/// [`compute_adversarial_corpus_hash`] and assert equality —
-/// continues to detect tamper of the empty scaffold through 2g
-/// ship.
+/// **Stays at C5a's empty-scaffold SHA-256.** Phase 2h did not
+/// refill this pin; T10 still detects tamper of the empty arrays.
 ///
 /// The SHA-256 covers a canonical byte serialization of the
 /// per-class contents in declaration order. See
@@ -151,8 +143,7 @@ pub const ADVERSARIAL_CORPUS_SHA256: [u8; 32] = [
 
 /// Total number of seedhashes across all R1-D5 classes.
 ///
-/// **Stays at `0` through 2g ship per §3.19 R7-D4** (R1-D5
-/// reopened by R7-D1; the post-2g round produces the corpus).
+/// **Stays at `0`.** Phase 2h's recipe corpus is not counted here.
 /// Exposed for documentation and for the structural-stub T16
 /// (canonical_outputs) sizing check.
 pub const ADVERSARIAL_SEEDHASH_COUNT: usize = CFROUND_SEEDHASHES.len()
@@ -163,8 +154,7 @@ pub const ADVERSARIAL_SEEDHASH_COUNT: usize = CFROUND_SEEDHASHES.len()
 
 /// Total number of data values across all R1-D6 classes.
 ///
-/// **Stays at `0` through 2g ship per §3.19 R7-D4** (R1-D6
-/// reopened by R7-D2; the post-2g round produces the corpus).
+/// **Stays at `0`.** Phase 2h's recipe corpus is not counted here.
 pub const ADVERSARIAL_DATA_COUNT: usize = DIV_BY_ZERO_DATA.len()
     + SIGNED_DIV_OVERFLOW_DATA.len()
     + SHIFT_BY_WIDTH_DATA.len()
@@ -277,9 +267,9 @@ mod tests {
     /// Asserts that the runtime-computed SHA-256 of the committed
     /// per-class arrays equals [`ADVERSARIAL_CORPUS_SHA256`].
     /// Through 2g ship the pin asserts the SHA-256 of the
-    /// empty-scaffold contents per §3.19 R7-D4; the post-2g
-    /// adversarial-corpus design round refreshes the pin against
-    /// whatever corpus contents that round produces.
+    /// empty-scaffold contents per §3.19 R7-D4. Phase 2h did not
+    /// refill this pin; it still catches a non-empty edit of these
+    /// arrays without a pin refresh.
     ///
     /// Failure mode: drift between the committed arrays and the pin
     /// — almost always either a code-review-time mistake (an array
@@ -321,12 +311,11 @@ mod tests {
         assert_eq!(ADVERSARIAL_DATA_COUNT, 0, "C5a data scaffold not empty");
     }
 
-    /// Class-label round trip via the iterator surfaces. Through
-    /// 2g ship the iterators yield zero pairs (per §3.19 R7-D4);
-    /// the test verifies the iteration shape (no panics,
-    /// well-formed labels) so the post-2g consumer has a stable
-    /// surface to count against if the post-2g round retains this
-    /// class taxonomy.
+    /// Class-label round trip via the iterator surfaces. The
+    /// iterators still yield zero pairs (empty 2g scaffold). The
+    /// test verifies the iteration shape (no panics, well-formed
+    /// labels) so a future fill of *this* module would still be
+    /// counted — not a promise that Phase 2h would fill it.
     #[test]
     fn class_iterators_yield_well_formed_labels() {
         let seedhash_labels: Vec<&str> = iter_adversarial_seedhashes()

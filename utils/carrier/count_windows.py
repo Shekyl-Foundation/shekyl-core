@@ -29,9 +29,12 @@ import json
 import struct
 import sys
 
-# rust/shekyl-levin/src/header.rs — little-endian on the wire.
+# rust/shekyl-levin/src/header.rs / docs/LEVIN_PROTOCOL.md — little-endian.
+# PWD-B5 deleted the inherited i32 return_code; the live header is 29 bytes.
+# 33 was the pre-B5 size: it made need = 33 + m_cb, so every real window
+# (m_cb = WINDOW_BYTES - 29 = 20 451) was scored as 20 484 and dropped.
 LEVIN_SIGNATURE = bytes.fromhex("0121010101010101")
-HEADER_SIZE = 33
+HEADER_SIZE = 29
 
 # Pinned to rust/shekyl-relay-privacy/src/params/carrier.rs. This is the
 # FRAMED size: shekyl_levin::noise_notify(n) produces exactly n bytes, and

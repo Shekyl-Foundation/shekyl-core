@@ -37,7 +37,7 @@
 rust/shekyl-engine-state/src/ledger_block.rs|pub tip_hash: Option<[u8; 32]>
 # Reorg trail is the height-plus-block-hash tuple sequence used to
 # detect reorgs at scan time. Block hashes are public network state.
-rust/shekyl-engine-state/src/ledger_block.rs|pub blocks: Vec<(u64, [u8; 32])>
+rust/shekyl-engine-state/src/ledger_block.rs|pub blocks: Vec<(BlockHeight, [u8; 32])>
 
 # ── payment_request.rs ────────────────────────────────────────────────
 #
@@ -136,10 +136,9 @@ rust/shekyl-engine-state/src/sync_state_block.rs|pub pending_tx_hashes: Vec<[u8;
 
 # ── transfer.rs ───────────────────────────────────────────────────────
 #
-# FCMP++ precomputed-path reference block is the block hash the path
-# was computed against — public chain state.
-rust/shekyl-engine-state/src/transfer.rs|pub reference_block: [u8; 32]
-# `path_blob` holds the serialized FCMP++ precomputed path (opaque
+# FCMP++ precomputed-path reference block is now `BlockHash` (public
+# chain state); the newtype is not byte-shaped to the grep. `path_blob`
+# holds the serialized FCMP++ precomputed path (opaque
 # merkle-proof bytes). The proof is a public-input artifact of the
 # full-chain-membership argument; it does not carry private scalar
 # material. Leaks the chosen anonymity-set positions but not the

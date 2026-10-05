@@ -16,24 +16,27 @@ use crate::schedule::{DelayFamily, DelayTable};
 
 use super::util::usize_from;
 
-/// Which edges a fluffing node relays across — the instrument's model of the
-/// relay crate's `FluffReach` (`shekyl-relay`; this crate deliberately does
-/// not depend on it, so the mirroring is by name and test, not by type).
+/// Which edges a fluffing node relays across.
 ///
-/// **Added at F-7 (§26).** The instrument previously inserted every edge in
-/// *both* directions, so it modelled `EveryPeer` **by construction** and had
-/// no way to express `OutboundOnly` — which is exactly *"traverse only the
-/// edges I initiated"*, a directed graph. `fluff_return_ms` was measured under
-/// the symmetric build and is fed to the embargo derivation for **every**
-/// transport, so on an anonymity zone (outbound-only fluff) the input is
-/// measured on a rule that configuration does not use.
+/// Production fluff is [`FloodReach::EveryPeer`] on every connector. D7
+/// (outbound-only fluff on a non-public zone) was deleted 2026-10-02, and
+/// `FluffReach` left the relay with it. [`FloodReach::OutboundOnly`] stays
+/// as the instrument: the shipped `fluff_return_ms` of 3250 ms was measured
+/// on that directed graph, and it is the longer direction, so the constant
+/// stays until the production graph is remeasured.
+///
+/// Transit is not this enum. A flood names a
+/// [`crate::verify_cost::MeasuredConnector`] beside its reach, so a Tor
+/// link at production reach is expressible and a directed graph at clearnet
+/// latency is too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloodReach {
-    /// Relay to every peer, initiated or not — the clearnet rule. Undirected.
+    /// Relay to every peer, initiated or not. Production, on every connector.
+    /// Undirected: effective degree is ~`2 × peers`.
     EveryPeer,
-    /// Relay only across edges this node initiated — the i2p/tor rule.
+    /// Relay only across edges this node initiated. The retired D7 graph.
     /// Directed: first passage is strictly slower, because a node has
-    /// `peers` usable out-edges rather than ~`2 × peers`, *and* paths must
+    /// `peers` usable out-edges rather than ~`2 × peers`, and paths must
     /// respect direction.
     OutboundOnly,
 }
@@ -110,68 +113,62 @@ pub struct FloodParams {
     pub transit_ms: u64,
 }
 
-/// The transit assumption that goes with a reach, so the two cannot be set to
-/// different link classes.
+/// The transit assumption for one connector.
 ///
-/// `FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
-/// the reach **is** the link class: deriving transit from it removes the one
-/// incoherent combination (an anonymity reach at clearnet latency) that §91.6
-/// says invalidates a derivation while still looking reasonable.
+/// Reach does not select it. Production fluff is [`FloodReach::EveryPeer`]
+/// at this connector's row; the retired D7 derivation is
+/// [`FloodReach::OutboundOnly`] at [`crate::verify_cost::MeasuredConnector::Tor`]. Both are
+/// legal. Deriving transit from the reach made the second the only way to
+/// name Tor, which is the weld this function used to be.
 ///
 /// **Derived from the cost model's constants, never re-typed.** An earlier
 /// revision spelled these as literals (`50`, `1_625`) beside doc text naming
 /// the constants — a duplicate that drifts the instant either assumption is
 /// adjusted, leaving the flood simulating a network the derivation has stopped
-/// describing. That is F-7's failure mode one layer down, and the fix is to
-/// delete the duplicate rather than keep it synchronized.
+/// describing.
+/// Both constants are finite, positive and far below 2^53; the cast cannot
+/// truncate meaningfully or lose a sign.
 #[must_use]
-pub fn transit_for(reach: FloodReach) -> u64 {
-    // Both constants are finite, positive and far below 2^53; the cast cannot
-    // truncate meaningfully or lose a sign.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    match reach {
-        FloodReach::EveryPeer => crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64,
-        FloodReach::OutboundOnly => crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64,
-    }
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn transit_for(connector: crate::verify_cost::MeasuredConnector) -> u64 {
+    crate::verify_cost::transit_ms_for_connector(connector) as u64
 }
 
 #[cfg(test)]
 mod transit_for_tests {
-    use super::{transit_for, FloodReach};
+    use super::transit_for;
+    use crate::verify_cost::MeasuredConnector;
 
-    /// The pairing is the point: an anonymity reach at clearnet latency is the
-    /// combination §91.6 says invalidates a derivation while looking
-    /// reasonable. Pinned against the cost model's own constants so this fails
-    /// if the two are ever separated again.
+    /// The row is the connector's, not the reach's. Production Tor is
+    /// [`super::FloodReach::EveryPeer`] at Tor's transit, and that pairing
+    /// has to be spellable.
     #[test]
-    fn transit_tracks_the_cost_model_not_a_literal() {
+    fn transit_tracks_the_connector_not_the_reach() {
         assert_eq!(
-            transit_for(FloodReach::EveryPeer),
+            transit_for(MeasuredConnector::Clearnet),
             crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64
         );
         assert_eq!(
-            transit_for(FloodReach::OutboundOnly),
+            transit_for(MeasuredConnector::Tor),
             crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64
         );
-        // And they must differ, or the link-class split is decorative.
-        assert!(transit_for(FloodReach::OutboundOnly) > transit_for(FloodReach::EveryPeer));
+        assert!(transit_for(MeasuredConnector::Tor) > transit_for(MeasuredConnector::Clearnet));
     }
 }
 
 /* `Default` was REMOVED with the transit field (§91.6). Its whole affordance
 was filling fields the caller did not think about, and the field the caller
-must not skip is the one that says which network this flood runs on. A
+must not skip is the one that says which connector this flood runs on. A
 default transit would have re-created, behind a shorter spelling, the exact
 omission that invalidated an `F′` derivation. Callers name all four fields.
 
-The two shipped pairings, so `reach` and `transit_ms` are not set to
-different link classes by accident:
+Reach and transit are independent:
 
-  clearnet  -> FloodReach::EveryPeer    + ADOPTED_TRANSIT_ASSUMPTION_MS  (50)
-  anonymity -> FloodReach::OutboundOnly + ANON_ZONE_TRANSIT_ASSUMPTION_MS (1625)
+  production, any connector -> FloodReach::EveryPeer + that connector's transit
+  retired D7 derivation      -> FloodReach::OutboundOnly + MeasuredConnector::Tor
 
-(`FluffReach::OutboundOnly` is set from `nzone != public_` in production, so
-the reach IS the link class; the transit must agree with it.) */
+The 3250 ms constant was measured on the second line. It is not the
+production reach. */
 
 /// First-passage statistics for a fluff flood, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -316,11 +313,12 @@ pub fn simulate_fluff_return<R: RelayRng + ?Sized>(
 ///    `degrees[v]` does not thin the edges pointed *at* `v` and does not slow
 ///    `v`'s own return at all.
 ///
-/// The split exists **only because the fluff rule is outbound-only**. Under
-/// [`FloodReach::EveryPeer`] the receiver relays back over the link it did not
-/// initiate, in-degree and out-degree collapse into one quantity, and the
-/// intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer` intuition
-/// applied to it is what produced the wrong sentence.
+/// The split exists **only on [`FloodReach::OutboundOnly`]**, the retired D7
+/// graph this instrument still measures. Under [`FloodReach::EveryPeer`] —
+/// production, on every connector — the receiver relays back over the link
+/// it did not initiate, in-degree and out-degree collapse into one quantity,
+/// and the intuition is sound. F-7 chose `OutboundOnly`; an `EveryPeer`
+/// intuition applied to that retired graph is what produced the wrong sentence.
 ///
 /// Measuring a node's own return therefore needs an instrument this builder
 /// does not provide: `degrees` parameterizes only *outgoing* draws, so no

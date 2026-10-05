@@ -51,10 +51,10 @@ pub(crate) fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> S
 /// exact public identity `construct_output` emitted (so the actor's
 /// re-derivation chain — combined-ss recovery, spend/mask scalars,
 /// per-output PQC keypair — reproduces the construction) plus the
-/// matching curve-tree leaf with the REAL `h_pqc`. The real hash is
-/// load-bearing: the handler's pre-flight leaf gate and the
-/// verify-side C-1 gate both demand `hash(backing_pubkey) ==
-/// leaf.h_pqc`, so a synthetic value refuses assembly.
+/// matching curve-tree leaf with the REAL `CM.x` (`PL-D3`). The real value
+/// is load-bearing: the signer re-derives the leaf opening from the
+/// record's secrets and refuses if the leaf is not that derivation, and
+/// the verifier's circuit opens the leaf to the backing key's point.
 pub(crate) fn constructed_record(
     keys: &ArchivalPKeys,
     gindex: u64,
@@ -63,6 +63,23 @@ pub(crate) fn constructed_record(
     index_in_transaction: u64,
     lineage: MintLineageOutput,
 ) -> (PFundingOutputRecord, LeafEntry) {
+    let (record, leaf, _entry) =
+        constructed_record_with_entry(keys, gindex, height, amount, index_in_transaction, lineage);
+    (record, leaf)
+}
+
+/// [`constructed_record`] plus the output's 64-byte `0x07` entry
+/// (`CM ‖ record`, `PL-D3`) — what a test that ingests the output into a
+/// real curve-tree client must publish for it, since the client slices one
+/// entry per output and takes the commitment point from it.
+pub(crate) fn constructed_record_with_entry(
+    keys: &ArchivalPKeys,
+    gindex: u64,
+    height: u64,
+    amount: u64,
+    index_in_transaction: u64,
+    lineage: MintLineageOutput,
+) -> (PFundingOutputRecord, LeafEntry, [u8; 64]) {
     let constructed = construct_output(
         &FIXTURE_TX_KEY,
         &keys.x25519_pk,
@@ -84,7 +101,9 @@ pub(crate) fn constructed_record(
             .compress()
             .to_bytes(),
         commitment: constructed.commitment,
-        h_pqc: constructed.h_pqc,
+        cm_x: shekyl_fcmp::PqcLeafScalar::from_commitment_point(&constructed.pqc_leaf.point)
+            .expect("constructed leaf commitment decompresses")
+            .0,
     };
-    (record, leaf)
+    (record, leaf, constructed.pqc_leaf.entry_bytes())
 }

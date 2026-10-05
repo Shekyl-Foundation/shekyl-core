@@ -35,12 +35,13 @@ mod epoch_close;
 mod schedule;
 mod serve_credit;
 mod settlement;
+mod shard_coverage;
 
 pub use attestation::{ShekylArchivalAttestationVerifyCtx, ShekylArchivalPidPubkey};
 pub use codes::*;
 pub use epoch_close::ShekylArchivalEmissionEpochSnapshot;
 pub use schedule::{
-    settlement_epoch_close_height, settlement_epoch_open_height,
+    settlement_epoch_last_block, settlement_epoch_open_height,
     settlement_epoch_slash_deadline_height,
 };
 
@@ -60,6 +61,7 @@ pub use schedule::*;
 #[allow(unused_imports)]
 pub use serve_credit::*;
 pub use settlement::*;
+pub use shard_coverage::*;
 
 #[cfg(test)]
 mod tests;

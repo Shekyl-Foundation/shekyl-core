@@ -11,22 +11,24 @@
 //! deliberate change: the tx key is the deterministic [`crate::txkey`]
 //! derivation instead of a fresh `keypair::generate`.
 //!
-//! `tx_extra` is emitted directly in the C++ `sort_tx_extra` fixed-point
-//! order for the genesis field subset — `0x01` pubkey, one aggregated `0x06`
-//! KEM-ciphertext blob, one aggregated `0x07` leaf-hash blob (pick order:
-//! `cryptonote_format_utils.cpp`, `sort_tx_extra`) — so no general sorter is
-//! needed and the emitted extra is already canonical.
+//! `tx_extra` is emitted by [`shekyl_wire::tx_extra::build_coinbase_extra`],
+//! the grammar's one constructor (`TXE-Q6′`): `0x01` pubkey, `0x02` nonce of
+//! eight **zero** bytes (genesis was not nonce-searched, and zero says so),
+//! one aggregated `0x06` KEM-ciphertext blob, one aggregated `0x07` leaf-entry
+//! blob (`CM ‖ record` per output). The constructor refuses an extra that
+//! admission would refuse, so the pins cannot drift from the grammar.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_wire::block::{Block, BlockHeader};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, TxExtraField, ML_KEM_768_CT_BYTES, PQC_LEAF_HASH_BYTES};
+use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
 use crate::{invalid, GenesisToolError};
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
@@ -43,7 +45,7 @@ pub struct BuiltGenesis {
     /// Lowercase hex of the serialized tx — the `GENESIS_TX` pin.
     pub hex: String,
     /// Consensus transaction hash.
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
 }
 
 /// Build the genesis coinbase transaction for `net` from validated
@@ -107,7 +109,7 @@ pub fn build_genesis_tx(
 
         kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
         kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-        leaf_blob.extend_from_slice(&od.h_pqc);
+        leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
 
         total = total
             .checked_add(r.amount)
@@ -119,13 +121,20 @@ pub fn build_genesis_tx(
             "built output sum {total} != genesis total {GENESIS_TOTAL_ATOMIC}"
         )));
     }
-    debug_assert_eq!(leaf_blob.len(), recipients.len() * PQC_LEAF_HASH_BYTES);
+    debug_assert_eq!(leaf_blob.len(), recipients.len() * PQC_LEAF_ENTRY_LEN);
 
-    let extra = tx_extra::serialize(&[
-        TxExtraField::PubKey(tx_pub),
-        TxExtraField::PqcKemCiphertext(kem_blob),
-        TxExtraField::PqcLeafHashes(leaf_blob),
-    ])?;
+    let extra = tx_extra::build_coinbase_extra(
+        tx_pub,
+        &[0u8; COINBASE_NONCE_BYTES],
+        outputs.len(),
+        &kem_blob,
+        &leaf_blob,
+    )
+    .map_err(|e| {
+        invalid(format!(
+            "built genesis extra fails the coinbase grammar: {e}"
+        ))
+    })?;
 
     let tx = Transaction {
         prefix: TxPrefix {
@@ -179,10 +188,10 @@ pub fn genesis_block(tx: Transaction, nonce: u32) -> Result<Block, GenesisToolEr
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
             minor_version: GENESIS_BLOCK_MINOR_VERSION,
             timestamp: 0,
-            previous: [0u8; 32],
+            previous: BlockHash::NULL,
             nonce,
-            curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
-            attestation_root,
+            curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            attestation_root: AttestationRoot::from_bytes(attestation_root),
         },
         miner_transaction: tx,
         transaction_hashes: Vec::new(),

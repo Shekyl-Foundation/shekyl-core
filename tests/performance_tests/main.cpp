@@ -36,10 +36,7 @@
 #include "performance_utils.h"
 
 // tests
-#include "construct_tx.h"
-#include "check_tx_signature.h"
 #include "check_hash.h"
-#include "cn_slow_hash.h"
 #include "ge_frombytes_vartime.h"
 #include "ge_tobytes.h"
 #include "generate_key_derivation.h"
@@ -99,30 +96,10 @@ int main(int argc, char** argv)
   performance_timer timer;
   timer.start();
 
-  // RCT + BP+ transaction construction benchmarks
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
-
-  // RCT + BP+ signature verification benchmarks
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 10, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, true);
-
-  // Aggregated BP+ verification benchmarks
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 62, 4);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 62, 4);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 56, 16);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 56, 16);
+  // The C++ transaction-construction / signature-verification benchmarks
+  // left with the C++ tx builder (TX_EXTRA_RUST_CUTOVER.md TXE-Q1): they
+  // timed a builder whose output no validator accepted. The spend path's
+  // numbers live with the Rust builder (shekyl-tx-builder benches).
 
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0, 1, 0, 1);
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0, 0xffffffffffffffff, 0, 0xffffffffffffffff);
@@ -144,10 +121,6 @@ int main(int argc, char** argv)
 
 
 
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 0);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 1);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 2);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 4);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 32);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 16384);
 

@@ -32,8 +32,6 @@
 
 #include <iostream>
 #include <stddef.h>
-#include <stdexcept>
-
 #include "common/pod-class.h"
 #include "generic-ops.h"
 #include "hex.h"
@@ -57,10 +55,6 @@ namespace crypto {
   static_assert(sizeof(hash) == HASH_SIZE, "Invalid structure size");
   static_assert(sizeof(hash8) == 8, "Invalid structure size");
 
-  /*
-    Cryptonight hash functions
-  */
-
   inline void cn_fast_hash(const void *data, std::size_t length, hash &hash) {
     cn_fast_hash(data, length, reinterpret_cast<char *>(&hash));
   }
@@ -69,23 +63,6 @@ namespace crypto {
     hash h;
     cn_fast_hash(data, length, reinterpret_cast<char *>(&h));
     return h;
-  }
-
-  static constexpr void cn_variant1_check(const std::size_t length, const int variant)
-  {
-    // see VARIANT1_CHECK in slow-hash.c
-    if (variant == 1 && length < 43)
-      throw std::logic_error("Cryptonight variant 1 is undefined for inputs of less than 43 bytes");
-  }
-
-  inline void cn_slow_hash(const void *data, std::size_t length, hash &hash, int variant = 0, uint64_t height = 0) {
-    cn_variant1_check(length, variant);
-    cn_slow_hash(data, length, reinterpret_cast<char *>(&hash), variant, 0/*prehashed*/, height);
-  }
-
-  inline void cn_slow_hash_prehashed(const void *data, std::size_t length, hash &hash, int variant = 0, uint64_t height = 0) {
-    cn_variant1_check(length, variant);
-    cn_slow_hash(data, length, reinterpret_cast<char *>(&hash), variant, 1/*prehashed*/, height);
   }
 
   inline void tree_hash(const hash *hashes, std::size_t count, hash &root_hash) {

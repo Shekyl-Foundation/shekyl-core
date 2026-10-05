@@ -49,17 +49,29 @@ const BUDGET_AT_ZONE: usize = 600_000;
 /// an under- or over-weighted fixture (review finding). A legitimate
 /// weight change (wire format, proof size, auth encoding) must update this
 /// table consciously — that is the point.
+// Re-pinned 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
+// `0x07` entry grew to 64 B per output (`+32·n_out`, plus one byte where the
+// field's length varint crosses 128) and the FCMP++ proof
+// gained the in-circuit opening leg (single-input proofs +128 B; multi-input
+// proofs shrink because the leg replaces the per-input extra-scalar branch —
+// census companion §8), so every cell moved and not by one constant.
 const EXPECTED_WEIGHTS: [(usize, usize, usize); 6] = [
-    (1, 2, 13_005),
-    (8, 2, 59_229),
-    (1, 16, 33_948),
+    (1, 2, 13_198),
+    (8, 2, 58_782),
+    (1, 16, 34_588),
     (8, 16, 80_172),
-    (4, 4, 37_332),
-    (2, 8, 29_845),
+    (4, 4, 37_460),
+    (2, 8, 30_357),
 ];
 
 #[test]
 fn fixture_weights_are_exactly_expected() {
+    // Capture aid: every shape's weight is printed before the first assert
+    // so a deliberate wire change can update the whole table from one run.
+    for (n_in, n_out, _) in EXPECTED_WEIGHTS {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+        eprintln!("weight ({n_in},{n_out}) = {}", fx.weight);
+    }
     for (n_in, n_out, expected) in EXPECTED_WEIGHTS {
         let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
         assert_eq!(
@@ -107,14 +119,14 @@ fn candidate_shapes_saturate_their_caps() {
         let leaf_blobs: Vec<usize> = fields
             .iter()
             .filter_map(|f| match f {
-                shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(b) => Some(b.len()),
+                shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(b) => Some(b.len()),
                 _ => None,
             })
             .collect();
         assert_eq!(
             leaf_blobs,
-            vec![32 * n_out],
-            "exactly ONE 0x07 field carrying 32·n_out leaf-hash bytes"
+            vec![shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN * n_out],
+            "exactly ONE 0x07 field carrying 64·n_out leaf-entry bytes (PL-D3)"
         );
 
         // Per-tx caps hold — the fixture is admissible under what R2 ratifies.

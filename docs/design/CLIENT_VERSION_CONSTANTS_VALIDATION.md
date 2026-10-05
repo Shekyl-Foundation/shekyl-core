@@ -179,7 +179,7 @@ while grounding `VC-D12`; §2's genesis row). Three stated commitments were
 chased on this day and all three lacked an enforcing site — the plan's
 "verified via `get_info`", this document's own first draft's "committed to
 by the genesis block hash", and, in another lane, `GENESIS_TX_WIRE_FORMAT`'s
-"consensus parses `32·n_outputs`". The identity tuple is the enforcing site
+"consensus parses `32·n_outputs`" (now `64·n_outputs`, `PL-D3`). The identity tuple is the enforcing site
 for the first two; genesis is armed (`VC-D18` discharged 2026-09-09 — the
 pins are the frozen block-0 ids, reminted with `GENESIS_TX` if those ids
 move).
@@ -499,8 +499,9 @@ un-revised number wearing a different face.
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
 either. The precedent is already in the header — `shekyl_rpc_fee_grace_blocks_max`,
-`shekyl_rpc_peerlist_limits` and `shekyl_rpc_span_pruning_seed` (`ffi.rs:741`,
-`:776`, `:779`) are narrow exports for facts with no business in a bigger POD.
+and `shekyl_rpc_peerlist_limits` (`ffi.rs:741`, `:776`) are narrow exports for
+facts with no business in a bigger POD (`shekyl_rpc_span_pruning_seed` was a
+third until the stripe engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at
 daemon start and per network — while the tip POD's contract is "what the chain
 tip looks like right now"; five of its six callers want a tip and one wants
@@ -816,7 +817,8 @@ against a client/daemon mismatch" is currently *nothing*.
 before this PR merges; canonical form `v2`, one re-pin — built.** The file
 settled it: `economics_params.json` carries `money_supply`,
 `final_subsidy_per_minute: 300000000` and
-`emission_speed_factor_per_minute: 22` — genesis-frozen emission constants,
+`emission_speed_factor_per_minute: 22` (since 2026-10-04
+`emission_speed_factor_per_block: 22`, read per block) — genesis-frozen emission constants,
 and the final subsidy *is* the perpetual tail Rick signed in `FL-R12′`
 (0.3 SKL/min × 2 min/block = the 0.6/block rail). "A digest pinning
 `consensus_constants.json` while leaving the emission curve's own authority
@@ -928,18 +930,22 @@ with a named owner, not an assumption.
 **The per-key membership grade (`VC-R19`), because "integer authority" was
 doing the work of a decision one level up.** `VC-R11` closed that move for the
 *type* of values; the same move survived at the choice of *keys*, which were
-ingested wholesale. All eighteen economics keys were walked. The grade is
+ingested wholesale. All eighteen economics keys were walked, and the two archival keys of
+`consensus_constants.json` that are provisional-until-testnet are graded beside them
+(2026-10-03). The grade is
 recorded so §3.7 is checkable by a reviewer rather than aspirational:
 
 | Key(s) | Does a different value make a different chain? |
 | --- | --- |
-| `emission_curve_asymptote`, `emission_speed_factor_per_minute`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
+| `emission_curve_asymptote`, `emission_speed_factor_per_block`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
 | `coin` | **Yes** — the atomic-unit denominator |
 | `display_decimal_point` | **Yes, but only through a coupling that was nowhere written down** — see below |
 | `shekyl_fixed_point_scale` | **Yes** — the denominator every ppm share is read against |
 | `shekyl_staker_pool_share`, `shekyl_staker_emission_share`, `shekyl_staker_emission_decay`, `shekyl_blocks_per_year` | **Yes** — the staker split and its decay (`calc_effective_emission_share`) |
 | `shekyl_burn_base_rate`, `shekyl_burn_cap`, `shekyl_tx_volume_baseline`, `shekyl_tx_volume_window` | **Yes** — burn rate and the window it is measured over |
 | `shekyl_escalation_asymptote_share`, `shekyl_escalation_knee_n`, `shekyl_release_min`, `shekyl_release_max` | **Yes** — D2 escalation; provisional-until-testnet, and §3.12 already rules that a change detector is *supposed* to move on them |
+| `archival_shard_length_bytes` (`W = 3,000,000 B`) | **Yes** — the shard partition: which shard every transaction belongs to (`SHT-Q2`). Provisional-until-testnet, pinned at the Round-2 testnet gate together with `L` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §11). **Reopens** if a measured window's single-attempt miss interval at the heaviest shard has its upper bound above 0.30 (the `p_attempt` bound, §10.6 item 1), or if `U1a` or `U1b`, re-measured at the gate, binds (§10.5, §10.8) |
+| `archival_attestation_anchor_lag_blocks` (`L = 4`) | **Yes** — the pass-anchor admission window. Provisional-until-testnet, pinned at the Round-2 testnet gate together with `W` (same §11; `ARCHIVAL_SHARD_FETCH.md` `SF-D8`). **Reopens** on its own falsifier, re-measured at the gate: a p99 fetch-plus-retry under two minutes drops it to 3; one over six tightens `SF-D6`'s retry budget (2 retries) and never raises `L` (§10.6 item 3, §10.7) |
 
 **`display_decimal_point` is the one that needed the walk.** On its own it is
 a rendering convention, and a rendering convention does not make a different
@@ -1367,6 +1373,7 @@ added `VC-D13`…`VC-D15`. What remains open is implementation
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-11 | **The pin fired on a key ADDITION — its third live case, and the first where the right answer was to bring a constant INTO the authority rather than move one around inside it.** Implementing the ratified surge factor (`CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3, `S = 4`, signed 2026-09-06) added `block_weight_short_term_surge_factor` to `config/consensus_constants.json`, moving the digest `c18aed8d…` → `1959257f…`. **The question was answered, not skipped:** *does a different value of this key make a different chain?* **Yes, directly** — it is the ceiling the effective block-weight median is clamped to and the per-block limit is twice that median, so a node holding `S = 50` accepts a block a node holding `S = 4` rejects as over-weight. That is a split, not a preference, so the key belongs in the authority and the re-pin is correct. **The reason it is worth a log entry is what the addition replaced:** the surge factor was a hand-written `#define` in `src/cryptonote_config.h` that bypassed the generator entirely — a consensus constant this digest **could not see**, carrying the value GAP-7's floor measurement had refuted. So the digest's silence about it was never evidence of agreement; it was evidence of absence, and `VC-D12`'s file-set ruling only binds constants that actually live in the files. **Generalises past this constant:** a green digest bounds drift among the keys present, and says nothing about a consensus value someone hand-defined outside them. Worth a sweep of `cryptonote_config.h` for other consensus-bearing hand-written defines the authority cannot see (`CRYPTONOTE_MAX_TX_SIZE`, the reward-zone constants and `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` are all candidates) — not done in the surge lane, which owns one value. |
 | 2026-09-09 | **The two handshakes became one comparison.** Wallet and console had each reimplemented the four-axis check; console omitted genesis, and the wallet `OnceCell` cached transport failures as a wire mismatch. Comparison now lives in `shekyl-rpc-types::IdentityExpectation::check`. Transport / JSON-RPC method errors are not stored. Remote console POSTs go through `Source::post_remote`, which handshakes once. |
 | 2026-09-09 | **The slice is built, and two things changed shape on contact with the code.** (1) `VC-D17`: the engine check could not live in `Engine::open_*` — that path is synchronous, the daemon client is not, and making it async ripples through 68 call sites. It moved to the first request, gated at `Rpc::post`, which every wallet request funnels through. That is better than the original wording rather than a concession: it is the honest reading of *connect-time*, it keeps opening a wallet file from needing a network round trip, and it is the shape `VC-3` had already taken for its own reason, so both arms now answer the question the same way instead of each inventing an answer. (2) `VC-D18`: the genesis pins are placeholders, and the code says so with a constant rather than a comment so the skipped arm is greppable. A pin not derived from the chain it names is a number, not a fact. **The console's network axis cost four C++ files and two constructor signatures**, and that was the right trade: the digest is generated from one JSON for every network, so a testnet build carries the same digest and the same RPC version as mainnet, and shipping the two compile-time axes alone would have been a handshake blind to the case an operator most plausibly hits. **`CORE_RPC_VERSION` is 3.29**, read from the tree cut from #658's merge as the pre-flight's first act — 3.28 was taken while this round was in flight, which is the hazard the procedure exists for. |
 | 2026-09-08 | **The pin fired for real, on another lane's change, and the prediction about the order was wrong.** §3.12 (ii) said "`VC-1` widens first; the `FL-R12′` rename re-pins". The rename landed on `dev` first (`aeb601552`, `money_supply` → `emission_curve_asymptote`, `FL-R15`) while this branch sat unmerged, so **`VC-1`'s own merge is what re-pinned**, `6e1f9125…` → `fab6f63e…`. The sequencing note was a claim about which PR would merge first, which is not a fact anyone controls; corrected here and in `FEE_LADDER_DERIVATION.md`'s `FL-R15` row. **The re-pin question was answered rather than skipped:** the key moved and the value did not, and `VC-D12` says to ask the question of the value the new name binds — the asymptote is the emission curve's asymptote, consensus, so the digest moving is correct. **`VC-R5` paid for itself on first contact:** the build printed the computed digest, so the re-pin was a copy rather than a hunt; under the shipped const-assert form the crate would not have compiled and the value would have been unavailable. **And the two digests over that one file disagreed, both correctly** — `shekyl-economics`'s parameter digest hashes values at fixed byte offsets and is name-blind, so its tests passed unre-pinned; `CONSENSUS_CONSTANTS_DIGEST` canonicalises `key value` pairs and is name-sensitive, so it moved. A key is part of the binding for an identity check, because every generator reads it by name, and is not part of it for a fixture-lineage check. Two instruments, two jobs, one file, and the earlier ruling that "two digests with different jobs is right; a gap between them is not" is what makes both answers correct rather than one of them a bug. |

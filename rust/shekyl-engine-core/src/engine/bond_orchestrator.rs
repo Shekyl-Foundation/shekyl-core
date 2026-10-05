@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::local_ledger::LocalLedger;
 use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHeight as CtBlockHeight, Gindex,
+    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot, Gindex,
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
@@ -35,6 +35,7 @@ use super::bond_assembly::{
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
+use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
@@ -118,7 +119,7 @@ fn bond_fee_from_estimates(
 ) -> Result<AtomicUnits, FirstStakeError> {
     p_lane_floor_fee(estimates).map_err(|e| match e {
         FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
-        other => FirstStakeError::FeeEstimate(other.to_string()),
+        other => FirstStakeError::FeeEstimate(other),
     })
 }
 
@@ -363,7 +364,7 @@ pub enum FirstStakeError {
     /// The daemon fee-estimate query failed — check the daemon connection
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
-    FeeEstimate(String),
+    FeeEstimate(FeeEstimatorError),
     /// The daemon *answered* the fee query and the wallet refused the
     /// answer (`ValidatedFeeEstimates`). Distinct from
     /// [`Self::FeeEstimate`] by remedy, exactly as `-29109` is distinct
@@ -441,14 +442,13 @@ use super::Engine;
 /// ledger-present. **Not** a hand-rolled `tip − FCMP_REFERENCE_BLOCK_MIN_AGE`.
 pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
-    chain_tip: u64,
-    block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
+    chain_tip: shekyl_types::BlockHeight,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
 ) -> Result<ReferenceBlock, BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
         .await
-        .map_err(|err| BondAssemblyError::build("curve-tree ingested tip", format!("{err:?}")))?
-        .map(|bh| bh.0);
+        .map_err(|err| BondAssemblyError::build("curve-tree ingested tip", format!("{err:?}")))?;
     let ingested = covered_through.ok_or(BondAssemblyError::ReferenceResyncing {
         detail: "curve tree has not ingested any block yet",
     })?;
@@ -465,7 +465,7 @@ pub(crate) async fn anchored_reference_block(
         });
     }
     let (curve_tree_root, _depth) = curve_tree
-        .reference_root_and_depth(CtBlockHeight(reference_height))
+        .reference_root_and_depth(reference_height)
         .await
         .map_err(|err| BondAssemblyError::build("reference root and depth", format!("{err:?}")))?;
     let block_hash =
@@ -473,9 +473,9 @@ pub(crate) async fn anchored_reference_block(
             detail: "reference-height block hash missing from ledger",
         })?;
     Ok(ReferenceBlock {
-        height: CtBlockHeight(reference_height),
-        curve_tree_root,
-        block_hash,
+        height: reference_height,
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     })
 }
 
@@ -520,7 +520,7 @@ where
                 .ok_or_else(|| BondAssemblyError::build("assemble", "no stake engine"))?;
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
-            let tip_hash_at = move |h: u64| snap.block_hash_at(h);
+            let tip_hash_at = move |h: BlockHeight| snap.block_hash_at(h);
             (
                 g.daemon().clone(),
                 stake,
@@ -596,9 +596,9 @@ where
             .records
             .iter()
             .map(|r| AssembleInput {
-                gindex: Gindex(r.gindex.to_raw()),
-                output_key: r.output_key,
-                commitment: r.commitment,
+                gindex: Gindex::from_raw(r.gindex.to_raw()),
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
             })
             .collect();
 
@@ -610,7 +610,9 @@ where
                 // the boundary (a rendered `Build.detail` would force retry
                 // policy into substring-matching the error text).
                 CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
-                    BondAssemblyError::OutputNotYetDrained { gindex: gindex.0 }
+                    BondAssemblyError::OutputNotYetDrained {
+                        gindex: gindex.to_raw(),
+                    }
                 }
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })?;
@@ -646,10 +648,10 @@ where
                     .leaf_chunk
                     .iter()
                     .map(|cl| LeafEntry {
-                        output_key: cl.output_key,
+                        output_key: cl.output_key.to_bytes(),
                         key_image_gen: cl.key_image_gen,
-                        commitment: cl.commitment,
-                        h_pqc: cl.h_pqc,
+                        commitment: cl.commitment.to_bytes(),
+                        cm_x: cl.cm_x,
                     })
                     .collect(),
                 c1_layers: path.c1_layers,
@@ -723,8 +725,8 @@ where
         self_arc: Arc<RwLock<Self>>,
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
-        chain_tip: u64,
-        tip_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
+        chain_tip: BlockHeight,
+        tip_hash_at: impl FnOnce(BlockHeight) -> Option<[u8; 32]>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
@@ -732,7 +734,7 @@ where
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
-        let reference_height = BlockHeight::from_raw(reference.height.0);
+        let reference_height = reference.height;
 
         // The seal basis is ONE ordered read — pending block, then pscan seal.
         // The order is `load_seal_basis`'s guarantee: loading the pscan seal
@@ -853,7 +855,7 @@ where
             };
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
-            let tip_hash_at = move |h: u64| snap.block_hash_at(h);
+            let tip_hash_at = move |h: BlockHeight| snap.block_hash_at(h);
             // One consistent snapshot of the staking block for every guard
             // below (enabled flag, recorded slots, monotone cursor).
             let staking = g.ledger.read().ledger.staking.clone();
@@ -961,7 +963,7 @@ where
             daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?,
+                .map_err(|e| FirstStakeError::FeeEstimate(map_daemon_engine_fee_error(e)))?,
         )?;
 
         // W1 preflight sweep (SA-R1-b, sweep-before-persist): the SAME body

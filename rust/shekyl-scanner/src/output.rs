@@ -14,20 +14,20 @@ use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
 use shekyl_curve_io::*;
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::Timelock;
+use shekyl_types::{Timelock, TxHash};
 
 use crate::extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE};
 
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct AbsoluteId {
-    pub(crate) transaction: [u8; 32],
+    pub(crate) transaction: TxHash,
     pub(crate) index_in_transaction: u64,
 }
 
 impl core::fmt::Debug for AbsoluteId {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         fmt.debug_struct("AbsoluteId")
-            .field("transaction", &hex::encode(self.transaction))
+            .field("transaction", &self.transaction)
             .field("index_in_transaction", &self.index_in_transaction)
             .finish()
     }
@@ -35,13 +35,13 @@ impl core::fmt::Debug for AbsoluteId {
 
 impl AbsoluteId {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_all(&self.transaction)?;
+        w.write_all(self.transaction.as_bytes())?;
         w.write_all(&self.index_in_transaction.to_le_bytes())
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<AbsoluteId> {
         Ok(AbsoluteId {
-            transaction: read_bytes(r)?,
+            transaction: TxHash::from_bytes(read_bytes(r)?),
             index_in_transaction: read_u64(r)?,
         })
     }
@@ -218,7 +218,7 @@ pub struct WalletOutput {
 
 impl WalletOutput {
     /// The hash of the transaction that created this output.
-    pub fn transaction(&self) -> [u8; 32] {
+    pub fn transaction(&self) -> TxHash {
         self.absolute_id.transaction
     }
 
@@ -265,7 +265,7 @@ impl WalletOutput {
     /// Construct a WalletOutput for testing or programmatic use.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(
-        tx_hash: [u8; 32],
+        tx_hash: TxHash,
         index_in_transaction: u64,
         index_on_blockchain: u64,
         key: curve25519_dalek::edwards::EdwardsPoint,

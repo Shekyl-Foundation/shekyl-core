@@ -59,7 +59,7 @@ pub(crate) fn assemble_tx_to_sign(
     // plumbing bug, not a runtime condition. The `debug_assert`s surface the
     // actual counts in dev/CI (where it would be diagnosed); the release guard
     // refuses gracefully rather than letting the `zip` below silently truncate
-    // to a shorter — and unsound — transaction. (`CannotSign`'s reason is
+    // to a shorter — and unsound — transaction. (`BuildInvariant`'s reason is
     // `&'static str`, so the counts ride the assert rather than the error.)
     debug_assert_eq!(
         selected_indices.len(),
@@ -72,19 +72,19 @@ pub(crate) fn assemble_tx_to_sign(
         "assemble-input count must equal selected input count",
     );
     if selected_indices.len() != paths.len() || selected_indices.len() != assemble_inputs.len() {
-        return Err(SendError::CannotSign {
+        return Err(SendError::BuildInvariant {
             reason: "assembled path count does not match selected input count",
         });
     }
     let Some(first) = paths.first() else {
-        return Err(SendError::CannotSign {
+        return Err(SendError::BuildInvariant {
             reason: "transaction has no inputs to assemble",
         });
     };
 
     let mut inputs = Vec::with_capacity(selected_indices.len());
     for ((&index, ai), path) in selected_indices.iter().zip(assemble_inputs).zip(paths) {
-        let td = transfers.get(index).ok_or(SendError::CannotSign {
+        let td = transfers.get(index).ok_or(SendError::BuildInvariant {
             reason: "selected transfer index out of range",
         })?;
         // Index-stability guard: the transfer at this index must still be the
@@ -92,8 +92,8 @@ pub(crate) fn assemble_tx_to_sign(
         // transfer vector shifted under the tx between selection and fold (a
         // reorg during the AssembleTx round-trip) — refuse rather than bind the
         // wrong secrets to this path.
-        if td.global_output_index != ai.gindex.0 {
-            return Err(SendError::CannotSign {
+        if td.global_output_index != ai.gindex {
+            return Err(SendError::BuildInvariant {
                 reason: "selected transfer shifted under the transaction during assembly",
             });
         }
@@ -103,7 +103,7 @@ pub(crate) fn assemble_tx_to_sign(
         // bind a tx context (root/depth) inconsistent with that input's
         // membership data. Refuse rather than sign.
         if path.tree != first.tree {
-            return Err(SendError::CannotSign {
+            return Err(SendError::BuildInvariant {
                 reason: "assembled paths disagree on the tree context",
             });
         }
@@ -119,6 +119,7 @@ pub(crate) fn assemble_tx_to_sign(
         outputs.push(TxOutputContext::Payment {
             dest: OutputDestination {
                 address: recipient.address.clone(),
+                rid: recipient.rid,
             },
             amount: recipient.amount_atomic_units.to_raw(),
         });
@@ -140,45 +141,39 @@ fn input_context_from_transfer(
     td: &TransferDetails,
     path: &AssembledPath,
 ) -> Result<TxInputSigningContext, SendError> {
-    let key_image = td.key_image.ok_or(SendError::CannotSign {
+    let key_image = td.key_image.ok_or(SendError::BuildInvariant {
         reason: "transfer missing key_image (scanner/indexes not populated)",
     })?;
-    let handle = td.output_handle.ok_or(SendError::CannotSign {
+    let handle = td.output_handle.ok_or(SendError::BuildInvariant {
         reason: "transfer missing output_handle (engine post-pass not run)",
     })?;
-    let source_ciphertext = td.source_ciphertext.clone().ok_or(SendError::CannotSign {
-        reason: "transfer missing source_ciphertext",
-    })?;
+    let source_ciphertext = td
+        .source_ciphertext
+        .clone()
+        .ok_or(SendError::BuildInvariant {
+            reason: "transfer missing source_ciphertext",
+        })?;
     let output_key = td.key.compress().to_bytes();
     let commitment = td.commitment.calculate().compress().to_bytes();
 
+    // The chunk carries the path node's full child set, including the spent
+    // output; the signer (tx-builder) re-derives this input's own PQC leaf
+    // commitment from its secrets and checks it against that entry before
+    // proving (`PL-D3`; a mismatch is the typed received-but-unspendable
+    // refusal), so nothing about the own leaf is read here.
     let leaf_chunk: Vec<LeafEntry> = path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect();
-    // This input's own PQC leaf hash is the real `h_pqc` of its own entry in the
-    // assembled leaf chunk (the chunk carries the path node's full child set,
-    // including the spent output). Matched on the full `(O, C)` identity pair
-    // (the same pairing `assemble_path`'s post-resolution check uses), so the
-    // lookup is unambiguous even if two chunk entries ever shared an output key.
-    let h_pqc = path
-        .leaf_chunk
-        .iter()
-        .find(|cl| cl.output_key == output_key && cl.commitment == commitment)
-        .map(|cl| cl.h_pqc)
-        .ok_or(SendError::CannotSign {
-            reason: "assembled leaf chunk does not contain the spent output",
-        })?;
 
     Ok(TxInputSigningContext {
         handle,
         // Signing context crosses into the crypto/FCMP layer, which takes raw
         // `[u8; 32]` (rule 18); convert at this edge.
         tx_hash: td.tx_hash.to_bytes(),
-        internal_output_index: td.internal_output_index,
+        internal_output_index: td.internal_output_index.to_raw(),
         amount: td.amount(),
         key_image,
         source_ciphertext,
         output_key,
         commitment,
-        h_pqc,
         leaf_chunk,
         c1_layers: path.c1_layers.clone(),
         c2_layers: path.c2_layers.clone(),
@@ -191,10 +186,10 @@ fn input_context_from_transfer(
 /// boundary.
 pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     LeafEntry {
-        output_key: cl.output_key,
+        output_key: cl.output_key.to_bytes(),
         key_image_gen: cl.key_image_gen,
-        commitment: cl.commitment,
-        h_pqc: cl.h_pqc,
+        commitment: cl.commitment.to_bytes(),
+        cm_x: cl.cm_x,
     }
 }
 

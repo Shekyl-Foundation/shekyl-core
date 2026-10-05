@@ -31,11 +31,13 @@ pub struct HandshakeRequest {
     pub node_data: BasicNodeData,
     /// `CORE_SYNC_DATA`.
     pub payload_data: CoreSyncData,
-    /// Self-detection nonce (PWD-T1's token, carried on this request until
-    /// the Noise handshake lands): 32 bytes of CSPRNG output, in the clear.
-    /// Per-connection, minted fresh, never persisted — its only job is to
-    /// be recognised by the node that emitted it, within the zone it was
-    /// emitted on.
+    /// Self-detection nonce (SHEKYL_P2P_PROTOCOL.md §3.5, *Two handshakes*,
+    /// PWD-T1): 32 bytes of CSPRNG output on the Levin handshake request.
+    /// Session content — it stays here on every zone, and does not ride the
+    /// transport handshake. On clearnet the Noise channel encrypts it; the
+    /// counterparty still sees it. Per-connection, minted fresh, never
+    /// persisted — its only job is to be recognised by the node that emitted
+    /// it, within the zone it was emitted on.
     pub nonce: [u8; 32],
 }
 

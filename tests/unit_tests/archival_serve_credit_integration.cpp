@@ -602,7 +602,7 @@ uint64_t expected_fire_height(const IntegrationKat& kat)
   const crypto::hash p_id = hash_from_hex(kat.p_id_hex);
   const crypto::hash seal_hash = hash_from_hex(kat.seal_hash_hex);
   const uint64_t h_open = shekyl_archival_epoch_open_height(kat.settlement_epoch);
-  const uint64_t h_close = shekyl_archival_epoch_close_height(kat.settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_last_block(kat.settlement_epoch);
   return shekyl_archival_challenge_fire_height(h_open, h_close,
     reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(p_id.data),
@@ -788,18 +788,14 @@ TEST(archival_serve_credit, full_tx_bytes_match_the_rust_oracle)
   ASSERT_EQ(parsed.ct_signatures.p.serve_credit_pruned.size(), 1u);
   EXPECT_EQ(parsed.ct_signatures.p.serve_credit_pruned[0], bytes_from_hex(k.pruned_hex));
   EXPECT_TRUE(parsed.pqc_auths.empty());
+  // The arm with no pqc_auths component (RF-D9): the pqc_auths range handed
+  // to the Rust mixer is empty and its count zero, so the id mixes prefix,
+  // base, prunable and the archival length -- which here is the prunable
+  // region alone. The spend arm has its own pin (`pruned_tx_hash_parity.cpp`);
+  // the pruned identity is Rust-only (`hash_with_supplied_prunable`, asserted
+  // against this same pin by the Rust leg).
+  EXPECT_EQ(parsed.pqc_auths_offset.load(), parsed.unprunable_size.load())
+      << "a serve-credit transaction carries no pqc_auths range";
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
       << "tx id differs across languages";
-
-  // The PRUNED identity on the 3-part (empty-pqc_auths) arm: mixing the
-  // prunable digest back in via `get_pruned_transaction_hash` must reproduce
-  // the cross-language txid -- the derivation a pruned daemon's reader
-  // depends on, asserted here against the same pin the Rust leg's
-  // `hash_with_supplied_prunable` asserts. The 4-part spend arm has its own
-  // pin (`pruned_tx_hash_parity.cpp`).
-  crypto::hash prunable_hash;
-  ASSERT_TRUE(calculate_transaction_prunable_hash(parsed, nullptr, prunable_hash));
-  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
-            k.tx_hash_hex)
-      << "pruned identity (supplied digest) diverged from the txid";
 }

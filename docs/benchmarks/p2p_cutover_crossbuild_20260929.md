@@ -1,0 +1,821 @@
+# P2P cutover cross-build, 2026-09-29
+
+Private testnet pair, option off. Not the public testnet: each node
+dialled only the other, on loopback. The seam pin is `2af7279fb`
+(the close-cause log on `979d9dc13`). The epee pin is `d09bf3ef0`,
+the branch base, so the pair differs by the cutover commits. Current
+`dev` has moved past that base with non-transport commits; it was
+not the peer.
+
+`--clearnet-transport-encrypt` was not set.
+
+## What passed
+
+- **Dial, both directions, clearnet.** Before any ban, each node
+  reported one incoming session and one outgoing session. The seam
+  node reported the same counts as socket counts.
+- **Sync from genesis, both directions.** One node held a chain at
+  height 80 (`top_block_hash` prefix `aa78f57dece25694`). The other
+  was started with an empty store and reached that height and that
+  hash. Then the roles were reversed, same tip.
+- **Block relay, both directions, clearnet.** While one node mined
+  at fixed difficulty 1, the other applied `NOTIFY_NEW_COMPACT_BLOCK`
+  and the tips matched at height 80. Heights briefly differed and
+  then matched again.
+- **Timed ban.** `set_bans` of `127.0.0.1` for 3600 seconds closed
+  both seam sockets with `LocalClose` and dropped both session
+  counts to zero. `get_bans` reported `permanent: false` and about
+  3598 seconds left. The next dials were `AdmissionRefused`.
+- **Permanent ban file.** A ban file containing `127.0.0.1` loaded
+  as `permanent: true` and `seconds: 0`. A second start with the
+  same file loaded the same row. Dials were `AdmissionRefused`.
+  No "Ban duration does not fit the clock" line.
+
+## What did not
+
+- **Transaction relay, both directions.** A transaction submitted
+  on the seam node stayed in the seam pool. A second, submitted on
+  the epee node, stayed in the epee pool. Each side logged
+  `Unable to send transaction(s) via Dandelion++ stem`, then
+  `Unable to send transaction(s), no available connections`. At
+  those moments the relay counted `0` outbound connections with
+  remote height at least the local height, after earlier moments
+  in the same run had counted `1`. Session counts were still one
+  in and one out. This is not on the harness expected-divergence
+  list (`P2P_DIFFERENTIAL_HARNESS.md`).
+- **An explicit `--in-peers 1` did not refuse at accept.** A second
+  epee node connected. The seam inbound socket count rose past 1.
+  An explicit inbound cap skips the process ceiling
+  (`apply_inbound_ceiling` returns when the cap is explicit).
+- **A derived ceiling of 0 refused the handshake and did not log a
+  cause.** With no `--in-peers` and a descriptor soft limit of 64,
+  the ceiling resolved to 0 (38 held, 112 reserved). Inbound stayed
+  0. The epee handshake failed with
+  `LEVIN_ERROR_CONNECTION_DESTROYED` before the handshake completed.
+  No `seam close` line was written for that refusal. The seam's own
+  outbound dial still completed.
+
+## D12 causes that were logged
+
+| When | Cause |
+| --- | --- |
+| Epee process stopped while the seam held both sockets | `PeerClosed` on each socket |
+| Timed ban of the peer | `LocalClose` on each socket, then `AdmissionRefused` on the next dials |
+| Ban file loaded, including after a restart | `AdmissionRefused` on dials |
+
+## Epee-to-epee control
+
+Same private testnet, same exclusive pair, same fixed difficulty,
+one node mining, then a spend. Both processes were the epee pin
+`d09bf3ef0` with one addition: an empty relay walk logs every
+candidate's direction, state, recorded height, the local height,
+and which message last wrote the recorded height.
+
+At the send the origin's local height was 85 and the filter
+threshold was 85. It had two candidates, one inbound and one
+outbound, both `normal`. Each recorded height was 45, last written
+by timed sync, so neither was eligible. The peer's walk was the
+same shape, recorded height 46 against local height 85, also last
+written by timed sync.
+
+The stem send still completed. The peer added the transaction to
+its pool. Fluff on both nodes then logged `no available
+connections`.
+
+The peer's own local height was 85, because it had received those
+blocks from the mining node, and it still recorded the mining node
+at 46, last written by timed sync. Receiving a block does not
+update the sender's recorded height. On a two-node network fluff
+had nobody else to send to: fluff skips the source, and the source
+was the only other session. Fluff does not read recorded height.
+This branch raises the sender's recorded chain length when the
+block is accepted, and relay eligibility is the session's normal
+state rather than that height.
+
+The seam-versus-epee run failed earlier than this. That run logged
+`Unable to send transaction(s) via Dandelion++ stem` and the
+transaction stayed in the origin pool. Two epee nodes, with the
+filter in the same empty state, still stemmed. The stem failure is
+the send, not the choice of peer. The failing send now logs the
+connection id, its zone and direction, whether the registry held
+it, and the seam's return and cause.
+
+## Rerun on the current branch, same day
+
+The daemon binary contains the accepted-block height raise, the
+`state_normal` eligibility rule, the accept-time inbound cap, and
+the seam send log. `--version` still prints `v3.1.0-c05ca6808`
+because CMake stamped it at configure time. The epee peer is still
+`d09bf3ef0`, so it still filters stems by recorded height.
+
+Unit tests, built here with `BUILD_TESTS=ON`:
+
+- `relay_peer.an_accepted_block_raises_recorded_height_and_never_lowers_it` passed.
+- The five `node_server.in_peers_*` tests passed, including a cap
+  above the derived ceiling refusing startup and `--in-peers 0`
+  staying 0.
+- `seam_endpoint.a_relay_send_on_the_strand_reaches_the_seam_connection`
+  failed on this run. Both payloads were shorter than a Levin
+  header, so the hit returned before `do_send`. The nil-uuid miss
+  returned 0 from the Levin connection map and never asked the seam.
+  The test now sends a real `bucket_head2`, and the miss is an id
+  the hub does not hold, asserted with the seam's `found` flag.
+
+Daemon admission, private loopback:
+
+- `--in-peers 1000000` exited with `Inbound cap 1000000 for public
+  exceeds the descriptor ceiling 524238; refusing to start.`
+- `--in-peers 1` with two epee dialers kept one inbound session.
+  The second dial logged `seam accept refused cause AdmissionRefused`.
+- A descriptor soft limit of 64 derived a ceiling of 0 (24 held,
+  112 reserved, the second figure after the Tor reservation).
+  The inbound count stayed 0. The dialer's handshake failed with
+  `LEVIN_ERROR_CONNECTION` and the seam logged `AdmissionRefused`.
+
+Stem, seam origin, heights matched near 112:
+
+- The seam logged `Found 1 out connections in normal state` and
+  `Sent 1 transaction(s)` on a stem. No `seam send refused`.
+- The epee peer logged `Including transaction` for that same
+  transaction. Both pools were empty afterward because the miner
+  included it.
+- Fluff on both sides then logged `no available connections`. On
+  two nodes the only other session is the source, which fluff skips.
+- The epee peer's own walk at that moment still had both sessions
+  `normal` and ineligible: recorded height 69 against local height
+  118, last written by timed sync and by chain entry. It stemmed
+  anyway, from a map built earlier, and the seam included the
+  transaction again.
+
+A second submit, originated on the epee peer a few seconds later,
+stayed in the epee pool. That walk logged `candidates=0` and
+`Unable to send transaction(s) via Dandelion++ stem`. The link had
+just re-handshaked. That failure is an empty epee walk, not a seam
+refusal.
+
+## The option on, same day
+
+Two cutover daemons on loopback with `--clearnet-transport-encrypt`
+at both ends never established a channel. Every dial logged
+`TransportHandshakeFailed` within about 70 µs of the TCP connect, at
+both ends, with no `PrefixMismatch`. That is faster than the
+handshake's cryptography, so the refusal came before any byte.
+
+The zone host stored the timing engine's handle and dropped the
+`EngineService` when its constructor returned. The service's `Drop`
+sets the closed flag every handle shares, so each `register` for a
+transport deadline returned `Closed`, which the connectors report as
+`TransportHandshakeFailed`. The plaintext path arms no deadline and
+never saw it; the Tor dial clock and gap timer arm one and would
+have failed the same way. The host now owns the service and stops it
+in `shekyl_zone_shutdown`, engine first, then the pool, then the
+join. `the_engine_outlives_ensure` fails on the old shape.
+
+After the fix the pair established on the first dial. The connectors
+now log each span, in nanoseconds, one line per connection: the
+clearnet TCP connect, the handshake by role and kind, the responder's
+blocking-pool queue wait and compute time, the Tor SOCKS dial, and
+the Tor channel-to-session gap. The clearnet gap is the interval from
+`NEW CONNECTION` to `CONNECTION HANDSHAKED OK` in the C++ log. These
+loopback figures are a smoke of the lines, not a link: initiator
+handshake 1.54 ms, responder queue 106 µs and compute 363 µs, Levin
+gap 43 ms. The deadline pin is the commit that carries the spans.
+
+## Tor, same day
+
+The first Tor connection on this branch was between an x86_64 daemon
+here and an off-site daemon on a Foundation seed host, both on the
+cutover pin. The seed side published a managed onion with
+proof-of-work through the pinned `15.0.19` Tor. The dialing side ran
+the same pinned Tor itself with a fixed SocksPort and `--tx-proxy`,
+because `--add-exclusive-node <onion>` creates the tor zone at option
+parse and `handle_command_line` refuses it before the managed Tor
+could have supplied its SOCKS address. That is a composition gap in
+the default posture, noted here and not fixed in this run.
+
+Two defects, found in that order:
+
+- **Every Tor dial was `DialFailed` about 100 µs in.** The zone host
+  learned the SOCKS address only through `listen_tor`, which `init`
+  calls for a tor zone that binds. An outbound-only `--tx-proxy tor`
+  zone never bound, so the host had no proxy, and its dialed
+  connections had no tor binding to post to. `init` now installs both
+  for that zone.
+- **Bytes into the seed's Tor forward listener vanished.** The onion
+  connection logged `NEW CONNECTION`, then nothing until
+  `LevinHandshakeTimeout` at +5 s. Raw bytes sent straight into the
+  forward listener on the seed's own loopback did the same, so the Tor
+  network was not the cause. `Deliver` and `Closed` posts carried a
+  null `observed`; the adapter routes by `observed->connector`, so
+  both landed on the clearnet binding and were dropped. Every post
+  now names its row's connector. This is the review's "Tor events
+  lose socket binding after establishment".
+
+After both, the dial connected in 3.93 s (SOCKS exchange, circuit,
+rendezvous; `proxy_connect_ns` 125 µs of that), the Levin handshake
+completed, and the gap was 597 ms outbound and 649 ms on the seed.
+Timed syncs followed. One sample, not a distribution.
+
+The floor device runs the pinned aarch64 `16.0a12` Tor beside its
+daemon and publishes a proof-of-work onion through it.
+
+A third defect surfaced when the floor device dialed the seed while
+the x86_64 session was still up: every new inbound connection on the
+seed logged `NEW CONNECTION` and went deaf. `drive_inbound` held a
+blocking thread for the life of a connection and the zone hands its
+runtime one blocking lane, so a daemon read from one connection at a
+time and every later one waited in the pool's queue until the first
+closed. The inbound drive is a task now, awaiting the strand on a
+`Notify`; `two_connections_deliver_on_one_blocking_lane` pins it.
+After that the seed carried the x86_64 session and the floor's dials
+together.
+
+## Tor dial distribution, floor device (2026-09-29)
+
+Raw samples: [`p2p_tor_dial_floor_20260929.tsv`](p2p_tor_dial_floor_20260929.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `572ed17c3`, the pinned `16.0a12` Tor (`0.4.9.12`) run beside it
+  with a fixed SocksPort and `--tx-proxy`, because a named onion peer
+  cannot yet be dialed under the managed posture (above). The client
+  Tor was restarted between samples, so each dial built its circuits
+  fresh; bootstrap from a cached consensus took 3–5 s and is not in
+  any span. The RandomX miner was off. Nothing else ran on the device.
+- Service: an off-site Foundation seed host (x86_64, 4 cores), daemon
+  `a764f5a76`, managed ephemeral onion published through the pinned
+  `15.0.19` Tor (`0.4.9.11`) with proof-of-work on. One other Tor
+  session was live on it throughout.
+- Link: the Tor network, from a LAN client to a host in South America.
+  Clearnet RTT between the two sites is about 170 ms; the Tor path is
+  whatever the circuits were.
+- n = 100, no timeouts. Samples 1–19 and 20–100 were one run.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| Tor dial (`dial_ns`: SOCKS exchange, circuit, rendezvous) | 1.84 s | 3.40 s | 4.54 s | 4.76 s | **9.1 s** |
+| loopback connect to the SOCKS port (`proxy_connect_ns`) | 0.4 ms | 0.5 ms | 0.5 ms | 0.5 ms | — |
+| channel to session (`gap_ns`, outbound side) | 626 ms | 827 ms | 1.26 s | 1.32 s | **2.6 s** |
+
+p99 is the 99th of the 100 sorted samples (4.537 s and 1.260 s), one
+sample from each max. Twice each is 9.07 s and 2.52 s, rounded up to
+9.1 s and 2.6 s per D9. This run's slowest dial cleared the old Levin
+invoke timeout (5 s) by 240 ms. A later run under these conditions
+whose p99 exceeds 4.55 s or 1.30 s reopens the respective deadline.
+`transport_spans` writes 9.1 s as the Tor dial and 2.6 s as the Tor gap.
+
+The inbound drive's wake was per hub when these samples were taken:
+every strand answer woke every waiting driver. One other session was
+live, so the herd here was two. The wake is per row from `212c3260e`.
+
+## Clearnet LAN distribution, floor device responder (2026-09-30 UTC)
+
+Raw samples:
+[`p2p_clearnet_lan_floor_responder_20260930.tsv`](p2p_clearnet_lan_floor_responder_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: this build host (x86_64), daemon `1485e5ae3`, one outbound
+  to the floor device and nothing else; `--clearnet-transport-encrypt`
+  on, ephemeral Tor off, no miner.
+- Responder: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `1485e5ae3`, `--clearnet-transport-encrypt` on, ephemeral Tor off,
+  inbound cap 16, one inbound live at a time. Sharing its four cores:
+  one idle regtest daemon from an unrelated lane, nothing else. The
+  RandomX miner was off; the mining floor device is its own record.
+- Link: one LAN segment, 0.2 ms RTT.
+- Method: each sample is a fresh TCP connection and a fresh NNhfs
+  handshake. The dialer's outbound cap was set to 0 and back to 12 over
+  RPC; the drop closes the session, and the exclusive-peer redial runs
+  on the next 1 s tick with no cap or recently-failed gate. Spans are
+  matched to their connection id on the side that logged them. The
+  spans are the connector's own (`shekyl_clearnet::drive`), except the
+  gap, which is the dialer's `NEW CONNECTION` to `CONNECTION HANDSHAKED
+  OK`.
+- n = 100, no timeouts.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, dialer) | 0.31 ms | 0.38 ms | 0.76 ms | 0.97 ms | 1.6 ms |
+| initiator handshake (`handshake_ns`, dialer: first write to session) | 3.72 ms | 4.17 ms | 7.15 ms | 7.23 ms | **14.3 ms** |
+| responder queue wait (`queue_ns`, floor: handshake job queued to started) | 51 µs | 66 µs | 95 µs | 119 µs | 0.2 ms |
+| responder compute (`compute_ns`, floor: the NNhfs arithmetic) | 2.17 ms | 2.23 ms | 2.31 ms | 2.37 ms | 4.7 ms |
+| responder handshake (`handshake_ns`, floor: first read to session) | 2.73 ms | 2.98 ms | 5.54 ms | 6.23 ms | **11.1 ms** |
+| channel to session (`gap_ns`, dialer) | 1.85 ms | 2.27 ms | 5.31 ms | 8.32 ms | **10.7 ms** |
+
+p99 is the 99th of the 100 sorted samples; precision 0.1 ms; 2 × p99
+rounded up per D9. Two things this distribution bounds and one it does
+not:
+
+- The floor device's responder cost is 2.2 ms of arithmetic with a
+  99th percentile 0.14 ms above the median, and a queue wait under
+  0.1 ms with one handshake at a time. The tail on the handshake spans
+  is not the arithmetic: on samples 55, 58 and 91 the initiator's span
+  and the responder's span are long together (6.1–7.1 ms and 5.1–6.2
+  ms) while `compute_ns` stays at 2.2 ms, so the wait is around the
+  compute — the job's dispatch or the socket — not in it; on sample 56
+  the initiator's span is the max (7.2 ms) with the responder's at its
+  median, a wait on the dialer's side alone.
+- The gap's max (8.3 ms, sample 58) is the same sample. The gap p99
+  here is 5.3 ms against 1.26 s on Tor; the gap deadline stays owned
+  by the Tor distribution.
+- The TCP connect is the LAN's. A connect deadline derived from 0.76
+  ms would refuse every peer past the first router. The clearnet
+  connect and initiator-handshake deadlines are owed to the off-site
+  leg, whose RTT is about 170 ms; this record's 14.3 ms is the LAN
+  bound on the handshake with the network term near zero.
+
+A later run under these conditions whose p99 exceeds 7.15 ms
+(initiator), 5.55 ms (responder) or 5.32 ms (gap) reopens the
+respective figure.
+
+### The defect this leg found
+
+The first attempt at this distribution ran at `a6af6b5ba` with the
+churn on the responder's side (`in_peers 0`, then 16) and produced one
+sample per 60 s. The acceptor logged `LocalClose` and `CLOSE
+CONNECTION` at once; the dialer's log was silent until its own
+timed-sync 54 s later, and `PeerClosed` landed 0.6 ms after that send.
+The responder's local close never reached the wire: `Hub::record`
+posted `Closed` and released the admission slot, but the `Session`
+whose drop closes the outbound queue was parked in the inbound drive
+waiting on the peer, and `ZoneDial` has no `reader_stopped`. The socket
+stayed open until the peer wrote. A peer that never writes would have
+held it for good — a ban, a protocol refusal, `del_in_connections`,
+all of them silent on the wire.
+
+Fixed in `1485e5ae3` (`SendHalf::close`; `record` closes the row's
+send half). Verified on this pair before the sweep: `in_peers 0` on
+the floor, `LocalClose` there and `PeerClosed` on the dialer within
+1 ms of each other. Unit test `a_local_close_ends_the_writer` is red on
+the previous shape.
+
+## Clearnet LAN distribution, floor device initiator (2026-09-30 UTC)
+
+Two runs, recorded side by side, not merged. Raw samples:
+[`p2p_clearnet_lan_floor_initiator_run1_20260930.tsv`](p2p_clearnet_lan_floor_initiator_run1_20260930.tsv),
+[`p2p_clearnet_lan_floor_initiator_run2_20260930.tsv`](p2p_clearnet_lan_floor_initiator_run2_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi 4 Model B, aarch64, 4 cores), daemon
+  `1485e5ae3` in run 1 and `54ba2b6cd` in run 2 (the second adds the
+  initiator's pre-write spans; no behaviour change), one outbound and
+  nothing else; `--clearnet-transport-encrypt` on, ephemeral Tor off.
+  The RandomX miner was off. Sharing its four cores: the same idle
+  regtest daemon as the responder leg.
+- Responder: a LAN VM (x86_64, 8 cores), the portable daemon at
+  `1485e5ae3`, inbound cap 16, one inbound live at a time. It is not a
+  quiet host: it shared its cores with a testnet miner of an unrelated
+  lane at about 3.4 cores throughout, and its load average rose from
+  5 to 8.5 across the two runs. It was the only LAN acceptor available
+  — this build host's firewall admits ssh only and there is no
+  privilege here to open a port, and the other VM carries the same
+  miner. The floor device's own spans are what this leg is for; the
+  responder's tails are the VM's and are attributed as such below.
+- Link: one LAN segment, 0.2 ms RTT.
+- Method: as the responder leg — dialer-side `out_peers` churn, spans
+  matched by connection id.
+- n = 100 each, no timeouts.
+
+Run 1 (`1485e5ae3`):
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 0.54 ms | 0.72 ms | 0.88 ms | 0.99 ms | 1.8 ms |
+| initiator handshake (`handshake_ns`, floor) | 3.40 ms | 4.51 ms | 109 ms | 4.30 s | — (VM's, see below) |
+| responder queue wait (`queue_ns`, VM) | 74 µs | 145 µs | 344 µs | 561 µs | — |
+| responder compute (`compute_ns`, VM) | 0.66 ms | 0.86 ms | 1.24 ms | 1.43 ms | — |
+| responder handshake (`handshake_ns`, VM) | 1.84 ms | 2.52 ms | 79 ms | 108 ms | — |
+| channel to session (`gap_ns`, floor) | 2.49 ms | 3.18 ms | 4.30 ms | 74 ms | 8.6 ms |
+
+Run 2 (`54ba2b6cd`), the floor's three waits before message 1 added:
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 0.49 ms | 0.64 ms | 0.84 ms | 0.88 ms | 1.7 ms |
+| initiator blocking-lane wait (`queue_ns`, floor) | 54 µs | 99 µs | 357 µs | 1.41 ms | 0.8 ms |
+| initiator compute (`compute_ns`, floor: keygen and message 1) | 0.40 ms | 0.91 ms | 1.04 ms | 1.15 ms | 2.1 ms |
+| initiator write under the up gate (`write_ns`, floor) | 89 µs | 141 µs | 210 µs | 239 µs | 0.5 ms |
+| initiator handshake (`handshake_ns`, floor) | 3.42 ms | 4.45 ms | 715 ms | 4.19 s | — (VM's, see below) |
+| responder queue wait (`queue_ns`, VM) | 81 µs | 155 µs | 310 µs | 887 µs | — |
+| responder compute (`compute_ns`, VM) | 0.66 ms | 0.84 ms | 1.12 ms | 2.02 ms | — |
+| responder handshake (`handshake_ns`, VM) | 1.76 ms | 2.68 ms | 35 ms | 4.18 s | — |
+| channel to session (`gap_ns`, floor) | 2.44 ms | 3.49 ms | 34 ms | 111 ms | — (VM's) |
+
+Precision 0.1 ms. What the two runs establish:
+
+- The floor device as initiator is tight where it can be measured on
+  its own. Across 200 handshakes its TCP connect p99 is under 0.9 ms
+  and, in the 100 that have them, its lane wait, compute and write are
+  each under 1.5 ms at their max, with no sample of the pre-write path
+  above that. The 0.40 ms is the initiator's first job only (what it
+  needs to send message 1); its second job, on message 2, is not
+  spanned, so it is not compared with the responder's 2.17 ms from
+  the previous section.
+- Every tail above 20 ms is the VM's. Run 1 samples 24, 91, 95 and run
+  2 samples 28 and 59 are long on both sides with the VM's compute at
+  0.6–0.8 ms: a wait around the compute on the loaded host, not in it.
+  Run 2 sample 59 (4.19 s, both sides) puts the wait between the VM
+  accepting the socket and reading message 1 — the floor's own
+  pre-write spans on that sample are 52 µs, 0.98 ms, 97 µs.
+- Run 1 sample 41 (4.30 s on the floor, 1.3 ms on the VM) was read at
+  the time as a floor-side stall. Run 2 refutes the reading: the VM's
+  span starts when its accept path starts, and on a starved host that
+  is late, so a short VM span with a long floor span is the same VM
+  wait with the clock started after it. The pre-write spans were added
+  because run 1 could not tell these apart; run 2 can, and found no
+  floor-side stall in 100.
+- Run 2 sample 46 (715 ms on the floor, 1.76 ms on the VM, floor
+  pre-write spans normal) is the one sample neither side's spans
+  attribute: the VM's responder span ends before its writer puts
+  message 2 on the wire, and the floor has no span on its message-2
+  read and second job. On a host at load 8.5 the VM's writer is the
+  likelier; it is not shown. A span on the responder's message-2
+  write would close this and is owed with the deadline commit.
+- The initiator-handshake and gap p99s in this leg are the VM's
+  scheduling and derive nothing. The floor's initiator handshake under
+  a quiet responder is the previous section's 7.15 ms read from the
+  other end; its connect and handshake deadlines are owed to the
+  off-site leg.
+
+A later run under these conditions whose p99 exceeds 0.88 ms (connect),
+0.36 ms (lane), 1.04 ms (compute) or 0.21 ms (write) on the floor
+device reopens the respective figure (p99s 0.877, 0.357, 1.037 and
+0.210 ms, rounded up at 0.01 ms).
+
+## Clearnet WAN distribution, floor device initiator (2026-09-30 UTC)
+
+The off-site leg. Raw samples:
+[`p2p_clearnet_wan_floor_initiator_20260930.tsv`](p2p_clearnet_wan_floor_initiator_20260930.tsv).
+This is the leg the clearnet connect and initiator-handshake deadlines
+are derived from — the LAN legs' 0.76 ms connect is the segment's, not
+the connector's.
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi-4, aarch64, 4 cores), daemon
+  `2f9565f71`, one outbound and nothing else; `--clearnet-transport-encrypt`
+  on, ephemeral Tor off, RandomX miner off. Sharing its four cores: the
+  same idle regtest daemon as the LAN legs.
+- Responder: an off-site Foundation seed host (x86_64, 4 cores), the
+  portable daemon at `2f9565f71`, `--clearnet-transport-encrypt` on,
+  ephemeral Tor off, inbound cap 16. It carried its production testnet
+  daemon alongside the measurement one; load average 0.08 throughout,
+  so the responder's cost is not what this leg reads.
+- Link: the public internet, a home LAN to a host in South America,
+  TCP RTT about 170 ms. This is one fibre path; higher-RTT honest links
+  (mobile, satellite, a congested overlay) are what the factor of two
+  covers and what the reopen catches.
+- Method: as the LAN initiator leg — dialer-side `out_peers` churn,
+  spans matched by connection id. The responder's spans were not
+  collected (they are the LAN responder leg's subject; this leg is the
+  floor's WAN cost, and reading a South-America log per sample buys
+  nothing the deadline needs).
+- n = 100, no timeouts.
+
+| span | p50 | p90 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- |
+| TCP connect (`connect_ns`, floor) | 169.6 ms | 172.3 ms | 174.1 ms | 174.7 ms | **349 ms** |
+| initiator handshake (`handshake_ns`, floor: first job, message 1, read message 2) | 177.8 ms | 181.0 ms | 182.6 ms | 183.0 ms | **366 ms** |
+| channel to session (`gap_ns`, floor: the Levin `COMMAND_HANDSHAKE`) | 168.8 ms | 175.3 ms | 179.3 ms | 179.7 ms | **359 ms** |
+| initiator blocking-lane wait (`queue_ns`, floor) | 70 µs | 121 µs | 502 µs | 782 µs | — |
+| initiator compute (`compute_ns`, floor) | 0.43 ms | 1.00 ms | 1.02 ms | 1.04 ms | — |
+| initiator write under the up gate (`write_ns`, floor) | 100 µs | 128 µs | 273 µs | 331 µs | — |
+
+Precision 1 ms. Each of the three spans is one WAN round trip: TCP
+connect is the SYN exchange, the Noise handshake is message 1 out and
+message 2 back, and the Levin gap is `COMMAND_HANDSHAKE`. The floor's
+own work inside the handshake is the last three rows — lane, compute
+and write together under 2 ms at p99 — so 99% of the 183 ms handshake
+is the 170 ms link, not the Pi-4. This is why the deadline is derived
+here and not on the LAN: the LAN leg measured the floor's compute with
+the network term near zero; this leg measures the term that dominates.
+
+**Not a shipped deadline, and not the input to one.** Each of 349 /
+366 / 359 ms is p99 × 2 of this one fibre path (TCP RTT about 170 ms).
+Twice that RTT is the honest-failure rate for links near 170 ms. An
+honest link above about 340 ms fails every dial, and a failed clearnet
+dial marks the address for up to an hour
+(`P2P_FAILED_ADDR_FORGET_SECONDS`). The clearnet form is the D9 update
+of 2026-09-30: twice (a 700 ms stated RTT ceiling + the node-local
+p99). This path supplies the handshake residual (182.56 − 170 = 12.6
+ms), which is the largest handshake residual of the three legs. It
+does not supply the deadline. The Tor gap timer is not in this hold:
+2.6 s is the maximum of two distant-circuit distributions, one each
+direction.
+
+A later distribution under these conditions whose p99 exceeds 174.07 ms
+(connect), 182.56 ms (handshake) or 179.34 ms (gap) reopens the
+respective figure for *this* path. It does not by itself adopt a
+deadline.
+
+## Clearnet New York distribution, floor device initiator (2026-09-30 UTC)
+
+The third RTT point. It confirms the slope; it does not set the
+deadline. Raw samples:
+[`p2p_clearnet_nyc_floor_initiator_20260930.tsv`](p2p_clearnet_nyc_floor_initiator_20260930.tsv).
+
+Conditions, per D9:
+
+- Dialer: the floor device (Pi-4, aarch64, 4 cores), one outbound and
+  nothing else; `--clearnet-transport-encrypt` on, ephemeral Tor off,
+  RandomX miner off. Sharing its four cores: the same idle regtest
+  daemon as the other floor legs.
+- Responder: a measurement daemon on a New York datacenter host
+  (x86_64, 2 cores), `--clearnet-transport-encrypt` on, ephemeral Tor
+  off, bound to the measurement port only. That host's production
+  testnet daemon stayed up; load average was about 2.7 on 2 cores.
+  Initiator spans are the floor's clock. That load is still a candidate
+  for the handshake tail below: the wait is for the responder.
+- Link: the public internet, a home LAN to that datacenter. Ping RTT
+  min / avg / max 21.2 / 24.0 / 25.1 ms (20 echoes).
+- Method: the same dialer-side `out_peers` churn as the other initiator
+  legs. Responder spans were not collected.
+- n = 100, no timeouts. p99 is rank ⌈0.99 n⌉, the 99th of 100.
+
+| span | p50 | p99 | max | residual vs 24.0 ms |
+| --- | --- | --- | --- | --- |
+| TCP connect | 26.1 ms | 31.2 ms | 31.5 ms | 7.2 ms |
+| initiator handshake | 36.5 ms | 115.7 ms | 676.6 ms | see below |
+| channel to session (gap) | 26.5 ms | 38.7 ms | 39.9 ms | 14.7 ms |
+| initiator queue / compute / write | 63 µs / 0.42 ms / 91 µs | 0.20 / 1.02 / 0.20 ms | — | — |
+
+Connect and gap sit one RTT plus a few-to-fifteen milliseconds, the
+same shape as the LAN (RTT 0.2 ms; residuals under 1 / 7 / 5 ms) and
+the South America path (RTT about 170 ms; residuals 4 / 13 / 9 ms).
+Slope about 1 across 0.2 ms, 24 ms and 170 ms.
+
+The handshake rank is not that shape. 98 of 100 handshakes are at or
+under 48.8 ms (median residual 12.5 ms, which matches the South
+America 12.6 ms). The 99th is 115.7 ms and the max is 676.6 ms. On
+both of those samples the connect and the gap were ordinary (connect
+27 and 31 ms, gap 22 and 28 ms), and the pre-write queue, compute and
+write were sub-millisecond. The stall is the initiator waiting inside
+the Noise handshake, after message 1 has been written and before
+message 2 has been read. The Levin gap on those rows is ordinary, so
+the wait ended before the session was handed to C++.
+
+**The handshake node-local term is the median residual, measured.**
+Rank ⌈0.99 n⌉ of this leg is a tail, and the tail is not a term in the
+deadline. The South America leg's p99 residual (12.6 ms) and this
+leg's median residual (12.5 ms) are the same number. The derivation
+was complete when this leg landed: three distributions, slope about 1,
+that residual, and the 700 ms ceiling. Rounded up to 1 ms: connect
+1.415 s, initiator handshake 1.426 s, gap 1.430 s. Nothing later in
+this section changes those.
+
+The same hole already has one attributed neighbour, and it is not this
+leg. South America's handshake max is 183.0 ms (p99 182.6 ms): no tail,
+on a responder whose load average was 0.08. The 715 ms sample is LAN
+run 2 sample 46, the floor against the loaded VM: 715 ms on the floor,
+1.76 ms on the VM, floor pre-write spans normal. The VM's responder
+span ends when the computed flight is handed to the writer task, before
+`write_budgeted` puts message 2 on the socket. Two stalls near 700 ms
+(715 ms on that VM, 676.6 ms here) and one at 115.7 ms, each with an
+ordinary connect and gap. The quiet South America responder produced
+none. Read at the time as a responder-side wait in the then-unspanned
+write. The exclusion runs below close that reading. C++ is not in it:
+`listen_clearnet` binds a Rust listener, the Noise read and write run
+on that socket, and the seam adopts the session only after
+`open_channel` returns. The pipe FFI is still in the tree and has no
+caller on this path. Nagle is left on (nothing sets `TCP_NODELAY`);
+both flights are one segment under one MSS, and the responder's
+message 2 is its first send, so Nagle does not hold it. The delayed-ACK
+timer does not make a 676 ms stall.
+
+The instrument for the tail, not a term in those deadlines, is one
+line, `clearnet responder message2`, logged when
+the peer's first byte arrives, which is after message 2 has been
+delivered. `wait_before_write_ns` is the writer task's delay after the
+flight is handed off. `write_ns` is only `write_all`, and that returns
+when the kernel accepts the segment, lost or not. `total_retrans` is
+`TCP_INFO` at that moment (`tcpi_total_retrans`); `retransmits` is the
+in-flight count. A wait with `total_retrans` 0 is the runtime on a
+loaded host. `total_retrans` 2 with a write near 0 is a segment loss,
+and the factor of two covers it. Both zero while the floor is still
+waiting is a cause this split has not named.
+
+Collected the same day, floor dialing the same datacenter responder,
+after that line was in the responder. Two runs, n = 100 each, no
+timeouts. The first was the host as it stood: load average 0.18, the
+production daemon idle beside the measurement one. Handshake p99
+44.6 ms, max 55.6 ms. Across 101 `message2` lines, `total_retrans` was
+0, `retransmits` was 0, writer wait p99 6.6 ms (max 6.8 ms), `write_ns`
+p99 3.8 ms. The second saturated both cores with busy loops (load
+average 2.1) and left the production daemon up. Handshake p99 43.3 ms,
+max 49.4 ms. Across those 100 lines, `total_retrans` was 0,
+`retransmits` was 0, writer wait p99 0.20 ms (max 0.30 ms), `write_ns`
+p99 3.9 ms (max 10.0 ms). The 115.7 ms and 676.6 ms rows did not recur under either of those
+loads. CPU contention is not the stall: writer wait under load was
+0.20 ms at p99.
+
+A third n = 100, same path, held 2.7 GiB of anonymous memory on that
+3.8 GiB host. It has no swap. About 150 MiB stayed available, above
+`min_free_kbytes` (66 MiB), and both daemons stayed up. `total_retrans`
+was 0 on all 100 lines. Writer wait median 0.084 ms, p99 0.69 ms, max
+1.0 ms. `write_ns` p99 5.0 ms, max 7.3 ms. Floor handshake median
+37.0 ms, p99 57.9 ms, max 117.2 ms (one row). That row's responder
+line was wait 0.38 ms, write 0.31 ms, `total_retrans` 0. Memory
+pressure did not produce a ~700 ms row, and it did not produce a
+retransmission. A 700 ms freeze of the host is not something these
+deadlines absorb, and this run did not show one.
+
+**Open, and not a deadline term.** A handshake tail near 700 ms was
+seen twice — 715 ms on the LAN VM, 676.6 ms on the morning datacenter
+leg — and once at 115.7 ms on that morning leg. About 500 later WAN
+handshakes did not add another. It is not retransmission
+(`total_retrans` 0 on every instrumented line), not the responder's
+runtime (writer wait at most 1.0 ms under memory pressure, 0.20 ms
+p99 under CPU saturation), not CPU, and not memory pressure. Cause
+unknown. The instrument is in production: `clearnet responder
+message2` on every inbound session, so the next one reports its own
+`wait_before_write_ns` and `total_retrans` in that daemon's log. No
+millisecond in the deadlines above depends on it.
+
+## Tor inbound distribution, floor device responder (2026-09-30 UTC)
+
+The Tor connector's inbound side. On Tor inbound the daemon does no
+Noise work (D10.3), so the span is the gap timer alone (D10.5): channel
+established to session established, the Levin `COMMAND_HANDSHAKE` over
+the inbound circuit. There is no dial or handshake span on our side to
+derive here — the gap is the whole of it.
+
+Two runs. The distant-circuit run below is the authoritative one for
+the deadline; the earlier self-dial run is the preliminary that motivated
+it and is kept as a local-circuit datapoint.
+
+### Distant circuit, warm Tor both ends (authoritative)
+
+Raw samples:
+[`p2p_tor_inbound_floor_distant_20260930.tsv`](p2p_tor_inbound_floor_distant_20260930.tsv).
+
+Conditions, per D9:
+
+- Responder: the floor device (Pi-4, aarch64, 4 cores), daemon
+  `2f9565f71`, publishing its default ephemeral per-boot PoW onion
+  through the pinned `16.0a12` Tor (`0.4.9.12`) managed beside it. Miner
+  off. This is the shipping posture, pinned for this exact distribution
+  by `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` ("a managed ephemeral Tor with
+  onion-service proof-of-work on").
+- Dialer: the off-site Foundation seed host (x86_64, 4 cores) dialing
+  the floor's onion through a warm client Tor (`0.4.9.11`, expert
+  bundle 15.0.17) kept up for the whole run — the descriptor is fetched
+  once and cached. The seed's production testnet daemon was resident.
+- Link: the live Tor network, a geographically distributed circuit
+  (home LAN in North America to a host in South America), fresh
+  rendezvous each sample. This is the representative-geography link the
+  self-dial run below lacked.
+- Method: each sample restarts the *dialer daemon* (not the Tor) to
+  force a fresh dial over the warm Tor — an exclusive connection is
+  sticky, so `out_peers` churn does not re-dial it. The gap is the
+  floor responder's `outbound=false` session span.
+- n = 109 clean, 1 timeout over 110 attempts.
+
+| span | p50 | p90 | p95 | p99 | max | 2 × p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| inbound gap (`gap_ns`, floor responder) | 615 ms | 745 ms | 792 ms | 1.221 s | 1.322 s | **2.5 s** |
+
+106 of 109 under 1 s. At n = 109 the p99 is the 108th of 109 sorted —
+one below the max, a real rank rather than the max itself — so the
+figure is derivable, unlike the self-dial run. 2 × p99 = 2.443 s, 2.5 s
+at 0.1 s.
+
+**The Tor connector gap timer is now derivable (D10.5).** One timer
+covers both directions; its deadline is the maximum of the two gap
+distributions: inbound 2.5 s (here) and outbound 2.6 s (2 × the Tor
+dial distribution's 1.26 s p99). The **outbound direction governs at
+2.6 s**; the inbound is below it. Both directions are now n ≈ 100 over
+distant circuits, so this is the value `transport_spans` writes for
+the Tor gap, and the earlier n = 66 self-dial's 3.65 s does not appear
+there.
+
+**First-contact availability.** Across 110 attempts, one timed out, and
+it was the one attempt whose fresh daemon logged a `DialFailed` — a
+single transient, not a fraction. With the Tor warm the descriptor is
+cached and every reconnect succeeded, so the warm-dialer rig did not
+reproduce the cold-first-contact shape the ruling asked about (a peer
+learning a just-booted onion from the peerlist and missing on first
+try). That question is neither confirmed nor refuted here — it needs a
+cold descriptor per attempt, which this rig deliberately does not have —
+so no FOLLOWUPS row is opened on it.
+
+### Self-dial, local rendezvous (preliminary, superseded)
+
+Raw samples:
+[`p2p_tor_inbound_floor_20260930.tsv`](p2p_tor_inbound_floor_20260930.tsv).
+A second floor daemon dialed the floor's own onion, both circuit ends on
+the floor, the client Tor restarted per sample. n = 66, one timeout:
+gap p50 410 ms, p95 720 ms, p99 = max = 1.82 s (the one-sample fragility
+D9 names, which is why it is superseded, not used). The per-sample Tor
+restart dropped the cached descriptor and re-fetched it, and the 240 s
+recently-failed backoff (`P2P_ANON_FAILED_ADDR_FORGET_SECONDS`) then
+rate-limited the run — both artifacts of the rig, fixed in the distant
+run by keeping the Tor warm and restarting the daemon instead. Kept as
+the local-rendezvous datapoint (median 410 ms, below the distant 615 ms,
+as a shorter circuit should be).
+
+## Tor relay leg (D-5 stem hop) — not measured; the previous reasons were a misread
+
+The D-5 per-hop stem latency over Tor (`DAEMON_RELAY_PRIVACY.md` §D-5)
+was set up on the inbound rig and not completed. The two reasons given
+for that in the previous revision of this section do not survive the
+log line or a height check on the two seed daemons.
+
+- **`local_height=1 eligible=0` is the daemon at height 1, and the
+  filter does not read recorded height.** `get_out_connections` keeps
+  an outbound session only when `m_state == state_normal`
+  (`levin_notify.cpp`). `recorded_height` is printed on the candidate
+  line and decides nothing. `local_height` is that process's own chain
+  height (`get_current_blockchain_height`). The measurement log has
+  exactly two filter lines, both `local_height=1 rule=state_normal
+  eligible=0`, both in the same second the process logged
+  `Setting m_height to: 1` — before the wallet process existed and
+  before `start_mining`. `eligible=0` means no outbound session was in
+  `state_normal` yet. It is not a chain at height 52 with a stale relay
+  height, and it does not touch the recorded-height follow-on.
+- **Mining stayed on the measurement daemon.** Checked after the fact:
+  the production daemon's chain height was 13434; the measurement
+  daemon, the one started with fixed difficulty and the one
+  `start_mining` was sent to, is the process whose height moved
+  1 → 19 → 52. The production chain was not that private chain.
+- **A Tor-only peer staying at height 1 is an inherited early return,
+  and it is not the rule.** On a non-public address the handshake sets
+  `state_normal` and returns without asking for the chain
+  (`cryptonote_protocol_handler.inl`). A peer syncs on the network it
+  is connected to, Tor the same as clearnet; that early return is the
+  leftover that skips the sync, and it is deleted with the rest of the
+  protocol's zone switch after this cutover. The stem hop does not wait
+  on that deletion: both ends are mined, so each holds a chain, and the
+  hop is one transaction from the measurement daemon whose only
+  outbound is the Tor session.
+
+One session that the sampler did not restart handshaked, completed a
+timed sync, and the dialer then recorded `PeerClosed` 39 s later. The
+responder did not close that connection; its object stayed until the
+responder process was stopped, about three minutes on. The `PeerClosed`
+lines during the inbound distribution are the sampler restarting the
+dialer. Whether a session left up stays up is watched on the rerun. One
+drop, with the other end still holding the object, is not a timer.
+
+The transport half of a hop is the Tor gap distributions (outbound
+1.26 s p99; inbound 1.221 s p99).
+
+### The hop, same day
+
+The rerun's command sequence, including the inbound-only fluff peer
+this two-node hop could not show, is
+[`D5_TOR_STEM_RUNBOOK.md`](D5_TOR_STEM_RUNBOOK.md).
+
+One transaction, measurement daemons only. The seed's measurement
+daemon mined a fixed-difficulty chain; the floor's measurement daemon
+synced that chain over clearnet (the inherited early return above means
+it will not sync it over the Tor session). The seed's only outbound was
+the Tor session to the floor's per-boot onion. The production daemon
+was not mined: its height moved 13434 → 13441 across the run, the
+testnet's own pace. Wallet and `start_mining` were pointed at the
+measurement RPC.
+
+The session that carried the stem is the one opened at the start of
+the run. Its spans: dial 4.30 s (first circuit, descriptor included),
+outbound gap 784 ms, inbound gap 781 ms. No `seam close` on either end
+from establishment through the hop, about four minutes. The three
+close fields are therefore empty for this run — neither end recorded a
+close, so there is no "who saw it first." The 39 s one-sided
+`PeerClosed` from the previous attempt was not reproduced on a session
+left up.
+
+| event | time (UTC) |
+| --- | --- |
+| seed: `Sent 1 transaction(s) … using Dandelion++ stem` | 11:26:54.382 |
+| floor: `Including transaction` (same tx) | 11:26:55.040 |
+| floor: `Transaction added to pool` | 11:26:56.400 |
+
+The hop, stem-send to the receiver's first log of the transaction, is
+**658 ms**. The receiver then took **1.36 s** from that line to
+`Transaction added to pool`. It tried to stem onward, logged `Unable to
+send transaction(s) via Dandelion++ stem` (a two-node stem has no
+further outbound), and queued the transaction for fluff.
+
+`hop` is transit plus the receiver's verification plus its scheduling
+(`params.rs`). The anonymity class assumes 1 625 ms of transit and a
+modal Pi 4 verification of 124.5 ms (`verify_cost.rs`, the pre-`PL-D3`
+cell; the floor re-measurement is the comment on that cell). This hop
+measured transit 658 ms, under that assumption, and a node-local
+interval of 1.36 s, about eleven times the cell. The sum is about
+2.02 s against an adopted anonymity hop of about 1.75 s. Under-estimating
+the hop is the privacy-losing direction: the embargo fires early and
+the stem fluffs short (`DAEMON_RELAY_PRIVACY.md` D-5). n = 1 does not
+move the derivation. The interval is also not yet the derivation's
+term: pool admission writes LMDB and checks key images beyond
+`shekyl_fcmp_verify`, and this transaction's input count and tree depth
+were not recorded, so it is not pinned to the modal cell. The
+distribution that splits verify from pool admission, and that records
+the shape, is the follow-on. This hop does not replace the 350 ms
+placeholder.
+
+## Not this run
+
+The thread-budget legs (D5 conditions pinned 2026-09-30) are not in this
+record and are blocked on the thread-ledger move-and-print row.

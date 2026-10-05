@@ -9,10 +9,10 @@ use super::codes::*;
 use shekyl_archival_retention::{
     claim_window_floor, effective_settlement_epoch_blocks, epoch_close_compute,
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
-    slash_open_interval_to_append, BadInterval, BaselineObservation, CreditPair, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, MAX_CLAIM_AGE_W,
+    serve_credit_epoch_ok, settlement_epoch_at_height, slash_open_interval_to_append, BadInterval,
+    BaselineObservation, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
+    ShardCloseWire, FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    MAX_CLAIM_AGE_W,
 };
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
@@ -240,14 +240,14 @@ pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
     effective_settlement_epoch_blocks()
 }
 
-/// True iff a `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override is active (the
-/// effective schedule differs from the genesis default — which requires
-/// this process to have **armed** via
-/// [`shekyl_archival_settlement_epoch_arm_regtest`]). Drives the daemon's
-/// loud fakechain warning.
+/// The effective reorg cap in blocks (the genesis-pinned `D_max`, 720, or
+/// the armed `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` override — the
+/// fakechain-only regtest lever beside the epoch's). The cap the daemon's
+/// Fakechain rule set names; C++ reads it only to report the schedule in
+/// force.
 #[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_overridden() -> bool {
-    settlement_epoch_blocks_overridden()
+pub extern "C" fn shekyl_archival_reorg_depth_blocks() -> u64 {
+    shekyl_archival_retention::effective_archival_reorg_depth_blocks()
 }
 
 /// True iff `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is present in the process
@@ -262,13 +262,15 @@ pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
     shekyl_archival_retention::settlement_epoch_override_present()
 }
 
-/// Arm the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override for the daemon's
-/// FAKECHAIN startup path, latching the validated override (or the genesis
-/// pin when the variable is unset). An unarmed process ignores the lever
-/// entirely, so arming is the single gate a regtest schedule passes
-/// through.
+/// Arm the regtest schedule levers — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
+/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` — for the daemon's FAKECHAIN
+/// startup path, latching the validated pair (or the genesis pins when
+/// unset). An unarmed process ignores the levers entirely, so arming is the
+/// single gate a regtest schedule passes through; the epoch is parsed
+/// against the cap, so `SEB ≤ cap` is refused here
+/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2 item 5).
 ///
-/// Returns a **cause code**, not a bool: the two refusals need different
+/// Returns a **cause code**, not a bool: the refusals need different
 /// remedies and sending an operator after the wrong one costs real
 /// debugging time (a levered daemon dying on
 /// [`SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE`] is a daemon-side
@@ -279,6 +281,7 @@ pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> u8 {
     match shekyl_archival_retention::arm_settlement_epoch_override_for_regtest() {
         Ok(_) => SHEKYL_ARCHIVAL_SEB_ARM_OK,
         Err(E::Invalid { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID,
+        Err(E::InvalidReorgCap { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP,
         Err(E::ArmedTooLate { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE,
     }
 }
@@ -370,11 +373,16 @@ pub struct ShekylArchivalEpochCloseBond {
 /// One gathered shard-registry row for `shekyl_archival_epoch_close_compute`.
 ///
 /// Layout must match `struct shekyl_archival_epoch_close_shard` in `shekyl_ffi.h`.
+/// The `freeze_height` / `has_segment` pair is the C++ LMDB validator's
+/// segment-keyed reading of a shard's close (CEN-L10); it crosses this ABI
+/// as-is and becomes a `ShardClose` via `ShardClose::from_wire` in the
+/// decoder below.
 #[repr(C)]
 pub struct ShekylArchivalEpochCloseShard {
     pub shard_id: u64,
     pub freeze_height: u64,
-    /// `0` when no frozen segment row exists (shard age is then zero).
+    /// `0` when no frozen segment row exists (the shard is open; its age
+    /// is then zero).
     pub has_segment: u8,
 }
 
@@ -473,8 +481,10 @@ pub(super) unsafe fn decode_epoch_rows(
         .iter()
         .map(|s| EpochCloseShard {
             shard_id: s.shard_id,
-            has_segment: s.has_segment != 0,
-            freeze_height: s.freeze_height,
+            close: ShardClose::from_wire(ShardCloseWire {
+                has_segment: s.has_segment != 0,
+                freeze_height: s.freeze_height,
+            }),
         })
         .collect();
     let pairs: Vec<CreditPair> = raw_pairs
@@ -627,9 +637,8 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
 pub struct ShekylArchivalEmissionEpochSnapshot {
     pub settlement_epoch: u64,
     /// The close-processing height `(E+1) × SEB` the gather froze at (shard-age
-    /// operand; must equal the height the close ran at). NOT `H_close(E)` =
-    /// `shekyl_archival_epoch_close_height(E)` = the epoch's last block =
-    /// `(E+1) × SEB − 1`, one block lower.
+    /// operand; must equal the height the close ran at). One above the epoch's
+    /// last block, `shekyl_archival_epoch_last_block(E)` = `(E+1) × SEB − 1`.
     pub close_block_height: u64,
     /// Persisted finalized `Σwork(E)` milli — the stored denominator.
     pub sigma_work_milli: u64,

@@ -357,7 +357,10 @@ absence-of-claim-is-claim-of-absence rule, the gate is written as a blocker:
 the `H(pqc_pk)` committed by the membership-only proof.** (Also recorded in
 [`REWARD_EMISSION_LEG.md`](../design/REWARD_EMISSION_LEG.md) §12.)
 
-**Quantum-forgery wargame (post-draft obligation, input to the vin PR).**
+**Quantum-forgery wargame (post-draft obligation, input to the vin PR) — CONCLUSION REFUTED 2026-09-14, `PL-D2` ([`FCMP_SPEND_LINKABILITY.md`](../design/FCMP_SPEND_LINKABILITY.md) §4): the wargame grants the adversary the discrete log of `O` and then assumes the `Fcmp` leg's in-circuit equality still binds; that leg is a discrete-log argument and falls with the same break, so "cannot substitute their own `pqc_pk`" does not hold against the adversary named. The vin-layer check is load-bearing only against a break of Ed25519 that spares Helios/Selene; the record kept in `0x07` (`PL-D3a`) is what survives a full break.**
+
+*Historical record (2026-07-01), kept for the audit trail and superseded by
+the refutation above — every sentence below states the pre-`PL-D2` reading:*
 Adversary: CRQC-equipped, targeting emission backing. Path: recover `x` from
 any on-chain `O` (Shor against curve25519) → construct a valid
 `FcmpMembershipOnly` proof over the victim leaf (the proof requires only
@@ -368,12 +371,16 @@ context; verify recomputes `H(pqc_pk)` and demands it equal the leaf-committed
 extra scalar that the `Fcmp` leg proved in-circuit. The adversary cannot
 produce an ML-DSA signature under the victim's `pqc_pk` (ML-DSA is
 quantum-resistant), and cannot substitute their own `pqc_pk` (its hash would
-not match the leaf commitment proven in-circuit). Conclusion: the vin-layer
-check is **load-bearing for the entire quantum spend-authority property**;
-its absence reduces backing ownership to classical security. This is why the
-gate in §12 is phrased as a merge blocker, not a checklist item.
+not match the leaf commitment proven in-circuit — *the discrete-log-bound
+claim `PL-D2` corrects: that equality is enforced by a discrete-log argument
+and falls with the same break*). Conclusion (historical, refuted): the
+vin-layer check was held **load-bearing for the entire quantum
+spend-authority property**; its absence reduces backing ownership to
+classical security. This is why the gate in §12 was phrased as a merge
+blocker, not a checklist item; the property it guards is the narrower one the
+heading states.
 
-**Backing-`pqc_pk` reveal linkability (cross-ref, 2026-07-01).** The vin carrying the
+**Backing-`pqc_pk` reveal linkability (cross-ref, 2026-07-01) — disposition REFUTED 2026-09-13, `PL-D1` ([`FCMP_SPEND_LINKABILITY.md`](../design/FCMP_SPEND_LINKABILITY.md)); the invariant this paragraph cites is struck at source in `REWARD_EMISSION_LEG.md` §7.3, and the reveal identifies the backing output *and* its whole ancestry, as does every FCMP++ spend.** The vin carrying the
 prover's `pqc_pk` cleartext (above) also **deterministically identifies the backing
 output** (leaf extra-scalars are publicly enumerable; the key is per-output one-time). That
 linkability class is analyzed and dispositioned in

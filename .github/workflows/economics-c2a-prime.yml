@@ -16,6 +16,14 @@
 name: ci/economics-c2a-prime
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   pull_request:
     branches: [dev]
     paths: &econ_paths
@@ -65,8 +73,7 @@ env:
   APT_INSTALL_LINUX: >-
     apt -y install build-essential cmake libboost-all-dev miniupnpc
     graphviz doxygen libunwind8-dev pkg-config libssl-dev
-    libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
-    protobuf-compiler ccache git curl ripgrep python3
+    libsodium-dev ccache git curl ripgrep python3
   CCACHE_SETTINGS: |
     ccache --max-size=150M
     ccache --set-config=compression=true
@@ -145,11 +152,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
-          # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
-          # libraries are therefore static .a archives and the test binaries are
-          # statically linked against them — no internal .so files exist, which is why
-          # the tar can exclude *.a and *.o and still ship working binaries.
+          # Internal libraries are always static .a archives (CMakeLists.txt refuses
+          # BUILD_SHARED_LIBS under the single-Rust-image contract) and the test
+          # binaries are statically linked against them — no internal .so files
+          # exist, which is why the tar can exclude *.a and *.o and still ship
+          # working binaries.
           #
           # That does NOT make them self-contained, and this comment previously said it
           # did. The binaries still need SYSTEM libraries (boost, libunwind, ssl,
@@ -240,7 +247,7 @@ jobs:
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
             libboost-program-options1.74.0 libboost-serialization1.74.0 \
-            libssl3 libsodium23 libprotobuf23 libunwind8
+            libssl3 libsodium23 libunwind8
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old

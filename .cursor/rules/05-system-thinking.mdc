@@ -43,3 +43,82 @@ subsystem, ask:
 
 Record the answer in the module's docstring or in `docs/FOLLOWUPS.md`. Don't
 assume something is needed because it exists.
+
+## The C++ is a template, not a source
+
+Shekyl is built to its specifications. The inherited C++ shows one way a
+specification was once met. Read it for the facts a validator needs, the
+read points, and the failure modes. Do not transcribe it. A field name is
+not a definition: `cumulative_tx_count` counts a block's **listed**
+transactions, while the shard partition is over **storage ids**, which
+include coinbases. Dividing the listed count by `T` drops the coinbases.
+Derive from the spec. Check the C++ against it. Where they differ, build
+the spec and record the C++ as a finding
+(`16-architectural-inheritance.mdc`).
+
+## A formula two lanes need is a function, not a row
+
+A recorded formula does not propagate. The next lane reads the C++ and
+re-derives, and a row that says "remember the coinbases" is found only by
+someone who already suspects they need it.
+
+What propagates is a function nobody can avoid calling.
+`shekyl_types::closed_shards` sits beside `T` and `storage_ids_through`.
+The validator, the prune, and the C++ (through one FFI) call it. No site
+divides by `T` for a frontier. Two quantities that shared a name became
+two names, and the collision became unrepresentable.
+
+When a derivation is needed by more than one lane, crate, or language:
+
+1. **Give it one home** — a function in the crate that owns its inputs,
+   with those inputs' definitions in the same place.
+2. **Make the other sites call it**, including the C++ through the FFI.
+   A second site that re-derives is the defect, whatever value it
+   currently produces. The gate is `rg` for the operator on the operand
+   (`/ T`, `/ SEGMENT_LEAF_COUNT`) finding one site.
+3. **Then write the row**, pointing at the function. The row records why.
+   The function is what the next lane cannot miss.
+
+A FOLLOWUPS row, a charter finding, or a census cell that carries a
+formula and no function has deferred this step.
+
+### A name defends the crate it is in; a type defends the call
+
+The function reaches as far as its callers can see it. What crosses a
+crate boundary, an FFI, or a `pub` signature is its **return type**. A
+`u64` on the far side is a formula again. A name like
+`Transition::count()` holds inside its crate. The next crate that takes
+`height: u64` will pass the count as a height, and the slip will not
+compile only if the signature is `BlockHeight` or `ChainCount`.
+
+Fourth clause: **the function's inputs and output are the domain's
+types, not the integers under them.** A derivation two lanes need is a
+function. A quantity two crates need is a type. A function that returns
+the bare integer has done the first and skipped the second. Any pair that
+shares a representation and differs by a convention — an index and a
+count, a nominal and a net, a byte length and a record length — is the
+same class.
+
+## One mechanism, one job
+
+When one setting, field, timer, structure or message serves several jobs
+with different requirements, that is a defect, not an economy. The shared
+value was tuned for one job, and every other job inherits a number nobody
+derived for it — nor can it be changed without disturbing the first.
+
+When reviewing or designing, for any mechanism ask: what jobs does this
+do? If more than one:
+
+1. Split it. Name each job and its owner.
+2. Each owner derives its own value from its own requirement, or replaces the
+mechanism with an event if no timer, field or setting is actually needed.
+3. A value shared between jobs is inherited, never derived; record it as such
+until it is split.
+
+Found so far: timed sync (chain-state backstop, peer gossip, liveness);
+LEVIN_SIGNATURE (framing, network separation); the 256 KiB initial limit
+(Levin message limit, missing transport limit); handshake_complete
+(channel, session); enum class zone (identity, origin-selection priority);
+epee's io_context (event loop, executor, timer source); m_local
+(address class, timer grant); network_zone (network plumbing, protocol
+state).

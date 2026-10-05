@@ -20,7 +20,6 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
-#include "common/pruning.h"
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
 #include "p2p/net_node.h"
@@ -175,21 +174,19 @@ int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
       bc.get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
       out->quantization_mask = cryptonote::Blockchain::get_fee_quantization_mask();
     }
-    // The estimator resizes to exactly four SLOTS, carrying three priced
-    // tiers: slot 2 is the RK-5 bridge and mirrors slot 1 (standard) until
-    // the RPC cutover, so four is a wire shape rather than four rates.
-    // That four-ness lives in one function and nothing else asserted it, so
-    // a derivation that returned three would have produced a silently wrong
-    // "base fee" downstream. Checked here instead.
-    if (fees.size() != 4)
+    // Arity lives on the POD array, not a second magic number. The
+    // estimator writes `FeeLadder::as_slots`; a length that does not fill
+    // `out->fees` is a fault rather than a shorter answer padded with zeros.
+    constexpr size_t kSlots = sizeof(out->fees) / sizeof(out->fees[0]);
+    if (fees.size() != kSlots)
     {
       MERROR("fee estimate facts: estimator returned " << fees.size()
-        << " tiers, expected 4");
+        << " tiers, expected " << kSlots);
       return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
     }
-    for (size_t i = 0; i < 4; ++i)
+    for (size_t i = 0; i < kSlots; ++i)
       out->fees[i] = fees[i];
-    out->fee_count = 4;
+    out->fee_count = static_cast<uint8_t>(kSlots);
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -752,8 +749,7 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
 
         // The prunable HASH is read unconditionally, and the prunable BLOB is
         // optional — that asymmetry is pruning's design, not an oversight.
-        // Both `prune_worker` and `prune_tx_data` delete `txs_prunable` (and
-        // the worker, `txs_prunable_tip`) and never `txs_prunable_hash`:
+        // A discard deletes `txs_prunable` and never `txs_prunable_hash`:
         // keeping the hash after dropping the bytes is the entire point of
         // storing it, since it is what still lets a client bind the pruned
         // body to the transaction. Reading the hash only when the blob
@@ -855,7 +851,10 @@ int transactions(cryptonote::Blockchain& bc, cryptonote::tx_memory_pool& pool,
         // the base, which is how the C++ handler split it.
         if (td.tx_blob.size() > owned->pruned[slot].size())
           owned->prunable[slot] = td.tx_blob.substr(owned->pruned[slot].size());
-        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx);
+        // From the blob in hand, so the digest is of the bytes served above
+        // and the transaction is not serialized a second time to find them.
+        const cryptonote::blobdata_ref pool_blob(td.tx_blob);
+        const crypto::hash ph = cryptonote::get_transaction_prunable_hash(td.tx, &pool_blob);
         std::memcpy(facts[slot].prunable_hash, ph.data, 32);
         facts[slot].where = 2;
         facts[slot].double_spend_seen = td.double_spend_seen ? 1 : 0;
@@ -1052,14 +1051,30 @@ int blocks_by_height(cryptonote::Blockchain& bc, const uint64_t* heights, size_t
         failed = true;
         break;
       }
-      owned->blocks.push_back(cryptonote::block_to_blob(blk));
+      // A stored block or transaction that will not serialize is the store
+      // contradicting itself. A fragment is not a body to hand a client.
+      std::string block_blob;
+      if (!cryptonote::block_to_blob(blk, block_blob))
+      {
+        MERROR("rpc facts: block " << heights[i] << " did not serialize");
+        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+      }
+      owned->blocks.push_back(std::move(block_blob));
       std::vector<cryptonote::transaction> txs;
       std::vector<crypto::hash> missed;
       bc.get_transactions(blk.tx_hashes, txs, missed);
       std::vector<std::string> blobs;
       blobs.reserve(txs.size());
       for (const cryptonote::transaction& tx : txs)
-        blobs.push_back(cryptonote::tx_to_blob(tx));
+      {
+        std::string blob;
+        if (!cryptonote::tx_to_blob(tx, blob))
+        {
+          MERROR("rpc facts: a transaction of block " << heights[i] << " did not serialize");
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        blobs.push_back(std::move(blob));
+      }
       owned->txs.push_back(std::move(blobs));
     }
 
@@ -1191,16 +1206,8 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out)
   {
     std::memset(out, 0, sizeof(*out));
     out->start_time = static_cast<uint64_t>(h->rpc->get_core().get_start_time());
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_in);
-      epee::net_utils::network_throttle_manager::get_global_throttle_in()
-        .get_stats(out->total_packets_in, out->total_bytes_in);
-    }
-    {
-      CRITICAL_REGION_LOCAL(epee::net_utils::network_throttle_manager::m_lock_get_global_throttle_out);
-      epee::net_utils::network_throttle_manager::get_global_throttle_out()
-        .get_stats(out->total_packets_out, out->total_bytes_out);
-    }
+    shekyl_link_totals(&out->total_bytes_in, &out->total_packets_in,
+      &out->total_bytes_out, &out->total_packets_out);
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1259,9 +1266,28 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.send_count = ctx.m_send_cnt;
       e.current_speed_down = ctx.m_current_speed_down;
       e.current_speed_up = ctx.m_current_speed_up;
+      {
+        // Totals feed the lifetime average. Current speed is the
+        // budget's recent window, from the engine's clock. It is not
+        // a second limit.
+        std::uint64_t socket_id = 0;
+        std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
+        if (socket_id != 0)
+        {
+          std::uint64_t up = 0;
+          std::uint64_t down = 0;
+          shekyl_link_connection(socket_id, &up, &down);
+          e.send_count = up;
+          e.recv_count = down;
+          std::uint64_t speed_up = 0;
+          std::uint64_t speed_down = 0;
+          shekyl_link_speed(socket_id, &speed_up, &speed_down);
+          e.current_speed_up = static_cast<double>(speed_up);
+          e.current_speed_down = static_cast<double>(speed_down);
+        }
+      }
       e.height = ctx.m_remote_blockchain_height;
       e.support_flags = support_flags;
-      e.pruning_seed = ctx.m_pruning_seed;
       e.port = ctx.m_remote_address.port();
       e.state = static_cast<uint8_t>(ctx.m_state);
       e.address_type = static_cast<uint8_t>(ctx.m_remote_address.get_type_id());
@@ -1302,23 +1328,20 @@ void shekyl_rpc_connections_free(void* owner)
   delete static_cast<daemon_rpc_facts::connections_owner*>(owner);
 }
 
-int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_stripe,
+int shekyl_rpc_sync_spans(core_rpc_handle* h,
   const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner)
 {
   if (out_owner)
     *out_owner = nullptr;
-  if (!h || !h->rpc || !out_next_needed_pruning_stripe || !out || !out_len || !out_owner)
+  if (!h || !h->rpc || !out || !out_len || !out_owner)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   *out = nullptr;
   *out_len = 0;
-  *out_next_needed_pruning_stripe = 0;
   std::unique_ptr<daemon_rpc_facts::sync_spans_owner> owned;
-  uint32_t stripe = 0;
   try
   {
     owned.reset(new daemon_rpc_facts::sync_spans_owner());
     auto& payload = h->rpc->get_p2p().get_payload_object();
-    stripe = payload.get_next_needed_pruning_stripe().second;
     const cryptonote::block_queue& queue = payload.get_block_queue();
     queue.foreach([&](const cryptonote::block_queue::span& span)
     {
@@ -1352,7 +1375,6 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h, uint32_t* out_next_needed_pruning_
     MERROR("sync spans facts: unknown exception");
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
-  *out_next_needed_pruning_stripe = stripe;
   *out = owned->entries.empty() ? nullptr : owned->entries.data();
   *out_len = owned->entries.size();
   *out_owner = owned.release();
@@ -1393,7 +1415,6 @@ int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
         shekyl_rpc_peer_facts e;
         std::memset(&e, 0, sizeof(e));
         e.last_seen = static_cast<uint64_t>(entry.last_seen);
-        e.pruning_seed = entry.pruning_seed;
         e.white = white;
         // Unconditional: whether a blocked peer is reported is the request's
         // policy, and the request lives in Rust now.
@@ -1455,12 +1476,6 @@ void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
     *out_white = P2P_LOCAL_WHITE_PEERLIST_LIMIT;
   if (out_gray)
     *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
-}
-
-uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height)
-{
-  return tools::get_pruning_seed(start_block_height,
-    std::numeric_limits<uint64_t>::max(), CRYPTONOTE_PRUNING_LOG_STRIPES);
 }
 
 int shekyl_rpc_hardforks(core_rpc_handle* h,
@@ -1689,7 +1704,11 @@ void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out,
   if (!out)
     return;
   std::memset(out, 0, sizeof(*out));
-  for (size_t i = 0; i < 4; ++i)
+  // Field indices 4 and 5 below are not fee-slot indexes: they seed a
+  // distinct value per POD field. The Rust twin (`ffi_exports.rs`) keeps
+  // the same indices, so both halves still fill identically.
+  constexpr size_t kSlots = sizeof(out->fees) / sizeof(out->fees[0]);
+  for (size_t i = 0; i < kSlots; ++i)
     out->fees[i] = field_value(seed, i);
   out->quantization_mask = field_value(seed, 4);
   out->fee_count = static_cast<uint8_t>(field_value(seed, 5));

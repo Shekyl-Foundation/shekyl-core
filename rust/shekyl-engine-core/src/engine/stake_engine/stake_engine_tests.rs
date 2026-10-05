@@ -31,7 +31,7 @@ use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_scanner::ScannableBlock;
 use shekyl_standoff::draw::GapRng;
 use shekyl_tx_builder::TreeContext;
-use shekyl_types::{GlobalOutputIndex, PCanonicalId};
+use shekyl_types::{BlockHash, GlobalOutputIndex, PCanonicalId};
 
 use super::test_fixtures::{constructed_record, derive_bundle, spawn_over};
 use super::*;
@@ -690,7 +690,7 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings)
+    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings, [0xEE; 32])
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);
@@ -856,7 +856,8 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
                 "scheduled offset must be the drawn spread"
             );
             assert_eq!(
-                bond_post_offset_blocks, post.bond_post_offset_blocks,
+                bond_post_offset_blocks,
+                post.bond_post_offset_blocks.to_raw(),
                 "schedule event must match the offset riding the reply"
             );
         }
@@ -892,9 +893,10 @@ fn block_funding(slot: u32) -> ScannableBlock {
 fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
     let post = BondPost {
         hybrid_public_key: oracle_bond_id(slot),
-        p_canonical_id: canonical_id(slot).to_bytes(),
+        p_canonical_id: canonical_id(slot),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1_000,
@@ -1315,7 +1317,7 @@ mod emission_claim_assembly {
         let depth = 2u8;
         let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
         let tree_ctx = TreeContext {
-            reference_block: [7u8; 32],
+            reference_block: BlockHash::from_bytes([7u8; 32]),
             tree_root,
             tree_depth: depth,
         };
@@ -1385,6 +1387,13 @@ mod emission_claim_assembly {
         let mut cursor: &[u8] = reply.bound_tx.bytes();
         let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
         assert!(cursor.is_empty(), "no trailing bytes after the tx");
+        // Context-free wire validation — the same `Transaction::validate()`
+        // Phase A runs on submitted bytes. This bites against a builder that
+        // emits a structurally invalid claim; it does NOT cover the rest of
+        // Phase A (canonical-encoding check, coinbase reject, unlock_time
+        // pool pin, emission-vin parse).
+        tx.validate()
+            .expect("assembled claim passes shekyl-wire context-free validation");
 
         // (1) Index pin.
         let to_key_count = tx
@@ -1475,7 +1484,7 @@ mod emission_claim_assembly {
         // wrong (un-erased) operand. Without this, the accepts below
         // could go vacuously green if the two hashes ever coincided.
         assert_ne!(signable, full_prefix_hash, "the erase must change the hash");
-        emission_vin_verify_auth(&vin, &reward_commits, &full_prefix_hash)
+        emission_vin_verify_auth(&vin, &reward_commits, full_prefix_hash.as_bytes())
             .expect_err("auths must refuse a signable hash that was not erase-derived");
 
         // The three landed-verifier legs over the PARSED vin and the
@@ -1483,9 +1492,9 @@ mod emission_claim_assembly {
         // auths, and the economics recompute. A builder/daemon drift in
         // the signable hash, index derivation, commit set, or either
         // auth key refuses here.
-        emission_vin_verify_backing(&vin, &tree_root, depth, signable)
+        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, signable.to_bytes())
             .expect("backing leg verifies against the erase-rule hash");
-        emission_vin_verify_auth(&vin, &reward_commits, &signable)
+        emission_vin_verify_auth(&vin, &reward_commits, signable.as_bytes())
             .expect("both auth legs verify against the erase-rule hash");
         self_check_claims(&source, &vin, vout_reward_sum)
             .expect("claims leg verifies against the paired source");
@@ -1540,7 +1549,7 @@ mod drain_assembly_shape {
         let depth = 2u8;
         let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
         let tree_ctx = TreeContext {
-            reference_block: [7u8; 32],
+            reference_block: BlockHash::from_bytes([7u8; 32]),
             tree_root,
             tree_depth: depth,
         };

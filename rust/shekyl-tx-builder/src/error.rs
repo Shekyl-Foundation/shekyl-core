@@ -67,6 +67,30 @@ pub enum TxBuilderError {
     #[error("input {index} has empty leaf chunk")]
     EmptyLeafChunk { index: usize },
 
+    /// The input's own entry is not in its leaf chunk (matched on the
+    /// `(output_key, commitment)` pair), so there is no leaf to prove against.
+    #[error("input {index}: the assembled leaf chunk does not contain the spent output")]
+    SpentOutputNotInLeafChunk { index: usize },
+
+    /// The PQC leaf commitment the signer re-derives for this input (`PL-D3`:
+    /// `CM = k·G_k + r·J` from the output's `combined_ss` and index) does not
+    /// match the leaf the chain holds for it — the output was created with a
+    /// `0x07` entry that is not the honest derivation. The funds were
+    /// received but **cannot be spent**: no opening of the chain's leaf is
+    /// known to this wallet. Surfaced here, before proving, as the typed
+    /// received-but-unspendable condition rather than as a proof failure
+    /// (`FCMP_SPEND_LINKABILITY.md` §6.2, rule 82).
+    #[error(
+        "input {index}: the chain's leaf commitment for this output is not the wallet's \
+         derivation — received but unspendable (creator published a non-honest 0x07 entry)"
+    )]
+    PqcLeafMismatch { index: usize },
+
+    /// The exceptional-value guard exhausted its counter while re-deriving
+    /// the input's leaf blind (a ~2⁻²⁵² event per step; effectively unreachable).
+    #[error("input {index}: PQC leaf blind derivation failed: {detail}")]
+    PqcLeafDerivation { index: usize, detail: String },
+
     /// An input's leaf chunk exceeds the Selene chunk width.
     #[error("input {index} leaf chunk has {count} entries, exceeds SELENE_CHUNK_WIDTH ({max})")]
     LeafChunkTooLarge {

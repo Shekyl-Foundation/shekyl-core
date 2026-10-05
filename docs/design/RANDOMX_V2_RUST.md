@@ -1,9 +1,13 @@
 # RandomX v2 — Rust verifier + C miner
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16).** Phase 0
+**Status:** LIVING CONTRACT (last-verified 2026-09-16). Phase 0
 deliverable for the RandomX v2 Rust port. Companion:
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Both documents
-must pass the Phase 0 review cycle before any code lands.
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Phase 0
+discharged by Phase 1 landing PR #54 merge
+`c0c4a11e59145a304690589d0856827907b5985b` (2026-05-19); the
+"must pass the Phase 0 review cycle before any code lands" gate
+is discharged at that SHA. Phase 4 deletion of `IPowSchema` /
+`pow_registry` landed 2026-09-15.
 
 **Scope.** Shekyl's target proof-of-work is RandomX v2 from the
 Shekyl-Foundation RandomX fork. Verification is a Rust pure-software
@@ -68,8 +72,8 @@ exceeds the value.
   https://github.com/Shekyl-Foundation/RandomX at the pinned commit.
 - **Current `external/randomx` submodule (v1-era):** pinned at
   `102f8acf` (`bump benchmark version to 1.2.1`), reachable from the
-  pre-PR-#317 history of the same fork. This submodule is dropped by
-  Phase 4 once the v2 verifier rewires the daemon.
+  pre-PR-#317 history of the same fork. Unlinked from consensus in
+  Phase 3c (PR #235). Phase 4 (`IPowSchema` deletion) **landed 2026-09-15**.
 
 ### 1.3 What v2 changes vs v1 (concretely)
 
@@ -168,17 +172,16 @@ implementation-time. Before Shekyl's mainnet release:
 
 If either condition fails — Monero finds a v2 issue in production, or
 the audit surfaces a delta-specific weakness — Shekyl's recovery is
-straightforward: **unpin to a pre-PR-#317 commit on the same fork
-(default `102f8acf`) and ship v1 at genesis** per
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Because the fork
-has not diverged and the verifier code is structured around the v1+v2
-spec (which is the same `doc/specs.md` with v2 deltas marked inline),
-the unpin is a submodule SHA change plus a `#[cfg]`-style switch in
-the verifier, not a re-implementation.
+**not** an unpin-and-revert of a v1 submodule SHA. Phase 3c deleted
+the v1 C path; Phase 4 deleted `IPowSchema` / `pow_registry`. The
+fallback is: re-add a CMake target that links a v1 verifier, plus the
+v1 `#[cfg]` in `shekyl-pow-randomx`, per
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). That is a
+deliberate re-introduction of a deleted path, not a SHA flip.
 
-This is what the non-divergence posture buys: the v1 fallback is a
-late-binding, unpin-and-revert operation, not a "stop everything and
-start over" project.
+This is what the non-divergence posture still buys: the v1 algorithm
+is reconstructible from the same spec. It is **not** a one-line
+submodule revert.
 
 #### What this means for the Phase 2 gate
 
@@ -198,10 +201,9 @@ because:
 
 The gate moves to **release** (Phase 5+, before mainnet), where it
 becomes the explicit release-checklist item described above. Phase 4
-deletion of `IPowSchema`/`pow_registry` still proceeds before release
-because that work is reversible at the unpin point: switching to v1
-fallback does not re-introduce dispatch scaffolding, since v1-only
-shipping is still a single-algorithm deployment.
+deletion of `IPowSchema`/`pow_registry` **landed 2026-09-15**. Switching
+to v1 fallback would re-add a CMake target, not restore dispatch
+scaffolding: v1-only shipping is still a single-algorithm deployment.
 
 ## 2. Permanent C/Rust Split
 
@@ -460,6 +462,31 @@ The verifier crate also forbids module-level runtime-mutable state.
 Immutable tables are allowed; `static mut`, `Mutex`, `RwLock`, `OnceCell`,
 `OnceLock`, `Lazy`, and atomics at module scope are not.
 
+### 7.3 `shekyld` binary checks (`check_randomx_symbol_isolation.sh`)
+
+The script in `scripts/ci/check_randomx_symbol_isolation.sh` is the
+binary half of §7.1. It reads `nm` / `nm --demangle` of a linked
+`shekyld` (per-PR on the Ubuntu 24.04 artifact in `build.yml`; also the
+differential cron). Six checks, exact names, never a `randomx_*` glob:
+
+1. The ten §7.1 C-ABI entry points are absent.
+2. Deleted CryptoNote DAA (`cryptonote::next_difficulty` family) is absent.
+3. `shekyl_pow_randomx_v2_hash` is present (the daemon still embeds the
+   Rust verifier).
+4. `aes`-crate internals (`_ZN3aes`) are present, per the Phase 2b
+   disposition.
+5. `cn_slow_hash` / unprefixed `slow_hash_{allocate,free}_state` are
+   absent (Phase 4 deleted CryptoNight).
+6. `cryptonote::set_pow_hash_override_for_tests` is absent (gc-sections
+   dropped the CEN-D2 setter), and the deleted schema-level names
+   (`IPowSchema`, `set_pow_schema_override_for_tests`,
+   `get_pow_for_height`) stay deleted. Anchored on
+   `cryptonote::hash_pow_randomx` and the slot
+   `s_pow_hash_override_for_tests` so a moved dispatch cannot pass
+   vacuously. Source counterpart: `check_pow_test_seam.sh`. A new
+   setter is a new name, added here and in the source gate together —
+   this check does not glob.
+
 ## 8. Performance Targets
 
 The C baseline is the current light-VM-JIT path described by
@@ -514,7 +541,13 @@ No Monero-era RandomX env vars carry forward.
 - `MONERO_RANDOMX_UMASK` becomes an explicit verifier configuration
   parameter if needed; no env var.
 - `MONERO_RANDOMX_FULL_MEM` is miner-only; verifier code does not use
-  the full 2 GiB dataset.
+  the full 2 GiB dataset **today** — a measure-first staging, not a
+  foreclosure: `Dataset::derive(cache)` is a planned transform (§4) and
+  the verifier-side dataset mode is revisited on the measurement
+  [`RANDOMX_V2_MINING_ASYMMETRY.md`](RANDOMX_V2_MINING_ASYMMETRY.md)
+  option (a) names (clarified 2026-09-19 after E2's pre-flight read this
+  line as a ruling; `DRS_E2_REPLAY_DRIVER.md` RD-F11 — the replay pipeline
+  emits that measurement).
 - `SEEDHASH_EPOCH_BLOCKS` becomes a typed constant.
 - `SEEDHASH_EPOCH_LAG` becomes a typed constant.
 
@@ -677,20 +710,15 @@ remote daemon had to compute RandomX themselves to pay for their
 queries, which is why `src/wallet/wallet_rpc_payments.cpp` imports the
 PoW machinery into the wallet tree.
 
-### 15.2 Evidence the wallet-tree PoW touchpoint is unique
+### 15.2 Evidence the wallet-tree PoW touchpoint was unique — LANDED
 
-A targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
-`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` returns exactly
-one file:
-
-- `src/wallet/wallet_rpc_payments.cpp:156` (`if (major_version >= RX_BLOCK_VERSION)`)
-- `src/wallet/wallet_rpc_payments.cpp:158` (`crypto::rx_slow_hash(...)`)
-- `src/wallet/wallet_rpc_payments.cpp:163` (`crypto::cn_slow_hash(...)`)
-
-Deleting RPC payments removes the entire wallet-tree PoW surface in a
-single sweep. The grep above is rerun in Track B's gate check as
-mechanical evidence that no new wallet-tree PoW touchpoint has
-appeared in the meantime.
+**Records-was** at the RPC-payment deletion (wallet2 cutover). A
+targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
+`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` then returned
+exactly one file, `src/wallet/wallet_rpc_payments.cpp` (lines 156/158/163
+at that pin: `RX_BLOCK_VERSION` gate, `rx_slow_hash`, `cn_slow_hash`).
+The file is deleted; the grep now returns empty. That is the Track B
+gate check's expected empty result.
 
 ### 15.3 Why delete (rather than rewrite)
 
@@ -1075,8 +1103,9 @@ Discipline applied to this work:
   commitment #1. The gate is satisfied by the Monero-funded delta
   audit because Shekyl is non-divergent from upstream (§1.1); Shekyl
   inherits the audit result without performing it. If the audit
-  surfaces a contraindicating finding, Shekyl unpins to a pre-PR-#317
-  commit and ships v1 per `RANDOMX_V1_FALLBACK.md`.
+  surfaces a contraindicating finding, Shekyl re-adds a CMake v1
+  verifier target (gitlink at `102f8acf` stays; this is not a SHA
+  unpin) and ships v1 per `RANDOMX_V1_FALLBACK.md`.
 - Phase 2 (Rust verifier implementation) has **no external-review
   gate** because it is faithful implementation against a stable spec,
   not an algorithm-soundness decision. Spec-vector and differential

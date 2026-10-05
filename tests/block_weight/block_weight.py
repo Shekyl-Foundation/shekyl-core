@@ -4,12 +4,28 @@
 # Written by Sarang Nother
 # Copyright (c) 2019-2022, The Monero Project
 from __future__ import print_function
+import json
+import os
 import sys
 import math
 
 MEDIAN_WINDOW_SMALL = 100 # number of recent blocks for median computation
 MEDIAN_WINDOW_BIG = 5000
-MULTIPLIER_BIG = 50.0
+
+# S is a parameter of the ArticMine algorithm, not part of it. Both this
+# model and the C++ implementation read it from the JSON authority; a
+# missing key is an error, not a default.
+def _surge_factor():
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, os.pardir, os.pardir, "config", "consensus_constants.json")
+    with open(path) as handle:
+        constants = json.load(handle)
+    key = "block_weight_short_term_surge_factor"
+    if key not in constants:
+        raise KeyError("%s missing from %s" % (key, path))
+    return float(constants[key])
+
+MULTIPLIER_BIG = _surge_factor()
 MEDIAN_THRESHOLD = 300*1000 # initial value for median (scaled kB -> B)
 lcg_seed = 0
 embw = MEDIAN_THRESHOLD

@@ -19,7 +19,7 @@ use shekyl_engine_state::pscan_state::{
     BondPostRecord, MintLineageOutput, PFundingOutputRecord, RetiredPersonaRecord,
 };
 use shekyl_engine_state::{PendingBondPost, PendingPostState};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, SettlementEpoch};
 use tokio::sync::RwLock as TokioRwLock;
 
 use crate::engine::test_support::{dummy_daemon, fixed_seed};
@@ -152,7 +152,7 @@ fn in_progress_states_are_named_before_nothing_staked() {
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
             },
-            BlockHeight::from_raw(5_000),
+            ChainCount::from_raw(5_000),
             g,
         ),
         SealAdmission::Admit
@@ -172,8 +172,8 @@ fn in_progress_states_are_named_before_nothing_staked() {
                 p_slot: PSlot::from_raw(0),
                 persona: persona(9),
                 tx_bytes: vec![0xAB; 4],
-                bond_post_offset_blocks: 0,
-                anchor_t0: BlockHeight::from_raw(1),
+                bond_post_offset_blocks: BlockCount::ZERO,
+                anchor_t0: ChainCount::from_raw(1),
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
             },
@@ -506,7 +506,7 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
                 funding_gindexes: Vec::new(),
                 state: PendingPostState::Pending,
             },
-            BlockHeight::from_raw(5_000),
+            ChainCount::from_raw(5_000),
             g,
         ),
         SealAdmission::Admit
@@ -648,4 +648,35 @@ fn per_slot_zero_does_not_forge_lane_wide_completion() {
         !other_exited_pools_remain(&ev_live, PSlot::from_raw(1)),
         "a live persona's funding is not an uncollected exit pool"
     );
+}
+
+// ── WSS-Q14 class-C observation ─────────────────────────────────────────
+//
+// `submit_release` gates the exit on the sync witness before it reads the
+// bond record as truth. The refusal's **public disposition** is observable
+// here; the full-path bite (drive `submit_release` against a syncing
+// transport and watch it decline) is owed and blocked — that method hangs
+// off the seven-generic `Engine`, and this crate has no async `Engine`
+// fixture to drive it with. Falsifier: when one exists, write it.
+//
+// What this does observe is not nothing, and it is the half that a caller
+// actually sees: an exit refused for sync reasons must arrive at the public
+// boundary as `Resyncing` (wait and retry), never as `NoBondRecord` (you
+// have nothing staked) — the two send an operator to opposite places.
+
+/// The sync refusal reaches the public boundary as the resyncing
+/// disposition, carrying a detail that names the daemon.
+///
+/// This bites against the refusal being flattened onto a wrong-remedy arm;
+/// it does **not** observe `submit_release` itself declining.
+#[test]
+fn a_sync_refusal_flattens_to_the_resyncing_disposition() {
+    let flattened = super::flatten_unstake_error(ReleaseRequestError::DaemonSyncing);
+    match flattened {
+        UnstakeError::Resyncing { detail } => assert!(
+            detail.contains("synchroniz"),
+            "the detail must name the daemon's state so the remedy is legible: {detail}"
+        ),
+        other => panic!("a sync refusal must not present as a different remedy: {other:?}"),
+    }
 }

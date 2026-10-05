@@ -1120,4 +1120,61 @@ mod tests {
     async fn run_blocking_io_runs_on_a_multi_thread_runtime() {
         assert_eq!(run_blocking_io(|| 7), 7);
     }
+    /// The fourth production submission seam — `LocalBondBroadcast` — rides the
+    /// same audited choke point its three siblings do (`claim_dispatch.rs`,
+    /// `drain_dispatch.rs` and `release_dispatch.rs` carry the identical pin).
+    ///
+    /// It is gated **here**, in the file that owns the site, rather than folded
+    /// into one of theirs: each of those gates reads its own file through
+    /// `include_str!`, so adding this file's needles to one of them would make
+    /// that gate's subject a lie, and a reader chasing its red would open the
+    /// wrong file. The cost of a fourth copy is four literals; the cost of a
+    /// mislocated gate is paid by whoever debugs it.
+    ///
+    /// This bites against the bond broadcast dropping the
+    /// `BroadcastSubmitter::local` construction, bypassing `submit_bound`'s
+    /// persona-pairing check, or reaching for a raw daemon client (T-DS-2). It
+    /// does NOT cover the inverse direction — that no production site *selects*
+    /// the ② `OwnRemote` arm — which is crate-wide and lives in
+    /// `tests/broadcast_own_remote_production_census.rs`; and like its siblings
+    /// it is a source-text pin, not a reachability proof.
+    #[test]
+    fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
+        // `split_once`, not `split().next()`: the latter always yields a first
+        // piece, so a drifted marker would silently make the "production half"
+        // the whole file and let this test module's own text satisfy the
+        // positive needles below. Marker drift must be red.
+        let (production, _) = include_str!("start.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("start.rs carries the tests-module marker this split relies on");
+        // Code-only view: drop comment-only lines (`//`, `///`, `//!`) so the
+        // module docs' references to forbidden tokens cannot satisfy the guards.
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let choke_construct = "BroadcastSubmitter::local(";
+        assert!(
+            code.contains(choke_construct),
+            "the bond broadcast must construct on the audited ① choke point"
+        );
+        let choke_submit = ".submit_bound(";
+        assert!(
+            code.contains(choke_submit),
+            "dispatch must ride submit_bound's persona-pairing check"
+        );
+        let bare_submit = ".submit(";
+        assert!(
+            !code.contains(bare_submit),
+            "no bare TransactionSubmitter::submit around the persona-pairing check (T-DS-2)"
+        );
+        let raw_client = "DaemonClient";
+        assert!(
+            !code.contains(raw_client),
+            "the bond broadcast must route through the persona transport, never a \
+             default DaemonClient (T-DS-2)"
+        );
+    }
 }

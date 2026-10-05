@@ -1,5 +1,7 @@
 # Daemon Relay Privacy — correcting and porting the Dandelion++ timing layer
 
+**Status:** LIVING — Round 3 dispositioned (scored ledger below the relay-lane acceptance).
+
 **Goal statement (§31, 2026-07-31): NON-ENUMERABILITY.** Dandelion Theorem 2
 floors any policy at `D_OPT ≥ p²`, `R_OPT ≥ p`, so *invisibility against the
 peer adversary was never reachable* — the available residual is that **the
@@ -7,6 +9,16 @@ adversary may hold observations it cannot turn into a list**. Criteria are
 written against §6.8's joint `L × labelable × linkable` over a stated horizon,
 not per-observation precision; the goal **borrows from FCMP++'s linkability
 gate**, which is therefore a reopening trigger for this document (§31.6).
+
+> **UPDATE 2026-09-12 — Tor-zone wire-observer cover SUPERSEDED as a protocol
+> default.** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC; RULED
+> 2026-09-04, recorded 2026-09-12): on Tor, cover is operator non-exit relay
+> posture, not the §42 carrier. Mixing requires the daemon's Tor client on
+> that same relay process ([`TOR_RELAY.md`](../TOR_RELAY.md)); a sidecar
+> client Tor is uncovered. The §42 architecture is **retained** for
+> encrypted zones other than Tor. Default Tor nodes no longer receive
+> protocol-level constant-rate cover. This document's Round-3 / RP port
+> status is unchanged.
 
 **Status:** ROUND 3 dispositioned — clean break; the RP-1…RP-3b port arc is
 **structurally complete** (§20.10), and the mechanism's definition of done is
@@ -79,6 +91,167 @@ carries reward-era assumptions, the parameters are network-topology-driven;
 *V4 lattice-only* — relay timing is cryptography-agnostic and survives any
 membership-proof successor untouched.
 
+## Relay-lane acceptance — RULED 2026-10-01
+
+Ruled so LV-3 and the zone-enum deletion do not choose shapes this
+lane then has to undo. UPDATE 2026-10-01: the ledger print, the stem
+registry, and the ingress reduction landed in #922. Criterion 4 is
+restated below for the deletion that follows. Criteria 5–7 stay with
+this lane.
+
+1. **One owner, one interface.** `shekyl-relay` already holds the
+   epoch, the stem map, the fluff walk, and the embargo derivation.
+   Its interface is: in = established outbound sessions, a transaction
+   with its arriving session or local, the node's own sync state, and
+   the clock; out = send to session S as stem, fluff to all but the
+   source, hold under embargo, or drop with a cause. Nothing else in
+   the daemon makes a relay decision. Today the decision is still
+   split across `levin_notify.cpp`, the pool's `relay_method`,
+   `core::on_transactions_relayed`, and the protocol handler's ingress
+   gates.
+
+2. **The pool knows one bit: public yet.** A stem-phase transaction
+   does not appear in `get_transaction_pool`, in peer pool sync, or in
+   a block template until it is fluffed. That is the only fact the
+   pool needs from Dandelion++. The bit is owned by the relay and read
+   by the pool. `relay_method` on the pool entry
+   (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
+   beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
+   are unused (`src/blockchain_db/blockchain_db.h:271`). They stay so
+   the record stays 192 bytes, and they are not a connector id.
+   `NetZone` stays the zone-parameterized embargo class, not a pool
+   field; discriminant 2 is unused so `tor` stays 3. `address_type`
+   (`ipv4 = 1`,
+   `ipv6 = 2`, `tor = 4`) stays the peerlist's wire discriminant. The
+   session's network is an attribute of the session.
+
+3. **Stem candidates come from the session registry.** Outbound,
+   uniform, without replacement, once per epoch (Dandelion++ §4.5).
+   The registry is the relay's session map, filled at
+   session-established with direction. Landed in #922:
+   `get_out_connections(` is gone. `get_out_connections_count` stays:
+   it answers whether a connector has an outbound peer and trims the
+   public cap (`net_node.inl:3133`). A falsifier of
+   `rg get_out_connections` would delete the count with the draw.
+
+4. **One Dandelion++ instance. The network is a property of an edge.**
+   UPDATE 2026-10-01. It is read at three named points, and it is never
+   a property of the relay.
+
+   One relay. Its session map is every established session, each
+   carrying its connector beside its direction. One stem map covers
+   every outbound session whose connector has a measured transit. One
+   epoch and one role are drawn. One fluff reaches every session
+   except the source.
+
+   - **Hop 0.** The relay is told at construction which connectors are
+     configured. The bit is whether any of them declares
+     `address_hidden_from_peer` as yes. A local origin on a node with
+     that bit is `OwnEdge`, drawn only from sessions whose own connector
+     declares the same, or `NoOwnEdge` when that pool is empty.
+     `NoOwnEdge` does not refresh the stem map and does not fluff.
+     A local origin with no hidden-address connector uses the stem map,
+     so the first hop is a slot. After hop 0 the draw is uniform over
+     every outbound edge. The clearnet route byte is retired with the
+     one relay.
+   - **Embargo.** The stem watch records the connector the stem was
+     forwarded on, and the observation window is that connector's
+     measured transit, matched on `ConnectorId`: clearnet is
+     `ADOPTED_TRANSIT_ASSUMPTION_MS` (50), Tor is
+     `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (1 625). A connector with no
+     measurement is not a stem edge. Per transaction, not per relay.
+   - **Cover.** `CoverClass` is the ruling, not `link_encrypted` and not
+     `address_hidden_from_peer`. An open link (clearnet) may run the
+     substitution carrier when it is requested. Tor is volume cover: no
+     envelope, and a stem or an own-edge leaves immediately. On an open
+     link the unrestricted origin is a stem slot, so it is slot-aligned
+     with that channel. No cover on Tor by ruling; on cover-bearing
+     links the own-edge is slot-aligned.
+
+   UPDATE 2026-10-02. Role, epoch, fluff, and ingress do not read the
+   connector. Stem selection reads it twice: hop 0 reads the
+   declaration, and a connector with no measured transit is not a stem
+   edge. `FluffReach`, the zone-route token, and the origin roll are
+   deleted. Fluff is this relay's fanout. Hop 0 is the construction bit
+   above. The pool embargo is the connector the stem was forwarded on;
+   an unnamed connector draws the longest measured transit. The stem
+   floor is one note per connector, and the tally row carries that
+   connector. D7, outbound-fluff-only on a non-public zone, is deleted.
+   The carrier development flag stays, default off. `make_relay`
+   (`levin_notify.cpp:259`) sets the noise flag from that opt-in and
+   does not scan encryption cells. `Relay::new` refuses the flag when
+   no configured connector is an open link.
+
+   `m_network_zones` is keyed by connector identity (clearnet 0, tor 1).
+   The two handshake registrations pass the connector the seam observed
+   for that session, and the session bookkeeping (port announcement,
+   which peerlist a handshake appends to, the outbound cap trim) looks
+   that connector up. The old zone type is gone. `address_type` stays,
+   and discriminant 2 is not reused.
+   Listener, advertised address, seeds, peerlist, and inbound cap stay
+   per connector. Collapsing those into one session table is LV-3. The
+   protocol handler does not branch on the connector: a session syncs,
+   relays blocks, answers support flags, and takes transactions the
+   same way whatever carried it. The clearnet-only gates are gone:
+   chain sync, compact-block relay, and the support-flags request.
+   The support-flags request goes out on the session's own zone
+   server. A session established before the relay exists logs at
+   error and is not registered.
+
+   `NETWORK_ID` is a handshake value, not a relay field. It is the
+   first 16 bytes of `cSHAKE256(S = "shekyl/p2p-network-id-v1",
+   X = genesis_block_hash)`, and the wire prefix is `prefix_for` of
+   that id. `shekyl_network_id` computes it from the genesis hash this
+   build already pins; C++ states no byte. A regenesis rotates the id
+   because the hash moves. The harness goldens keep their synthetic id.
+
+5. **Embargo is a deadline in the timing engine.** `OwnerClass::Relay`
+   already exists (`shekyl-timing-engine`). The embargo is one
+   `OwnerClass::Relay` deadline per held transaction, memoryless as
+   `shekyl-relay-privacy` already derives it, firing fluff-now as an
+   event. The pool is not scanned by a relay timer.
+
+6. **Ingress gates are the relay's, decided in Rust.** After the
+   `:832` reduction and LV-3, notify dispatch is Rust and the relay
+   makes the ingress call with its own causes (`NotSynced`,
+   `UnknownSession`, `Duplicate`), logged after the decision. The
+   reduction landed in #922: only `state_before_handshake` is dropped,
+   and the log is a second pass that says the transaction was accepted
+   for admission. Moving that decision into Rust is what this
+   criterion still owes. `is_synchronized()` already answers whether
+   the node can validate it.
+
+7. **The measurements are inputs.** The hop distribution (transit,
+   verify, and admission, split) and `record_stem_observation` feed
+   the embargo. They are taken against the head that contains the
+   stem-registry draw, not against the C++ filter they replace. The
+   transactions-per-epoch bound is derived below.
+
+   **Transactions per epoch (2026-10-03).** Sharma–Gosain–Diaz §VII-A
+   reconstruct about 98.5% of a static privacy subgraph from about 100
+   transactions relayed per honest node. That figure is cumulative over
+   a static subgraph, and one epoch is the window for this bound only
+   because the stem map is redrawn each epoch, so observations of the
+   previous map do not help learn the new one — the stem-map inference
+   §VII-A reconstructs — while which nodes exist, their degrees, and
+   the own-edge pool's membership survive the redraw and are outside
+   this bound. The count is stem arrivals at one honest node during
+   one epoch, not the network origination rate.
+
+   The epoch is `DandelionParams::inherited`: `min_epoch_secs` 600 plus
+   `epoch_jitter_secs` drawn uniformly from 0 to 30. Mean length 615 s.
+   100 arrivals in 615 s is a stem-arrival rate of 100/615 per second
+   at one honest node.
+
+   That count is the reopen. When a measured epoch shows 100 or more
+   stem arrivals at an honest node, the epoch is too long and must
+   shorten. Each transaction visits λ honest nodes in stem, and those
+   visits are spread over N honest nodes, so arrivals at one node per
+   second are R·λ/N. The network origination rate that produces 100
+   arrivals in a mean epoch is `R = 100·N / (λ·615)` transactions per
+   second. λ is the hop distribution and is not measured. Until it is,
+   the reopen is the count, not a guessed network rate.
+
 **Not consensus.** Every quantity in this document is node-local relay policy.
 Nodes running different delays do not fork, no rule reads these values, and
 none of this is genesis-blocking. It is being fixed before ship because it is
@@ -87,6 +260,23 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 ---
 
 ## 0. Problem statement (verified at source and by measurement)
+
+> **Dated 2026-09-11 — this section is the state that MOTIVATED the work, recorded
+> as found. Read it as history; it is not a description of the tree today.** The
+> banner exists because §0 is written in the present tense and carried no date,
+> and at least one of its sentences has since been overtaken: *"There is no test,
+> anywhere in the tree, of any randomized quantity in the relay layer."* That was
+> the finding that justified the round, and it is **preserved, not deleted** —
+> but a randomized relay quantity is now tested, in
+> `tests/unit_tests/txpool_relay_timers.cpp` (`TEST(relay_deadline,
+> an_out_of_range_draw_saturates_forward_never_backward)`,
+> `is_monotonic_in_the_draw`, `zero_draw_still_never_lands_in_the_past`) and
+> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`, `rng.rs`).
+>
+> Dating the section is the whole remedy, and deliberately so: no sentence below
+> is edited, because deciding which of §0's findings the port has since closed is
+> the relay arc's judgement, not a sweeper's. A date converts the section from a
+> standing assertion into the record it always was.
 
 Shekyl inherits a complete Dandelion++ implementation from the Monero
 lineage: the stem map in `src/net/dandelionpp.cpp` (**deleted at RP-3a** — see
@@ -550,8 +740,8 @@ comparison, the existing daemon-submit boundary is 754 lines of C++ shim plus
 | Black-hole recovery scales as `M/(j+1)` | `black_hole_recovery_scales_with_holder_count` | Round 1 ✅ |
 | Black-hole attribution leak is mean-invariant; passive races are non-leaky | `black_hole_attack_leak_is_mean_invariant` | Round 2 ✅ |
 | First-spy diffusion precision π₀ | `first_spy_precision_rises_with_spy_fraction` | Round 2 ✅ |
-| Clearnet↔Tor delta: supernode observer collapses on Tor | `tor_collapses_the_supernode_diffusion_observer` | Round 2 (transport) ✅ |
-| Clearnet passive channel is real, mean-dependent, zero on Tor | `passive_clearnet_leak_is_mean_dependent_and_zero_on_tor` | Round 3 (ε lever) ✅ |
+| Production fluff: an inbound supernode observes it (EveryPeer, every connector). The retired D7 graph is the arm that sees nothing | `an_inbound_supernode_observes_a_production_fluff` | updated 2026-10-02 |
+| Production passive channel is mean-dependent; the retired D7 graph leaks nothing on that inbound edge | `every_peer_passive_leak_falls_with_the_embargo` | updated 2026-10-02 |
 | ≤0.3% worst-case exposure reachable via reshape, not embargo-lengthening | `origin_exposure_meets_target_via_reshape_not_embargo` | Round 3 (levers) ✅ |
 | Origin always stems (unit stem at q=100%) | `always_fluffing_gives_a_unit_stem_the_origin_still_holds` | Round 2 (RD-4) ✅ |
 | Frozen reference vectors, cross-architecture | `tests/golden_vector.rs` | RP-1 ✅ |
@@ -682,6 +872,12 @@ than one from a clearnet origin.
 > gap could have produced it. The measurements below remain valid and useful —
 > they quantify what Tor buys against the *passive* supernode adversary — but
 > they are no longer what the recommendation waits on.
+>
+> **SUPERSEDED 2026-10-02 (D7).** Outbound-only fluff is deleted. Production
+> fluff is `EveryPeer` on every connector, so an inbound supernode observes
+> the diffusion on Tor as on clearnet. The zero rows in the tables below are
+> the retired graph, not a current Tor property. Connector transit does not
+> select the edge set.
 
 The original framing, retained because the measurement programme it sets up is
 unchanged: Tor was **not** frozen as the principal default, pending the
@@ -697,17 +893,17 @@ on Tor." What it can do is **measure both configurations** and let the
 `simulate_transport_observation` measures exactly the delta the §6.3 source fact
 produces, for the paper's primary adversary — a supernode that opens cheap
 *inbound* edges to a fraction of honest nodes and runs the first-spy estimator
-(512 nodes, 12 peers, `tor_collapses_the_supernode_diffusion_observer`; re-measured
+(512 nodes, 12 peers, `an_inbound_supernode_observes_a_production_fluff`; the retired-graph rows were `tor_collapses_the_supernode_diffusion_observer`, re-measured
 at the §69.2 `peers` pin — §70.2):
 
 | supernode reach | transport | fluff observed | first-spy π₀ |
 | --- | --- | --- | --- |
 | dials 5 % | clearnet | 1.0000 | 0.0978 |
-| dials 5 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 5 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 10 % | clearnet | 1.0000 | 0.1760 |
-| dials 10 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 10 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 | dials 30 % | clearnet | 1.0000 | 0.4228 |
-| dials 30 % | **Tor/I2P** | **0.0000** | **0.000** |
+| dials 30 % | **Tor/I2P — RETIRED D7, not production** | **0.0000** | **0.000** |
 
 The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
@@ -726,7 +922,7 @@ the cheap inbound supernode; the black-hole channel is unchanged, and remains
 the reason the mechanism itself (embargo distribution + Q-8a reshape) must be
 correct regardless of transport.**
 
-### 6.6 The clearnet passive channel is real, mean-dependent, and zero on Tor
+### 6.6 The passive channel is real and mean-dependent — Tor's structural zero is RETIRED D7 (2026-10-02)
 
 `simulate_transport_observation` (§6.5) measures the *diffusion-phase* supernode
 — what it learns from watching natural fluff. `simulate_passive_neighbor_leak`
@@ -734,7 +930,7 @@ measures the *embargo-phase* leak the same inbound supernode gets: when a
 stem-prefix node's embargo fires before it is disarmed, a supernode neighbouring
 that node catches the early fluff and attributes the source to a prefix member.
 Measured (supernode reach φ = 0.10,
-`passive_clearnet_leak_is_mean_dependent_and_zero_on_tor`):
+`every_peer_passive_leak_falls_with_the_embargo`; the zero row is the retired graph):
 
 | embargo mean | transport | leak rate | origin share of leaks |
 | --- | --- | --- | --- |
@@ -747,7 +943,7 @@ Measured (supernode reach φ = 0.10,
 | 144 s (adopted **until F-7**; now 190 s, see banner) | clearnet | 0.0114 | 0.20 |
 | 300 s | clearnet | 0.0056 | 0.20 |
 | 500 s | clearnet | 0.0032 | 0.20 |
-| *any* | **Tor/I2P** | **0.0000** | — |
+| *any* | **Tor/I2P — RETIRED D7, not production** | **0.0000** | — |
 
 Two properties, both load-bearing for Round 3:
 
@@ -2339,7 +2535,9 @@ of your outbound endpoints and reads what you originate. Two orthogonal threats,
 and only one gets a mechanism on Tor:
 
 - **Channel observer** (ISP, entry guard, circuit-level traffic analysis) — sees
-  the *wire*, not the content. The noise channel (constant-rate cover) defends this,
+  the *wire*, not the content. The noise channel (constant-rate cover) defends this
+  *(SUPERSEDED as Tor-zone default 2026-09-12, TRC — cover on Tor is operator
+  relay volume, not this channel; retained for other encrypted zones)*,
   legitimately and arguably better than clearnet's jitter. The source comment says
   exactly this: *"good protection against ISP adversaries, but not sybil
   adversaries"* ([levin_notify.cpp:829-833](../../src/cryptonote_protocol/levin_notify.cpp#L829)).
@@ -2536,7 +2734,7 @@ broken position). That is a **parameter to the one mechanism, not a fork of it**
 mechanism + Tor mechanism." Everything else — selection, embargo, reshape, the
 `g_max` bound itself — is transport-invisible. Under this mechanism the broadcast-to-2
 disappears as a *consequence* (the unified mechanism selects, like the public path;
-the constant-rate cover traffic then simply wraps the *selected* send on Tor, an
+the constant-rate cover traffic then simply wraps the *selected* send on Tor *(SUPERSEDED as Tor-zone default wrap 2026-09-12, TRC — cover on Tor is operator relay posture, not this wrap; retained as the wrap for other encrypted zones)*, an
 orthogonal transport-layer concern on the observation axis).
 
 **Why this is the structural-enforcement move, not a preference.** Same discipline
@@ -3698,7 +3896,7 @@ them — the same reason RP-4's correction needed no unchanged-behaviour oracle.
 
 `notify`'s public API is the contract that must survive verbatim — callers and
 all 33 tests bind to it: `get_status`, `new_out_connection`,
-`on_handshake_complete`, `on_connection_close`, `send_txs`, and the three `run_*`
+`on_session_established`, `on_connection_close`, `send_txs`, and the three `run_*`
 hooks. Each becomes a forwarding call onto a Rust zone handle, exactly as
 `connection_map` became a forwarding wrapper in RP-2a.
 
@@ -3724,7 +3922,7 @@ guarantee than the strand, because it is enforced by ownership rather than by
 each handler remembering its `\pre`. The RP-2a map contract inverts cleanly with
 it: "no internal lock because the zone strand serializes" becomes "no internal
 lock because the Rust task owns it". The design obligation is the handoff — every
-C++-side event (`on_handshake_complete`, `on_connection_close`, `send_txs`) must
+C++-side event (`on_session_established`, `on_connection_close`, `send_txs`) must
 enqueue to that task rather than mutate anything, and the FFI must make the
 mutating path the only path.
 
@@ -4003,8 +4201,8 @@ peers notified where five belonged. It reads like a delivery detail and is a
 privacy rule: on a hidden service an inbound peer is a stranger who dialled us,
 so relaying to it hands a transaction to a peer this node never chose — the exact
 sybil exposure i2p/tor is standing in for now that Dandelion++ stemming is off.
-It is now `FluffReach::OutboundOnly`, a zone-lifetime policy in Rust, with a test
-asserting *who* received the batch plus a public-zone negative control.
+**SUPERSEDED 2026-10-02.** That restoration was `FluffReach::OutboundOnly`.
+D7 deleted the rule: a fluff reaches every session, and the type is gone.
 
 **But §18.4b's map could not have predicted it, and that is the lesson.** The map
 is organised by the behaviours the port *knew it was moving*; the outbound-only
@@ -4218,7 +4416,7 @@ where does the fact live now."**
 | G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
 | G-4 | ~~Anchor admission is any successful outbound handshake~~ | ~~`net_node.inl:1347`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | The anchor list, its admission and its dial arm were removed whole; there is no anchor admission to verify. See the STALE note in §12.11 |
 | G-4 | ~~On reconnect the 2 anchor slots fill first~~ | ~~`net_node.inl:1820`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | No anchor slots exist. Refill is white-first to the 70 % target, then gray |
-| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
+| §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **NO LONGER HOLDS — D7 deleted 2026-10-02** | Fluff reaches every session. `FluffReach` is gone. The retired directed graph remains an instrument in `shekyl-relay-privacy` (`FloodReach::OutboundOnly`) and is not production |
 | — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
 
 **Two findings from the census, neither of which is a line-number update.**
@@ -7346,10 +7544,12 @@ after.
 
 |  | **recall denial** (deny the count) | **assembly denial** (deny the link) |
 | --- | --- | --- |
-| **wire observer** | payload-independence → **0** | memorylessness — **(b)** |
+| **wire observer** | payload-independence → **0** — **SUPERSEDED as Tor-zone default 2026-09-12 (TRC)**; posture-conditional there; **retained for other encrypted zones** | memorylessness — **(b)** |
 | **peer adversary** | **floored at `p` — unreachable** | stem asymmetry + FCMP++ |
 
-**Both wire-observer cells are achievable outright**, because that adversary
+**Both wire-observer cells are achievable outright** *(on encrypted zones
+other than Tor; Tor-zone recall is SUPERSEDED as a protocol default
+2026-09-12, TRC — posture-conditional)*, because that adversary
 appears in **no floor theorem**. The peer adversary's recall cell is **the one
 place where the honest answer is "you cannot"** — which is precisely why the
 goal had to become non-enumerability (§31.1), and why **the remaining work
@@ -8431,15 +8631,18 @@ every subsequent round.**
 
 ### 41.2 The trade, recorded as §30.6 required
 
-**What is lost:** constant-rate cover on anonymity zones. A wire observer at
-the guard regains **emission timing** — it can see *that* this node
+**What is lost** *(records-was, 2026-08-01 B-deletion; Tor-zone default cover
+is SUPERSEDED 2026-09-12, TRC)*: constant-rate cover on anonymity zones. A wire
+observer at the guard regains **emission timing** — it can see *that* this node
 transmitted and *when*. That is a real loss on the axis §20.9 charters, and it
 is the **only** cell of §32.6's grid where the answer was previously *zero*.
 
 **To whom:** operators running `--tx-proxy`. Nobody else — the public zone never
 had covert channels.
 
-**What restores it:** the §30 composition, in this order — **R-1** (relayed
+**What restores it** *(2026-08-01 path; Tor-zone restoration SUPERSEDED
+2026-09-12, TRC — operator relay posture, not covert re-enable; retained for
+other encrypted zones)*: the §30 composition, in this order — **R-1** (relayed
 traffic made eligible for the anonymity zone, so the channel stops being an
 origin oracle), the **restored backstop** (§25.1's design question: what the
 embargo does when it fires on a noise zone, with the public-zone fallback
@@ -8494,7 +8697,7 @@ It records why the composition has the shape §30 gives it, and a reader who
 finds covert channels re-enabled later needs to know what made them unsafe the
 first time.
 
-## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes
+## 42. Cover traffic over configuration C — the capacity collision is a *fluff* problem, and RD-4 already separates the classes — Tor-zone application SUPERSEDED 2026-09-12 (TRC); architecture retained for other encrypted zones
 
 **2026-08-01. Candidate output of the §30 design round, not an implementation.**
 §30.2 said R-1 collides with capacity at zero slack and left three options plus
@@ -8619,7 +8822,9 @@ requirement: **32 % more than "cover everything" needs.**
 > Bandwidth moves 2.72 → 3.20 KiB/s and the Tor figure 0.27 → 0.32 %, both
 > still far under axis 2's ceiling.
 
-**So the wire-observer recall cell returns to zero for ALL traffic**, and
+**So the wire-observer recall cell returns to zero for ALL traffic**
+*(SUPERSEDED as Tor-zone default 2026-09-12, TRC — posture-conditional there;
+retained for other encrypted zones)*, and
 §42.4's conceded activity signal closes. The narrowing is not repaired — its
 premise is gone. §42.4 is kept above rather than rewritten, because a reader who
 finds the cell reading zero needs to know it once did not, and why.
@@ -11463,7 +11668,7 @@ embargo cannot currently be per-zone**:
 
 - `shekyl_dandelionpp_embargo_draw_seconds()` (`dandelionpp_ffi.rs:95`) takes
   **no arguments** — there is no zone to pass.
-- `tx_pool.cpp` carries **no** `epee::net_utils::zone` reference at all; the
+- `tx_pool.cpp` carries **no** zone-type reference at all; the
   arm site (`:1058`) is zone-blind.
 
 This is exactly the dependency the inherited comment names at
@@ -11560,11 +11765,11 @@ file. The mismatch is a stale checkout, not a disputed fact.
 
 | anchor | content that locates it |
 | --- | --- |
-| `:936` | `if (covert_enabled \|\| zone == epee::net_utils::zone::public_)` |
+| `:936` | `if (covert_enabled \|\| zone ==` the public-zone enumerator) |
 | `:974-977` | `void notify::new_out_connection()` + its `covert_enabled` early return |
 | `:807`, `:827` | `make_payload_send_txs(*zone_->p2p, …, zone_->pad_txs, false)` |
 | `:561` | `make_payload_send_txs(*z.p2p, …, z.pad_txs, true)` |
-| `:1222` | `if (zone_->nzone == epee::net_utils::zone::public_)` |
+| `:1222` | `if (zone_->nzone ==` the public-zone enumerator) |
 
 > **A line number is a coordinate in one checkout; the content is the claim.**
 > `params.rs`'s numbers moved in this arc's own PR #397, which is exactly how
@@ -12084,7 +12289,7 @@ REST handler, and none of the sixteen admin REST paths appear in
 
 §69.2 pinned `FloodParams::peers` 8 → 12 and updated §67.2 and §28.4. It did
 not touch **§6.5**, whose table is the recorded output of
-`tor_collapses_the_supernode_diffusion_observer` — a test that consumes
+`tor_collapses_the_supernode_diffusion_observer` (renamed `an_inbound_supernode_observes_a_production_fluff`) — a test that consumed
 `FloodParams::default()`. The pin therefore re-parameterised that measurement
 silently, and every assertion in it got *easier* at higher degree
 (`observed_fraction > 0.9`, a structural-zero Tor arm, a monotonicity arm), so
@@ -12150,7 +12355,7 @@ two doc comments saying so.
 | §55.2's three false claims | **amended on the record** (superseded note, not a rewrite) |
 | `handler_for` totality → compile time | **done (§70.1)** — `Endpoint`-keyed table, exhaustive match, no wildcard; the startup panic is now `error[E0004]`, and the specification tests green untouched across the change |
 | `state.restricted` at the one call site | **open, named at the site** — needs an `AppState`, which links `core_rpc_ffi_*`; the only route-table property still resting on review |
-| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `tor_collapses_the_supernode_diffusion_observer` runs **143–236 s** debug on the reference box across two runs (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
+| `propagation_measurement` wall-clock | **accepted, and measured so it is visible**: `an_inbound_supernode_observes_a_production_fluff` (formerly `tor_collapses_the_supernode_diffusion_observer`) ran **143–236 s** debug on the reference box across two runs of the old body (the spread is machine load, not variance in the instrument — the π₀ figures are bit-identical, the draws being seeded), and the whole suite runs in CI's default workspace pass because the crate's own dev-dependency self-enables `conformance` — so a `required-features` gate on the `[[test]]` would gate nothing. The two real remedies both cost more than the wall-clock: cutting trial counts edits a measurement instrument for CI convenience, and moving the suite behind a non-auto feature relocates the cost without removing it. Recorded rather than trimmed |
 | `hop` quantile policy | decided (§66); clearnet measurement still outstanding |
 | F′ reverse-parity readouts | unblocked; three readouts in §67.2's order |
 
@@ -12315,9 +12520,11 @@ They are a separate surface and a separate curve.)*
 ### 72.2 ML-DSA-65 is not verified on this path — corrected
 
 §71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
-`shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` and converts each entry to a
-`shekyl_fcmp::leaf::PqcLeafScalar` — **the PQ commitment is a hash bound into
-the proof, not a signature checked beside it.** No ML-DSA verification occurs.
+`shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` (one key scalar `k = H_ℓ(pk)`
+per input) and converts each entry to a `shekyl_fcmp::leaf::PqcKeyScalar` —
+**the PQ binding is an in-circuit opening of the leaf commitment to the key's
+point, not a signature checked beside it** (`PL-D3`). No ML-DSA verification
+occurs.
 
 Every ML-DSA `verify` call in the workspace sits in `multisig.rs`,
 `derivation.rs`, `signature.rs` and `archival_p.rs` — multisig assembly and
@@ -12335,7 +12542,7 @@ takes.
 ### 72.3 The curve is two-dimensional, and both axes are real
 
 Inputs drive `shekyl_fcmp_verify` (`num_spend`, bounded by
-`shekyl_fcmp::MAX_INPUTS`) and the per-input leaf hash. Outputs drive
+`shekyl_fcmp::MAX_INPUTS`) and the per-input key scalar / opening leg. Outputs drive
 `shekyl_check_commitment_masks` — a prime-order subgroup check per output
 commitment, which is not free — and the balance sum.
 
@@ -12406,7 +12613,7 @@ unreproducible and an artifact indistinguishable from a property:
   thermal throttling directly. Measured **69 °C under sustained compile load** —
   the heaviest work the box sees — so the margin is ~11 °C before the first
   threshold.
-- **Storage — and it is not what was assumed.** `skl-pi` has **no NVMe**
+- **Storage — and it is not what was assumed.** The floor device has **no NVMe**
   (`/dev/nvme*` absent). Root is the **SD card** (`/dev/mmcblk0p2`). The
   attached USB device is a **WD easystore 2648 / WD10SDRW-11A0XS0, 931 GB,
   `rotational = 1`** — a *spinning* 2.5" disk, not solid state — and it is
@@ -13885,7 +14092,13 @@ Recomputed at `q = 20` — the anon zone's value, verified unchanged:
 The decision stands. What changes is that it arrives with a bill §64 had not
 priced, because §63.2's margin was computed on the posture being retired.
 
-### 89.2 The embargo is per-zone — and F-7's precedent does not transfer
+### 89.2 The embargo is per-zone — SUPERSEDED 2026-10-01
+
+> **SUPERSEDED 2026-10-01.** The premise that a stem stays on the zone
+> it arrived on is reversed. One relay draws after hop 0 over every
+> outbound edge, and the embargo reads the class of the edge that stem
+> was forwarded on (relay-lane acceptance, criterion 4). The argument
+> below is the record of the ruling it replaced.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
@@ -14343,7 +14556,7 @@ load-bearing. On the shipped path it is **false**, and not merely untested:
 The `forward` transaction from §89.8.1 waits out its delay in the pool and
 re-emerges through `core::relay_txpool_transactions`, which maps
 `case relay_method::forward: stem_req` (`cryptonote_core.cpp:1069-1071`) and
-dispatches `stem_req` at **`epee::net_utils::zone::public_`** with a nil source
+dispatches `stem_req` at **the public-zone enumerator** with a nil source
 (`:1091`). Origin `public_` cannot cohere and a nil source cannot re-roll, so
 the remaining hops of that stem run on **clearnet**.
 
@@ -15248,6 +15461,13 @@ left.
 > not by the value meaning anything but by monotonicity throwing the value away.
 > A value that works because it is ignored is not a mechanism to carry forward.
 
+**Pool-side consequence, recorded 2026-09-24 (S-POOL pre-flight).** The
+three clauses above are three fields with three lifetimes on the Rust pool
+record, not one `relay_method` value: [`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md)
+§3 and [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) SPL-18 / `SPL-Q9`. A
+field-for-field port of `relay_method::local` re-bundles what this section
+unbundled.
+
 ### 92.5 The disarm's SCOPE is open — and origin-only is net-NEGATIVE
 
 **This is the deciding question, not insurance.** The re-broadcast loop is
@@ -15610,37 +15830,33 @@ over noise networks"*, and then broadcast the result to **every** channel,
 which is the opposite of what a stem is. **Deleted, not repaired** (§2.9 step
 4): with the premise gone there was nothing left to fix.
 
-### 93.2 Noise runs only on an encrypted network
+### 93.2 Cover follows the open link — SUPERSEDED the encryption predicate, 2026-10-02
 
-What noise buys is concealment of **packet sizing**, and sizing is the only
-thing left for a network observer to read once the link is encrypted. On a
-cleartext link that observer reads the contents outright, so padding the sizes
-conceals nothing and the bandwidth is spent for no privacy.
+**Current.** `CoverClass` decides, not `RelayZone::is_encrypted` and not
+`link_encrypted`. An open link (clearnet) may run the substitution carrier
+when the development flag asks for it: requesting the carrier means the
+NNhfs pipe encrypts and covers that link. Tor is volume cover
+([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)): no envelope, and a stem
+or an own-edge leaves immediately. `Relay::new` refuses the flag when no
+configured connector is an open link, rather than silently running
+carrier-off. The FFI maps that refusal to null. `is_encrypted` stays the
+wire-observer cell. It does not select the carrier.
 
-**The binding property is encryption, not anonymity, and not reach.** The three
-coincide for the current zone set only because ordinary internet traffic is not
-encrypted. **If we ever encrypt ordinary internet traffic it gets noise too** —
-that is a live expectation, not a hypothetical carve-out, and it is why the
-predicate is named for the property that actually decides.
+**Records-was (2026-08).** Noise was refused on a cleartext link because
+padding was argued to conceal nothing a cleartext observer could not
+already read, and `RelayZone::is_encrypted` was named the single site that
+would change when clearnet's answer changed. The refusal still lives in
+`Relay::new` rather than at the FFI edge, and the two errors stay
+distinct. What changed is the question: the open link, not the encryption
+cell.
 
-Enforced as a refusal at `Zone::new` rather than a silent downgrade to
-carrier-off: a node configured for a protection it is not receiving is the
-failure worth being loud about, and a silent downgrade is indistinguishable
-from working. It lives in `Zone::new` rather than at the FFI edge because the
-daemon Rust cutover makes Rust the in-process caller, and an edge check is one
-it would route straight around. `LinkSecrecy` is constructed only from a
-`RelayZone` (`LinkSecrecy::of`) — there is no `Encrypted` variant a caller
-can mint beside the wrong reach — and `Zone::new` returns `Result<_, ZoneNewError>`
-so the two refusals (noise on cleartext; wrong channel count) stay distinct.
-The FFI maps both to null. `RelayZone::is_encrypted` is the single site
-that changes when the clearnet answer changes.
-
-**One consequence landed immediately:** ten Rust fixtures had been building
-noise zones on `FluffReach::EveryPeer` — a configuration production cannot
-hold — and an FFI test asserted that outbound-only fluff plus noise on the
-*clearnet* zone builds. It does not, and §25.5 keeps outbound-only fluff on
-clearnet open as a real configuration in its own right. Reach had been standing
-in for encryption, which is the collapse in miniature.
+**Records-was (2026-08), one consequence of that predicate:** ten Rust
+fixtures had been building noise zones on `FluffReach::EveryPeer` — a
+configuration production cannot hold — and an FFI test asserted that
+outbound-only fluff plus noise on the clearnet zone builds. Under the
+encryption predicate it did not. That predicate is superseded above:
+clearnet is the open link, and noise requested there does build.
+`FluffReach` is deleted. Reach had been standing in for encryption.
 
 ### 93.3 On the vocabulary itself
 
@@ -16177,7 +16393,7 @@ becomes a project.
 a shipped `hop`, this term is either measured on the floor device or explicitly
 ruled negligible with a number attached. *"We did not measure it"* is not a
 finding that it is small. **DISCHARGED 2026-08-21 via the first branch —
-measured on the floor device (`skl-pi`); see §94.9.**
+measured on the floor device; see §94.9.**
 
 ### 94.8 The transit round does NOT reopen err-high — §44.3 already settled it (2026-08-21)
 
@@ -16368,7 +16584,7 @@ shape that hid the 12-second jump inside a 4 ms fold.
 
 §94.7 left the node's own Tor/TLS/circuit crypto owed a floor-device measurement
 *or* a negligibility ruling with a number. **It is measured on the floor device
-(`skl-pi`, the reference Raspberry Pi 4 Model B), which is the criterion's first
+(the reference Raspberry Pi 4 Model B), which is the criterion's first
 and stronger branch** — and a first draft of this section, which took the second
 branch on a *bounded* Pi rate, got the bound wrong in a way only the measurement
 caught. That correction is kept in view below, because it is the case for
@@ -16408,7 +16624,7 @@ while transit itself is measured with far larger spread would be false precision
 
 **Why the correction matters more than the result.** The disposition (negligible,
 excluded) is unchanged, but the draft reached it through a hardware assumption
-that was wrong and a rate that was 5.8× off, and only measuring on `skl-pi`
+that was wrong and a rate that was 5.8× off, and only measuring on the floor device
 surfaced either. A grep that had found the host earlier would have replaced a
 plausible-but-wrong bound with the measurement three steps sooner — the same
 ground-at-source lesson this arc keeps re-learning.

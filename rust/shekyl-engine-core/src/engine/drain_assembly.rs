@@ -82,6 +82,7 @@ use curve25519_dalek::Scalar;
 use rand_core::{OsRng, RngCore as _};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, OutputInfo,
@@ -367,6 +368,7 @@ pub(super) async fn assemble_drain_tx(
         spec0.ml_kem_ek,
         spec0.amount,
         0,
+        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout0 construction", e))?;
     let vout1 = build_output(
@@ -376,6 +378,7 @@ pub(super) async fn assemble_drain_tx(
         spec1.ml_kem_ek,
         spec1.amount,
         1,
+        &sentinel_plaintext(),
     )
     .map_err(|e| DrainAssemblyError::build("drain vout1 construction", e))?;
 
@@ -384,14 +387,13 @@ pub(super) async fn assemble_drain_tx(
     let output_keys: Vec<[u8; 32]> = built_outputs.iter().map(|b| b.output_key).collect();
     let view_tags: Vec<Option<u8>> = built_outputs.iter().map(|b| b.view_tag).collect();
     let kem_blobs: Vec<Vec<u8>> = built_outputs.iter().map(|b| b.kem_blob.clone()).collect();
-    let leaf_hash_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.h_pqc).collect();
+    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
 
     // ── Step 3: tx_extra — tx pubkey + per-output KEM blobs + the `0x07` PQC
-    // leaf hashes (identical layout + order to the transfer path; without the
-    // `0x07` field the outputs ingest with a zero `h_pqc` leaf and are
-    // unspendable). ──
+    // leaf entries (identical layout + order to the transfer path; consensus
+    // refuses a transaction with outputs that lacks the field). ──
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep

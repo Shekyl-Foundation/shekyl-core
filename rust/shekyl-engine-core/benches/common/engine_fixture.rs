@@ -221,6 +221,8 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
+#[cfg(feature = "bench-internals")]
+use shekyl_types::BlockHeight;
 
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.
@@ -479,10 +481,10 @@ pub fn build_engine_fixture_with_balance(
     for i in 0..n {
         transfers.push(sample_transfer(i as u64));
     }
-    let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+    let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
     let reorg_blocks = ReorgBlocks {
         blocks: (999_990..=1_000_000)
-            .map(|h| (h, [(h & 0xff) as u8; 32]))
+            .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
             .collect(),
     };
     let ledger_block = LedgerBlock::new(transfers, tip, reorg_blocks);
@@ -640,9 +642,9 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         // keep the raw `[u8; 32]` local for the `derive_output_handle` call
         // below (crypto takes `&[u8; 32]`); wrap only at the typed field.
         tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-        internal_output_index,
-        global_output_index: 1_000 + seed,
-        block_height: 100,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(internal_output_index),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + seed),
+        block_height: shekyl_types::BlockHeight::from_raw(100),
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
@@ -662,8 +664,9 @@ fn sample_transfer(seed: u64) -> TransferDetails {
             &tx_hash,
             internal_output_index,
         )),
-        eligible_height: 100 + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
         frozen: false,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }

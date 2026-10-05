@@ -1,0 +1,51 @@
+{
+  "description": "PL-D3 / PL-D3a pins for the owner-side tx_extra 0x07 entry: CM = k*G_k + r*J (k = H_l(hybrid_pk), r = HKDF-Expand(prk, \"shekyl-pqc-leaf-blind\" || idx_le64 || ctr, 64) mod l), record = cSHAKE256(shekyl/pqc-leaf-record-v1, pk || r_h), r_h = HKDF-Expand(prk, \"shekyl-pqc-leaf-record-blind\" || idx_le64, 32), per (combined_ss, output_index). Consumed by pqc_leaf_commitment_known_answer_vectors in rust/shekyl-crypto-pq/src/leaf_commitment.rs. Frozen: never regenerated without a decision-log entry (SHEKYL_PINNED_REGEN_DECISION).",
+  "regeneration_decision": "2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned",
+  "vectors": [
+    {
+      "blind": "4a4f8e0b798f9ede88d1c5962149c77e2590a13fb20c092e07b0268bd717090d",
+      "combined_ss": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "counter": 0,
+      "output_index": 0,
+      "point": "470d669c2402ce6a1f18b2dd5dde6b7b1a96365d751d243746f577415f4e637f",
+      "record": "0e54de18306f69aa84388837e3e1ead47dcf52fac1b34d1393f203a8e3f8bcb0",
+      "record_blind": "eb72becb0aafef21398d3ec533150034704864937bc981918d5875385afa3183"
+    },
+    {
+      "blind": "2a8a9b72c0170a17352b27bdfa5ff1dfa7d06c8a8fa417b75255ae9dc08e6c0b",
+      "combined_ss": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "counter": 0,
+      "output_index": 1,
+      "point": "c4ef4b328e2ce620c17117cc81d0f8989aea49db01b3c08f3ddef50364f5234d",
+      "record": "6a3548cbe7ae795e98975292031df07da88456efb76e6f7dd87a10ea7e916a54",
+      "record_blind": "7a35b3620cf2e931529d0ce7ede2dc6d21a0b98111650bada60d214c8547da5e"
+    },
+    {
+      "blind": "af4dba153c25918daa44fcf6e95af547be115156961385887f2520501ddac30c",
+      "combined_ss": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "counter": 0,
+      "output_index": 0,
+      "point": "44bd70891e47cfc9639c1ca139305a34031ab7d5e9bc9ea6f42ade7d452cfd64",
+      "record": "00b7d52772224c182a23688dc1bd20e3fcaee8477980e86fd4526a1d31d0b207",
+      "record_blind": "ded290402beee4502749bbf66e93f84c3f4824225571b5b065f70240e3dd766e"
+    },
+    {
+      "blind": "7af971ee8ee14989cf681bc44f46f3d06fdb967223958c18ec355969f765a407",
+      "combined_ss": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "counter": 0,
+      "output_index": 7,
+      "point": "e657b000022cc8def6e2094dbdebe0cd3f05bb84fb876442c212fb5af772ffcb",
+      "record": "3800c476aa0a61a62cb794af34a2652df8a6fc4467fdad95820621df2afedf51",
+      "record_blind": "3bcad9f597a1676c5ab3d3b758ddb129f77811428517b40128f039e9422f0372"
+    },
+    {
+      "blind": "bbfa01a074a8ff5a4a17d376ce3851ccad1fa83524f7d7fb7c98e866d63e020e",
+      "combined_ss": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "counter": 0,
+      "output_index": 18446744073709551615,
+      "point": "0ab24780c6d865eab7e994d0cd129acad0954722f20185c2eb8a3d840abb988e",
+      "record": "bc50e29cc876d793c2c46a6da49e41e5994eb4ede0e79e3d9c4a55ed3cea33d1",
+      "record_blind": "d725f850e5bce6eed06337c17c92b7377c3d8990e668ff891a8ddf47d9ed8807"
+    }
+  ]
+}

@@ -150,13 +150,14 @@ ciphersuite = "0.4"
 shekyl-multisig = { path = "../shekyl-multisig", optional = true }
 # The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
 # `submit_transaction`, `engine/daemon.rs`) is always-compiled production
-# code that builds `get_fee_estimate` params and parses the response as
-# `serde_json::Value` (defensive untrusted-daemon parsing per
-# `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
-# lockfile (transitively via `shekyl-rpc-client`, plus this crate's build- and
-# dev-deps), so making it a direct non-optional dependency adds no new
-# third-party crate (`17-dependency-discipline.mdc`). It is therefore no
-# longer listed under the `multisig` feature.
+# code that builds `get_fee_estimate` params. The fee snapshot parses
+# through `shekyl_rpc_types::GetFeeEstimateResponse` (defensive
+# untrusted-daemon parsing per `20-rust-vs-cpp-policy.mdc` §3); other
+# daemon methods still take `serde_json::Value`. `serde_json` is already
+# in the workspace lockfile (transitively via `shekyl-rpc-client`, plus
+# this crate's build- and dev-deps), so making it a direct non-optional
+# dependency adds no new third-party crate (`17-dependency-discipline.mdc`).
+# It is therefore no longer listed under the `multisig` feature.
 serde_json = "1"
 # Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
 # native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
@@ -258,6 +259,21 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
+# Rust producer builds a block at exactly the consensus weight bound and
+# the C++ daemon judges it (CEN-F14), so the producer crate and the rules
+# crate's public definitions (`EMISSION_SPLIT_EPOCH`, the rule set's
+# unlock window) are read here, not restated. Test-only; both are already
+# normal dependencies of shekyl-chain-ingest (rule 17).
+shekyl-block-template = { path = "../shekyl-block-template" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# DRS-E4 commit 7: the chain-vector capture (`regtest_e2e.rs`) writes the
+# regtest injector's receipt as the corpus's `Injection` — one type for the
+# `--inject` flag it passes `shekyl-chain-replay fetch`, the manifest row
+# it writes, and the replay's report — so the height cannot be spelled
+# differently at any of them. No default features: the type lives in the
+# unconditional `source` module; the pipeline and CLI are not compiled.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and
@@ -268,6 +284,13 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # alter the default-feature production crate graph.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Live-daemon e2e (`engine::regtest_e2e`): route the wallet's own
+# `tracing` events into the test's captured output, so a wallet-side
+# refusal (e.g. the `submit_transaction` round-trip guard) is visible
+# next to the daemon log excerpt rather than dropped for want of a
+# subscriber. `fmt` + `env-filter` only; already in the lockfile via
+# `shekyl-logging` / `shekyl-wallet-rpc`.
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 # `gungraun` is the deterministic-instructions sibling for the
 # criterion wall-clock benches in this crate. The CI gate

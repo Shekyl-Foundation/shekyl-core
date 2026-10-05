@@ -26,9 +26,11 @@
 //! `check_commitment_mask_valid` fingerprint block in `blockchain.cpp`.
 
 use shekyl_ct_balance::{
-    check_commitment_masks, check_output_keys, verify_ct_balance, CtBalanceError, OutputPointsError,
+    check_commitment_masks, check_output_keys, verify_ct_balance, CtBalanceError, MaskSubject,
+    OutputPointsError,
 };
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::{CT_TYPE_FCMP, CT_TYPE_NULL};
 
 /// Balance holds (`ΣpseudoOuts = Σout_masks + fee*H`) over canonical prime-order points.
 pub const SHEKYL_CT_BALANCE_OK: u8 = 0;
@@ -54,6 +56,12 @@ pub const SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK: u8 = 3;
 /// A commitment mask took a trivial amount-leaking form (identity, `G`, or
 /// coinbase `zeroCommit(amount)`).
 pub const SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK: u8 = 4;
+/// The mask count is not the output count (or, for a coinbase, the amount
+/// count is not) — one mask per output (E6 slice 4 §3.1 S25).
+pub const SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT: u8 = 5;
+/// The CT type byte names neither the coinbase (`CTTypeNull`) nor the FCMP++
+/// spend shape — the subject of the mask check cannot be derived.
+pub const SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE: u8 = 6;
 
 fn map_err(e: CtBalanceError) -> u8 {
     match e {
@@ -67,6 +75,7 @@ fn map_output_points_err(e: OutputPointsError) -> u8 {
         OutputPointsError::InvalidOutputKey => SHEKYL_OUTPUT_POINTS_ERR_INVALID_KEY,
         OutputPointsError::InvalidMask => SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK,
         OutputPointsError::TrivialMask => SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK,
+        OutputPointsError::MaskCountMismatch => SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT,
     }
 }
 
@@ -195,28 +204,33 @@ pub unsafe extern "C" fn shekyl_check_output_keys(keys_ptr: *const u8, num_keys:
     }
 }
 
-/// Check `outPk` commitment masks against the §2.3 output-point rule plus the
+/// Check `outPk` commitment masks: the §2.3 output-point rule, the
 /// trivial-mask fingerprint guards (identity, `G`, coinbase
-/// `zeroCommit(amount)`).
+/// `zeroCommit(amount)`), and **one mask per output**.
 ///
-/// `masks_ptr` is a flattened `num_masks × 32` buffer. For a **coinbase** tx,
-/// pass the cleartext vout amounts via `coinbase_amounts_ptr` /
-/// `num_coinbase_amounts` (mask `i` is checked against
-/// `zeroCommit(amounts[i])` for `i < num_coinbase_amounts`); for non-coinbase
-/// txs pass `(null, 0)`, which skips only the coinbase fingerprint. Either
-/// pointer may be null when its count is zero.
+/// C++ passes **facts** — the transaction's CT type byte, its `vout` count,
+/// the flattened `num_masks × 32` masks and every `vout[i].amount` — and
+/// Rust derives the subject: `CT_TYPE_NULL` is a coinbase (cleartext
+/// amounts, fingerprint gate on), `CT_TYPE_FCMP` is a spend (gate off). Until
+/// E6 slice 4 (`CHAIN_RULES_SLICE_4.md` §3.1 S25/S27) the C++ caller made
+/// both decisions — whether the fingerprint applies, and the
+/// `outPk.size() != vout.size()` arity refusal — before Rust ran; both are
+/// rule content and both are `shekyl_ct_balance::check_commitment_masks`'s
+/// now. `amounts_ptr` must carry exactly `num_outputs` values for every
+/// shape (a spend's are all zero on the wire); the FFI does not select.
 ///
 /// # Safety
 ///
-/// `masks_ptr` must address `num_masks * 32` valid bytes and
-/// `coinbase_amounts_ptr` must address `num_coinbase_amounts` valid `u64`s for
-/// the duration of the call when their counts are nonzero.
+/// `masks_ptr` must address `num_masks * 32` valid bytes and `amounts_ptr`
+/// must address `num_outputs` valid `u64`s for the duration of the call when
+/// their counts are nonzero. Either may be null when its count is zero.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_check_commitment_masks(
+    ct_type: u8,
+    num_outputs: usize,
     masks_ptr: *const u8,
     num_masks: usize,
-    coinbase_amounts_ptr: *const u64,
-    num_coinbase_amounts: usize,
+    amounts_ptr: *const u64,
 ) -> u8 {
     let masks_len = match flat_len_sized(
         masks_ptr,
@@ -227,7 +241,7 @@ pub unsafe extern "C" fn shekyl_check_commitment_masks(
         Ok(len) => len,
         Err(code) => return code,
     };
-    if num_coinbase_amounts > 0 && coinbase_amounts_ptr.is_null() {
+    if num_outputs > 0 && amounts_ptr.is_null() {
         return SHEKYL_OUTPUT_POINTS_ERR_NULL_PTR;
     }
     // SAFETY: `flat_len_sized` proved `masks_len = num_masks * 32 <= isize::MAX`
@@ -239,13 +253,18 @@ pub unsafe extern "C" fn shekyl_check_commitment_masks(
         unsafe { std::slice::from_raw_parts(masks_ptr, masks_len) }
     };
     // SAFETY: null-checked above when the count is nonzero; the caller's safety
-    // contract guarantees `num_coinbase_amounts` valid, aligned `u64`s.
-    let coinbase_amounts: Option<&[u64]> = if num_coinbase_amounts == 0 {
-        None
+    // contract guarantees `num_outputs` valid, aligned `u64`s.
+    let amounts: &[u64] = if num_outputs == 0 {
+        &[]
     } else {
-        Some(unsafe { std::slice::from_raw_parts(coinbase_amounts_ptr, num_coinbase_amounts) })
+        unsafe { std::slice::from_raw_parts(amounts_ptr, num_outputs) }
     };
-    match check_commitment_masks(masks_flat, coinbase_amounts) {
+    let subject = match ct_type {
+        CT_TYPE_NULL => MaskSubject::Coinbase { amounts },
+        CT_TYPE_FCMP => MaskSubject::Spend,
+        _ => return SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE,
+    };
+    match check_commitment_masks(masks_flat, num_outputs, subject) {
         Ok(()) => SHEKYL_OUTPUT_POINTS_OK,
         Err(e) => map_output_points_err(e),
     }
@@ -338,25 +357,78 @@ mod tests {
             * curve25519_dalek::constants::ED25519_BASEPOINT_POINT)
             .compress()
             .to_bytes();
+        // A spend's amounts are zero on the wire; the FFI takes them as facts.
+        let spend_amounts = [0u64];
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(mask.as_ptr(), 1, ptr::null(), 0) },
+            unsafe {
+                shekyl_check_commitment_masks(
+                    CT_TYPE_FCMP,
+                    1,
+                    mask.as_ptr(),
+                    1,
+                    spend_amounts.as_ptr(),
+                )
+            },
             SHEKYL_OUTPUT_POINTS_OK
         );
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(TORSION.as_ptr(), 1, ptr::null(), 0) },
+            unsafe {
+                shekyl_check_commitment_masks(
+                    CT_TYPE_FCMP,
+                    1,
+                    TORSION.as_ptr(),
+                    1,
+                    spend_amounts.as_ptr(),
+                )
+            },
             SHEKYL_OUTPUT_POINTS_ERR_INVALID_MASK
         );
         let g = g_bytes();
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(g.as_ptr(), 1, ptr::null(), 0) },
+            unsafe {
+                shekyl_check_commitment_masks(
+                    CT_TYPE_FCMP,
+                    1,
+                    g.as_ptr(),
+                    1,
+                    spend_amounts.as_ptr(),
+                )
+            },
             SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK
         );
+        // Amounts are required for every non-empty shape: a null pointer with
+        // outputs is refused before any point is read.
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(mask.as_ptr(), 1, ptr::null(), 1) },
+            unsafe {
+                shekyl_check_commitment_masks(CT_TYPE_FCMP, 1, mask.as_ptr(), 1, ptr::null())
+            },
             SHEKYL_OUTPUT_POINTS_ERR_NULL_PTR
+        );
+        // One mask per output (S25): two outputs, one mask.
+        assert_eq!(
+            unsafe {
+                shekyl_check_commitment_masks(CT_TYPE_FCMP, 2, mask.as_ptr(), 1, [0u64, 0].as_ptr())
+            },
+            SHEKYL_OUTPUT_POINTS_ERR_MASK_COUNT
+        );
+        // An unknown CT type has no subject.
+        assert_eq!(
+            unsafe {
+                shekyl_check_commitment_masks(0x7f, 1, mask.as_ptr(), 1, spend_amounts.as_ptr())
+            },
+            SHEKYL_OUTPUT_POINTS_ERR_CT_TYPE
+        );
+        // Zero outputs, zero masks: vacuous (the C++ `outPk.empty()` guard was
+        // redundant with this).
+        assert_eq!(
+            unsafe { shekyl_check_commitment_masks(CT_TYPE_FCMP, 0, ptr::null(), 0, ptr::null()) },
+            SHEKYL_OUTPUT_POINTS_OK
         );
     }
 
+    /// The fingerprint gate is selected by the CT type the C++ passes, not
+    /// by which pointer it chose to fill (S27): the same `zeroCommit(amount)`
+    /// point is refused for a coinbase and accepted for a spend.
     #[test]
     fn coinbase_zero_commit_fingerprint_fires_through_ffi() {
         const AMOUNT: u64 = 600_000_000_000;
@@ -366,12 +438,29 @@ mod tests {
         .to_bytes();
         let amounts = [AMOUNT];
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(zero_commit.as_ptr(), 1, amounts.as_ptr(), 1) },
+            unsafe {
+                shekyl_check_commitment_masks(
+                    CT_TYPE_NULL,
+                    1,
+                    zero_commit.as_ptr(),
+                    1,
+                    amounts.as_ptr(),
+                )
+            },
             SHEKYL_OUTPUT_POINTS_ERR_TRIVIAL_MASK
         );
-        // Without the coinbase amounts the same point is a well-formed mask.
+        // As a spend the same point is a well-formed mask: the subject, not
+        // the caller, decides.
         assert_eq!(
-            unsafe { shekyl_check_commitment_masks(zero_commit.as_ptr(), 1, ptr::null(), 0) },
+            unsafe {
+                shekyl_check_commitment_masks(
+                    CT_TYPE_FCMP,
+                    1,
+                    zero_commit.as_ptr(),
+                    1,
+                    amounts.as_ptr(),
+                )
+            },
             SHEKYL_OUTPUT_POINTS_OK
         );
     }

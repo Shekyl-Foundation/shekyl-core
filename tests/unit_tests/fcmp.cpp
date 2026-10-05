@@ -308,8 +308,10 @@ TEST(fcmp, referenceBlock_staleness_constants)
 
 TEST(fcmp, key_offsets_empty_for_fcmp_type)
 {
-  // FCMP++ transactions must not have key_offsets (ring members);
-  // the anonymity set is the full UTXO set via the curve tree proof.
+  // FCMP++ transactions must not have key_offsets (ring members); the
+  // membership proof ranges over the full UTXO set via the curve tree, which
+  // is the spend's anonymity set since PL-D3 (2026-09-14; before it, PL-D1 —
+  // docs/design/FCMP_SPEND_LINKABILITY.md).
   cryptonote::txin_to_key txin;
   txin.key_offsets.clear();
   ASSERT_TRUE(txin.key_offsets.empty());
@@ -429,10 +431,10 @@ TEST(fcmp, multisig_signing_request_json_v2_fields)
   ASSERT_EQ(doc["input_global_indices"].Size(), 2u);
 }
 
-TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
+TEST(fcmp, multisig_pqc_key_scalar_via_ffi)
 {
   // Generate 3 PQC keypairs and build a key container blob,
-  // then verify shekyl_fcmp_pqc_leaf_hash returns a non-zero 32-byte hash.
+  // then verify shekyl_fcmp_pqc_key_scalar returns a non-zero 32-byte key scalar (PL-D3).
   std::vector<std::vector<uint8_t>> pub_keys;
   for (int i = 0; i < 3; ++i)
   {
@@ -460,7 +462,7 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
   }
 
   uint8_t hash_out[32] = {};
-  bool ok = shekyl_fcmp_pqc_leaf_hash(keys_blob.data(), keys_blob.size(), hash_out);
+  bool ok = shekyl_fcmp_pqc_key_scalar(keys_blob.data(), keys_blob.size(), hash_out);
   ASSERT_TRUE(ok);
 
   // Hash should not be all zeros
@@ -471,7 +473,7 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
 
   // Deterministic: same input, same output
   uint8_t hash_out2[32] = {};
-  ok = shekyl_fcmp_pqc_leaf_hash(keys_blob.data(), keys_blob.size(), hash_out2);
+  ok = shekyl_fcmp_pqc_key_scalar(keys_blob.data(), keys_blob.size(), hash_out2);
   ASSERT_TRUE(ok);
   ASSERT_EQ(memcmp(hash_out, hash_out2, 32), 0);
 }
@@ -516,18 +518,20 @@ TEST(fcmp, single_sig_hex_roundtrip)
   shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 
-TEST(fcmp, per_output_pqc_leaf_hash_derivation_consistency)
+TEST(fcmp, per_output_pqc_leaf_derivation_consistency)
 {
   uint8_t combined_ss[64];
   crypto::rand(64, combined_ss);
 
-  uint8_t h1[32], h2[32], h3[32];
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h1));
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h2));
-  ASSERT_EQ(memcmp(h1, h2, 32), 0) << "Same input must produce same leaf hash";
+  // 64-byte 0x07 entries: CM || record (PL-D3 / PL-D3a).
+  uint8_t h1[64], h2[64], h3[64];
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 42, h1));
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 42, h2));
+  ASSERT_EQ(memcmp(h1, h2, 64), 0) << "Same input must produce the same leaf entry";
 
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 99, h3));
-  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce different leaf hash";
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 99, h3));
+  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce a different commitment";
+  ASSERT_NE(memcmp(h1 + 32, h3 + 32, 32), 0) << "Different index must produce a different record";
 }
 
 TEST(fcmp, multisig_2of3_sig_container_assembly)
@@ -681,8 +685,8 @@ std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
   return sig_blob;
 }
 
-// Minimal 2-spend-input, 0-output v3 tx whose rct base + prunable serialize
-// through get_transaction_signed_payload. 0 outputs ⇒ no Bp+ / outPk needed;
+// Minimal 2-spend-input, 0-output v3 tx whose bytes the signing-preimage
+// derivation accepts. 0 outputs ⇒ no Bp+ / outPk needed;
 // two spend inputs ⇒ two pseudoOuts. Not a spendable tx — just enough for the
 // PQC signing-payload binding that verify_transaction_pqc_auth checks.
 cryptonote::transaction msw6_two_spend_skeleton()
@@ -710,13 +714,23 @@ cryptonote::transaction msw6_two_spend_skeleton()
   return tx;
 }
 
+// The input's signing-preimage hash, from the derivation of record
+// (shekyl-wire, through the daemon's own call; CEN-I17) — the same hash
+// verify_transaction_pqc_auth will check the signature against.
 crypto::hash msw6_input_payload_hash(const cryptonote::transaction& tx, size_t idx)
 {
-  std::string payload;
-  CHECK_AND_ASSERT_THROW_MES(cryptonote::get_transaction_signed_payload(tx, idx, payload),
-                             "get_transaction_signed_payload failed");
+  const cryptonote::blobdata blob = cryptonote::t_serializable_object_to_blob(tx);
+  std::vector<uint8_t> hashes(32 * tx.vin.size());
+  size_t count = 0;
+  char msg[160] = {0};
+  const int32_t rc = shekyl_tx_pqc_signing_payload_hashes(
+      reinterpret_cast<const uint8_t*>(blob.data()), blob.size(),
+      hashes.data(), tx.vin.size(), &count, msg, sizeof(msg));
+  CHECK_AND_ASSERT_THROW_MES(rc == SHEKYL_TX_SIGNING_OK,
+                             "signing preimage refused (code " << rc << "): " << msg);
+  CHECK_AND_ASSERT_THROW_MES(idx < count, "no preimage for input " << idx);
   crypto::hash h;
-  cryptonote::get_blob_hash(payload, h);
+  memcpy(h.data, hashes.data() + 32 * idx, 32);
   return h;
 }
 
@@ -743,8 +757,9 @@ TEST(fcmp, msw6_mixed_scheme_transaction_verifies)
   cryptonote::transaction tx = msw6_two_spend_skeleton();
 
   // Public keys must be final before the payloads are computed — the signing
-  // payload binds every input's key hash (get_transaction_signed_payload), so
-  // the signatures are set afterward (the payload never covers the signature).
+  // preimage binds every input's key hash (FCMP_SPEND_SIGNING_PREIMAGE.md
+  // §1.1), so the signatures are set afterward (the preimage never covers
+  // the signature).
   tx.pqc_auths[0].auth_version = 1;
   tx.pqc_auths[0].scheme_id = 1;  // solo
   tx.pqc_auths[0].flags = 0;

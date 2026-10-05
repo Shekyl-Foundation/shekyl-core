@@ -12,12 +12,18 @@
 //! There is no wallet2 / FFI path.
 
 use clap::{Parser, Subcommand};
+use shekyl_cli::outcome::{refusal, Presentation, Render, Transcript};
 use shekyl_cli::{commands, daemon, prompt_password, rpc_client};
 use shekyl_rpc_transport::network_posture::{self, ProxyResolution};
 use shekyl_wallet_rpc::Network;
 
 #[derive(Parser)]
-#[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
+#[command(
+    name = "shekyl-cli",
+    about = "Shekyl interactive CLI wallet",
+    version,
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -34,65 +40,127 @@ enum Commands {
 
     /// Non-interactively create a wallet, writing its one-time seed backup to
     /// a file (for scripting / automation). Connection flags (--network,
-    /// --engine-dir, --rpc-url, …) must come BEFORE the subcommand name.
+    /// --testnet, --wallet-dir, --rpc-url, …) are global: they parse before
+    /// or after the subcommand name.
     Create(commands::scripted::CreateArgs),
 
     /// Non-interactively restore a wallet from a seed file (for scripting /
-    /// automation). Connection flags must come BEFORE the subcommand name.
+    /// automation). Connection flags are global: before or after the
+    /// subcommand name.
     Restore(commands::scripted::RestoreArgs),
+
+    /// One wallet command, in the same words as the prompt. Parsed by the
+    /// prompt grammar, not a second flag set.
+    #[command(external_subcommand)]
+    Words(Vec<String>),
 }
 
+/// Shared connection flags. Every arg is `global`, so they parse before or
+/// after a subcommand name (CU-1: `shekyl-cli create w --testnet` works).
 #[derive(Parser)]
 pub struct ReplArgs {
     /// Daemon address (host:port or full URL). Default: this machine's
-    /// daemon at the RPC port for --network. With --rpc-url the self-hosted
-    /// wallet RPC is not started, but the REPL still queries the daemon at
-    /// this address directly.
-    #[arg(long)]
+    /// daemon at the RPC port for the selected network. With --rpc-url the
+    /// self-hosted wallet RPC is not started, but the REPL still queries the
+    /// daemon at this address directly.
+    #[arg(long, global = true)]
     daemon_address: Option<String>,
 
     /// Connect to an external shekyl-wallet-rpc daemon instead of
     /// self-hosting one (http://host:port, or uds:///path/to.sock on Unix).
-    #[arg(long)]
+    #[arg(long, global = true)]
     rpc_url: Option<String>,
 
     /// Network the self-hosted wallet server binds to: mainnet, testnet,
     /// stagenet. With --rpc-url that server is not started, and the flag is
     /// then read only to supply the default daemon port (so a run that names
     /// its own --daemon-address never consults it).
-    #[arg(long, default_value = "mainnet")]
+    #[arg(long, global = true, default_value = "mainnet")]
     network: String,
 
-    /// Directory for wallet files. Ignored with --rpc-url.
-    #[arg(long, default_value = ".")]
-    engine_dir: String,
+    /// Use the test network (same as --network testnet, and the same flag
+    /// shekyld takes). No flag means mainnet — the network is never
+    /// remembered between runs.
+    #[arg(long, global = true, conflicts_with_all = ["network", "stagenet"])]
+    testnet: bool,
 
-    /// Open a wallet immediately on startup
-    #[arg(long)]
-    engine_file: Option<String>,
+    /// Use the staging network (same as --network stagenet).
+    #[arg(long, global = true, conflicts_with = "network")]
+    stagenet: bool,
+
+    /// Directory for wallet files. Default: ~/.shekyl/wallets/<network>/
+    /// (created on demand), so wallets on different networks never share a
+    /// directory. Ignored with --rpc-url. (--engine-dir is a hidden alias,
+    /// CU-2.)
+    #[arg(long, global = true, alias = "engine-dir")]
+    wallet_dir: Option<String>,
+
+    /// Open this wallet immediately on startup. (--engine-file is a hidden
+    /// alias, CU-2.)
+    #[arg(long, global = true, alias = "engine-file")]
+    wallet: Option<String>,
 
     /// SOCKS proxy for the wallet's daemon connections — the self-hosted
     /// block scan and the REPL's direct daemon queries (e.g.
     /// socks5h://127.0.0.1:9050). Prefer `socks5h://`: the scan resolves the
     /// daemon hostname at the proxy regardless, but the direct queries honor
     /// the scheme, and `socks5://` resolves it locally (a DNS leak).
-    #[arg(long)]
+    #[arg(long, global = true)]
     proxy: Option<String>,
 
     /// Path to PEM CA certificate for self-signed daemon TLS.
     /// Only needed for https:// daemon addresses with custom CAs.
-    #[arg(long)]
+    #[arg(long, global = true)]
     daemon_ca_cert: Option<String>,
 
     /// Show structured RPC error details (error.data) on failures.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
+
+    /// Read the wallet password from this file when `--wallet` is set.
+    /// Required when stdin is not a terminal. Wiped after the wallet opens.
+    #[arg(long, global = true, value_name = "PATH")]
+    password_file: Option<std::path::PathBuf>,
+
+    /// Post a Foundation CompleteTree bond before the prompt. Hidden: this
+    /// is an unbounded-disk, non-earning posture, not a normal command.
+    #[arg(long, global = true, hide = true)]
+    complete_tree_foundation: bool,
+
+    /// The exact phrase `serve without reward`, required with
+    /// `--complete-tree-foundation` when stdin is not a terminal.
+    #[arg(long, global = true, hide = true, value_name = "PHRASE")]
+    acknowledge: Option<String>,
+
+    /// Print one JSON object per command instead of human text.
+    /// Seeds and passwords are never included.
+    #[arg(long, global = true, default_value_t = false)]
+    json: bool,
+
+    /// Run the commands in this file as one wallet session. `#` starts a
+    /// comment. The first failure stops the file.
+    #[arg(long, global = true, value_name = "PATH")]
+    script: Option<std::path::PathBuf>,
 }
 
 impl ReplArgs {
+    /// The selected network's name: `--testnet` / `--stagenet` shorthand
+    /// first (clap rejects combining them with `--network`), else the
+    /// `--network` value as typed. Not yet validated — [`parse_network`]
+    /// does that where a `Network` is actually needed.
+    fn network_name(&self) -> &str {
+        if self.testnet {
+            "testnet"
+        } else if self.stagenet {
+            "stagenet"
+        } else {
+            &self.network
+        }
+    }
+
     /// The daemon address this invocation dials: the flag as given, or the
-    /// loopback daemon at `--network`'s RPC port — the wallet knows the
-    /// protocol's ports so the operator need not. `--network` is parsed
+    /// loopback daemon at the selected network's RPC port — the wallet knows
+    /// the protocol's ports so the operator need not. The network is parsed
     /// **here**, which is why this is only called for a run that opens a
     /// daemon connection: an unknown network must not fail a run that never
     /// needed a default port. Failing here is before anything is dialed.
@@ -101,9 +169,26 @@ impl ReplArgs {
             Some(given) => Ok(given.clone()),
             None => Ok(format!(
                 "127.0.0.1:{}",
-                parse_network(&self.network)?.daemon_rpc_port()
+                parse_network(self.network_name())?.daemon_rpc_port()
             )),
         }
+    }
+
+    /// The wallet-file directory: `--wallet-dir` as given, else the
+    /// per-network default `~/.shekyl/wallets/<network>/` (CU-1) — so a
+    /// testnet wallet file can never collide with a mainnet one, the
+    /// Electrum isolation shape. Only consulted for a self-hosted session
+    /// (`--rpc-url` stores wallets server-side).
+    fn resolved_wallet_dir(&self) -> Result<std::path::PathBuf, String> {
+        if let Some(dir) = &self.wallet_dir {
+            return Ok(std::path::PathBuf::from(dir));
+        }
+        let home = dirs::home_dir()
+            .ok_or("cannot determine the home directory; pass --wallet-dir explicitly")?;
+        Ok(home
+            .join(".shekyl")
+            .join("wallets")
+            .join(self.network_name()))
     }
 }
 
@@ -170,7 +255,7 @@ impl Endpoints {
                 daemon: opens_direct_daemon.then(|| daemon(cli)).transpose()?,
             }),
             None => Ok(Self::SelfHosted {
-                network: parse_network(&cli.network)?,
+                network: parse_network(cli.network_name())?,
                 daemon: daemon(cli)?,
             }),
         }
@@ -185,21 +270,109 @@ impl Endpoints {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+fn presentation_for(interactive: bool, json: bool, debug: bool) -> Presentation {
+    Presentation {
+        transcript: if interactive {
+            Transcript::Interactive
+        } else {
+            Transcript::Scripted
+        },
+        render: if json { Render::Json } else { Render::Human },
+        debug,
+    }
+}
 
-    match &cli.command {
+/// Tell the operator about a failure that happened before a command printer
+/// ran, then stop. One envelope, the same one the command loop uses.
+fn stop(
+    presentation: &Presentation,
+    command: &str,
+    error: shekyl_cli::outcome::CommandFailed,
+) -> ! {
+    commands::publish_failure(presentation, command, error);
+    std::process::exit(1);
+}
+
+/// Stop a session that already owns a server. `process::exit` skips
+/// destructors, so the server is shut down before the envelope is the last
+/// thing the process does.
+fn stop_session(
+    rpc: rpc_client::RpcSession,
+    presentation: &Presentation,
+    command: &str,
+    error: shekyl_cli::outcome::CommandFailed,
+) -> ! {
+    rpc.shutdown();
+    stop(presentation, command, error);
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let json = cli.repl.json;
+    let debug = cli.repl.debug;
+    // Create, restore, a one-shot, and a script file are not a conversation.
+    // Only a terminal with no command and no script file is.
+    let scripted = presentation_for(false, json, debug);
+    if cli.repl.script.is_some() && cli.command.is_some() {
+        stop(
+            &scripted,
+            "session",
+            refusal("Pass either --script or a subcommand, not both."),
+        );
+    }
+    let (presentation, outcome) = match &cli.command {
         Some(Commands::DerivationFreezeSelfCheck) => {
             run_derivation_freeze_self_check();
-            Ok(())
+            return;
         }
-        Some(Commands::Create(args)) => {
-            run_scripted(&cli.repl, |rpc| commands::scripted::run_create(rpc, args))
+        Some(Commands::Create(args)) => (
+            scripted,
+            run_scripted(&cli.repl, |rpc| {
+                commands::scripted::present_create(&scripted, rpc, args)
+            }),
+        ),
+        Some(Commands::Restore(args)) => (
+            scripted,
+            run_scripted(&cli.repl, |rpc| {
+                commands::scripted::present_restore(&scripted, rpc, args)
+            }),
+        ),
+        Some(Commands::Words(words)) => (
+            scripted,
+            run_repl_command(
+                &scripted,
+                &cli.repl,
+                commands::CommandSource::One(words.clone()),
+            ),
+        ),
+        None => {
+            let source = match &cli.repl.script {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => {
+                        commands::CommandSource::File(text.lines().map(str::to_owned).collect())
+                    }
+                    Err(error) => stop(
+                        &scripted,
+                        "script",
+                        refusal(format!("cannot read script {}: {error}", path.display())),
+                    ),
+                },
+                None if !std::io::IsTerminal::is_terminal(&std::io::stdin()) => {
+                    commands::CommandSource::Stdin
+                }
+                None => commands::CommandSource::Terminal,
+            };
+            let presentation = presentation_for(
+                matches!(source, commands::CommandSource::Terminal),
+                json,
+                debug,
+            );
+            let outcome = run_repl_command(&presentation, &cli.repl, source);
+            (presentation, outcome)
         }
-        Some(Commands::Restore(args)) => {
-            run_scripted(&cli.repl, |rpc| commands::scripted::run_restore(rpc, args))
-        }
-        None => run_repl(&cli.repl),
+    };
+    if let Err(error) = outcome {
+        stop(&presentation, "session", refusal(error.to_string()));
     }
 }
 
@@ -275,31 +448,39 @@ fn build_session(
             cli.proxy.as_deref(),
             cli.debug,
         )?),
-        Endpoints::SelfHosted { network, daemon } => Ok(rpc_client::RpcSession::host_in_process(
-            std::path::PathBuf::from(&cli.engine_dir),
-            *network,
-            daemon::daemon_url(&daemon.address),
-            cli.proxy.clone(),
-            cli.debug,
-        )?),
+        Endpoints::SelfHosted { network, daemon } => {
+            let wallet_dir = cli.resolved_wallet_dir()?;
+            // The per-network default is created on demand; an explicit
+            // --wallet-dir is also created rather than failing on a path the
+            // operator clearly intends to use.
+            std::fs::create_dir_all(&wallet_dir)
+                .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
+            Ok(rpc_client::RpcSession::host_in_process(
+                wallet_dir,
+                *network,
+                daemon::daemon_url(&daemon.address),
+                cli.proxy.clone(),
+                cli.debug,
+            )?)
+        }
     }
 }
 
 /// Run one non-interactive subcommand against a fresh session and translate a
 /// failure into a non-zero exit (so automation sees the error), tearing the
 /// session down either way.
-fn run_scripted<F>(conn: &ReplArgs, run: F) -> Result<(), Box<dyn std::error::Error>>
+fn run_scripted<F>(conn: &ReplArgs, publish: F) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: FnOnce(&rpc_client::RpcSession) -> Result<(), Box<dyn std::error::Error>>,
+    F: FnOnce(&rpc_client::RpcSession) -> bool,
 {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
     let endpoints = Endpoints::resolve(conn, false)?;
     let rpc = build_session(conn, &endpoints)?;
     disclose_network_posture(conn, &endpoints);
-    let outcome = run(&rpc);
+    let ok = publish(&rpc);
     rpc.shutdown();
-    if let Err(e) = outcome {
-        eprintln!("Error: {e}");
+    if !ok {
+        // The command printer already wrote the envelope or the human line.
         std::process::exit(1);
     }
     Ok(())
@@ -328,7 +509,37 @@ fn parse_network(s: &str) -> Result<Network, String> {
     }
 }
 
-fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
+/// The daemon-down hint (CU-1, CLI_USABILITY.md §CU-5 F1): when this run
+/// dials a **loopback** daemon, a refused connection names the invocation
+/// that would start one — `shekyld --testnet` and the port — instead of a
+/// bare "connection refused". A remote daemon gets no hint: "start it" copy
+/// for a machine the operator may not control would mislead.
+fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
+    // Same classification as the startup disclosure: a substring match on
+    // "127.0.0.1" would accept 127.0.0.1.evil.com and miss 127.0.0.0/8.
+    // Loopback-only hint — "start shekyld" is true of this machine, not of
+    // a remote node the operator named.
+    if !daemon::is_loopback_endpoint(address) {
+        return None;
+    }
+    let network = parse_network(cli.network_name()).ok()?;
+    let flag = match network {
+        Network::Mainnet => "",
+        Network::Testnet => " --testnet",
+        Network::Stagenet => " --stagenet",
+    };
+    Some(format!(
+        "Start the {name} daemon with: shekyld{flag} (its RPC answers on port {port}).",
+        name = cli.network_name(),
+        port = network.daemon_rpc_port(),
+    ))
+}
+
+fn run_repl_command(
+    presentation: &Presentation,
+    cli: &ReplArgs,
+    source: commands::CommandSource,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
     let endpoints = Endpoints::resolve(cli, true)?;
@@ -343,6 +554,7 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
             &daemon.address,
             cli.proxy.as_deref(),
             cli.daemon_ca_cert.as_deref(),
+            daemon_down_hint(cli, &daemon.address),
         ) {
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,
@@ -353,37 +565,88 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    if let Some(ref filename) = cli.engine_file {
-        // The password lives in this inner scope and nowhere else, so it is
-        // wiped before the match below — which can reach `process::exit`, and
-        // `exit` bypasses Drop. A `Zeroizing` still in scope at that call is a
-        // secret that never gets wiped at all. Scoping keeps that structural:
-        // the compiler ends the lifetime here, so a later branch added to the
-        // match cannot extend a secret's life past the exit by accident.
-        let opened = {
-            let password = prompt_password("Wallet password: ")?;
-            rpc.call(
-                "open_wallet",
-                rpc_client::params::NamedPassword {
-                    name: filename,
-                    password: &password,
-                },
-            )
-        };
-        match opened {
-            Ok(_) => {
-                rpc.set_open(filename);
-                println!("Opened wallet: {filename}");
+    // F1 at startup (CLI_USABILITY.md §CU-5): a dead local daemon is the
+    // most common first-run state; disclose it now rather than at the first
+    // command that needs it. Loopback only — probing a remote daemon at
+    // startup would spend a Tor circuit on a courtesy check.
+    if let Some(ref dc) = daemon_client {
+        if dc.is_loopback() {
+            if let Err(e) = dc.get_info() {
+                if matches!(e, daemon::DaemonError::ConnectionRefused { .. }) {
+                    eprintln!("Note: {e}");
+                }
             }
-            Err(e) => {
-                rpc.report("Failed to open wallet", &e);
+        }
+    }
+
+    if cli.complete_tree_foundation && cli.wallet.is_none() {
+        stop_session(
+            rpc,
+            presentation,
+            "complete-tree-foundation",
+            refusal(
+                "--complete-tree-foundation needs --wallet <name>. \
+                 Unbounded disk, no reward. Nothing was written.",
+            ),
+        );
+    }
+
+    if let Some(ref filename) = cli.wallet {
+        if !presentation.interactive() && cli.password_file.is_none() {
+            stop_session(
+                rpc,
+                presentation,
+                "wallet open",
+                refusal(
+                    "A script must pass --password-file with --wallet. \
+                     Stdin is the script, not the password.",
+                ),
+            );
+        }
+        if cli.complete_tree_foundation {
+            if let Err(error) =
+                commands::accept_foundation_terms(presentation, cli.acknowledge.as_deref())
+            {
+                stop_session(rpc, presentation, "complete-tree-foundation", error);
+            }
+        }
+        let password = match &cli.password_file {
+            Some(path) => match commands::scripted::read_password_file(path) {
+                Ok(password) => password,
+                Err(error) => stop_session(rpc, presentation, "wallet open", error),
+            },
+            None => match prompt_password("Wallet password: ") {
+                Ok(password) => password,
+                Err(error) => stop_session(
+                    rpc,
+                    presentation,
+                    "wallet open",
+                    refusal(format!("Failed to read password: {error}")),
+                ),
+            },
+        };
+        if !commands::publish_wallet_open(presentation, &rpc, filename, &password) {
+            drop(password);
+            rpc.shutdown();
+            std::process::exit(1);
+        }
+        if cli.complete_tree_foundation {
+            let sealed = commands::publish_foundation_stake(presentation, &rpc, &password);
+            drop(password);
+            if !sealed {
                 rpc.shutdown();
                 std::process::exit(1);
             }
         }
     }
 
-    commands::repl(rpc, daemon_client.as_ref())
+    commands::run(
+        rpc,
+        daemon_client.as_ref(),
+        cli.network_name(),
+        *presentation,
+        source,
+    )
 }
 
 #[cfg(test)]
@@ -467,5 +730,108 @@ mod tests {
         ]);
         let repl = Endpoints::resolve(&named, true).expect("the daemon is named");
         assert_eq!(repl.daemon().expect("a daemon").address, "127.0.0.1:11029");
+    }
+
+    /// `--testnet` / `--stagenet` are the same flags `shekyld` takes and mean
+    /// `--network testnet` / `--network stagenet`. Combining spellings is a
+    /// parse error, not a precedence rule — a run that says two networks
+    /// must not silently pick one (CU-1).
+    #[test]
+    fn testnet_and_stagenet_flags_select_the_network() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        assert_eq!(
+            args(&["shekyl-cli", "--testnet"]).daemon_address().unwrap(),
+            "127.0.0.1:12029"
+        );
+        assert_eq!(
+            args(&["shekyl-cli", "--stagenet"])
+                .daemon_address()
+                .unwrap(),
+            "127.0.0.1:13029"
+        );
+        assert!(
+            ReplArgs::try_parse_from(["shekyl-cli", "--testnet", "--network", "testnet"]).is_err()
+        );
+        assert!(
+            ReplArgs::try_parse_from(["shekyl-cli", "--stagenet", "--network", "stagenet"])
+                .is_err()
+        );
+        assert!(ReplArgs::try_parse_from(["shekyl-cli", "--testnet", "--stagenet"]).is_err());
+    }
+
+    /// Connection flags are global (CU-1): they parse after a subcommand
+    /// name, so `shekyl-cli create w --seed-out s --testnet` works instead
+    /// of demanding the flags come first.
+    #[test]
+    fn connection_flags_parse_after_a_subcommand() {
+        let cli = Cli::try_parse_from([
+            "shekyl-cli",
+            "create",
+            "w",
+            "--seed-out",
+            "/tmp/seed.txt",
+            "--testnet",
+        ])
+        .expect("global connection flags parse after the subcommand");
+        assert!(cli.repl.testnet);
+        assert!(matches!(cli.command, Some(Commands::Create(_))));
+    }
+
+    /// The default wallet dir is per-network (`~/.shekyl/wallets/<network>/`,
+    /// CU-1) so wallets on different networks never share a directory; an
+    /// explicit `--wallet-dir` is taken as given.
+    #[test]
+    fn the_default_wallet_dir_is_per_network() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        let dir = args(&["shekyl-cli", "--testnet"])
+            .resolved_wallet_dir()
+            .unwrap();
+        assert!(
+            dir.ends_with(".shekyl/wallets/testnet"),
+            "got {}",
+            dir.display()
+        );
+        let mainnet = args(&["shekyl-cli"]).resolved_wallet_dir().unwrap();
+        assert!(
+            mainnet.ends_with(".shekyl/wallets/mainnet"),
+            "got {}",
+            mainnet.display()
+        );
+        assert_eq!(
+            args(&["shekyl-cli", "--engine-dir", "/tmp/wallets"])
+                .resolved_wallet_dir()
+                .unwrap(),
+            std::path::PathBuf::from("/tmp/wallets")
+        );
+    }
+
+    /// The daemon-down hint (F1) fires for loopback endpoints only and names
+    /// the network-matched `shekyld` invocation plus its port; a remote
+    /// daemon gets no "start it" copy.
+    #[test]
+    fn the_daemon_down_hint_is_loopback_only_and_names_the_network() {
+        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        let testnet = args(&["shekyl-cli", "--testnet"]);
+        let hint = daemon_down_hint(&testnet, "127.0.0.1:12029").expect("loopback gets a hint");
+        assert!(hint.contains("shekyld --testnet"), "got {hint}");
+        assert!(hint.contains("12029"), "got {hint}");
+        assert!(daemon_down_hint(&testnet, "node.example.com:12029").is_none());
+        assert!(
+            daemon_down_hint(&testnet, "http://127.0.0.1.evil.com:12029").is_none(),
+            "a spoofed 127.0.0.1 prefix is not loopback"
+        );
+        assert!(daemon_down_hint(&testnet, "[::1]:12029").is_some());
+        assert!(
+            daemon_down_hint(&testnet, "127.0.0.2:12029").is_some(),
+            "127.0.0.0/8 is loopback"
+        );
+
+        let mainnet_hint =
+            daemon_down_hint(&args(&["shekyl-cli"]), "127.0.0.1:11029").expect("hint");
+        assert!(mainnet_hint.contains("shekyld"), "got {mainnet_hint}");
+        assert!(
+            !mainnet_hint.contains("--"),
+            "mainnet is flagless: {mainnet_hint}"
+        );
     }
 }

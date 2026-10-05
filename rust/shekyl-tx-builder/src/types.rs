@@ -4,11 +4,13 @@
 //! [`OutputInfo`], and [`TreeContext`], pass them to [`crate::sign_transaction`],
 //! and receive [`SignedProofs`] on success.
 //!
-//! All `[u8; 32]` fields serialize/deserialize as hex strings when used with
-//! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
+//! 32-byte fields serialize as hex strings in JSON (via [`hex_bytes32`] for
+//! raw arrays and [`hex_typed_hash`] for `hash32!` identities), matching
+//! the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_types::{BlockHash, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -32,6 +34,30 @@ pub mod hex_bytes32 {
         v.try_into().map_err(|v: Vec<u8>| {
             serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
         })
+    }
+}
+
+/// Hex serde for any [`shekyl_types::Hash32Bytes`] identity — one helper for the family,
+/// so typing another field does not mint another `hex_block_hash` copy.
+/// JSON form is the same 64 lowercase hex characters [`hex_bytes32`] emits.
+pub mod hex_typed_hash {
+    use serde::{Deserializer, Serializer};
+    use shekyl_types::Hash32Bytes;
+
+    pub fn serialize<S, T>(hash: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Hash32Bytes,
+    {
+        super::hex_bytes32::serialize(hash.as_bytes(), serializer)
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Hash32Bytes,
+    {
+        super::hex_bytes32::deserialize(deserializer).map(T::from_bytes)
     }
 }
 
@@ -162,9 +188,10 @@ pub struct LeafEntry {
     /// Pedersen commitment C to the output amount.
     #[serde(with = "hex_bytes32")]
     pub commitment: [u8; 32],
-    /// PQC leaf hash H(pqc_pk) for this output.
+    /// The leaf's 4th scalar for this output: `CM.x`, the Wei25519
+    /// x-coordinate of its PQC leaf commitment (`PL-D3`).
     #[serde(with = "hex_bytes32")]
-    pub h_pqc: [u8; 32],
+    pub cm_x: [u8; 32],
 }
 
 /// A spendable input with its secret keys, curve tree membership proof path,
@@ -196,9 +223,12 @@ pub struct SpendInput {
     /// Pedersen commitment mask z where C = zG + amount*H.
     #[serde(with = "hex_bytes32")]
     pub commitment_mask: [u8; 32],
-    /// Hash of the PQC public key for this output: H(pqc_pk).
-    #[serde(with = "hex_bytes32")]
-    pub h_pqc: [u8; 32],
+    // The input's own PQC leaf commitment `CM = k·G_k + r·J` and blind `r`
+    // (`PL-D3`) are not fields: the signer re-derives both from `combined_ss`
+    // and `output_index` (`shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf`) —
+    // the same derivation that produced the published `0x07` entry — and
+    // checks the derived `CM.x` against this output's entry in `leaf_chunk`
+    // before proving ([`crate::error::TxBuilderError::PqcLeafMismatch`]).
     /// Combined KEM shared secret (X25519 || ML-KEM) for PQC key derivation.
     /// Zeroized on drop.
     #[serde(with = "hex_blob")]
@@ -207,7 +237,7 @@ pub struct SpendInput {
     pub output_index: u64,
 
     /// All outputs in the same Selene leaf chunk as this input.
-    /// Each entry contains (O, I, C, h_pqc). Must be non-empty and contain
+    /// Each entry contains (O, I, C, CM.x). Must be non-empty and contain
     /// at most `SELENE_CHUNK_WIDTH` entries.
     pub leaf_chunk: Vec<LeafEntry>,
     /// Selene (C1) branch layers, ordered bottom-to-top.
@@ -264,21 +294,20 @@ pub struct OutputInfo {
 
 /// Curve tree context at the reference block height.
 ///
-/// # Important distinction
-///
-/// `tree_root` is the curve tree root extracted from the block header's
-/// `curve_tree_root` field (the topmost-layer node — Helios or Selene
-/// depending on tree depth, per `shekyl-fcmp/src/tree.rs`). It is **not** the
-/// block hash. Confusing these was the root cause of the prover bug this
-/// crate was created to fix.
+/// Mirrors the curve-tree crate's `TreeContext`: `reference_block` is the
+/// block identity, `tree_root` is the header-committed [`CurveTreeRoot`].
+/// The two cannot be swapped — that mix-up was the prover bug this crate
+/// was created to fix. Bytes for the transform-shaped proof crate are
+/// taken at the `prove` call, not here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
     /// Hash of the reference block (stored in CtSig.referenceBlock).
-    #[serde(with = "hex_bytes32")]
-    pub reference_block: [u8; 32],
-    /// Curve tree root at the reference block height (passed to prover).
-    #[serde(with = "hex_bytes32")]
-    pub tree_root: [u8; 32],
+    #[serde(with = "hex_typed_hash")]
+    pub reference_block: BlockHash,
+    /// Curve tree root at the reference block height (passed to the prover
+    /// as bytes at the proof-crate boundary).
+    #[serde(with = "hex_typed_hash")]
+    pub tree_root: CurveTreeRoot,
     /// Tree depth (number of layers). Must be >= 1.
     pub tree_depth: u8,
 }
@@ -332,8 +361,8 @@ pub struct SignedProofs {
     /// Per-input PQC authentication (ML-DSA-65 hybrid signatures).
     pub pqc_auths: Vec<PqcAuth>,
     /// Reference block hash (echo back for CtSig).
-    #[serde(with = "hex_bytes32")]
-    pub reference_block: [u8; 32],
+    #[serde(with = "hex_typed_hash")]
+    pub reference_block: BlockHash,
     /// Tree depth (echo back for CtSig).
     pub tree_depth: u8,
 }

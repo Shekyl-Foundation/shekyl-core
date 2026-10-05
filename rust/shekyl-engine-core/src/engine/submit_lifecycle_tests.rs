@@ -141,16 +141,16 @@ impl WatchdogHost for StubHost {
         self.state.lock().unwrap().held.clone()
     }
 
-    fn synced_height(&self) -> u64 {
-        self.state.lock().unwrap().synced
+    fn synced_height(&self) -> BlockHeight {
+        BlockHeight::from_raw(self.state.lock().unwrap().synced)
     }
 
-    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.state
             .lock()
             .unwrap()
             .block_hashes
-            .get(&height)
+            .get(&height.to_raw())
             .copied()
     }
 
@@ -215,6 +215,7 @@ impl StubDaemon {
                     connections: 8,
                     height: 10_000,
                     target_height: 0,
+                    synchronized: true,
                 },
                 health_fail: false,
                 block_hashes: HashMap::new(),
@@ -538,6 +539,7 @@ async fn peerless_daemon_alarms_without_probing() {
         connections: 0,
         height: 10_000,
         target_height: 0,
+        synchronized: true,
     });
     let mut d = driver();
 
@@ -567,6 +569,7 @@ async fn syncing_daemon_waits() {
         connections: 8,
         height: 5_000,
         target_height: 6_000,
+        synchronized: true,
     });
     let mut d = driver();
 

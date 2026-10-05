@@ -52,6 +52,7 @@
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/tx_pool.h"
 #include "pqc_spend_fixture.h"
+#include "tx_blob.h"
 #include "rpc/rpc_facts_ffi.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -120,6 +121,25 @@ namespace
     // get_block_by_hash` falls through to `get_alt_block` when the main-chain
     // lookup throws BLOCK_DNE, and sets `orphan` when it hits.
     void set_alt_block(const cryptonote::block& blk) { m_alt = blk; m_has_alt = true; }
+
+    // The stored bytes of one transaction a block names. Without this every
+    // listed transaction is a miss, and `blocks_by_height` -- which reads the
+    // bodies through `Blockchain::get_transactions` -- serves blocks with no
+    // transactions at all.
+    void set_tx_blob(const crypto::hash& txid, cryptonote::blobdata blob)
+    {
+      m_tx_id = txid;
+      m_tx_blob = std::move(blob);
+      m_has_tx = true;
+    }
+
+    bool get_tx_blob(const crypto::hash& h, cryptonote::blobdata& tx) const override
+    {
+      if (!m_has_tx || h != m_tx_id)
+        return false;
+      tx = m_tx_blob;
+      return true;
+    }
     crypto::hash alt_hash() const { return cryptonote::get_block_hash(m_alt); }
 
     bool get_alt_block(const crypto::hash& blkid, cryptonote::alt_block_data_t* data,
@@ -151,6 +171,13 @@ namespace
       return m_height ? hash_at(top) : crypto::null_hash;
     }
 
+    // A block whose miner transaction the serializer refuses. The chain's
+    // coinbase is v1 with one input; a signature vector whose length is not
+    // that input count is the refusal. Set this after `init_blockchain`:
+    // `HardFork::init` rereads every height through `get_block_from_height`
+    // while the chain is built.
+    void set_unserializable_block(uint64_t height) { m_unserializable_block = height; }
+
     // `get_block_from_height` is what `blocks_by_height` reads. BaseTestDB
     // answers every height with a default-constructed block, so without this
     // override a past-the-tip height would look like a successful read of an
@@ -165,7 +192,10 @@ namespace
       // reaches its subject.
       if (height >= m_height)
         throw BLOCK_DNE("no block at that height");
-      return block_at(height);
+      cryptonote::block blk = block_at(height);
+      if (height == m_unserializable_block)
+        blk.miner_tx.signatures.resize(2);
+      return blk;
     }
 
     // `Blockchain::get_block_by_hash` reaches the store through
@@ -223,8 +253,12 @@ namespace
     uint64_t m_height;
     uint64_t m_missing = std::numeric_limits<uint64_t>::max();
     uint64_t m_bad_coinbase = std::numeric_limits<uint64_t>::max();
+    uint64_t m_unserializable_block = std::numeric_limits<uint64_t>::max();
     cryptonote::block m_alt{};
     bool m_has_alt = false;
+    crypto::hash m_tx_id = crypto::null_hash;
+    cryptonote::blobdata m_tx_blob;
+    bool m_has_tx = false;
   };
 
   // Blockchain and its pool refer to each other; construct in this order, as
@@ -478,14 +512,12 @@ TEST(rpc_facts_shims, chain_tip_reports_the_count_and_the_top_block_hash)
   EXPECT_EQ(0, std::memcmp(facts.top_hash, expected.data, sizeof(facts.top_hash)));
 }
 
-// The two scalars are reported **verbatim**, and that is the contract worth
-// pinning: the wire's rule is "`target_height` is 0 when synchronized", and
-// that rule lives in the Rust handler, not here. If this export ever applied
-// it, the raw target would become unobservable and `sync_info` and
-// `get_info` — which both need to distinguish "synchronized" from "target
-// happens to be zero" — would be reading a value that had already been
-// collapsed. A synchronized daemon with a non-zero target must survive the
-// seam intact.
+// The two scalars are reported **verbatim**. The Rust handlers used to
+// rewrite a synchronized node's target to 0; they no longer do, and this
+// export must not either. If it did, the raw target would become
+// unobservable and a synchronized daemon with a non-zero target would be
+// indistinguishable from one whose core reported none. A synchronized
+// daemon with a non-zero target must survive the seam intact.
 TEST(rpc_facts_shims, chain_tip_passes_the_p2p_scalars_through_uncollapsed)
 {
   BlockchainAndPool bap;
@@ -643,6 +675,24 @@ TEST(rpc_facts_shims, a_fee_estimate_beyond_the_reward_window_is_refused)
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
     daemon_rpc_facts::fee_estimate(bap.bc, ceiling + 1, &f));
   EXPECT_EQ(0u, f.fee_count) << "a refusal reports no tiers";
+}
+
+// The production marshal, not the layout twin: a successful estimate must
+// fill every POD slot the array declares, and no more. The fill/check
+// twins cannot see an estimator that still emits a fourth value.
+TEST(rpc_facts_shims, a_fee_estimate_writes_three_priced_tiers)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_fee_estimate_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::fee_estimate(bap.bc, 10, &f));
+  constexpr size_t kSlots = sizeof(f.fees) / sizeof(f.fees[0]);
+  EXPECT_EQ(kSlots, static_cast<size_t>(3));
+  EXPECT_EQ(f.fee_count, static_cast<uint8_t>(kSlots));
+  EXPECT_LE(f.fees[0], f.fees[1]);
+  EXPECT_LE(f.fees[1], f.fees[2]);
+  EXPECT_GT(f.quantization_mask, 0u);
 }
 
 TEST(rpc_facts_shims, null_out_pointer_refuses)
@@ -919,6 +969,111 @@ TEST(rpc_facts_shims, blocks_by_height_keeps_the_prefix_when_a_later_height_fail
   }
 }
 
+// A stored transaction the serializer refuses is the store contradicting
+// itself, not a body to serve.
+//
+// `blocks_by_height` reads each listed transaction through the tolerant
+// parser and serializes it again. The two do not accept the same set: the
+// parser reads a spend that ends right after its ct base as one with no
+// per-input authorizations, and the serializer refuses to write a spend
+// without them. Bytes of that shape cannot be connected by this daemon, so
+// finding them stored is corruption -- and what would be served for them is
+// the fragment the serializer wrote before it refused.
+TEST(rpc_facts_shims, blocks_by_height_refuses_a_stored_transaction_that_does_not_serialize)
+{
+  // The whole body, and the same body cut where its authorizations begin.
+  cryptonote::transaction whole = shekyl_test_fixtures::make_pqc_spend();
+  whole.ct_signatures.type = ct::CTTypeNull;
+  const cryptonote::blobdata full = shekyl_test_fixtures::tx_blob(whole);
+  ASSERT_LT(whole.pqc_auths_offset.load(), full.size());
+  const cryptonote::blobdata cut = full.substr(0, whole.pqc_auths_offset.load());
+
+  // The fixture is what it claims: the parser takes the cut body, and the
+  // serializer refuses what the parser made of it.
+  cryptonote::transaction parsed;
+  ASSERT_TRUE(cryptonote::parse_and_validate_tx_from_blob(cut, parsed));
+  cryptonote::blobdata fragment;
+  ASSERT_FALSE(cryptonote::tx_to_blob(parsed, fragment));
+
+  const uint64_t heights[] = {1};
+  const crypto::hash listed = block_at(1).tx_hashes[0];
+
+  // Control: the whole body under that id is served, byte for byte.
+  {
+    BlockchainAndPool bap;
+    FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+    db->set_tx_blob(listed, full);
+    ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+    const shekyl_rpc_block_entry* out = nullptr;
+    size_t len = 0;
+    uint64_t failed = 0;
+    uint8_t ok = 0;
+    BlocksOwner owned;
+    ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::blocks_by_height(
+      bap.bc, heights, 1, &out, &len, &failed, &ok, &owned.owner));
+    EXPECT_EQ(1, ok);
+    ASSERT_EQ(1u, len);
+    ASSERT_EQ(1u, out[0].tx_count) << "the one stored body; the other listed id is a miss";
+    ASSERT_EQ(full.size(), out[0].tx_lens[0]);
+    EXPECT_EQ(0, std::memcmp(out[0].txs[0], full.data(), full.size()));
+  }
+
+  // The cut body under the same id: no reply, no view, no owner.
+  {
+    BlockchainAndPool bap;
+    FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+    db->set_tx_blob(listed, cut);
+    ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+    const shekyl_rpc_block_entry* out = nullptr;
+    size_t len = 7;
+    uint64_t failed = 0;
+    uint8_t ok = 1;
+    BlocksOwner owned;
+    EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT, daemon_rpc_facts::blocks_by_height(
+      bap.bc, heights, 1, &out, &len, &failed, &ok, &owned.owner));
+    EXPECT_EQ(nullptr, out);
+    EXPECT_EQ(0u, len);
+    EXPECT_EQ(0, ok);
+    EXPECT_EQ(nullptr, owned.owner) << "a refusal hands back nothing to release";
+  }
+}
+
+// A stored block the serializer refuses is the same contradiction as a
+// stored transaction: the fragment written before the refusal is not a
+// block to hand a client.
+TEST(rpc_facts_shims, blocks_by_height_refuses_a_stored_block_that_does_not_serialize)
+{
+  cryptonote::block whole = block_at(1);
+  cryptonote::blobdata whole_blob;
+  ASSERT_TRUE(cryptonote::block_to_blob(whole, whole_blob));
+  ASSERT_FALSE(whole_blob.empty());
+
+  cryptonote::block damaged = whole;
+  damaged.miner_tx.signatures.resize(2);
+  cryptonote::blobdata fragment;
+  ASSERT_FALSE(cryptonote::block_to_blob(damaged, fragment));
+
+  const uint64_t heights[] = {1};
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  db->set_unserializable_block(1);
+
+  const shekyl_rpc_block_entry* out = nullptr;
+  size_t len = 7;
+  uint64_t failed = 0;
+  uint8_t ok = 1;
+  BlocksOwner owned;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT, daemon_rpc_facts::blocks_by_height(
+    bap.bc, heights, 1, &out, &len, &failed, &ok, &owned.owner));
+  EXPECT_EQ(nullptr, out);
+  EXPECT_EQ(0u, len);
+  EXPECT_EQ(0, ok);
+  EXPECT_EQ(nullptr, owned.owner) << "a refusal hands back nothing to release";
+}
+
 TEST(rpc_facts_shims, blocks_by_height_refuses_every_null_out_parameter)
 {
   BlockchainAndPool bap;
@@ -999,8 +1154,8 @@ namespace
 {
   // A store holding one transaction, with each accompanying fact
   // independently withholdable. Modelled on the real reads: the prunable HASH
-  // survives pruning (`prune_worker` and `prune_tx_data` never delete
-  // `txs_prunable_hash`), so its absence is a fault, while the prunable BLOB
+  // survives any discard (the hash is an operand of the pruned txid and is
+  // never deleted), so its absence is a fault, while the prunable BLOB
   // legitimately disappears.
   class OneTxDB : public BaseTestDB
   {
@@ -1313,7 +1468,7 @@ TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slot
   cryptonote::txin_to_key in{};
   in.k_image = pool_ki;
   ptx.vin.push_back(in);
-  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
+  const cryptonote::blobdata pblob = shekyl_test_fixtures::tx_blob(ptx);
   cryptonote::txpool_tx_meta_t meta{};
   meta.weight = 1;
   meta.fee = 1000;
@@ -1343,6 +1498,34 @@ TEST(rpc_facts_shims, key_images_spent_maps_chain_pool_and_neither_to_their_slot
   EXPECT_EQ(2, status[2]) << "spent in the pool, and written back to ITS slot";
 }
 
+namespace {
+
+// One transaction in the pool: the shared v3 PQC spend, keyed by its REAL
+// hash — the pool parses the blob back out, so an invented txid would not
+// survive the lookup, and a v1 stand-in would not survive
+// `get_transaction_prunable_hash` (observed: the shim refuses it). v3 is also
+// the only shape a Shekyl pool can hold.
+struct PooledSpend
+{
+  crypto::hash txid;
+  cryptonote::blobdata blob;
+};
+
+PooledSpend pool_one_spend(cryptonote::BlockchainDB& db)
+{
+  const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
+  PooledSpend pooled{cryptonote::get_transaction_hash(ptx), shekyl_test_fixtures::tx_blob(ptx)};
+  cryptonote::txpool_tx_meta_t meta{};
+  meta.weight = 1;
+  meta.fee = 1000;
+  meta.receive_time = 1;
+  meta.set_relay_method(cryptonote::relay_method::fluff);
+  db.add_txpool_tx(pooled.txid, {pooled.blob.data(), pooled.blob.size()}, meta);
+  return pooled;
+}
+
+} // namespace
+
 // ── transactions: a repeated pool txid consumes a repeated slot ────────────
 //
 // The pool remap walks `missed` with one forward cursor, on the strength of
@@ -1357,19 +1540,8 @@ TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
   BlockchainAndPool bap;
   auto* db = new KeyImageDB(CHAIN_HEIGHT);
 
-  // The shared v3 PQC spend, keyed by its REAL hash — the pool parses the
-  // blob back out, so an invented txid would not survive the lookup, and a
-  // v1 stand-in would not survive `get_transaction_prunable_hash` (observed:
-  // the shim refuses it). v3 is also the only shape a Shekyl pool can hold.
-  const cryptonote::transaction ptx = shekyl_test_fixtures::make_pqc_spend();
-  const cryptonote::blobdata pblob = cryptonote::tx_to_blob(ptx);
-  const crypto::hash ptxid = cryptonote::get_transaction_hash(ptx);
-  cryptonote::txpool_tx_meta_t meta{};
-  meta.weight = 1;
-  meta.fee = 1000;
-  meta.receive_time = 1;
-  meta.set_relay_method(cryptonote::relay_method::fluff);
-  db->add_txpool_tx(ptxid, {pblob.data(), pblob.size()}, meta);
+  const PooledSpend pooled = pool_one_spend(*db);
+  const crypto::hash& ptxid = pooled.txid;
 
   ASSERT_TRUE(init_blockchain(bap.bc, db));
   ASSERT_TRUE(bap.txpool.init());
@@ -1388,4 +1560,40 @@ TEST(rpc_facts_shims, a_repeated_pool_txid_answers_both_of_its_slots)
     << "second occurrence must consume its own slot, not read as missing";
   EXPECT_EQ(q.out[0].pruned_len, q.out[1].pruned_len)
     << "both slots carry the same transaction";
+}
+
+// A pool entry's `prunable_hash` is the digest of the prunable bytes the same
+// entry serves. A wallet that prunes the reply keeps the digest and drops the
+// bytes, then mixes the digest into the txid it checks the pruned half
+// against — so a digest of anything else would name another transaction. The
+// expected value is Rust's digest of the served range, not a second call of
+// the function the shim used.
+TEST(rpc_facts_shims, a_pool_entrys_prunable_hash_is_the_digest_of_the_prunable_bytes_it_serves)
+{
+  BlockchainAndPool bap;
+  auto* db = new KeyImageDB(CHAIN_HEIGHT);
+  const PooledSpend pooled = pool_one_spend(*db);
+
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  ASSERT_TRUE(bap.txpool.init());
+
+  TxQuery q;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::transactions(bap.bc, bap.txpool,
+      reinterpret_cast<const uint8_t*>(pooled.txid.data), 1, 0,
+      &q.out, &q.out_len, &q.chain_height, &q.owner));
+  ASSERT_EQ(1u, q.out_len);
+  const shekyl_rpc_tx_entry& e = q.out[0];
+  ASSERT_EQ(2, e.where) << "answered from the pool";
+
+  // The two halves are the pool's blob, cut once.
+  ASSERT_GT(e.prunable_len, 0u) << "the fixture spend has a prunable region";
+  ASSERT_EQ(pooled.blob.size(), e.pruned_len + e.prunable_len);
+  EXPECT_EQ(0, std::memcmp(pooled.blob.data(), e.pruned, e.pruned_len));
+  EXPECT_EQ(0, std::memcmp(pooled.blob.data() + e.pruned_len, e.prunable, e.prunable_len));
+
+  uint8_t of_served_bytes[32];
+  ASSERT_TRUE(shekyl_tx_prunable_hash(e.prunable, e.prunable_len, of_served_bytes));
+  EXPECT_EQ(0, std::memcmp(of_served_bytes, e.prunable_hash, 32))
+    << "the digest served is not the digest of the prunable half served";
 }

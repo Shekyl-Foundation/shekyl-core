@@ -37,7 +37,6 @@
 #include "rapidjson/istreamwrapper.h"
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
@@ -57,12 +56,11 @@ using archival_test::connect_block_with_txs;
 namespace
 {
 
-constexpr size_t KEM = HYBRID_KEM_CT_BYTES;      // 1120
-constexpr size_t LEAF = PQC_LEAF_HASH_BYTES;     // 32
+constexpr size_t KEM = SHEKYL_HYBRID_KEM_CT_BYTES;   // 1120
+constexpr size_t LEAF = SHEKYL_PQC_LEAF_ENTRY_BYTES; // 64 (CM || record, PL-D3)
 
 using shekyl_test_fixtures::append_pqc_kem_field;
 using shekyl_test_fixtures::append_pqc_leaf_field;
-using shekyl_test_fixtures::strip_pqc_fields;
 
 void append_kem(transaction& tx, size_t bytes) { append_pqc_kem_field(tx, bytes); }
 void append_leaf(transaction& tx, size_t bytes) { append_pqc_leaf_field(tx, bytes); }
@@ -77,9 +75,16 @@ transaction conforming_spend()
 
 transaction bare_spend()
 {
-  transaction tx = shekyl_test_fixtures::make_pqc_spend();
-  strip_pqc_fields(tx);
-  return tx;
+  return shekyl_test_fixtures::make_pqc_spend(/*with_pqc_fields=*/false);
+}
+
+// The fixture must actually be unparseable, or a rejection could come from a
+// field rule rather than the parse arm. The codec is the only parser now.
+bool extra_parses(const transaction& tx)
+{
+  ShekylOwnedBuffer out;
+  return shekyl_tx_extra_field(tx.extra.empty() ? nullptr : tx.extra.data(), tx.extra.size(),
+    SHEKYL_TX_EXTRA_TAG_PUBKEY, 0, &out.buf) != SHEKYL_TX_EXTRA_MALFORMED;
 }
 
 bool semantic_accepts(const transaction& tx)
@@ -152,7 +157,31 @@ TEST(tx_extra_pqc_field_shape, rejects_a_kem_field_on_a_transaction_with_no_outp
   EXPECT_FALSE(semantic_accepts(tx)) << "a zero-output tx carrying 0x06 was accepted";
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_hash_field)
+// PL-D3 content rule: a right-sized 0x07 whose entry does not begin with an
+// admissible commitment point is refused at the same gate as a wrong shape.
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_is_zero_filled)
+{
+  transaction tx = bare_spend();
+  append_kem(tx, KEM * tx.vout.size());
+  shekyl_test_fixtures::append_raw_tx_extra_field(tx, SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
+    std::string(LEAF * tx.vout.size(), '\0'));
+  EXPECT_FALSE(semantic_accepts(tx));
+}
+
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_has_small_order)
+{
+  transaction tx = bare_spend();
+  append_kem(tx, KEM * tx.vout.size());
+  std::string blob;
+  for (size_t i = 0; i < tx.vout.size(); ++i)
+    blob += shekyl_test_fixtures::conforming_pqc_leaf_entry();
+  // y = 0 encodes an 8-torsion point: decompresses, but is not prime-order.
+  std::fill(blob.begin(), blob.begin() + 32, '\0');
+  shekyl_test_fixtures::append_raw_tx_extra_field(tx, SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob);
+  EXPECT_FALSE(semantic_accepts(tx));
+}
+
+TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_entry_field)
 {
   transaction tx = conforming_spend();
   append_leaf(tx, LEAF * tx.vout.size());
@@ -166,7 +195,7 @@ TEST(tx_extra_pqc_field_shape, rejects_duplicate_kem_field)
   EXPECT_FALSE(semantic_accepts(tx)) << "two 0x06 fields";
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_long)
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_field_one_output_long)
 {
   transaction tx = bare_spend();
   append_kem(tx, KEM * tx.vout.size());
@@ -174,7 +203,7 @@ TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_long)
   EXPECT_FALSE(semantic_accepts(tx)) << "0x07 at 32*(n+1)";
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_short)
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_field_one_output_short)
 {
   transaction tx = bare_spend();
   ASSERT_GE(tx.vout.size(), 1u);
@@ -221,10 +250,9 @@ TEST(tx_extra_pqc_field_shape, rejects_a_tx_extra_that_does_not_parse_truncated_
   ASSERT_TRUE(semantic_accepts(tx)) << "the base transaction must be accepted";
   // A 0x06 tag whose varint length (256) runs past the end of the blob: the
   // field cannot be read, so the whole extra fails to deserialize.
-  const std::vector<uint8_t> truncated{TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0x80, 0x02};
+  const std::vector<uint8_t> truncated{SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0x80, 0x02};
   tx.extra.insert(tx.extra.end(), truncated.begin(), truncated.end());
-  std::vector<tx_extra_field> fields;
-  ASSERT_FALSE(parse_tx_extra(tx.extra, fields)) << "the fixture must actually be unparseable";
+  ASSERT_FALSE(extra_parses(tx)) << "the fixture must actually be unparseable";
   EXPECT_FALSE(semantic_accepts(tx)) << "an unparseable tx_extra was accepted";
 }
 
@@ -236,14 +264,13 @@ TEST(tx_extra_pqc_field_shape, rejects_a_tx_extra_that_does_not_parse_unknown_ta
   // the remainder unreadable, which is why "must parse" is part of the rule
   // rather than a parser detail.
   tx.extra.push_back(0x7f);
-  std::vector<tx_extra_field> fields;
-  ASSERT_FALSE(parse_tx_extra(tx.extra, fields)) << "the fixture must actually be unparseable";
+  ASSERT_FALSE(extra_parses(tx)) << "the fixture must actually be unparseable";
   EXPECT_FALSE(semantic_accepts(tx)) << "a tx_extra with an unknown tag was accepted";
 }
 
 // ---- Gate 2: the coinbase, on a real-nettype chain --------------------------
 
-TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_rejected_before_writing)
+TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_entry_field_is_rejected_before_writing)
 {
   TestnetChain chain;
   block_verification_context bvc{};
@@ -262,7 +289,7 @@ TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_reject
 
 // ---- Gate 3: the DB collector, below admission ------------------------------
 
-TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_hash_field_instead_of_zero_filling)
+TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_entry_field_instead_of_zero_filling)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;

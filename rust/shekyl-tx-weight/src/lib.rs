@@ -11,18 +11,30 @@
 //! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 //!
+//! **Two parity tests, different jobs.** The one named above builds a wire
+//! `Transaction` *by hand* at five shapes, so it pins the field model against a
+//! second reading of the wire layout. `tests/weight_gate.rs` — the FL-R20
+//! weight gate — asserts the same equality against the bytes the **builder**
+//! emits, across every `n_in x n_out x L` a spend can take and every `u64` fee
+//! varint length. Under FL-R23's zero relay slack a one-byte prediction error
+//! is a hard bounce, so that gate is what justifies deleting the inherited 2%
+//! admission cushion; edit this function and run it.
+//!
 //! Hoisted from `shekyl-engine-core` (§12.3 D-1) so the wallet fee path **and**
 //! `shekyl-economics-sim`'s W9 stuffer arm share one single-sourced weight model
-//! rather than a replicated byte formula. The **fee-rate** layer
-//! (`FeeRate`/`FeeDirective`/fee convergence) stays in engine-core — this crate
-//! is weight only, so its dependency surface is just the wire layout + proof
-//! sizes ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
+//! rather than a replicated byte formula. The wallet's **masked** rate
+//! (`FeeRate` / the daemon quantization mask) stays in engine-core. The
+//! unrounded fixed point of `fee = rate × weight(fee)` is
+//! [`converge_weight_fee`]: the circularity is this function's fee varint, not
+//! the mask. The dependency surface stays the wire layout + proof sizes
+//! ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
 //! no RPC or wallet types. The FCMP proof-size KAT's *validation* against real
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
 
 use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_curve_io::varint_len;
+use shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN;
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
 // via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
 // and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
@@ -100,39 +112,45 @@ const EXTRA_PUBKEY_FIELD_WEIGHT: usize = 1 + 32;
 /// engine-core's `kat_fcmp_proof_size_grid` validates every cell against
 /// re-measurement (`#[ignore]`; ~slow); `kat_fcmp_proof_size_depth1_row` guards
 /// the depth-1 column in CI. Both call the `pub` [`fcmp_proof_size`] below.
+///
+/// Re-measured 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
+/// in-circuit commitment-opening leg adds one claimed point and a discrete-log
+/// gadget per input and removes the per-input extra-scalar branch, so every
+/// cell moved (single-input proofs +128 B at depth 1; multi-input proofs
+/// smaller than before at most depths — census companion §8).
 const FCMP_PROOF_SIZE_KAT: [[usize; 25]; 9] = [
     [0; 25],
     [
-        0, 3744, 4384, 4768, 5408, 5792, 6432, 6816, 7456, 6880, 6304, 6560, 6944, 7200, 7584,
-        7840, 8224, 7776, 7072, 7200, 7456, 7712, 7968, 8096, 8352,
+        0, 3872, 4512, 4896, 5536, 5920, 6560, 5984, 6624, 6880, 6304, 6560, 6944, 7200, 7584,
+        7840, 8224, 7648, 6944, 7200, 7456, 7584, 7840, 8096, 8352,
     ],
     [
-        0, 5504, 6784, 6208, 7488, 8000, 7808, 8320, 9088, 8640, 8192, 8576, 9088, 9472, 9984,
-        10368, 10880, 10560, 9984, 10240, 10624, 11008, 11392, 11648, 12032,
+        0, 5760, 7040, 6208, 7488, 8000, 7808, 7360, 8128, 8512, 8064, 8448, 8960, 9344, 9856,
+        10240, 10752, 10304, 9728, 10112, 10496, 10752, 11136, 11520, 11904,
     ],
     [
-        0, 5664, 7584, 8352, 8800, 8352, 8416, 9056, 9824, 10336, 11104, 10912, 10592, 10976,
-        11616, 12128, 12640, 13152, 13792, 14304, 14816, 15200, 14880, 15392, 15776,
+        0, 5664, 7584, 8352, 8800, 8224, 8288, 8800, 9568, 10208, 10976, 10528, 10208, 10720,
+        11360, 11872, 12384, 12896, 13536, 13920, 14432, 14944, 14624, 14432, 14816,
     ],
     [
-        0, 6784, 9344, 9024, 9600, 10368, 10432, 11200, 12224, 12032, 11840, 12480, 13248, 13888,
-        14656, 15296, 16064, 16000, 15680, 16192, 16832, 17472, 18112, 18624, 19264,
+        0, 6784, 9344, 8768, 9344, 10112, 10176, 9984, 11008, 11648, 11456, 12096, 12864, 13504,
+        14272, 14912, 15680, 15488, 15168, 15808, 16448, 16960, 17600, 18240, 18880,
     ],
     [
-        0, 8032, 10016, 9568, 10272, 11296, 12576, 12384, 12448, 13216, 14240, 15008, 15904, 16800,
-        16736, 16672, 17440, 18080, 18976, 19744, 20512, 21280, 22048, 22688, 23456,
+        0, 6304, 8288, 9312, 10016, 9824, 11104, 11872, 11936, 12704, 13728, 14624, 15520, 15456,
+        15392, 16032, 16800, 17568, 18464, 19232, 20000, 20640, 21408, 22176, 22944,
     ],
     [
-        0, 7552, 9920, 11072, 11904, 11840, 12288, 13312, 14464, 15360, 16512, 16704, 16768, 17536,
-        18560, 19456, 20352, 21248, 22272, 23168, 24064, 24832, 24896, 25792, 26560,
+        0, 7168, 9536, 10688, 11520, 11328, 11776, 12672, 13824, 14848, 16000, 15936, 16000, 16896,
+        17920, 18816, 19712, 20608, 21632, 22400, 23296, 24192, 24256, 24448, 25216,
     ],
     [
-        0, 8416, 11168, 11360, 12320, 13472, 14048, 15200, 16480, 16672, 16992, 18016, 19168,
-        20192, 21344, 22368, 23392, 24288, 25440, 26464, 26528, 26848, 27872, 28768, 29792,
+        0, 8032, 10784, 10720, 11680, 12832, 13408, 14432, 15712, 15904, 16224, 17248, 18400,
+        19424, 20576, 21472, 22496, 23520, 24672, 25696, 25760, 25952, 26976, 28000, 29024,
     ],
     [
-        0, 9280, 12416, 12608, 13696, 14976, 15552, 16832, 18368, 18688, 19008, 20160, 21440,
-        22592, 23872, 25024, 26304, 26752, 26944, 27968, 29120, 30272, 31424, 32448, 33600,
+        0, 8768, 11904, 11840, 12928, 14208, 14784, 15104, 16640, 17792, 18112, 19264, 20544,
+        21696, 22976, 24128, 25408, 25728, 25920, 27072, 28224, 29248, 30400, 31552, 32704,
     ],
 ];
 
@@ -201,12 +219,13 @@ fn extra_kem_field_weight(n_out: usize) -> usize {
     1 + varint_len(blob as u64) + blob
 }
 
-/// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 32`
-/// `H(pqc_pk)` leaf hashes — the field whose omission ingests an output with a
-/// zero `h_pqc` leaf (unspendable); the transfer path appends it (sign_bridge.rs,
-/// PR-4b), so every predicted spend carries it.
+/// `ExtraField::PqcLeafEntries` (`0x07`): tag + varint(len) + `n_out × 64`
+/// leaf entries (`CM ‖ record`, `PL-D3` / `PL-D3a`) — a consensus-required
+/// field (CEN-I19: a transaction with outputs is refused without it); the
+/// transfer path appends it (sign_bridge.rs, PR-4b), so every predicted spend
+/// carries it.
 fn extra_leaf_hashes_field_weight(n_out: usize) -> usize {
-    let blob = n_out * 32;
+    let blob = n_out * PQC_LEAF_ENTRY_LEN;
     1 + varint_len(blob as u64) + blob
 }
 
@@ -282,6 +301,96 @@ pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee:
         fcmp,                // fcmp_proof body
         n_in * PSEUDO_OUT_LEN, // pseudoOuts
         bp_clawback,         // Bp+ verification clawback
+    ]
+    .into_iter()
+    .sum()
+}
+
+/// Bytes in the longest `u64` varint. [`varint_len`]`(u64::MAX)` is this;
+/// the test beside [`converge_weight_fee`] pins the equality, so a wider
+/// encoding has to move the iteration bound with it.
+const U64_VARINT_BYTES_MAX: usize = 10;
+
+/// Passes [`converge_weight_fee`] may take. A pass that is not yet the fixed
+/// point changes `varint_len(fee)`, and a `u64` has at most
+/// [`U64_VARINT_BYTES_MAX`] such lengths. One further pass is the agreement
+/// check, so the loop returns by equality rather than by exhaustion.
+const WEIGHT_FEE_FIXPOINT_PASSES: usize = U64_VARINT_BYTES_MAX + 1;
+
+/// Unrounded fee fixed point: `fee = rate_per_weight × weight(fee)`.
+///
+/// [`predict_weight`] takes the fee because the wire carries `varint(fee)`.
+/// Returning before the fixed point under-pays by one varint byte of rate
+/// when the fee has just crossed a `2^(7k)` boundary. Iteration from zero
+/// is monotone (weight and the product are both non-decreasing in the fee)
+/// and meets the bound above.
+///
+/// This is the product with **no quantization mask**. The wallet's masked
+/// sibling is `shekyl_engine_core`'s `converge_fee`, which rounds through
+/// `FeeRate` on each pass. A mask of 1 makes the two agree; any other mask
+/// is the wallet's contract and does not belong here.
+#[must_use]
+pub fn converge_weight_fee(
+    rate_per_weight: u64,
+    n_in: InputCount,
+    n_out: OutputCount,
+    tree_depth: u8,
+) -> u64 {
+    let mut fee = 0u64;
+    for _ in 0..WEIGHT_FEE_FIXPOINT_PASSES {
+        let next = weight_times_rate(
+            predict_weight(n_in, n_out, tree_depth, fee),
+            rate_per_weight,
+        );
+        if next == fee {
+            return fee;
+        }
+        fee = next;
+    }
+    // Unreachable: each non-fixed pass consumes one varint length, and the
+    // bound is one past the longest `u64` varint. The extra evaluation is
+    // the side that does not under-pay.
+    fee.max(weight_times_rate(
+        predict_weight(n_in, n_out, tree_depth, fee),
+        rate_per_weight,
+    ))
+}
+
+fn weight_times_rate(weight: usize, rate_per_weight: u64) -> u64 {
+    u64::try_from(weight)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(rate_per_weight)
+}
+
+/// The **archival length** of the tx the builder would produce from these
+/// counts: `|pqc_auths| + |prunable|` — the two segments a prune discards and
+/// the bytes that count toward a shard's `W`
+/// (`shekyl_wire::TxSegments::archival_len`, SHT-Q2). The partial sum of
+/// [`predict_weight`]'s field list from the per-input PQC auths through
+/// `pseudoOuts`, so a built spend's `Transaction::archival_len()` equals this
+/// without constructing the transaction — pinned beside the weight parity in
+/// this crate's tests and over the builder's whole shape space in
+/// `tests/weight_gate.rs`.
+///
+/// Independent of the fee (the fee varint is in the pruned segment) and of
+/// the Bp+ clawback (a fee-weight term, not bytes). This is the one place the
+/// per-transaction archival length is predicted from a shape; the economics
+/// sim's archival-burden model reads it here rather than carrying a bytes-per-
+/// transaction mean (DQ-2G dep-don't-mirror; `ARCHIVAL_SHARD_COUNT_CUTOVER.md`
+/// §D, the `SHARD_BYTES` row).
+#[must_use]
+pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8) -> usize {
+    let fcmp = fcmp_proof_size(n_in, tree_depth);
+    let bp = bp_plus_weight(n_out);
+    let n_in = n_in.get();
+    [
+        n_in * pqc_auth_weight(),          // the `pqc_auths` segment
+        varint_len(1u64),                  // prunable nbp
+        bp,                                // bulletproof+
+        varint_len(u64::from(tree_depth)), // tree_depth
+        varint_len(fcmp as u64),           // fcmp_proof length prefix
+        fcmp,                              // fcmp_proof body
+        n_in * PSEUDO_OUT_LEN,             // pseudoOuts
     ]
     .into_iter()
     .sum()
@@ -372,6 +481,42 @@ mod tests {
         assert!(w3 > w1);
     }
 
+    /// The returned fee is `rate × weight(fee)`, and two passes from zero are
+    /// not that point when the second product crosses a varint boundary.
+    ///
+    /// `24_184` is the wallet's pinned rate. After the weight model moved
+    /// (PL-D3) that rate settles in two passes, so it witnesses agreement
+    /// with the wallet's mask-1 absolute and nothing about the bound. `23_840`
+    /// is the neighbour that still has one varint length left after two
+    /// passes: the shortfall is exactly one byte of rate.
+    #[test]
+    fn converge_weight_fee_is_the_varint_fixed_point() {
+        assert_eq!(varint_len(u64::MAX), U64_VARINT_BYTES_MAX);
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+
+        let fixed = |rate: u64| {
+            let fee = converge_weight_fee(rate, n_in, n_out, depth);
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, fee)).unwrap();
+            assert_eq!(fee, weight.saturating_mul(rate), "rate {rate}");
+            fee
+        };
+        // The wallet's masked sibling, at mask 1, pins this same absolute.
+        assert_eq!(fixed(24_184), 272_336_024);
+
+        let rate = 23_840u64;
+        let mut two_passes = 0u64;
+        for _ in 0..2 {
+            let weight = u64::try_from(predict_weight(n_in, n_out, depth, two_passes)).unwrap();
+            two_passes = weight.saturating_mul(rate);
+        }
+        let fee = fixed(rate);
+        assert_eq!(
+            fee - two_passes,
+            rate,
+            "two passes {two_passes} undershoot {fee} by one varint byte of rate"
+        );
+    }
+
     #[test]
     fn predict_weight_caps_oversize_counts() {
         // Counts are type-bounded, so an out-of-range value is unrepresentable:
@@ -435,7 +580,7 @@ mod tests {
                 );
                 // The 0x07 leaf-hash blob the transfer path appends (sign_bridge.rs)
                 // — real serializer, same as the KEM term.
-                e.push_pqc_leaf_hashes(vec![0u8; n_out * 32]);
+                e.push_pqc_leaf_entries(vec![0u8; n_out * PQC_LEAF_ENTRY_LEN]);
                 e.serialize()
             };
             let tx = Transaction {
@@ -459,7 +604,7 @@ mod tests {
                 },
                 ct: Ct::Fcmp {
                     fee,
-                    reference_block: [0; 32],
+                    reference_block: shekyl_types::BlockHash::NULL,
                     base: CtBase {
                         enc_amounts: vec![[0; 9]; n_out],
                         enc_labels: vec![[0; 9]; n_out],
@@ -505,6 +650,11 @@ mod tests {
                 tx.serialized_len(),
                 "predict_size_and_weight size ≠ wire serialized_len for n_in={n_in} n_out={n_out}"
             );
+            assert_eq!(
+                predict_archival_len(InputCount::clamped(n_in), OutputCount::clamped(n_out), depth),
+                usize::try_from(tx.archival_len().to_raw()).expect("archival length fits usize"),
+                "predict_archival_len ≠ wire archival_len for n_in={n_in} n_out={n_out} depth={depth}"
+            );
         }
     }
 }
@@ -520,7 +670,9 @@ mod marginal_input_weight_pin {
     #[test]
     fn marginal_input_weight_is_pinned() {
         let w = super::marginal_input_weight_at_d_ref();
-        assert_eq!(w, 9136, "weight-model movement changes the dust boundary");
+        // 9136 → 9008 with PL-D3 (2026-09-14): the opening leg replaces the
+        // per-input extra-scalar branch, so the marginal input weight fell.
+        assert_eq!(w, 9008, "weight-model movement changes the dust boundary");
         assert!(
             w > 3457,
             "the marginal weight must exceed the retired proofless stub"

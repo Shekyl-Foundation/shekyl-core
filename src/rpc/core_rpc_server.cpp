@@ -32,6 +32,7 @@
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/uuid/nil_generator.hpp>
 #include <filesystem>
+#include <limits>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -46,12 +47,13 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-#include "fcmp/ct_ops.h"
 #include "misc_language.h"
 #include "net/local_ip.h"
 #include "net/parse.h"
 #include "crypto/hash.h"
 #include "rpc/archival_claim_source.h"
+#include "rpc/archival_shard_coverage.h"
+#include "rpc/archival_shard_fetch.h"
 #include "rpc/rpc_args.h"
 #include "rpc/rpc_handler.h"
 #include "core_rpc_server_error_codes.h"
@@ -60,11 +62,6 @@ using namespace epee;
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc"
-
-#define MAX_RESTRICTED_FAKE_OUTS_COUNT 40
-#define MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT 5000
-
-#define OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION (3 * 86400) // 3 days max, the wallet requests 1.8 days
 
 #define RESTRICTED_BLOCK_HEADER_RANGE 1000
 #define RESTRICTED_BLOCK_COUNT 1000
@@ -218,6 +215,12 @@ namespace cryptonote
     uint64_t total_conn = restricted ? 0 : m_p2p.get_public_connections_count();
     res.outgoing_connections_count = restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
     res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
+    // Socket counts are the transport's, per connector. A restricted caller
+    // receives zero, the same gate as the session counts above.
+    res.public_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 0);
+    res.public_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(0, 1);
+    res.tor_incoming_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 0);
+    res.tor_outgoing_socket_count = restricted ? 0 : shekyl_seam_socket_count(1, 1);
     // Always zero, and the reason is not the restriction. The C++ server has
     // not owned the RPC connections since the Axum cutover, so the accessor
     // this read was a literal `return 0` with two identical arms — a dead
@@ -266,11 +269,20 @@ namespace cryptonote
         tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
     // Burn is a pure function of activity and supply — stake was deleted as a
     // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
-    res.burn_pct = shekyl_calc_burn_pct(
-        tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE,
-        already_generated, SHEKYL_EMISSION_CURVE_ASYMPTOTE,
-        SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
     res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
+    // The percentage the next coinbase burns: over the DERIVED supply
+    // (already_generated − total_burned, FL-R16c), from the shipped
+    // EconomicParams — the same function consensus pays on. A supply
+    // underflow is a store-invariant violation; the field reports 0 and the
+    // refusal is logged rather than swallowed as a plausible percentage.
+    res.burn_pct = 0;
+    {
+      const int32_t st = shekyl_calc_burn_pct_at(
+          tx_volume.tx_count_sum, tx_volume.blocks, already_generated, res.total_burned, &res.burn_pct);
+      if (st != SHEKYL_ECONOMICS_OK)
+        MERROR("get_info: shekyl_calc_burn_pct_at refused (status " << st << "): total_burned "
+            << res.total_burned << " exceeds already_generated " << already_generated);
+    }
 
     // Component 4: effective staker emission share at current height
     const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
@@ -286,8 +298,6 @@ namespace cryptonote
       res.emission_era = "Maturity";
     else
       res.emission_era = "Tail";
-
-    res.tx_prune_height = m_core.get_blockchain_storage().get_db().get_last_pruned_tx_data_height();
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -421,17 +431,7 @@ namespace cryptonote
     // address (no msg_sign_pk field).
     if (lMiner.is_mining() || lMiner.get_is_background_mining_enabled())
       res.address = lMiner.get_mining_address_str();
-    const uint8_t major_version = m_core.get_blockchain_storage().get_current_hard_fork_version();
-    const unsigned variant = major_version >= 7 ? major_version - 6 : 0;
-    switch (variant)
-    {
-      case 0: res.pow_algorithm = "Cryptonight"; break;
-      case 1: res.pow_algorithm = "CNv1 (Cryptonight variant 1)"; break;
-      case 2: case 3: res.pow_algorithm = "CNv2 (Cryptonight variant 2)"; break;
-      case 4: case 5: res.pow_algorithm = "CNv4 (Cryptonight variant 4)"; break;
-      case 6: case 7: case 8: case 9: res.pow_algorithm = "RandomX"; break;
-      default: res.pow_algorithm = "RandomX"; break; // assumed
-    }
+    res.pow_algorithm = "RandomX";
     if (res.is_background_mining_enabled)
     {
       res.bg_idle_threshold = lMiner.get_idle_threshold();
@@ -582,13 +582,38 @@ namespace cryptonote
       LOG_ERROR("Failed to create block template");
       return false;
     }
+    // The coinbase nonce is always present and always SHEKYL_COINBASE_NONCE_BYTES
+    // wide (the coinbase grammar, TXE-Q6'), so reserved_offset is always
+    // meaningful: the grammar fixes the layout [0x01 pubkey(32), 0x02 len(1)
+    // nonce(8), ...], so the nonce begins 34 bytes after the first pubkey
+    // byte. The pubkey is fresh per template and locates the extra in the blob.
     blobdata block_blob = t_serializable_object_to_blob(b);
-    crypto::public_key tx_pub_key = cryptonote::get_tx_pub_key_from_extra(b.miner_tx);
-    if(tx_pub_key == crypto::null_pkey)
+    crypto::public_key tx_pub_key;
+    if (shekyl_tx_extra_tx_pubkey(
+          b.miner_tx.extra.empty() ? nullptr : b.miner_tx.extra.data(), b.miner_tx.extra.size(),
+          reinterpret_cast<uint8_t*>(&tx_pub_key)) != SHEKYL_TX_EXTRA_OK)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Internal error: failed to create block template";
       LOG_ERROR("Failed to get tx pub key in coinbase extra");
+      return false;
+    }
+    reserved_offset = slow_memmem((void*)block_blob.data(), block_blob.size(), &tx_pub_key, sizeof(tx_pub_key));
+    if(!reserved_offset)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Internal error: failed to create block template";
+      LOG_ERROR("Failed to find tx pub key in blockblob");
+      return false;
+    }
+    // The grammar's distance from the pubkey byte to the nonce payload
+    // (key, 0x02 tag, one-byte length). One source, in shekyl-wire.
+    reserved_offset += shekyl_coinbase_nonce_offset_from_pubkey();
+    if(reserved_offset + SHEKYL_COINBASE_NONCE_BYTES > block_blob.size())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Internal error: failed to create block template";
+      LOG_ERROR("Coinbase nonce offset past the end of the block blob");
       return false;
     }
 
@@ -599,29 +624,6 @@ namespace cryptonote
       next_seed_hash = m_core.get_block_id_by_height(next_height);
     else
       next_seed_hash = seed_hash;
-
-    if (extra_nonce.empty())
-    {
-      reserved_offset = 0;
-      return true;
-    }
-
-    reserved_offset = slow_memmem((void*)block_blob.data(), block_blob.size(), &tx_pub_key, sizeof(tx_pub_key));
-    if(!reserved_offset)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Internal error: failed to create block template";
-      LOG_ERROR("Failed to find tx pub key in blockblob");
-      return false;
-    }
-    reserved_offset += sizeof(tx_pub_key) + 2; //2 bytes: tag for TX_EXTRA_NONCE(1 byte), counter in TX_EXTRA_NONCE(1 byte)
-    if(reserved_offset + extra_nonce.size() > block_blob.size())
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Internal error: failed to create block template";
-      LOG_ERROR("Failed to calculate offset for ");
-      return false;
-    }
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -636,10 +638,21 @@ namespace cryptonote
       return false;
     }
 
-    if(req.reserve_size > 255)
+    // The coinbase nonce is a fixed SHEKYL_COINBASE_NONCE_BYTES (the coinbase
+    // grammar, TXE-Q6'): the daemon always reserves exactly that many bytes,
+    // so `reserve_size` is accepted only up to it and `extra_nonce` only up
+    // to that many bytes (zero-padded). More is a bound violation -- it was
+    // the 0..255 free-text region that made the field a covert channel and a
+    // length signal -- and is refused with its own code so a pool stack sees
+    // the cause rather than a generic parameter error.
+    // `extra_nonce` is hex: two digits per payload byte.
+    constexpr size_t hex_digits_per_byte = 2;
+    if (req.reserve_size > SHEKYL_COINBASE_NONCE_BYTES
+        || req.extra_nonce.size() > hex_digits_per_byte * SHEKYL_COINBASE_NONCE_BYTES)
     {
-      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE;
-      error_resp.message = "Too big reserved size, maximum 255";
+      error_resp.code = CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND;
+      error_resp.message = "reserve_size / extra_nonce exceed the coinbase nonce width of "
+        + std::to_string(SHEKYL_COINBASE_NONCE_BYTES) + " bytes";
       return false;
     }
 
@@ -647,13 +660,6 @@ namespace cryptonote
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "Cannot specify both a reserve_size and an extra_nonce";
-      return false;
-    }
-
-    if(req.extra_nonce.size() > 510)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_RESERVE_SIZE;
-      error_resp.message = "Too big extra_nonce size, maximum 510 hex chars";
       return false;
     }
 
@@ -684,8 +690,6 @@ namespace cryptonote
         return false;
       }
     }
-    else
-      blob_reserve.resize(req.reserve_size, 0);
     cryptonote::difficulty_type wdiff;
     // `prev_block` is RESERVED / NOT SUPPORTED. The field is kept in the request
     // definition deliberately: epee ignores unknown fields, so REMOVING it would
@@ -788,7 +792,7 @@ namespace cryptonote
     try
     {
       cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), blockblob, pow_hash, req.height,
-        req.major_version, req.seed_hash.size() ? &seed_hash : NULL, 0);
+        req.seed_hash.size() ? &seed_hash : NULL);
     }
     catch (const std::exception &e)
     {
@@ -879,7 +883,6 @@ namespace cryptonote
     COMMAND_RPC_SUBMITBLOCK::request submit_req;
     COMMAND_RPC_SUBMITBLOCK::response submit_res;
 
-    template_req.reserve_size = 1;
     template_req.wallet_address = req.wallet_address;
     submit_req.push_back(std::string{});
     res.height = m_core.get_blockchain_storage().get_current_blockchain_height();
@@ -913,8 +916,8 @@ namespace cryptonote
         error_resp.message = "Error converting seed hash";
         return false;
       }
-      miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash) {
-        return cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), b, hash, height, seed_hash, threads);
+      miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash) {
+        return cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), b, hash, height, seed_hash);
       }, b, template_res.difficulty, template_res.height, &seed_hash);
 
       submit_req.front() = string_tools::buff_to_hex_nodelimer(block_to_blob(b));
@@ -958,14 +961,19 @@ namespace cryptonote
     // injector, under the blockchain lock — a snapshot taken here would be
     // pre-lock and can go stale against a concurrent mine/pop. On refusal
     // (wrong nettype, empty chain) the daemon log names the reason.
+    // The receipt: the tip index the row was keyed at, from inside the
+    // lock. The caller's only way to learn it (DRS-E4 §3.8 item 3 — the
+    // capture replays the injection as a corpus event at this height).
+    uint64_t attributed_height = 0;
     if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch))
+      p_canonical_id, req.shard_id, req.settlement_epoch, attributed_height))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Serve-credit injection failed";
       return false;
     }
 
+    res.height = attributed_height;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -996,31 +1004,27 @@ namespace cryptonote
   {
     RPC_TRACKER(get_bans);
 
-    auto now = time(nullptr);
-    std::map<std::string, time_t> blocked_hosts = m_p2p.get_blocked_hosts();
-    for (std::map<std::string, time_t>::const_iterator i = blocked_hosts.begin(); i != blocked_hosts.end(); ++i)
+    for (const auto& row : m_p2p.ban_list())
     {
-      if (i->second > now) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first;
-        b.ip = 0;
-        uint32_t ip;
-        if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
-          b.ip = ip;
-        b.seconds = i->second - now;
-        res.bans.push_back(b);
+      COMMAND_RPC_GETBANS::ban b;
+      b.host = row.text;
+      b.ip = 0;
+      uint32_t ip;
+      if (epee::string_tools::get_ip_int32_from_string(ip, b.host))
+        b.ip = ip;
+      b.permanent = row.permanent != 0;
+      if (b.permanent)
+        b.seconds = 0;
+      else if (row.remaining_ns == 0)
+        continue;
+      else
+      {
+        const std::uint64_t sec = (row.remaining_ns + 999999999ull) / 1000000000ull;
+        b.seconds = sec > std::numeric_limits<std::uint32_t>::max()
+          ? std::numeric_limits<std::uint32_t>::max()
+          : static_cast<std::uint32_t>(sec);
       }
-    }
-    std::map<epee::net_utils::ipv4_network_subnet, time_t> blocked_subnets = m_p2p.get_blocked_subnets();
-    for (std::map<epee::net_utils::ipv4_network_subnet, time_t>::const_iterator i = blocked_subnets.begin(); i != blocked_subnets.end(); ++i)
-    {
-      if (i->second > now) {
-        COMMAND_RPC_GETBANS::ban b;
-        b.host = i->first.host_str();
-        b.ip = 0;
-        b.seconds = i->second - now;
-        res.bans.push_back(b);
-      }
+      res.bans.push_back(std::move(b));
     }
 
     res.status = CORE_RPC_STATUS_OK;
@@ -1044,11 +1048,14 @@ namespace cryptonote
     if (m_p2p.is_host_blocked(na, &seconds))
     {
       res.banned = true;
-      res.seconds = seconds;
+      res.permanent = m_p2p.host_ban_is_permanent(na);
+      res.seconds = res.permanent ? 0 : static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(seconds), std::numeric_limits<std::uint32_t>::max()));
     }
     else
     {
       res.banned = false;
+      res.permanent = false;
       res.seconds = 0;
     }
 
@@ -1071,7 +1078,14 @@ namespace cryptonote
         if (ns_parsed)
         {
           if (i->ban)
-            m_p2p.block_subnet(*ns_parsed, i->seconds);
+          {
+            if (!m_p2p.block_subnet(*ns_parsed, i->seconds))
+            {
+              error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+              error_resp.message = "Ban duration does not fit the clock";
+              return false;
+            }
+          }
           else
             m_p2p.unblock_subnet(*ns_parsed);
           continue;
@@ -1101,7 +1115,14 @@ namespace cryptonote
         na = epee::net_utils::ipv4_network_address{i->ip, 0};
       }
       if (i->ban)
-        m_p2p.block_host(na, i->seconds);
+      {
+        if (!m_p2p.block_host(na, i->seconds))
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+          error_resp.message = "Ban duration does not fit the clock";
+          return false;
+        }
+      }
       else
         m_p2p.unblock_host(na);
     }
@@ -1164,47 +1185,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_output_histogram(const COMMAND_RPC_GET_OUTPUT_HISTOGRAM::request& req, COMMAND_RPC_GET_OUTPUT_HISTOGRAM::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_output_histogram);
-
-    const bool restricted = caller_is_restricted(ctx);
-    size_t amounts = req.amounts.size();
-    if (restricted && amounts == 0)
-    {
-      res.status = "Restricted RPC will not serve histograms on the whole blockchain. Use your own node.";
-      return true;
-    }
-
-    if (restricted && req.recent_cutoff > 0 && req.recent_cutoff < (uint64_t)time(NULL) - OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION)
-    {
-      res.status = "Recent cutoff is too old";
-      return true;
-    }
-
-    std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> histogram;
-    try
-    {
-      histogram = m_core.get_blockchain_storage().get_output_histogram(req.amounts, req.unlocked, req.recent_cutoff, req.min_count);
-    }
-    catch (const std::exception &e)
-    {
-      res.status = "Failed to get output histogram";
-      return true;
-    }
-
-    res.histogram.clear();
-    res.histogram.reserve(histogram.size());
-    for (const auto &i: histogram)
-    {
-      if (std::get<0>(i.second) >= req.min_count && (std::get<0>(i.second) <= req.max_count || req.max_count == 0))
-        res.histogram.push_back(COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry(i.first, std::get<0>(i.second), std::get<1>(i.second), std::get<2>(i.second)));
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_coinbase_tx_sum(const COMMAND_RPC_GET_COINBASE_TX_SUM::request& req, COMMAND_RPC_GET_COINBASE_TX_SUM::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
     RPC_TRACKER(get_coinbase_tx_sum);
@@ -1259,8 +1239,8 @@ namespace cryptonote
   {
     RPC_TRACKER(get_limit);
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1268,12 +1248,12 @@ namespace cryptonote
   bool core_rpc_server::on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(set_limit);
-    // -1 = reset to default
+    // -1 = unlimited
     //  0 = do not modify
 
     if (req.limit_down > 0)
     {
-      epee::net_utils::connection_basic::set_rate_down_limit(req.limit_down);
+      shekyl_link_set_down(req.limit_down);
     }
     else if (req.limit_down < 0)
     {
@@ -1282,12 +1262,12 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_down_limit(nodetool::default_limit_down);
+      shekyl_link_set_down(-1);
     }
 
     if (req.limit_up > 0)
     {
-      epee::net_utils::connection_basic::set_rate_up_limit(req.limit_up);
+      shekyl_link_set_up(req.limit_up);
     }
     else if (req.limit_up < 0)
     {
@@ -1296,11 +1276,11 @@ namespace cryptonote
         res.status = "Invalid parameter";
         return true;
       }
-      epee::net_utils::connection_basic::set_rate_up_limit(nodetool::default_limit_up);
+      shekyl_link_set_up(-1);
     }
 
-    res.limit_down = epee::net_utils::connection_basic::get_rate_down_limit();
-    res.limit_up = epee::net_utils::connection_basic::get_rate_up_limit();
+    res.limit_down = shekyl_link_get_down();
+    res.limit_up = shekyl_link_get_up();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1383,19 +1363,15 @@ namespace cryptonote
       cryptonote::blobdata txblob;
       if ((broadcasted = m_core.get_pool_transaction(txid, txblob, relay_category::broadcasted)) || m_core.get_pool_transaction(txid, txblob, relay_category::all))
       {
-        // Q12-D5a residual absorption. Always passes `invalid`. Anything not
-        // yet fluff/block (`local` AND `stem` — stem is outside
-        // `relay_category::broadcasted`) is remapped to `local`, so
-        // `once_at_origin_route` fail-closes onto the anonymity zone. A
-        // transaction that rolled clearnet and is still stemming is
-        // therefore re-decided onto anon: the zone chosen again after
-        // origination, which once-at-origin forbids. Closing it needs the
-        // pool meta at this RPC (TODO above). Until then this is a named
-        // residual, not a silent p_own=1. FOLLOWUPS.
+        // A pool entry that is not yet broadcast is relayed as local.
+        // Hop 0 inside the relay is the construction bit. This call does
+        // not choose a connector. Closing the residual that a still-stemming
+        // entry is re-sent as local needs the pool meta at this RPC (TODO
+        // above). FOLLOWUPS.
         NOTIFY_NEW_TRANSACTIONS::request r;
         r.txs.push_back(std::move(txblob));
         const auto tx_relay = broadcasted ? relay_method::fluff : relay_method::local;
-        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), epee::net_utils::zone::invalid, tx_relay);
+        m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), tx_relay);
         //TODO: make sure that tx has reached other nodes here, probably wait to receive reflections from other nodes
       }
       else
@@ -1433,288 +1409,12 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_prune_blockchain(const COMMAND_RPC_PRUNE_BLOCKCHAIN::request& req, COMMAND_RPC_PRUNE_BLOCKCHAIN::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(prune_blockchain);
-
-    try
-    {
-      if (!(req.check ? m_core.check_blockchain_pruning() : m_core.prune_blockchain()))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-        error_resp.message = req.check ? "Failed to check blockchain pruning" : "Failed to prune blockchain";
-        return false;
-      }
-      res.pruning_seed = m_core.get_blockchain_pruning_seed();
-      res.pruned = res.pruning_seed != 0;
-    }
-    catch (const std::exception &e)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Failed to prune blockchain";
-      return false;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_flush_cache(const COMMAND_RPC_FLUSH_CACHE::request& req, COMMAND_RPC_FLUSH_CACHE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
     RPC_TRACKER(flush_cache);
     if (req.bad_blocks)
       m_core.flush_invalid_blocks();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_curve_tree_path);
-
-    static constexpr size_t MAX_OUTPUTS_PER_RPC_REQUEST = 64;
-
-    if (req.output_indices.empty())
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "output_indices must not be empty";
-      return false;
-    }
-
-    if (req.output_indices.size() > MAX_OUTPUTS_PER_RPC_REQUEST)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "Too many output_indices (max " + std::to_string(MAX_OUTPUTS_PER_RPC_REQUEST) + ")";
-      return false;
-    }
-
-    const auto &db = m_core.get_blockchain_storage().get_db();
-    const uint8_t depth = db.get_curve_tree_depth();
-    const uint64_t tip_leaf_count = db.get_curve_tree_leaf_count();
-
-    if (tip_leaf_count == 0)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Curve tree is empty";
-      return false;
-    }
-
-    const uint64_t height = m_core.get_current_blockchain_height();
-    const uint64_t top_height = height - 1;
-    const uint64_t min_anchor_age = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
-    const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
-    const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
-    res.reference_block = epee::string_tools::pod_to_hex(reference_hash);
-    cryptonote::block ref_blk;
-    m_core.get_blockchain_storage().get_block_by_hash(reference_hash, ref_blk);
-    res.curve_tree_root = epee::string_tools::pod_to_hex(ref_blk.curve_tree_root);
-    res.reference_height = reference_height;
-    res.tree_depth = depth;
-
-    // Compute the leaf count at reference_height (not tip) by subtracting
-    // leaves drained into the tree after reference_height.
-    uint64_t leaves_after_ref = 0;
-    for (uint64_t h = reference_height + 1; h <= top_height; ++h)
-      leaves_after_ref += db.get_pending_tree_drain_entries(shekyl::db::BlockHeight{h}).size();
-    const uint64_t ref_leaf_count = tip_leaf_count - leaves_after_ref;
-
-    res.leaf_count = ref_leaf_count;
-    res.paths.clear();
-
-    const uint32_t SELENE_CHUNK_WIDTH = shekyl_curve_tree_selene_chunk_width();
-    const uint32_t HELIOS_CHUNK_WIDTH = shekyl_curve_tree_helios_chunk_width();
-    static constexpr uint32_t SCALARS_PER_LEAF = 4;
-
-    auto chunk_width = [&](uint8_t layer) -> uint32_t {
-      if (layer == 0) return SELENE_CHUNK_WIDTH;
-      return (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
-    };
-
-    for (const uint64_t output_idx : req.output_indices)
-    {
-      COMMAND_RPC_GET_CURVE_TREE_PATH::path_entry entry{};
-      entry.output_index = output_idx;
-      entry.tree_depth = depth;
-
-      if (output_idx >= tip_leaf_count)
-      {
-        // Beyond the entire tree: the wallet only knows outputs up to the tip, so this
-        // is a malformed request, not a timing race. Hard-fail (WRONG_PARAM) so a client
-        // bug surfaces instead of being silently omitted like the not-yet-drained case.
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "output_index " + std::to_string(output_idx) +
-                             " >= tip_leaf_count " + std::to_string(tip_leaf_count);
-        return false;
-      }
-      if (output_idx >= ref_leaf_count)
-      {
-        // In the tree but not yet drained into the *reference* tree (still inside the
-        // maturity + reorg window): skip this index rather than failing the whole batch.
-        // A wallet legitimately requests paths for all its unspent outputs and matches
-        // the returned paths by output_index, waiting for the rest. The omission is
-        // unambiguous: an out-of-tree index hard-fails above, and a genuine fault (e.g.
-        // the leaf read below) still `return false`s the whole call, so a missing index
-        // in a *successful* response means only "not yet in the reference tree".
-        continue;
-      }
-
-      std::string path_hex;
-
-      // Layer 0: collect leaf scalars in the chunk, bounded by ref_leaf_count
-      uint64_t chunk_idx = output_idx / SELENE_CHUNK_WIDTH;
-      uint64_t chunk_start = chunk_idx * SELENE_CHUNK_WIDTH;
-      uint64_t chunk_end = std::min(chunk_start + static_cast<uint64_t>(SELENE_CHUNK_WIDTH), ref_leaf_count);
-
-      std::vector<uint8_t> path_bytes;
-      uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
-      path_bytes.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
-      path_bytes.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
-
-      std::vector<uint8_t> chunk_output_bytes;
-
-      for (uint64_t i = chunk_start; i < chunk_end; ++i)
-      {
-        uint8_t leaf[128];
-        if (!db.get_curve_tree_leaf_by_tree_position(i, leaf))
-        {
-          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-          error_resp.message = "Failed to read leaf at tree position " + std::to_string(i);
-          return false;
-        }
-        path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
-
-        output_data_t od = db.get_output_key(0, i);
-        chunk_output_bytes.insert(chunk_output_bytes.end(),
-            reinterpret_cast<const uint8_t*>(od.pubkey.data),
-            reinterpret_cast<const uint8_t*>(od.pubkey.data) + 32);
-
-        ge_p3 hp;
-        ct::key od_rct;
-        memcpy(od_rct.bytes, od.pubkey.data, 32);
-        ct::hash_to_p3(hp, od_rct);
-        uint8_t ki_gen[32];
-        ge_p3_tobytes(ki_gen, &hp);
-        chunk_output_bytes.insert(chunk_output_bytes.end(), ki_gen, ki_gen + 32);
-
-        chunk_output_bytes.insert(chunk_output_bytes.end(),
-            reinterpret_cast<const uint8_t*>(od.commitment.bytes),
-            reinterpret_cast<const uint8_t*>(od.commitment.bytes) + 32);
-
-        chunk_output_bytes.insert(chunk_output_bytes.end(), leaf + 96, leaf + 128);
-      }
-
-      entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
-        std::string(reinterpret_cast<const char*>(chunk_output_bytes.data()), chunk_output_bytes.size()));
-
-      // Layers 1..depth: collect sibling hashes with boundary-chunk trimming.
-      // The loop emits exactly `depth` branch layers (branch_count == depth), the
-      // count the wallet's path parser / FCMP++ signer expect.
-      uint64_t ref_nodes_at_prev_layer = ref_leaf_count;
-      uint64_t cur_nodes_at_prev_layer = tip_leaf_count;
-      uint64_t child_chunk = chunk_idx;
-
-      for (uint8_t layer = 1; layer <= depth; ++layer)
-      {
-        uint32_t prev_cw = chunk_width(layer - 1);
-        uint32_t cw = chunk_width(layer);
-
-        uint64_t ref_chunks_below = (ref_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
-        uint64_t cur_chunks_below = (cur_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
-        uint64_t last_ref_chunk_below = (ref_chunks_below > 0) ? ref_chunks_below - 1 : 0;
-
-        uint64_t parent_chunk = child_chunk / cw;
-        uint64_t sib_start = parent_chunk * cw;
-        uint16_t pos_in_parent = static_cast<uint16_t>(child_chunk - sib_start);
-
-        path_bytes.push_back(static_cast<uint8_t>(pos_in_parent & 0xFF));
-        path_bytes.push_back(static_cast<uint8_t>((pos_in_parent >> 8) & 0xFF));
-
-        for (uint32_t c = 0; c < cw; ++c)
-        {
-          uint64_t sibling_chunk = sib_start + c;
-          uint8_t hash[32] = {};
-
-          if (sibling_chunk < ref_chunks_below)
-          {
-            if (!db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash))
-            {
-              error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-              error_resp.message = "Internal error: missing layer hash at layer "
-                + std::to_string(layer - 1) + " chunk " + std::to_string(sibling_chunk);
-              return false;
-            }
-
-            // Trim boundary chunk that grew since reference_height
-            if (sibling_chunk == last_ref_chunk_below &&
-                ref_nodes_at_prev_layer != cur_nodes_at_prev_layer &&
-                ref_nodes_at_prev_layer % prev_cw != 0)
-            {
-              uint64_t ref_in_chunk = ref_nodes_at_prev_layer - sibling_chunk * prev_cw;
-              uint64_t cur_in_chunk = std::min(
-                  cur_nodes_at_prev_layer - sibling_chunk * prev_cw,
-                  static_cast<uint64_t>(prev_cw));
-
-              if (cur_in_chunk > ref_in_chunk)
-              {
-                uint64_t scalars_per_entry = (layer == 1) ? SCALARS_PER_LEAF : 1;
-                uint64_t trim_offset = ref_in_chunk * scalars_per_entry;
-                uint64_t num_extra = cur_in_chunk - ref_in_chunk;
-                uint64_t num_extra_scalars = num_extra * scalars_per_entry;
-
-                std::vector<uint8_t> extra_data;
-                if (layer == 1)
-                {
-                  for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
-                       li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
-                  {
-                    uint8_t lf[128];
-                    if (db.get_curve_tree_leaf_by_tree_position(li, lf))
-                      extra_data.insert(extra_data.end(), lf, lf + 128);
-                    else
-                      extra_data.insert(extra_data.end(), 128, 0);
-                  }
-                }
-                else
-                {
-                  for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
-                       li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
-                  {
-                    uint8_t h[32] = {};
-                    db.get_curve_tree_layer_hash(layer - 2, li, h);
-                    extra_data.insert(extra_data.end(), h, h + 32);
-                  }
-                }
-
-                uint8_t zero_scalar[32] = {};
-                uint8_t trimmed[32];
-                bool is_selene = (layer - 1) % 2 == 0;
-                bool ok;
-                if (is_selene)
-                  ok = shekyl_curve_tree_hash_trim_selene(
-                      hash, trim_offset, extra_data.data(),
-                      num_extra_scalars, zero_scalar, trimmed);
-                else
-                  ok = shekyl_curve_tree_hash_trim_helios(
-                      hash, trim_offset, extra_data.data(),
-                      num_extra_scalars, zero_scalar, trimmed);
-
-                if (ok)
-                  memcpy(hash, trimmed, 32);
-              }
-            }
-          }
-          path_bytes.insert(path_bytes.end(), hash, hash + 32);
-        }
-
-        ref_nodes_at_prev_layer = ref_chunks_below;
-        cur_nodes_at_prev_layer = cur_chunks_below;
-        child_chunk = parent_chunk;
-      }
-
-      entry.path_blob = epee::string_tools::buff_to_hex_nodelimer(
-        std::string(reinterpret_cast<const char*>(path_bytes.data()), path_bytes.size()));
-      res.paths.push_back(std::move(entry));
-    }
-
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1796,6 +1496,59 @@ namespace cryptonote
       return false;
     }
 
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_archival_shard_coverage(const COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::request& /*req*/, COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_archival_shard_coverage);
+    (void)ctx;
+    try
+    {
+      auto& db = m_core.get_blockchain_storage().get_db();
+      db_rtxn_guard rtxn_guard(&db);
+      rpc::fill_archival_shard_coverage(db, res);
+    }
+    catch (const std::exception& e)
+    {
+      MERROR("Failed to gather archival shard coverage: " << e.what());
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Failed to gather archival shard coverage";
+      return false;
+    }
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_request_archival_shard(const COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::request& req, COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(request_archival_shard);
+    (void)ctx;
+    /* Restricted gate is Rust `RESTRICTED_METHODS` (RK-D6), same as
+       `on_relay_tx`. Coverage stays public; this fetch is admin-only. */
+    try
+    {
+      if (req.shard_id == std::numeric_limits<uint64_t>::max())
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "shard_id is required";
+        return false;
+      }
+      if (!rpc::fill_request_archival_shard(req.shard_id, res))
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE;
+        error_resp.message = "could not retrieve this archive";
+        return false;
+      }
+    }
+    catch (const std::exception& e)
+    {
+      MERROR("Failed to request archival shard: " << e.what());
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "could not retrieve this archive";
+      return false;
+    }
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

@@ -221,56 +221,63 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
     use shekyl_relay_privacy::verify_cost::SPEC_VERIFY_COST;
 
     let mut checked = 0;
+    let mut moved = Vec::new();
     for (n_in, depth, cell) in SPEC_VERIFY_COST.populated() {
         let real = message_bytes(n_in, 2, u8::try_from(depth).expect("table depth is small"));
-        assert_eq!(
-            usize::try_from(cell.msg_bytes).expect("pinned size is small"),
-            real,
-            "verify-cost cell ({n_in}, {depth}) pins {} B but the shape really \
-             produces {real} B; f_ms derives its node-crypto term from the pin",
-            cell.msg_bytes,
-        );
+        if usize::try_from(cell.msg_bytes).expect("pinned size is small") != real {
+            moved.push(format!(
+                "verify-cost cell ({n_in}, {depth}) pins {} B but the shape really \
+                 produces {real} B",
+                cell.msg_bytes
+            ));
+        }
         checked += 1;
     }
+    // Every moved cell in one report: a wire change moves them together, and
+    // f_ms derives its node-crypto term from each pin.
+    assert!(moved.is_empty(), "{}", moved.join("\n"));
     assert_eq!(checked, 4, "the in-tree surface is the four §85.3 pins");
 }
 
-/// The zone count behind the ceiling is COUNTED, and the peak is derived.
+/// The substitution-cover ceiling is the open-link count, and the peak is
+/// derived.
 ///
-/// `CEILING_ZONES` used to be a literal `2` — a hand-copy of an answer that
-/// lives in `RelayZone::is_encrypted`, which made the ceiling's build-break
-/// claim false: a third encrypted zone would have raised the real bandwidth
-/// while the constant, and therefore the assert, stayed put.
+/// `CEILING_ZONES` is not [`RelayZone::is_encrypted`]. Tor is encrypted and
+/// takes no envelope. `shekyl-relay` asserts the constant equals its
+/// open-link walk; this crate cannot import `ConnectorId`, so the number
+/// is pinned here. Equating the two would bill Tor and omit clearnet the
+/// day those counts diverge.
 ///
-/// What edit reds this: making `RelayZone::Public` encrypted (the case the
-/// predicate's own docs anticipate, "encrypting ordinary internet traffic
-/// would make Public eligible for noise") takes the count to 3, and the
-/// compile-time ceiling assert fires before this test even runs.
+/// What edit reds this: a second open link moves the count off 1. The peak
+/// pin moves with it. The compile-time ceiling assert fires when the
+/// product exceeds the signed cap.
 #[test]
-fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
-    let counted = RelayZone::ALL.iter().filter(|z| z.is_encrypted()).count();
+fn the_ceiling_counts_open_links_and_states_its_peak() {
     assert_eq!(
-        carrier::CEILING_ZONES as usize,
-        counted,
-        "CEILING_ZONES must equal the number of encrypted zones, not a \
-         transcription of today's answer"
+        carrier::CEILING_ZONES,
+        1,
+        "clearnet — a new open link is a ceiling change"
     );
-    assert_eq!(
-        counted, 2,
-        "Tor and I2P — a change here is a ceiling change"
+    assert!(
+        RelayZone::ALL.iter().any(|zone| zone.is_encrypted()),
+        "Tor stays encrypted; that predicate is not this count"
     );
 
-    // The peak is an UPPER BOUND, so it rounds up. Asserted against the
-    // rounded-up scaling rather than a re-derivation of the same division,
-    // because the defect this replaces was a floor that published a "peak"
-    // the emitter exceeds by 0.46 B/s — small, and in the one direction a
-    // sizing figure must not err.
-    let exact_num =
-        u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC) * u64::from(carrier::MEAN_CADENCE_MS);
+    // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
+    // sustained rate scaled by mean/min, rather than a re-derivation of the
+    // same division the constant performs, because the defect this replaces
+    // was a floor that published a "peak" the emitter exceeds — small, and
+    // in the one direction a sizing figure must not err. The signed cap is
+    // not that rate: one open link sustains half of it, and scaling the cap
+    // publishes a peak no emitter reaches.
+    let sustained = u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
+        * u64::from(carrier::CEILING_ZONES)
+        * inherited::NOISE_CHANNELS as u64;
+    let exact_num = sustained * u64::from(carrier::MEAN_CADENCE_MS);
     assert_eq!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC),
         exact_num.div_ceil(u64::from(carrier::NOISE_MIN_DELAY_MS)),
-        "the peak must be the sustained rate scaled by mean/min, rounded UP"
+        "the peak must be today's sustained rate scaled by mean/min, rounded UP"
     );
     assert!(
         u64::from(carrier::PER_NODE_PEAK_BYTES_PER_SEC) * u64::from(carrier::NOISE_MIN_DELAY_MS)
@@ -282,7 +289,7 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
     );
     assert_eq!(
         carrier::PER_NODE_PEAK_BYTES_PER_SEC,
-        24_579,
+        12_290,
         "the documented burst figure moved; COVER_TRAFFIC_RESTORATION.md sec \
          3.3 quotes it"
     );
@@ -302,13 +309,15 @@ fn the_ceiling_counts_encrypted_zones_and_states_its_peak() {
         4_096,
         "axis 2's rig spec quotes this as the sustained circuit load"
     );
+    // One open link sustains half the signed cap. The cap was ruled for two
+    // networks and was not lowered when the count became the open-link
+    // count, so equality would be the stale claim. The factor of two is
+    // that ruling, pinned here so neither a new open link nor a re-ruled
+    // cap can pass in silence.
     assert_eq!(
-        u64::from(carrier::PER_CIRCUIT_SUSTAINED_BYTES_PER_SEC)
-            * u64::from(carrier::CEILING_ZONES)
-            * inherited::NOISE_CHANNELS as u64,
+        sustained * 2,
         u64::from(carrier::PER_NODE_CEILING_BYTES_PER_SEC),
-        "the per-circuit sustained rate times the channel count IS the \
-         per-node ceiling; if these drift apart one is on the wrong \
-         denominator"
+        "the signed cap is the two-network ruling. One open link sustains \
+         half of it. Adding an open link, or re-ruling the cap, moves this."
     );
 }

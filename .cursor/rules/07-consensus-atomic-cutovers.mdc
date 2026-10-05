@@ -195,60 +195,43 @@ discipline cuts across the criteria:
 
 ## History of application
 
-The exception class is auditable by enumeration of past
-invocations. Each invocation cites this rule, demonstrates
-the four criteria are met, and links here. Approved
-invocations:
+The exception is auditable by enumeration. Each invocation cites this
+rule, meets the four criteria, and appends a row here in the invoking
+PR. A row names the change, the PR and merge commit, the archive tag,
+one sentence for why no flag decomposition is simultaneously valid, and
+where the enumeration and the rollback live. The file lists below are
+the reviewer-map; they are not restated here.
 
-- **LWMA-1 Phase 4** (`docs/completed/DAA_LWMA1_PLAN.md` Phase 4;
-  landed on `dev` 2026-05-18 as PR #53 merge commit
-  `ef6f6bb66871ad6547ae92591ecabf43f9426f0b`; pre-merge branch tip
-  archived as tag `archive/feat-daa-lwma1-phase4-2026-05-19` at
-  `e1384eac0`; the eleven-commit decomposition disposed in
-  `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §18).
-  Difficulty-algorithm cutover from CryptoNote
-  cut-windowed-average to LWMA-1, paired with FTL and MTP
-  value changes. The FTL (`7200 → 540`) and MTP (`60 → 11`)
-  value changes are consensus-rule constants; both
-  validating nodes have to agree on the same FTL and MTP
-  values at the same height, and there is no
-  simultaneously-valid flag decomposition (per criterion 2)
-  that produces a consensus-safe intermediate. Criteria 1
-  (consensus-rule boundary: FTL/MTP/algorithm), 2 (no
-  simultaneously-valid flag decomposition exists for any of
-  the three), 3 (enumerated in advance: `DAA_LWMA1.md`
-  §§9.4–9.7, with the Phase 4 implementation amendments
-  recorded in `DAA_LWMA1_PLAN.md` "Phase 4 implementation
-  drift findings" section), and 4 (disposition: the Phase 4 PR
-  description cited this rule and contained the
-  sub-clause-4.1–4.4 artifacts; the rollback procedure was
-  "revert the merge commit on `dev`" because the cutover was
-  atomic and reversion is single-commit). The five-commit
-  consensus-rule cluster (commits 3–5: DAA rewires, FTL
-  rewires, MTP rewires; commits 7–8: `#define` deletions and
-  surgical `next_difficulty` deletion) is the reviewer-map
-  "consensus-affecting" subsection; commits 1, 2, 6, 9, 10,
-  and 11 are the mechanical / new-artifact / deletion shape
-  per sub-clause 4.3.
+Approved:
 
-  *In-flight discipline lesson.* Seven implementation drift
-  findings (F1–F7, recorded in `DAA_LWMA1_PLAN.md` "Phase 4
-  implementation drift findings") surfaced during the PR.
-  F1, F6, and F7 are the load-bearing class: each was a
-  case where the pre-flight specified wholesale deletion
-  and implementation revealed surgical deletion was the
-  correct shape (the file contained both load-bearing and
-  deletion-target code; the pre-flight didn't distinguish).
-  The pre-flight §18 "implementation-time drift" policy
-  absorbed these without triggering scope-creep-loses-the-
-  exception per sub-clause 4-criterion-3, because each
-  finding *narrowed* scope rather than expanding it. The
-  pattern argues for a forward-template item in this rule
-  (future pre-flights for consensus-atomic cutovers should
-  distinguish "delete the file" from "delete these specific
-  symbols in the file" at pre-flight time, not at
-  implementation time); landed under §18 here so future
-  invocations inherit the lesson without amending the rule.
+- **LWMA-1 Phase 4** — PR #53, merge `ef6f6bb66`, archive
+  `archive/feat-daa-lwma1-phase4-2026-05-19`. FTL, MTP, and the
+  difficulty algorithm must agree at one height. Enumeration:
+  `DAA_LWMA1.md` §§9.4–9.7. Rollback: revert the merge commit.
+- **JoinMarket serving endpoint** — PR #724, merge `f103acd38`, archive
+  `archive/feat/join-market-endpoint-2026-09-13`. The bond-post vin
+  carries the endpoint or is refused. Record v6 → v7, LMDB 12 → 13.
+  Kind-4 `EndpointUpdate` was excised before merge (archive
+  `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`): narrowing
+  the enumerated surface is allowed.
+- **Txid binds the archival length** (`SHT-Q2`) — PR #923, merge
+  `ecdcbffec`, archive `archive/sht-q2-txid-length-cutover-2026-10-01`
+  at `4456a63cd`. One mixer or the nodes name one transaction two ways.
+  LMDB 15 → 16, redb schema 20 → 21. Enumeration: the six greps in the
+  PR description. Rollback: revert the merge; both stores refuse at open.
+
+Lessons the next invocation inherits:
+
+- Pre-flight distinguishes "delete the file" from "delete these symbols
+  in the file." A file can hold both load-bearing code and a deletion
+  target. Narrowing the enumerated surface during the PR keeps the
+  exception. Widening it loses the exception.
+- Criterion 3 needs a code surface, so the PR may open after the
+  rulings land. The enumeration stays anchored at the base it was run
+  against. A merge of `dev` is not scope growth, and it is the moment
+  to check that none of the enumerated symbols moved.
+- A review finding outside the enumerated surface is filed, not fixed
+  in this PR.
 
 ### Cases that might appear analogous but are not
 

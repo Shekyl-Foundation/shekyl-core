@@ -7,9 +7,9 @@
 //! `P` constructor leaves in the pool so the terminal `Release` stays fundable.
 //!
 //! `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 rule 2: mid-life constructors (claim
-//! fee inputs, both `HoldingsUpdate` directions, `Rebond`, and — from
-//! `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4 — a partial drain from a **live**
-//! persona) never spend the pool below [`EXIT_FEE_RESERVE_ATOMIC`]. A
+//! fee inputs, `Reinstate`, and — from `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4 — a
+//! partial drain from a **live** persona) never spend the pool below
+//! [`EXIT_FEE_RESERVE_ATOMIC`]. A
 //! post-retirement sweep has no future `Release`, so the reserve is moot and a
 //! drain-all may take the pool to zero (the live/retired branch is the
 //! consumer's, e.g. the drain selector's — this module owns only the floor).

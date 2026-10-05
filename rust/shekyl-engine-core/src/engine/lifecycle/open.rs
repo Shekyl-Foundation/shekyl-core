@@ -17,6 +17,7 @@ use shekyl_engine_file::{
 };
 use shekyl_engine_prefs::LoadOutcome as PrefsLoadOutcome;
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+use shekyl_types::BlockHeight;
 
 use crate::engine::error::{IoError, KeyError, OpenError};
 use crate::engine::stake_engine::PSlot;
@@ -93,7 +94,8 @@ impl Engine<SoloSigner> {
 
         let mut initial_ledger = WalletLedger::empty();
         if restore_height_hint > 0 {
-            initial_ledger.sync_state.restore_from_height = u64::from(restore_height_hint);
+            initial_ledger.sync_state.restore_from_height =
+                BlockHeight::from_raw(u64::from(restore_height_hint));
         }
         let cap_content = CapabilityContent::Full { master_seed_64 };
 
@@ -140,11 +142,8 @@ impl Engine<SoloSigner> {
         // Persist the caller-supplied preferences so the next open
         // sees them. `save_prefs` is HMAC-keyed by the session-cached
         // PrefsHmacKey on `file`.
-        file.save_prefs(&prefs).map_err(|e| {
-            OpenError::Io(IoError::WalletFile {
-                detail: e.to_string(),
-            })
-        })?;
+        file.save_prefs(&prefs)
+            .map_err(|e| OpenError::Io(IoError::WalletFile(e)))?;
 
         let indexes = LedgerIndexes::rebuild_from_ledger(&initial_ledger.ledger);
 
@@ -281,11 +280,7 @@ impl Engine<SoloSigner> {
                 );
                 prefs
             }
-            Err(e) => {
-                return Err(OpenError::Io(IoError::WalletFile {
-                    detail: e.to_string(),
-                }));
-            }
+            Err(e) => return Err(OpenError::Io(IoError::WalletFile(e))),
         };
 
         let (ledger, restored_from) = match outcome {

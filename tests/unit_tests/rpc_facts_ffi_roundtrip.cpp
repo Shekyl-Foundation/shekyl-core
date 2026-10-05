@@ -261,13 +261,13 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
 
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
   static_assert(sizeof(shekyl_rpc_hard_fork_facts) == 32, "hard-fork facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 48, "fee-estimate facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
   // carry pointers, so a fill/check twin has nothing to compare and the
   // layout itself is what must agree with
   // `rust/shekyl-daemon-rpc/src/ffi.rs`.
-  static_assert(sizeof(shekyl_rpc_connection_facts) == 136, "connection facts changed size");
+  static_assert(sizeof(shekyl_rpc_connection_facts) == 128, "connection facts changed size");
   static_assert(offsetof(shekyl_rpc_connection_facts, address) == 0, "address offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, address_len) == 8, "address_len offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, host) == 16, "host offset");
@@ -282,14 +282,13 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_up) == 96, "current_speed_up offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, height) == 104, "height offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, support_flags) == 112, "support_flags offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, pruning_seed) == 116, "pruning_seed offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 120, "port offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 122, "state offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 123, "address_type offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 124, "incoming offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 125, "localhost offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 126, "local_ip offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 127, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 116, "port offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 118, "state offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 119, "address_type offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 120, "incoming offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 121, "localhost offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 122, "local_ip offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 123, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_sync_span_facts) == 72, "sync span facts changed size");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address) == 0, "remote_address offset");
@@ -303,14 +302,12 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_sync_span_facts, filled) == 64, "filled offset");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, reserved) == 65, "reserved offset");
 
-  static_assert(sizeof(shekyl_rpc_peer_facts) == 40, "peer facts changed size");
+  static_assert(sizeof(shekyl_rpc_peer_facts) == 32, "peer facts changed size");
   static_assert(offsetof(shekyl_rpc_peer_facts, host) == 0, "host offset");
   static_assert(offsetof(shekyl_rpc_peer_facts, host_len) == 8, "host_len offset");
   static_assert(offsetof(shekyl_rpc_peer_facts, last_seen) == 16, "last_seen offset");
   static_assert(offsetof(shekyl_rpc_peer_facts, ip) == 24, "ip offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, pruning_seed) == 28, "pruning_seed offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 32, "port offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 34, "white offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 35, "blocked offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, reserved) == 36, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 28, "port offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 30, "white offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 31, "blocked offset");
 }

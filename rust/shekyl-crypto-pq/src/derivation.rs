@@ -3,33 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Per-output PQC keypair derivation.
+//! Per-output PQC keypair and HKDF secret derivation.
 //!
 //! From a combined KEM shared secret (X25519 + ML-KEM-768) and an output
-//! index, deterministically derive an ML-DSA-65 keypair. The public key
-//! hash `H(pqc_pk)` becomes the 4th scalar in the FCMP++ curve tree leaf.
+//! index, deterministically derive the hybrid ML-DSA-65 + Ed25519 keypair
+//! and the rest of [`OutputSecrets`]. The output's PQC leaf commitment
+//! (`CM = k·G_k + r·J`) lives in [`crate::leaf_commitment`].
 //!
 //! ```text
 //! combined_ss ─── HKDF-Expand("shekyl-pqc-output" || output_index_le64)
 //!                   └── 32-byte seed → ML-DSA-65 deterministic keygen
 //! ```
 
-use blake2::{Blake2b512, Digest};
 use hkdf::Hkdf;
 use sha2::Sha512;
-use zeroize::Zeroize;
 
 use fips204::ml_dsa_65;
 
 use crate::CryptoError;
-
-/// Domain separator for the per-output PQC leaf hash.
-///
-/// This crate is the **single source** for the consensus leaf hash: both this
-/// module's [`hash_pqc_public_key`] and `shekyl_fcmp::PqcLeafScalar` compute the
-/// leaf scalar through this constant, and `shekyl-fcmp` wraps `hash_pqc_public_key`
-/// rather than re-deriving it (SA-3a retired the duplicate definition + logic).
-pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 
 /// ML-DSA-65 public key length.
 pub const ML_DSA_65_PK_LEN: usize = ml_dsa_65::PK_LEN;
@@ -55,68 +46,14 @@ pub fn keygen_from_seed(
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
 }
 
-/// Compute `H(pqc_pk)` — the PQC leaf scalar for the curve tree.
-///
-/// Uses domain-separated Blake2b-512, reduced to a canonical Selene base
-/// field element via `HelioseleneField::wide_reduce` on the full 512-bit
-/// hash output. This is the **single source** for the consensus leaf hash:
-/// `shekyl_fcmp::PqcLeafScalar::from_pqc_public_key` wraps this function
-/// (SA-3a), so the two entry points are identical by construction rather than
-/// by two implementations agreeing.
-pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    use helioselene::HelioseleneField;
-
-    let mut hasher = Blake2b512::new();
-    hasher.update(DOMAIN_PQC_LEAF);
-    hasher.update(pqc_pk_bytes);
-    let hash_512 = hasher.finalize();
-
-    let mut uniform = [0u8; 64];
-    uniform.copy_from_slice(hash_512.as_ref());
-    let field_elem = HelioseleneField::wide_reduce(uniform);
-    uniform.zeroize();
-    field_elem.to_repr()
-}
-
-/// Derive `h_pqc = H(hybrid_public_key)` from combined shared secret and output
-/// index, without returning any secret key material.
-///
-/// Internally derives the full hybrid keypair via `derive_output_secrets` (salt B)
-/// + `keygen_from_seed`, hashes the public key, and zeroizes the secret key on drop.
-pub fn derive_pqc_leaf_hash(
-    combined_ss: &[u8; 64],
-    output_index: u64,
-) -> Result<[u8; 32], CryptoError> {
-    use crate::signature::HybridPublicKey;
-    use ed25519_dalek::SigningKey;
-
-    let secrets = derive_output_secrets(combined_ss, output_index);
-    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
-
-    let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
-    let ed_verifying = ed_signing.verifying_key();
-
-    let hybrid_pk = HybridPublicKey {
-        ed25519: ed_verifying.to_bytes(),
-        ml_dsa: {
-            use fips204::traits::SerDes;
-            ml_pk.into_bytes().to_vec()
-        },
-    };
-
-    let pk_bytes = hybrid_pk
-        .to_canonical_bytes()
-        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
-
-    Ok(hash_pqc_public_key(&pk_bytes))
-}
-
 /// Derive the canonical hybrid public key bytes from combined shared secret and
 /// output index, without returning any secret key material.
 ///
-/// Used where the full public key (not just its hash) is needed before signing,
-/// e.g. populating `tx.pqc_auths[i].hybrid_public_key` for payload construction.
+/// Used where the full public key is needed before signing, e.g. populating
+/// `tx.pqc_auths[i].hybrid_public_key` for payload construction. The leaf never
+/// stores a hash of these bytes: it stores `CM.x` (`PL-D3`), and the verifier
+/// recomputes the key scalar `k = H_ℓ(hybrid_pk)` from the revealed key as the
+/// commitment's key component ([`crate::leaf_commitment`]).
 pub fn derive_pqc_public_key(
     combined_ss: &[u8; 64],
     output_index: u64,
@@ -154,7 +91,7 @@ pub fn derive_pqc_public_key(
 use curve25519_dalek::scalar::Scalar;
 
 /// HKDF salt for the combined shared secret derivation (Instance 1).
-const HKDF_SALT_OUTPUT_DERIVE: &[u8] = b"shekyl-output-derive-v1";
+pub(crate) const HKDF_SALT_OUTPUT_DERIVE: &[u8] = b"shekyl-output-derive-v1";
 
 /// HKDF salt for ML-KEM-keyed view-tag pre-filter (Instance 2).
 const HKDF_SALT_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter-v1";
@@ -198,6 +135,10 @@ const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
 /// ml_dsa_seed     =             HKDF-Expand(prk, "shekyl-pqc-output"           || idx_le64, 32)
 /// ed25519_pqc_seed=             HKDF-Expand(prk, "shekyl-pqc-ed25519"          || idx_le64, 32)
 /// ```
+///
+/// The PQC leaf-commitment blinds (`shekyl-pqc-leaf-blind`,
+/// `shekyl-pqc-leaf-record-blind`) share this PRK but live in
+/// [`crate::leaf_commitment`].
 #[derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct OutputSecrets {
     /// DL of O w.r.t. G minus spend key b: `O = (ho+b)*G + y*T`
@@ -320,28 +261,50 @@ pub fn derive_kem_seed(
     seed
 }
 
-fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
+pub(crate) fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
     let mut info = Vec::with_capacity(label.len() + 8);
     info.extend_from_slice(label);
     info.extend_from_slice(&output_index.to_le_bytes());
     info
 }
 
-fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
-    let info = make_info(label, output_index);
-    let mut wide = [0u8; 64];
-    hk.expand(&info, &mut wide)
+/// Expand 64 bytes under `info` and wide-reduce into a canonical Ed25519
+/// scalar (rule 30: wide-reduce, never 32-byte modular reduction). The shared
+/// body for every scalar derived off the output PRK: [`expand_to_scalar`] and
+/// the PQC leaf-commitment blind ([`crate::leaf_commitment`]) both come
+/// through here, so the reduction cannot drift between them. The 64-byte
+/// expansion is wiped structurally; the returned scalar wipes on drop.
+pub(crate) fn expand_wide_scalar(hk: &Hkdf<Sha512>, info: &[u8]) -> zeroize::Zeroizing<Scalar> {
+    let mut wide = zeroize::Zeroizing::new([0u8; 64]);
+    hk.expand(info, wide.as_mut())
         .expect("HKDF-Expand failed for 64-byte output");
-    let scalar = Scalar::from_bytes_mod_order_wide(&wide);
-    wide.zeroize();
-    scalar.to_bytes()
+    zeroize::Zeroizing::new(Scalar::from_bytes_mod_order_wide(&wide))
 }
 
-fn expand_32(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
-    let info = make_info(label, output_index);
+fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+    let scalar = expand_wide_scalar(hk, &make_info(label, output_index));
     let mut out = [0u8; 32];
-    hk.expand(&info, &mut out)
+    out.copy_from_slice(scalar.as_bytes());
+    out
+}
+
+/// HKDF-Expand 32 bytes under `label ‖ idx_le64` directly into `out` — the
+/// write-into-destination shape (rule 35) for callers whose destination is
+/// already inside a `Zeroize` wrapper.
+pub(crate) fn expand_32_into(
+    hk: &Hkdf<Sha512>,
+    label: &[u8],
+    output_index: u64,
+    out: &mut [u8; 32],
+) {
+    let info = make_info(label, output_index);
+    hk.expand(&info, out)
         .expect("HKDF-Expand failed for 32-byte output");
+}
+
+pub(crate) fn expand_32(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    expand_32_into(hk, label, output_index, &mut out);
     out
 }
 
@@ -353,31 +316,6 @@ fn expand_first_byte(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn derivation_deterministic() {
-        let ss = [0xab; 64];
-        let h1 = derive_pqc_leaf_hash(&ss, 0).unwrap();
-        let h2 = derive_pqc_leaf_hash(&ss, 0).unwrap();
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn different_indices_different_keys() {
-        let ss = [0xab; 64];
-        let h0 = derive_pqc_leaf_hash(&ss, 0).unwrap();
-        let h1 = derive_pqc_leaf_hash(&ss, 1).unwrap();
-        assert_ne!(h0, h1);
-    }
-
-    #[test]
-    fn different_secrets_different_keys() {
-        let ss1 = [0xab; 64];
-        let ss2 = [0xcd; 64];
-        let h1 = derive_pqc_leaf_hash(&ss1, 0).unwrap();
-        let h2 = derive_pqc_leaf_hash(&ss2, 0).unwrap();
-        assert_ne!(h1, h2);
-    }
 
     #[test]
     fn derived_key_sizes() {
@@ -400,209 +338,6 @@ mod tests {
         let msg = b"shekyl per-output pqc test";
         let sig = sk.try_sign(msg, &[]).unwrap();
         assert!(pk.verify(msg, &sig, &[]));
-    }
-
-    #[test]
-    fn hash_pqc_pk_deterministic() {
-        let pk = vec![0xab; ML_DSA_65_PK_LEN];
-        let h1 = hash_pqc_public_key(&pk);
-        let h2 = hash_pqc_public_key(&pk);
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn hash_pqc_pk_canonical_field_element() {
-        use ciphersuite::group::ff::PrimeField;
-        use helioselene::HelioseleneField;
-
-        let pk = vec![0xff; ML_DSA_65_PK_LEN];
-        let h = hash_pqc_public_key(&pk);
-        assert!(
-            bool::from(HelioseleneField::from_repr(h).is_some()),
-            "hash must produce a canonical Selene base field element"
-        );
-    }
-
-    #[test]
-    fn derivation_sequential_indices_all_unique() {
-        let ss = [0xab; 64];
-        let mut seen = std::collections::HashSet::new();
-        for i in 0..10u64 {
-            let h = derive_pqc_leaf_hash(&ss, i).unwrap();
-            assert!(seen.insert(h), "index {i} produced duplicate leaf hash");
-        }
-    }
-
-    #[test]
-    fn derivation_large_index() {
-        let ss = [0xab; 64];
-        let h = derive_pqc_leaf_hash(&ss, u64::MAX).unwrap();
-        assert_ne!(h, [0u8; 32]);
-    }
-
-    #[test]
-    fn hash_pqc_pk_different_lengths() {
-        let short = hash_pqc_public_key(&[0xab; 32]);
-        let long = hash_pqc_public_key(&[0xab; ML_DSA_65_PK_LEN]);
-        assert_ne!(short, long);
-    }
-
-    #[test]
-    fn hash_pqc_pk_empty_input() {
-        use ciphersuite::group::ff::PrimeField;
-        use helioselene::HelioseleneField;
-
-        let h = hash_pqc_public_key(&[]);
-        assert!(bool::from(HelioseleneField::from_repr(h).is_some()));
-        assert_ne!(h, [0u8; 32]);
-    }
-
-    #[test]
-    fn derived_keypair_sign_verify_consistency() {
-        use fips204::traits::{Signer as _, Verifier as _};
-
-        let ss = [0xcd; 64];
-        for idx in [0u64, 1, 100, u64::MAX - 1] {
-            let secrets = derive_output_secrets(&ss, idx);
-            let (pk, sk) = keygen_from_seed(&secrets.ml_dsa_seed).unwrap();
-
-            let msg = format!("test message for output index {idx}");
-            let sig = sk.try_sign(msg.as_bytes(), &[]).unwrap();
-            assert!(
-                pk.verify(msg.as_bytes(), &sig, &[]),
-                "sign/verify failed for index {idx}"
-            );
-        }
-    }
-
-    /// Cross-crate agreement pin (SA-3a): `PqcLeafScalar::from_pqc_public_key`
-    /// forwards to `hash_pqc_public_key`, and this asserts the two entry points
-    /// agree on a real derived ML-DSA-65 public key. It pins **value agreement
-    /// only** — it catches a wrapper that stops forwarding *and* diverges, not a
-    /// byte-identical re-duplication (no value test can). The guards against
-    /// silent re-forking are structural: `shekyl-fcmp` no longer carries a
-    /// Blake2b dependency (SA-3a removed it), and the frozen byte pins in
-    /// `PQC_LEAF_HASH_RAW_PK_KAT.json` fail the moment any copy drifts.
-    #[test]
-    fn hash_matches_leaf_scalar() {
-        use shekyl_fcmp::leaf::PqcLeafScalar;
-
-        let ss = [0xab; 64];
-        let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
-        let h = hash_pqc_public_key(&pk_bytes);
-        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&pk_bytes);
-        assert_eq!(
-            h, leaf_scalar.0,
-            "PqcLeafScalar::from_pqc_public_key must forward to hash_pqc_public_key"
-        );
-    }
-
-    #[test]
-    fn leaf_hash_consistent_with_derive_pqc_public_key() {
-        let ss = [0xab; 64];
-        let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
-        let h_from_pk = hash_pqc_public_key(&pk_bytes);
-        let h_from_leaf = derive_pqc_leaf_hash(&ss, 0).unwrap();
-        assert_eq!(
-            h_from_pk, h_from_leaf,
-            "derive_pqc_leaf_hash must equal hash_pqc_public_key(derive_pqc_public_key(...))"
-        );
-    }
-
-    #[derive(serde::Deserialize)]
-    struct LeafHashKat {
-        combined_ss: String,
-        output_index: u64,
-        h_pqc: String,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct LeafHashKatFile {
-        vectors: Vec<LeafHashKat>,
-    }
-
-    #[test]
-    fn pqc_leaf_hash_known_answer_vectors() {
-        let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_KAT.json");
-        let file: LeafHashKatFile =
-            serde_json::from_str(json).expect("failed to parse PQC_LEAF_HASH_KAT.json");
-        assert!(
-            !file.vectors.is_empty(),
-            "no vectors in PQC_LEAF_HASH_KAT.json"
-        );
-
-        for (i, v) in file.vectors.iter().enumerate() {
-            let css_bytes = hex::decode(&v.combined_ss)
-                .unwrap_or_else(|_| panic!("vector {i}: invalid combined_ss hex"));
-            let css: [u8; 64] = css_bytes
-                .as_slice()
-                .try_into()
-                .unwrap_or_else(|_| panic!("vector {i}: combined_ss not 64 bytes"));
-            let h_pqc = derive_pqc_leaf_hash(&css, v.output_index)
-                .unwrap_or_else(|e| panic!("vector {i}: derive_pqc_leaf_hash failed: {e}"));
-            let expected =
-                hex::decode(&v.h_pqc).unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
-            assert_eq!(
-                h_pqc.as_slice(), expected.as_slice(),
-                "vector {i}: h_pqc mismatch for combined_ss={} idx={}:\n  got:      {}\n  expected: {}",
-                &v.combined_ss[..8], v.output_index,
-                hex::encode(h_pqc), v.h_pqc
-            );
-        }
-    }
-
-    #[derive(serde::Deserialize)]
-    struct RawPkLeafHashKat {
-        pqc_pk: String,
-        h_pqc: String,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct RawPkLeafHashKatFile {
-        vectors: Vec<RawPkLeafHashKat>,
-    }
-
-    /// SA-3a byte-proof: frozen captures of the pre-dedup
-    /// `PqcLeafScalar::from_pqc_public_key` (the duplicate Blake2b/wide_reduce
-    /// body that lived in `shekyl-fcmp`), covering the degenerate input lengths
-    /// (empty, 1-byte) the derived-path vectors above cannot express. Each
-    /// vector is asserted through **both** consensus entry points — the owner
-    /// [`hash_pqc_public_key`] and the fcmp wrapper — so any future fork of
-    /// either copy fails here. Never regenerate these from current code; on a
-    /// mismatch the code, not the vector, is wrong.
-    #[test]
-    fn pqc_leaf_hash_raw_pk_known_answer_vectors() {
-        use shekyl_fcmp::leaf::PqcLeafScalar;
-
-        let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json");
-        let file: RawPkLeafHashKatFile =
-            serde_json::from_str(json).expect("failed to parse PQC_LEAF_HASH_RAW_PK_KAT.json");
-        assert_eq!(
-            file.vectors.len(),
-            4,
-            "PQC_LEAF_HASH_RAW_PK_KAT.json is a frozen pin set — vectors are never added or removed"
-        );
-
-        for (i, v) in file.vectors.iter().enumerate() {
-            let pk =
-                hex::decode(&v.pqc_pk).unwrap_or_else(|_| panic!("vector {i}: invalid pqc_pk hex"));
-            let expected =
-                hex::decode(&v.h_pqc).unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
-            let owner = hash_pqc_public_key(&pk);
-            let wrapper = PqcLeafScalar::from_pqc_public_key(&pk);
-            assert_eq!(
-                owner.as_slice(),
-                expected.as_slice(),
-                "vector {i}: hash_pqc_public_key drifted for input length {}",
-                pk.len()
-            );
-            assert_eq!(
-                wrapper.0.as_slice(),
-                expected.as_slice(),
-                "vector {i}: PqcLeafScalar::from_pqc_public_key drifted for input length {}",
-                pk.len()
-            );
-        }
     }
 
     // ── OutputSecrets known-answer tests against locked vectors ──────────

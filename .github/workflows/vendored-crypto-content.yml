@@ -13,6 +13,14 @@ name: vendored crypto content
 # once A0 re-syncs the subtree to a clean fork baseline.
 
 on:
+  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
+  # not only the branch head — the class of failure neither PR's CI can
+  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
+  # filter, so this runs on every group regardless of the PR filter above
+  # or below.
+  merge_group:
+    types: [checks_requested]
+    branches: [dev]
   push:
     # dev/main only. PR branches are covered by the pull_request event (which
     # tests the PR merged into its base); an unrestricted push trigger would

@@ -103,21 +103,70 @@ pub enum EpochSettlement {
 
 /// Why a `(passes, issued)` pair was refused rather than settled.
 ///
-/// The two counts reach the fold from **independent sources** — `passes`
-/// from admission-verified records, `issued` from the urn derivation — so
-/// a desync between them is a reachable runtime state on the settlement
-/// path, and it must reject (the block, upstream) rather than panic the
-/// daemon. Same posture as the urn's own [`crate::FeedError`]: a stream
-/// the fold cannot trust is a typed refusal, never a crash and never a
-/// silently "clamped" settlement.
+/// # What this guards (`SO-D8d`, 2026-09-16)
+///
+/// Under `SO-D8b` (exact-get dedup + membership;
+/// `docs/design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6), `passes > issued`
+/// is unreachable by construction: one record per `(P, s, E, h)`, each `h`
+/// tied to a draw, `E = epoch(h)`. This error is **not** an arithmetic
+/// disagreement that can arise on its own. It is a cheap backstop under
+/// two stronger local layers that guard **Q3** — whether the drawable-set
+/// reconstruction is stable between admission at `h_incl` and settlement
+/// at the slash deadline, hundreds of blocks later:
+///
+/// 1. per-record assignment equality against the writer's `assignment(h)`
+///    (a streamed replay, not a materialised epoch);
+/// 2. a local 32-byte digest of the drawable set, persisted in the connect
+///    batch at `h_open(E)`, compared against a re-walk of the set at the
+///    slash pass.
+///
+/// This variant is **strictly dominated**: it fires only when
+/// `passes ≥ issued + 1`, which requires records, which layer 1 already
+/// covers. Neither direction that costs a bond reaches it — an
+/// over-derived `issued` (`NonObservation` read as `Missed`) or an
+/// under-derived one (`Missed` read as `NonObservation`, the free exit)
+/// both satisfy `passes ≤ issued`. Those are layer 2's alone (§6.1).
+///
+/// Four edits make the stack fire, each a different real defect: revert
+/// the dedup widening (layers 1/3); perturb the reconstruction so
+/// admission and settlement disagree (layer 2); prune a journal above the
+/// retention horizon (fires upstream, as the enumerator's refusal or an
+/// SI-7 view fault, and escalates at the slash pass); compile the
+/// `cfg(test)` λ constructor into a production module (layer 1 only —
+/// Q4 is a coverage precondition). Named here so a sweep does not read
+/// an unreachable check as dead.
+///
+/// # What the caller must do
+///
+/// `settle_epoch` returns a typed refusal (same posture as the urn's
+/// [`crate::FeedError`]). At the slash-pass caller it is a **store-invariant
+/// Fault** — `poison().arm(<SI- row>)` → `ConnectState::Halted`, the row
+/// minted at Slice C — never a `CenRow`, never `InvalidBlock`. The slash
+/// pass runs inside the connect batch, so the block at the slash height is
+/// not written on this node **because the writer halted, not because the
+/// block is invalid**; other nodes connect it. The halt is in memory,
+/// re-derived on restart, reads stay open. Never panic. Never clamp
+/// (`min(passes, issued)`). Never skip (write no row — `SO-D5` inversion:
+/// absent reads as NonObservation).
+///
+/// *SUPERSEDED: "a reachable runtime state on the settlement path" in
+/// the arithmetic sense; "must reject (the block, upstream)".*
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SettleError {
-    /// More passes counted than challenges assigned — the record count and
-    /// the urn bookkeeping disagree about the same pair-epoch.
+    /// More admitted pass records than derived issuance for the pair-epoch —
+    /// the cheap backstop under the `SO-D8d` layers. Not an arithmetic
+    /// disagreement that can arise on its own once `SO-D8b` holds: either
+    /// admission let in records the derivation never assigned (a dedup or
+    /// membership regression — §6.5's first falsifier, with reconstruction
+    /// agreeing), or the drawable-set derivation itself disagrees between
+    /// admission and settlement (the Q3 case). The message names both so an
+    /// operator is not sent to one subsystem when the fault is in the other.
     #[error(
-        "more passes ({passes}) than issued challenges ({issued}): passes come from \
-         admission-verified records and issued from the urn derivation, so this pair \
-         is a desynced accounting input, not a settlement state"
+        "more admitted pass records ({passes}) than derived issuance ({issued}) \
+         for the pair-epoch: admission credited records the derivation did not \
+         assign (dedup/membership regression) or the drawable-set derivation \
+         disagrees between admission and settlement (SO-D8d); a store-invariant \
+         fault, not a settlement state"
     )]
     MorePassesThanIssued {
         /// Admission-verified pass records counted for the pair-epoch.
@@ -138,7 +187,8 @@ pub enum SettleError {
 /// # Errors
 ///
 /// [`SettleError::MorePassesThanIssued`] if `passes > issued` — see
-/// [`SettleError`] for why that is a typed refusal rather than a panic.
+/// [`SettleError`] for why that is a typed refusal (the slash-pass
+/// caller **halts**; never a panic, never a clamp, never a skip).
 pub fn settle_epoch(passes: u32, issued: u32) -> Result<EpochSettlement, SettleError> {
     if passes > issued {
         return Err(SettleError::MorePassesThanIssued { passes, issued });
@@ -222,9 +272,9 @@ mod tests {
 
     #[test]
     fn more_passes_than_issued_is_a_typed_refusal() {
-        // A record count exceeding the urn's issued count is a desynced
-        // accounting input — refused with both numbers named, never folded
-        // (and never a panic on the settlement path).
+        // Layer-3 mapping pin (`SO-D8d`): the fold refuses rather than
+        // clamping. This is not the Q3 reconstruction fixture — that seeds
+        // two urns from divergent drawable sets at Slice C.
         assert_eq!(
             settle_epoch(3, 2),
             Err(SettleError::MorePassesThanIssued {

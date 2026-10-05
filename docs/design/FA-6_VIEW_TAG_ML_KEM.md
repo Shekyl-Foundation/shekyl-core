@@ -156,7 +156,7 @@ post-decap (or decap is universal).
 | **`enc_label` (8 B)** (FA-11) | `CtSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
 | `view_tag_combined` | **Not on wire** | Hybrid | `combined_ss` | Internal only | N/A | No wire action |
 | KEM CTs (`R_eph`, ML-KEM) | `tx_extra` | Public / ciphertext | — | — | No clustering via tag alone | No FA-6 change |
-| `output_key`, commitment, `pqc_pk`, `h_pqc` | tx / RCT | Public | — | — | No | No FA-6 change |
+| `output_key`, commitment, `pqc_pk`, the `0x07` leaf entry | tx / RCT | Public | — | — | No | No FA-6 change |
 
 **Implementation gate:** Before FA-6 merges, sign off §3.1 rows marked
 **Verify** with code pointers (`dev` post–PR #100 for `label_tag` /
@@ -801,7 +801,7 @@ For each scenario, let `T_meas` = measured wall-clock, `T_ceil` = §8.4 ceiling.
 
 #### 8.7.1 Recorded outcome (2026-06-08)
 
-Micro gate (§8.5.1) on reference device **skl-pi** (Pi 4 Model B, 4 GB, active
+Micro gate (§8.5.1) on the reference device (Pi 4 Model B, 4 GB, active
 cooling, USB3 SSD host, wallet-only). Harness:
 `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs` with
 `--path fa6|classical`; Pi capture via `scripts/bench/fa6_pi4_gate.sh`. Full
@@ -809,12 +809,12 @@ matrix in `PERFORMANCE_BASELINE.md` §FA-6.
 
 | Host | Path | Scenario | `T_meas` | ns/out | `T_ceil` | `gate_outcome` |
 |------|------|----------|----------|--------|----------|----------------|
-| skl-pi | fa6 | smoke | — | 271,505 | — | informational |
-| skl-pi | fa6 | A | 550.4 s | 273,023 | 45 s | **fail** |
-| skl-pi | fa6 | B | *(pending capture)* | ~273,000 (extrap. from A) | 20 min | **fail** (expected) |
-| skl-pi | classical | smoke | — | 639,791 | — | informational |
-| skl-pi | classical | A | 1,289.9 s | 639,834 | 45 s | **fail** |
-| skl-pi | classical | B | *(pending capture)* | ~640,000 (extrap. from A) | 20 min | **fail** (expected) |
+| floor | fa6 | smoke | — | 271,505 | — | informational |
+| floor | fa6 | A | 550.4 s | 273,023 | 45 s | **fail** |
+| floor | fa6 | B | *(pending capture)* | ~273,000 (extrap. from A) | 20 min | **fail** (expected) |
+| floor | classical | smoke | — | 639,791 | — | informational |
+| floor | classical | A | 1,289.9 s | 639,834 | 45 s | **fail** |
+| floor | classical | B | *(pending capture)* | ~640,000 (extrap. from A) | 20 min | **fail** (expected) |
 
 Classical counterfactual captures used `RUSTFLAGS=-C target-cpu=cortex-a72`
 per §8.2; FA-6 scenario A used default `RUSTFLAGS` on Pi (ratio ~2.3× still

@@ -8,7 +8,13 @@
 #
 # Last-line-of-defense that every `[u8; N]` or `Vec<u8>` field
 # declared inside `rust/shekyl-engine-state/src/**/*.rs` (production
-# code — test modules are elided) is either:
+# code — the tests module is elided) is either:
+#
+# `**` is literal: the walk RECURSES. It globbed `src/*.rs` until
+# 2026-09-11, one level only, while claiming `src/**/*.rs` -- harmless
+# then (every file was top-level) and silently narrowing the moment a
+# module is carved into a directory, which is this repo's standing
+# decomposition move.
 #
 #   1. Wrapped in a zeroize-on-drop type (`Zeroizing<...>` or
 #      `SecretKey<...>`) at the same-line declaration site, OR
@@ -54,16 +60,35 @@ fi
 # `let` / `match` / `impl` / return-arrow lines are excluded. The
 # remaining hits are strict field declarations, including tuple-struct
 # single-liners like `pub struct PaymentId(pub [u8; 8]);`.
+# Rule 47: the gate must assert its own subject. An empty file list means the
+# crate moved, not that every field is wrapped -- and a zero-hit run would then
+# report "clean" over nothing at all.
+SRC_FILES=$(find "${SRC_DIR}" -type f -name '*.rs' | LC_ALL=C sort)
+if [ -z "${SRC_FILES}" ]; then
+  echo "FATAL: no .rs files found under ${SRC_DIR}"
+  echo "       The gate has no subject; the crate moved or the path is wrong."
+  echo "       Fix the path -- do not let this pass on an empty scan."
+  exit 2
+fi
+
 HITS=$(
-  for f in "${SRC_DIR}"/*.rs; do
+  while IFS= read -r f; do
     # Use awk to walk the file, tracking paren depth across lines so
     # we can tell "inside a multi-line fn sig" from "struct body."
     awk -v file="${f#${REPO_ROOT}/}" '
       BEGIN { pdepth = 0; test_seen = 0 }
 
-      # Stop at the first #[cfg(test)] — Rust test modules are not
-      # persisted, so their field declarations are out of scope.
-      /^[ \t]*#\[cfg\(test\)\]/ { test_seen = 1 }
+      # Stop at the tests MODULE, which by convention is an UNINDENTED
+      # `#[cfg(test)]` at column 0. The previous pattern allowed leading
+      # whitespace and so fired on the first `#[cfg(test)]` anywhere --
+      # including the indented ones that gate test-only helper *functions*
+      # inside a production impl block. In pending_post_block.rs those sit at
+      # lines 544/557/607 while the real `mod tests` is at 1041, so ~496 lines
+      # of production code were never scanned. Anchoring at column 0 is also
+      # the SAFE direction if the convention ever varies: scanning too much
+      # yields a false RED (an extra candidate needing a wrapper or an
+      # allowlist entry), never a false green.
+      /^#\[cfg\(test\)\]/ { test_seen = 1 }
       { if (test_seen) next }
 
       {
@@ -116,7 +141,7 @@ HITS=$(
         if (pdepth < 0) pdepth = 0
       }
     ' "$f"
-  done
+  done <<< "${SRC_FILES}"
 )
 
 # ---- Pass 2: filter out Zeroizing / SecretKey wrappers ----------------

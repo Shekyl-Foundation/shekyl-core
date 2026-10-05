@@ -17,8 +17,9 @@ use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
+use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
-use shekyl_crypto_pq::output::construct_output;
+use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
@@ -33,6 +34,7 @@ use super::local_keys::LocalKeys;
 use super::traits::key::{
     TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
 };
+use crate::outbound_label::label_plaintext_for_recipient;
 
 struct DerivedScalars {
     spend_public: EdwardsPoint,
@@ -67,15 +69,20 @@ pub(super) struct BuiltOutput {
     pub(super) output_key: [u8; 32],
     pub(super) view_tag: Option<u8>,
     pub(super) kem_blob: Vec<u8>,
-    /// The output's `H(pqc_pk)` curve-tree leaf component, for the tx_extra
-    /// `0x07` leaf-hash blob (vout order). An output whose transaction omits
-    /// the field ingests with a **zero** `h_pqc` leaf and is unspendable —
-    /// no FCMP++ spend of it can satisfy the verifier's
-    /// `pqc_auths`-derived leaf hash (the PR-4b bond e2e surfaced this
-    /// live: the persona funding transfer's outputs could not fund a bond).
-    pub(super) h_pqc: [u8; 32],
+    /// The output's 64-byte `0x07` entry `CM ‖ record` (`PL-D3` / `PL-D3a`):
+    /// the PQC leaf commitment whose x-coordinate becomes the leaf's 4th
+    /// scalar, and the post-quantum record. Consensus refuses a transaction
+    /// with outputs that omits the field (CEN-I19), and an entry that is not
+    /// the honest derivation leaves the recipient with an output it can see
+    /// but never open (received-but-unspendable), so every builder appends
+    /// exactly this value in vout order.
+    pub(super) pqc_leaf: [u8; 64],
 }
 
+/// `label_plaintext` is the 8-byte block this output encrypts
+/// (`outbound_label`): the payee's `rid` echo for a payment that answers a
+/// link, the sentinel for everything else. The wire is the same width
+/// either way.
 pub(super) fn build_output(
     tx_key_secret: &[u8; 32],
     recipient_spend_pk: &[u8; 32],
@@ -83,14 +90,16 @@ pub(super) fn build_output(
     recipient_ml_kem: &[u8],
     amount: u64,
     output_index: u64,
+    label_plaintext: &[u8; 8],
 ) -> Result<BuiltOutput, KeyEngineError> {
-    let constructed = construct_output(
+    let constructed = construct_output_with_label_plaintext(
         tx_key_secret,
         recipient_x25519,
         recipient_ml_kem,
         recipient_spend_pk,
         amount,
         output_index,
+        label_plaintext,
     )
     .map_err(KeyEngineError::SourceCiphertextDecapsulationFailed)?;
 
@@ -109,7 +118,7 @@ pub(super) fn build_output(
         output_key: constructed.output_key,
         view_tag: Some(constructed.view_tag_prefilter),
         kem_blob,
-        h_pqc: constructed.h_pqc,
+        pqc_leaf: constructed.pqc_leaf.entry_bytes(),
     })
 }
 
@@ -219,7 +228,6 @@ fn spend_input_from_context(
         spend_key_x: *bundle.spend_key_x,
         spend_key_y: *bundle.spend_key_y,
         commitment_mask: *bundle.commitment_mask,
-        h_pqc: ctx.h_pqc,
         combined_ss: bundle.combined_ss.to_vec(),
         output_index: ctx.internal_output_index,
         leaf_chunk,
@@ -229,6 +237,38 @@ fn spend_input_from_context(
 }
 
 /// Sign a populated [`TxToSign`] using wallet key material (actor round-trip).
+/// One payment output the sign pass will construct, its label plaintext
+/// already chosen so the construction loop only encrypts.
+struct PaymentOutput {
+    address: String,
+    amount: u64,
+    label_plaintext: [u8; 8],
+}
+
+/// The payment outputs of a sign request, each with the label plaintext
+/// `outbound_label` chose for its destination, and their total. `Change`
+/// intents carry nothing here: V3.0 is primary-only, change always returns
+/// to the base spend key, and its amount is the leftover the caller derives.
+fn payment_outputs_of(
+    outputs: &[TxOutputContext],
+) -> Result<(u64, Vec<PaymentOutput>), KeyEngineError> {
+    let mut total = 0u64;
+    let mut payments = Vec::new();
+    for output in outputs {
+        if let TxOutputContext::Payment { dest, amount } = output {
+            total = total
+                .checked_add(*amount)
+                .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
+            payments.push(PaymentOutput {
+                address: dest.address.clone(),
+                amount: *amount,
+                label_plaintext: label_plaintext_for_recipient(dest.rid)?,
+            });
+        }
+    }
+    Ok((total, payments))
+}
+
 pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError> {
     let keys = &local.keys;
     if tx.inputs.is_empty() {
@@ -249,21 +289,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
     }
 
-    let mut payment_total = 0u64;
-    let mut payment_outputs: Vec<(String, u64)> = Vec::new();
-    for output in &tx.outputs {
-        match output {
-            TxOutputContext::Payment { dest, amount } => {
-                payment_total = payment_total
-                    .checked_add(*amount)
-                    .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
-                payment_outputs.push((dest.address.clone(), *amount));
-            }
-            // V3.0 is primary-only: change always returns to the base spend key,
-            // so the requested change index (if any) carries no signing meaning.
-            TxOutputContext::Change { .. } => {}
-        }
-    }
+    let (payment_total, payment_outputs) = payment_outputs_of(&tx.outputs)?;
 
     let leftover =
         input_amounts
@@ -296,7 +322,12 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     let mut kem_blobs: Vec<Vec<u8>> = Vec::new();
     let mut output_index: u64 = 0;
 
-    for (address, amount) in payment_outputs {
+    for PaymentOutput {
+        address,
+        amount,
+        label_plaintext,
+    } in payment_outputs
+    {
         let recipient = decode_recipient(&address, network)?;
         // The address carries the recipient's **Edwards** view key; the KEM's
         // X25519 half encapsulates to `montgomery(view_pk)` (the parameter-free
@@ -317,6 +348,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
             &recipient.ml_kem_encap_key,
             amount,
             output_index,
+            &label_plaintext,
         )?;
         kem_blobs.push(built.kem_blob.clone());
         built_outputs.push(built);
@@ -336,6 +368,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
                 &keys.ml_kem_ek,
                 change_amount,
                 output_index,
+                &sentinel_plaintext(),
             )?;
             kem_blobs.push(built.kem_blob.clone());
             built_outputs.push(built);
@@ -348,17 +381,14 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     }
 
-    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf-hash
-    // blob (`H(pqc_pk)` per output, vout order). Without the `0x07` field
-    // every output of this transfer ingests into the curve tree with a zero
-    // `h_pqc` leaf and is **unspendable** — the FCMP++ verifier derives the
-    // leaf hash from the spender's pqc auth key, which can never equal zero.
-    // The bond/emission assembly paths (stake_engine.rs) have always
-    // appended it; the PR-4b bond e2e surfaced this gap live when a persona
-    // funding output built by this path could not fund a bond post.
-    let leaf_hash_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.h_pqc).collect();
+    // tx_extra: tx pubkey + per-output KEM blobs + the `0x07` PQC leaf
+    // entries (`CM ‖ record` per output, vout order; `PL-D3`). Consensus
+    // refuses a transaction with outputs that lacks the field (CEN-I19), and
+    // the bond/emission assembly paths (stake_engine.rs) append the same
+    // value through the same primitive.
+    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
     let mut bundles = HashMap::new();
@@ -528,7 +558,133 @@ mod tests {
     use super::*;
     use crate::engine::local_keys::LocalKeys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
-    use shekyl_crypto_pq::output::scan_output_recover;
+    use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
+    use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
+    use shekyl_engine_state::PaymentRequestId;
+
+    /// The production path from a destination's `rid` to the plaintext the
+    /// sign pass encrypts: `payment_outputs_of` is what `sign_tx` calls, so
+    /// a sentinel substituted for the request echo there fails here.
+    #[test]
+    fn the_sign_pass_chooses_the_request_echo_from_the_destinations_rid() {
+        use super::super::traits::key::OutputDestination;
+        let outputs = vec![
+            TxOutputContext::Payment {
+                dest: OutputDestination {
+                    address: "shekyl1payee".into(),
+                    rid: Some(PaymentRequestId(42)),
+                },
+                amount: 5,
+            },
+            TxOutputContext::Change {
+                subaddress_index: 0,
+            },
+            TxOutputContext::Payment {
+                dest: OutputDestination {
+                    address: "shekyl1other".into(),
+                    rid: None,
+                },
+                amount: 7,
+            },
+        ];
+        let (total, payments) = payment_outputs_of(&outputs).expect("both rids are echoable");
+        assert_eq!(total, 12);
+        assert_eq!(payments.len(), 2, "change is not a payment output");
+        assert_eq!(
+            classify_label_plaintext(&payments[0].label_plaintext),
+            LabelPlaintextKind::Request(42)
+        );
+        assert_eq!(payments[0].amount, 5);
+        assert_eq!(
+            classify_label_plaintext(&payments[1].label_plaintext),
+            LabelPlaintextKind::Sentinel
+        );
+        let unechoable = vec![TxOutputContext::Payment {
+            dest: OutputDestination {
+                address: "shekyl1payee".into(),
+                rid: Some(PaymentRequestId(0)),
+            },
+            amount: 1,
+        }];
+        assert!(matches!(
+            payment_outputs_of(&unechoable),
+            Err(KeyEngineError::RidNotEncodable(_))
+        ));
+    }
+
+    /// A payment that answers a `shekyl:` link echoes the request id in its
+    /// encrypted label and the recipient reads it back; a payment with no
+    /// request carries the sentinel through the same construction. This is
+    /// the wiring `sign_tx` relies on: `build_output` encrypts exactly the
+    /// plaintext `outbound_label` chose for the destination.
+    #[test]
+    fn payment_output_label_echoes_the_recipients_request_id() {
+        const SEED: [u8; 32] = [21u8; 32];
+        const TX_KEY: [u8; 32] = [23u8; 32];
+        const OUT_IDX: u64 = 1;
+        const AMOUNT: u64 = 7_000_000;
+
+        let recipient_keys = LocalKeys::from_test_seed(SEED);
+        let address = recipient_keys
+            .keys
+            .to_address(Network::Mainnet)
+            .encode()
+            .expect("encode recipient address");
+        let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
+        let recipient_x25519 =
+            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+
+        let recover = |built: &BuiltOutput| {
+            let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
+            let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
+            let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
+                + (*shekyl_curve_generators::H * Scalar::from(AMOUNT)))
+            .compress()
+            .to_bytes();
+            scan_output_recover(
+                recipient_keys.keys.view_sk.as_canonical_bytes(),
+                recipient_keys.keys.ml_kem_dk.as_canonical_bytes(),
+                ct_x25519
+                    .try_into()
+                    .expect("the X25519 ciphertext is 32 bytes"),
+                ct_ml_kem,
+                &built.output_key,
+                &commitment,
+                built.info.enc_amount.ciphertext(),
+                built.info.enc_amount.tag(),
+                built.info.enc_label.ciphertext(),
+                built.info.enc_label.tag(),
+                built.view_tag.expect("payment outputs carry a view tag"),
+                OUT_IDX,
+            )
+            .expect("recipient recovers the payment output")
+        };
+
+        for (rid, expected) in [
+            (None, LabelPlaintextKind::Sentinel),
+            (
+                Some(PaymentRequestId(12345)),
+                LabelPlaintextKind::Request(12345),
+            ),
+        ] {
+            let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
+            let built = build_output(
+                &TX_KEY,
+                &decoded.spend_key,
+                &recipient_x25519,
+                &decoded.ml_kem_encap_key,
+                AMOUNT,
+                OUT_IDX,
+                &label,
+            )
+            .expect("construct payment output");
+            assert_eq!(
+                classify_label_plaintext(&recover(&built).label_plaintext),
+                expected,
+                "rid {rid:?}"
+            );
+        }
+    }
 
     /// A self-paid **change** output must return to the wallet's base spend key
     /// `D = b·G` so the wallet can both **detect** it (the scanner recovers
