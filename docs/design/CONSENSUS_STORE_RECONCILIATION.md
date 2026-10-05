@@ -468,11 +468,17 @@ re-derived 26 times:
   the only serve-credit acceptance that runs (Rust CEN-J8–J10 pending;
   FOLLOWUPS *Serve-credit acceptance (CEN-J8–J10) has no Rust rule*), and it
   retires with its FFI at the LMDB cutover (`DEL-008`).
-- **Walk W-BP** — bond-post: `blockchain.cpp:4839–5260`. Four kind arms plus
-  the shared cold-authority gate (`shekyl_archival_cold_authority_pin`, all
-  non-OK reject; **selector in Rust** as `requires_cold_authority`) and the
-  credit-arm identity-key check, present on every credit path. Operator
-  strings for the family are `shekyl_archival_bond_post_err_string`
+- **Walk W-BP** — bond-post. At the walk SHA the range was
+  `blockchain.cpp:4839–5260`. Three live kind arms remain (`JoinMarket`,
+  `Reinstate`, `Release`); the `HoldingsUpdate` arm is gone (**REJECTED
+  2026-09-20**). What the walk's cold-authority and identity-key sentences
+  name now is the shared gate (`shekyl_archival_cold_authority_pin`, all
+  non-OK reject; **selector in Rust** as `requires_cold_authority`,
+  `Release` only) and the identity-key check on `JoinMarket` and
+  `Reinstate`. *Records-was of the walk:* four kind arms, and a credit-arm
+  check described as present on every credit path including
+  HoldingsUpdate-add. Operator strings for the family are
+  `shekyl_archival_bond_post_err_string`
   (`bond_post_err_cstr` in Rust); the C++ switch is gone.
 - **Walk W-EM** — emission: `blockchain.cpp:3888–4190`. Extract, key-derivation,
   reference-context, per-epoch snapshot, reward-set, coarse-verify and
@@ -499,12 +505,12 @@ Rust-side FFI calls, with the exceptions noted per row.
 | CEN-J9 | **CHECKED-CONFORMANT** | W-SC. Leaf index **derived** (`shekyl_archival_challenge_leaf_index`, rc-checked reject; RF-D6 "never read off the vin"); PC-D3 binds to `prev_block_hash`, all-zero refused FFI-side; chunk bounds Rust-only ("same one-site family as the freeze rule") (`:5489–5516`) |
 | CEN-J10 | **CHECKED-CONFORMANT** | W-SC. `shekyl_archival_verify_serve_credit_vin` rc-checked reject (`:5551–5556`); chunk read is all-or-nothing before the FFI ("no partial-fill path reaches the FFI verifier") |
 | CEN-J11 | **CHECKED-CONFORMANT** | W-BP. Length gate, recompute-failure gate, and hint-mismatch gate each reject (`:4892–4909`) |
-| CEN-J12 | **CHECKED-CONFORMANT** | W-BP. JoinMarket requires canonical-length `bond_spend_pk` (`:5201`); Unbond/HoldingsUpdate/Reinstate each reject a non-empty one (`:4922`, `:4990`, `:5138`), and a kind-agnostic catch-all rejects the residue (`:5208`) — **all five sites agree** |
-| CEN-J13 | **CHECKED-CONFORMANT** | W-BP. Debit arms authorize via `shekyl_archival_cold_authority_pin` (all non-OK reject; helper `:4789`, Release `:4889`, HoldingsUpdate-drop `:5012`); credit arms check the identity key on every path (add `:5001`, Reinstate `:5148`, JoinMarket `:5254`). **Re-anchored 2026-09-11** at the cold-authority refactor, and again when the C++ error-string switch moved to `bond_post_err_cstr`: the pin is unchanged, the selector lives in Rust (`requires_cold_authority`: Release always, HoldingsUpdate iff `bond_debit > 0`), and `NOT_COLD_AUTHORITY_POST` is the arm/predicate cross-check, unreachable through these three sites. Conformance status **carried on an affirmative instrument, not assumed**: the 156/156 `archival_*` gtest run on the rebuilt daemon at the refactor commit. Previous anchors: `:4941` / `:5068` / `:5193` / `:5178` / `:5327` / `:5433` (first re-anchor, helper rename); before that `:4828–4855` / `:5041` / `:5183` / `:5288`, already stale (`:5041` sat above the HoldingsUpdate arm's own start at `:5089`) |
+| CEN-J12 | **RE-DERIVED 2026-10-05** | The `4b9807c5e` grade cited five sites, three of them arms that no longer exist. At HEAD the belt is one check: `JoinMarket` must carry a canonical `bond_spend_pk` (`blockchain.cpp:4492–4498`); every other kind must have the JoinMarket-coupled fields absent (`:4500–4503`). There is no per-kind reject list and no HoldingsUpdate site. *Records-was:* "Unbond/HoldingsUpdate/Reinstate each reject a non-empty one" and "all five sites agree". |
+| CEN-J13 | **RE-DERIVED 2026-10-05** | Cold authority is `requires_cold_authority`: `Release` only. `bond_debit` is unused — it selected HoldingsUpdate-drop against add, and that kind is **REJECTED 2026-09-20**. The `Release` arm calls `archival_cold_authority_pin` before `shekyl_archival_verify_release_bond_post` (`blockchain.cpp:4506–4558`). `JoinMarket` and `Reinstate` authorize with the identity key; `Reinstate` is zero-money, so the identity-key path is not a positive credit. *Records-was of the 2026-09-11 re-anchor:* "Release always, HoldingsUpdate iff `bond_debit > 0`", and a HoldingsUpdate-drop pin at `:5012`. The 156/156 gtest was that refactor's instrument, not a grade of the deleted arms. |
 | CEN-J14 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_join_market_bond_post` rc-checked reject (`:5216–5231`) |
 | CEN-J15 | **CHECKED-CONFORMANT** | W-BP. Admission FFI rc-checked reject with decoded reason (`:5273–5284`); the per-shard facts (r_market, freeze/presence) are gathered C++-side as **marshaled operands**, decided Rust-side |
 | CEN-J16 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_unbond_bond_post` rc-checked reject (`:4958–4980`); last-served scan selection itself asks Rust (`shekyl_archival_last_served_scan`) |
-| CEN-J17 | **CHECKED-CONFORMANT** | W-BP. Both arm verifies rc-checked (`:5034`, `:5123`). **REWRITE-NOTE:** the drop arm derives the dropped shard by a C++ set-difference (`:5065–5078`) — operand logic in the marshal; the Rust verify re-validates shape. That the derivation should move inside the verify is **work, and it has a FOLLOWUPS row** (*"CEN-J17's dropped-shard derivation lives in the C++ marshal"*, owner `ARCHIVAL_BOND_GATE4.md`); this row records where the operand logic sits today *(rewritten 2026-09-26 from "routed to the rewrite via this register" — a register is not a routing channel)* |
+| CEN-J17 | **REJECTED (immutable-bond 2026-09-20; slice 8 Q1 (a) 2026-10-04)** | No arm to be conformant to. `BondPostKind::from_u8(3)` is `InvalidPostKind`; verify, connect, and pop were deleted (E4 `ARW-14`). The `4b9807c5e` CHECKED-CONFORMANT grade (both arm verifies, and a C++ set-difference for the dropped shard) described a kind that does not exist. The FOLLOWUPS row that owned that derivation was removed with the subject (rule 23). |
 | CEN-J18 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_reinstate_bond_post` rc-checked reject (`:5156–5179`) |
 | CEN-J19 | **CHECKED-CONFORMANT** | W-EM. `extract_rc != OK \|\| len == 0` rejects (`:3952–3961`) |
 | CEN-J20 | **CHECKED-CONFORMANT** | W-EM. Key-derivation failure and derived-id mismatch each reject (`:3970–3980`) |
@@ -538,9 +544,11 @@ vectors; it retires CEN-J8–J10 by ruling. *Was: "`PDM-Q6` item 4 signs
 > writer halt came out of a conformance row. Of the 22 REWRITE-NOTE rows,
 > eight were prescriptive ("the rewrite carries / must / should"): four
 > described work E6 has since landed and are rewritten below as records with
-> their era (H5, F4, F19, H12); three name work that is owed and now point at
+> their era (H5, F4, F19, H12); two name work that is owed and now point at
 > the plan that owns it (J3 → `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5.1, J26 →
-> `DRS_E1_SPOOL.md`, J17 → a FOLLOWUPS row); one (I7) is refuted in place. A
+> `DRS_E1_SPOOL.md`); J17 pointed at a FOLLOWUPS row for the drop arm's
+> shard derivation — the kind is **REJECTED** and that row was removed with
+> the subject (rule 23, 2026-10-05); one (I7) is refuted in place. A
 > new note states a fact about the C++ and may *cite* the plan row that owns
 > the consequence; it does not instruct.
 
