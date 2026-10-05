@@ -55,6 +55,12 @@ jobs:
   wallet-ref:
     name: wallet ref
     runs-on: ubuntu-latest
+    # `contents: read` cannot call the pulls API. The merge-queue path
+    # reads the pull request's head branch; without this scope that call
+    # is rejected and the job always builds wallet dev.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       ref: ${{ steps.pick.outputs.ref }}
     steps:
