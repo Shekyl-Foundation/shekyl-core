@@ -133,7 +133,7 @@ Production prices a byte as `F = R·C·w_ref/M²`
 block-weight median `M`.
 [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) FL-V11 named the
 consequence on 2026-09-03: the floor decays **3 413×** from genesis to the
-tail. The archival sim's A1, A4 and onset arms never joined that finding.
+tail (1 707× on the design curve, since 2026-10-04). The archival sim's A1, A4 and onset arms never joined that finding.
 They read `fee_per_tx` from the scenario table, and the scenario table
 says `100_000_000` atomic in every row.
 
