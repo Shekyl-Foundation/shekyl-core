@@ -7,7 +7,7 @@
 //! and the same words as a one-shot.
 //!
 //! These tests do not mine. A refused send is the failure the envelope has
-//! to carry. The regtest script beside them is the pattern for a daemon-
+//! to carry. The daemon script beside them is the pattern for a daemon-
 //! backed run; it stays ignored until `SHEKYLD_BIN` is set.
 
 use std::io::Write;
@@ -267,28 +267,34 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
     );
 }
 
-/// A regtest daemon this test owns. Drop kills, reaps, and removes the data
+/// A daemon this test owns. Drop kills, reaps, and removes the data
 /// directory, including when an assertion panics. Dropping a bare `Child`
 /// does not.
-struct SpawnedRegtest {
+struct SpawnedDaemon {
     child: Child,
     data_dir: PathBuf,
 }
 
-impl SpawnedRegtest {
+impl SpawnedDaemon {
     fn spawn(bin: &std::ffi::OsStr, rpc_port: u16) -> Self {
-        let data_dir = std::env::temp_dir().join(format!("shekyl-cli-regtest-{rpc_port}"));
+        let data_dir = std::env::temp_dir().join(format!("shekyl-cli-daemon-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("data dir");
         let port = rpc_port.to_string();
+        let p2p_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("p2p port");
+            listener.local_addr().expect("addr").port().to_string()
+        };
         let child = Command::new(bin)
             .args([
-                "--regtest",
+                "--testnet",
                 "--offline",
                 "--non-interactive",
                 "--no-igd",
-                "--fixed-difficulty",
-                "1",
+                "--p2p-bind-ip",
+                "127.0.0.1",
+                "--p2p-bind-port",
+                &p2p_port,
                 "--rpc-bind-ip",
                 "127.0.0.1",
                 "--rpc-bind-port",
@@ -311,7 +317,7 @@ impl SpawnedRegtest {
     }
 }
 
-impl Drop for SpawnedRegtest {
+impl Drop for SpawnedDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
         drop(self.child.wait());
@@ -319,12 +325,15 @@ impl Drop for SpawnedRegtest {
     }
 }
 
-/// The script in `tests/scripts/regtest_session.txt`, against a live
-/// `--regtest` daemon. Ignored: CI does not build `shekyld` in the Rust
-/// lane. Run with `SHEKYLD_BIN` set and `--ignored`.
+/// The script in `tests/scripts/daemon_session.txt`, against a live
+/// daemon this test starts: `--testnet --offline`, so it holds the testnet
+/// genesis and nothing else. Not `--regtest`: that daemon reports
+/// `fakechain`, and the shipped wallet path refuses it on identity
+/// (`FakechainPolicy::Refuse`). Ignored: CI does not build `shekyld` in the
+/// Rust lane. Run with `SHEKYLD_BIN` set and `--ignored`.
 #[test]
-#[ignore = "regtest pattern: needs SHEKYLD_BIN and spawns shekyld --regtest"]
-fn regtest_script_drives_balance_refresh_and_a_refused_send() {
+#[ignore = "daemon pattern: needs SHEKYLD_BIN and spawns shekyld --testnet --offline"]
+fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     let bin = std::env::var_os("SHEKYLD_BIN").unwrap_or_else(|| {
         panic!(
             "SHEKYLD_BIN not set. Build the daemon and pass \
@@ -338,7 +347,7 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
     // Owned from the moment the process exists. A panic in the readiness
     // or wallet assertions still kills and reaps it and removes its data
     // directory; dropping a bare `Child` does neither.
-    let daemon = SpawnedRegtest::spawn(&bin, rpc_port);
+    let daemon = SpawnedDaemon::spawn(&bin, rpc_port);
     let address = format!("127.0.0.1:{rpc_port}");
     let mut up = false;
     for _ in 0..50 {
@@ -348,7 +357,7 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    assert!(up, "regtest daemon did not accept RPC on {address}");
+    assert!(up, "daemon did not accept RPC on {address}");
 
     let dir = tempfile::tempdir().expect("tempdir");
     let password = write_password(dir.path());
@@ -357,13 +366,13 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
     let (code, stdout, stderr) = run(&[
         "--json",
         "--network",
-        "mainnet",
+        "testnet",
         "--daemon-address",
         &address,
         "--wallet-dir",
         wallets.to_str().unwrap(),
         "create",
-        "regtest",
+        "wallet",
         "--seed-out",
         seed.to_str().unwrap(),
         "--password-file",
@@ -371,19 +380,19 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
     ]);
     assert_eq!(code, 0, "{stderr}\n{stdout}");
 
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts/regtest_session.txt");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts/daemon_session.txt");
     let (code, stdout, stderr) = run(&[
         "--json",
         "--script",
         script.to_str().unwrap(),
         "--network",
-        "mainnet",
+        "testnet",
         "--daemon-address",
         &address,
         "--wallet-dir",
         wallets.to_str().unwrap(),
         "--wallet",
-        "regtest",
+        "wallet",
         "--password-file",
         password.to_str().unwrap(),
     ]);
@@ -405,9 +414,21 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
             .any(|row| row["command"] == "chain" && row["ok"] == true),
         "chain against the daemon\n{stderr}\n{stdout}"
     );
-    // An empty wallet cannot pay. The script's last line is that refusal,
-    // and it is why the process exits 1.
+    // The script's last line is a refused send, and it is why the process
+    // exits 1. The daemon holds only genesis, so the wallet has no synced
+    // block to build against, and the build says so before it reads the
+    // recipient: the pattern's `<recipient>` placeholder is never decoded
+    // here. The code is the assertion. `ok == false` alone would also pass
+    // on a refusal that never reached the wallet's state. This test does
+    // not reach the balance: that needs a mined block, and a daemon the
+    // wallet accepts mines at the network's real difficulty.
     assert_eq!(code, 1, "{stderr}\n{stdout}");
-    assert_eq!(rows.last().expect("send")["command"], "send");
-    assert_eq!(rows.last().expect("send")["ok"], false);
+    let send = rows.last().expect("send");
+    assert_eq!(send["command"], "send");
+    assert_eq!(send["ok"], false, "{send}");
+    assert_eq!(
+        send["error"]["code"],
+        i64::from(shekyl_wallet_rpc::WalletRpcErrorCode::WalletNotSynced.as_i32()),
+        "{send}"
+    );
 }
