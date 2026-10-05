@@ -26,8 +26,8 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
     block_with_nonce, bond_post_body, chain_listing, chain_listing_with, cleanup,
-    emission_claim_body, h, key_image, open_store, serve_credit_body, spend, tmp, trace_of, Family,
-    GrownTree, Scripted, FIRST_SPEND_HEIGHT,
+    emission_claim_body, h, join_body, key_image, open_store, serve_credit_body, spend, tmp,
+    trace_of, Family, GrownTree, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -379,7 +379,10 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         // mutation duplicates, beside the spend `chain(n)` would list. The
         // serve credit's twin is the body itself, `unlock_time` moved; the
         // emission's and the bond post's are signed over their content, so
-        // the run supplies a second valid body with the same key.
+        // the run supplies a second valid body with the same key. A credit
+        // names a persona with a record read off the view before its block
+        // (CEN-J4), so the block below `AT` lists `P1`'s join beside its
+        // spend; the credit's epoch is past the join's (CEN-J5).
         Mutation::DuplicateServeCredit | Mutation::DuplicateClaim | Mutation::DuplicateBondPost => {
             let (archival, twin): (Transaction, Option<Transaction>) = match mutation {
                 Mutation::DuplicateServeCredit => (serve_credit_body(P1, 7, 11), None),
@@ -396,12 +399,18 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
                     Some(bond_post_body(key_image(Family::Fork, AT + 1), P1)),
                 ),
             };
+            let join_below = matches!(mutation, Mutation::DuplicateServeCredit)
+                .then(|| join_body(key_image(Family::Fork, AT - 1), P1));
             let listed: Vec<Vec<Transaction>> = (0..n)
                 .map(|hh| {
                     if hh < FIRST_SPEND_HEIGHT {
                         Vec::new()
                     } else if hh == AT {
                         vec![spend(key_image(Family::Main, hh)), archival.clone()]
+                    } else if hh == AT - 1 {
+                        std::iter::once(spend(key_image(Family::Main, hh)))
+                            .chain(join_below.clone())
+                            .collect()
                     } else {
                         vec![spend(key_image(Family::Main, hh))]
                     }

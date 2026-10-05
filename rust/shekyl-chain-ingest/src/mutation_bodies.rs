@@ -39,6 +39,15 @@ pub fn serve_credit_body(p: [u8; 32], shard: u64, epoch: u64) -> Transaction {
     tx
 }
 
+/// A spend of `key_image` that posts `p`'s **JoinMarket** — the harness's
+/// `join_market`, the body that opens the record a [`serve_credit_body`]
+/// for `p` is judged against (CEN-J4 reads it off the view before the
+/// credit's block, so the join lists in a block below the credit's).
+/// Unanchored and unsigned like every body `chain_listing_with` places.
+pub fn join_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
+    fixture::join_market(key_image, p)
+}
+
 /// A spend of `key_image` that also posts a bond for `p` — the harness's
 /// balanced bond post (CEN-H21's shape), unanchored and unsigned like every
 /// body `chain_listing_with` places: anchoring signs it. Two calls with two

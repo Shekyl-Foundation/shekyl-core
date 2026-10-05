@@ -127,8 +127,11 @@ pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
 /// inputs and nothing else, no outputs, zero fee, no spend material, and the
 /// `RF-D1` prunable region holding one pruned pass record per serve-credit
 /// vin — [`PRUNED_PASS_RECORD`], a marker no verifier reads)
-/// crediting persona `p` for shard 0 in settlement epoch 0 — the open
-/// epoch on any chain shorter than one (every fixture chain is). The one
+/// crediting persona `p` for shard 0 in settlement epoch 1 — the first
+/// epoch a persona who joined in epoch 0 may serve (CEN-J5: `E ≥ join +
+/// 1`, and every fixture join is in epoch 0, the open epoch on any chain
+/// shorter than one). Which epoch the listing chain is *in* is CEN-J7's
+/// question (E6 slice C), not this body's. The one
 /// legal non-coinbase shape with **no key image** — what a test needs
 /// when it must list the same body twice (SI-3) without tripping the
 /// spent-key-image set. It connects only behind [`join_market`] for `p`
@@ -139,7 +142,7 @@ pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![serve_credit_vin(p, 0, 0)],
+            inputs: vec![serve_credit_vin(p, 0, 1)],
             outputs: Vec::new(),
             extra: Vec::new(),
         },

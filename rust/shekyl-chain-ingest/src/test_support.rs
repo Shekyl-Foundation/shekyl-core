@@ -510,7 +510,9 @@ pub fn spend(key_image: [u8; 32]) -> Transaction {
 }
 
 #[cfg(feature = "pipeline")]
-pub use crate::mutation_bodies::{bond_post_body, emission_claim_body, serve_credit_body};
+pub use crate::mutation_bodies::{
+    bond_post_body, emission_claim_body, join_body, serve_credit_body,
+};
 
 /// The first height at which a block may list a spend (CEN-I11: the
 /// reference is at least `REFERENCE_BLOCK_MIN_AGE` below the connecting

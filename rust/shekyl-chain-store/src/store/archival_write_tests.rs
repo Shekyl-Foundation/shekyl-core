@@ -75,7 +75,8 @@ const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
 
 /// A sixteen-block settlement epoch, so a chain a few blocks past the first
 /// admissible spend height closes an epoch with a record and a credit in
-/// it: the join at height 10 is in epoch 0, and block 15 closes it.
+/// it: the join at height 5 is in epoch 0, block 15 closes that, and
+/// block 31 closes epoch 1 — the first the persona may be credited for.
 const SHORT_SEB: u64 = 16;
 const SHORT_RETENTION: u64 = 8;
 const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 4));
@@ -159,10 +160,14 @@ fn pop(store: &ChainStore) {
 
 // ------------------------------------------------------- phase 2 and 9a
 
-/// A JoinMarket and the credit behind it land as the rows the delta names
-/// — the record the delta inserted, the credit's pass bit, the open
-/// epoch's accrual post-image — and the pop lifts all three, the accrual
-/// back to the pre-image the blocks before had written.
+/// A JoinMarket and, one block above it, the credit on its record land as
+/// the rows the two deltas name — the record the join's delta inserted,
+/// the credit's pass bit, each block's open-epoch accrual post-image — and
+/// the pops lift them in order: the credit's pop the pass bit and the
+/// accrual back to the join block's, the join's pop the record and the
+/// accrual back to the pre-image the blocks before had written. The credit
+/// is for epoch 1 (CEN-J5: the join's epoch plus one); the pass bit is
+/// read under that key.
 #[test]
 fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     let path = tmp("aw-join-credit");
@@ -180,26 +185,32 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     assert!(before.is_some(), "the coinbase-only blocks accrued");
 
     let [join, credit] = credited(11, P);
-    let delta = connect_one(
-        &store,
-        &mut hashes,
-        vec![join, credit],
-        RuleSet::GENESIS,
-        None,
-    );
-    let [write] = delta.records() else {
-        panic!("one record write: {:?}", delta.records());
+    let joined = connect_one(&store, &mut hashes, vec![join], RuleSet::GENESIS, None);
+    let [write] = joined.records() else {
+        panic!("one record write: {:?}", joined.records());
     };
     assert_eq!(write.kind(), RecordWriteKind::Insert);
     assert_eq!(*write.persona(), p);
-    assert_eq!(delta.serve_credits().len(), 1);
+    assert!(joined.serve_credits().is_empty());
     assert!(
-        delta.close().is_none(),
+        joined.close().is_none(),
         "epoch 0 is open under the production SEB"
     );
     assert_ne!(
-        Some(delta.accrual().total),
+        Some(joined.accrual().total),
         before,
+        "this block's inflow moved the accrual"
+    );
+
+    let credited_delta = connect_one(&store, &mut hashes, vec![credit], RuleSet::GENESIS, None);
+    assert!(
+        credited_delta.records().is_empty(),
+        "a credit writes no record"
+    );
+    assert_eq!(credited_delta.serve_credits().len(), 1);
+    assert_ne!(
+        credited_delta.accrual().total,
+        joined.accrual().total,
         "this block's inflow moved the accrual"
     );
 
@@ -212,10 +223,24 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         snap.bond_records().expect("read"),
         vec![(p, write.record().clone())]
     );
-    assert!(snap.pass_count(&p, shard(0), epoch(0)).expect("read").any());
+    assert!(snap.pass_count(&p, shard(0), epoch(1)).expect("read").any());
     assert_eq!(
         snap.budget_accruing(epoch(0)).expect("read"),
-        Some(delta.accrual().total)
+        Some(credited_delta.accrual().total)
+    );
+    drop(snap);
+
+    pop(&store);
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.bond_record(&p).expect("read"),
+        Some(write.record().clone()),
+        "the credit's pop leaves the join's record"
+    );
+    assert!(!snap.pass_count(&p, shard(0), epoch(1)).expect("read").any());
+    assert_eq!(
+        snap.budget_accruing(epoch(0)).expect("read"),
+        Some(joined.accrual().total)
     );
     drop(snap);
 
@@ -223,7 +248,6 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     let snap = store.begin_read().expect("read");
     assert_eq!(snap.bond_record(&p).expect("read"), None);
     assert!(snap.bond_records().expect("read").is_empty());
-    assert!(!snap.pass_count(&p, shard(0), epoch(0)).expect("read").any());
     assert_eq!(snap.budget_accruing(epoch(0)).expect("read"), before);
     drop(snap);
     drop(store);
@@ -232,12 +256,19 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
 
 // ------------------------------------------------------------- phase 9c
 
-/// On a sixteen-block schedule block 15 closes epoch 0: the close's
-/// `r_market` (the credited shard), `Σwork` and `budget` land as the
-/// verdict computed them, and the accruing row is **removed** rather than
-/// left as a second copy of the budget. The pop restores the accruing row
-/// to the block-14 post-image and clears the three close rows; the
-/// re-connect closes again, identically.
+/// On a sixteen-block schedule block 31 closes epoch 1 — the first epoch
+/// the persona who joined at height 5, in epoch 0, may serve (CEN-J5), and
+/// so the first close with a credit in it: the credit for epoch 1 is
+/// listed at height 18, inside the epoch and past its seal block (what
+/// CEN-J7 will require; E6 slice C). The close's `r_market` (the credited
+/// shard), `Σwork` and `budget` land as the verdict computed them, and the
+/// accruing row is **removed** rather than left as a second copy of the
+/// budget. The pop restores the accruing row to the block-30 post-image
+/// and clears the three close rows; the re-connect closes again,
+/// identically. *Records-was:* until E6 slice 8 row 3 this closed epoch 0
+/// at block 15 over a credit for epoch 0 listed beside its join — a credit
+/// the C++ refuses twice over (no record before the block, CEN-J4; the
+/// join's own epoch, CEN-J5).
 #[test]
 fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back() {
     let path = tmp("aw-close");
@@ -248,17 +279,24 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     }
     let p = persona(P);
     let [join, credit] = credited(12, P);
-    connect_one(&store, &mut hashes, vec![join, credit], SHORT, None);
-    let mut accrued_through_14 = None;
-    for _ in (FIRST_SPEND_HEIGHT + 1)..(SHORT_SEB - 1) {
-        accrued_through_14 = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
+    connect_one(&store, &mut hashes, vec![join], SHORT, None);
+    const CREDIT_HEIGHT: u64 = SHORT_SEB + 2;
+    const CLOSING_HEIGHT: u64 = 2 * SHORT_SEB - 1;
+    for _ in (FIRST_SPEND_HEIGHT + 1)..CREDIT_HEIGHT {
+        connect_empty(&store, &mut hashes, SHORT);
     }
-    let accrued_through_14 = accrued_through_14.expect("blocks 11..=14 connected");
-    assert_eq!(hashes.len(), 15, "the next block is 15, the closing one");
+    assert_eq!(hashes.len(), 18, "the next block is 18, the credit's");
+    connect_one(&store, &mut hashes, vec![credit], SHORT, None);
+    let mut accrued_through_30 = None;
+    for _ in (CREDIT_HEIGHT + 1)..CLOSING_HEIGHT {
+        accrued_through_30 = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
+    }
+    let accrued_through_30 = accrued_through_30.expect("blocks 19..=30 connected");
+    assert_eq!(hashes.len(), 31, "the next block is 31, the closing one");
 
     let closing = connect_one(&store, &mut hashes, Vec::new(), SHORT, None);
-    let close = closing.close().expect("block 15 closes epoch 0");
-    assert_eq!(close.epoch(), epoch(0));
+    let close = closing.close().expect("block 31 closes epoch 1");
+    assert_eq!(close.epoch(), epoch(1));
     assert_eq!(
         closing.accrual().total,
         close.budget(),
@@ -271,16 +309,16 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     );
 
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(0)).expect("read"), Some(close.budget()));
+    assert_eq!(snap.budget(epoch(1)).expect("read"), Some(close.budget()));
     assert_eq!(
-        snap.sigma_work(epoch(0)).expect("read"),
+        snap.sigma_work(epoch(1)).expect("read"),
         Some(close.sigma_work())
     );
     for (s, r) in &r_market {
-        assert_eq!(snap.r_market(*s, epoch(0)).expect("read"), Some(*r));
+        assert_eq!(snap.r_market(*s, epoch(1)).expect("read"), Some(*r));
     }
     assert_eq!(
-        snap.budget_accruing(epoch(0)).expect("read"),
+        snap.budget_accruing(epoch(1)).expect("read"),
         None,
         "ARW-Q3: the accruing row is removed at the close"
     );
@@ -292,15 +330,15 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
 
     pop(&store);
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(0)).expect("read"), None);
-    assert_eq!(snap.sigma_work(epoch(0)).expect("read"), None);
+    assert_eq!(snap.budget(epoch(1)).expect("read"), None);
+    assert_eq!(snap.sigma_work(epoch(1)).expect("read"), None);
     for (s, _) in &r_market {
-        assert_eq!(snap.r_market(*s, epoch(0)).expect("read"), None);
+        assert_eq!(snap.r_market(*s, epoch(1)).expect("read"), None);
     }
     assert_eq!(
-        snap.budget_accruing(epoch(0)).expect("read"),
-        Some(accrued_through_14),
-        "the pop puts the block-14 accrual back"
+        snap.budget_accruing(epoch(1)).expect("read"),
+        Some(accrued_through_30),
+        "the pop puts the block-30 accrual back"
     );
     drop(snap);
 
@@ -308,12 +346,12 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     let again = connect_one(&store, &mut hashes, Vec::new(), SHORT, None);
     assert_eq!(again, closing, "the same block, the same verdict");
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(0)).expect("read"), Some(close.budget()));
+    assert_eq!(snap.budget(epoch(1)).expect("read"), Some(close.budget()));
     assert_eq!(
-        snap.sigma_work(epoch(0)).expect("read"),
+        snap.sigma_work(epoch(1)).expect("read"),
         Some(close.sigma_work())
     );
-    assert_eq!(snap.budget_accruing(epoch(0)).expect("read"), None);
+    assert_eq!(snap.budget_accruing(epoch(1)).expect("read"), None);
     drop(snap);
     drop(store);
     cleanup(&path);
@@ -527,7 +565,7 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
             ServeCreditKey::new(
                 p,
                 shard(0),
-                epoch(0),
+                epoch(1),
                 BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
             )
             .key(),
@@ -538,7 +576,7 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
         row,
         "the credit was written behind a record this session does not hold"
     );
-    let read = snap.pass_count(&p, shard(0), epoch(0)).unwrap_err();
+    let read = snap.pass_count(&p, shard(0), epoch(1)).unwrap_err();
     assert!(
         matches!(
             read,
