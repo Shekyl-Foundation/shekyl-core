@@ -30,14 +30,14 @@ Ordered, because each step's numbers are inputs to the next.
 
 | Step | What | Owner | State |
 | --- | --- | --- | --- |
-| **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | the ESF PR (`fix/esf-per-block`); this PR | in progress |
-| **EUP-2** | The economics sim realigned to the code: #936 merges `dev` (and with it the ESF fix); ESR-8 (restated constants → imports); ESR-10 (fee multiplier and rung mix, each run on `w_ref` and the zone as they are **and** re-derived from the post-quantum ordinary weight). | [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) | ESR-1…ESR-7 landed on #936; ESR-8 in progress |
+| **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | #951 (`fix/esf-per-block`); #948 | landed |
+| **EUP-2** | The economics sim realigned to the code: #936 landed on `dev` first, and the ESF fix (#951) merged over it, carrying the per-block factor into the sim and regenerating its fixtures on the design curve; ESR-8 (restated constants → imports); ESR-10 (fee multiplier and rung mix, each run on `w_ref` and the zone as they are **and** re-derived from the post-quantum ordinary weight). | [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) | ESR-1…ESR-7 landed (#935, #936); ESR-8 in progress |
 | **EUP-3** | Staking coupled in: the purse the economics sim computes feeds the population model; L19i's challenge egress in the same model; the bond at the shipped floor. The staking sim is checked against what has been built, and leads what has not. | `shekyl-staking-sim`; the staking-sim row in `FOLLOWUPS.md` (reworded on PR #936 to *Check `shekyl-staking-sim` against the staking code built so far*) | not started |
 | **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. | this document | waits on EUP-1…EUP-3 |
 | **EUP-5** | The decisions, with numbers: D (the floor in consensus, holistically), F (the escalation and its GF-7 asymptote), G (zone and `w_ref` derivations, FL-R13), H (challenge doctrine against the budget), I (bond sizing, first-time sim), and the stress test of the 720-block window's length. | each row's owner (§3) | waits on EUP-4 |
 
-**No production-arm table is run until the ESF fix is on `dev` and #936 has
-merged it** (design-owner lane, 2026-10-04): every number in ESR-1…ESR-7 was
+**No production-arm table is run until the ESF fix and #936 are both on
+`dev`** (design-owner lane, 2026-10-04): every number in ESR-1…ESR-7 was
 computed on the Monero curve, and a table run before then would be a third
 curve's worth of numbers. From that point EUP-2's registered runs (ESR-10's
 tables and the realigned fixtures) run on the design curve; the full
@@ -149,6 +149,50 @@ prevent.
 
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
 their own tests, and are not graded here.
+
+### 4.1 The horizon, and one reading registered before the tables run (2026-10-04)
+
+**What the first run on the design curve showed.** Merging the ESF fix over
+the realigned sim (#936) failed three tests that each used "year 60" to mean
+"the fee era". On the design curve it is not: the neutral trajectory reaches
+the tail near year 119, and the control arm's fold near year 132 (the release
+multiplier's floor slows it); at year 60 the curve still mints ≈ 23.9
+SKL/block. Two of the tests state tail-era facts and now start in the tail era
+and assert it (`onset::tests::assert_tail_era`). The third is the escalation
+knee's band, whose high fell to 2,079,614 against a shipped knee of 2,250,000;
+the knee is held, not re-pinned (`docs/FOLLOWUPS.md`).
+
+**Horizon — PROPOSED, a decision about the assessment.** The structural
+questions (onset, fee era, tail) are tail-era questions, and a 60-year run no
+longer sees them. The structural arms run to about 135 years; the remaining
+arms stay at 60. Measured cost on the control arm: the baseline to 135 years
+is 64 s. The growth schedule is not affordable that far as the fill stands —
+63 years is 337 s and 66 years exceeds 500 s — because
+`Fill::admit_up_to` batches only the penalty-free part of a block and walks
+the penalty zone one body at a time. Long growth arms wait on that zone being
+closed in form, held to the single-offer walk as the free part is.
+
+Scenario 9 (high history, low activity) is the first of the structural arms.
+It was built to be the fee-era case, and its 60 years no longer reach that
+era. Asked whether its horizon should follow the tail out, Rick's initial
+assessment (2026-10-04) is "yes it should, since that is it's actual
+purpose". The horizon moves with EUP-4's run set, not before: it changes
+every scenario-9 figure and the knee band's high.
+
+**Registered reading: the capacity cap spans most or all of the horizon on
+the production arm.** The design-owner lane's argument: the fill condition
+`w ≤ 4ρ·w_ref·(m/M)²` has no reward in it, because `R` cancels between a
+ladder fee and the penalty; the crossover moves only with `ρ = (1−σ)/(1−b)`,
+which grows as `σ` decays and the burn's supply ratio rises, and the supply
+ratio rises half as fast at 22 per block. One observation agrees: the band's
+low anchor, the production-arm baseline's closed shards at year 10, is
+229,864 on both curves. One does not bear on it: the control arm sitting at
+20 of 50 transactions a block through year 60 (and carrying 50 from between
+years 61 and 65) is the flat fee, which does not scale with `R`, so there the
+reward does not cancel. If the reading holds when the production tables run,
+G (`w_ref` and the zone) is the first decision of EUP-5 rather than one of
+six: the purse, the knee, the onset and the stuffer's cost are not readable
+on a chain capped at the zone.
 
 ---
 

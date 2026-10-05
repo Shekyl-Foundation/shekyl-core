@@ -70,6 +70,13 @@ use crate::types::{
     ReferenceBlock, TargetKind,
 };
 
+mod capture;
+
+pub(crate) use capture::{
+    ChunkSpan, CAPTURED_IDENTITY_BYTES, CAPTURED_IDENTITY_CM_X_AT, CAPTURED_IDENTITY_COMMITMENT_AT,
+    CAPTURED_IDENTITY_OUTPUT_KEY_AT, CURVE_ELEMENT_BYTES, NODE_CHILD_BYTES,
+};
+
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
 /// transaction's `0x07` blob (recon-owned) and builds the full
@@ -126,11 +133,15 @@ pub enum ClientError {
     ///
     /// Raised after assembly, from `verify_path_against_its_branches`.
     /// The store gate above it compares two store reads and cannot see this:
-    /// [`crate::types::TreeContext::tree_root`] is copied from the gated reference while the
-    /// branches come from replay. [`crate::assemble::PathRootFault`] names
-    /// which step refused. [`crate::assemble::PathRootFault::ChildAbsent`] is
-    /// the membership link. [`crate::assemble::PathRootFault::RootDisagrees`]
-    /// is the final comparison.
+    /// [`crate::types::TreeContext::tree_root`] is copied from the gated
+    /// reference, and the branches come from the route that assembled the
+    /// path — the capture table and the frontier snapshot, or the rebuild of
+    /// `entries`. [`crate::assemble::PathRootFault`] names which step refused.
+    /// [`crate::assemble::PathRootFault::ChildAbsent`] is the membership link.
+    /// [`crate::assemble::PathRootFault::RootDisagrees`] is the final
+    /// comparison. [`crate::assemble::PathRootFault::ShortPath`] and
+    /// [`crate::assemble::PathRootFault::LongPath`] are also how a rebuilt
+    /// layer count that disagrees with the gate's depth is reported.
     ///
     /// This is a defect, not a user condition: the wallet's two views of one
     /// tree disagree. Refusing is the point — an inconsistent path yields a
@@ -141,6 +152,102 @@ pub enum ClientError {
         claimed: CurveTreeRoot,
         /// Which step of the fold refused.
         fault: crate::assemble::PathRootFault,
+    },
+    /// A registration names an output this client does not hold at that
+    /// `gindex`.
+    ///
+    /// The wallet says it owns `O` at `gindex`; the client's chain view has
+    /// a different output there. One of the two is reading a different
+    /// chain, which is the same inter-component invariant
+    /// [`ClientError::IdentityMismatch`] guards at assembly — raised here so
+    /// it surfaces at registration rather than at the spend that needed the
+    /// capture.
+    ///
+    /// Refused rather than stored: a registration this client cannot match
+    /// would capture nothing and report nothing, and the remedy is the
+    /// wallet's own rescan, which re-registers with the key its scan of the
+    /// current chain found (rule 82).
+    RegistrationIdentityMismatch {
+        /// The global output index the registration named.
+        gindex: Gindex,
+        /// The output key the registration carried.
+        expected: OneTimePubkey,
+        /// The output key this client holds at that `gindex`.
+        got: OneTimePubkey,
+    },
+    /// The reference height has no frontier snapshot, so the open chunks of
+    /// a captured path cannot be read at it.
+    ///
+    /// The ring holds `[tip - horizon, tip]` with the horizon at
+    /// `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (720), and the daemon rejects a
+    /// reference older than `REFERENCE_BLOCK_MAX_AGE` (100) blocks. A
+    /// reference past that horizon is one the daemon would refuse, and
+    /// rebuilding the tree from every drained leaf to serve it is not worth
+    /// the read. A miss *inside* the horizon is a hole: the height was
+    /// ingested, and reading it again does not write the row. Re-anchor
+    /// treats both as terminal. The unregistered route never reaches this
+    /// error; it rebuilds before the snapshot is consulted.
+    ReferenceOutsideSnapshotRing {
+        /// The reference height asked for.
+        height: BlockHeight,
+    },
+    /// A chunk a captured path needs has closed, and the capture table does
+    /// not hold it.
+    ///
+    /// The owned position was resolved, so every chunk over it should have
+    /// been written — by the fold as it closed, or by reconciliation for the
+    /// ones that closed before registration. One missing means that did not
+    /// happen, and the remedy is [`CurveTreeClient::reconcile_captures`],
+    /// which writes exactly what is due and absent. Not a fallback to the
+    /// rebuild: that would serve the spend while hiding that the mechanism
+    /// it relies on has a hole.
+    CaptureMissing {
+        /// Leaf position the chunk closed at — the capture row's key.
+        end_leaf: u64,
+        /// The layer the row lacks.
+        layer: u8,
+    },
+    /// A held owned position is not one the canonical drain order produces.
+    ///
+    /// `owned_positions` is written by the fold, leaf by leaf, as the
+    /// frontier counts. [`CurveTreeClient::reconcile_captures`] recomputes
+    /// the same set from `drained_sorted` — the order assembly resolves
+    /// against — and the two must agree, with the recomputed set a superset
+    /// (it also covers registrations the fold never saw). A held position
+    /// the recomputation does not produce means the two orders have
+    /// diverged, and every capture keyed on the fold's coordinate is then
+    /// keyed on the wrong leaf.
+    ///
+    /// Reported rather than repaired: reconciliation would otherwise
+    /// silently overwrite one order's coordinates with the other's, and
+    /// nothing says which is right.
+    ///
+    /// Classified [`StoreOpenFault::Internal`], not `Corrupt`. The store may
+    /// be sound — the disagreement is in memory — and `Corrupt`'s remedy is
+    /// to delete the store.
+    OwnedPositionDrift {
+        /// The held position the canonical order does not produce.
+        position: u64,
+    },
+    /// Capture needed the leaf identities under a closing layer-0 chunk and
+    /// the store did not hold all of them.
+    ///
+    /// The chunk's siblings come from the leaf rows at `end_leaf + 1 -
+    /// SELENE_CHUNK_WIDTH ..= end_leaf`: the rows below this block's first
+    /// drain from [`LeafStore::read_drained_range`], the rest from the block
+    /// being ingested. A short count means a leaf row is gone from a position
+    /// the store still counts — which only [`LeafStore::prune_frozen`]
+    /// produces, by dropping non-owned frozen leaf bytes. Resume already
+    /// refuses such a store ([`ClientError::ResumeFromPrunedStore`], F5);
+    /// this is the same refusal for a store pruned while open, and it refuses
+    /// the block rather than writing a short chunk the merge would accept.
+    CaptureIdentitiesIncomplete {
+        /// Leaf position at which the chunk closed — the capture row's key.
+        end_leaf: u64,
+        /// Siblings the chunk has, which is [`shekyl_fcmp::tree::SELENE_CHUNK_WIDTH`].
+        want: usize,
+        /// Siblings the leaf rows yielded.
+        got: usize,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
@@ -336,11 +443,30 @@ impl ClientError {
             ClientError::Store(e) => e.open_fault(),
             // Pruned-store resume is unbuilt (F5): a shape this build cannot
             // resume, not a broken store.
-            ClientError::ResumeFromPrunedStore { .. } => StoreOpenFault::Unsupported,
+            ClientError::ResumeFromPrunedStore { .. }
+            // Same cause, same verdict: leaf bytes capture needs are gone
+            // from a position the store counts. Pruned-store *support* is
+            // F5 work, so this build cannot proceed over one.
+            | ClientError::CaptureIdentitiesIncomplete { .. } => StoreOpenFault::Unsupported,
             ClientError::ResumeFromCorruptStore { .. }
             | ClientError::Frontier { .. }
             | ClientError::SnapshotLeafCountMismatch { .. } => StoreOpenFault::Corrupt,
-            ClientError::RootMismatch { .. }
+            // Not `Corrupt`: that fault's stated remedy is *delete the
+            // store and let the wallet rebuild it*, and drift is the
+            // client's in-memory positions disagreeing with the canonical
+            // drain order — the store may be entirely sound. Destroying a
+            // good store over a memory defect is naming a remedy that costs
+            // more than the fault (rule 82). It is also not an open-time
+            // outcome at all, which is what `Internal` says here, exactly
+            // as `PathRootMismatch` does.
+            // A registration disagreeing with the chain view is the same
+            // family as `IdentityMismatch` below it: a caller-vs-client
+            // disagreement, not an open-time outcome.
+            ClientError::RegistrationIdentityMismatch { .. }
+            | ClientError::OwnedPositionDrift { .. }
+            | ClientError::ReferenceOutsideSnapshotRing { .. }
+            | ClientError::CaptureMissing { .. }
+            | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
@@ -372,7 +498,8 @@ pub struct CurveTreeClient {
     /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
     /// a second database beside a serving host that is still holding the
     /// first, and the read-only wrapper stays unable to mint a writer.
-    store: Arc<LeafStore>,
+    // `pub(crate)` for the sibling `assemble` module's capture reads.
+    pub(crate) store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -406,6 +533,99 @@ pub struct CurveTreeClient {
     /// in-memory state ([`Self::resume`], [`Self::rollback_to_fork`])
     /// re-derives it from the store rather than adjusting it.
     frontier: Frontier,
+    /// Outputs whose membership-path material this client captures, as
+    /// `gindex -> O`.
+    ///
+    /// **Both halves, because a `gindex` is a name and not an identity.** It
+    /// is a position in the chain's output sequence, and a reorg re-derives
+    /// it: the same number can name a different output on the new chain. A
+    /// registry keyed on the number alone would then mark a stranger's leaf
+    /// as owned and capture its chunks, and no rule evaluated on the rebuilt
+    /// state can tell the two apart — see [`Self::rollback_to_fork`] for the
+    /// two inequalities that tried. `O` is a one-time key, so the pair names
+    /// one specific output and the question stops being answerable only in
+    /// hindsight.
+    ///
+    /// Registered by the wallet ([`Self::register_owned`]), never derived:
+    /// the curve-tree client sees every output on the chain and cannot tell
+    /// which are the wallet's — that is the scanner's knowledge, and keeping
+    /// it on this side would mean either a second view-key consumer or a
+    /// guess.
+    ///
+    /// **Session-scoped on purpose.** [`Self::resume`] starts empty, because
+    /// a registry persisted here would be a second copy of the wallet's own
+    /// output list — the thing that would silently rot when the two diverge.
+    /// The wallet re-registers what it holds; what that leaves owed is the
+    /// captures for chunks that closed before the registration, which
+    /// reconciliation discharges.
+    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
+    /// Drain positions of owned leaves, as the fold assigned them.
+    ///
+    /// Not derived from [`Self::owned_outputs`] on demand: a position is
+    /// the leaf's index in drain order, which is what the frontier counts as
+    /// it pushes. Recording it there is the one instrument; resolving it
+    /// again from the maturity index would be a second.
+    ///
+    /// Keyed by **position**, because the fold's intersection test is a
+    /// range over positions; the value is the gindex it resolved, which is
+    /// what assembly reverses to find an input's position. That reverse
+    /// lookup is a scan — the registry is the wallet's own output count and
+    /// a batch holds at most `MAX_INPUTS`.
+    ///
+    /// A rollback **retains** the positions below the surviving leaf count
+    /// and drops the rest — see [`Self::rollback_to_fork`].
+    pub(crate) owned_positions: BTreeMap<u64, Gindex>,
+}
+
+/// What registering an owned output means for the captures it needs
+/// ([`CurveTreeClient::register_owned`]).
+///
+/// The distinction is not cosmetic: capture rides the **fold**, and a fold
+/// happens once. Registering before the leaf drains puts every chunk over it
+/// on the capture path; registering after means the chunks that already
+/// closed were folded without a reason to keep them, and no future fold
+/// reports them again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OwnedRegistration {
+    /// The leaf has not drained at the ingested tip. Every chunk over it is
+    /// captured as the fold closes it; nothing is owed.
+    BeforeDrain,
+    /// The leaf had already drained. Chunks over it that closed before this
+    /// call are **not** captured, and are owed to reconciliation; chunks
+    /// that have yet to close are captured as normal.
+    ///
+    /// This is the state a resumed client leaves every held output in, since
+    /// the registry does not persist
+    /// ([`CurveTreeClient::register_owned`]).
+    AfterDrain,
+}
+
+/// What one [`CurveTreeClient::reconcile_captures`] call did.
+///
+/// Reported rather than returned as a bare count because the three numbers
+/// answer different questions: whether the call found work it did not know
+/// about, how many rows it touched, and how much it wrote. A reconcile that
+/// resolves positions but writes nothing is the normal steady state; one
+/// that writes on every call would mean the delta check is not working.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaptureReconciliation {
+    /// Owned positions this call resolved that were not already held — the
+    /// late registrations it picked up.
+    pub positions_resolved: usize,
+    /// Capture rows (`end_leaf` keys) written.
+    pub rows_written: usize,
+    /// Chunks written across those rows. Higher than `rows_written` wherever
+    /// a cascade put two layers under one key.
+    pub chunks_written: usize,
+    /// Leaves read and hashed to rebuild the missing chunks.
+    ///
+    /// The cost figure, and the one a caller should watch. **Zero** when
+    /// every due capture is already present, which is the normal resume —
+    /// reconciliation then costs a table read per due coordinate and no
+    /// hashing at all. A non-zero value is bounded by the spans of the
+    /// chunks actually missing (`outputs_per_node(layer)` each), never by
+    /// the chain's length.
+    pub leaves_rebuilt: u64,
 }
 
 /// The authority to rebuild the single writer over an already-open store —
@@ -513,6 +733,8 @@ impl CurveTreeClient {
             ingested_tip_height: None,
             poisoned: false,
             frontier: Frontier::new(),
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -703,6 +925,11 @@ impl CurveTreeClient {
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
             frontier: rebuilt.frontier,
+            // A resumed client holds no registrations: the wallet's output
+            // list is the wallet's, and re-registering is what tells this
+            // client what to capture. See `owned_outputs`.
+            owned_outputs: BTreeMap::new(),
+            owned_positions: BTreeMap::new(),
         })
     }
 
@@ -869,12 +1096,77 @@ impl CurveTreeClient {
         // client poisoned, which is the contract.
         self.poisoned = true;
         self.store.verify_frozen_tail().map_err(ClientError::from)?;
+        // Which registrations name an output this client holds *now* — read
+        // before the rebuild, because staleness is a set difference **across**
+        // the rollback and neither side alone answers it. See the retain
+        // below for why no inequality on `gindex` can.
+        let named_a_held_output: Vec<(Gindex, OneTimePubkey)> = self
+            .owned_outputs
+            .iter()
+            .filter(|(gindex, key)| Self::held_output(&self.entries, **gindex) == Some(**key))
+            .map(|(gindex, key)| (*gindex, *key))
+            .collect();
         let rebuilt = Self::rebuild_from_store(&self.store)?;
         self.entries = rebuilt.entries;
         self.next_gindex = rebuilt.next_gindex;
         self.drained_through_counts = Vec::new();
         self.entries_by_maturity = rebuilt.entries_by_maturity;
         self.ingested_tip_height = rebuilt.ingested_tip_height;
+        // The two holders a rollback has to trim, one event in two units.
+        //
+        // **Positions**, in drained-leaf coordinates: truncation deletes
+        // `range(start..)` and shifts nothing, so a surviving leaf keeps its
+        // position and a removed one re-resolves through the fold when it
+        // drains again. `start` is the surviving leaf count, which is the
+        // rebuilt frontier's — the same coordinate `FoldedChunk::end_leaf`
+        // is compared against.
+        let surviving = rebuilt.frontier.leaf_count();
+        self.owned_positions
+            .retain(|position, _| *position < surviving);
+
+        // **Registrations**, in `(gindex, O)`. This is now *cleanup*, not
+        // the correctness rule: ownership is tested by identity at the fold
+        // and in reconciliation, so a rebound gindex simply does not match
+        // and a stranger's chunks are never captured, whatever this does.
+        // What it buys is a registry that does not accumulate dead rows
+        // across reorgs.
+        //
+        // A registration is dropped iff the output it names *was* here and
+        // is now absent **or different** — the set difference taken above
+        // and below the rebuild, over the pair rather than the number. The
+        // identity half is load-bearing even here: a rollback that rebinds a
+        // gindex leaves it present, so a gindex-only difference keeps the
+        // dead row. Three rules were tried before this one, and the first
+        // two were not merely untidy but wrong:
+        //
+        // `gindex >= surviving_leaf_count` mixes units (a gindex is not a
+        // position; `TargetKind::Other` consumes one without draining a
+        // leaf) — `a_gindex_is_not_a_position`.
+        //
+        // `gindex < next_gindex && !entries.contains(gindex)` typechecks and
+        // still fails, in the case it was written for. A rollback removes
+        // the chain's tail, so every output it removes holds a gindex at or
+        // above the **rebuilt** `next_gindex`, which is `entries.last() + 1`
+        // over what survived. The clause meant to protect a registration for
+        // a not-yet-ingested output therefore protects every removed one too,
+        // and the rule drops nothing — `a_removed_gindex_sits_above_the_
+        // rebuilt_next_gindex`.
+        //
+        // *Candidate 3 — the same difference on `gindex` alone.* Shipped,
+        // then found to miss the rebinding case: a rollback that gives the
+        // gindex to a different output leaves it present, so the difference
+        // sees nothing gone.
+        //
+        // None of the three could answer the question from the rebuilt state,
+        // because a `gindex` is a name. Binding the registration to `O` at
+        // registration time is what makes it answerable at all — see
+        // `owned_outputs`. Nothing persists the registry (`resume` starts
+        // empty), so there is no stale trace to re-derive on a later open.
+        for (gindex, key) in named_a_held_output {
+            if Self::held_output(&self.entries, gindex) != Some(key) {
+                self.owned_outputs.remove(&gindex);
+            }
+        }
         self.frontier = rebuilt.frontier;
         self.poisoned = false;
         Ok(())
@@ -897,7 +1189,9 @@ impl CurveTreeClient {
     ///
     /// **Store-write-before-commit (B5).** The block's full delta — newly
     /// drained bucket, newly created pending leaves, drained pending
-    /// removals, tip advance, and the frontier snapshot — lands in one ACID
+    /// removals, tip advance, the frontier snapshot, and the path material
+    /// captured for registered outputs ([`Self::register_owned`]) — lands in
+    /// one ACID
     /// [`LeafStore::append_block_with_snapshot`] transaction *before* any
     /// in-memory state changes. On `Err` the client is unchanged on both
     /// sides and the same block can be re-ingested; on `Ok` the in-memory
@@ -979,19 +1273,11 @@ impl CurveTreeClient {
         let drained = self.newly_drained_from_index(through);
         let removed: Vec<Gindex> = drained.iter().map(|entry| entry.gindex).collect();
 
-        // The frontier advances on a CLONE, before the transaction opens.
-        // A fold is fallible, and B5 puts every fallible step ahead of the
-        // commit: a leaf whose bytes will not hash refuses the block with
-        // both sides untouched, exactly as a bad published point does.
+        // The frontier advances on a clone, and capture is collected with
+        // it, before the transaction opens. A hash failure or a short
+        // layer-0 read refuses the block with both sides untouched.
         let mut advanced = self.frontier.clone();
-        for entry in &drained {
-            advanced
-                .push_leaf(&entry.leaf)
-                .map_err(|source| ClientError::Frontier {
-                    height: block.height,
-                    source,
-                })?;
-        }
+        let captured = self.fold_block_captures(block.height, &drained, &mut advanced)?;
         // C3 in production, not only in a test: the snapshot this block
         // captures must carry exactly the drain index's count for the
         // cutoff, because root and depth are both read back off it.
@@ -1017,6 +1303,7 @@ impl CurveTreeClient {
             &removed,
             block.height,
             &snapshot,
+            &captured.rows,
         )?;
 
         // Store committed — the in-memory commit below is infallible.
@@ -1031,6 +1318,7 @@ impl CurveTreeClient {
         self.next_gindex = next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
+        self.owned_positions.extend(captured.pending_owned);
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -1103,7 +1391,7 @@ impl CurveTreeClient {
         canonical
     }
 
-    fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
+    pub(crate) fn drained_leaf_count_at(&self, through: BlockHeight) -> u64 {
         if let Ok(i) = self
             .drained_through_counts
             .binary_search_by_key(&through, |(t, _)| *t)
@@ -1201,11 +1489,11 @@ impl CurveTreeClient {
     ///
     /// The CT-5c send path needs both before assembling: the depth sizes the
     /// FCMP++ proof weight for fee estimation (which runs *before* path
-    /// assembly), and the root binds the [`ReferenceBlock`]. The depth equals
-    /// the assembler's `AssembledPath.tree.tree_depth` (which `assemble_path`
-    /// takes from `build_layers(..).len()`) by the `layer_count_for_leaves`
-    /// drift KAT, so the engine can assert their equality as a consistency
-    /// check that never fires benignly.
+    /// assembly), and the root binds the [`ReferenceBlock`]. Both assembly
+    /// routes stamp this depth onto `AssembledPath.tree.tree_depth`. The
+    /// rebuild compares it with `build_layers(..).len()` and refuses when
+    /// they disagree; the `layer_count_for_leaves` drift KAT is why that
+    /// comparison holds on a sound tree.
     pub fn root_and_depth_at(
         &self,
         reference_height: BlockHeight,
@@ -1302,7 +1590,7 @@ impl CurveTreeClient {
     }
 
     /// Decode the ring's row at `height`, if it has one.
-    fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
+    pub(crate) fn snapshot_at(&self, height: BlockHeight) -> Result<Option<Frontier>, ClientError> {
         Self::snapshot_at_in(&self.store, height)
     }
 

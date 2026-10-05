@@ -7,6 +7,43 @@
 
 - Docs: the economy's umbrella plan (`ECONOMY_UMBRELLA_PLAN.md`, `EUP-`); `DESIGN_CONCEPTS.md` records F-D, its design home's archival rationale, and its April tables' inputs.
 
+### Consensus — the emission speed factor is per block, as designed
+
+- The emission curve emits `remaining >> 22` each block, the design's factor
+  (`DESIGN_CONCEPTS.md` §3: 50 % emitted ~year 11, 80 % ~year 25; year-1
+  reward ~970 SKL). Until now `shekyl_economics::emission_speed_factor`
+  applied Monero's per-minute convention, `22 − (2 − 1)`, and ran the curve
+  at 21 per block: twice the design's rate, 2 048 SKL at genesis, half emitted
+  by ~year 5.5. The genesis reward is now 1 024 SKL. The conversion
+  function is deleted; the curve shifts by
+  `EconomicParams::emission_speed_factor_per_block`.
+- `config/economics_params.json`: `emission_speed_factor_per_minute` →
+  `emission_speed_factor_per_block` (value 22). The generated C macro
+  `EMISSION_SPEED_FACTOR_PER_MINUTE`, which nothing read, is deleted.
+- Re-pinned with it: the consensus-constants digest, the economics params
+  digest (format `0x04`: a field redefined at an unchanged value) and
+  `CALIBRATION_GENERATION` (1). Every pin of a curve value is re-derived from
+  the closed form: the C2a′ weight-penalty KAT on both sides of the FFI, the
+  first-values and mid-curve pins in Rust and C++, the genesis ladder
+  anchors, the chain store's slashing-tip snapshot hash, the recorded economics
+  vector and the captured replay chains.
+- `shekyl_economics::neutral_height_reaching`: the first height the neutral
+  trajectory reaches a given emission, the inverse of
+  `projected_already_generated` on one shared walk. The recorder's
+  half-emission milestone reads it (2 907 270).
+- A captured replay chain's `built_at_dev_sha` is the SHA the daemon reports,
+  and the capture refuses unless it is the checkout's clean `HEAD`.
+- `ECONOMY_EXPLAINED.md` Loop 1 states the design curve: `remaining >> 22`,
+  1 024 coins at genesis, the emission table recomputed from the owner, the
+  tail near year 119. The live census row `CEN-F13` and slice 4's `F13` name
+  `>> 22`.
+- The realigned economics sim (#936) on the design curve: its 60-year horizon
+  no longer reaches the tail (≈ year 119 neutral, ≈ year 132 in the fold). The
+  two tail-era sim tests start in the tail era and assert it; the escalation
+  knee, above its band's new high, is held at the swept middle
+  (`KNEE_BAND[1]`) while the escalation is flat
+  (`ECONOMY_UMBRELLA_PLAN.md` §4.1, `FOLLOWUPS.md`).
+
 ### Archival shards — `U1b` is read: the floor device does not lower `W`'s ceiling
 
 - A Pi 4 serving the largest shard object for 24 hours, with PoW on and the

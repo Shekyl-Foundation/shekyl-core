@@ -462,9 +462,12 @@ impl SlashedChain {
 /// accrual, and the slash families above. A fingerprint of bytes, not a
 /// domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
-/// 2026-10-02 (`ARW-Q18`).
+/// 2026-10-02 (`ARW-Q18`). Re-pinned 2026-10-04 with no layout change: the
+/// emission speed factor became per block (22, the design's, where the
+/// per-minute convention had run 21), which halves the emission each closed
+/// epoch's budget row records. Was `6b1d14e8…f501f76a`.
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a";
+    "2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
