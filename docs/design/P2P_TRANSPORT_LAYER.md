@@ -1490,9 +1490,10 @@ died mid-handshake. The reservation does not repeat that.
   slice 3's decision.
 - The once-a-second monitor thread is deleted. *Records-was
   (2026-09-25): it goes when slice 3 lands, cited at `:1113-1138`.*
-  LV-3 step c deleted it. The out-count cache at `net_node.inl:1573`
-  is not refreshed by it. *Records-was: `:1605`.* Slice 3 keeps the
-  fill loops that read the cache.
+  LV-3 step c deleted it. The dial cap at `net_node.inl:1576` recounts
+  through `get_outgoing_connections_count` and does not store the count.
+  *Records-was: the out-count cache at `:1573`, not refreshed by the
+  thread (`:1605`).* Slice 3 keeps the fill loops. They recount.
 - RPC reports both counts, each under its own name. Sockets and
   sessions are not one number.
 

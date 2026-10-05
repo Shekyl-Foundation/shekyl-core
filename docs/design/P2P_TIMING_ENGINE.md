@@ -69,7 +69,7 @@ engine runs today's behaviour so a differential harness can match it.
 | Idle-peer kick | `m_idle_peer_kicker`, 8 s (`cryptonote_protocol_handler.h:205`), run from `on_idle` (`cryptonote_protocol_handler.inl:1665`) | the cryptonote handler's open register row |
 | Standby check | `m_standby_checker`, 100 ms (`:206`). The tick that polls it is 1 s, so today it runs about once a second | the same open row |
 | Sync search | `m_sync_search_checker`, 101 s (`:207`) | the same open row |
-| Peers-monitor thread | deleted. *Records-was: its own thread, `sleep_for(1s)` (`net_node.inl:1113-1140`).* | LV-3 step c deleted it. The out-count cache is not refreshed by it. |
+| Peers-monitor thread | deleted. *Records-was: its own thread, `sleep_for(1s)` (`net_node.inl:1113-1140`).* | LV-3 step c deleted it. The dial cap recounts and does not store a peer count. *Records-was: the out-count cache was not refreshed by the thread.* |
 | Rate-limit sleep | `handler_response_blocks_now` (`cryptonote_protocol_handler-base.cpp:102`). Its calls are commented out (`cryptonote_protocol_handler.inl:966-967` and `cryptonote_protocol_handler.h:238`) | not a deadline. Delete the function (rule 15) |
 
 `idle_worker` (`net_node.inl:2217-2226`) is the 1-second poll over the

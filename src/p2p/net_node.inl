@@ -1570,9 +1570,9 @@ namespace nodetool
       return false;
     }
 
-    // Recount. The one-second thread no longer stores this, and an
-    // exclusive list returns before connections_maker's own recount,
-    // so the stored atomic is not the cap.
+    // Recount. The one-second thread is gone, and an exclusive list
+    // returns before connections_maker's own recount, so a stored
+    // count would skip this cap. The count is not cached.
     const size_t out_peers = get_outgoing_connections_count(zone);
     const uint32_t max_out = zone.m_config.m_net_config.max_out_connection_count;
     if (out_peers >= max_out)
@@ -2145,12 +2145,6 @@ namespace nodetool
         ++count;
       return true;
     });
-    // Admission does not read this cache. Store the recount for a reader
-    // that still looks at the atomic. The one-second thread no longer
-    // writes it.
-    zone.m_current_number_of_in_peers = count > std::numeric_limits<unsigned int>::max()
-      ? std::numeric_limits<unsigned int>::max()
-      : static_cast<unsigned int>(count);
     return count;
   }
   //-----------------------------------------------------------------------------------
@@ -2164,11 +2158,6 @@ namespace nodetool
         ++count;
       return true;
     });
-
-    // Store this recount for a reader that still looks at the atomic.
-    // The dial cap calls this function rather than reading the stored value.
-    zone.m_current_number_of_out_peers = count;
-
     return count;
   }
   //-----------------------------------------------------------------------------------

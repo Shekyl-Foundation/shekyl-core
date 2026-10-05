@@ -1565,23 +1565,23 @@ the sockets moved here.*
 
 **And one concrete inheritance worth naming**, because it is invisible from
 `levin_notify`. **UPDATE 2026-10-04:** admission does not read the
-recount. `apply_inbound_ceiling` (`net_node.inl:3009`) charges
-`shekyl_seam_inbound_held()` (`net_node.inl:2975`). The once-per-second
+recount. `apply_inbound_ceiling` (`net_node.inl:2964`) charges
+`shekyl_seam_inbound_held()` (`net_node.inl:2973`). The once-per-second
 peers-monitor thread is deleted. *Records-was: `node_server::run`
 (`:1163`) slept one second and wrote `m_current_number_of_in_peers`
 and `m_current_number_of_out_peers`.* The dial cap recounts through `get_outgoing_connections_count`
-(`try_to_connect_and_handshake_with_new_peer`). *Records-was: the cap
+(`try_to_connect_and_handshake_with_new_peer`, `net_node.inl:1576`). *Records-was: the cap
 read the stored atomic at `:1573`, which the deleted thread used to
-write, and an exclusive list returned before any recount.* That
-function still stores the recount (`:2170`). The recount is a
-`foreach_connection` at every dial, the opposite direction from this
-step. The board row already carries direction and established
-(`Session` in `registry.rs`). The next commit in this step reads the
-count of outbound established rows from the published board, once
-that count's FFI lands. The walk does not stay. Slice 3 keeps the fill
-loops. The in-count atomic is written by
-`get_incoming_connections_count` (`:2150`) and has no reader in
-`src/`. Deleting the thread removes the one-second `--in-peers`
+write, and an exclusive list returned before any recount.* Both count
+functions return that recount and neither stores it. *Records-was: the
+out-count store at `:2170` and the in-count store at `:2150`.* The
+recount is a `foreach_connection` at every dial. The board publishes
+`direction_count` (`registry.rs`), which counts rows in one direction
+whether or not the handshake has finished. The dial cap's predicate is
+`direction_count(Outbound)`. The cap still walks `foreach_connection`
+until that count's FFI lands. It does not count established rows only,
+and this step does not convert the walk. Slice 3 keeps the fill
+loops. Deleting the thread removes the one-second `--in-peers`
 measurement input (rule 76;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
 item 2). *Records-was: the ceiling was compared against the atomic the
@@ -1627,22 +1627,22 @@ in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 | `is_peer_used` | `:1513` |
 | `is_addr_connected` | `:1538` |
 | `make_new_connection_from_peerlist` | `:1770` |
-| `get_incoming_connections_count` (one zone) | `:2141`, also writes the in-count cache |
-| `get_outgoing_connections_count` (one zone) | `:2160`, also writes the out-count cache |
-| `get_incoming_connections_count` (every zone) | `:2190` |
-| `peer_sync_idle_maker` | `:2332`, mutable; sets `m_in_timedsync` |
-| `print_connections_container` | `:2812` |
+| `get_incoming_connections_count` (one zone) | `:2142`. Returns the recount. Does not store it. |
+| `get_outgoing_connections_count` (one zone) | `:2155`. Returns the recount. Does not store it. |
+| `get_incoming_connections_count` (every zone) | `:2179` |
+| `peer_sync_idle_maker` | `:2321`, mutable; sets `m_in_timedsync` |
+| `print_connections_container` | `:2801` |
 
 `foreach_connection` hands the callback `get_context_ref()`
-(`levin_protocol_handler_async.h:925`). `for_connection` does the same
-at `:939`. *Records-was: `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
+(`levin_protocol_handler_async.h:946`). `for_connection` does the same
+at `:960`. *Records-was: `:939` and `:925`, and before that `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
 `m_connector`, a `ConnectorId`.
 
 **Two Rust session tables already exist. Step c does not add a
-third.** `shekyl_seam::Hub` (`hub.rs:145`) holds every admitted
-session. Its lock is the writer: `adopt` (`:278`) inserts from the
-connector, `finish` (`:601`) records a close from the transport, and
-`reap` (`:642`) drops the row when the executor drops the link. None
+third.** `shekyl_seam::Hub` (`hub.rs:167`) holds every admitted
+session. Its lock is the writer: `adopt` (`:275`) inserts from the
+connector, `finish` (`:589`) records a close from the transport, and
+`reap` (`:639`) drops the row when the executor drops the link. None
 of those three is a strand
 handler. The strand does not exist until the established post, and a
 close must not wait on it. The strand writes the C++ context, posts
@@ -1656,38 +1656,42 @@ or a view over it.
 **What greens step c.** The walks that remain read snapshots. The two
 mutable walks become posts to that connection's strand:
 `for_each_connection` (`:158`) hands its callback a mutable context,
-and `peer_sync_idle_maker` (`:2332`) sets `m_in_timedsync`. The
+and `peer_sync_idle_maker` (`:2321`) sets `m_in_timedsync`. The
 snapshot gains what each of those reads before it writes. The `run`
 thread is deleted, and that deletion removes the `--in-peers`
 measurement input named above. D8 had left the thread until slice 3;
 that sentence is records-was in
 [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D8 and in the
-timing-engine inventory. The out-count cache at `:1573` is not
-refreshed by the thread. *Records-was: `:1605`.* Slice 3 keeps the
-fill loops that read it.
+timing-engine inventory. The peer-count caches are deleted. The dial
+cap recounts at `:1576` and does not store the count. *Records-was: the
+out-count cache at `:1573` was not refreshed by the thread (`:1605`).*
+Slice 3 keeps the fill loops. They recount.
 
 **Which of the twelve move in step c.** The board carries the id, the
 connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
 relationship. Those arrive when their owner publishes them, through
 the step-b handle, not as blanks on the board. The `run` thread is
-gone. The dial cap's recount is the walk this step converts to the
-board. The rest of this subset is still the C++ walk. The twelve
+gone. The dial cap's recount is still `foreach_connection`.
+`Board::direction_count(Outbound)` is that predicate, including rows
+whose handshake has not finished. The cap reads it when the FFI lands.
+This step does not convert the walk. The rest of this subset is still
+the C++ walk. The twelve
 reading snapshots greens at b.
 
 | Step c | Step b |
 | --- | --- |
-| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2332`. It reads the pull relationship and writes `m_in_timedsync`. |
-| `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The stored out-count is not refreshed by it. |
+| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2321`. It reads the pull relationship and writes `m_in_timedsync`. |
+| `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The peer-count caches are deleted. *Records-was: the stored out-count was not refreshed by the thread.* |
 | `send_stop_signal` `:1248` | |
 | `has_outbound_connection_to_host` `:1492` | |
 | `is_peer_used` `:1513` | |
 | `is_addr_connected` `:1538` | |
 | `make_new_connection_from_peerlist` `:1770` | |
-| `get_incoming_connections_count` `:2141` | |
-| The dial cap (`:1576`) recounts through `get_outgoing_connections_count` (`:2158`). That recount converts, in this step, to the count of outbound established rows on the published board. | |
-| `get_incoming_connections_count` `:2190` | |
-| `print_connections_container` `:2812`, the address, the id, and the direction | A sync-state line on the connection print. `:2812` does not print one today. |
+| `get_incoming_connections_count` `:2139` | |
+| The dial cap (`:1576`) still recounts through `get_outgoing_connections_count` (`:2152`). `direction_count(Outbound)` is the same predicate, including rows whose handshake has not finished, and is what the cap reads once its FFI lands. Established is not part of the count. This step does not convert the walk. | |
+| `get_incoming_connections_count` `:2174` | |
+| `print_connections_container` `:2801`, the address, the id, and the direction | A sync-state line on the connection print. `:2801` does not print one today. |
 
 This step does not wait behind steps a and b. Those follow it. It
 does not wait on slices 1–4, the timing-engine bridge, or relay
@@ -1699,33 +1703,38 @@ mutable context across a strand write. `rg get_context_ref` in
 
 | Line | What holds the reference |
 | --- | --- |
-| `:808` | the definition. *Records-was: `:815`, and before that `:790`.* |
-| `:313`, `:315` | the invoke-timeout completion, inside the post at `:303`. It delivers when `m_timer_cancelled` is clear. *Records-was: `:319` and `:321`, inside `:314`, gated on `m_cancel_timer_called`.* |
-| `:271` | `anvoke_handler::cancel`, the callback |
-| `:925` | `foreach_connection` hands the walker the context. *Records-was: `:932`, and before that `:907`.* |
-| `:939` | `for_connection` hands the caller the context. *Records-was: `:946`, and before that `:921`.* |
+| `:829` | the definition. *Records-was: `:808`, and before that `:815`, and before that `:790`.* |
+| `:329`, `:331` | the invoke-timeout completion, inside the post at `:321`. It reports timeout unless close set the report to destroyed. *Records-was: `:313` and `:315`, inside `:303`, gated on `m_timer_cancelled`. Records-was before that: `:319` and `:321`, inside `:314`, gated on `m_cancel_timer_called`.* |
+| `:283` | `anvoke_handler::cancel`, the callback. This is where the report becomes destroyed. |
+| `:946` | `foreach_connection` hands the walker the context. *Records-was: `:925`, and before that `:932`, and before that `:907`.* |
+| `:960` | `for_connection` hands the caller the context. *Records-was: `:939`, and before that `:946`, and before that `:921`.* |
 
-`:271` is strand-side. `cancel` is called only from
+`:283` is strand-side. `cancel` is called only from
 `release_protocol`, and `begin_closed` calls that from `on_strand`
 (`zone_server.h:481`). *Records-was: `:276`.* The falsifier keeps it.
 
 The constructor's debug post is deleted. *Records-was: `:236` posted
-the caller's log, and the read was `:237`.* `:303` posts each
-invoke-timeout completion. The outer-call ref is what keeps
+the caller's log, and the read was `:237`.* `:321` posts each
+invoke-timeout completion. The completion holds the handler from
+`arm_timeout` (`:309`). The outer-call ref is what keeps
 `begin_closed` from posting destruction while it is queued; releasing
 that ref at the end of the closure posts destruction behind it. The
-reads are `:313` and `:315`. They run on the strand, and only when
-`m_timer_cancelled` is still clear: `TIMEDOUT`, or `DESTROYED` when
-close already lost the timer. *Records-was, same day: an extra
-`add_ref` around the post at `:314`, and a `m_cancel_timer_called`
-check at `:319` and `:321`.* The timer stays on the zone
-`io_context` (`levin_protocol_handler_async.h:229`), which
+reads are `:329` and `:331`. They run on the strand, and only when
+`m_timer_cancelled` is still clear. Close sets the report to destroyed
+(`:279`) before `cancel_timer`. A response that loses `cancel_timer`
+leaves the report at timeout, so a fired timer that the response did
+not abort is `TIMEDOUT`. `DESTROYED` is only the close path.
+*Records-was, same day: the completion treated `m_cancel_timer_called`
+as destroyed, so a response that lost the timer was reported destroyed.
+Records-was before that: an extra `add_ref` around the post at `:314`,
+and a `m_cancel_timer_called` check at `:319` and `:321`.* The timer stays on the zone
+`io_context` (`levin_protocol_handler_async.h:239`), which
 `zone_server::run` drives on more than one worker
 (`zone_server.h:258`). *Records-was: `:240` and `:242`, and the old
 `:302` and `:304`, ran on whichever worker took the timer, and `:234`
 ran on `async_invoke`'s caller.*
 
-`:939` is not only a walker. *Records-was: `:946`, and before that `:921`.* `node_server::for_connection`
+`:960` is not only a walker. *Records-was: `:939`, and before that `:946`, and before that `:921`.* `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
 (`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
 `update_sync_search` (`:1757`), `should_download_next_span`

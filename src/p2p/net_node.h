@@ -338,8 +338,6 @@ namespace nodetool
           m_peerlist(),
           m_config{},
           m_proxy_address(),
-          m_current_number_of_out_peers(0),
-          m_current_number_of_in_peers(0),
           m_seed_nodes_lock(),
           m_can_announce(false),
           m_seed_nodes_initialized(false)
@@ -359,8 +357,6 @@ namespace nodetool
           m_peerlist(),
           m_config{},
           m_proxy_address(),
-          m_current_number_of_out_peers(0),
-          m_current_number_of_in_peers(0),
           m_seed_nodes_lock(),
           m_can_announce(false),
           m_seed_nodes_initialized(false)
@@ -389,8 +385,6 @@ namespace nodetool
       peerlist_manager m_peerlist;
       config m_config;
       net::socks::endpoint m_proxy_address;
-      std::atomic<unsigned int> m_current_number_of_out_peers;
-      std::atomic<unsigned int> m_current_number_of_in_peers;
       boost::shared_mutex m_seed_nodes_lock;
       // This zone may announce an inbound endpoint (public port-only advert
       // or the zone's self-address). Renamed from m_can_pingback: the
