@@ -125,7 +125,7 @@ impl Dial for ZoneDial {
                 }
                 self.dial_clearnet(*ip, *port)
             }
-            Endpoint::Tor { host, port } => self.dial_tor(host, *port),
+            Endpoint::Tor { key, port } => self.dial_tor(key, *port),
             Endpoint::TorInbound => Err(CloseCause::new(CloseKind::DialFailed)),
         }
     }
@@ -187,7 +187,7 @@ impl ZoneDial {
         })
     }
 
-    fn dial_tor(&self, host: &str, port: u16) -> Result<Channel, CloseCause> {
+    fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<Channel, CloseCause> {
         let proxy = self
             .host
             .tor_proxy
@@ -195,7 +195,7 @@ impl ZoneDial {
             .expect("tor proxy")
             .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
         let address = NetworkAddress::Tor {
-            host: host.to_owned(),
+            host: shekyl_onion_v3::v3_onion_hostname(key),
             port,
         };
         let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
@@ -219,10 +219,7 @@ impl ZoneDial {
         Ok(Channel {
             open: admitted.open,
             session: admitted.bytes,
-            endpoint: Endpoint::Tor {
-                host: host.to_owned(),
-                port,
-            },
+            endpoint: Endpoint::Tor { key: *key, port },
             gap: Some(admitted.gap),
         })
     }
@@ -352,7 +349,13 @@ fn adopt_clearnet(hub: &Hub, admitted: ClearnetAdmitted) {
 fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
     let id = admitted.open.id();
     let endpoint = match admitted.onion {
-        Some((host, port)) => Endpoint::Tor { host, port },
+        Some((host, port)) => match shekyl_onion_v3::v3_pubkey(&host) {
+            Some(key) => Endpoint::Tor { key, port },
+            None => {
+                tracing::error!("tor session refused: dialed host is not a v3 onion");
+                return;
+            }
+        },
         None => Endpoint::TorInbound,
     };
     let Ok(attached) = hub.adopt(admitted.open, admitted.bytes, endpoint, Some(admitted.gap))

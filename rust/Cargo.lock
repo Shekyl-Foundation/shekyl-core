@@ -4392,6 +4392,7 @@ dependencies = [
  "shekyl-levin",
  "shekyl-logging",
  "shekyl-net-address",
+ "shekyl-onion-v3",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
@@ -4492,6 +4493,7 @@ version = "3.1.0"
 name = "shekyl-onion-v3"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
  "sha3",
 ]
 
@@ -4767,6 +4769,7 @@ name = "shekyl-seam"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
