@@ -630,13 +630,15 @@ jobs:
 
       - name: Run measurement-ledger gate
         # A constant derived from a capture must not outlive the code the
-        # capture was taken on without the ledger saying so. Each row of
-        # `docs/benchmarks/measurement_ledger.toml` names a constant, its
-        # capture and revision, and the paths whose cost it budgets; the gate
-        # fails when a row's stated status (current / stale / unmeasured)
-        # disagrees with git in either direction. Needs the full history this
-        # job already fetches (`fetch-depth: 0`); a shallow checkout whose cut
-        # lies inside a row's range is exit 2, never a pass
+        # capture was taken on without the ledger saying so. Each constant
+        # in `docs/benchmarks/measurement_ledger.toml` names its definition,
+        # its capture and revision, and one path set: the pathspecs whose
+        # cost it shares, acknowledged once. The gate fails when a
+        # constant's stated status (current / stale / unmeasured) disagrees
+        # with git in either direction. A stale constant keeps its name
+        # until a newer capture retires it. Needs the full history this
+        # job already fetches (`fetch-depth: 0`); a shallow checkout whose
+        # cut lies inside a constant's range is exit 2, never a pass
         # (47-gate-subject-assertion.mdc).
         if: '!cancelled()'
         run: python3 scripts/ci/check_measurement_ledger.py

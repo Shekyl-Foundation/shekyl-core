@@ -9,7 +9,7 @@
 # what each status means and how a failure is cleared; `README.md` beside
 # this file says how to add a row.
 #
-# A row binds four things that were otherwise joined only by prose:
+# A constant binds what is true of that value alone:
 #
 #   defined_in / needle   where the constant lives and the text that states
 #                         its value. A changed value fails the row.
@@ -19,18 +19,28 @@
 #                         code it was taken on. `rev_source` says where the
 #                         revision comes from when the capture does not
 #                         record one.
-#   paths                 git pathspecs for the code whose cost the constant
-#                         budgets. A commit touching them that the row has
-#                         not heard fails the check.
+#   path_set              the `[[path_set]]` whose spec is the code the
+#                         constant budgets. Several constants name one path
+#                         set when they share one cost, and that cost is
+#                         acknowledged once.
 #
-# A stale row keeps listening. `stale_through` lists the commits to its paths
-# it has heard, each with a note on what the change does to the cost; a
-# commit that is in none of their histories fails the row until its author
-# adds an entry. Entries are a set: name your own commit, in any order.
+# A path set is heard once. `stale_through` lists the commits to its spec
+# a stale constant has heard, each with a note on what the change does to
+# the cost; a commit that is in none of their histories fails every stale
+# constant on that path set until its author adds an entry. `cleared` is
+# the same list for a current constant, with `reason` in place of `note`.
+# A stale constant does not read `cleared`. Entries are a set: name your
+# own commit, in any order.
+#
+# The only edit that retires a stale constant is a capture, under the same
+# name, whose revision contains that constant's `stale_since`.
 #
 # `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
-# for the whole ledger. It is owed while any row is current across the
-# change, because a compiler bump is on no row's paths and moves them all.
+# for the whole ledger. It is owed while any constant is current across the
+# change, because a compiler bump is on no path set's spec and moves them
+# all. A toolchain entry names the commit that touched the pin (`commit`).
+# A path-set entry names a commit whose history the path set has heard
+# (`through`). Those are different facts and stay different keys.
 #
 # NOT IN THIS LEDGER, by class, so that an absent constant can be told from a
 # forgotten one (the register is section 4 of the tracked-set document):
@@ -68,7 +78,25 @@ note = "Pins rustc at 1.94.0. The RandomX allocation record names only the works
 commit = "5aac523ad"
 note = "Comment only: the bump policy gains the gitian descriptors. The channel does not move."
 
-# --- consensus: block weight ------------------------------------------------
+# --- consensus: block weight ------------------------------------------
+
+[[path_set]]
+id = "block-weight"
+spec = [
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-fcmp-proofs/src",
+  "rust/shekyl-oxide/crypto/fcmps",
+  "rust/shekyl-ffi/src/legacy_fcmp.rs",
+  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+  "rust/shekyl-ffi/src/legacy_core.rs",
+  "rust/shekyl-crypto-pq/src/signature.rs",
+  "rust/shekyl-pow-randomx/src",
+  "src/fcmp/bulletproofs_plus.cc",
+]
+stale_through = [
+  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 
 [[constant]]
 name = "block_weight_short_term_surge_factor"
@@ -78,24 +106,10 @@ measured_by = ["BA-T2", "BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
 carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
-stale_through = [
-  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
-paths = [
-  "rust/shekyl-fcmp/src",
-  "rust/shekyl-fcmp-proofs/src",
-  "rust/shekyl-oxide/crypto/fcmps",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
-  "rust/shekyl-ffi/src/legacy_core.rs",
-  "rust/shekyl-crypto-pq/src/signature.rs",
-  "rust/shekyl-pow-randomx/src",
-  "src/fcmp/bulletproofs_plus.cc",
-]
+path_set = "block-weight"
 
 [[constant]]
 name = "block_weight_full_reward_zone_bytes"
@@ -105,23 +119,16 @@ measured_by = ["BA-T10"]
 status = "stale"
 stale_since = "20738bf714"
 carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
-stale_through = [
-  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
 capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
 rev_source = "capture header"
-paths = [
+path_set = "block-weight"
+
+[[path_set]]
+id = "fcmp-inputs"
+spec = [
   "rust/shekyl-fcmp/src",
-  "rust/shekyl-fcmp-proofs/src",
-  "rust/shekyl-oxide/crypto/fcmps",
-  "rust/shekyl-ffi/src/legacy_fcmp.rs",
-  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
-  "rust/shekyl-ffi/src/legacy_core.rs",
-  "rust/shekyl-crypto-pq/src/signature.rs",
-  "rust/shekyl-pow-randomx/src",
-  "src/fcmp/bulletproofs_plus.cc",
+  "rust/shekyl-wire/tests/input_cap_cost.rs",
 ]
 
 [[constant]]
@@ -131,7 +138,11 @@ needle = "#define FCMP_MAX_INPUTS_PER_TX                  8"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the cap's derivation is owed (FOLLOWUPS, CEN-I4)."
-paths = ["rust/shekyl-fcmp/src", "rust/shekyl-wire/tests/input_cap_cost.rs"]
+path_set = "fcmp-inputs"
+
+[[path_set]]
+id = "fcmp-tree-depth"
+spec = ["rust/shekyl-fcmp/src"]
 
 [[constant]]
 name = "fcmp_max_tree_depth"
@@ -140,7 +151,11 @@ needle = "pub const MAX_TREE_DEPTH: u8 = 24;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. Nothing is measured past depth 7; the depth-24 verify cost the surge factor is signed on is composed from per-layer slopes (BA-G4)."
-paths = ["rust/shekyl-fcmp/src"]
+path_set = "fcmp-tree-depth"
+
+[[path_set]]
+id = "archival-attestation-cap"
+spec = ["rust/shekyl-crypto-pq/src/signature.rs"]
 
 [[constant]]
 name = "archival_max_attestation_records"
@@ -149,9 +164,17 @@ needle = "constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10 (BA-G16). Justified in place as bounding per-block admission cost; no measurement of that cost exists."
-paths = ["rust/shekyl-crypto-pq/src/signature.rs"]
+path_set = "archival-attestation-cap"
 
-# --- relay privacy ----------------------------------------------------------
+# --- relay privacy ----------------------------------------------------
+
+[[path_set]]
+id = "relay-verify-cell"
+spec = [
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-ffi/src/legacy_fcmp.rs",
+  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+]
 
 [[constant]]
 name = "spec_verify_cost_modal_cell"
@@ -160,7 +183,11 @@ needle = "cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));"
 measured_by = ["BA-T1", "BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. The 2026-08-05 floor grids are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
-paths = ["rust/shekyl-fcmp/src", "rust/shekyl-ffi/src/legacy_fcmp.rs", "rust/shekyl-ffi/src/ct_balance_ffi.rs"]
+path_set = "relay-verify-cell"
+
+[[path_set]]
+id = "relay-aes"
+spec = ["rust/shekyl-relay-privacy/src/verify_cost.rs"]
 
 [[constant]]
 name = "pi4_aes_bytes_per_sec"
@@ -169,7 +196,14 @@ needle = "const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. Measured on the floor on 2026-08-21; the capture is not in the tree."
-paths = ["rust/shekyl-relay-privacy/src/verify_cost.rs"]
+path_set = "relay-aes"
+
+[[path_set]]
+id = "relay-anon-transit"
+spec = [
+  "rust/shekyl-relay/src/zone",
+  "rust/shekyl-tor/src",
+]
 
 [[constant]]
 name = "anon_zone_transit_assumption_ms"
@@ -178,7 +212,14 @@ needle = "pub const ANON_ZONE_TRANSIT_ASSUMPTION_MS: f64 = 1_625.0;"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). An assumption, declared as such; one Tor stem has been timed (FOLLOWUPS, the anonymity hop on the floor)."
-paths = ["rust/shekyl-relay/src/zone", "rust/shekyl-tor/src"]
+path_set = "relay-anon-transit"
+
+[[path_set]]
+id = "relay-adopted-transit"
+spec = [
+  "rust/shekyl-relay/src/zone",
+  "rust/shekyl-clearnet/src",
+]
 
 [[constant]]
 name = "adopted_transit_assumption_ms"
@@ -187,7 +228,11 @@ needle = "pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). An assumption, declared as such in place."
-paths = ["rust/shekyl-relay/src/zone", "rust/shekyl-clearnet/src"]
+path_set = "relay-adopted-transit"
+
+[[path_set]]
+id = "relay-fluff"
+spec = ["rust/shekyl-relay-privacy/src/params.rs"]
 
 [[constant]]
 name = "fluff_return_ms"
@@ -196,9 +241,22 @@ needle = "fluff_return_ms: 3_250,"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). A simulated figure from an earlier graph; its own comment says it has not been re-measured."
-paths = ["rust/shekyl-relay-privacy/src/params.rs"]
+path_set = "relay-fluff"
 
-# --- archival serve and fetch -----------------------------------------------
+# --- archival serve and fetch -----------------------------------------
+
+[[path_set]]
+id = "archival-serve-fetch"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+  "rust/shekyl-p-fetch/src",
+  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+]
+stale_through = [
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+]
 
 [[constant]]
 name = "archival_shard_length_bytes"
@@ -208,19 +266,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
-stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
-  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
-]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
 capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
-paths = [
-  "rust/shekyl-p-serve/src",
-  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
-  "rust/shekyl-p-fetch/src",
-  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
-]
+path_set = "archival-serve-fetch"
 
 [[constant]]
 name = "archival_attestation_anchor_lag_blocks"
@@ -230,19 +279,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
-stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
-  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
-]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
 capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
-paths = [
-  "rust/shekyl-p-serve/src",
-  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
-  "rust/shekyl-p-fetch/src",
-  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
-]
+path_set = "archival-serve-fetch"
 
 [[constant]]
 name = "sf_d6_retry_budget"
@@ -252,19 +292,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
-stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
-  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
-]
 capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
 capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
-paths = [
-  "rust/shekyl-p-serve/src",
-  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
-  "rust/shekyl-p-fetch/src",
-  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
-]
+path_set = "archival-serve-fetch"
 
 [[constant]]
 name = "p_attempt"
@@ -274,19 +305,10 @@ measured_by = ["BA-T7"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
-stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
-  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
-]
 capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
 capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
-paths = [
-  "rust/shekyl-p-serve/src",
-  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
-  "rust/shekyl-p-fetch/src",
-  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
-]
+path_set = "archival-serve-fetch"
 
 [[constant]]
 name = "floor_read_capacity_pairs_per_epoch"
@@ -296,18 +318,16 @@ measured_by = ["BA-T5"]
 status = "stale"
 stale_since = "2ebb1da607"
 carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954. The 2026-10-05 serve-cost record prices the v3 serve path over loopback and does not re-run this reading."
-stale_through = [
-  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
-  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
-]
 capture = "docs/benchmarks/u1b_floor_device_20261002.tsv"
 capture_rev = "ecdcbffecc1894dbe2a8d26ec4d64f50c2aba270"
 rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-02"
-paths = [
+path_set = "archival-serve-fetch"
+
+[[path_set]]
+id = "p-serve"
+spec = [
   "rust/shekyl-p-serve/src",
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
-  "rust/shekyl-p-fetch/src",
-  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
 ]
 
 [[constant]]
@@ -317,7 +337,14 @@ needle = "pub const MAX_INFLIGHT: usize = 64;"
 measured_by = ["BA-T5"]
 status = "unmeasured"
 carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment; no run has varied or derived it."
-paths = ["rust/shekyl-p-serve/src", ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs"]
+path_set = "p-serve"
+
+[[path_set]]
+id = "p-fetch"
+spec = [
+  "rust/shekyl-p-fetch/src",
+  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+]
 
 [[constant]]
 name = "p_fetch_max_inflight"
@@ -326,9 +353,20 @@ needle = "pub const MAX_INFLIGHT: usize = 8;"
 measured_by = ["BA-T6"]
 status = "unmeasured"
 carrier = "BA-T6 (BA-G2). The 2026-09-16 width run is a table in ARCHIVAL_SHARD_FETCH.md with no capture in the tree, and client verify cost has never been measured."
-paths = ["rust/shekyl-p-fetch/src", ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs"]
+path_set = "p-fetch"
 
-# --- P2P transport ----------------------------------------------------------
+# --- P2P transport ----------------------------------------------------
+
+[[path_set]]
+id = "clearnet-span"
+spec = [
+  "rust/shekyl-clearnet/src",
+  "rust/shekyl-p2p-transport/src",
+  "rust/shekyl-transport-layer/src",
+]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 
 [[constant]]
 name = "clearnet_dial_within_ns"
@@ -338,13 +376,10 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
-paths = ["rust/shekyl-clearnet/src", "rust/shekyl-p2p-transport/src", "rust/shekyl-transport-layer/src"]
+path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_handshake_within_ns"
@@ -354,13 +389,10 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_clearnet_wan_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
-paths = ["rust/shekyl-clearnet/src", "rust/shekyl-p2p-transport/src", "rust/shekyl-transport-layer/src"]
+path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_gap_within_ns"
@@ -370,13 +402,20 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
 capture_rev = "2f9565f71"
 rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
-paths = ["rust/shekyl-clearnet/src", "rust/shekyl-p2p-transport/src", "rust/shekyl-transport-layer/src"]
+path_set = "clearnet-span"
+
+[[path_set]]
+id = "tor-span"
+spec = [
+  "rust/shekyl-tor/src",
+  "rust/shekyl-transport-layer/src",
+]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 
 [[constant]]
 name = "tor_dial_within_ns"
@@ -386,13 +425,10 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
-paths = ["rust/shekyl-tor/src", "rust/shekyl-transport-layer/src"]
+path_set = "tor-span"
 
 [[constant]]
 name = "tor_gap_within_ns"
@@ -402,13 +438,10 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
-paths = ["rust/shekyl-tor/src", "rust/shekyl-transport-layer/src"]
+path_set = "tor-span"
 
 [[constant]]
 name = "tor_shutdown_timeout_ns"
@@ -418,13 +451,17 @@ measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
 carrier = "BA-T8 (BA-G7). Takes the Tor dial figure; the connector and transport have changed since the capture, and no change has been reviewed for cost."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
 capture_rev = "572ed17c3"
 rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
-paths = ["rust/shekyl-tor/src", "rust/shekyl-transport-layer/src"]
+path_set = "tor-span"
+
+[[path_set]]
+id = "transport-budget"
+spec = [
+  "rust/shekyl-transport-layer/src",
+  "rust/shekyl-timing-engine/src",
+]
 
 [[constant]]
 name = "transport_workers"
@@ -433,7 +470,7 @@ needle = "spans.workers = 2;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
-paths = ["rust/shekyl-transport-layer/src", "rust/shekyl-timing-engine/src"]
+path_set = "transport-budget"
 
 [[constant]]
 name = "transport_blocking"
@@ -442,9 +479,21 @@ needle = "spans.blocking = 1;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
-paths = ["rust/shekyl-transport-layer/src", "rust/shekyl-timing-engine/src"]
+path_set = "transport-budget"
 
-# --- wallet -----------------------------------------------------------------
+# --- wallet -----------------------------------------------------------
+
+[[path_set]]
+id = "fa6-scan"
+spec = [
+  "rust/shekyl-crypto-pq/src/output.rs",
+  "rust/shekyl-crypto-pq/src/kem.rs",
+  "rust/shekyl-scanner/src/scan.rs",
+]
+stale_through = [
+  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 
 [[constant]]
 name = "fa6_scan_budget_ceiling_a"
@@ -454,14 +503,10 @@ measured_by = ["BA-T16"]
 status = "stale"
 stale_since = "a1801d4ca"
 carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
-stale_through = [
-  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
 capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
 rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
-paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
+path_set = "fa6-scan"
 
 [[constant]]
 name = "fa6_scan_budget_ceiling_b"
@@ -471,14 +516,10 @@ measured_by = ["BA-T16"]
 status = "stale"
 stale_since = "a1801d4ca"
 carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
-stale_through = [
-  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
 capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
 rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
-paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
+path_set = "fa6-scan"
 
 [[constant]]
 name = "fa6_scan_budget_margin"
@@ -488,14 +529,17 @@ measured_by = ["BA-T16"]
 status = "stale"
 stale_since = "a1801d4ca"
 carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
-stale_through = [
-  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
 capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
 rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
-paths = ["rust/shekyl-crypto-pq/src/output.rs", "rust/shekyl-crypto-pq/src/kem.rs", "rust/shekyl-scanner/src/scan.rs"]
+path_set = "fa6-scan"
+
+[[path_set]]
+id = "wallet-kdf"
+spec = [
+  "rust/shekyl-crypto-pq/src/wallet_envelope.rs",
+  "rust/shekyl-engine-file/src",
+]
 
 [[constant]]
 name = "wallet_default_kdf_m_log2"
@@ -504,7 +548,7 @@ needle = "pub const DEFAULT_KDF_M_LOG2: u8 = 0x10;"
 measured_by = ["BA-T17"]
 status = "unmeasured"
 carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the floor."
-paths = ["rust/shekyl-crypto-pq/src/wallet_envelope.rs", "rust/shekyl-engine-file/src"]
+path_set = "wallet-kdf"
 
 [[constant]]
 name = "wallet_default_kdf_t"
@@ -513,7 +557,17 @@ needle = "pub const DEFAULT_KDF_T: u8 = 0x03;"
 measured_by = ["BA-T17"]
 status = "unmeasured"
 carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the floor."
-paths = ["rust/shekyl-crypto-pq/src/wallet_envelope.rs", "rust/shekyl-engine-file/src"]
+path_set = "wallet-kdf"
+
+[[path_set]]
+id = "wss-spend"
+spec = [
+  "rust/shekyl-curve-tree/src",
+  "rust/shekyl-fcmp/src",
+]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
 
 [[constant]]
 name = "wss_spend_delta_floor_s"
@@ -523,13 +577,10 @@ measured_by = ["BA-T19"]
 status = "stale"
 stale_since = "af1f60b1a"
 carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
 capture_rev = "ece3aa4fb"
 rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
-paths = ["rust/shekyl-curve-tree/src", "rust/shekyl-fcmp/src"]
+path_set = "wss-spend"
 
 [[constant]]
 name = "wss_spend_delta_relative"
@@ -539,13 +590,14 @@ measured_by = ["BA-T19"]
 status = "stale"
 stale_since = "af1f60b1a"
 carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
-]
 capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
 capture_rev = "ece3aa4fb"
 rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
-paths = ["rust/shekyl-curve-tree/src", "rust/shekyl-fcmp/src"]
+path_set = "wss-spend"
+
+[[path_set]]
+id = "wss-open"
+spec = ["rust/shekyl-engine-core/src/engine/daemon"]
 
 [[constant]]
 name = "wss_open_edge_ceiling_s"
@@ -554,7 +606,11 @@ needle = "**RULED 2026-09-19: `≤ 5 s` absolute, local-daemon posture.**"
 measured_by = ["BA-T19"]
 status = "unmeasured"
 carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 3). The open-edge row has not run on the floor; no record of it is in the tree."
-paths = ["rust/shekyl-engine-core/src/engine/daemon"]
+path_set = "wss-open"
+
+[[path_set]]
+id = "shard-render"
+spec = ["rust/shekyl-shard-visual/src"]
 
 [[constant]]
 name = "shard_render_floor_targets"
@@ -565,9 +621,16 @@ status = "current"
 capture = "docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt"
 capture_rev = "655d31cb2"
 rev_source = "capture header"
-paths = ["rust/shekyl-shard-visual/src"]
+path_set = "shard-render"
 
-# --- PoW and chain store ----------------------------------------------------
+# --- PoW and chain store ----------------------------------------------
+
+[[path_set]]
+id = "randomx-cache"
+spec = ["rust/shekyl-pow-randomx/src"]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
+]
 
 [[constant]]
 name = "randomx_cache_derivation_target_ms"
@@ -577,13 +640,17 @@ measured_by = ["BA-T14"]
 status = "stale"
 stale_since = "bd7cea464"
 carrier = "BA-T14 (BA-G9, BA-Q19). The record predates the real dispatch core; 341 ms on x86 against the 200 ms target, never run on the floor."
-stale_through = [
-  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
-]
 capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
 capture_rev = "f237aad327aba71cb2c59518c887e5bd44b5df8e"
 rev_source = "not recorded in the record; the last commit touching the crate's sources on the run date, 2026-05-22"
-paths = ["rust/shekyl-pow-randomx/src"]
+path_set = "randomx-cache"
+
+[[path_set]]
+id = "randomx-vm"
+spec = ["rust/shekyl-pow-randomx/src/vm.rs"]
+cleared = [
+  { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
+]
 
 [[constant]]
 name = "randomx_vm_allocation_target_us"
@@ -594,10 +661,11 @@ status = "current"
 capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
 capture_rev = "321b89edbe9867263d8cdf72d28c444b19b7efc7"
 rev_source = "not recorded in the record; the last commit touching the crate on the re-measurement date, 2026-05-24"
-paths = ["rust/shekyl-pow-randomx/src/vm.rs"]
-cleared = [
-  { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
-]
+path_set = "randomx-vm"
+
+[[path_set]]
+id = "chain-store-ibd"
+spec = ["rust/shekyl-chain-store/src"]
 
 [[constant]]
 name = "ibd_floor_ratio"
@@ -606,4 +674,4 @@ needle = "IBD_FLOOR_RATIO = 1.25"
 measured_by = ["BA-T13"]
 status = "unmeasured"
 carrier = "BA-T13 (BA-G6). The ratio is pre-registered; only the LMDB arm has run, and the redb arm waits on a build target (FOLLOWUPS, DRS-BENCH redb arm)."
-paths = ["rust/shekyl-chain-store/src"]
+path_set = "chain-store-ibd"
