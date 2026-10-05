@@ -346,8 +346,8 @@ impl PServeEndpoint {
     /// * the signed read's body is not the length its frame declares;
     /// * the shard vanished, or its frame changed, between the signed read
     ///   and the send — still the shared 404, because nothing was written;
-    /// * the send read failed part-way, or its bytes did not digest to the
-    ///   digest that was signed, so the signature was withheld.
+    /// * the send read failed part-way, ran past the frame, or did not digest
+    ///   to the digest that was signed, so the signature was withheld.
     ///
     /// An ordinary miss (unknown id, unfrozen segment, anchor out of window)
     /// is the deliberate 404 and is **not** counted. A signer that refuses is
@@ -517,8 +517,8 @@ enum Lookup {
     StoreFault,
 }
 
-/// Read a shard body to its end, one chunk resident, and return its frame
-/// and its [`FramedDigest`].
+/// Read a shard body to its end, one chunk resident, and return the frame
+/// with the digest of the bytes that made its declared length.
 ///
 /// `None` if the store fails part-way, or if the body is not the length its
 /// frame declares. Either way nothing has been signed.

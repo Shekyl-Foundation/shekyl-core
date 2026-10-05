@@ -30,9 +30,9 @@ pub(super) struct FramedDigest {
     /// [`Self::start`], and retained so the sender writes the bytes it hashed.
     frame_bytes: Vec<u8>,
     /// [`ServedFrameHeader::framed_len`]: header, payload, and padding.
-    expect: u64,
+    framed_len: u64,
     /// Bytes absorbed so far, including the frame header.
-    read: u64,
+    absorbed: u64,
 }
 
 impl FramedDigest {
@@ -44,14 +44,14 @@ impl FramedDigest {
     /// the addition is not allowed to ignore.
     pub(super) fn start(frame: &ServedFrameHeader, nonce: &[u8; PASS_NONCE_LEN]) -> Option<Self> {
         let frame_bytes = frame.to_bytes();
-        let read = u64::try_from(frame_bytes.len()).ok()?;
+        let absorbed = u64::try_from(frame_bytes.len()).ok()?;
         let mut hasher = PassDeliveryHasher::new(nonce);
         hasher.update(&frame_bytes);
         Some(Self {
             hasher,
             frame_bytes,
-            expect: frame.framed_len(),
-            read,
+            framed_len: frame.framed_len(),
+            absorbed,
         })
     }
 
@@ -68,19 +68,19 @@ impl FramedDigest {
     /// signing or sending a body the frame does not describe.
     pub(super) fn absorb(&mut self, chunk: &[u8]) -> Option<()> {
         let len = u64::try_from(chunk.len()).ok()?;
-        let read = self.read.checked_add(len)?;
-        if read > self.expect {
+        let absorbed = self.absorbed.checked_add(len)?;
+        if absorbed > self.framed_len {
             return None;
         }
         self.hasher.update(chunk);
-        self.read = read;
+        self.absorbed = absorbed;
         Some(())
     }
 
     /// The digest, if the absorbed bytes are exactly the frame's declared
     /// length. A short body is `None`: it is not a prefix someone may sign.
     pub(super) fn finish(self) -> Option<[u8; PASS_DELIVERY_DIGEST_LEN]> {
-        if self.read != self.expect {
+        if self.absorbed != self.framed_len {
             return None;
         }
         Some(self.hasher.finalize())
