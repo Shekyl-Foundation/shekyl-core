@@ -312,6 +312,16 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_bench.py
 
+      - name: Run benchmark comparator tests
+        # `scripts/bench/compare.py` decides the per-PR benchmark gate: which
+        # delta is a fail, which is a warn, and what a zero baseline means.
+        # This is its regression suite (BA-Q21, ruled 2026-10-05). It runs
+        # here, beside its DRS sibling, and not in `benchmarks.yml`, because
+        # this job has no `paths:` filter: a PR that edits the comparator
+        # cannot skip the tests that check it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_compare.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.

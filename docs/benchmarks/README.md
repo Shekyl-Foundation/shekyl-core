@@ -109,8 +109,9 @@ is the per-PR gate, wired in commit 3 of the hardening pass.
 
 ### Per-PR gate
 
-On a pull request targeting `dev` that touches any benched crate,
-`scripts/bench/**`, or the workflow itself:
+On a pull request targeting `dev` that touches anything under `rust/`,
+`scripts/bench/**`, or the workflow itself (the whole workspace, because a
+bench's cost depends on crates other than its own):
 
 1. A fresh `ubuntu-latest` runner captures the full
    `shekyl_rust_v0.json` envelope against the PR head via
@@ -170,7 +171,7 @@ purpose). It is the only place in the repository where captured
 numbers live that the gate reads.
 
 - Updated by the `update-baseline` job of the workflow on every
-  push to `dev` that touches a benched path. A bot-authored commit
+  push to `dev` that touches the same paths the per-PR gate triggers on. A bot-authored commit
   replaces the tip with the fresh capture.
 - If the branch does not exist (first-time bootstrap), the gate
   posts a `bootstrap-pending` comment on the PR and passes. The
