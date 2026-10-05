@@ -97,14 +97,26 @@ jobs:
               REF=dev
               ;;
             *)
-              # No pipe. `grep -q` under `pipefail` can take SIGPIPE from
-              # ls-remote and report a branch that exists as absent.
-              hits=$(git ls-remote --heads https://github.com/Shekyl-Foundation/shekyl-gui-wallet.git "$CANDIDATE")
-              if [ -n "$hits" ]; then
-                REF="$CANDIDATE"
-              else
-                REF=dev
-              fi
+              # The pattern is the full ref. A tail match would accept
+              # archive/feat/example for a candidate of feat/example, then
+              # the checkout of feat/example would miss. Keep a line only
+              # when its ref is exactly that branch. No pipe.
+              want="refs/heads/${CANDIDATE}"
+              hits=$(git ls-remote https://github.com/Shekyl-Foundation/shekyl-gui-wallet.git "$want")
+              REF=dev
+              rest=$hits
+              while [ -n "$rest" ]; do
+                line=${rest%%$'\n'*}
+                case "$rest" in
+                  *$'\n'*) rest=${rest#*$'\n'} ;;
+                  *) rest= ;;
+                esac
+                ref=${line#*$'\t'}
+                if [ "$ref" = "$want" ]; then
+                  REF=$CANDIDATE
+                  break
+                fi
+              done
               ;;
           esac
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
