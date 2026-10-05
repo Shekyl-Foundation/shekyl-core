@@ -25,9 +25,9 @@ use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    block_with_nonce, bond_post_body, chain_listing, chain_listing_with, cleanup,
-    emission_claim_body, h, join_body, key_image, open_store, serve_credit_body, spend, tmp,
-    trace_of, Family, GrownTree, Scripted, FIRST_SPEND_HEIGHT,
+    block_with_nonce, chain_listing, chain_listing_with, cleanup, emission_claim_body, h,
+    join_body, key_image, open_store, serve_credit_body, spend, tmp, trace_of, Family, GrownTree,
+    Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -379,7 +379,9 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         // mutation duplicates, beside the spend `chain(n)` would list. The
         // serve credit's twin is the body itself, `unlock_time` moved; the
         // emission's and the bond post's are signed over their content, so
-        // the run supplies a second valid body with the same key. A credit
+        // the run supplies a second valid body with the same key — for the
+        // bond post a second **join** for `P1` (`join_body` docs: a Release
+        // over no record is J16's in the slot loop, before G10). A credit
         // names a persona with a record read off the view before its block
         // (CEN-J4), so the block below `AT` lists `P1`'s join beside its
         // spend; the credit's epoch is past the join's (CEN-J5).
@@ -395,8 +397,8 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
                     )),
                 ),
                 _ => (
-                    bond_post_body(key_image(Family::Fork, AT), P1),
-                    Some(bond_post_body(key_image(Family::Fork, AT + 1), P1)),
+                    join_body(key_image(Family::Fork, AT), P1),
+                    Some(join_body(key_image(Family::Fork, AT + 1), P1)),
                 ),
             };
             let join_below = matches!(mutation, Mutation::DuplicateServeCredit)

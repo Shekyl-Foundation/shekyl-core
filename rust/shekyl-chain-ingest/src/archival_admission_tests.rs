@@ -65,7 +65,7 @@ use std::path::Path;
 use shekyl_archival_retention::{
     good_through, p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok,
     verify_reinstate_bond_post, BondPostKind as RetentionKind, HoldingsKind,
-    ARCHIVAL_BOND_FLOOR_ATOMIC,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_chain_rules::{
     ArchivalKey, CenRow, FakechainSchedule, Locus, RecordWriteKind, RuleSet, SettlementEpochBlocks,
@@ -277,8 +277,9 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
 ///   the complete tree's floor and a one-shard compact set's are the same
 ///   number (`bond_floor_of`), so the corpus does **not** distinguish a
 ///   per-shard floor from a flat one; a rule that gets the multiplier
-///   wrong passes the corpus. The driver's two-shard join
-///   (`scenario_archival_tests`) is the witness that does.
+///   wrong passes the corpus. The driver's two-shard join and its
+///   one-floor negative (`scenario_archival_tests`) are the witnesses
+///   that do.
 /// - **J5** — the one credit is the injector's, at epoch `E_join + 1`,
 ///   written while epoch 0 was still open (tip 115 of a 512-block epoch):
 ///   a credit *for* an epoch that has not begun. It is a record, not a
@@ -426,10 +427,13 @@ async fn record_of(
 ///   `verify_reinstate_bond_post` agrees with the fold on the same vin;
 ///   the interval closes at `reinstate epoch + 1`, the write is an
 ///   `Update`, and the store reads it back.
-/// - **(b) the belts, pinned as L7:** a second Reinstate (no open
-///   interval) and one naming the holdings it had before the slash
-///   (`HoldingsChanged`) refuse at the post under L7 today; §5 row 5 moves
-///   them under J18.
+/// - **(b) the belts, under J18:** a second Reinstate (no open interval)
+///   and one naming the holdings it had before the slash
+///   (`HoldingsChanged`) refuse at the post under **CEN-J18** (*were*
+///   L7's until §5 row 5); the fold's arms are the belts beneath. A
+///   Release two epochs inside the cooldown is **CEN-J16**'s
+///   (`CooldownNotElapsed`) — the one negative of that arm a chain with a
+///   served record can shape.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_verify() {
     let schedule = levered_schedule();
@@ -630,7 +634,7 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
     assert_eq!(past_interval.archival.serve_credits().len(), 2);
     chain.push(past_interval);
 
-    // (b) The belts, as L7 today. Every post below rides coinbase 2 at the
+    // (b) The belts, under J18. Every post below rides coinbase 2 at the
     // same height; a refused block leaves the chain where it was.
     let spender = Spender::over(&chain);
     let height = next(&chain);
@@ -652,15 +656,30 @@ async fn a_slashed_persona_reinstates_and_the_fold_agrees_with_the_wallet_side_v
     .expect("two shards");
     before_slash.bad_intervals = record.bad_intervals.clone();
     let holdings_changed = riding(persona.reinstate(&before_slash));
+    // J16's cooldown: the persona's last pass on its kept shard is
+    // `after_close`, the block connecting now is still in
+    // `reinstate_epoch`, and a Release waits `RELEASE_COOLDOWN_EPOCHS`
+    // past the last pass. J13 passes it first (the bond-spend slot).
+    let current = schedule.epoch_at_height(height);
+    assert!(
+        current < after_close + RELEASE_COOLDOWN_EPOCHS,
+        "the release lists inside the cooldown ({current} < {after_close} + {RELEASE_COOLDOWN_EPOCHS})"
+    );
+    let early_release = riding(persona.release(stored.bonded_total.to_raw()));
 
     refused_at(
         scenario.mine_listing(vec![no_open_interval]).await,
-        CenRow::L7,
+        CenRow::J18,
         at_post(0),
     );
     refused_at(
         scenario.mine_listing(vec![holdings_changed]).await,
-        CenRow::L7,
+        CenRow::J18,
+        at_post(0),
+    );
+    refused_at(
+        scenario.mine_listing(vec![early_release]).await,
+        CenRow::J16,
         at_post(0),
     );
 

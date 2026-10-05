@@ -198,6 +198,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J11,
             CenRow::J12,
             CenRow::J13,
+            // Slice 8 row 5: the post against its record — a join's floor and
+            // claim slot, a Release's exit, a Reinstate's open interval.
+            CenRow::J14,
+            CenRow::J16,
+            CenRow::J18,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

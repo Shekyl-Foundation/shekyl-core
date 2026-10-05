@@ -30,22 +30,30 @@
 //! multi-block.) The multi-block
 //! arms follow on the same chain: a release of the persisted record (its
 //! post-image read back), a release whose debit is not that record's total
-//! refused at L7 before the valid one connects, a second join for a bonded
-//! persona refused, and a reinstate against a record whose only interval is
-//! a clean close
-//! refused — the reinstate arm's *positive* witness needs an open interval,
+//! refused at CEN-J16 before the valid one connects, a second join for a
+//! bonded persona refused at CEN-J14, and a reinstate against a record
+//! whose only interval is a clean close refused at CEN-J18 (*was* L7's,
+//! all three, until E6 slice 8 row 5 landed the post rows ahead of the
+//! fold) — the reinstate arm's *positive* witness needs an open interval,
 //! which only a slash writes, and no fixture chain here reaches the slash
 //! scan (a slash needs `M` epochs of settled misses and one epoch of
 //! grace; `shekyl-chain-store`'s `slash_writes_land_at_the_m_epoch_deadline`
 //! is that path's witness).
 //!
 //! One arm the plan listed as single-block is not. A join and a release
-//! for one persona in one block do not reach L7: **CEN-G10**
-//! (`bond_post_block_unique`, ratified 2026-07-12) refuses a second bond
-//! post for a `P` in a block, whatever its kind, and G10 runs before the
-//! transition. So "join + release in one block" is G10's refusal, pinned
-//! below as such, and the release arm's positive witness is a release of a
-//! *persisted* record.
+//! for one persona in one block do not reach L7, and the release arm's
+//! positive witness is a release of a *persisted* record. *Records-was:*
+//! until E6 slice 8 row 5 this file read the pair as **CEN-G10**'s refusal
+//! (`bond_post_block_unique`, ratified 2026-07-12: one bond post per `P`
+//! per block, whatever its kind) on the ground that "G10 runs before the
+//! transition". It does — but the slot loop runs before G10, and with
+//! CEN-J16 in it the release reads the view before the block, finds no
+//! record for `P`, and is refused there (`RecordMissing`) a pass ahead of
+//! G10. The C++ has the same order (`check_tx_inputs` per body, the
+//! block's duplicate-post pass after), so the pair never reached G10 there
+//! either; the sentence was true of the design and false of both
+//! implementations. G10's witness is two posts that each pass the slot
+//! loop alone: two **joins** for one `P`, pinned below.
 //!
 //! # What the store says
 //!
@@ -126,10 +134,13 @@ fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow,
 /// record is there, the accrual row is the post-image, and the blocks
 /// after read them — a credit for the persona, for the first epoch it may
 /// serve (`E_join + 1`, CEN-J5), connects, a release whose debit is not
-/// the persisted total is L7 before any connect, a release of that total
-/// empties the record and its post-image is what the store holds, a
-/// second join and a reinstate over a clean close are L7's refusals at
-/// their input.
+/// the persisted total is CEN-J16's before any connect, a release of that
+/// total empties the record and its post-image is what the store holds, a
+/// second join is CEN-J14's refusal and a reinstate over a clean close is
+/// CEN-J18's, at their input (all three *were* L7's until slice 8 row 5).
+/// The compact persona's two-shard join is the corpus's one two-floor
+/// positive for J14, and the same post with one floor behind it is the
+/// negative the fixtures cannot shape.
 ///
 /// *Records-was:* until E6 slice 8 row 3 this block also listed a credit
 /// **beside** the join, for the join's own epoch, and it connected: the
@@ -171,6 +182,8 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         CenRow::I18,
         CenRow::G10,
         CenRow::J4,
+        CenRow::J13,
+        CenRow::J14,
         CenRow::L7,
     ] {
         assert!(block.judged_by.contains(&row), "{row} judged the block");
@@ -266,10 +279,11 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // and a release of the other persisted record is its `Update` — bonded
     // to zero, holding nothing, one clean interval close at the open epoch.
     let next = connecting + 1;
-    // A debit that is not the persisted total is L7
-    // (`DebitNotRecordTotal`) at the post input. The block does not
-    // connect, so the valid release below still lands at `next` on the
-    // same coinbase.
+    // A debit that is not the persisted total is CEN-J16's
+    // (`DebitNotFullBalance`) at the post input — J13 passes it first,
+    // the slot being `bond_spend_pk`'s; the fold's `DebitNotRecordTotal`
+    // is the belt beneath. The block does not connect, so the valid
+    // release below still lands at `next` on the same coinbase.
     let wrong_debit = whole.release(whole_record.bonded_total.to_raw() + 1);
     refused_at(
         scenario
@@ -281,7 +295,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
                 Some(&wrong_debit),
             )])
             .await,
-        CenRow::L7,
+        CenRow::J16,
         Locus::Input {
             slot: TxSlot::Listed(0),
             input: 1,
@@ -298,6 +312,12 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     assert_eq!(block.height, BlockHeight::from_raw(next));
     for row in [CenRow::H20, CenRow::J4, CenRow::J5, CenRow::J6] {
         assert!(block.judged_by.contains(&row), "{row} judged the credit");
+    }
+    // The release passed J13 (the bond-spend slot) and J16 over the
+    // persisted record: `whole` never served, so the cooldown and the
+    // slash watermark have nothing to wait on.
+    for row in [CenRow::J13, CenRow::J16] {
+        assert!(block.judged_by.contains(&row), "{row} judged the release");
     }
     let credits = block.archival.serve_credits();
     assert_eq!(credits.len(), 1);
@@ -346,10 +366,11 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     spender.push(&block);
 
     // Refusals that read a persisted record: a second join for a bonded
-    // persona (SI-19's insert-once, judged at L7 first), and a reinstate
-    // of the released record — it holds nothing and its only interval is
-    // a clean close, so the fold has nothing to reinstate. Each is refused
-    // at the post's own input; the chain stays where it was.
+    // persona (CEN-J14's `RecordExists`; SI-19's insert-once is the fold's
+    // belt beneath it), and a reinstate of the released record — it holds
+    // nothing and its only interval is a clean close, so CEN-J18 has
+    // nothing to reinstate. Each is refused at the post's own input; the
+    // chain stays where it was.
     let after = next + 1;
     let at_post = Locus::Input {
         slot: TxSlot::Listed(0),
@@ -366,7 +387,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
                 Some(&rejoin),
             )])
             .await,
-        CenRow::L7,
+        CenRow::J14,
         at_post,
     );
     let mut reinstate = whole.join_post(complete_tree(), ENDPOINT);
@@ -382,7 +403,30 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
                 Some(&reinstate),
             )])
             .await,
-        CenRow::L7,
+        CenRow::J18,
+        at_post,
+    );
+    // CEN-J14's floor arm, which the fixtures cannot shape (every
+    // fixture's holdings cost one floor): the compact persona's two-shard
+    // join with one floor behind it. The post names a persona already
+    // bonded, so the arm under test is reached only because the verify
+    // reads the money before the record — `FloorMismatch` ahead of
+    // `RecordExists`, the retention crate's order.
+    let mut under_bonded = compact.join_post(shard_set(vec![7, 42]), ENDPOINT);
+    under_bonded.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    under_bonded.bond_credit = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    let under_bonded = compact.post_by_hand(under_bonded);
+    refused_at(
+        scenario
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                3,
+                after,
+                FEE,
+                Some(&under_bonded),
+            )])
+            .await,
+        CenRow::J14,
         at_post,
     );
     assert_eq!(
@@ -398,10 +442,14 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
 /// stack: a post is assembled and signed as a wallet would (so CEN-H21 and
 /// I18 pass and L7 is the row that fires), listed at the same height — a
 /// refused block leaves the chain where it was — and refused at the post's
-/// own input. The last case is G10's, not L7's (module docs). The serve
-/// credit is **CEN-J4**'s (E6 slice 8 row 3): the one bond-state read the
-/// transaction pass makes, ahead of the fold — *was* L7's until row 3
-/// landed, the pin slice 8's row 2 held.
+/// own input: the release at **CEN-J16**, the reinstate at **CEN-J18**,
+/// the empty compact join at **CEN-J14** (all three *were* L7's until E6
+/// slice 8 row 5), the unnamed kind still at L7 — no post row names it,
+/// so the sequence passes it to the fold. The join-and-release pair is
+/// J16's too, not G10's (module docs). The serve credit is **CEN-J4**'s
+/// (E6 slice 8 row 3): the one bond-state read the transaction pass makes,
+/// ahead of the fold — *was* L7's until row 3 landed, the pin slice 8's
+/// row 2 held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let connecting = first_spending_height();
@@ -420,7 +468,9 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
         |bond| spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&bond));
 
     // A release (through `build_release_vin`, `bond_spend_sk` signing the
-    // slot, the debit a source the outputs grow by) with no record to empty.
+    // slot, the debit a source the outputs grow by) with no record to
+    // empty: J16's `RecordMissing`. J13's Release arm is gated on the
+    // record, so with none it has nothing to pin the slot against.
     let release = riding(persona.release(ARCHIVAL_BOND_FLOOR_ATOMIC));
     // A reinstate with no record. No wallet producer exists for one, so the
     // post is a join's fields under the Reinstate tag.
@@ -431,8 +481,9 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let mut unknown = persona.join_post(shard_set(vec![7]), ENDPOINT);
     unknown.kind = BondPostKind::Other(9);
     let unknown = riding(persona.post_by_hand(unknown));
-    // A compact join holding nothing: the wire carries an empty list, the
-    // transition refuses a record with no holdings. (A repeated shard is
+    // A compact join holding nothing: the wire carries an empty list,
+    // J14's `ShardSetCompactEmpty` refuses it; the transition's refusal of
+    // a record with no holdings is the belt beneath. (A repeated shard is
     // not listed here: the wire decoder refuses it before any rule reads
     // the block, so L7's duplicate arm is a belt behind the decoder — the
     // fixture's case, `archival_tests`, is its witness.)
@@ -456,12 +507,12 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     );
     refused_at(
         scenario.mine_listing(vec![release]).await,
-        CenRow::L7,
+        CenRow::J16,
         at_post,
     );
     refused_at(
         scenario.mine_listing(vec![reinstate]).await,
-        CenRow::L7,
+        CenRow::J18,
         at_post,
     );
     refused_at(
@@ -471,7 +522,7 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     );
     refused_at(
         scenario.mine_listing(vec![empty]).await,
-        CenRow::L7,
+        CenRow::J14,
         at_post,
     );
 
@@ -487,31 +538,41 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     scenario.close().await;
 }
 
-/// A join and a release for one persona in one block is CEN-G10's refusal
-/// (one bond post per `P` per block), at the second post — it never reaches
-/// the transition. The release arm's positive witness therefore needs a
-/// persisted record: commit 5's.
+/// A join and a release for one persona in one block is **CEN-J16**'s
+/// refusal at the release — the view the slot loop reads is the one before
+/// the block, so the record the join would open is not there (module
+/// docs: *was* pinned as CEN-G10's until E6 slice 8 row 5, on a sentence
+/// true of neither implementation). It never reaches the transition, so
+/// the release arm's positive witness needs a persisted record: commit
+/// 5's. CEN-G10's own witness is the second block: two joins for one
+/// persona, each passing the slot loop alone, the second refused after it
+/// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_join_and_a_release_in_one_block_is_g10s_refusal_not_l7s() {
+async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
     let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-g10");
     let mined = scenario.mine(connecting).await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(4);
+    let second = Locus::Input {
+        slot: TxSlot::Listed(1),
+        input: 1,
+    };
     let join = persona.join(shard_set(vec![7]), ENDPOINT);
     let release = persona.release(ARCHIVAL_BOND_FLOOR_ATOMIC);
     let listed: Vec<Transaction> = vec![
         spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
         spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&release)),
     ];
-    refused_at(
-        scenario.mine_listing(listed).await,
-        CenRow::G10,
-        Locus::Input {
-            slot: TxSlot::Listed(1),
-            input: 1,
-        },
-    );
+    refused_at(scenario.mine_listing(listed).await, CenRow::J16, second);
+    // The refused block wrote nothing, so both joins read no record and
+    // J14 passes each; G10 counts the second.
+    let again = persona.join(shard_set(vec![7]), ENDPOINT);
+    let joins: Vec<Transaction> = vec![
+        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
+        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&again)),
+    ];
+    refused_at(scenario.mine_listing(joins).await, CenRow::G10, second);
     scenario.close().await;
 }
 

@@ -61,7 +61,7 @@ use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
-use crate::rules::tx_bond::{judge_bond_post_key, judge_serve_credit_bond};
+use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
 use crate::rules::{self, BlockContext, FormContext};
@@ -629,9 +629,10 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    // No 4.I row reads the rule set yet; the first that does (a schedule
-    // step varying a reference-window constant, Q5) takes it from here.
-    let _ = rule_set;
+    // The rule set reaches one row here: J16's current epoch is the
+    // schedule's at the connecting height (`judge_bond_post`). No 4.I row
+    // reads it yet; the first that does (a schedule step varying a
+    // reference-window constant, Q5) takes it from the same argument.
     let mut coverage = RuleCoverage::EMPTY;
     let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
         Ok(cx) => cx,
@@ -657,13 +658,16 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    // The bond-post arm of `check_tx_inputs`, its key-selection rule (J13):
-    // a Release's slot against the record's committed `bond_spend_pk`
-    // (`cold_authority_pin`, one record read), a credit's against the
-    // post's identity key. Before the signatures, as the C++ pins the key
+    // The bond-post arms of `check_tx_inputs`, in the C++'s per-kind order:
+    // a JoinMarket's statics against the record's absence (J14) then its
+    // identity key (J13); a Release's slot against the record's committed
+    // `bond_spend_pk` (J13, `cold_authority_pin`) then its full exit,
+    // cooldown and settlement (J16, the one row reading the rule set); a
+    // Reinstate's open interval and unchanged holdings (J18) then its
+    // identity key (J13). Before the signatures, as the C++ pins the key
     // before `verify_transaction_pqc_auth` verifies it — I18 asks whether
     // the slot's key signed; J13 asks whether it is the right key.
-    match judge_bond_post_key(&cx, view, &mut coverage).map_err(ViewRead::View)? {
+    match judge_bond_post(&cx, view, rule_set, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

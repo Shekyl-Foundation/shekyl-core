@@ -19,7 +19,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_chain_rules::harness::fixture;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-use shekyl_wire::{BondPost, BondPostKind, Holdings, Input, Transaction};
+use shekyl_wire::{Input, Transaction};
 
 /// A **serve-credit-only** body (CEN-H20's shape, the harness's
 /// `serve_credit_only`) whose one vin **parses** as the kept half of a pass
@@ -46,31 +46,17 @@ pub fn serve_credit_body(p: [u8; 32], shard: u64, epoch: u64) -> Transaction {
 /// for `p` is judged against (CEN-J4 reads it off the view before the
 /// credit's block, so the join lists in a block below the credit's).
 /// Unanchored and unsigned like every body `chain_listing_with` places.
+///
+/// Two calls with two key images and one `p` are the pair CEN-G10 refuses:
+/// each join alone passes the post rows over a view with no record for `p`
+/// (CEN-J14 reads the record's absence, J13 the identity key), and G10
+/// counts the second after the slot loop. Until slice 8 row 5 the family
+/// twinned a **Release** here instead; with J16 landed a Release over no
+/// record refuses on `RecordMissing` in the slot loop, before G10 — the
+/// C++'s order too (`check_tx_inputs` runs per body ahead of the block's
+/// duplicate-post pass), so the Release pair never reached G10 there.
 pub fn join_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
     fixture::join_market(key_image, p)
-}
-
-/// A spend of `key_image` that also posts a **Release** for `p` — the
-/// harness's balanced bond post (CEN-H21's shape) with the persona's key
-/// and recompute, unanchored and unsigned like every body
-/// `chain_listing_with` places: anchoring signs it, with the persona's
-/// bond-spend key (the Release slot's, CEN-J13). Two calls with two key
-/// images and one `p` are the pair CEN-G10 refuses; over a chain holding
-/// no record for `p` the release itself is not J13's to refuse.
-pub fn bond_post_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
-    let who = fixture::persona(p);
-    fixture::balanced_bond_post(
-        key_image,
-        BondPost {
-            hybrid_public_key: who.identity,
-            p_canonical_id: who.id,
-            kind: BondPostKind::Other(2),
-            holdings: Holdings::CompleteTree,
-            bonded_total_atomic: 0,
-            bond_credit: 0,
-            bond_debit: 0,
-        },
-    )
 }
 
 /// A spend of `key_image` that also carries an emission claim by the
