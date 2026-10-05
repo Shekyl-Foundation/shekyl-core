@@ -277,3 +277,176 @@ async fn cursor_read_on_fresh_client_is_none() {
         .expect("cursor read on a live actor");
     assert_eq!(tip, None, "a fresh client has no ingested tip");
 }
+
+/// A reorg rebinds a gindex, and a caller whose view is still the old chain
+/// is told so, refused cleanly, and served again once it has rescanned.
+///
+/// This is the case `CT6_PROVING_STATE.md` §11.9 hands the registrant. The
+/// tree's ingest is acknowledged before the ledger's merge commits, so the
+/// tree can be on the new chain while the ledger — and a spend selected
+/// from it — still names the old one. What has to hold, in order:
+///
+/// 1. the old pair is reported stale, alone: the pair below the fork, in
+///    the same batch, is still held and served;
+/// 2. a spend of the old pair is refused as unregistered, which
+///    `transfer::support` classifies as reselect — not assembled over
+///    another output's leaf, and not a store fault;
+/// 3. the rescan's pair registers, and its reconciliation rebuilds exactly
+///    the one leaf chunk the reorg replaced. Had the old chain's capture
+///    row for that chunk survived the rollback it would be found present
+///    and nothing would be rebuilt, so the equality is the witness that
+///    nothing was left behind;
+/// 4. both outputs then assemble against the new chain's root.
+#[tokio::test]
+async fn a_view_behind_a_reorg_is_reported_stale_and_recovers_on_the_rescan() {
+    use crate::engine::test_support::{seeded_commitment, seeded_output_key, seeded_tx_leaves};
+
+    /// The chain the wallet scanned, and the one that replaced it.
+    const BEFORE: u8 = 1;
+    const AFTER: u8 = 2;
+    /// One full leaf chunk per carrying block.
+    const PER_BLOCK: u64 = 38;
+    /// Far enough past block 1 that its outputs have drained.
+    const TIP: u64 = 14;
+
+    /// Ingest `from..=TIP`. Block 0 is common to both chains; block 1 is
+    /// `fork`'s; the rest are empty.
+    async fn ingest_chain(handle: &CurveTreeHandle, from: u64, fork: u8) {
+        for height in from..=TIP {
+            let txs = match height {
+                0 => seeded_tx_leaves(BEFORE, 0, PER_BLOCK),
+                1 => seeded_tx_leaves(fork, 1, PER_BLOCK),
+                _ => seeded_tx_leaves(fork, height, 0),
+            };
+            handle
+                .ingest(BlockHeight::from_raw(height), txs)
+                .await
+                .expect("a seeded block ingests");
+        }
+    }
+
+    /// The input for output `index` of block `height` as `chain` mined it.
+    fn input(chain: u8, height: u64, index: u64) -> AssembleInput {
+        AssembleInput {
+            gindex: shekyl_curve_tree::Gindex::from_raw(height * PER_BLOCK + index),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(seeded_output_key(
+                chain, height, index,
+            )),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(seeded_commitment(
+                chain, height, index,
+            )),
+        }
+    }
+    fn pair(input: &AssembleInput) -> crate::engine::ownership::OwnedOutput {
+        (input.gindex, input.output_key)
+    }
+    async fn reference_at_tip(handle: &CurveTreeHandle) -> ReferenceBlock {
+        let height = BlockHeight::from_raw(TIP);
+        let (root, _) = handle
+            .reference_root_and_depth(height)
+            .await
+            .expect("the tree answers at its tip");
+        ReferenceBlock {
+            height,
+            curve_tree_root: CurveTreeRoot::from_bytes(root),
+            block_hash: shekyl_curve_tree::BlockHash::NULL,
+        }
+    }
+
+    let (_dir, client) = fresh_client();
+    let handle = CurveTreeHandle::spawn(client);
+
+    // Below the fork, and the same output on both chains.
+    let below = input(BEFORE, 0, 5);
+    // One gindex, two outputs.
+    let old = input(BEFORE, 1, 2);
+    let new = input(AFTER, 1, 2);
+    assert_eq!(old.gindex, new.gindex, "the reorg rebinds this gindex");
+    assert_ne!(old.output_key, new.output_key);
+
+    ingest_chain(&handle, 0, BEFORE).await;
+    let scanned = handle
+        .sync_owned(vec![pair(&below), pair(&old)])
+        .await
+        .expect("sync on a live actor");
+    assert_eq!(scanned.after_drain, 2);
+    assert_eq!(
+        scanned
+            .reconciliation
+            .expect("both are owed")
+            .leaves_rebuilt,
+        2 * PER_BLOCK,
+        "each output's own leaf chunk"
+    );
+
+    // The reorg, as the refresh's ingest applies it: back to the last
+    // common block, then the new chain.
+    handle
+        .rollback_to_fork(BlockHeight::ZERO)
+        .await
+        .expect("a rollback inside the window");
+    ingest_chain(&handle, 1, AFTER).await;
+
+    // 1. The ledger has not merged the new chain yet. It re-offers what it
+    //    holds.
+    let lagging = handle
+        .sync_owned(vec![pair(&below), pair(&old)])
+        .await
+        .expect("a stale pair does not fail the batch");
+    assert_eq!(lagging.stale, vec![old.gindex], "the rebound gindex, alone");
+    assert_eq!(
+        (
+            lagging.already_held,
+            lagging.before_drain,
+            lagging.after_drain
+        ),
+        (1, 0, 0),
+        "the pair below the fork is untouched by its neighbour's verdict"
+    );
+    assert_eq!(lagging.reconciliation, None);
+
+    // 2. A spend selected from that ledger.
+    let reference = reference_at_tip(&handle).await;
+    let err = handle
+        .assemble_tx(reference, vec![old])
+        .await
+        .expect_err("the tree holds another output at that gindex");
+    assert!(
+        matches!(
+            err,
+            CurveTreeHandleError::Client(ClientError::OutputNotRegistered { gindex, output_key })
+                if gindex == old.gindex && output_key == old.output_key
+        ),
+        "expected OutputNotRegistered for the stale pair; got {err:?}"
+    );
+
+    // 3. The rescan reaches the new chain and offers what is there now.
+    let rescanned = handle
+        .sync_owned(vec![pair(&below), pair(&new)])
+        .await
+        .expect("sync on a live actor");
+    assert!(rescanned.stale.is_empty());
+    assert_eq!((rescanned.already_held, rescanned.after_drain), (1, 1));
+    let report = rescanned
+        .reconciliation
+        .expect("the new output drained before it was offered");
+    assert_eq!(report.positions_resolved, 1);
+    assert_eq!(
+        report.leaves_rebuilt, PER_BLOCK,
+        "the replaced leaf chunk is rebuilt from the new chain; no row of the old one answered for it"
+    );
+
+    // 4. And both assemble against the new chain's root.
+    let paths = handle
+        .assemble_tx(reference, vec![below, new])
+        .await
+        .expect("held outputs assemble from their captures");
+    assert_eq!(paths.len(), 2);
+
+    // The old pair stays stale however often it is offered.
+    let again = handle
+        .sync_owned(vec![pair(&old)])
+        .await
+        .expect("sync on a live actor");
+    assert_eq!(again.stale, vec![old.gindex]);
+}

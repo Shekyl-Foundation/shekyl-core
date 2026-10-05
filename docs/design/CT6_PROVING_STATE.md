@@ -1271,18 +1271,41 @@ invariant `IdentityMismatch` guards at assembly, raised at registration rather
 than at the spend that needed the capture — and a re-registration *replaces*,
 so a rescan rebinds a gindex with no separate retraction.
 
-**Inherited by the registrant, as written — discharged.** `RegistrationIdentityMismatch`
-is raised in **normal operation**: a P-scan lagging across a reorg offers the
-pre-reorg key for a gindex that now names a different output, and the client
+**Inherited by the registrant.** `RegistrationIdentityMismatch` is raised in
+**normal operation**: a caller whose view is still the pre-reorg chain offers
+the old key for a gindex that now names a different output, and the client
 correctly refuses it — exactly what happened to the first draft of the reorg
-red-bite below. The registrant classifies it as *the caller's view is stale*
-and nothing else: the batch form `sync_owned` collects such pairs in
-`OwnershipSync::stale`, registers the rest, reconciles once if anything is
-owed, poisons nothing, and the rescan re-offers the right key. The red-bite is
-`a_batch_registers_reconciles_once_and_reports_stale_pairs`: the wrong key is
-reported, a re-offer is still reported, and the right key is then accepted and
-reconciled. The engine's refresh never sees it as an error — it is logged with a
-count — which is also why it adds no `RefreshError` variant and so no
+red-bite below. The caller that can be behind is the **ledger**, not the
+persona scan: the tree's ingest is acknowledged before the ledger's merge
+commits, so a merge that loses its race leaves the tree on the new chain and
+the ledger — and any spend selected from it — on the old one. (The persona
+scan cannot be: it sweeps only blocks the archival reorg depth behind the
+tip, below any reorg the tree accepts.) The registrant classifies it as *the
+caller's view is stale* and nothing else: the batch form `sync_owned`
+collects such pairs in `OwnershipSync::stale`, registers the rest, reconciles
+once if anything is owed, poisons nothing, and the rescan re-offers the right
+key.
+
+Two tests grade it, at two layers. The client's
+`a_batch_registers_reconciles_once_and_reports_stale_pairs` offers a wrong key
+by hand: reported, still reported on a re-offer, and the right key then
+accepted and reconciled. That shows the verdict; it does not show a reorg.
+The actor's
+`a_view_behind_a_reorg_is_reported_stale_and_recovers_on_the_rescan` does: a
+chain is ingested and its outputs registered, the tree is rolled back to the
+fork and a different chain ingested over the same gindexes, and then, through
+the handle, (1) the old pair is reported stale *alone* — the pair below the
+fork in the same batch is still held; (2) a spend of the old pair is refused
+`OutputNotRegistered`, which the re-anchor classifier maps to reselection;
+(3) the rescan's pair registers, and its reconciliation rebuilds **exactly**
+the one leaf chunk the reorg replaced; (4) both outputs assemble against the
+new root. The equality in (3) is the witness that nothing was left behind:
+with the rollback's capture truncation removed, the old chain's row answers
+for that chunk and the figure reads 0, which is how that mutation fails the
+test.
+
+The engine's refresh never sees a stale pair as an error — it is logged with
+a count — which is also why it adds no `RefreshError` variant and so no
 wallet-RPC contract bump. The re-anchor classifier keeps the variant in the
 reselection family, as #945 placed it: the caller's view is stale, a rescan
 re-registers against the chain it now sees, and discarding the selection is
