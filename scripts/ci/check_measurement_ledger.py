@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Measurement-ledger gate: a constant that rests on a measurement must not
+# outlive the code that measurement was taken on without somebody saying so.
+#
+# THE DEFECT THIS EXISTS FOR. A constant is derived from a capture taken at one
+# revision. The code path whose cost it budgets changes later. Nothing notices,
+# because the link between the constant, the capture and the code path is
+# prose in a design document. Two instances, a month apart: the block-weight
+# surge factor rests on a floor capture at `8af70a60a`, and the FCMP++ proof
+# changed nine days later; the archival shard length and anchor lag rest on
+# fetch captures taken before the serve path began reading each shard twice.
+# Both were found by a person reading, long after the change merged.
+#
+# THE RULE. `docs/benchmarks/measurement_ledger.toml` holds one row per
+# cost-justified constant: where it is defined, which tracked benchmark
+# measures it, the capture and the revision the capture was taken at, and the
+# code paths whose cost it budgets. For every measured row this gate asks one
+# question of git: is any commit that touches those paths newer than the
+# row's review point? It needs no hardware and reads no timing data.
+#
+# A ROW IS IN ONE OF THREE STATES, and the gate fails when a row's stated
+# state disagrees with git IN EITHER DIRECTION:
+#
+#   current     nothing touching the paths is newer than the review point.
+#               A newer commit is a FAIL that names it.
+#   stale       something is newer, the row names it (`stale_since`) and
+#               names the carrier of the re-measurement. A `stale` row with
+#               nothing newer is a FAIL too: a ledger that cries stale about
+#               a current capture is as wrong as the reverse, and the next
+#               reader stops believing the word.
+#   unmeasured  no capture exists in the tree. The row is there so the
+#               ledger's completeness can be read, and it names its carrier.
+#
+# So green means "the ledger tells the truth", not "every capture is fresh".
+# The stale rows are the rulings that are owed, and they are printed on every
+# run.
+#
+# CLEARING A FAIL is an edit to the ledger, reviewed in the diff like any
+# other line: land a newer capture; or add a `cleared` note saying every
+# commit through a named one is cost-neutral, and why; or mark the row stale
+# with its carrier. A commit trailer was considered and refused: the judgement
+# "this did not move the cost" belongs next to the constant it is about, where
+# the next reader of the constant finds it.
+#
+# WHAT "NEWER" MEANS. `git log <base>..HEAD -- <paths>` with git's default
+# history simplification, where <base> is the review point when it is an
+# ancestor of HEAD and otherwise the merge-base of the two (reported, since a
+# capture built from a commit that never merged cannot be compared exactly).
+# The review point is the last `cleared` note's commit, or the capture's
+# revision when there is none.
+#
+# THE REVISION IS A LEDGER FIELD, NOT PARSED FROM THE CAPTURE. Several
+# captures carry no revision (the P2P span files have no header at all), and
+# one family's stamp is known to go stale. Where a capture does record a
+# revision the gate cross-checks it; where it does not, `rev_source` must say
+# where the ledger's value came from.
+#
+# SUBJECT (47-gate-subject-assertion.mdc). Exit 2 — the question could not be
+# asked — when the ledger is missing or empty, when no row has a capture, when
+# the tracked-set document it names is missing, or when the checkout is
+# shallow AND its history is cut inside a range a row asks about (a cut older
+# than every review point hides nothing, and is not refused). A declared path that matches no
+# tracked file is a FAIL: a ledger whose paths have rotted would otherwise
+# pass in silence, which is the failure it exists to end.
+#
+# Exit 0 truthful ledger; 1 findings; 2 cannot ask. `--selftest` builds
+# throwaway git repositories and bites each failure class red, beside a
+# control row that must stay green.
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+LEDGER = "docs/benchmarks/measurement_ledger.toml"
+
+STATUSES = ("current", "stale", "unmeasured")
+COMMON_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "paths"}
+MEASURED_KEYS = {"capture", "capture_rev", "rev_source", "cleared"}
+STALE_KEYS = {"stale_since", "carrier"}
+UNMEASURED_KEYS = {"carrier"}
+HEADER_REV = "capture header"
+# A revision a capture file records about itself.
+CAPTURE_REV_RE = re.compile(r"git[_ ]rev(?:ision)?[\"'\s:=]+([0-9a-f]{7,40})", re.I)
+T_ROW_RE = re.compile(r"^BA-T\d+$")
+MIN_REASON = 12
+
+
+class GateError(Exception):
+    """The gate could not ask its question (exit 2)."""
+
+
+def git(root: str, *args: str) -> tuple[int, str]:
+    r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+
+
+def resolve(root: str, rev: str) -> str | None:
+    rc, out = git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    return out if rc == 0 and out else None
+
+
+def shallow_boundary(root: str) -> set[str]:
+    """The commits a shallow repository's history is cut at; empty when complete."""
+    rc, out = git(root, "rev-parse", "--is-shallow-repository")
+    if rc != 0 or out != "true":
+        return set()
+    _, common = git(root, "rev-parse", "--git-common-dir")
+    path = common if os.path.isabs(common) else os.path.join(root, common)
+    try:
+        with open(os.path.join(path, "shallow"), encoding="ascii") as fh:
+            return {ln.strip() for ln in fh if ln.strip()}
+    except OSError:
+        return set()
+
+
+SHALLOW_MSG = ("this checkout is shallow and its history is cut inside the range "
+               "the ledger asks about; fetch full history (`git fetch --unshallow`)")
+
+
+def is_ancestor(root: str, a: str, b: str) -> bool:
+    rc, _ = git(root, "merge-base", "--is-ancestor", a, b)
+    return rc == 0
+
+
+def is_exclude(spec: str) -> bool:
+    return spec.startswith(":!") or spec.startswith(":^") or (
+        spec.startswith(":(") and "exclude" in spec.split(")", 1)[0]
+    )
+
+
+def newer_commits(root: str, base: str, paths: list[str]) -> list[str]:
+    # A shallow repository answers this question honestly only when no cut
+    # lies between the review point and HEAD. A cut deeper than the review
+    # point hides nothing the row asks about.
+    cut = shallow_boundary(root)
+    if cut:
+        rc, span = git(root, "rev-list", f"{base}..HEAD")
+        if rc != 0 or cut & set(span.splitlines()):
+            raise GateError(SHALLOW_MSG)
+    rc, out = git(root, "log", "--format=%H", f"{base}..HEAD", "--", *paths)
+    if rc != 0:
+        raise GateError(f"git log {base[:10]}..HEAD failed")
+    return [ln for ln in out.splitlines() if ln]
+
+
+def describe(root: str, sha: str) -> str:
+    _, out = git(root, "log", "-1", "--format=%h %ad %s", "--date=short", sha)
+    return out
+
+
+def check_row(root: str, row: dict, t_rows: set[str], notes: list[str]) -> list[str]:
+    """Every way one row can be untrue. An empty list means it tells the truth."""
+    name = row.get("name", "<unnamed>")
+    fails: list[str] = []
+
+    def bad(msg: str) -> None:
+        fails.append(f"{name}: {msg}")
+
+    status = row.get("status")
+    if status not in STATUSES:
+        bad(f"status {status!r} is not one of {', '.join(STATUSES)}")
+        return fails
+    allowed = set(COMMON_KEYS)
+    if status in ("current", "stale"):
+        allowed |= MEASURED_KEYS
+    if status == "stale":
+        allowed |= STALE_KEYS
+    if status == "unmeasured":
+        allowed |= UNMEASURED_KEYS
+    for k in sorted(set(row) - allowed):
+        bad(f"key {k!r} is not valid for a {status} row")
+    for k in sorted(COMMON_KEYS - set(row)):
+        bad(f"missing {k!r}")
+    if fails:
+        return fails
+
+    # The constant is where the row says it is, with the value the row quotes.
+    defined = os.path.join(root, row["defined_in"])
+    if not os.path.isfile(defined):
+        bad(f"defined_in {row['defined_in']} does not exist")
+    else:
+        with open(defined, encoding="utf-8", errors="replace") as fh:
+            if row["needle"] not in fh.read():
+                bad(f"needle {row['needle']!r} is not in {row['defined_in']} "
+                    "(the constant moved, was renamed, or changed value)")
+
+    measured_by = row["measured_by"]
+    if not isinstance(measured_by, list) or not measured_by:
+        bad("measured_by must be a non-empty list of BA-T rows")
+    else:
+        for t in measured_by:
+            if not T_ROW_RE.match(str(t)):
+                bad(f"measured_by {t!r} is not a BA-T row id")
+            elif t not in t_rows:
+                bad(f"measured_by {t} is not defined in the tracked-set document")
+
+    paths = row["paths"]
+    if not isinstance(paths, list) or not any(not is_exclude(p) for p in paths):
+        bad("paths must list at least one included pathspec")
+        return fails
+    for spec in paths:
+        if is_exclude(spec):
+            continue
+        rc, out = git(root, "ls-files", "--", spec)
+        if rc != 0 or not out:
+            bad(f"path {spec!r} matches no tracked file")
+
+    if status == "unmeasured":
+        if len(str(row.get("carrier", "")).strip()) < MIN_REASON:
+            bad("an unmeasured row names its carrier (what will measure it, "
+                "or the ruling that it needs no measurement)")
+        return fails
+
+    for k in ("capture", "capture_rev", "rev_source"):
+        if not str(row.get(k, "")).strip():
+            bad(f"a {status} row needs {k!r}")
+    if fails:
+        return fails
+
+    capture = os.path.join(root, row["capture"])
+    header_revs: list[str] = []
+    if not os.path.isfile(capture):
+        bad(f"capture {row['capture']} does not exist")
+    else:
+        with open(capture, encoding="utf-8", errors="replace") as fh:
+            header_revs = CAPTURE_REV_RE.findall(fh.read())
+    rev = resolve(root, row["capture_rev"])
+    if rev is None:
+        if shallow_boundary(root):
+            raise GateError(SHALLOW_MSG)
+        bad(f"capture_rev {row['capture_rev']} is not a commit in this repository")
+        return fails
+    if header_revs:
+        if not any(rev.startswith(h) or h.startswith(rev) for h in header_revs):
+            bad(f"capture_rev {row['capture_rev']} disagrees with the revision the "
+                f"capture records ({', '.join(sorted(set(header_revs)))})")
+    elif row["rev_source"].strip() == HEADER_REV:
+        bad(f"rev_source says {HEADER_REV!r} but {row['capture']} records no revision")
+    if fails:
+        return fails
+
+    # The review point: the capture, moved forward by each cleared note.
+    review = rev
+    for i, note in enumerate(row.get("cleared", [])):
+        through = resolve(root, str(note.get("through", "")))
+        if through is None:
+            bad(f"cleared[{i}].through is not a commit in this repository")
+            return fails
+        if len(str(note.get("reason", "")).strip()) < MIN_REASON:
+            bad(f"cleared[{i}] gives no reason")
+        if not is_ancestor(root, through, "HEAD"):
+            bad(f"cleared[{i}].through {through[:10]} is not an ancestor of HEAD")
+            return fails
+        if is_ancestor(root, review, "HEAD") and not is_ancestor(root, review, through):
+            bad(f"cleared[{i}].through {through[:10]} is not newer than the "
+                f"review point before it ({review[:10]})")
+            return fails
+        review = through
+    if fails:
+        return fails
+
+    base = review
+    if not is_ancestor(root, review, "HEAD"):
+        rc, mb = git(root, "merge-base", review, "HEAD")
+        if rc != 0 or not mb:
+            bad(f"review point {review[:10]} shares no history with HEAD")
+            return fails
+        base = mb
+        notes.append(f"{name}: review point {review[:10]} is not an ancestor of "
+                     f"HEAD; compared from their merge-base {mb[:10]}")
+
+    newer = newer_commits(root, base, paths)
+    if status == "current":
+        if newer:
+            shown = "; ".join(describe(root, c) for c in newer[-3:][::-1])
+            more = f" (and {len(newer) - 3} more)" if len(newer) > 3 else ""
+            bad(f"says current, but {len(newer)} commit(s) touching its paths are "
+                f"newer than {base[:10]}: {shown}{more}. Land a newer capture, "
+                "add a `cleared` note with the reason they are cost-neutral, or "
+                "mark the row stale with its carrier")
+        return fails
+
+    # stale
+    if len(str(row.get("carrier", "")).strip()) < MIN_REASON:
+        bad("a stale row names the carrier of its re-measurement")
+    since = resolve(root, str(row.get("stale_since", "")))
+    if since is None:
+        bad("stale_since is not a commit in this repository")
+    elif not newer:
+        bad(f"says stale, but nothing touching its paths is newer than "
+            f"{base[:10]}; mark it current")
+    elif since not in newer:
+        bad(f"stale_since {since[:10]} is not among the {len(newer)} commit(s) "
+            f"touching its paths after {base[:10]}")
+    return fails
+
+
+def load(root: str) -> tuple[list[dict], set[str]]:
+    rc, _ = git(root, "rev-parse", "--git-dir")
+    if rc != 0:
+        raise GateError("not a git repository")
+    path = os.path.join(root, LEDGER)
+    if not os.path.isfile(path):
+        raise GateError(f"{LEDGER} is missing — missing subject (rule 47)")
+    with open(path, "rb") as fh:
+        try:
+            data = tomllib.load(fh)
+        except tomllib.TOMLDecodeError as e:
+            raise GateError(f"{LEDGER} does not parse: {e}") from e
+    rows = data.get("constant", [])
+    if not rows:
+        raise GateError(f"{LEDGER} has no rows — missing subject (rule 47)")
+    if not any(r.get("status") in ("current", "stale") for r in rows):
+        raise GateError("no row has a capture, so the staleness question was "
+                        "never asked — missing subject (rule 47)")
+    tracked = data.get("tracked_set", "")
+    tpath = os.path.join(root, tracked)
+    if not tracked or not os.path.isfile(tpath):
+        raise GateError(f"tracked_set {tracked!r} does not exist; the ledger's "
+                        "measured_by ids cannot be resolved")
+    with open(tpath, encoding="utf-8", errors="replace") as fh:
+        t_rows = set(re.findall(r"^\| \*\*(BA-T\d+)\*\* \|", fh.read(), re.M))
+    if not t_rows:
+        raise GateError(f"{tracked} defines no BA-T rows")
+    return rows, t_rows
+
+
+def run(root: str) -> int:
+    try:
+        rows, t_rows = load(root)
+        notes: list[str] = []
+        fails: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            name = row.get("name", "")
+            if name in seen:
+                fails.append(f"{name}: duplicate row name")
+            seen.add(name)
+            fails += check_row(root, row, t_rows, notes)
+    except GateError as e:
+        print(f"FAIL: {e}")
+        return 2
+    for n in notes:
+        print(f"note: {n}")
+    stale = [r for r in rows if r.get("status") == "stale"]
+    for r in stale:
+        print(f"stale: {r['name']} — since {str(r.get('stale_since'))[:10]}; "
+              f"carrier: {r.get('carrier')}")
+    if fails:
+        print("FAIL: the measurement ledger disagrees with the tree:")
+        for f in fails:
+            print("  " + f)
+        return 1
+    count = {s: sum(1 for r in rows if r.get("status") == s) for s in STATUSES}
+    print(f"measurement ledger: {len(rows)} rows tell the truth — "
+          f"{count['current']} current, {count['stale']} stale, "
+          f"{count['unmeasured']} unmeasured")
+    return 0
+
+
+# --- selftest ---------------------------------------------------------------
+
+def _sh(root: str, *args: str) -> str:
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)}: {r.stderr}")
+    return r.stdout.strip()
+
+
+def _write(root: str, rel: str, text: str) -> None:
+    p = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def _commit(root: str, msg: str) -> str:
+    _sh(root, "add", "-A")
+    _sh(root, "commit", "-q", "-m", msg, "--allow-empty")
+    return _sh(root, "rev-parse", "HEAD")
+
+
+TRACKED = "| Id | Benchmark |\n| --- | --- |\n| **BA-T1** | a |\n| **BA-T2** | b |\n"
+
+
+def _ledger(rows: str) -> str:
+    return 'tracked_set = "docs/design/TRACKED.md"\n\n' + rows
+
+
+def _row(name: str, status: str, rev: str = "", extra: str = "",
+         paths: str = '["src/hot"]', needle: str = "LIMIT = 4") -> str:
+    out = (f'[[constant]]\nname = "{name}"\ndefined_in = "src/consts.txt"\n'
+           f'needle = "{needle}"\nmeasured_by = ["BA-T1"]\nstatus = "{status}"\n'
+           f"paths = {paths}\n")
+    if status != "unmeasured":
+        out += (f'capture = "docs/benchmarks/cap.txt"\ncapture_rev = "{rev}"\n'
+                f'rev_source = "{HEADER_REV}"\n')
+    return out + extra + "\n"
+
+
+def _fixture(tmp: str) -> dict[str, str]:
+    """A repository with a capture at c1 and one later change to the hot path."""
+    _sh(tmp, "init", "-q", "-b", "main")
+    _write(tmp, "src/consts.txt", "LIMIT = 4\n")
+    _write(tmp, "src/hot/a.rs", "fn a() {}\n")
+    _write(tmp, "src/cold/b.rs", "fn b() {}\n")
+    _write(tmp, "docs/design/TRACKED.md", TRACKED)
+    c1 = _commit(tmp, "c1: the measured tree")
+    _write(tmp, "docs/benchmarks/cap.txt", f"# git_rev={c1}\nvalue=1\n")
+    c1b = _commit(tmp, "capture lands")
+    _write(tmp, "src/cold/b.rs", "fn b() { /* cold */ }\n")
+    c2 = _commit(tmp, "c2: touches a path nobody budgets")
+    return {"c1": c1, "c1b": c1b, "c2": c2}
+
+
+def _verdict(tmp: str, rows: str) -> tuple[int, str]:
+    _write(tmp, LEDGER, _ledger(rows))
+    old = sys.stdout
+    sys.stdout = buf = __import__("io").StringIO()
+    try:
+        rc = run(tmp)
+    finally:
+        sys.stdout = old
+    return rc, buf.getvalue()
+
+
+def selftest() -> int:
+    failures: list[str] = []
+    passed = 0
+
+    def expect(tmp: str, rows: str, want: int, why: str, says: str = "") -> None:
+        nonlocal passed
+        rc, out = _verdict(tmp, rows)
+        if rc != want or (says and says not in out):
+            failures.append(f"{why}: wanted exit {want}"
+                            + (f" naming {says!r}" if says else "")
+                            + f", got {rc}\n{out}")
+        else:
+            passed += 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        c = _fixture(tmp)
+        control = _row("control", "current", c["c1"])
+
+        # CONTROL: a change to an unbudgeted path leaves the row current. Every
+        # red below sits beside this row, so a red cannot be the fixture's own.
+        expect(tmp, control, 0, "control: an untouched hot path is current")
+
+        _write(tmp, "src/hot/a.rs", "fn a() { /* slower */ }\n")
+        c3 = _commit(tmp, "c3: changes the hot path")
+        expect(tmp, control, 1, "a newer commit on a budgeted path fails a current row",
+               "c3: changes the hot path")
+
+        cold = _row("cold", "current", c["c1"], paths='["src/cold"]')
+        expect(tmp, cold, 1, "the same question is asked per row, of that row's paths",
+               "c2: touches a path")
+        scoped = _row("scoped", "current", c["c1"], paths='["docs/design"]')
+        expect(tmp, scoped, 0, "a row whose paths did not move after its capture is current")
+
+        cleared = _row("control", "current", c["c1"],
+                       f'cleared = [{{ through = "{c3}", reason = "comment only; no code path changed" }}]\n')
+        expect(tmp, cleared, 0, "a cleared note through the newer commit clears it")
+        no_reason = _row("control", "current", c["c1"],
+                         f'cleared = [{{ through = "{c3}", reason = "ok" }}]\n')
+        expect(tmp, no_reason, 1, "a cleared note without a reason is refused", "no reason")
+        backwards = _row("control", "current", c["c1"],
+                         f'cleared = [{{ through = "{c3}", reason = "comment only; no code path changed" }}, '
+                         f'{{ through = "{c["c2"]}", reason = "moves the review point backwards" }}]\n')
+        expect(tmp, backwards, 1, "a cleared note older than the one before it is refused",
+               "not newer than")
+
+        stale = _row("control", "stale", c["c1"],
+                     f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n')
+        expect(tmp, stale, 0, "a stale row naming the commit and a carrier passes", "stale: control")
+        stale_wrong = _row("control", "stale", c["c1"],
+                           f'stale_since = "{c["c2"]}"\ncarrier = "BA-T1 floor re-run, owed"\n')
+        expect(tmp, stale_wrong, 1, "stale_since must be a commit that touched the paths",
+               "is not among")
+        stale_no_carrier = _row("control", "stale", c["c1"], f'stale_since = "{c3}"\ncarrier = ""\n')
+        expect(tmp, stale_no_carrier, 1, "a stale row without a carrier is refused", "carrier")
+        cries_wolf = _row("control", "stale", c3,
+                          f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n')
+        _write(tmp, "docs/benchmarks/cap.txt", f"# git_rev={c3}\nvalue=2\n")
+        _commit(tmp, "a newer capture lands")
+        expect(tmp, cries_wolf, 1, "INVERSE: stale with nothing newer is refused",
+               "mark it current")
+        fresh = _row("control", "current", c3)
+        expect(tmp, fresh, 0, "a newer capture makes the row current again")
+
+        expect(tmp, _row("control", "current", c["c1"]), 1,
+               "a ledger revision that disagrees with the capture's own is refused",
+               "disagrees with the revision")
+        expect(tmp, _row("control", "current", c3, paths='["src/gone"]'), 1,
+               "a declared path that matches no tracked file is refused",
+               "matches no tracked file")
+        expect(tmp, _row("control", "current", c3, needle="LIMIT = 5"), 1,
+               "a constant whose value changed under the ledger is refused", "needle")
+        expect(tmp, _row("control", "current", "0" * 40), 1,
+               "an unknown revision is refused", "not a commit")
+        expect(tmp, fresh.replace('["BA-T1"]', '["BA-T9"]'), 1,
+               "a measured_by id the tracked set does not define is refused", "BA-T9")
+        expect(tmp, fresh + 'typo_key = "x"\n', 1, "an unknown key is refused", "typo_key")
+        expect(tmp, fresh + fresh, 1, "a duplicate row name is refused", "duplicate")
+
+        unmeasured = _row("placeholder", "unmeasured",
+                          extra='carrier = "BA-T2 derives it on the floor"\n')
+        expect(tmp, fresh + unmeasured, 0, "an unmeasured row with a carrier passes")
+        expect(tmp, fresh + _row("placeholder", "unmeasured", extra='carrier = ""\n'), 1,
+               "an unmeasured row without a carrier is refused", "carrier")
+        expect(tmp, fresh + _row("placeholder", "unmeasured",
+                                 extra='carrier = "BA-T2 derives it"\ncapture = "x"\n'), 1,
+               "an unmeasured row may not claim a capture", "capture")
+
+        # Subject assertions: each must be "cannot ask", never a pass.
+        expect(tmp, "", 2, "an empty ledger is a missing subject")
+        expect(tmp, unmeasured, 2, "a ledger with no measured row never asks the question")
+        _write(tmp, LEDGER, 'tracked_set = "docs/design/NOPE.md"\n\n' + fresh)
+        if run_quiet(tmp) != 2:
+            failures.append("a missing tracked-set document did not refuse")
+        else:
+            passed += 1
+        os.remove(os.path.join(tmp, LEDGER))
+        if run_quiet(tmp) != 2:
+            failures.append("a missing ledger did not refuse")
+        else:
+            passed += 1
+
+        # A capture built from a commit that never merged: compared from the
+        # merge-base, and said so.
+        _sh(tmp, "checkout", "-q", "-b", "side", c["c1"])
+        _write(tmp, "src/side.txt", "x\n")
+        side = _commit(tmp, "a side branch that never merges")
+        _sh(tmp, "checkout", "-q", "main")
+        _write(tmp, "docs/benchmarks/cap.txt", "value=3\n")
+        _commit(tmp, "a capture with no header revision")
+        off = _row("control", "stale", side,
+                   f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n').replace(
+                       f'rev_source = "{HEADER_REV}"', 'rev_source = "the run record names it"')
+        expect(tmp, off, 0, "a non-ancestor revision is compared from the merge-base",
+               "not an ancestor of HEAD")
+        expect(tmp, _row("control", "stale", side,
+                         f'stale_since = "{c3}"\ncarrier = "BA-T1 floor re-run, owed"\n'), 1,
+               "rev_source 'capture header' with no header revision is refused",
+               "records no revision")
+
+        # A shallow clone whose cut lies inside a row's range cannot answer
+        # and must say so; one whose cut is older than the review point can.
+        _write(tmp, LEDGER, _ledger(off))
+        _commit(tmp, "ledger")
+        recent = _sh(tmp, "rev-parse", "HEAD~1")
+        inside = _row("control", "current", recent).replace(
+            f'rev_source = "{HEADER_REV}"', 'rev_source = "the run record names it"')
+        with tempfile.TemporaryDirectory() as shallow:
+            subprocess.run(["git", "clone", "-q", "--depth", "1", "file://" + tmp, shallow],
+                           check=True, capture_output=True)
+            if run_quiet(shallow) != 2:
+                failures.append("a shallow clone cut inside the range did not refuse")
+            else:
+                passed += 1
+        with tempfile.TemporaryDirectory() as shallow:
+            subprocess.run(["git", "clone", "-q", "--depth", "3", "file://" + tmp, shallow],
+                           check=True, capture_output=True)
+            _write(shallow, LEDGER, _ledger(inside))
+            if run_quiet(shallow) != 0:
+                failures.append("a shallow clone cut OLDER than the review point was refused")
+            else:
+                passed += 1
+
+    if failures:
+        print("SELFTEST FAIL:")
+        for f in failures:
+            print("  " + f)
+        return 1
+    print(f"selftest: {passed} cases pass")
+    return 0
+
+
+def run_quiet(root: str) -> int:
+    old = sys.stdout
+    sys.stdout = __import__("io").StringIO()
+    try:
+        return run(root)
+    finally:
+        sys.stdout = old
+
+
+def main() -> int:
+    if "--selftest" in sys.argv:
+        return selftest()
+    return run(ROOT)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -12,8 +12,9 @@ docs/benchmarks/
 ├── shekyl_rust_v0.manifest.md          Rust baseline: operation lists + fixture shapes
 ├── shekyl_rust_v0.json                 Rust baseline: frozen numbers (criterion + iai)
 ├── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
-└── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
+├── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
                                         DRS-BENCH: consensus-store IBD artifacts
+└── measurement_ledger.toml             which constant rests on which capture, at which revision
 ```
 
 (The tree above names the baseline set; ad-hoc Pi-4 captures,
@@ -247,6 +248,46 @@ starts from a partial chain is a different experiment.
 
 `scripts/bench/test_drs_bench.py` is the selftest; it and `drs_bench.py
 blockers` run in `docs-gates.yml`.
+
+## Measurement ledger
+
+[`measurement_ledger.toml`](measurement_ledger.toml) holds one row per
+constant whose value is justified by a measured cost or latency: where the
+constant is defined, which tracked benchmark measures it, the capture and
+the revision it was taken at, and the code paths whose cost it budgets
+([`BENCHMARK_ALIGNMENT.md`](../design/BENCHMARK_ALIGNMENT.md) `BA-Q23`).
+`scripts/ci/check_measurement_ledger.py` reads it in `docs-gates.yml` and
+asks one question of git for each measured row: has any commit touched those
+paths since the capture?
+
+Each row states one of three things, and the check fails when the statement
+disagrees with git in either direction:
+
+| Status | Means | Fails when |
+| --- | --- | --- |
+| `current` | Nothing touching the paths is newer than the capture | A newer commit exists; the failure names it |
+| `stale` | Something is newer; the row names the commit and the carrier of the re-measurement | Nothing is newer, or the named commit did not touch the paths |
+| `unmeasured` | No capture is in the tree; the row names what will measure it | It claims a capture, or names no carrier |
+
+A green run means the ledger tells the truth. It does not mean every capture
+is fresh: the stale rows are printed on every run, and each is a
+re-measurement somebody owes.
+
+**When your PR fails it.** You changed a path a constant budgets. Edit the
+row in the same PR, one of three ways:
+
+- Land a newer capture and set `capture` and `capture_rev` to it.
+- Add a `cleared` note: `{ through = "<commit>", reason = "..." }`. It says
+  every commit touching the paths up to that one is cost-neutral, and why.
+  The reason is reviewed with the diff.
+- Set `status = "stale"`, `stale_since` to the commit, and `carrier` to the
+  benchmark run that will re-measure it.
+
+**When you add a constant that rests on a measurement,** add its row. A
+constant with a number behind it and no row is the gap this file closes.
+
+The check needs full history. A shallow clone whose cut lies inside a row's
+range is refused with exit 2, not passed.
 
 ## Baseline-update policy
 
