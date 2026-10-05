@@ -229,7 +229,7 @@ where
     /// The callers are the chains that need a slash deadline inside what a
     /// test can mine: the ARW-Q15 fixture replica
     /// (`archival_fixture_replica_tests`, epoch eleven's) and slice 8's
-    /// reinstate measurement (`archival_admission_tests`, the open interval
+    /// reinstate measurement (`archival_slash_tests`, the open interval
     /// only a slash writes).
     pub fn open_under(name: &str, pow: P, rules: ChainRules) -> Self {
         Self::open_under_with(name, pow, rules, |path| {

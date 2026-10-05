@@ -66,17 +66,26 @@
 
 #![deny(unsafe_code)]
 
-/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2): census 4.J through
-/// the driver before any 4.J rule — the corpus's archival inputs
-/// enumerated, a Reinstate the driver can now build, and today's connects
-/// and refusals on the bond-state and hint rows, each pinned to the row
-/// that flips it.
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
+/// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]
-mod archival_admission_tests;
+mod archival_corpus_tests;
+/// The first spendable height and the refusal shape the archival driver
+/// tests share.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod archival_driver;
 /// `ARW-Q15`'s consumer: the LMDB slash fixture rebuilt on the Rust stack
 /// under a levered schedule and compared through a role map.
 #[cfg(all(test, feature = "pipeline"))]
 mod archival_fixture_replica_tests;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 4): a mismatched hint is
+/// CEN-J11, and a Release signed by the wrong key is CEN-J13.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_hint_tests;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
+/// slash chain, J5 through the Release, a phase at a time.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_slash_tests;
 /// DRS-E4 §3.8 item 2: the archival oracle's sufficiency stamp — census
 /// and stub halves over the captured corpus.
 #[cfg(all(test, feature = "pipeline"))]

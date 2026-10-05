@@ -86,22 +86,15 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::{Input, Transaction};
 
+use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
 use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
-use crate::scenario::{Clocked, FreeHash, Mined, Scenario, StepOutcome, RULES};
+use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_spend::Spender;
 use crate::source::{IngestEvent, Injection, ServeCredit};
 use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
-
-/// The first height that can spend block 0's coinbase against a root that
-/// holds it (`scenario_tests`: unlock window + spendable age + 1).
-fn first_spending_height() -> u64 {
-    RuleSet::GENESIS.mined_money_unlock_window().to_raw()
-        + RuleSet::GENESIS.tx_spendable_age().to_raw()
-        + 1
-}
 
 /// The settlement epoch open at `height` under the genesis rule set — the
 /// epoch a join at `height` records and a credit at `height` is keyed by.
@@ -111,20 +104,6 @@ fn epoch_at(height: u64) -> SettlementEpoch {
             .settlement_schedule()
             .epoch_at_height(height),
     )
-}
-
-const FEE: u64 = 1_000_000;
-const ENDPOINT: [u8; 32] = [0xEE; 32];
-
-fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow, locus: Locus) {
-    match outcome {
-        Err(StepOutcome::Refused(refused)) => {
-            assert_eq!(refused.rule, row, "the row that refused: {refused}");
-            assert_eq!(refused.locus, locus, "where it refused: {refused}");
-        }
-        Ok(block) => panic!("admitted at {}, expected {row}'s refusal", block.height),
-        Err(other) => panic!("expected {row}'s refusal, got {other}"),
-    }
 }
 
 /// A JoinMarket through `build_join_market_vin`, signed by the persona,
@@ -150,7 +129,7 @@ fn refused_at(outcome: Result<crate::scenario::Mined, StepOutcome>, row: CenRow,
 /// in the block after, for the epoch after.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
-    let connecting = first_spending_height();
+    let connecting = first_spending_height().to_raw();
     let mut scenario = Scenario::open("scenario-archival-join");
     let mined = scenario.mine(connecting).await;
     let mut spender = Spender::over(&mined);
@@ -444,15 +423,16 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
 /// refused block leaves the chain where it was — and refused at the post's
 /// own input: the release at **CEN-J16**, the reinstate at **CEN-J18**,
 /// the empty compact join at **CEN-J14** (all three *were* L7's until E6
-/// slice 8 row 5), the unnamed kind still at L7 — no post row names it,
-/// so the sequence passes it to the fold. The join-and-release pair is
+/// slice 8 row 5), the unnamed kind at L7 in the sequence itself — the
+/// same row and locus the fold refuses, whose arm stays the belt. The
+/// join-and-release pair is
 /// J16's too, not G10's (module docs). The serve credit is **CEN-J4**'s
 /// (E6 slice 8 row 3): the one bond-state read the transaction pass makes,
 /// ahead of the fold — *was* L7's until row 3 landed, the pin slice 8's
 /// row 2 held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
-    let connecting = first_spending_height();
+    let connecting = first_spending_height().to_raw();
     let mut scenario = Scenario::open("scenario-archival-refusals");
     let mined = scenario.mine(connecting).await;
     let spender = Spender::over(&mined);
@@ -549,7 +529,7 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
 /// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
-    let connecting = first_spending_height();
+    let connecting = first_spending_height().to_raw();
     let mut scenario = Scenario::open("scenario-archival-g10");
     let mined = scenario.mine(connecting).await;
     let spender = Spender::over(&mined);
@@ -579,7 +559,7 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
 /// A chain with one bonded persona and a few blocks past the join, as the
 /// injector finds it: the blocks (for a replay) and the persona.
 async fn bonded_chain(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Persona) {
-    let connecting = first_spending_height();
+    let connecting = first_spending_height().to_raw();
     let mut scenario = Scenario::open(name);
     let mut mined = scenario.mine(connecting).await;
     let spender = Spender::over(&mined);
