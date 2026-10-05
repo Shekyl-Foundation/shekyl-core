@@ -48,6 +48,10 @@ Each inventory row carries exactly one proposed disposition.
 | **T2** | Criterion wall-clock | CI runner, per PR or per merge | Trended, never gates |
 | **T3** | Floor-device run with a recorded protocol: alternating arms, cache state stated, `n` stated | floor, per release and on any PR touching the path | Compared against the ruled constant's stated margin; a breach reopens the constant |
 
+Two wall-clock checks gate in CI today and fit none of these tiers: the
+shard-render smoke (BA-I32) and the RandomX Rust-to-C ratio bounds (BA-I33).
+BA-Q22 asks whether they stay gated as named exceptions.
+
 ## 1. The CI gate at the pin
 
 One workflow gates performance: `ci/benchmarks`
@@ -339,6 +343,25 @@ moving; at the pin only the first row has one.
 | Write-stall deadline | design only (`docs/design/LV3_CONNECTION_OBJECT.md:30`) | A distribution that does not exist yet | — | No | The design defers the number until samples exist; BA-T8 collects them |
 | Clearnet accept-rate bound; inbound ceiling | design only | Handshake cost per connection; memory and descriptors per peer | floor, 2026-09-26 (handshake) | No | BA-G11, `docs/FOLLOWUPS.md:954`, `:1290` |
 
+**`config/consensus_constants.json`, the remaining keys.** Four of its 28
+keys appear above. Of the other 24, two — `archival_failure_window_m` and
+`archival_failure_window_n` — are provisional until re-pinned against a
+measured outage-duration distribution at the Round-2 testnet gate; that is
+an observation of the network, not a cost a benchmark can produce, and none
+is proposed. The remaining 22 carry no cost or latency rationale in their
+comment field: `fcmp_reference_block_min_age`,
+`fcmp_reference_block_max_age`, `ct_type_fcmp_plus_plus_pqc`,
+`daa_window_n`, `daa_target_seconds`, `daa_ftl_seconds`, `daa_mtp_window`,
+`daa_genesis_difficulty`, `block_weight_long_term_window_blocks`,
+`block_weight_short_term_window_blocks`, `archival_bond_floor_atomic`,
+`settlement_epoch_blocks`, `max_settlement_epochs_per_emission`,
+`max_claim_age_w`, `retention_horizon_blocks`,
+`archival_reorg_depth_blocks`, `release_cooldown_epochs`,
+`archival_max_holdings_shards`, `bond_duration_base_epochs`,
+`bond_duration_age_scale`, `archival_reward_age_weight_milli`,
+`segment_leaf_count`. Their owning documents were not each re-read for a
+cost argument made outside the comment field (§7).
+
 **Economics and staking simulators.** No document states that a
 simulator's turnaround blocks a ruling, and neither crate holds timing code
 (`grep -rln 'Instant::now' rust/shekyl-economics-sim rust/shekyl-staking-sim`
@@ -374,16 +397,16 @@ a live node.
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
 | **BA-T9** | Tor stem hop: transit and node-local time | T3, floor | The runbook BA-I68; n ≥ 100; each sample mapped to a verify-cost cell | BA-I68 | relay privacy |
-| **BA-T10** | The floor verify surface: admission pair by input count and depth, hybrid signature, shipped Bulletproofs+ single and batched, parse, block-budget fill, AES throughput | T3, floor | Criterion, 10 samples per point; depth cells that are projections labelled so | BA-I20, BA-I21, BA-I30, BA-I58, BA-I73, BA-I77 | chain rules, relay privacy |
-| **BA-T11** | Thread-budget legs: the smallest worker, blocking and executor counts that meet each duty | T3, floor | Per `docs/FOLLOWUPS.md:69` | new (BA-G10) | P2P transport |
+| **BA-T10** | The floor verify surface: admission pair by input count and depth, hybrid signature, shipped Bulletproofs+ single and batched, parse, block-budget fill, AES throughput | T3, floor | Criterion, 10 samples per point; depth cells that are projections labelled so | BA-I20, BA-I21, BA-I30, BA-I42, BA-I58, BA-I73, BA-I75, BA-I77 | chain rules, relay privacy |
+| **BA-T11** | Timer arm and poll cost, and the thread-budget legs: the smallest worker, blocking and executor counts that meet each duty | T3, floor | Per `docs/FOLLOWUPS.md:69`; criterion, 10 samples, for the timer | BA-I19, BA-I90; new (BA-G10) | P2P transport |
 | **BA-T12** | Rust `validate` plus store `connect` per block, ordinary and deadline block; with proof verification once it lands | T1 on a CI runner; T3 on the floor | Fixture as BA-I27; the proof-bearing fixture when it exists | BA-I27, BA-I28 | chain rules, daemon store |
 | **BA-T13** | IBD wall time, CPU, RSS and disk, LMDB against redb | T3; x86 dev as the design specifies, floor per BA-Q14 | `scripts/bench/drs_bench.py`, conditions-first | BA-I43, BA-I69 to BA-I71 | daemon store |
 | **BA-T14** | RandomX per-hash verify and cache derivation | T2 on a CI runner; T3 on the floor | Light mode; 100 samples | BA-I23, BA-I24 | PoW |
-| **BA-T15** | Scan one block: `Scanner::scan` plus merge, typical and worst case | T1, CI runner | gungraun | BA-I4, BA-I15 | wallet engine |
+| **BA-T15** | Scan one block: `Scanner::scan` plus merge, typical and worst case | T1, CI runner | gungraun | BA-I4, BA-I15, BA-I18 | wallet engine |
 | **BA-T16** | Scan rate: the FA-6 incremental and restore scenarios | T3, floor | Shipping flags; the scenarios of [`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md) §8 | BA-I17, BA-I41, BA-I72 | wallet engine |
 | **BA-T17** | Wallet open: the KAT profile under gungraun with the default parameters pinned by assertion; the default profile timed | T1 on a CI runner; T3 on the floor | A populated, production-shaped ledger | BA-I3 | wallet engine |
-| **BA-T18** | Shard render matrix | T3, floor; the x86 smoke stays in CI | The matrix of BA-I32; triggered as `docs/FOLLOWUPS.md:1132` states | BA-I32, BA-I89 | shard visual |
-| **BA-T19** | Wallet proving-state edges: spend-time replay against proving, open-time refetch | T3, floor | [`WSS_Q1B_BENCH_SPEC.md`](WSS_Q1B_BENCH_SPEC.md) | BA-I34, BA-I96 to BA-I103 | wallet-side store |
+| **BA-T18** | Shard render matrix | T3, floor; the x86 smoke stays in CI | The matrix of BA-I32; triggered as `docs/FOLLOWUPS.md:1132` states | BA-I32, BA-I51, BA-I89 | shard visual |
+| **BA-T19** | Wallet proving-state edges: spend-time replay against proving, open-time refetch | T3, floor | [`WSS_Q1B_BENCH_SPEC.md`](WSS_Q1B_BENCH_SPEC.md) | BA-I34, BA-I45, BA-I96 to BA-I103 | wallet-side store |
 | **BA-T20** | Transfer build: Bulletproofs+ prove, hybrid sign through the production entry, FCMP++ prove at 1 and 2 inputs; `sign_transaction` end to end | T1 on a CI runner for the components; T3 on the floor end to end | Seeded fixtures | BA-I5 | wallet engine |
 | **BA-T21** | Wallet ledger round-trip at 100 / 1 000 / 10 000 production-shaped transfers | T1, CI runner | gungraun | BA-I1 | wallet engine |
 | **BA-T22** | Merge-time handle projection | T1, CI runner | as today | BA-I9 | wallet engine |
@@ -391,6 +414,14 @@ a live node.
 | **BA-T24** | Transport handshake and AEAD | T2 on a CI runner, which also makes it compile there; T3 on the floor | Criterion | BA-I22, BA-I79 | P2P transport |
 | **BA-T25** | Inbound connection cost: RSS and descriptors per peer, startup peak | T3, floor | Per `docs/FOLLOWUPS.md:1290` | BA-I29 | P2P transport |
 | **BA-T26** | Per-refresh ledger snapshot at 1 000 / 10 000 / 50 000 transfers | T2, CI runner | Criterion | BA-I14 | wallet engine |
+| **BA-T27** | RandomX Rust-to-C latency ratio, typical and adversarial | Gated on a CI runner by exception (BA-Q22); daily and weekly cron | As `rust/shekyl-randomx-differential` runs it today | BA-I33, BA-I52, BA-I53 | PoW |
+
+The gate's machinery (BA-I37 to BA-I40, BA-I44, BA-I46 to BA-I50, BA-I54,
+BA-I59) persists with the tiers it serves and has no row of its own. The
+documents marked **Rewrite** (BA-I61, BA-I64, BA-I65, BA-I66) are rewritten
+under BA-Q17, and BA-I31 and BA-I36 wait on BA-Q12. A dated
+capture kept in §2.8 is the evidence for a constant until the first run of
+the T3 row that replaces it; it is then superseded by that run's capture.
 
 **What happens to the gate's coverage.** The gate holds 20 entries today.
 At the defaults, 6 leave with their rows (BA-I2: 3; BA-I6, BA-I7, BA-I8: 1
@@ -494,12 +525,12 @@ no gate before a budget exists.
 BA-I57). Default: delete both, which discharges `docs/FOLLOWUPS.md:666`;
 the shipped Bulletproofs+ verifier keeps BA-I58 until the cutover.
 
-**BA-Q17 — The frozen baseline files and the two contract documents**
-(BA-I60 to BA-I65). Default: delete BA-I60 and BA-I62;
+**BA-Q17 — The frozen baseline files and the contract documents**
+(BA-I60 to BA-I66). Default: delete BA-I60 and BA-I62;
 [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) becomes the contract
 of record for the tracked set, holding each row's threshold and protocol;
-`docs/benchmarks/README.md` is rewritten against it; this document is
-archived when that lands.
+`docs/benchmarks/README.md`, the manifest and the RandomX record are
+rewritten against it; this document is archived when that lands.
 
 **BA-Q18 — Wall-clock on CI (BA-D13).** Default: T2 is trended on shared
 runners and never gates; the dedicated-runner upgrade is rejected with a
@@ -515,6 +546,14 @@ Default: replace them with floor-measured values that cite their capture.
 **BA-Q21 — The comparator's tests (BA-D16).** Default: run
 `scripts/bench/test_compare.py` in the workflow that runs
 `scripts/bench/test_drs_bench.py`.
+
+**BA-Q22 — Wall-clock checks that gate today** (BA-I32 with BA-I51; BA-I33
+with BA-I52 and BA-I53). Under BA-Q1 wall-clock never gates. The shard
+smoke gates on absolute x86 thresholds per PR; the RandomX bounds gate on a
+same-machine ratio on a schedule. Default: both stay gated as named
+exceptions, the ratio because both arms share a machine and the smoke
+because its thresholds sit far above the measured figures; any further
+wall-clock gate needs its own ruling.
 
 ## 7. What this round examined, and what it did not
 
@@ -549,5 +588,7 @@ a measurement.
 - Whether `PL-D3` moved wallet scan cost is not established; BA-G15 does not
   depend on it.
 - `shekyl-mobile-wallet` and `shekyl-web` are outside this round.
+- The owning documents of the 22 `consensus_constants.json` keys listed in
+  §4 were not each re-read for a cost argument outside the comment field.
 - `config/economics_params.json` holds no entry justified by a cost or a
   latency; its entries were not traced to their derivations.
