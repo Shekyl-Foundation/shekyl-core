@@ -376,7 +376,7 @@ pub fn run(
             ),
             ResolvedCommand::Unstake { yes } => present(
                 &presentation,
-                "release",
+                "stake release",
                 staking::cmd_unstake(&rpc, &presentation, yes),
                 staking::show_release,
             ),

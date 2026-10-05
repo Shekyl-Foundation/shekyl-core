@@ -255,7 +255,7 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
     let rows = lines(&stdout);
     let release = rows
         .iter()
-        .find(|row| row["command"] == "release")
+        .find(|row| row["command"] == "stake release")
         .expect("release");
     assert_eq!(release["ok"], false, "{release}");
     assert!(
