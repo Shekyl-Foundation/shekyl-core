@@ -21,6 +21,22 @@
   `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
   owner's participation-floor input.
 
+### Chain rules — a bond post is judged against its record before the block (CEN-J14, J16, J18)
+
+- The Rust validator now runs the retention crate's three kind verifies
+  on every bond post, over the record as the chain stood before the
+  block: a JoinMarket must bond exactly the floor for its holdings over
+  no existing record; a Release must empty a record that exists, past
+  the cooldown from its last served epoch and with slashes settled through
+  it; a Reinstate must close the one open interval of the record it names
+  without changing its holdings. Until this change those predicates ran
+  only in the C++ and the daemon's submit pool, and the Rust side refused
+  a subset of them one pass later, from the fold's belts
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5). A join and a release for one
+  persona in one block is refused on the release's missing record, not on
+  the block's one-post-per-persona rule — the order both implementations
+  already had.
+
 ### Chain rules — a bond post is keyed by its key, and a Release by the record's (CEN-J11, J12, J13)
 
 - The Rust validator now refuses a bond post whose `p_canonical_id` is not

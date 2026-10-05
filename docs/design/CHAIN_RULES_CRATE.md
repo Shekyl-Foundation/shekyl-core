@@ -813,10 +813,16 @@ anchor) and `judge_signatures` (I17 yields every input's signing hash, I18
 verifies over it), with `judge_serve_credit_bond` between them (one
 `bond_record` read per serve-credit vin feeding J4, J5, J6 — the C++
 `check_tx_inputs` arm's order; `rules/tx_bond.rs`, slice 8) and then
-`judge_bond_post_key` (J13: which key a bond post's slot must carry — the
-record's `bond_spend_pk` on a Release through `cold_authority_pin`, the
-identity key on a credit — judged **before** I18 verifies the slot, so a
-wrong-key post refuses as J13 and not as a bad signature; slice 8 Q8) — and `TxScope`
+`judge_bond_post` (one `bond_record` read per bond-post vin feeding the
+kind's verify and J13 in the C++ arm's order — JoinMarket J14 → J13,
+Release J13 over the record → J16, Reinstate J18 → J13; J13: which key
+the slot must carry — the record's `bond_spend_pk` on a Release through
+`cold_authority_pin`, the identity key on a credit — judged **before** I18
+verifies the slot, so a wrong-key post refuses as J13 and not as a bad
+signature, slice 8 Q8; J16 reads the rule set for the connecting height's
+settlement epoch — the first transaction rule to read a parameter off it;
+`tx_against` itself only compares it to the formed one; *was* `judge_bond_post_key`,
+J13 alone, at slice 8 row 4) — and `TxScope`
 has a `Coinbase` arm (I20: the coinbase only, vacuous on every listed
 transaction).
 Block-level **predicates** run in census order, each through
@@ -862,7 +868,9 @@ H4, H5, H6, H7, H9, H10, H11, H14, H15, H16, H17, H18, H20, H21, H22
 vins, added 2026-10-03 for `SHT-9` — and J4, J5, J6, the serve credit's bond
 state read off the view in `rules/tx_bond.rs`, slice 8 row 3, 2026-10-04;
 and J11, J12, J13 — the bond post's statics in `tx_inputs.rs` and its
-key-selection rule in `tx_bond.rs`, slice 8 row 4, 2026-10-04);
+key-selection rule in `tx_bond.rs`, slice 8 row 4, 2026-10-04; and J14,
+J16, J18 — the three kind verifies over the record in `tx_bond.rs`,
+slice 8 row 5, 2026-10-04);
 H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
 applies, a pass is not coverage) until slice 6 lands the BP+ verification
