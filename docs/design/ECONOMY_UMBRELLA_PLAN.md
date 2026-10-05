@@ -202,6 +202,20 @@ of high-fee bodies fills to it, the block is 731 B over, and an honest miner
 has no block to mine while the pool stays full, at the cost to an attacker
 of fee offers that are never collected.
 
+**The fill weighs bodies alone, at every weight.** The reserve's shortfall
+at the limit is the visible end of a wider difference. `Fill::admit` and
+`Fill::reward` price the penalty on the bodies' weight; the template and the
+validator weigh the block, coinbase included. So bodies that fit the median
+are penalty-free to the fill and 1,331 B over it in the block
+(`the_fill_prices_bodies_alone_and_the_template_prices_the_block`). The
+daemon's C++ fill selects the same way and then re-prices the block it
+built; the sim does not re-price. `BlockSpace::fill` pays the fill's reward
+and records the bodies' weight into the median, so every sim block is one
+coinbase lighter than the chain's, in the reward it pays and in the median
+it moves. That is 0.44 % of the zone, about a tenth of an ordinary
+transaction. Its effect on the ESR figures has not been measured: they are
+re-run when the owner prices the weight the block carries (§3.2 d).
+
 **What the walk adds.** Four rows are new: the coinbase reserve and the three
 version gates. One row sharpens an old name: the tail's size, which is now
 ruled as a criterion. The rest were already on record, and the block-weight
@@ -251,7 +265,7 @@ the three operands.
 | a | The version-gate sweep: every `version >= N` in the C++, each marked dead or live, as its own PR | before EUP-4 |
 | b | `Fill::admit_up_to` batches the penalty zone, held to the single-offer walk | EUP-4 prep; the 135-year arms wait on it |
 | c | The coinbase reserve, derived, with its compile-time assertion | with the zone's capacity leg; before (d) |
-| d | The fill moves to `shekyl-block-template`; the C++ fill and gate are deleted | after (c) |
+| d | The fill moves to `shekyl-block-template`; the C++ fill and gate are deleted. The owner prices and bounds the weight the block carries, coinbase included, and the sim records that weight; the ESR figures that read the fill are re-run | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
 
 Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
