@@ -23,9 +23,10 @@
 //!
 //! Every economics quantity comes from canonical `shekyl-economics`
 //! functions or build-generated params (drift-pair ban, §1.9): the reward
-//! family, `emission_speed_factor` / `tail_subsidy_per_block`, and
-//! `TX_VOLUME_WINDOW` are all imported; the block-policy zone is
-//! [`shekyl_economics::FULL_REWARD_ZONE`].
+//! family, `tail_subsidy_per_block`, and `TX_VOLUME_WINDOW` are imported;
+//! the shift is
+//! [`shekyl_economics::EconomicParams::emission_speed_factor_per_block`];
+//! the block-policy zone is [`shekyl_economics::FULL_REWARD_ZONE`].
 //! Two deliberate exceptions, marked at their definitions: the ArticMine
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
@@ -46,11 +47,10 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, fee_correction, hysteresis_fold, hysteresis_settled,
-    hysteresis_step, paid_block_reward, projected_already_generated, quantize_pow2_ceil,
-    relay_fee_floor, round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection,
-    FeeLadder, TxVolume, BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    effective_emission, fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step,
+    paid_block_reward, projected_already_generated, quantize_pow2_ceil, relay_fee_floor,
+    round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
+    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
@@ -1946,7 +1946,7 @@ pub struct DegeneratePins {
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
     let ratio_09 = params.emission_curve_asymptote / 10 * 9;
-    let esf = emission_speed_factor(params);
+    let esf = params.emission_speed_factor_per_block;
     let tail = tail_subsidy_per_block(params).expect("tail subsidy");
     let s = params.emission_curve_asymptote;
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
@@ -3045,14 +3045,16 @@ mod tests {
     ///
     /// What remains true, and is all this asserts: the four-rung ArticMine
     /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
-    /// puts genesis `Fh` at 14,000,000.
+    /// puts genesis `Fh` at 6,900,000: `2·R₀/Zm` = 6,826,666 at the design's
+    /// `R₀` = 1 024 SKL, rounded up to two significant digits. (14,000,000
+    /// at the per-minute convention's 2 048 SKL, until 2026-10-04.)
     #[test]
     fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
         // `fees[2]` is priority.
-        assert_eq!(fees[2], 14_000_000);
+        assert_eq!(fees[2], 6_900_000);
     }
 
     /// Pin the relay-floor transliteration against

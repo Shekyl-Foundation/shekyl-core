@@ -134,7 +134,7 @@ impl EconomicsEngine for LocalEconomics {
         // The `as_of` stamp lets a consumer detect a stale captured copy.
         let p = &self.params;
         EconomicsParametersSnapshot {
-            emission_speed_factor: u8::try_from(p.emission_speed_factor_per_minute)
+            emission_speed_factor_per_block: u8::try_from(p.emission_speed_factor_per_block)
                 .unwrap_or(u8::MAX),
             emission_curve_asymptote_atomic: p.emission_curve_asymptote,
             final_subsidy_per_minute: p.final_subsidy_per_minute,

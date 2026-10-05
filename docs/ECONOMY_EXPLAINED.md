@@ -14,10 +14,13 @@
 > `PUBLIC_NARRATIVE_FAQ.md` (positioning and service promise).
 >
 > **DRIFT (marked 2026-10-02).** Parts of this explainer describe the
-> economics as simulated in June 2026 and no longer match `dev`. Two
+> economics as simulated in June 2026 and no longer match `dev`. Three
 > facts are corrected in place: the burn formula (the stake-ratio factor
-> is deleted from the code) and the shard unit (a shard is 3 MB of
-> archival bytes, not one per settlement epoch). Three passages are
+> is deleted from the code), the shard unit (a shard is 3 MB of
+> archival bytes, not one per settlement epoch), and, on 2026-10-04, the
+> emission curve of Loop 1 (the code had run the design's factor of 22 as
+> 21 per block: twice the rate, 2,048 coins at genesis, the tail near
+> year 64). Three passages are
 > **marked, not rewritten**, because the design they describe is under
 > re-examination and the replacement text is not decided: the "small
 > accountability bond" claim just below, the section *Why staking doesn't
@@ -64,27 +67,30 @@ the banner above.)*
 
 ## Loop 1 — The emission curve (the PoW backbone)
 
-Every block pays `max(M_r · (remaining >> 21), TAIL) · penalty`, where
+Every block pays `max(M_r · (remaining >> 22), TAIL) · penalty`, where
 `TAIL` is the perpetual 0.6 coins/block (0.3 coins/minute × 2-minute
 blocks), `M_r` is Loop 2's release multiplier applied to the *curve* (the
 floor is never modulated — a paced floor would pay least exactly when fees
 are lowest), and the block-weight penalty applies to the *paid* amount
 (so oversizing a block always costs, tail era included). `remaining`
 floors at zero: past the curve's asymptote the tail simply continues. At
-genesis the curve pays **2,048 coins per block**; it decays smoothly as
+genesis the curve pays **1,024 coins per block**; it decays smoothly as
 the asymptote approaches (neutral trajectory, `M_r = 1`):
 
-| Year | Avg block reward | Supply emitted | Net inflation |
+| Year | Block reward at year end | Supply emitted | Net inflation |
 |---|---|---|---|
-| 0 | ~1,807 | 11.8% | — |
-| 5 | ~966 | 52.9% | 13.5% |
-| 10 | ~516 | 74.8% | 4.7% |
-| 20 | ~147 | 92.8% | 1.04% |
-| 29 | ~48 | 97.7% | 0.31% |
+| 0 | ~962 | 6.1% | — |
+| 5 | ~703 | 31.3% | 16.5% |
+| 10 | ~514 | 49.8% | 7.0% |
+| 20 | ~275 | 73.2% | 2.4% |
+| 29 | ~156 | 84.7% | 1.2% |
+| 60 | ~22 | 97.8% | 0.14% |
 
-(Neutral-trajectory sim output against the consensus integer math, not
-estimates.) By year 30 the chain is effectively in its fee era, with the
-0.6-coin tail preventing the "zero subsidy" security cliff forever — the
+(The consensus integer math on the neutral trajectory, not estimates:
+`shekyl_economics::projected_already_generated` and `base_emission_at`.)
+Half the supply is emitted by about year 11 and 80 % by about year 26. The
+curve reaches the 0.6-coin tail near year 119, and the tail prevents the
+"zero subsidy" security cliff forever — the
 tail is perpetual by construction: there is no supply cutoff, only the
 asymptote the curve approaches, and the burn is what bounds net supply in
 practice.

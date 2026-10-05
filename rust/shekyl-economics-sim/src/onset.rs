@@ -746,17 +746,47 @@ mod tests {
         }
     }
 
+    /// A scenario started in the tail era and run to the onset horizon:
+    /// the whole curve already emitted, so every block mints the tail.
+    ///
+    /// On the design's curve (ESF 22 per block) the fold reaches the tail
+    /// near year 132, past [`ONSET_HORIZON_YEARS`]; a run from genesis is in
+    /// the emission era to its last year. A test of a tail-era fact starts
+    /// here and holds its run to the premise with [`assert_tail_era`].
+    fn in_the_tail_era(mut config: ScenarioConfig) -> ScenarioConfig {
+        config.initial_emitted_fraction = 1.0;
+        at_horizon(config)
+    }
+
+    /// The premise of a tail-era test, on the fold's own state: the curve
+    /// at each year's last block mints exactly the tail.
+    fn assert_tail_era(params: &SimParams, aggs: &[A1YearAgg]) {
+        let economic = params.economic();
+        let tail = shekyl_economics::tail_subsidy_per_block(&economic).expect("tail");
+        for a in aggs {
+            assert_eq!(
+                shekyl_economics::base_block_reward(a.last_block.already_generated, &economic)
+                    .expect("base"),
+                tail,
+                "y{}: the curve is above the tail; this is not the fee era",
+                a.year
+            );
+        }
+    }
+
     #[test]
     fn growth_schedule_year_fees_exceed_u64_so_the_aggregate_is_u128() {
-        // The reason `A1YearAgg`'s annual sums are u128: run to 60 y, the
-        // growth schedule's yearly fees pass the chain's u64 — a u64 field
-        // would have had to clip, silently. Pins that the case is real and
-        // that the aggregate carries it. The case arises on the flat arm,
-        // where the fee does not fall as the traffic grows.
+        // The reason `A1YearAgg`'s annual sums are u128: in the tail era the
+        // penalty costs a block almost nothing, the growth schedule's blocks
+        // carry their demand, and its yearly fees pass the chain's u64 — a
+        // u64 field would have had to clip, silently. Pins that the case is
+        // real and that the aggregate carries it. The case arises on the
+        // flat arm, where the fee does not fall as the traffic grows.
         let params = SimParams::section_12_14_control();
-        let config = at_horizon(all_scenarios(&params).remove(2));
+        let config = in_the_tail_era(all_scenarios(&params).remove(2));
         assert_eq!(config.name, "sustained_growth");
         let aggs = a1_year_aggs(&params, &config);
+        assert_tail_era(&params, &aggs);
         let last = aggs.last().expect("60 years");
         assert!(
             last.whole_fees_atomic > u128::from(u64::MAX),
@@ -796,18 +826,19 @@ mod tests {
     fn fee_horizon_closed_form_matches_the_fold_on_the_baseline() {
         // In the fee era, for constant V, the per-year ratio ≈ H / t: check
         // the closed form (its burn base read at the baseline's own volume)
-        // against the fold on the baseline scenario late in its 60-y run
-        // (emission at the tail), to within the tail's contribution and the
-        // storage add-on. A closed form exists only on the flat arm.
+        // against the fold on the baseline scenario late in a 60-y run of
+        // the tail era, to within the tail's contribution and the storage
+        // add-on. A closed form exists only on the flat arm.
         //
         // `H` and `t` are in traffic-years — years of the baseline's `V`
         // carried — not calendar years. The two agree only while every block
-        // carries its demand; under the fill rule (ESR-6) the control's
-        // blocks carry about 20 of 50 for decades, so `t` is the corpus's
-        // age in carried traffic.
+        // carries its demand, as the tail era's do; in the emission era the
+        // fill rule (ESR-6) holds the control's blocks to about 20 of 50, so
+        // `t` is the corpus's age in carried traffic.
         let params = SimParams::section_12_14_control();
-        let config = at_horizon(all_scenarios(&params).remove(0));
+        let config = in_the_tail_era(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
+        assert_tail_era(&params, &aggs);
         let fee = params
             .fee
             .flat_per_tx_atomic()

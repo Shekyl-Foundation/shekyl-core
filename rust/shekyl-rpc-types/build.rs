@@ -177,7 +177,15 @@ use std::path::PathBuf;
 /// (`asymptote_share == staker_pool_share`), so `staker_pool_share_at` is
 /// bit-identical at every `n` whatever the knee; the number is provisional
 /// until the GF-7 ceremony picks it with the asymptote.
-const PINNED_DIGEST: &str = "05a1ba28da50990199b8d7d9621eceda7f2407033ed950137fd445f270f699ab";
+///
+/// **Re-pinned 2026-10-04: a KEY changed and the chain changed with it.**
+/// `emission_speed_factor_per_minute: 22` became
+/// `emission_speed_factor_per_block: 22`. The value is byte-identical, but
+/// the curve read it through Monero's per-minute conversion as 21 per block;
+/// it now reads 22, the design's (`DESIGN_CONCEPTS.md` §3). Every block
+/// reward above genesis changes, so this is a different chain, not a pure
+/// rename (`EconomicParams::emission_speed_factor_per_block`).
+const PINNED_DIGEST: &str = "4bad8c3eafe2a03224238d2140e3a5ef3d72ce73c75837d6726d37112f15f54f";
 
 fn main() {
     let manifest_dir =
