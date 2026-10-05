@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Docs: the delivery digest (`SF-D8`, PR #954) costs a Pi 4 78 ms of CPU per served shard, 0.5 % of a Tor read; record in `docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`.
+- Docs: `BENCHMARK_ALIGNMENT.md` (`BA-`) inventories every benchmark, gate script and dated capture, lists the measurements that ruled constants rest on with nothing tracking them, and proposes a tracked set for ruling. No benchmark, workflow or baseline changes.
 
 ## [3.1.0-alpha.9] - 2026-10-05
 
