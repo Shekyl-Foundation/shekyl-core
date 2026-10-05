@@ -300,7 +300,9 @@ impl PassRequestHeader {
 /// precomputable summary of it, such as a root of chunk hashes: a `P`
 /// holding only the summary could sign a digest consistent with a shard it
 /// had discarded, and no later reader could tell. A padding scheme keeps
-/// the property only if the padded frame stays recomputable from the shard.
+/// the property only if a later reader can still rebuild the padded frame:
+/// either the padding is a function of the shard, or its exact bytes are
+/// carried with the pass record.
 ///
 /// **What this does not claim.** It does not show that `P` stores the bytes:
 /// a `P` that fetches them from a co-holder on demand produces the same
