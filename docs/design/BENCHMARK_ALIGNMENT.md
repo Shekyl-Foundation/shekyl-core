@@ -101,7 +101,7 @@ that fixes or retires each.
 | **BA-D11** | `rust/shekyl-engine-file/benches/open.rs:22`: the bidirectional threshold catches a "silent `m_log2` demotion" of the Argon2id default | The gated sibling pins the KAT profile `m_log2 = 0x08` itself (`rust/shekyl-engine-file/benches/open_iai.rs:9`) and never runs `KdfParams::default()`. A change to the default cost moves no gated count |
 | **BA-D12** | `scripts/bench/gap7_pi4_gate.sh` and `scripts/bench/fa6_pi4_gate.sh` are named gates | Neither enforces a performance threshold. The GAP-7 script checks build provenance and that the measurement ran (`scripts/bench/gap7_pi4_gate.sh:123`, `:135`). The FA-6 script runs a binary that prints a classification; its recorded outcome is `fail` and FA-6 shipped (`docs/PERFORMANCE_BASELINE.md:808`). The FA-6 script recommends `-C target-cpu=cortex-a72` (`scripts/bench/fa6_pi4_gate.sh:20`), which the GAP-7 script forbids because it crashes RandomX on the floor board (`scripts/bench/gap7_pi4_gate.sh:34`). The GAP-7 script cites "PERFORMANCE_BASELINE.md §8.2" (`scripts/bench/gap7_pi4_gate.sh:9`); that file has no §8.2 |
 | **BA-D13** | [`MID_REWIRE_HARDENING.md`](../MID_REWIRE_HARDENING.md) §3.3 defers the Tier-2 criterion gate to §6 "and its deadline" (`docs/MID_REWIRE_HARDENING.md:382`) | §6.1 (`docs/MID_REWIRE_HARDENING.md:1220`) states triggers and no deadline, and no `docs/FOLLOWUPS.md` row carries the deferral (`grep -n -e 'Tier-2' -e 'Tier 2' docs/FOLLOWUPS.md` returns only an unrelated row). Under [`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc) it has no carrier |
-| **BA-D14** | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) "Verification Time": FCMP++ proof ~35 ms per input, PQC auth ~18 ms per input (`docs/FCMP_PLUS_PLUS.md:1081`, `:1083`); no source or device given | Measured on the floor: 64.9 ms per input for the proof ([`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5.4, 2026-09-24) and 0.97 ms per hybrid signature (GAP-7, 2026-09-05) |
+| **BA-D14** | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) "Verification Time": FCMP++ proof ~35 ms per input, PQC auth ~18 ms per input (`docs/FCMP_PLUS_PLUS.md:1081`, `:1083`); no source or device given | Measured on the floor ([`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5.4, 2026-09-24, depth 3): the proof verifies in 130.6 ms at one input and 191.9 ms at two, a marginal 63.9 ms per added input; the hybrid signature is about 1.0 ms per input (0.97 ms in GAP-7, 2026-09-05); Bulletproofs+ is a fixed 34.9 ms; a one-input transaction verifies in 166.7 ms and a two-input one in 229.1 ms |
 | **BA-D15** | `rust/shekyl-p-serve/src/serve.rs:119`: "The W₂ rig derives the real value" of `MAX_INFLIGHT` on floor hardware | The W₂ runs are finished and read ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10); none varied or derived the serve-side cap. `MAX_INFLIGHT = 64` is still the placeholder the same comment declares it to be (`rust/shekyl-p-serve/src/serve.rs:112`, `:122`) |
 | **BA-D16** | `scripts/bench/test_compare.py` is the regression suite for the comparator that decides the gate | No workflow runs it (`grep -rn test_compare .github/workflows` returns nothing). `scripts/bench/test_drs_bench.py`, its sibling, is run (`.github/workflows/docs-gates.yml:313`) |
 
@@ -135,9 +135,13 @@ Every gated row's last run is the baseline refresh of 2026-10-05 from
 
 ### 2.2 Registered Rust bench targets outside the gate
 
-None of these is run by any workflow. Criterion ids here carry no routing
-prefix, so `scripts/bench/compare.py:155` would class them `unrouted` if a
-`BENCHES` row were added without a rename.
+None of these is run by any workflow. The comparator routes gungraun
+function names by prefix (`scripts/bench/compare.py:149`); criterion
+results are informational. Of the targets below with a gungraun arm,
+BA-I11 to BA-I13 already carry a routed prefix, and BA-I15's two functions
+carry none, so `scripts/bench/compare.py:155` would class them `unrouted`
+if a `BENCHES` row were added without a rename. The rest are
+criterion-only and have no instruction count to gate.
 
 | Id | Target and path | Measures | Production path? | Last run | Consumer | Proposed |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -154,8 +158,8 @@ prefix, so `scripts/bench/compare.py:155` would class them `unrouted` if a
 | **BA-I21** | `shekyl-ffi::relay_admission_verify` | The BA-I10 pair over 64 cells: depth and layout by 1 to 8 inputs | Yes, as BA-I10 | 2026-08-05, floor; the result grids are not in the tree (`rust/shekyl-relay-privacy/src/verify_cost.rs:46`) | `SPEC_VERIFY_COST`, whose own comment says the floor re-measurement is owed (`rust/shekyl-relay-privacy/src/verify_cost.rs:347`) | **Keep, tracked** (T3) |
 | **BA-I22** | `shekyl-p2p-transport::c5` | Noise handshake initiator and responder, seal/open at four sizes, rekey | Yes: `rust/shekyl-clearnet/src/handshake.rs:321`, `:368`. Never compiled in CI: its `c5-bench` feature is enabled nowhere | 2026-09-26, floor (BA-I79) | The clearnet accept-rate bound, which is not yet written (`docs/design/P2P_TRANSPORT_LAYER.md:1522`) | **Keep, tracked** (T3) |
 | **BA-I23** | `shekyl-pow-randomx::cache_derive` | `PreparedCache::derive` for one seed | Yes: `rust/shekyl-pow-randomx/src/cache_store.rs:535` | 2026-05-22, x86 dev: 341 ms (`rust/shekyl-pow-randomx/BENCH_RESULTS.md:32`) | The 150–200 ms cache-miss budget (`docs/design/RANDOMX_V2_RUST.md:398`) | **Keep, tracked** — and a floor run is a gap (BA-G9) |
-| **BA-I24** | `shekyl-pow-randomx::compute_hash_alloc` | `compute_hash` under two names, and a pooled variant that never ships | `compute_hash` yes: `rust/shekyl-ffi/src/pow_randomx_ffi.rs:228` | 2026-05-22, x86 dev: 296 ms against a ≤ 100 µs budget (`rust/shekyl-pow-randomx/BENCH_RESULTS.md:262`) | Per-block PoW verify cost | **Rewrite** — two arms time one function, and the budget it reports against was never the right unit |
-| **BA-I25** | `shekyl-pow-randomx::per_call_alloc` | Mirrors of the VM's two allocations, through `std` directly | No: it does not call the crate's functions | 2026-05-22, x86 dev | The Phase 2F allocation A/B, a closed plan under `docs/completed/` | **Retire** — its decision is made |
+| **BA-I24** | `shekyl-pow-randomx::compute_hash_alloc` | `compute_hash` under two names, and a pooled variant that never ships | `compute_hash` yes: `rust/shekyl-ffi/src/pow_randomx_ffi.rs:228` | 2026-05-22, x86 dev: 296 ms per hash. Its record sets that against the ≤ 100 µs target, which bounds VM allocation and not a hash (`rust/shekyl-pow-randomx/BENCH_RESULTS.md:262`) | Per-block PoW verify cost; no per-hash budget is stated | **Rewrite** — two arms time one function, and there is no per-hash budget for it to report against |
+| **BA-I25** | `shekyl-pow-randomx::per_call_alloc` | Mirrors of the VM's two allocations, through `std` directly | No: it does not call the crate's functions | 2026-05-24, x86 dev: 47.75 µs. Never on the floor | The per-call allocation target of ≤ 100 µs, which decides whether a VM pool is added (`docs/design/RANDOMX_V2_RUST.md:500`) | **Retire** — the target is met and the pooling decision is made |
 | **BA-I26** | `helioselene` — `rust/shekyl-oxide/crypto/helioselene/benches/helioselene.rs` | Selene point add and field operations, printed from a hand-rolled timer | Indirect, through FCMP++ | none recorded | None found (`grep -rn benches/helioselene docs` finds one audit-trail note) | **Retire** from the tracked set. The file is vendored; whether it leaves the fork is a [`10-shekyl-first`](../../.cursor/rules/10-shekyl-first.mdc) question |
 
 ### 2.3 Bench-like code outside `benches/`
@@ -165,7 +169,7 @@ prefix, so `scripts/bench/compare.py:155` would class them `unrouted` if a
 | **BA-I27** | `rust/shekyl-chain-store/src/store/slash_scan_bench_tests.rs` (`#[ignore]`) | Rust `validate` plus store `connect` per block, ordinary against deadline block, 1 300 blocks, 64 personas | x86 dev, 2026-09-30, 2 runs. Never on the floor | The slash-scan placement ruling ([`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md) §3.1) | **Keep, tracked** (T3) — it is the only timing of the post-cutover connect path |
 | **BA-I28** | `rust/shekyl-chain-store/src/store/weights_read_bench_tests.rs` (`#[ignore]`) | Two read shapes for the weight window over 100 000 blocks; the cursor arm is a copy of the function that later landed (`rust/shekyl-chain-store/src/store/read.rs:279`) | floor, 2026-09-27, n = 1: 36.6 ms against 598 ms | The read-shape ruling ([`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md)); ruled with about ten times headroom | **Retire** — decision made, and the arm no longer times production code |
 | **BA-I29** | `rust/shekyl-levin/tests/inbound_cost_bench.rs` (`#[ignore]`) | RSS, high-water RSS and descriptors of a real daemon at 0 to 128 inbound peers | x86 dev and floor; no capture in `docs/benchmarks/` | The inbound ceiling, where a measurement is owed (`docs/FOLLOWUPS.md:1290`) | **Keep, tracked** (T3) |
-| **BA-I30** | `rust/shekyl-wire/tests/input_cap_cost.rs` (`#[ignore]`) | Prove and verify for real 1 / 2 / 4 / 8-input spends | x86 dev and floor, 2026-09-24, n = 1 each: 64.9 ms per input on the floor | The input cap of 8, whose derivation is owed (`docs/FOLLOWUPS.md:141`) | **Keep, tracked** (T3) |
+| **BA-I30** | `rust/shekyl-wire/tests/input_cap_cost.rs` (`#[ignore]`) | Prove and verify for real 1 / 2 / 4 / 8-input spends | x86 dev and floor, 2026-09-24, n = 1 each: on the floor 166.7 ms to verify one input, and 64.9 ms for each added input | The input cap of 8, whose derivation is owed (`docs/FOLLOWUPS.md:141`) | **Keep, tracked** (T3) |
 | **BA-I31** | `rust/shekyl-archival-retention/src/challenge_assignment.rs:620` (`#[ignore]`) | Full-epoch challenge replay on reorg, 972 000 draws | none recorded | Not traced | **Keep, tracked** — pending BA-Q12 |
 | **BA-I32** | `rust/shekyl-shard-visual/examples/budget_matrix.rs` | Shard render latency, 36 cells; an x86 smoke profile and the floor targets | CI runner per PR (smoke); floor 2026-09-06 (BA-I89) | `FLOOR_TARGETS` (`rust/shekyl-shard-visual/examples/budget_matrix.rs:34`) | **Keep, gated** for the smoke; the floor arm is T3 |
 | **BA-I33** | `rust/shekyl-randomx-differential/src/mode_latency.rs`, `rust/shekyl-randomx-differential/tests/worst_case_ratio.rs` | Rust-to-C RandomX latency ratio, typical and adversarial | CI runner, daily and weekly cron | The ratio bounds 3.0 and 5.0 (`rust/shekyl-randomx-differential/src/mode_latency.rs:127`) | **Keep, gated** — no aarch64 leg (BA-G9) |
@@ -318,7 +322,8 @@ moving; at the pin only the first row has one.
 | IBD floor, redb ≤ 1.25× LMDB | `scripts/bench/drs_artifact.py:29` | Slower IBD means fewer full nodes | x86 dev, LMDB arm only | No | BA-G6, BA-T13 |
 | Read shape for the weight window | ruled in [`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md) | ≤ 5 % of zone-point verify; measured 0.5 % | floor, 2026-09-27, n = 1 | No | None needed: about ten times headroom, and the denominator is BA-G4's |
 | Slash-scan placement | ruled in [`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md) | About 10 ms once per epoch | x86 dev only | No | BA-T12 |
-| RandomX cache-miss budget 150–200 ms | `docs/design/RANDOMX_V2_RUST.md:398` | One-off stall at an epoch boundary | x86 dev: 341 ms | No | BA-G9, BA-T14 |
+| RandomX cache derivation ≤ 200 ms; cache-miss budget 150–200 ms | `docs/design/RANDOMX_V2_RUST.md:499`, `:398` | One-off stall at an epoch boundary | x86 dev: 341 ms | No | BA-G9, BA-T14 |
+| RandomX per-call VM allocation ≤ 100 µs | `docs/design/RANDOMX_V2_RUST.md:500` | Whether to add a VM pool | x86 dev: 47.75 µs | No | None needed on x86: met with about twice the headroom. Not measured on the floor (BA-G9) |
 | RandomX ratio bounds 3.0 and 5.0 | `rust/shekyl-randomx-differential/src/mode_latency.rs:127` | Verification-DoS bound against the C reference | CI runner, cron | Yes, x86 only | BA-I33, BA-G9 |
 | FA-6 budgets: 45 s, 20 min, margin 0.20 | `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs:42` | User-facing sync time | floor, 2026-06-08, outcome `fail` | No | BA-G15, BA-T16 |
 | Argon2id default: 64 MiB, t = 3 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs:135` | "under ~500 ms on a commodity desktop" | Not on the floor | No | BA-G12, BA-T17 |
@@ -536,9 +541,13 @@ rewritten against it; this document is archived when that lands.
 runners and never gates; the dedicated-runner upgrade is rejected with a
 reopening criterion, or gets a `docs/FOLLOWUPS.md` row with a named blocker.
 
-**BA-Q19 — RandomX budgets on the floor.** Default: state a per-hash and a
-cache-derivation budget from BA-T14's floor run, and withdraw the ≤ 100 µs
-and 150–200 ms figures that no machine has met.
+**BA-Q19 — RandomX budgets on the floor.** Three targets are stated, all on
+x86: the latency ratio (gated), cache derivation ≤ 200 ms (341 ms measured,
+unmet), and per-call allocation ≤ 100 µs (47.75 µs measured, met). None is
+stated for the floor, and no per-hash budget exists on any device. Default:
+state a per-hash and a cache-derivation budget for the floor from BA-T14's
+run, and either re-rule the 200 ms cache target or record the x86 figure as
+a standing breach. The allocation target stands.
 
 **BA-Q20 — Figures in documents that no measurement supports** (BA-D14).
 Default: replace them with floor-measured values that cite their capture.
