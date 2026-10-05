@@ -61,12 +61,7 @@ banner or an enclosing heading above it. Concretely:
   heading. The artifact is what gets mistaken for current; a line that
   says `REJECTED` or `SUPERSEDED` is hard to mistake.
 
-This is the failure that produced the "twenty-seven" backlog sentence,
-the `x50` surge rows read as live, and a `CLOSED as record` file whose
-§5.5 heading said *"nothing here is ruled"* 1148 lines below the banner
-that said all three sub-rounds were ruled and built.
-
-**What line-local status does NOT mean: delete the past.** A pinned
+**What line-local status does not mean: delete the past.** A pinned
 *records-was* row — `DIVERGENT at <sha>`, a conformance verdict at a
 declared era — is a **provenance-bearing claim that is true now**, not
 history, and it stays. The discriminator is **artifact vs verdict**,

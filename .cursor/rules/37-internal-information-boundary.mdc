@@ -14,14 +14,11 @@ permanently, and is mirrored by forks and archivers beyond our reach.
 private. Not in a public doc with the sensitive parts softened; in the
 other repository.
 
-This rule is codified because manual vigilance already failed here. A
-commit titled *"docs: generalise the operator note; this repo is public"*
-cleaned one operator note and left the seed-estate survey tables
-directly beneath it — per-seed addresses, reachability, which
-configuration files were still the pristine example, and one seed's
-unrestricted RPC port. The author knew the repository was public and
-still missed it, because "be careful about internal details" has no
-mechanical surface. A bright line and a gate do.
+The tell for why a bright line exists: a commit that knew the repo was
+public cleaned one operator note and left the survey tables under it —
+per-host addresses, reachability, which config was still the example,
+and an open RPC port. "Be careful" has no mechanical surface. The three
+classes below do.
 
 ## The three forbidden classes
 
