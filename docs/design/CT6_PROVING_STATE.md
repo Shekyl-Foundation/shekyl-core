@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, the refresh re-offers everything the wallet holds on every pass (a resume is a mass late registration, cheap because a held pair is `AlreadyHeld`), and the merge hands back what it inserted for registration outside the ledger guard — §11.12. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -1279,9 +1279,13 @@ red-bite below. The caller that can be behind is the **ledger**, not the
 persona scan: the tree's ingest is acknowledged before the ledger's merge
 commits, so a merge that loses its race leaves the tree on the new chain and
 the ledger — and any spend selected from it — on the old one. (The persona
-scan cannot be: it sweeps only blocks the archival reorg depth behind the
-tip, below any reorg the tree accepts.) The registrant classifies it as *the
-caller's view is stale* and nothing else: the batch form `sync_owned`
+scan is behind by construction rather than by accident: it sweeps only
+blocks `ARCHIVAL_REORG_DEPTH_BLOCKS` behind the tip and treats them as final,
+so a pair it seals is rebound only by a reorg deeper than that. The tree's
+own window, `FINALITY_DEPTH_BLOCKS`, is one lock window wider, so such a
+reorg is not unrepresentable — and the verdict it would get is this one.)
+The registrant classifies it as *the caller's view is stale* and nothing
+else: the batch form `sync_owned`
 collects such pairs in `OwnershipSync::stale`, registers the rest, reconciles
 once if anything is owed, poisons nothing, and the rescan re-offers the right
 key.
@@ -1440,11 +1444,18 @@ hashing and are quoted to an order, not a figure. The leaf counts are exact —
 `outputs_per_node(layer)`.
 
 So a late registration under a long-finalized high-layer chunk can still cost
-tens of minutes, the same order as the old per-spend figure. It is rare,
-because ownership has to be learned long after the fact for a *high* chunk to
-be the missing one, and it is bounded by the chunk rather than the chain — a
-chunk's span does not grow once it has closed, while the chain does. But it is
-the worst case that remains, and "span-bounded" should not be read as "cheap".
+tens of minutes, the same order as the old per-spend figure. It is bounded by
+the chunk rather than the chain — a chunk's span does not grow once it has
+closed, while the chain does. But it is the worst case that remains, and
+"span-bounded" should not be read as "cheap".
+
+**How often depends on whose output it is.** For the principal it is rare:
+ownership has to be learned long after the fact for a *high* chunk to be the
+missing one, and §11.12 registers a detection before its leaf folds. For the
+persona it is the **only** case, because the persona's scan learns of every
+output about 710 blocks after it drained (§11.12). An earlier revision of
+this paragraph said "it is rare" without the qualifier, and was written
+before anyone had asked when the persona's scan runs.
 
 What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
 It is a sort, not a hash, and it goes with `entries` at increment 7.
@@ -1464,18 +1475,122 @@ backfill onward. `reconciliation_resolves_the_position_so_the_fold_continues`
 grows the fixture to the chunk count that closes a layer-1 node after the
 reconcile, because that is the only way to observe it.
 
-### 11.12 The registrant: three sites, one batch call, no fallback
+### 11.12 The registrant: two sites, one batch call, no fallback
 
-**Where ownership enters the tree.** Three sites, all through one client call,
+**Where ownership enters the tree.** Two sites, both through one client call,
 `sync_owned(&[(gindex, O)])`, which registers what it can, reconciles **once**
 iff anything was owed, and reports — not refuses — the pairs whose key the
 tree disagrees with.
 
 | site | when | what it buys |
 | --- | --- | --- |
+| the refresh's ingest (`merge::curve_tree_ingest_scan_result`) | every refresh, between the ingest's rollback and its first fold, with everything the wallet will hold once this refresh has merged (`Engine::owned_outputs`) | **registration before the leaf folds**, so the chunk is captured as it closes and nothing is rebuilt; and **resume as a mass late registration** — the registry does not persist, so the first refresh after open is one reconcile (zero hashing when the captures are there) and every later one is all `AlreadyHeld` |
 | the curve-tree actor's `AssembleTx` handler | before every assembly, in the same handler invocation (E1: no ingest or rollback interleaves) | **the capture path is total.** A spend's inputs already carry `(gindex, O)`; the handler registers them and then assembles. Whatever reached the actor — a spend, a claim, a bond, a release — assembles from captures, whether the refresh registered it earlier or not. A held pair is `AlreadyHeld` and costs a map lookup |
-| the refresh, after the respawn-aware ingest and before the merge | every refresh, with every unspent output the ledger holds | **resume as a mass late registration**: the registry does not persist, so the first refresh after open is one reconcile (zero hashing when the captures are there) and every later one is all `AlreadyHeld`. Ordered after the ingest so a dead actor has been healed before it is asked; the chunks that close *during* that first ingest for already-held outputs are backfilled by the reconcile it triggers |
-| the refresh, after the merge, outside the ledger guard | with what the merge inserted | the fold captures for a new output from the next block. The merge is synchronous under the ledger write lock and cannot `ask` the actor, so it hands the pairs back (`apply_scan_result` → `Vec<OwnedOutput>`; the sync driver's `refresh_with_outcome` carries them out of the retry loop) |
+
+**Why inside the ingest, and why at that point.** One scan result spans
+everything from the ledger's height to the tip (`local_refresh.rs`:
+`scan_start = synced_height + 1`, `scan_end = chain_tip.next_height()`), and a
+leaf drains one lock window (`DEFAULT_LOCK_WINDOW`, 10 blocks) after its
+block. So any result longer than the lock window carries outputs that are
+*found and drained inside it* — a wallet that was offline for a day, or one
+being restored, sees almost nothing else. This PR's first revision registered
+after the ingest (what the ledger held) and again after the merge (what the
+merge inserted). That is right for a wallet sitting at the tip and late for
+every output in a catch-up: the fold had already passed them, so each one was
+`AfterDrain` and its chunks were rebuilt by §11.10's table — on the one path
+every restore takes.
+
+The registration is now a step of the ingest, and each side of where it sits
+is load-bearing:
+
+- **after the rollback**, because a reorg rebinds gindexes. Offered before
+  it, the new chain's pair is compared with the old chain's leaf at that
+  gindex, reported stale and dropped;
+- **before the first fold**, for the reason above;
+- **inside the respawn-aware wrapper**, because a respawned actor starts with
+  an empty registry: the retry re-offers the set before it folds the rest of
+  the range. This is also what the earlier ordering rule — "register after
+  the respawn-aware ingest, so a dead actor has been healed" — was for. A
+  dead actor fails this call with the same respawn-recoverable fault the
+  ingest's own calls raise, and the ordering that rule asked for would have
+  let a respawned actor fold the whole range unregistered.
+
+Since the placement is only visible in what the registration *cost*, the
+ingest returns the `OwnershipSync` it got. The first draft of the tests below
+probed the tree after the ingest and passed with the registration moved back
+behind the fold — by then the late path had reconciled, and "held and
+served" was true either way. They assert on the returned report instead:
+`before_drain == 1`, no reconciliation.
+
+**What is offered.** Everything the wallet will hold once this result has
+merged, from three sources:
+
+1. the ledger's unspent transfers **below the result's range**. A row at or
+   above the range start is one this result re-derives — the range starts at
+   the fork on a reorg and one past the ledger's height otherwise — so
+   offering it would register a pair the merge is about to rewind;
+2. the persona's held funding outputs (below);
+3. what the result detected, less what it also saw spent. These are not in
+   the ledger yet, because the merge follows the ingest, and they are the
+   outputs the fold is about to reach.
+
+Source 3 means an output is named twice — from the detection, then from its
+ledger row on every later refresh — by two derivations over two types.
+`merge::tests::a_detection_and_its_ledger_row_name_one_pair` holds them
+equal; nothing else would notice them drift, and the registry is keyed on
+the pair.
+
+**The persona's outputs, and why its scan has no site.** The staking
+persona's funding outputs live in its sealed scan state and never enter the
+ledger, and the drain, the claim, the release and the bond-post spend them
+through the same actor. Before this section's second revision nothing
+offered them: the tree first heard of a persona output when the drain's own
+`AssembleTx` registered it, which put the whole late-registration rebuild
+inside the persona's exit.
+
+The obvious site — the persona scan registers each output as it finds it —
+does not do what it appears to. That scan sweeps only blocks
+`ARCHIVAL_REORG_DEPTH_BLOCKS` (720) behind the tip (`pscan/start.rs`), and a
+leaf drains 10 blocks after its block, so the scan learns of an output about
+**710 blocks after it drained**. A registration made there is late too. It
+would also not survive a restart: the registry is not persisted and the scan
+names each output once. So the refresh carries them, from the seal, on every
+pass.
+
+That makes the persona's first registration **structurally late**, and what
+it costs is §11.10's table read at the chunks that closed in the meantime.
+The bound is the trail, not the output's age: registered at the first
+refresh after the scan sealed it, the output is under whatever closed in
+roughly 710 blocks, and every chunk closing afterwards is captured by the
+fold. At §10's worst-case leaf rate (1 056 leaves/block) that window is about
+750 000 leaves — past a layer-3 span (467 856), so layers 0–3 are missing and
+the rebuild is of the order of the table's layer-3 row, once per layer-3
+chunk rather than once per output; and it reaches a layer-4 span
+(17 778 528) for the outputs within 750 000 leaves of one's end, about one in
+twenty-four. On a lightly loaded chain the same arithmetic gives
+proportionally less. None of it is in the drain any more, and none of it
+grows with how long the persona held the output. The dependency this creates
+on the store's leaf rows is §11.11's third item.
+
+An unreadable persona seal is **logged and read as empty** — the opposite of
+every staking read, deliberately. Those reads decide what the wallet tells
+its user it holds, so they fail closed. This one decides only when captures
+are written, and the `AssembleTx` handler still registers a spend's inputs;
+failing would stop the principal's refresh on the state of the persona's
+file.
+
+One conversion, `ownership::p_assemble_input`, now turns a funding record
+into the tree's types. The four persona spend paths each carried a copy;
+they call it, and the registration pair is its first two fields, so what
+the persona registers and what it spends cannot differ.
+
+**The persona's rows are in the plaintext table from the refresh after
+discovery**, where before they appeared at its spend. Same table, same §11.8
+ruling, same retirement row. What that row's successor has to answer is new,
+though: it names "sealed persistence on the wallet's own ledger", and the
+persona's outputs are not in the ledger. Where the persona's path set is
+sealed is a placement question between two identities, and it is owed with
+Q3 — not settled here.
 
 **And the rebuild is deleted.** #945's dispatch comment promised the registrant
 PR would retire the fallback, and the first site is what makes that honest
@@ -1502,9 +1617,11 @@ chunks, and the re-offer is held *with the captures present* — asserted on the
 rows, not the verdict, because the verdict alone would also come from a rule
 that never reconciled.
 
-**Unspent only.** Capture serves spending, and a spent output's chunks are
-plaintext rows for nothing. The mass pass runs every refresh, so an output a
-reorg makes unspent again is picked up when its flag flips.
+**Unspent only**, in all three sources: the ledger's flag, the seal's own
+pruning of spent funding records, and the result's observed key images.
+Capture serves spending, and a spent output's chunks are plaintext rows for
+nothing. The set is offered every refresh, so an output a reorg makes
+unspent again is picked up when its flag flips.
 
 **What the instrument times now.** `shekyl-wss-q1b-bench`'s `assemble_once`
 timed the rebuild through #931; it now registers the rig's inputs outside the
@@ -1516,14 +1633,32 @@ rebuild era; it is not a number the rig can still produce.
 **Where this is graded.** Client: the batch's four verdicts and the stale
 report; the rollback re-offer above; a resumed mass registration reconciling
 once then `AlreadyHeld`; an unregistered input refused by name. Actor:
-`SyncOwned` round-trips, and `AssembleTx` registers before it assembles —
-pinned by an unregistered input on an empty tree refusing as *not drained*,
-which only the handler's own sync can produce. Engine: the merge's returned
-pairs are the inserted unspent rows as `(gindex, O)`; and over the consistent
-ledger-and-tree fixture, the registration pass reconciles once, a re-offer is
-held, and a spend then assembles through the actor from captures with no
-rebuild to fall back to. The real-proof builds in `transfer_pending_tx_tests`
-run through the syncing handler as well.
+`SyncOwned` round-trips; `AssembleTx` registers before it assembles — pinned
+by an unregistered input on an empty tree refusing as *not drained*, which
+only the handler's own sync can produce; and §11.9's stale view across a real
+rollback. Engine, in `ownership::tests`, each named for what it holds and
+each failed by the mutation beside it:
+
+| test | mutation that fails it |
+| --- | --- |
+| `an_output_found_and_drained_within_one_scan_result_is_captured_as_it_folds` | the registration moved behind the fold (`after_drain` reads 1) |
+| `a_reorged_result_registers_against_the_chain_it_keeps` | the registration moved ahead of the rollback (the new pair is reported stale) |
+| `a_respawned_actor_is_re_offered_the_set_before_it_folds` | the respawn retry offering nothing |
+| `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
+| `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed |
+| `a_persona_funding_output_is_registered_by_the_refresh_not_by_its_spend` | the persona's set left out of the offer |
+| `an_undecodable_persona_seal_is_read_as_empty` | the unreadable-seal arm made to fail |
+
+The persona test is the one that carries the claim above: registered by a
+refresh, the output rebuilds **exactly** its one closed leaf chunk
+(`leaves_rebuilt == 38`); two more chunks then drain, closing its layer-1
+chunk; and the sync the handler makes at the spend finds it held with no
+reconciliation, after which the path assembles from a layer-1 chunk nobody
+was asked to write. Over the consistent ledger-and-tree fixture in
+`transfer_pending_tx_tests`, a registration pass reconciles once, a re-offer
+is held, and a spend assembles through the actor from captures with no
+rebuild to fall back to; the real-proof builds there run through the syncing
+handler as well.
 
 ### 11.11 What capture still does not do
 
@@ -1550,6 +1685,16 @@ recomputes come from `drained_sorted` over `entries` (§11.10); without
 `entries`, those come from the store. Both say one thing: retiring `entries`
 needs a precise account of which identities the wallet must still be able to
 produce, each case supplied or refused.
+
+A third reader is not of `entries` but belongs in the same account, because
+it is the standing consumer of the late path: **the persona's registration is
+always late** (§11.12). Its rebuild reads the store's drained leaf rows over
+the missing chunk's own span (`read_drained_range`), so it survives the
+retirement of the in-memory vector as it stands — and it stops working the
+day those rows are pruned below a chunk a persona output has yet to be
+registered under. Whatever increment 7 does to the leaf rows has to keep
+them for at least the persona scan's trail plus its catch-up, or give the
+persona a way to name its outputs before they drain.
 
 **Superseded by §11.12 for the registrant and the fallback** — the
 paragraph below described the state between #945 and the registrant PR, and

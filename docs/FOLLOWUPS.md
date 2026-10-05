@@ -11,7 +11,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **Retire the plaintext `captured_chunks` table for sealed persistence on the wallet's own ledger (`CT-6` Q3), deleting it rather than migrating it** (why it is plaintext now, and why no nettype branch may stand in: `CT6_PROVING_STATE.md` §11.8). Falsify by `captured_chunks` being absent from `redb_backend.rs` with the path set riding the sealed ledger.
+- **Retire the plaintext `captured_chunks` table for sealed persistence on the wallet's own ledger (`CT-6` Q3), deleting it rather than migrating it** (why it is plaintext now, and why no nettype branch may stand in: `CT6_PROVING_STATE.md` §11.8; where the persona's rows go, since its outputs are not in that ledger: §11.12). Falsify by `captured_chunks` being absent from `redb_backend.rs` with the path set riding the sealed ledger.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
@@ -19,7 +19,7 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
-- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail and the owned positions `drained_sorted` still supplies: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
+- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail, the owned positions `drained_sorted` still supplies, and the leaf rows the persona's always-late registration rebuilds from: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
