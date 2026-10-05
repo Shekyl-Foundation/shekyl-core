@@ -289,6 +289,11 @@ constant with a number behind it and no row is the gap this file closes.
 The check needs full history. A shallow clone whose cut lies inside a row's
 range is refused with exit 2, not passed.
 
+What it does not see: a row lists source paths, so a toolchain bump, a
+dependency upgrade in `Cargo.lock` or a change in a crate the row does not
+list moves no row. The paths are a reviewed judgement about where the cost
+lives, not a dependency closure.
+
 ## Baseline-update policy
 
 The `bench-baseline` branch workflow advances the baseline

@@ -23,10 +23,25 @@
 #                         budgets. A commit touching them after the review
 #                         point makes the row stale.
 #
-# Not in this ledger, on purpose: constants a CI job re-measures on every run
-# (the RandomX latency-ratio bounds), constants that time Tor's protocol
-# rather than device work (BA-Q13), and constants ruled as resting on no
-# measurement (`CHALLENGE_RESPONSE_BLOCKS`).
+# NOT IN THIS LEDGER, by class, so that an absent constant can be told from a
+# forgotten one (the register is section 4 of the tracked-set document):
+#
+#   re-measured by CI on every run   the RandomX latency-ratio bounds; the
+#                                    key-dispatch ratio. A capture cannot go
+#                                    stale when there is none.
+#   derived from rows that are here  `ADOPTED_PROPAGATION_TIMEOUT_SECS`, from
+#                                    the transit, fluff-return and verify
+#                                    cells.
+#   Tor's protocol, not device work  `P2P_ANON_FAILED_ADDR_FORGET_SECONDS`,
+#                                    `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT`
+#                                    (BA-Q13).
+#   ruled as resting on no           `CHALLENGE_RESPONSE_BLOCKS`.
+#   measurement
+#   a ruling that left no constant   the weight-window read shape; the
+#                                    slash-scan placement.
+#   named by the design, not yet a   the write-stall deadline; the clearnet
+#   number                           accept-rate bound; the inbound ceiling.
+#                                    Each gets a row when it gets a value.
 #
 # Where a capture records no revision, `capture_rev` is the last commit on
 # this history BEFORE the day the run started, so that anything merged on or
@@ -335,9 +350,31 @@ rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name th
 paths = ["rust/shekyl-tor/src", "rust/shekyl-transport-layer/src"]
 
 [[constant]]
+name = "tor_shutdown_timeout_ns"
+defined_in = "src/p2p/net_node.inl"
+needle = "spans.shutdown_timeout_ns = 9100000000ull;"
+measured_by = ["BA-T8"]
+status = "stale"
+stale_since = "57d756bca"
+carrier = "BA-T8 (BA-G7). Takes the Tor dial figure; the connector and transport have changed since the capture, and no change has been reviewed for cost."
+capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
+capture_rev = "572ed17c3"
+rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+paths = ["rust/shekyl-tor/src", "rust/shekyl-transport-layer/src"]
+
+[[constant]]
 name = "transport_workers"
 defined_in = "src/p2p/net_node.inl"
 needle = "spans.workers = 2;"
+measured_by = ["BA-T11"]
+status = "unmeasured"
+carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
+paths = ["rust/shekyl-transport-layer/src", "rust/shekyl-timing-engine/src"]
+
+[[constant]]
+name = "transport_blocking"
+defined_in = "src/p2p/net_node.inl"
+needle = "spans.blocking = 1;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
@@ -377,8 +414,17 @@ stale_since = "af1f60b1a"
 carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
 capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
 capture_rev = "ece3aa4fb"
-rev_source = "capture header"
+rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
 paths = ["rust/shekyl-curve-tree/src", "rust/shekyl-fcmp/src"]
+
+[[constant]]
+name = "wss_open_edge_ceiling_s"
+defined_in = "docs/design/WALLET_SIDE_STORE.md"
+needle = "**RULED 2026-09-19: `≤ 5 s` absolute, local-daemon posture.**"
+measured_by = ["BA-T19"]
+status = "unmeasured"
+carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 3). The open-edge row has not run on the floor; no record of it is in the tree."
+paths = ["rust/shekyl-engine-core/src/engine/daemon"]
 
 [[constant]]
 name = "shard_render_floor_targets"
@@ -405,6 +451,20 @@ capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
 capture_rev = "f237aad327aba71cb2c59518c887e5bd44b5df8e"
 rev_source = "not recorded in the record; the last commit touching the crate's sources on the run date, 2026-05-22"
 paths = ["rust/shekyl-pow-randomx/src"]
+
+[[constant]]
+name = "randomx_vm_allocation_target_us"
+defined_in = "docs/design/RANDOMX_V2_RUST.md"
+needle = "Per-call `Vm` allocation must be at most 100 us."
+measured_by = ["BA-T14"]
+status = "current"
+capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
+capture_rev = "321b89edbe9867263d8cdf72d28c444b19b7efc7"
+rev_source = "not recorded in the record; the last commit touching the crate on the re-measurement date, 2026-05-24"
+paths = ["rust/shekyl-pow-randomx/src/vm.rs"]
+cleared = [
+  { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
+]
 
 [[constant]]
 name = "ibd_floor_ratio"
