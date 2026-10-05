@@ -111,6 +111,13 @@
   persona in one block is refused on the release's missing record, not on
   the block's one-post-per-persona rule — the order both implementations
   already had.
+- An unnamed bond-post kind is refused under CEN-L7 inside that same
+  sequence, at the post's input — the row and the locus the fold already
+  used. The fold's arm stays, for a transition that did not run the
+  sequence. A bond post with no auth slot at its input is refused under
+  CEN-J13 at the point that kind reads the slot, after the kind's other
+  check, so neither case is recorded as a covered pass
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5).
 
 ### Chain rules — a bond post is keyed by its key, and a Release by the record's (CEN-J11, J12, J13)
 
