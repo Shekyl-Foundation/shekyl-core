@@ -18,7 +18,10 @@
 //! and a reserve proof publishes the key images of live outputs (a
 //! permanent spend-detection beacon for anyone who ever sees the
 //! string). The CLI is the last surface before the user shares the
-//! artifact, so the warnings print at generation time.
+//! artifact, so the warnings print at generation time, through
+//! [`Presentation::disclose`](crate::outcome::Presentation::disclose):
+//! with the human proof on stdout, and on stderr when stdout is the
+//! JSON transcript. They are not narration, so a script still prints them.
 
 use serde_json::{json, Value};
 
@@ -49,28 +52,33 @@ pub fn cmd_get_tx_proof(
     }
 }
 
+const OUTBOUND_TX_PROOF_DISCLOSURE: &str = "\
+Warning: an OUTBOUND proof reveals this transaction's key. Any \
+holder of the string can verify every output of the transaction \
+and re-sign a proof for it under a new message. Share it only \
+with the intended verifier.";
+
+const INBOUND_TX_PROOF_DISCLOSURE: &str = "\
+Note: an INBOUND proof reveals the amounts of your received \
+outputs in this transaction to whoever holds the string.";
+
+/// The sharing warning for a generated payment proof, when the direction
+/// is one the contract defines. The human formatter does not print this:
+/// [`crate::outcome::present`] skips formatters in JSON mode, and the
+/// warning has to reach that mode too.
+pub(crate) fn tx_proof_disclosure(val: &Value) -> Option<&'static str> {
+    match val.get("direction").and_then(|v| v.as_str()) {
+        Some("OUTBOUND") => Some(OUTBOUND_TX_PROOF_DISCLOSURE),
+        Some("INBOUND") => Some(INBOUND_TX_PROOF_DISCLOSURE),
+        _ => None,
+    }
+}
+
 pub(crate) fn show_tx_proof(val: &Value) {
     let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
     let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
     println!("Direction: {direction}");
     println!("{proof}");
-    match direction {
-        "OUTBOUND" => {
-            println!(
-                "Warning: an OUTBOUND proof reveals this transaction's key. Any \
-                 holder of the string can verify every output of the transaction \
-                 and re-sign a proof for it under a new message. Share it only \
-                 with the intended verifier."
-            );
-        }
-        "INBOUND" => {
-            println!(
-                "Note: an INBOUND proof reveals the amounts of your received \
-                 outputs in this transaction to whoever holds the string."
-            );
-        }
-        _ => {}
-    }
 }
 
 pub fn cmd_get_reserve_proof(
@@ -112,14 +120,17 @@ pub(crate) fn show_reserve_proof(val: &Value) {
     let count = val.get("output_count").and_then(Value::as_u64).unwrap_or(0);
     println!("Proved reserve: {total} SKL across {count} output(s)");
     println!("{proof}");
-    println!(
-        "Warning: a reserve proof reveals the amounts AND key images of the \
-         proven outputs. Anyone who ever sees this string can detect the exact \
-         moment each proven output is spent, forever. Share it only with the \
-         intended verifier, and prefer an amount-bounded proof \
-         (\"prove reserve <amount>\") over proving the full balance."
-    );
 }
+
+/// Sharing warning for a generated reserve proof. Same channel as
+/// [`tx_proof_disclosure`]: not part of the JSON result, and not skipped
+/// when the transcript is a script.
+pub(crate) const RESERVE_PROOF_DISCLOSURE: &str = "\
+Warning: a reserve proof reveals the amounts AND key images of the \
+proven outputs. Anyone who ever sees this string can detect the exact \
+moment each proven output is spent, forever. Share it only with the \
+intended verifier, and prefer an amount-bounded proof \
+(\"prove reserve <amount>\") over proving the full balance.";
 
 // ── Verification (wallet-less) ───────────────────────────────────────
 
@@ -245,7 +256,21 @@ fn print_confirmations(val: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::describe_reserve_binding;
+    use serde_json::json;
+
+    use super::{describe_reserve_binding, tx_proof_disclosure};
+
+    #[test]
+    fn payment_proof_disclosure_follows_direction() {
+        assert!(tx_proof_disclosure(&json!({"direction": "OUTBOUND"}))
+            .expect("outbound")
+            .contains("transaction's key"));
+        assert!(tx_proof_disclosure(&json!({"direction": "INBOUND"}))
+            .expect("inbound")
+            .contains("amounts"));
+        assert!(tx_proof_disclosure(&json!({"direction": "OTHER"})).is_none());
+        assert!(tx_proof_disclosure(&json!({})).is_none());
+    }
 
     /// The generation-time echo names both bindings explicitly: an unbounded
     /// proof says "the full balance" (never a blank), and an empty challenge

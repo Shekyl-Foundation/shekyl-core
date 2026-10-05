@@ -11,8 +11,8 @@
 //! backed run; it stays ignored until `SHEKYLD_BIN` is set.
 
 use std::io::Write;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 use serde_json::Value;
 
@@ -267,6 +267,58 @@ fn a_one_shot_uses_the_prompt_grammar_and_exits() {
     );
 }
 
+/// A regtest daemon this test owns. Drop kills, reaps, and removes the data
+/// directory, including when an assertion panics. Dropping a bare `Child`
+/// does not.
+struct SpawnedRegtest {
+    child: Child,
+    data_dir: PathBuf,
+}
+
+impl SpawnedRegtest {
+    fn spawn(bin: &std::ffi::OsStr, rpc_port: u16) -> Self {
+        let data_dir = std::env::temp_dir().join(format!("shekyl-cli-regtest-{rpc_port}"));
+        drop(std::fs::remove_dir_all(&data_dir));
+        std::fs::create_dir_all(&data_dir).expect("data dir");
+        let port = rpc_port.to_string();
+        let child = Command::new(bin)
+            .args([
+                "--regtest",
+                "--offline",
+                "--non-interactive",
+                "--no-igd",
+                "--fixed-difficulty",
+                "1",
+                "--rpc-bind-ip",
+                "127.0.0.1",
+                "--rpc-bind-port",
+                &port,
+                "--data-dir",
+                data_dir.to_str().expect("utf8"),
+                "--log-level",
+                "1",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match child {
+            Ok(child) => Self { child, data_dir },
+            Err(error) => {
+                drop(std::fs::remove_dir_all(&data_dir));
+                panic!("spawn shekyld: {error}");
+            }
+        }
+    }
+}
+
+impl Drop for SpawnedRegtest {
+    fn drop(&mut self) {
+        drop(self.child.kill());
+        drop(self.child.wait());
+        drop(std::fs::remove_dir_all(&self.data_dir));
+    }
+}
+
 /// The script in `tests/scripts/regtest_session.txt`, against a live
 /// `--regtest` daemon. Ignored: CI does not build `shekyld` in the Rust
 /// lane. Run with `SHEKYLD_BIN` set and `--ignored`.
@@ -283,31 +335,10 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port");
         listener.local_addr().expect("addr").port()
     };
-    let data_dir = std::env::temp_dir().join(format!("shekyl-cli-regtest-{rpc_port}"));
-    drop(std::fs::remove_dir_all(&data_dir));
-    std::fs::create_dir_all(&data_dir).expect("data dir");
-    let mut daemon = Command::new(&bin)
-        .args([
-            "--regtest",
-            "--offline",
-            "--non-interactive",
-            "--no-igd",
-            "--fixed-difficulty",
-            "1",
-            "--rpc-bind-ip",
-            "127.0.0.1",
-            "--rpc-bind-port",
-            &rpc_port.to_string(),
-            "--data-dir",
-            data_dir.to_str().expect("utf8"),
-            "--log-level",
-            "1",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn shekyld");
-
+    // Owned from the moment the process exists. A panic in the readiness
+    // or wallet assertions still kills and reaps it and removes its data
+    // directory; dropping a bare `Child` does neither.
+    let daemon = SpawnedRegtest::spawn(&bin, rpc_port);
     let address = format!("127.0.0.1:{rpc_port}");
     let mut up = false;
     for _ in 0..50 {
@@ -356,13 +387,7 @@ fn regtest_script_drives_balance_refresh_and_a_refused_send() {
         "--password-file",
         password.to_str().unwrap(),
     ]);
-    let killed = daemon.kill();
-    let waited = daemon.wait();
-    assert!(
-        killed.is_ok() || waited.is_ok(),
-        "regtest daemon did not exit"
-    );
-    drop(std::fs::remove_dir_all(&data_dir));
+    drop(daemon);
 
     let rows = lines(&stdout);
     assert!(

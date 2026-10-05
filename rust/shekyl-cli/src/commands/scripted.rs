@@ -147,7 +147,18 @@ pub(crate) fn show_created_wallet(created: &CreatedWallet) {
 }
 
 /// Restore a wallet from a seed file. The caller prints the result.
+///
+/// The receipt is the wallet name, copied before the password and the
+/// seed are read. The function that holds those secrets returns only
+/// success or failure, so the printed value is not assembled while
+/// either secret is live.
 pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<RestoredWallet> {
+    let name = args.name.clone();
+    post_restore(rpc, args)?;
+    Ok(RestoredWallet { name })
+}
+
+fn post_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<()> {
     let password = read_password_source(args.password_file.as_deref(), args.password_stdin)?;
     let seed = Zeroizing::new(std::fs::read_to_string(&args.seed_file).map_err(|e| {
         local(format!(
@@ -169,9 +180,7 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<Restor
     drop(seed);
 
     match result {
-        Ok(_) => Ok(RestoredWallet {
-            name: args.name.clone(),
-        }),
+        Ok(_) => Ok(()),
         Err(e) => Err(rpc.report("Failed to restore wallet", &e)),
     }
 }

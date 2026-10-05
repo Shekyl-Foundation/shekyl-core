@@ -450,12 +450,20 @@ pub fn run(
                 txid,
                 address,
                 message,
-            } => present(
-                &presentation,
-                "prove payment",
-                proofs::cmd_get_tx_proof(&rpc, &txid, &address, message.as_deref()),
-                proofs::show_tx_proof,
-            ),
+            } => {
+                let result = proofs::cmd_get_tx_proof(&rpc, &txid, &address, message.as_deref());
+                let disclosure = result.as_ref().ok().and_then(proofs::tx_proof_disclosure);
+                let ok = present(
+                    &presentation,
+                    "prove payment",
+                    result,
+                    proofs::show_tx_proof,
+                );
+                if let Some(text) = disclosure {
+                    presentation.disclose(text);
+                }
+                ok
+            }
             ResolvedCommand::CheckTxProof {
                 txid,
                 address,
@@ -467,12 +475,19 @@ pub fn run(
                 proofs::cmd_check_tx_proof(&rpc, &txid, &address, &proof, message.as_deref()),
                 proofs::show_tx_check,
             ),
-            ResolvedCommand::GetReserveProof { amount, message } => present(
-                &presentation,
-                "prove reserve",
-                proofs::cmd_get_reserve_proof(&rpc, amount, message.as_deref()),
-                proofs::show_reserve_proof,
-            ),
+            ResolvedCommand::GetReserveProof { amount, message } => {
+                let result = proofs::cmd_get_reserve_proof(&rpc, amount, message.as_deref());
+                let ok = present(
+                    &presentation,
+                    "prove reserve",
+                    result,
+                    proofs::show_reserve_proof,
+                );
+                if ok {
+                    presentation.disclose(proofs::RESERVE_PROOF_DISCLOSURE);
+                }
+                ok
+            }
             ResolvedCommand::CheckReserveProof {
                 address,
                 proof,

@@ -115,16 +115,29 @@ impl Presentation {
         self.interactive() && self.human()
     }
 
-    /// Progress and explanation.
+    /// Where progress and explanation go, when they go anywhere.
     ///
-    /// Human mode prints it on stdout. Interactive JSON prints it on stderr:
-    /// a person still sees the summary before confirming, and the JSON
-    /// transcript stays one object per line. A script prints nothing.
+    /// A script prints nothing: `--script` is not a person, with or without
+    /// `--json`. An interactive terminal prints on stdout. Interactive JSON
+    /// prints on stderr, so the transcript stays one object per line and the
+    /// person still sees the summary before confirming.
+    fn narration(self) -> Option<Narration> {
+        if !self.interactive() {
+            return None;
+        }
+        Some(if self.human() {
+            Narration::Stdout
+        } else {
+            Narration::Stderr
+        })
+    }
+
+    /// Progress and explanation. See [`Self::narration`].
     pub fn say(&self, line: impl std::fmt::Display) {
-        if self.human() {
-            println!("{line}");
-        } else if self.interactive() {
-            eprintln!("{line}");
+        match self.narration() {
+            Some(Narration::Stdout) => println!("{line}"),
+            Some(Narration::Stderr) => eprintln!("{line}"),
+            None => {}
         }
     }
 
@@ -150,6 +163,13 @@ impl Presentation {
             Transcript::Interactive => MoneyGate::Ask { ignored_yes: yes },
         }
     }
+}
+
+/// Where [`Presentation::say`] writes. Absent for a script.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Narration {
+    Stdout,
+    Stderr,
 }
 
 /// The decision [`Presentation::money_gate`] made. The prompt itself stays
@@ -359,6 +379,19 @@ mod tests {
             MoneyGate::Ask { ignored_yes: false } => {}
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_script_omits_narration_and_a_json_terminal_keeps_it_off_stdout() {
+        assert!(scripted(Render::Human).narration().is_none());
+        assert!(scripted(Render::Json).narration().is_none());
+        assert_eq!(interactive_human().narration(), Some(Narration::Stdout));
+        let json_terminal = Presentation {
+            transcript: Transcript::Interactive,
+            render: Render::Json,
+            debug: false,
+        };
+        assert_eq!(json_terminal.narration(), Some(Narration::Stderr));
     }
 
     #[test]

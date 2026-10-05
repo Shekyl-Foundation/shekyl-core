@@ -278,9 +278,13 @@ summary.
 Both are non-interactive: `--yes` is honored, and a money move without
 it fails without reading the next line. The refusal says that nothing
 was sent. An interactive terminal still ignores `--yes` and prompts.
-Narration (the summary before that prompt, the release warning) is on
-stdout for a person and on stderr when that person asked for JSON. A
-script omits it. Prompt `wallet create` / `wallet restore` refuse under
+Narration (the summary before that prompt, the release warning, progress
+such as `Refreshing...`) is on stdout for a person and on stderr when
+that person asked for JSON. A script omits it, including a human
+`--script` that is not `--json`. A generated payment or reserve proof's
+disclosure is not narration: it prints after the proof on stdout for a
+person, and on stderr whenever stdout is JSON, including for a script.
+Prompt `wallet create` / `wallet restore` refuse under
 `--json`, because the one-time seed is shown on stdout and stdout is
 the JSON transcript. `wallet open` and `wallet password` refuse in a
 script: the password prompt would read the script. Open with
