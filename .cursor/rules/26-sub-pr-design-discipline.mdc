@@ -297,6 +297,13 @@ boundary, substrate evidence, parent-plan revision artifact if
 phases renumbered, and FOLLOWUPS/CHANGELOG if user-visible scope
 shift.
 
+**The check.** A PR whose scope was ruled carries the ruling's row (or
+phase) range in its body, and a commit that lands outside that range
+either updates the line or re-rules the split — in the same turn, never
+later. The body is the one surface a reviewer reads before the diff, so
+it is where the branch is checked against the ruling; a ruling that
+lives only in the plan doc is checked by nobody at commit time.
+
 **Anti-patterns.**
 
 - **"The boundary is the boundary."** Refusal-forever without criteria;
@@ -304,6 +311,12 @@ shift.
 - **Absorb without parent-plan alignment.** F4 required
   `RANDOMX_V2_PLAN.md` phase deletion — scope move plus track
   enumeration update.
+- **The ruling held for one PR and then stopped being applied.** Not
+  "the plan changed": a split ruled for a stated reason, then commits
+  landing outside it one row at a time, each reviewed, none re-ruling
+  it, the body still stating the ruled range. The scope was not the
+  failure; the absence of any check of the branch against the ruling
+  was — a PR body lagging its branch, one level up.
 
 **Precedents.**
 
@@ -311,6 +324,13 @@ shift.
   `DatasetReader` trait + mock (PR #66).
 - R2-D1: trait → free function within Round 1 locked dispositions —
   structural tightening, not scope creep (Round 2).
+- E6 slice 8 PR-a (#953, 2026-10-05): Q7 ruled rows 1–3 / 4–6 / 7–11 as
+  three PRs in sequence, for reviewability; rows 4 and 5 landed on PR-a
+  over two days with the body reading rows 1–3 throughout, found at row
+  6's open. Ruled to land as rows 1–5 — every commit had been reviewed
+  as it landed, and re-splitting would re-review sixteen commits to
+  restore a shape whose purpose was avoiding that — with the check above
+  as what was missing (`CHAIN_RULES_SLICE_8.md` §5).
 
 ---
 

@@ -656,6 +656,22 @@ Slice C's call — which block's view, and on which side of a same-block
 slash it reads — in terms J15's implementer can test without reading
 SO-D8 §8.0. PR-b's row 6 does not land until that sentence exists.
 
+**Asked of SO-D8, 2026-10-05 (row 6 open and idle on it; carried by the
+maintainer, as PDM's Q3 was).** One sentence in §8.0 input 4, confirming
+or refusing: (1) the signature `fn closed_and_final(view: &ChainView,
+shard: ShardId, at: BlockHeight) -> bool` — the height a parameter, the
+predicate reading nothing only one caller has; (2) what `at` *is* for
+Slice C's call, in J15's implementer's terms: **which block's view** (the
+seal block, the height that replaces the fire height, the connecting
+block) and **which side of a same-block slash** it reads — strictly above,
+as `holds_shard_at` does (`held_at_height.rs:97`), or not. J15's own call
+passes the parent's height and reads the pre-block view; if Slice C's
+reads the same side, one body serves both and row 6's *operand retry* leg
+stays at 0; if it reads the other, the predicate takes the side as a
+second parameter and the leg is 1 (§5.1 row 6). This is the surface where
+E4 landed three one-apart defects, so the answer is wanted as a sentence
+J15's test can be written against, not as a pointer to input 3.
+
 - **Default: amend CEN-J15's row text** to carry the predicate as its
   first clause, with the three answers above recorded on the row; no new
   `CEN-` id. The census is the registry of consensus rules, and a rule's
@@ -871,14 +887,36 @@ the per-commit authorization, and the split above was neither re-ruled nor
 named as deviated from — the reader who found it was the one row 6's
 precondition sent back to Q7. The facts the ruling turned on are now the
 other way round: the sequence was to keep any PR under the ceiling, and
-the first PR is the one past it. *Disposition owed from the maintainer,
-not taken here.* Default: #953 lands as rows 1–5 — its commits are
-individually reviewed and its tip verified from a fresh clone — and PR-b
-becomes row 6 alone, opening when SO-D8 §8.0 carries its sentence (§3.4);
-PR-c is unchanged. The alternative is to stop #953 at a reviewed commit and
-re-open rows 4–5 as PR-b, which re-reviews sixteen commits to restore a
-shape whose purpose was to avoid that. Either way the body's scope line is
-made true in the same turn this is written.
+the first PR is the one past it. **RULED 2026-10-05 (maintainer): (a) — #953 lands as rows 1–5.** The
+split's purpose was reviewability; every commit was reviewed as it landed
+and the tip clone-verified, so re-opening rows 4–5 as PR-b would
+re-review sixteen commits to restore a shape whose whole point was
+avoiding a sixteen-commit review — the remedy costs more than the drift
+and buys a reviewer nothing they do not have. PR-b is now row 6 alone
+(or the reorder below); PR-c unchanged. **Recorded as what it is, not as
+"the plan changed": the ruling held for one PR and then stopped being
+applied.** Q7 was a decision made for a stated reason; rows 4 and 5
+went onto PR-a without anyone re-ruling it, and the body said rows 1–3
+for two rows' worth of commits. The failure was not the scope — it was
+that nothing checked the branch against the ruling, the same class as a
+PR body lagging its branch, one level up. The check that was missing is
+now rule 26 A4's: *a PR whose scope was ruled carries the ruling's row
+range in its body, and a commit that lands outside that range updates
+the line or re-rules the split.* #953's scope line reads rows 1–5 with
+this ruling and its reason, so the next reader does not find a three-row
+ruling and a five-row PR with nothing connecting them.
+
+**Reorder, proposed 2026-10-05 for the maintainer's word (Q7's sequence
+kept; the order inside it moves).** Row 6 waits on SO-D8's sentence
+(§3.4) and nothing in rows 7–10 reads J15 or the predicate: the emission
+rows judge coinbase outputs and the budget, B4 judges the header's
+witness. So PR-b = rows 7–10 with their docs (estimate 2 + 1 + 3 + 2 + 1
+= 9 commits, under the ceiling), and PR-c = row 6 with its docs
+(FOLLOWUPS `:205` moves from row 11's list to row 6's), opening when
+the sentence exists. Nothing is lost by waiting for the word: PR-b cannot
+open until #953 is on `dev`. Falsifier for the independence claim: a
+row-7–10 test that needs a persona's holdings to mean something — none is
+in §5's text; one found at commit reopens this.
 
 **A ruling that spans the split is named in both bodies.** Q6's ruling
 lands at PR-a commit 1; its implementation is row 10, in PR-c. A reader
@@ -976,6 +1014,7 @@ at close, as slice 7 did.
 | 3 | 2026-10-04 | **§5 row 3 — J4, J5, J6 (PR-a commits 6–7).** The first rules of the slice: `rules/tx_bond.rs`, `judge_serve_credit_bond` in `validate::tx_against` after `judge_reference`, one `bond_record` read per serve-credit vin, the C++ arm's order; `implemented 97 → 100 / 151` (gate). The seven driver pins shed three: L7 → J4, J5 at `E_join`, J6 inside the interval — all three flipped as row 2 named them. **Found before the rule, at the fixtures:** the fold's L7 arm admits a same-block join + credit because its `post` read sees the block's own joins; the C++ reads the DB before the block, and the fixtures in three crates (the rules crate's serve-credit shapes, the store's `credited` chain, the driver's join scenario) all carried a credit in the join's block or epoch — commit 6 moved them, commit 7 landed the rule (§5.1: 2 by split, not retry). Row 2's measurement ran one direction — what the driver produces — and missed what the validator reads against; rule 16's direction variant, producer-ward, one slice after slice 6 failed it consumer-ward. The rule's entry is reshaped to name the axis rather than the instance, so the next sweep has a question to fail. **Recorded forward:** J7 (Slice C) requires the credited epoch's seal on chain, so the fixtures that now credit `E_join + 1` inside `E_join` will need their chains advanced when J7 lands — Slice C's fixture work, named here so it is not read as a J4–J6 red; and a new pin for J8 — a credit for a shard the slash removed connects once the interval is closed. Harness: `TxShape::reads_bond_state` (the sanity gate stops at `tx_form` for bond-reading shapes; the mock has no bonds by policy); the I17/I18 vacuity tests call `judge_signatures` directly, since the whole pass now refuses J4 on a record-less view. L7's J4 arm and the writer's SI-15 arm (`ARW-9`) are belts beneath a rule now; both stay, each saying so |
 | 5 | 2026-10-04 | **§5 row 5 — J14, J16, J18 (PR-a commit 13).** The three kind verifies as callers of the retention crate's bodies, in one sequence per bond-post vin — `judge_bond_post_key` renamed `judge_bond_post`, J13 interleaved per kind in the C++ arm's order (JoinMarket J14 → J13; Release J13 over the record → J16; Reinstate J18 → J13); `implemented 103 → 106 / 151`. J16's operands read first time: the two last-served gathers (per held shard on a compact record, every served shard on a complete tree), the slash watermark, the connecting height's epoch off the rule set — the first transaction rule to read a parameter off it. Seven driver pins flipped L7 → J14/J16/J18 as rows 2 and 4 named them; two driver negatives added that no rules-crate fixture can shape (J14's under-bonded two-shard join; J16's Release inside the cooldown), and on review (2026-10-05) J16's **accept over a served anchor** — the operand `release_terms_hold` gathers, not the vacuous `None` of a never-served persona, which was the only driven accept at the row's landing: the two serving operands lift at one height (the fold settles the anchor in its deadline block, the next block opens the cooldown's boundary epoch), so the witness is a one-block pair — refused J16 at the deadline, the record's `Update` to zero one block later, and no re-slash of the persona in the ~40 blocks between. **Found at the pins, after the rule:** two G10 witnesses (the driver's join-and-release block; the mutation family's `DuplicateBondPost`, a twinned Release) read *"G10 runs before the transition"* as *G10 refuses the pair*; the slot loop runs before G10, and with J16 in it the release refuses on the missing record first — the C++'s order too (`check_tx_inputs` at `:5643`, the duplicate pass at `:5805`), so the pair never reached G10 in either implementation. Re-derived as two joins for one `P`; the pair pinned as J16's, the posed text kept. §5.1 row 5 measured **1** against the legs the re-pricing named: the fixture assumption held, the operand retry was not needed, and the leg the row did find — the pins — was not among them. `retention_vin` has a second copy in the submit verifier, named as the one that deletes when the pool adopts `tx_against` |
 | 5 (review) | 2026-10-05 | **§5 row 5 on review (PR-a commits 15–16).** J16's accept over a served anchor driven as a one-block pair at the cooldown's boundary (the fold settles the anchor in its deadline block; the next opens epoch `E + RELEASE_COOLDOWN_EPOCHS`), the only driven accept before it being the vacuous `None` of a never-served persona; the G10 pair premise swept to the retention crate's `bond_post_block_unique` doc and `ARCHIVAL_BOND_GATE4.md`; `retention_vin`'s second copy filed with a grep falsifier. **Row 6 opened and did not begin:** SO-D8 §8.0 input 4 on `dev` (`cd51261ab2`) still reads *ruled and unbuilt* with no signature and no height semantics — the precondition §3.4 names is unmet, and the sentence is SO-D8's to write, not this slice's. Found at the open: PR-a carries rows 1–5 against Q7's rows 1–3 (§5, the disclosure paragraph); row 6's four legs priced in §5.1 |
+| 6 (open) | 2026-10-05 | **Q7 re-ruled (a): #953 lands as rows 1–5**, recorded as *the ruling held for one PR and then stopped being applied* — the missing check (the body carries the ruled range; a commit outside it updates the line or re-rules) is now rule 26 A4's, with #953 as its precedent. **SO-D8 asked for its sentence** (§3.4): the signature to confirm or refuse, and what `at` is for Slice C's call — which block's view, which side of a same-block slash. **Reorder proposed** (§5): PR-b = rows 7–10, PR-c = row 6 when the sentence exists; Q7's sequence kept. #953 marked ready for review at the commit carrying this row (docs-only over the clone-verified `512e4c3cf5`); the merge word is the maintainer's |
 
 ---
 
