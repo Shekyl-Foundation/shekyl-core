@@ -160,9 +160,12 @@ check below has caught a real failure at least once in a neighbouring
 project, and the order matters.
 
 The ceremony assumes you have already performed `docs/RELEASING.md`
-steps 1 (changelog rename on `dev`) and 2 (`git merge --no-ff dev` on
-`main`). You should be on `main` with the release merge commit as
-`HEAD`. The tag is placed on that commit.
+steps 1 (changelog rename on `dev`) and 2 (the promotion pull request,
+merged into `main` with a merge commit). That merge happened on the
+remote: your local `main` does not have it, and your `origin/main` has it
+only after a fetch. The tag is placed on that merge commit, named
+explicitly — never on whatever `HEAD` happens to be. Step 2 below
+identifies the commit before anything is signed.
 
 ### 0. Pre-flight (one time, before your first release)
 
@@ -250,10 +253,30 @@ for release tags — that config is pointed at your personal commit-
 signing key and should stay there. `-u` overrides it for this single
 invocation.
 
+First identify the commit, so that the signature goes on the release and
+not on a stale ref:
+
 ```bash
-git tag -u 6914D74823DDA8DC -a -s vX.Y.Z-alpha.N \
+git fetch origin
+git log -1 --format='%H%n  parents: %P%n  %s' origin/main
+```
+
+Expected: the subject is the promotion pull request's merge
+(`Merge pull request #N from …/dev`), and there are **two** parents — the
+previous release's commit and the frozen `dev` SHA. One parent, or the
+previous release's own subject, means the fetch did not happen or the
+pull request was not merged with a merge commit: stop.
+
+Then tag that commit by name:
+
+```bash
+git tag -u 6914D74823DDA8DC -a -s vX.Y.Z-alpha.N origin/main \
   -m "Shekyl vX.Y.Z-alpha.N"
 ```
+
+`-s` alone would also produce an annotated tag; `-a` is written out
+because the policy above is "signed annotated tag" and the command says
+both.
 
 gpg will prompt for the YubiKey's Signature PIN via pinentry. The
 YubiKey's amber LED will blink on the touch-confirm step (UIF may be
@@ -288,8 +311,16 @@ Checks:
   `F5F7 5A47 70C9 4FE1 D5A5 AE59 844E 424F 9866 4F44`.
 - The UID is `Shekyl Foundation (Release Signing Key) ...`.
 
-If any of the three are wrong, delete the tag locally and re-run from
-step 1 after diagnosing:
+Then check the tag points at the remote's `main`, read from the remote
+and not from a local ref:
+
+```bash
+test "$(git rev-parse 'vX.Y.Z-alpha.N^{commit}')" = \
+     "$(git ls-remote origin refs/heads/main | cut -f1)" && echo on-main
+```
+
+If any of the three are wrong, or `on-main` is not printed, delete the
+tag locally and re-run from step 1 after diagnosing:
 
 ```bash
 git tag -d vX.Y.Z-alpha.N
@@ -307,14 +338,17 @@ impossible if `verify-tag` passed, but the cross-check is free).
 
 ### 4. Push
 
-Branch first, then tag. CI fires on tag push, and the tag must point
-to a commit already present on the remote `main` or CI will fail
-hard:
+Push the tag, and only the tag. `main` is already on the remote: the
+promotion pull request was merged there, and step 3 checked that the tag
+points at it. CI fires on the tag push:
 
 ```bash
-git push origin main
 git push origin vX.Y.Z-alpha.N
 ```
+
+There is no `git push origin main` in this ceremony. A local `main` that
+could be pushed would be one that diverged from the remote's, which is a
+reason to stop, not a step.
 
 ### 5. Post-ceremony
 
@@ -324,8 +358,8 @@ git push origin vX.Y.Z-alpha.N
   counter series is a useful independent cross-check if a future
   compromise investigation needs to ask "did this key sign
   something we don't have a record of?").
-- Open the reverse-merge PR `main` → `dev` (or fast-forward `dev` to
-  match `main`, depending on the shape of the release commit).
+- `dev` needs no sync with `main` (`docs/RELEASING.md` step 6). No
+  reverse-merge pull request is opened.
 
 ### Failure cheat sheet
 
@@ -352,7 +386,7 @@ improvise it either:
 
 ```sh
 # Release owner, token inserted, after the release job published assets:
-python3 scripts/release/sign_release_assets.py <tag> --download --upload
+python3 scripts/release/sign_release_assets.py <tag> --download --upload --clobber
 
 # Anyone, verifying a published release:
 python3 scripts/release/sign_release_assets.py <tag> --download --verify-only
@@ -365,7 +399,12 @@ signing subkey must be an on-card stub, and the release tag itself must
 verify under a pinned Foundation fingerprint. It signs with exactly the
 signing subkey (`6914D74823DDA8DC!`), round-trip-verifies the signature
 and every hash before anything is uploaded, and refuses to overwrite a
-published manifest without an explicit `--clobber`. Because the subkey
+published manifest without an explicit `--clobber`. On a release cut by the
+gitian workflow `--clobber` is the expected path, not an exception: that job
+publishes an unsigned `SHA256SUMS` of its own, so that a download can be
+checked before the ceremony has run, and the ceremony replaces it with the
+manifest it re-derives from the published assets and its signature. First
+exercised on `v3.1.0-alpha.9` (2026-10-06). Because the subkey
 is hardware-token-held, this ceremony deliberately **cannot run in CI**
 — it is the release owner's local act, like the tag ceremony.
 

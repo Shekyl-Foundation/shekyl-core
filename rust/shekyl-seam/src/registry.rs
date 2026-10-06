@@ -137,18 +137,31 @@ impl Board {
         self.rows.is_empty()
     }
 
-    /// Rows in `direction`, handshake or not.
+    /// Rows of this connector and direction, handshake or not.
     ///
     /// The handshake flag is not part of this count. A dial in flight
-    /// still occupies an outbound slot, so the dial cap's predicate is
-    /// [`Direction::Outbound`]. `established` is a separate fact on the
-    /// row, and a count of established rows would let the node dial past
-    /// the cap while handshakes are outstanding.
+    /// still occupies an outbound slot, so a zone's dial cap reads
+    /// [`Direction::Outbound`] for that connector. `established` is a
+    /// separate fact on the row. A count of established rows would let
+    /// the node dial past the cap while handshakes are outstanding.
     #[must_use]
-    pub fn direction_count(&self, direction: Direction) -> usize {
+    pub fn count(&self, connector: ConnectorId, direction: Direction) -> usize {
         self.rows
             .iter()
-            .filter(|row| row.direction() == direction)
+            .filter(|row| row.connector() == connector && row.direction() == direction)
             .count()
+    }
+
+    /// Rows in `direction` on every connector, handshake or not.
+    ///
+    /// This is [`Self::count`] summed across [`ConnectorId::ALL`]. A
+    /// connector that is not in that list is not a row this board can hold.
+    #[must_use]
+    pub fn direction_count(&self, direction: Direction) -> usize {
+        ConnectorId::ALL
+            .iter()
+            .copied()
+            .map(|connector| self.count(connector, direction))
+            .sum()
     }
 }

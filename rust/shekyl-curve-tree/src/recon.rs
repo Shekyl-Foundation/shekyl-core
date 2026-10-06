@@ -219,62 +219,117 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoi
     }
 }
 
+/// The index [`collect_block_leaves`] gave one output, and whether that
+/// output entered the leaf vector.
+///
+/// Every output consumes exactly one gindex, in transaction order and then
+/// `vout` order. Leaf membership is a separate decision ([`try_build_leaf`],
+/// [`maturity_height`]). The two travel as one value so a later reader
+/// registers from the index that was assigned, rather than counting outputs
+/// again and hoping the two counts still agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputAssignment {
+    /// Consumed `gindex` and was pushed to the leaf vector.
+    Leaf(Gindex),
+    /// Consumed `gindex` and was not a leaf: unknown target, or no
+    /// commitment slot. The index is still spent.
+    IndexOnly(Gindex),
+}
+
+impl OutputAssignment {
+    /// The gindex this output consumed.
+    #[must_use]
+    pub const fn gindex(self) -> Gindex {
+        match self {
+            Self::Leaf(gindex) | Self::IndexOnly(gindex) => gindex,
+        }
+    }
+}
+
+/// What [`collect_block_leaves`] produced for one block.
+///
+/// `assigned` is parallel to the transactions that were collected:
+/// `assigned[tx_index][vout]` is that output's [`OutputAssignment`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollectedLeaves {
+    /// The running global output sequence after this block. The caller
+    /// threads it into the next block.
+    pub next_gindex: u64,
+    /// One vec per transaction, each in `vout` order.
+    pub assigned: Vec<Vec<OutputAssignment>>,
+}
+
 /// Collect leaf entries from a block's transactions, assigning global
 /// output indices in C++ drain order (S1).
 ///
 /// `next_gindex` is the running global output sequence (`next_output_seq`
 /// in the daemon). It is advanced for **every** output regardless of leaf
 /// membership — the leaf-ineligible outputs still consume an index — and
-/// the updated value is returned so the caller threads it across blocks.
-/// Per the derive-don't-accumulate rule (CT2_DRAIN_ORDER.md §7.1), the
-/// caller derives `next_gindex` from cumulative chain position rather than
-/// persisting a stateful counter, which makes reorg handling free
-/// (truncate-and-rebuild).
+/// [`CollectedLeaves::next_gindex`] is that advanced value, so the caller
+/// threads it across blocks. Per the derive-don't-accumulate rule
+/// (CT2_DRAIN_ORDER.md §7.1), the caller derives `next_gindex` from
+/// cumulative chain position rather than persisting a stateful counter,
+/// which makes reorg handling free (truncate-and-rebuild).
 ///
 /// Pass `txs` in C++ order: the coinbase first, then block txs in
 /// block-list order; outputs within each in `vout` order.
+///
+/// [`CollectedLeaves::assigned`] is the index each output consumed. It is
+/// the only record of that assignment: a caller that needs the gindex of
+/// `vout` reads it here, including for an output that did not become a leaf.
 ///
 /// Errors with [`LeafPointError`] when an output's published point fails
 /// decompression ([`try_build_leaf`] (c)): the daemon aborts on the same
 /// input, so the replica refuses the block rather than omitting the leaf
 /// and building a silently divergent tree. `out` may hold a partial batch
-/// on `Err`; the caller discards it.
+/// on `Err`; the caller discards it, and the assignment is discarded with
+/// the `Err`.
 pub fn collect_block_leaves(
     block_height: shekyl_types::BlockHeight,
     txs: &[TxOutputs<'_>],
     next_gindex: u64,
     out: &mut Vec<LeafEntry>,
-) -> Result<u64, LeafPointError> {
+) -> Result<CollectedLeaves, LeafPointError> {
     let mut gindex = next_gindex;
+    let mut assigned = Vec::with_capacity(txs.len());
     for tx in txs {
+        let mut tx_assigned = Vec::with_capacity(tx.outputs.len());
         for output in tx.outputs {
-            let this_gindex = gindex;
+            let this_gindex = Gindex::from_raw(gindex);
             // Every vout consumes an index before any skip check
             // (`next_output_seq++` at blockchain_db.cpp:360).
-            gindex += 1;
+            gindex = gindex.checked_add(1).expect("a gindex fits u64");
             let Some(maturity) = maturity_height(block_height, tx.is_miner, output.target) else {
+                tx_assigned.push(OutputAssignment::IndexOnly(this_gindex));
                 continue; // (a) unknown target; index already consumed.
             };
             match try_build_leaf(output) {
-                Ok(Some(leaf)) => out.push(LeafEntry {
-                    gindex: Gindex::from_raw(this_gindex),
-                    maturity,
-                    creation_height: block_height,
-                    leaf,
-                    identity: *output,
-                }),
+                Ok(Some(leaf)) => {
+                    out.push(LeafEntry {
+                        gindex: this_gindex,
+                        maturity,
+                        creation_height: block_height,
+                        leaf,
+                        identity: *output,
+                    });
+                    tx_assigned.push(OutputAssignment::Leaf(this_gindex));
+                }
                 // (b) no commitment slot; index already consumed.
-                Ok(None) => {}
+                Ok(None) => tx_assigned.push(OutputAssignment::IndexOnly(this_gindex)),
                 Err(point) => {
                     return Err(LeafPointError {
-                        gindex: Gindex::from_raw(this_gindex),
+                        gindex: this_gindex,
                         point,
                     });
                 }
             }
         }
+        assigned.push(tx_assigned);
     }
-    Ok(gindex)
+    Ok(CollectedLeaves {
+        next_gindex: gindex,
+        assigned,
+    })
 }
 
 /// The drained leaves at `drained_through`, in canonical drain order
@@ -557,9 +612,17 @@ mod tests {
             outputs: &outputs,
         }];
         let mut leaves = Vec::new();
-        let next = collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves)
+        let collected = collect_block_leaves(BlockHeight::from_raw(60), &txs, 0, &mut leaves)
             .expect("no bad point");
-        assert_eq!(next, 2, "both vouts consume an index");
+        assert_eq!(collected.next_gindex, 2, "both vouts consume an index");
+        assert_eq!(
+            collected.assigned,
+            vec![vec![
+                OutputAssignment::IndexOnly(Gindex::from_raw(0)),
+                OutputAssignment::Leaf(Gindex::from_raw(1)),
+            ]],
+            "the assignment is the index each vout consumed, leaf or not"
+        );
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
         assert_eq!(
             leaves[0].gindex,

@@ -119,9 +119,6 @@ namespace cryptonote
 
     uint64_t summary_amounts = 0;
 
-    CHECK_AND_ASSERT_MES(hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC, false,
-      "construct_miner_tx: hard_fork_version " << (int)hard_fork_version
-      << " < HF_VERSION_FCMP_PLUS_PLUS_PQC. Shekyl is v3 from genesis.");
     CHECK_AND_ASSERT_MES(!miner_address.m_pqc_public_key.empty(), false,
       "Miner address has no PQC public key; v3 requires per-output KEM encapsulation. "
       "Regenerate your miner wallet with `--generate-new-wallet` on a v3 build.");

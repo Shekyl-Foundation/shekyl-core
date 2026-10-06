@@ -185,7 +185,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
 #[tokio::test]
 async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
     // Segment 1 exists in the serve-set but has not frozen; segment 77
-    // does not exist at all. Both must render the identical 404 —
+    // does not exist at all. Both must render the same 404 —
     // holdings and freeze progress are chain-public, but this endpoint
     // must not become a second, unauthenticated oracle for them.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
@@ -199,18 +199,22 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
 
     let unfrozen = fetch(ep.addr(), "/shard/1").await;
     let unknown = fetch(ep.addr(), "/shard/77").await;
-    let bad_route = fetch(ep.addr(), "/nope").await;
     assert_eq!(unfrozen, unknown);
-    assert_eq!(unknown, bad_route);
+    assert!(unknown.starts_with(b"HTTP/1.1 404 "), "not held is the 404");
+    // A request that is not valid is a different answer, and not one that
+    // depends on the store.
+    let bad_route = fetch(ep.addr(), "/nope").await;
+    assert!(bad_route.starts_with(b"HTTP/1.1 400 "));
     assert_eq!(ep.served_count(), 0);
     assert_eq!(ep.lookup_failure_count(), 0, "a refusal is not a failure");
 }
 
 #[tokio::test]
-async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() {
+async fn unpinned_prune_surfaces_as_a_counted_failure_and_the_503() {
     // The silent-slash precursor, end to end: freeze, prune WITHOUT
-    // pinning, serve. The wire shows the shared 404 (store health is not
-    // probeable); the local counter shows exactly what went wrong.
+    // pinning, serve. The wire shows the bare 503 — this persona's fault,
+    // and not the 404 a shard it does not hold gets; the local counter
+    // shows exactly what went wrong.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
@@ -222,8 +226,12 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
     ))))
     .await;
     let pruned = fetch(ep.addr(), "/shard/0").await;
-    let bad_route = fetch(ep.addr(), "/nope").await;
-    assert_eq!(pruned, bad_route, "store failure renders the shared 404");
+    assert!(
+        pruned.starts_with(b"HTTP/1.1 503 "),
+        "a store failure on a held shard is the 503"
+    );
+    let not_held = fetch(ep.addr(), "/shard/77").await;
+    assert!(not_held.starts_with(b"HTTP/1.1 404 "));
     assert_eq!(ep.lookup_failure_count(), 1, "but the counter names it");
     assert_eq!(ep.served_count(), 0);
 }

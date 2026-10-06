@@ -78,17 +78,24 @@
 //!   target (`shekyl_tor_control_wallet`'s `OnionPort::loopback`, on the host side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
-//! - every **complete-head** non-servable outcome — wrong path, wrong
-//!   method, malformed route/id, missing / duplicate / malformed request
-//!   header, out-of-gate anchor, **unknown shard, unfrozen shard, store
-//!   failure, signer refusal** — renders one identical 404, so neither the
-//!   route table nor store health nor key residency is probeable by
-//!   **response bytes**;
+//! - every **complete-head** request that is not valid — wrong path,
+//!   wrong method, malformed route/id, missing / duplicate / malformed
+//!   request header, out-of-gate anchor — renders one bare 400, decided
+//!   before the shard store is consulted, so it does not vary with what is
+//!   held and names no check;
+//! - every valid request for a shard that is not held — **unknown shard,
+//!   unfrozen shard** — renders one bare 404, and nothing else does;
+//! - a fault of the persona's own — **an unreadable tip, a store failure,
+//!   no resident key** — renders one bare 503, which does not say which;
+//! - a held shard whose signer refuses after the body went out is a full
+//!   200 whose envelope is the refusal trailer, so the failure is stated
+//!   by the persona and never inferred from a response that stopped;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
-//! - which response a complete head gets is settled **before any byte is
-//!   written**, so no miss can leak as a truncated `200`; the one residual
+//! - which of 400, 404, 503 and 200 a complete head gets is settled **before
+//!   any byte is written**, so no miss can leak as a truncated `200`; the
+//!   residual
 //!   ([`serve`], "the residual") is a body cut short by a stalled peer or a
 //!   store fault, and is named rather than assumed away;
 //! - no request logging at any level: the only observables are five

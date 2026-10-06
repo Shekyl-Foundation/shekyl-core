@@ -731,6 +731,7 @@ mod ring;
 // Capture's own passes: what the fold wrote, graded against what assembly
 // builds from the whole tree.
 mod capture;
+mod expected;
 
 // ---------------------------------------------------------------------------
 // CT-6 increment 5 — capture's red-bite lives in `capture`
