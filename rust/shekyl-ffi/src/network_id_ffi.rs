@@ -33,26 +33,6 @@ pub extern "C" fn shekyl_network_id(nettype: u8, out: *mut u8) -> i32 {
     0
 }
 
-/// Writes the 32-byte genesis pin for `nettype` into `out`.
-///
-/// The pin is [`genesis_hash_for`]. Fakechain's pin is mainnet's. Returns
-/// 0, or -1 when `out` is null or `nettype` is not one of the four networks.
-///
-/// # Safety
-/// `out` points at 32 bytes the caller owns.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_genesis_hash(nettype: u8, out: *mut u8) -> i32 {
-    if out.is_null() {
-        return -1;
-    }
-    let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
-        return -1;
-    };
-    let pin = genesis_hash_for(net);
-    unsafe { std::ptr::copy_nonoverlapping(pin.as_ptr(), out, pin.len()) };
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,13 +77,6 @@ mod tests {
             assert_eq!(fill(code), id);
         }
         assert_eq!(fill(3), MAINNET_ID);
-        let mut genesis = [0u8; 32];
-        assert_eq!(unsafe { shekyl_genesis_hash(1, genesis.as_mut_ptr()) }, 0);
-        assert_eq!(genesis, genesis_hash_for(DaemonNetwork::Testnet));
-        assert_eq!(unsafe { shekyl_genesis_hash(3, genesis.as_mut_ptr()) }, 0);
-        assert_eq!(genesis, genesis_hash_for(DaemonNetwork::Mainnet));
-        assert_eq!(unsafe { shekyl_genesis_hash(4, genesis.as_mut_ptr()) }, -1);
-        assert_eq!(unsafe { shekyl_genesis_hash(0, std::ptr::null_mut()) }, -1);
         assert_eq!(
             genesis_hash_for(DaemonNetwork::Fakechain),
             genesis_hash_for(DaemonNetwork::Mainnet)

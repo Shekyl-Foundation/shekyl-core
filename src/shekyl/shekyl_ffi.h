@@ -4510,10 +4510,6 @@ void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::u
 /// `out` is null or `nettype` is not one of those four. This function does
 /// not state the bytes.
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
-/// The 32-byte block-0 pin for `nettype` (`genesis_hash_for`). Fakechain's
-/// pin is mainnet's. Returns 0, or -1 when `out` is null or `nettype` is
-/// not one of the four. `out` is 32 bytes.
-int shekyl_genesis_hash(std::uint8_t nettype, std::uint8_t* out);
 
 } // extern "C"
 
