@@ -1575,12 +1575,13 @@ read the stored atomic at `:1573`, which the deleted thread used to
 write, and an exclusive list returned before any recount.* Both count
 functions return that recount and neither stores it. *Records-was: the
 out-count store at `:2170` and the in-count store at `:2150`.* The
-recount is a `foreach_connection` at every dial. The board publishes
+recount was a `foreach_connection` at every dial. The board publishes
 `direction_count` (`registry.rs`), which counts rows in one direction
 whether or not the handshake has finished. The dial cap's predicate is
-`direction_count(Outbound)`. The cap still walks `foreach_connection`
-until that count's FFI lands. It does not count established rows only,
-and this step does not convert the walk. Slice 3 keeps the fill
+that count for the zone's connector. `shekyl_seam_board` copies the
+board, and the cap reads the copy. It does not count established rows
+only. *Records-was: the cap still walked `foreach_connection` until
+that count's FFI landed, and this step did not convert the walk.* Slice 3 keeps the fill
 loops. Deleting the thread removes the one-second `--in-peers`
 measurement input (rule 76;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
@@ -1615,7 +1616,10 @@ row.
 peers-monitor thread deleted.** `git grep -c foreach_connection` at
 that pin was 12 calls in `src/p2p/net_node.inl` and 1 comment in
 `src/cryptonote_protocol/levin_notify.cpp` (`:406`, not a call). The
-thread's walk is gone, so the calls in `net_node.inl` are 11.
+thread's walk is gone, so the calls in `net_node.inl` were 11.
+**UPDATE 2026-10-06:** two calls remain, `for_each_connection` (`:164`)
+and `peer_sync_idle_maker` (`:2342`). The other nine read
+`shekyl_seam_board`.
 *Records-was at `9bc062036`: 15 calls in `net_node.inl` and 2 calls
 in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 
@@ -1672,26 +1676,26 @@ connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
 relationship. Those arrive when their owner publishes them, through
 the step-b handle, not as blanks on the board. The `run` thread is
-gone. The dial cap's recount is still `foreach_connection`.
-`Board::direction_count(Outbound)` is that predicate, including rows
-whose handshake has not finished. The cap reads it when the FFI lands.
-This step does not convert the walk. The rest of this subset is still
-the C++ walk. The twelve
-reading snapshots greens at b.
+gone. The dial cap reads `shekyl_seam_board`. A zone's count is the
+rows of that connector and direction, handshake or not.
+`Board::direction_count(Outbound)` is that predicate across connectors.
+*Records-was: the recount was still `foreach_connection`, and this step
+did not convert the walk.* The two walks that need sync state stay.
+The rest of this subset reads the board.
 
 | Step c | Step b |
 | --- | --- |
-| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2321`. It reads the pull relationship and writes `m_in_timedsync`. |
+| `for_each_connection` `:164`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. **UPDATE 2026-10-06: still the walk. The protocol handler reads support flags, pull state, and byte counters the board does not carry.** | `peer_sync_idle_maker` `:2342`. It reads the pull relationship and writes `m_in_timedsync`. **UPDATE 2026-10-06: still the walk.** |
 | `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The peer-count caches are deleted. *Records-was: the stored out-count was not refreshed by the thread.* |
-| `send_stop_signal` `:1248` | |
-| `has_outbound_connection_to_host` `:1492` | |
-| `is_peer_used` `:1513` | |
-| `is_addr_connected` `:1538` | |
-| `make_new_connection_from_peerlist` `:1770` | |
-| `get_incoming_connections_count` `:2139` | |
-| The dial cap (`:1576`) still recounts through `get_outgoing_connections_count` (`:2152`). `direction_count(Outbound)` is the same predicate, including rows whose handshake has not finished, and is what the cap reads once its FFI lands. Established is not part of the count. This step does not convert the walk. | |
-| `get_incoming_connections_count` `:2174` | |
-| `print_connections_container` `:2801`, the address, the id, and the direction | A sync-state line on the connection print. `:2801` does not print one today. |
+| `send_stop_signal` — **UPDATE 2026-10-06: reads the board, then `close` by id.** *Records-was: `:1248`.* | |
+| `has_outbound_connection_to_host` — **UPDATE 2026-10-06: the board.** *Records-was: `:1492`.* | |
+| `is_peer_used` — **UPDATE 2026-10-06: the board.** *Records-was: `:1513`.* | |
+| `is_addr_connected` — **UPDATE 2026-10-06: the board.** *Records-was: `:1538`.* | |
+| `make_new_connection_from_peerlist` — **UPDATE 2026-10-06: the subnet set is the board.** *Records-was: `:1771`.* | |
+| `get_incoming_connections_count` — **UPDATE 2026-10-06: the board, one zone and every zone.** *Records-was: `:2142` and `:2179`.* | |
+| The dial cap reads `outbound_dial_refused` on the board copy. Established is not part of the count. *Records-was: `:1576` recounted through `get_outgoing_connections_count` (`:2155`), and this step did not convert the walk.* | |
+| `get_outgoing_connections_count` — **UPDATE 2026-10-06: the board.** *Records-was: `:2155`.* | |
+| `print_connections_container` — **UPDATE 2026-10-06: the address, the id, and the direction, from the board.** *Records-was: `:2801`.* | A sync-state line on the connection print. The board print does not carry one. |
 
 This step does not wait behind steps a and b. Those follow it. It
 does not wait on slices 1–4, the timing-engine bridge, or relay
@@ -1734,16 +1738,32 @@ and a `m_cancel_timer_called` check at `:319` and `:321`.* The timer stays on th
 `:302` and `:304`, ran on whichever worker took the timer, and `:234`
 ran on `async_invoke`'s caller.*
 
+**UPDATE 2026-10-06.** The nine walks that moved no longer call
+`get_context_ref`. What still does:
+
+| Caller | Strand |
+| --- | --- |
+| `:283` `anvoke_handler::cancel` | Yes. `release_protocol` from `begin_closed`, and `begin_closed` runs from `on_strand`. |
+| `:329`, `:331` the invoke-timeout completion | Yes. Posted onto the connection strand. |
+| `:946` from `for_each_connection` (`net_node.inl:164`) | No. The protocol handler reads support flags, pull state, and byte counters. Waiting on each strand from that walk is the deadlock this step does not introduce. |
+| `:946` from `peer_sync_idle_maker` (`net_node.inl:2342`) | No. It writes `m_in_timedsync`. Same wait. |
+| `:960` from `node_server::for_connection` (`net_node.inl:169`) | No. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state. |
+
+The two `:946` callers are the step-b holdouts. `:960` is the same
+class: anything that needs sync state. Step c is not green on
+"only strand-side callers" until those posts exist. A caller that
+cannot move onto the strand is this list, not a silent carve-out.
+
 `:960` is not only a walker. *Records-was: `:939`, and before that `:946`, and before that `:921`.* `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
 (`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
 `update_sync_search` (`:1757`), `should_download_next_span`
 (`:1849`), `drop_connection` by id (`:2624`, and the comment there
 says the call can be outside the strand), `drop_connections` by host
-(`:2665`), and `levin_notify.cpp:374` and `:430`. Step c is green when
-`rg get_context_ref` returns only strand-side callers, and the commit
-that claims it lists them. A caller that cannot move onto the strand
-is a finding, not a carve-out.
+(`:2665`), and `levin_notify.cpp:374` and `:430`. *Records-was: step c
+is green when `rg get_context_ref` returns only strand-side callers.*
+The 2026-10-06 list above is that enumeration. The holdouts are not
+strand-side, and this step does not post-and-wait them.
 
 **Step a, a starting table (2026-10-04).** The hub lock is the only writer of the row, and the connection's strand is the only writer of the C++ context. `adopt`, `finish`, and `reap` come from the connector, the transport, and the executor. The strand does not exist until the established post, so a close never waits on a strand that may not be there. The members that cross are
 the 14 on `connection_context_base` (`net_utils_base.h`) and the 16

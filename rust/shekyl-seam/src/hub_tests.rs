@@ -556,3 +556,19 @@ fn published_rows_follow_admission_order() {
     assert_eq!(board.direction_count(Direction::Outbound), 8);
     assert_eq!(board.direction_count(Direction::Inbound), 0);
 }
+
+#[test]
+fn an_unestablished_outbound_row_still_fills_the_dial_cap() {
+    let rig = rig();
+    let opened: Vec<_> = (0..12)
+        .map(|_| adopt(&rig, Direction::Outbound, 32))
+        .collect();
+    let board = rig.hub.board();
+    assert_eq!(board.len(), 12);
+    assert!(board.rows().iter().all(|row| !row.established()));
+    assert_eq!(board.direction_count(Direction::Outbound), 12);
+    rig.hub.session_established(opened[0].id);
+    let after = rig.hub.board();
+    assert!(after.get(opened[0].id).expect("row").established());
+    assert_eq!(after.direction_count(Direction::Outbound), 12);
+}
