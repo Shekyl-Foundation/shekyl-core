@@ -2287,6 +2287,64 @@ not wait on them; building does.
    (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not
    leaf chunks.
 
+   **Answer to slice 8 (`CHAIN_RULES_SLICE_8.md` §3.4, asked 2026-10-05;
+   answered 2026-10-06).** The signature is confirmed as
+   `closed_and_final(view, shard, at)`, and for both callers `at` names a
+   block whose **post-connect** state is read — the archival fold through
+   block `at` inclusive, nothing above it — so J15 passes the parent of the
+   connecting block and Slice C passes `h_open(E)`, and one body serves both.
+
+   What that sentence rests on, so J15's test can be written from here:
+
+   - **The predicate is a function of the archival fold alone.** It is
+     true iff the first height whose `cumulative_archival_len` reaches
+     `(shard + 1) · W` is at most `at − archival_reorg_depth_blocks`
+     (`shard_close_height(view, shard, at)`, `archival/close.rs`, already
+     searches `[0, at]` inclusive). It reads no bond record and no slash
+     log.
+   - **A same-block slash has no side here.** The question was carried
+     over from the holdings read (`holds_shard_at`, strictly above), which
+     is a different fact about a persona. A slash, a bond post or a
+     release in block `at` or after it cannot change whether a shard is
+     closed and final at `at`. So there is no side parameter, and row 6's
+     operand-retry leg stays at 0. The holdings read keeps its own
+     boundary and stays input 3's.
+   - **The fixture.** A shard whose closing block is `c`: false at every
+     `at < c + archival_reorg_depth_blocks`, including `at = c` (closed,
+     not final); true at `at = c + archival_reorg_depth_blocks` and at
+     every later height; false for any `at` below
+     `archival_reorg_depth_blocks`; unchanged by a slash of a holder in
+     block `at`; unchanged by anything in block `at + 1`. An open shard is
+     false at every `at`.
+   - **The return carries the view's fault.** Its two operands are
+     fallible reads (`closed_shards_through`, `shard_close_height`), so
+     the body returns `Result<bool, ViewRead<V::Fault>>` or its
+     equivalent. That is the only departure from the shape as posed.
+
+   **Where Slice C calls it, and why `h_open(E)`.** Not the seal block
+   (the beacon's, deleted with the fire-height path), not the issuing
+   block `h`, and not the connecting block. Slice C calls it once per
+   shard while building the epoch's drawable set, at the instant the set
+   is already pinned to: the state after block `h_open(E)` connects
+   (§7.4, *Pin for Slice C*). The call bounds the complete-tree record's
+   expansion (§7.4 construction, pin 2: "the shard registry as of
+   `h_open(E)`"): the registry is the shards closed and final at
+   `h_open(E)`. A compact record needs no call. J15 admitted its shards as
+   closed and final at the bond post, holdings do not grow after birth
+   (immutable-bond ruling, 2026-09-20), and the predicate is monotone in
+   `at` along one chain, so they are closed and final at every later
+   height. Admission then makes no second call: `is_assigned(h, P, s)`
+   reads a set every member of which already passed. That is how the
+   predicate carries the job of the freeze clause J8 loses.
+
+   **For the maintainer to confirm:** that the complete-tree registry is
+   bounded by closed *and final*, where pin 2 says only "as of
+   `h_open(E)`" and the epoch close's universe
+   (`ClosedUniverse::before`) is closed alone. Closed-and-final is chosen
+   so one predicate decides what is bondable and what is drawable.
+   Refusing it changes Slice C's enumeration and nothing in J15: the
+   signature and the reading of `at` above stand either way.
+
 Also owed with the census change that lands the rows (`SCV-Q6`): a
 `RowStatus` arm for a row retired by ruling, carrying its citation, so the
 gate's second half is a state a check reads.

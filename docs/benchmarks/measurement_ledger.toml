@@ -256,6 +256,7 @@ spec = [
 stale_through = [
   { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "765d6991ba", note = "PR #969: doc comments on the delivery digest and the frame's padding field, and one test. No executable serve or fetch code changed." },
 ]
 
 [[constant]]
@@ -567,6 +568,7 @@ spec = [
 ]
 stale_through = [
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "765d6991ba", note = "PR #969: a doc comment on the served frame's padding field in shekyl-curve-tree. No executable code changed." },
 ]
 
 [[constant]]
