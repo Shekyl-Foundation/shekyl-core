@@ -1739,8 +1739,9 @@ outsider could trigger it at will. So the expectation is
 `(tx_hash, vout, O)` (`ExpectedOutput`); `TxLeafInputs` carries the block's
 transaction hash beside its outputs; and `CurveTreeClient::ingest_block`
 looks each transaction up by hash, confirms the key at that `vout`, and
-registers the pair with the gindex it has just assigned
-(`match_expected_outputs`). A transaction hash is the block feed's, not the
+registers the pair at the gindex `collect_block_leaves` assigned.
+`match_expected_outputs` reads that assignment; it does not count vouts
+a second time. A transaction hash is the block feed's, not the
 wallet's, so a hash that resolves to a different key is **counted and
 skipped**, never an error (`expected_output_mismatches`): a feed that
 mislabels can cost the wallet an early registration and nothing else. A

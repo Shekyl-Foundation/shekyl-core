@@ -619,9 +619,9 @@ pub struct CurveTreeClient {
     /// Outputs the wallet built and has not yet seen mined, keyed by their
     /// transaction: `vout` and the key the wallet gave that output.
     ///
-    /// [`Self::ingest_block`] looks each transaction up here as it assigns
-    /// gindexes, and an expected output whose key the transaction confirms
-    /// is registered at that moment — before its leaf drains, so every
+    /// [`Self::ingest_block`] looks each transaction up here and registers a
+    /// confirmed output at the gindex [`crate::recon::collect_block_leaves`]
+    /// assigned it — before its leaf drains, so every
     /// chunk over it is captured by the fold. Matching is by transaction
     /// and position, never by key alone: a key is public the moment its
     /// transaction is relayed, and a copy of it in someone else's
@@ -1377,19 +1377,17 @@ impl CurveTreeClient {
         // point refuses the whole block (the local vec is discarded), so no
         // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
-        let next_gindex =
-            collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves).map_err(
-                |source| ClientError::LeafPoint {
-                    height: block.height,
-                    source,
-                },
-            )?;
+        let collected = collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves)
+            .map_err(|source| ClientError::LeafPoint {
+                height: block.height,
+                source,
+            })?;
 
-        // The wallet's own outputs in this block, named ahead of time by
-        // transaction and position and confirmed by key here, where their
-        // gindexes have just been assigned. Applied after the store commits,
-        // with the rest of the block's effect.
-        let matched = self.match_expected_outputs(&block, &new_leaves)?;
+        // The wallet's own outputs in this block, named ahead by transaction
+        // and position and confirmed by key against the gindex the collector
+        // just assigned. Applied after the store commits, with the rest of
+        // the block's effect.
+        let matched = self.match_expected_outputs(&block, &collected.assigned)?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never
@@ -1444,7 +1442,7 @@ impl CurveTreeClient {
                 .push(entry_base + offset);
         }
         self.entries.extend(new_leaves);
-        self.next_gindex = next_gindex;
+        self.next_gindex = collected.next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
         self.owned_positions.extend(captured.pending_owned);

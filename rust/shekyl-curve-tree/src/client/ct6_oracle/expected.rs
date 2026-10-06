@@ -17,12 +17,16 @@ use super::super::{BlockLeaves, TxLeafInputs};
 use crate::types::{CommitmentBytes, Gindex, OneTimePubkey, TargetKind};
 use crate::RawOutput;
 use crate::{BlockHeight, ClientError, CurveTreeClient};
-use shekyl_fcmp::tree::key_image_generator;
+use shekyl_consensus::DEFAULT_LOCK_WINDOW;
+use shekyl_fcmp::tree::{key_image_generator, SELENE_CHUNK_WIDTH};
 use shekyl_types::TxHash;
 
 /// Outputs per transaction in these fixtures: one full leaf chunk, so a
 /// chunk closes with each one.
-const PER_TX: u64 = 38;
+const OUTPUTS_PER_TX: u64 = SELENE_CHUNK_WIDTH as u64;
+
+/// The block that carries the wallet's transaction in the single-block passes.
+const CARRIED_AT: u64 = 1;
 
 /// A valid, byte-distinct point per seed.
 fn point(seed: u64) -> [u8; 32] {
@@ -31,9 +35,9 @@ fn point(seed: u64) -> [u8; 32] {
     key_image_generator(&preimage)
 }
 
-/// One transaction of `PER_TX` outputs whose keys are `point(seed_base + i)`.
+/// One transaction of [`OUTPUTS_PER_TX`] outputs whose keys are `point(seed_base + i)`.
 fn outputs(seed_base: u64) -> Vec<RawOutput> {
-    (0..PER_TX)
+    (0..OUTPUTS_PER_TX)
         .map(|i| RawOutput {
             output_key: OneTimePubkey::from_bytes(point(seed_base + i)),
             commitment: Some(CommitmentBytes::from_bytes(point(
@@ -70,7 +74,10 @@ fn hash(n: u8) -> TxHash {
 /// the rest are ordinary transactions (which drain after the short lock).
 fn ingest(client: &mut CurveTreeClient, height: u64, txs: &[Tx]) -> Result<(), ClientError> {
     let outs: Vec<Vec<RawOutput>> = txs.iter().map(|t| outputs(t.seed_base)).collect();
-    let blobs: Vec<Vec<u8>> = txs.iter().map(|t| blob(t.seed_base, PER_TX)).collect();
+    let blobs: Vec<Vec<u8>> = txs
+        .iter()
+        .map(|t| blob(t.seed_base, OUTPUTS_PER_TX))
+        .collect();
     let inputs: Vec<TxLeafInputs<'_>> = txs
         .iter()
         .enumerate()
@@ -132,11 +139,36 @@ fn expecting() -> CurveTreeClient {
     client
 }
 
-/// The gindex the *next* block's second transaction will give its `vout`:
-/// the client's running count, past the coinbase. Read before the block is
-/// ingested.
-fn next_second_tx_gindex(client: &CurveTreeClient, vout: u64) -> Gindex {
-    Gindex::from_raw(client.next_gindex + PER_TX + vout)
+/// The gindex [`crate::recon::collect_block_leaves`] assigned the leaf with
+/// `key` created at `height`.
+///
+/// Read from the leaves the ingest collected. A pass that instead added
+/// `OUTPUTS_PER_TX` to the running counter would be grading its own recount,
+/// and would stay green if the collector and the recount diverged.
+fn gindex_of(client: &CurveTreeClient, key: OneTimePubkey, height: u64) -> Gindex {
+    let created = BlockHeight::from_raw(height);
+    let mut found = client
+        .entries
+        .iter()
+        .filter(|entry| entry.identity.output_key == key && entry.creation_height == created);
+    let entry = found
+        .next()
+        .expect("a leaf with this key was collected at this height");
+    assert!(
+        found.next().is_none(),
+        "one leaf for this key at this height"
+    );
+    entry.gindex
+}
+
+/// Reference height at which a non-miner output created at `created_at` has
+/// drained.
+///
+/// Maturity is creation plus [`DEFAULT_LOCK_WINDOW`]. The root at `h` drains
+/// through `h - 1`, so the output is in the tree at `created_at + lock + 1`.
+fn spendable_drains_at(created_at: u64) -> u64 {
+    let lock = u64::try_from(DEFAULT_LOCK_WINDOW).expect("the lock window fits u64");
+    created_at + lock + 1
 }
 
 /// The expected output is registered the moment its transaction is
@@ -146,25 +178,23 @@ fn next_second_tx_gindex(client: &CurveTreeClient, vout: u64) -> Gindex {
 #[test]
 fn an_expected_output_is_registered_when_its_transaction_is_ingested() {
     let mut client = expecting();
-    let pair = (
-        next_second_tx_gindex(&client, OURS_VOUT),
-        expectation().output_key,
-    );
     assert!(
-        !client.owned_outputs.contains_key(&pair.0),
+        client.owned_outputs.is_empty(),
         "nothing is registered before the transaction arrives"
     );
 
-    ingest(&mut client, 1, &[coinbase(100), ours()]).expect("block 1 ingests");
+    ingest(&mut client, CARRIED_AT, &[coinbase(100), ours()]).expect("block 1 ingests");
+    let gindex = gindex_of(&client, expectation().output_key, CARRIED_AT);
+    let pair = (gindex, expectation().output_key);
     assert_eq!(
         client.owned_outputs.get(&pair.0),
         Some(&pair.1),
-        "registered at ingest, with the gindex the ingest assigned"
+        "registered at ingest, at the gindex the collector assigned"
     );
     assert_eq!(client.expected_output_mismatches(), 0);
 
     // The leaf drains and its chunk closes under the fold.
-    ingest_empty(&mut client, 2, 80);
+    ingest_empty(&mut client, CARRIED_AT + 1, spendable_drains_at(CARRIED_AT));
     let at_spend = client.sync_owned(&[pair]).expect("sync on a live client");
     assert_eq!(at_spend.already_held, 1, "held and served since block 1");
     assert_eq!(at_spend.reconciliation, None, "and nothing rebuilt");
@@ -187,9 +217,9 @@ fn a_copied_key_in_another_transaction_is_not_registered() {
         outs[usize::try_from(OURS_VOUT).expect("small")].output_key = expectation().output_key;
         outs
     };
-    let copy_blob = blob(700, PER_TX);
+    let copy_blob = blob(700, OUTPUTS_PER_TX);
     let coinbase_outs = outputs(100);
-    let coinbase_blob = blob(100, PER_TX);
+    let coinbase_blob = blob(100, OUTPUTS_PER_TX);
     let txs = [
         TxLeafInputs {
             is_miner: true,
@@ -204,13 +234,13 @@ fn a_copied_key_in_another_transaction_is_not_registered() {
             outputs: &copy_outputs,
         },
     ];
-    let copied_at = next_second_tx_gindex(&client, OURS_VOUT);
     client
         .ingest_block(BlockLeaves {
             height: BlockHeight::from_raw(1),
             txs: &txs,
         })
         .expect("block 1 ingests");
+    let copied_at = gindex_of(&client, expectation().output_key, 1);
     assert!(
         !client.owned_outputs.contains_key(&copied_at),
         "the copy is not registered"
@@ -221,8 +251,8 @@ fn a_copied_key_in_another_transaction_is_not_registered() {
         "and is not a mismatch either: its transaction was never expected"
     );
 
-    let ours_at = next_second_tx_gindex(&client, OURS_VOUT);
     ingest(&mut client, 2, &[coinbase(101), ours()]).expect("block 2 ingests");
+    let ours_at = gindex_of(&client, expectation().output_key, 2);
     assert_eq!(
         client.owned_outputs.get(&ours_at),
         Some(&expectation().output_key)
@@ -244,7 +274,7 @@ fn a_key_the_transaction_does_not_carry_is_counted_not_registered() {
         ..expectation()
     };
     let no_such_vout = ExpectedOutput {
-        vout: PER_TX + 5,
+        vout: OUTPUTS_PER_TX + 5,
         ..expectation()
     };
     client
@@ -262,8 +292,8 @@ fn a_key_the_transaction_does_not_carry_is_counted_not_registered() {
 #[test]
 fn a_re_mined_transaction_is_matched_again_after_a_rollback() {
     let mut client = expecting();
-    let first = next_second_tx_gindex(&client, OURS_VOUT);
     ingest(&mut client, 1, &[coinbase(100), ours()]).expect("block 1 ingests");
+    let first = gindex_of(&client, expectation().output_key, 1);
     assert!(client.owned_outputs.contains_key(&first));
 
     client
@@ -276,8 +306,8 @@ fn a_re_mined_transaction_is_matched_again_after_a_rollback() {
 
     // The other fork: block 1 is a coinbase alone, block 2 carries ours.
     ingest(&mut client, 1, &[coinbase(101)]).expect("block 1 ingests");
-    let second = next_second_tx_gindex(&client, OURS_VOUT);
     ingest(&mut client, 2, &[coinbase(102), ours()]).expect("block 2 ingests");
+    let second = gindex_of(&client, expectation().output_key, 2);
     assert_ne!(first, second, "a different gindex on the other fork");
     assert_eq!(
         client.owned_outputs.get(&second),
@@ -340,10 +370,10 @@ fn a_new_set_of_expectations_replaces_the_old() {
         hash: Some(hash(0x22)),
         seed_base: 600,
     };
-    let ours_at = next_second_tx_gindex(&client, OURS_VOUT);
     ingest(&mut client, 1, &[coinbase(100), ours()]).expect("block 1 ingests");
-    let other_at = next_second_tx_gindex(&client, 0);
+    let ours_at = gindex_of(&client, expectation().output_key, 1);
     ingest(&mut client, 2, &[coinbase(101), other_tx]).expect("block 2 ingests");
+    let other_at = gindex_of(&client, other.output_key, 2);
     assert!(
         !client.owned_outputs.contains_key(&ours_at),
         "the replaced expectation is gone"
@@ -358,79 +388,41 @@ fn a_new_set_of_expectations_replaces_the_old() {
 /// refusal would be bumped again on the retry, for one mislabelled
 /// transaction.
 ///
-/// The refusal here is capture's own: an owned leaf's chunk is about to
-/// close with one of its committed sibling rows gone
-/// (`a_missing_leaf_row_refuses_rather_than_capturing_short` is that case's
-/// own pass). The refused block carries the expected transaction under a
-/// key the wallet did not name.
+/// The refusal is capture's own
+/// ([`super::capture::client_before_capture_refusal`]): an owned leaf's
+/// chunk is about to close with one of its committed sibling rows gone.
+/// The refused block carries the expected transaction under a key the
+/// wallet did not name. That transaction is not a coinbase, so its leaves
+/// mature [`DEFAULT_LOCK_WINDOW`] blocks later and do not join the chunk
+/// this block closes.
 #[test]
 fn a_refused_block_counts_no_mismatch() {
-    use crate::TreePosition;
-
-    /// Outputs of block 1's transaction: short of a chunk, so the chunk
-    /// closes a block later and half of it is already in the store.
-    const FIRST: usize = 20;
-
-    let mut client = CurveTreeClient::new();
-    ingest(&mut client, 0, &[coinbase(1)]).expect("genesis ingests");
-
-    // Block 1: a coinbase and a transaction of `FIRST` outputs, one of them
-    // the wallet's. Block 2: a coinbase and a full transaction. Both
-    // transactions drain after the short lock, a block apart.
-    let owned = (
-        next_second_tx_gindex(&client, 0),
-        OneTimePubkey::from_bytes(point(800)),
-    );
-    client.sync_owned(&[owned]).expect("registered ahead");
-    let (coinbase_outs, coinbase_blob) = (outputs(100), blob(100, PER_TX));
-    let (first_outs, first_blob) = (outputs(800), blob(800, FIRST as u64));
-    client
-        .ingest_block(BlockLeaves {
-            height: BlockHeight::from_raw(1),
-            txs: &[
-                TxLeafInputs {
-                    is_miner: true,
-                    tx_hash: Some(hash(100)),
-                    leaf_entry_blob: Some(&coinbase_blob),
-                    outputs: &coinbase_outs,
-                },
-                TxLeafInputs {
-                    is_miner: false,
-                    tx_hash: Some(hash(0x80)),
-                    leaf_entry_blob: Some(&first_blob),
-                    outputs: &first_outs[..FIRST],
-                },
-            ],
-        })
-        .expect("block 1 ingests");
-    let second = Tx {
-        hash: Some(hash(0x81)),
-        seed_base: 900,
-    };
-    ingest(&mut client, 2, &[coinbase(101), second]).expect("block 2 ingests");
-    ingest_empty(&mut client, 3, 12);
-    assert_eq!(
-        client.frontier.leaf_count(),
-        FIRST as u64,
-        "block 1's transaction has drained and block 2's has not"
+    let (mut client, closing) = super::capture::client_before_capture_refusal();
+    let tip = client.ingested_tip_height();
+    let registered = client.owned_outputs.clone();
+    assert!(
+        !registered.is_empty(),
+        "the fixture registered the owned leaf before the close"
     );
 
-    // The owned leaf's chunk closes when block 2's transaction drains, at
-    // block 13. Take one of its committed sibling rows away first.
-    client
-        .store
-        .drop_leaf_rows_for_test(TreePosition::from_raw(1), TreePosition::from_raw(1))
-        .expect("the row drops");
-
-    // Block 13 carries the expected transaction, under a key the wallet did
-    // not name.
     client
         .set_expected_outputs(&[ExpectedOutput {
             output_key: OneTimePubkey::from_bytes(point(999_999)),
             ..expectation()
         }])
         .expect("expectations set");
-    let err = ingest(&mut client, 13, &[coinbase(102), ours()])
+    let outs = outputs(OURS_SEED);
+    let leaf_blob = blob(OURS_SEED, OUTPUTS_PER_TX);
+    let err = client
+        .ingest_block(BlockLeaves {
+            height: closing,
+            txs: &[TxLeafInputs {
+                is_miner: false,
+                tx_hash: Some(hash(OURS)),
+                leaf_entry_blob: Some(&leaf_blob),
+                outputs: &outs,
+            }],
+        })
         .expect_err("a chunk short of a sibling refuses the block");
     assert!(
         matches!(err, ClientError::CaptureIdentitiesIncomplete { .. }),
@@ -438,12 +430,16 @@ fn a_refused_block_counts_no_mismatch() {
     );
     assert_eq!(
         client.ingested_tip_height(),
-        Some(BlockHeight::from_raw(12)),
+        tip,
         "the block was not applied"
     );
     assert_eq!(
         client.expected_output_mismatches(),
         0,
         "and its mismatch was not counted"
+    );
+    assert_eq!(
+        client.owned_outputs, registered,
+        "and the registration made before the block is untouched"
     );
 }

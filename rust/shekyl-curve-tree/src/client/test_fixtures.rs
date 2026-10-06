@@ -254,7 +254,8 @@ mod tests {
                 next_gindex,
                 &mut entries,
             )
-            .expect("construct_leaf accepts every fixture point");
+            .expect("construct_leaf accepts every fixture point")
+            .next_gindex;
         }
         entries
     }

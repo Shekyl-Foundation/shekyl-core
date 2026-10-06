@@ -22,6 +22,7 @@ use super::{
 };
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::drained_sorted;
+use crate::recon::OutputAssignment;
 use crate::segment::outputs_per_node;
 use crate::store::CapturedChunk;
 use crate::types::{BlockHeight, Gindex, LeafEntry, OneTimePubkey, TreePosition};
@@ -289,22 +290,20 @@ impl CurveTreeClient {
 
     /// The expected outputs this block carries, as the pairs to register.
     ///
-    /// Called by [`Self::ingest_block`] once the block's gindexes are
-    /// assigned and before anything is committed. A transaction is looked
-    /// up by its hash; each expected `vout` of it is confirmed against the
-    /// key the transaction actually carries there, and a confirmed output
-    /// that became a leaf is returned with the gindex it was just given.
-    /// Every `vout` consumes a gindex whether or not it becomes a leaf
-    /// (`collect_block_leaves`), which is why the gindex is counted here
-    /// rather than read off `new_leaves`.
+    /// `assigned` is [`crate::recon::collect_block_leaves`]'s assignment for
+    /// this block, parallel to `block.txs`: `assigned[tx_index][vout]`. A
+    /// transaction is looked up by its hash; each expected `vout` is
+    /// confirmed against the key the transaction carries there. A confirmed
+    /// output that became a leaf is returned with the gindex the collector
+    /// assigned. An output that consumed an index and did not become a leaf
+    /// is neither registered nor counted: it has no path to prepare.
     ///
-    /// A key that does not match is counted and skipped, never an error:
-    /// the hash is the block feed's and only the key is the wallet's own, so
-    /// a feed that mislabels a transaction can cost the wallet an early
-    /// registration and nothing else. A `vout` the transaction does not
-    /// have is treated the same way.
+    /// A key that does not match, or a `vout` the transaction does not have,
+    /// is counted and skipped, never an error. The hash is the block feed's
+    /// and only the key is the wallet's own, so a feed that mislabels a
+    /// transaction can cost the wallet an early registration and nothing else.
     ///
-    /// Takes `&self` and returns what it found: the block is not committed
+    /// Takes `&self` and returns what it found. The block is not committed
     /// yet, and a block that is then refused — by the fold, or by the store
     /// — must leave no trace, including in the mismatch count. The ingest
     /// applies [`ExpectedMatches`] with the rest of the block's effect.
@@ -316,16 +315,23 @@ impl CurveTreeClient {
     pub(super) fn match_expected_outputs(
         &self,
         block: &BlockLeaves<'_>,
-        new_leaves: &[LeafEntry],
+        assigned: &[Vec<OutputAssignment>],
     ) -> Result<ExpectedMatches, ClientError> {
         let mut matched = ExpectedMatches::default();
         if self.expected_outputs.is_empty() {
             return Ok(matched);
         }
-        let mut gindex = self.next_gindex;
-        for (tx_index, tx) in block.txs.iter().enumerate() {
-            let first_gindex = gindex;
-            gindex += u64::try_from(tx.outputs.len()).expect("a transaction's vout count fits u64");
+        debug_assert_eq!(
+            block.txs.len(),
+            assigned.len(),
+            "the collector's assignment is one vec per transaction"
+        );
+        for (tx_index, (tx, slots)) in block.txs.iter().zip(assigned).enumerate() {
+            debug_assert_eq!(
+                tx.outputs.len(),
+                slots.len(),
+                "the collector's assignment is one slot per output"
+            );
             let Some(tx_hash) = tx.tx_hash else {
                 return Err(ClientError::TxHashMissing {
                     height: block.height,
@@ -336,18 +342,19 @@ impl CurveTreeClient {
                 continue;
             };
             for (vout, output_key) in expected {
-                let confirmed = usize::try_from(*vout)
-                    .ok()
-                    .and_then(|i| tx.outputs.get(i))
-                    .is_some_and(|raw| raw.output_key == *output_key);
-                if !confirmed {
+                let Some(index) = usize::try_from(*vout).ok() else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                let Some(raw) = tx.outputs.get(index) else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                if raw.output_key != *output_key {
                     matched.mismatches += 1;
                     continue;
                 }
-                let gindex = Gindex::from_raw(first_gindex + vout);
-                // Only a leaf can be captured; an output that consumed an
-                // index without becoming one has no path to prepare.
-                if new_leaves.iter().any(|leaf| leaf.gindex == gindex) {
+                if let Some(OutputAssignment::Leaf(gindex)) = slots.get(index).copied() {
                     matched.registered.push((gindex, *output_key));
                 }
             }
