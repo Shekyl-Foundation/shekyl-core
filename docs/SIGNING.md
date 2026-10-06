@@ -352,7 +352,7 @@ improvise it either:
 
 ```sh
 # Release owner, token inserted, after the release job published assets:
-python3 scripts/release/sign_release_assets.py <tag> --download --upload
+python3 scripts/release/sign_release_assets.py <tag> --download --upload --clobber
 
 # Anyone, verifying a published release:
 python3 scripts/release/sign_release_assets.py <tag> --download --verify-only
@@ -365,7 +365,12 @@ signing subkey must be an on-card stub, and the release tag itself must
 verify under a pinned Foundation fingerprint. It signs with exactly the
 signing subkey (`6914D74823DDA8DC!`), round-trip-verifies the signature
 and every hash before anything is uploaded, and refuses to overwrite a
-published manifest without an explicit `--clobber`. Because the subkey
+published manifest without an explicit `--clobber`. On a release cut by the
+gitian workflow `--clobber` is the expected path, not an exception: that job
+publishes an unsigned `SHA256SUMS` of its own, so that a download can be
+checked before the ceremony has run, and the ceremony replaces it with the
+manifest it re-derives from the published assets and its signature. First
+exercised on `v3.1.0-alpha.9` (2026-10-06). Because the subkey
 is hardware-token-held, this ceremony deliberately **cannot run in CI**
 — it is the release owner's local act, like the tag ceremony.
 

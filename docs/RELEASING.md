@@ -34,13 +34,13 @@ The CI workflows install all dependencies automatically. For local builds:
    `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
    empty `## Unreleased` section above it. Commit on `dev`.
 
-2. **Merge `dev` into `main`** with a merge commit to preserve branch
-   topology and create a clear release boundary:
-
-   ```bash
-   git checkout main
-   git merge --no-ff dev -m "release: merge dev for vX.Y.Z"
-   ```
+2. **Promote `dev` to `main`** by pull request, titled `Release: vX.Y.Z`, and
+   merge it with GitHub's **Create a merge commit** — never squash, rebase or
+   fast-forward. The merge commit preserves branch topology and is the release
+   boundary. `RELEASE_PROMOTION.md` §4 is the full sequence, including the
+   pre-flight on the frozen SHA; this pull request is also the first full build
+   and test run on it. (`git merge --no-ff dev` on a local `main` produces the
+   same commit, but `main` is protected and takes it through the pull request.)
 
 3. **Tag the release** on `main` with the Foundation institutional
    signing key, following the ceremony in `docs/SIGNING.md`
@@ -80,16 +80,15 @@ The CI workflows install all dependencies automatically. For local builds:
    For pre-releases use a suffix: `v3.0.3-RC1`, `v3.1.0-alpha.5`,
    `v3.1.0-beta.1`, etc.
 
-4. **Push the branch and tag.** CI triggers on tag push. Push the
-   branch first so the tag commit is reachable:
+4. **Push the tag.** CI triggers on tag push. `main` is already on the
+   remote, because the merge happened there:
 
    ```bash
-   git push origin main
-   git push origin v3.0.3-RC1
+   git merge-base --is-ancestor v3.0.3-RC1 origin/main && git push origin v3.0.3-RC1
    ```
 
    > **Important:** The tag must point to a commit that is already on
-   > the remote's `main` branch. Push the branch first, then the tag.
+   > the remote's `main` branch.
 
 5. **(Optional) Bump the dev default** -- after tagging, update
    `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next
@@ -103,7 +102,7 @@ The CI workflows install all dependencies automatically. For local builds:
 
 7. **GitHub Actions takes over.** The `gitian` workflow automatically:
    - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
-     armhf, riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
+     riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
      inside isolated Docker containers
    - Packages Linux x86_64 and aarch64 binaries as `.deb` and `.rpm`
    - Builds a Windows NSIS installer (`.exe`)
@@ -112,6 +111,17 @@ The CI workflows install all dependencies automatically. For local builds:
    - Publishes everything as a GitHub Release
 
 8. **Verify the release** at https://github.com/Shekyl-Foundation/shekyl-core/releases
+
+9. **Sign the asset manifest.** The release job publishes an unsigned
+   `SHA256SUMS`. With the token inserted, run the manifest ceremony
+   (`docs/SIGNING.md` §"Release assets"):
+
+   ```bash
+   python3 scripts/release/sign_release_assets.py vX.Y.Z --download --upload --clobber
+   ```
+
+   Until this has run, a downloader can check hashes but not who published
+   them.
 
 ## Tag Naming
 
@@ -127,7 +137,6 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 |------|-------------|
 | `shekyl-x86_64-linux-gnu-vX.Y.Z.tar.bz2` | Linux x86_64 binaries |
 | `shekyl-aarch64-linux-gnu-vX.Y.Z.tar.bz2` | Linux ARM64 binaries |
-| `shekyl-riscv64-linux-gnu-vX.Y.Z.tar.bz2` | Linux RISC-V 64-bit binaries |
 | `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu x86_64 package with systemd unit |
 | `shekyl_X.Y.Z_arm64.deb` | Debian/Ubuntu ARM64 package with systemd unit |
 | `shekyl-X.Y.Z-1.x86_64.rpm` | RPM x86_64 package for Fedora/RHEL/SUSE |
@@ -139,6 +148,10 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 | `shekyl-x86_64-unknown-freebsd-vX.Y.Z.tar.bz2` | FreeBSD x86_64 binaries |
 | `shekyl-vX.Y.Z-source.tar.gz` | Complete source with submodules |
 | `SHA256SUMS` | Checksums for all artifacts |
+| `SHA256SUMS.asc` | Detached signature over `SHA256SUMS`, added by the manifest ceremony (step 9) |
+
+The Gitian Linux build also produces a RISC-V 64-bit tarball; the release job
+does not publish it (see "Future Platforms").
 
 ## Linux Package Details
 

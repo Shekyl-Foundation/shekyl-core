@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours after ten failed handshakes, and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
+- Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
