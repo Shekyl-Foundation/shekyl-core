@@ -45,7 +45,7 @@ use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
-/// Epoch length, in blocks. With [`CAP`], the slash deadline at height 319
+/// Epoch length, in blocks. With [`REORG_CAP_BLOCKS`], the slash deadline at height 319
 /// is inside what a test mines in seconds.
 const EPOCH_BLOCKS: u64 = 20;
 
@@ -99,10 +99,12 @@ struct LeveredChain {
 }
 
 impl LeveredChain {
-    /// The height of the next block: the chain's length, as the driver mines
-    /// from genesis.
-    fn height(&self) -> u64 {
-        self.chain.len() as u64
+    /// The height of the next block. Mined from genesis, the chain's length
+    /// is that height.
+    fn height(&self) -> BlockHeight {
+        BlockHeight::from_raw(
+            u64::try_from(self.chain.len()).expect("a test chain's length is a height"),
+        )
     }
 
     async fn open() -> Self {
@@ -123,14 +125,14 @@ impl LeveredChain {
         let served = 42u64;
         let unserved = 7u64;
         let join_height = self.height();
-        let join_epoch = self.schedule.epoch_at_height(join_height);
+        let join_epoch = self.schedule.epoch_at_height(join_height.to_raw());
         assert_eq!(join_epoch, 3, "71 / 20");
         let joining = {
             let spender = Spender::over(&self.chain);
             spender.spend_coinbase_posting(
                 self.scenario.wallet(),
                 0,
-                join_height,
+                join_height.to_raw(),
                 FEE,
                 Some(&persona.join(shard_set(vec![unserved, served]), ENDPOINT)),
             )
@@ -200,7 +202,7 @@ impl LeveredChain {
         let slash_epoch = join.join_epoch + FAILURE_WINDOW;
         let deadline = self.schedule.slash_deadline_height(slash_epoch);
         assert_eq!(deadline, 319);
-        while self.height() <= deadline {
+        while self.height().to_raw() <= deadline {
             let block = self
                 .scenario
                 .mine_listing(Vec::new())
@@ -291,13 +293,13 @@ impl LeveredChain {
         )
         .expect("the wallet-side verify accepts the driver's reinstate");
         let reinstate_height = self.height();
-        let reinstate_epoch = self.schedule.epoch_at_height(reinstate_height);
+        let reinstate_epoch = self.schedule.epoch_at_height(reinstate_height.to_raw());
         let riding = {
             let spender = Spender::over(&self.chain);
             spender.spend_coinbase_posting(
                 self.scenario.wallet(),
                 1,
-                reinstate_height,
+                reinstate_height.to_raw(),
                 FEE,
                 Some(&join.persona.reinstate(&slashed.record)),
             )
@@ -377,7 +379,13 @@ impl LeveredChain {
         let (no_open_interval, holdings_changed, early_release) = {
             let spender = Spender::over(&self.chain);
             let riding = |bond| {
-                spender.spend_coinbase_posting(self.scenario.wallet(), 2, height, FEE, Some(&bond))
+                spender.spend_coinbase_posting(
+                    self.scenario.wallet(),
+                    2,
+                    height.to_raw(),
+                    FEE,
+                    Some(&bond),
+                )
             };
             let no_open_interval = riding(join.persona.reinstate(&reinstated.stored));
             let mut before_slash = reinstated.stored.clone();
@@ -393,7 +401,7 @@ impl LeveredChain {
             .expect("two shards");
             before_slash.bad_intervals = slashed.record.bad_intervals.clone();
             let holdings_changed = riding(join.persona.reinstate(&before_slash));
-            let current = self.schedule.epoch_at_height(height);
+            let current = self.schedule.epoch_at_height(height.to_raw());
             assert!(
                 current < after_close + RELEASE_COOLDOWN_EPOCHS,
                 "the release lists inside the cooldown ({current} < {after_close} + {RELEASE_COOLDOWN_EPOCHS})"
@@ -438,7 +446,7 @@ impl LeveredChain {
             anchor + RELEASE_COOLDOWN_EPOCHS,
             "the block after the anchor's deadline opens the cooldown's boundary epoch"
         );
-        while self.height() < boundary {
+        while self.height().to_raw() < boundary {
             let block = self
                 .scenario
                 .mine_listing(Vec::new())

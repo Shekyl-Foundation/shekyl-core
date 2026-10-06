@@ -53,7 +53,6 @@ rust/shekyl-chain-ingest/src/mutation_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	let fork_spend = |hashes: &[BlockHash], height: u64| {
 rust/shekyl-chain-ingest/src/scenario_archival_tests.rs	1	fn epoch_at(height: u64) -> SettlementEpoch {
-rust/shekyl-chain-ingest/src/scenario_archival_tests.rs	1	fn first_spending_height() -> u64 {
 rust/shekyl-chain-ingest/src/scenario_spend.rs	2	height: u64,
 rust/shekyl-chain-ingest/src/scenario_spend.rs	1	pub fn root_at(&self, height: u64) -> CurveTreeRoot {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn over(self, tree: &GrownTree, height: u64) -> Facts {
