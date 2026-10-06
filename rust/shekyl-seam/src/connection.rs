@@ -26,18 +26,23 @@
 //!
 //! # Claimed
 //!
-//! `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`,
-//! and the handshake's advertised port and address. The peer asserted
-//! them. `Claimed<T>` is the type so a reader cannot treat one as a
-//! measurement. Sync may use a claim as a hypothesis. Nothing that
-//! decides who stays connected may.
+//! `m_last_known_hash`, `support_flags`, and the handshake's advertised
+//! address. The peer asserted them. `Claimed<T>` is the type so a reader
+//! cannot treat one as a measurement. Sync may use a claim as a
+//! hypothesis. Nothing that decides who stays connected may.
+//!
+//! A height the peer sent is claimed. A height raised from a block this
+//! node accepted is observed chain length. The two do not share a
+//! representation. The label that names which message wrote it stays on
+//! the C++ context with the rest of the sync bookkeeping.
 //!
 //! # The one promotion
 //!
-//! The advertised port and address stay claimed. A re-dial that answers
-//! is a new `Observed` endpoint. It does not write the claim. That is
-//! the gray-to-white rule on this object: the claim and the observation
-//! do not share a representation.
+//! The advertised address stays claimed. A re-dial that answers is a new
+//! `Observed` endpoint, and it is outbound: an inbound socket is not a
+//! dial this node placed. The observation does not write the claim. That
+//! is the gray-to-white rule on this object: the claim and the
+//! observation do not share a representation.
 //!
 //! # Local
 //!
@@ -58,8 +63,9 @@
 //! measurements this node made — idle time, a check it ran — and not
 //! the peer's claims. A claim is not that measurement.
 
+use shekyl_onion_v3::v3_pubkey;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::SocketId;
+use shekyl_transport_layer::{Direction, SocketId};
 
 use crate::endpoint::Endpoint;
 
@@ -106,26 +112,55 @@ impl<T> Observed<T> {
     }
 }
 
-/// The port the handshake advertised.
+/// The address the handshake advertised.
 ///
 /// This is not the endpoint the socket connected to. The connected
 /// address is [`Endpoint`], observed at adoption.
+///
+/// A clearnet handshake carries a host the receiver does not keep: the
+/// wire zeros it, and the port is combined with the host already
+/// observed on the socket. Storing that host would make a reader treat
+/// a discarded value as an address. An overlay handshake carries the
+/// service the peer named, and that service is the claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AdvertisedEndpoint {
-    port: u16,
+pub enum AdvertisedEndpoint {
+    /// The port the public-zone handshake named.
+    Clearnet {
+        /// The advertised port.
+        port: u16,
+    },
+    /// The v3 service the overlay handshake named, and its port.
+    Tor {
+        /// The service key.
+        key: [u8; 32],
+        /// The advertised port.
+        port: u16,
+    },
 }
 
 impl AdvertisedEndpoint {
-    /// `port` is the port the peer named.
+    /// `port` is the port the public-zone handshake named.
     #[must_use]
-    pub const fn new(port: u16) -> Self {
-        Self { port }
+    pub const fn clearnet(port: u16) -> Self {
+        Self::Clearnet { port }
+    }
+
+    /// The overlay service `host` names, or `None` when `host` is not a
+    /// v3 onion.
+    #[must_use]
+    pub fn tor(host: &str, port: u16) -> Option<Self> {
+        Some(Self::Tor {
+            key: v3_pubkey(host)?,
+            port,
+        })
     }
 
     /// The advertised port.
     #[must_use]
     pub const fn port(self) -> u16 {
-        self.port
+        match self {
+            Self::Clearnet { port } | Self::Tor { port, .. } => port,
+        }
     }
 }
 
@@ -141,10 +176,19 @@ pub struct Redial {
 }
 
 impl Redial {
-    /// Hold the claim and the dial side by side.
+    /// Hold the claim beside the endpoint the re-dial connected to.
+    ///
+    /// `None` when `observed` is inbound. A re-dial is a socket this
+    /// node opened.
     #[must_use]
-    pub const fn new(claimed: Claimed<AdvertisedEndpoint>, observed: Observed<Endpoint>) -> Self {
-        Self { claimed, observed }
+    pub const fn new(claimed: Claimed<AdvertisedEndpoint>, observed: Endpoint) -> Option<Self> {
+        if !matches!(observed.direction(), Direction::Outbound) {
+            return None;
+        }
+        Some(Self {
+            claimed,
+            observed: Observed::new(observed),
+        })
     }
 
     /// The handshake's advertisement, unchanged.
@@ -160,6 +204,19 @@ impl Redial {
     }
 }
 
+/// A recorded chain length, with the provenance of the write.
+///
+/// A height the peer sent is a claim. The chain length of a block this
+/// node accepted is a measurement. The message label
+/// (`remote_height_source`) stays on the C++ context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteHeight {
+    /// The peer asserted this height.
+    Claim(Claimed<u64>),
+    /// Chain length of a block this node accepted.
+    AcceptedBlock(Observed<u64>),
+}
+
 /// One adopted session.
 ///
 /// The endpoint and the start time are write-once. Claims are recorded
@@ -170,7 +227,7 @@ pub struct Connection {
     id: SocketId,
     endpoint: Observed<Endpoint>,
     started: Tick,
-    remote_height: Option<Claimed<u64>>,
+    remote_height: Option<RemoteHeight>,
     last_known_hash: Option<Claimed<[u8; 32]>>,
     support_flags: Option<Claimed<u32>>,
     advertised: Option<Claimed<AdvertisedEndpoint>>,
@@ -209,15 +266,36 @@ impl Connection {
         self.started
     }
 
-    /// The height the peer asserted.
+    /// The recorded height, claimed or observed.
     #[must_use]
-    pub const fn remote_height(&self) -> Option<&Claimed<u64>> {
+    pub const fn remote_height(&self) -> Option<&RemoteHeight> {
         self.remote_height.as_ref()
     }
 
-    /// Record the height the peer asserted. The endpoint stays.
-    pub fn note_remote_height(&mut self, height: u64) {
-        self.remote_height = Some(Claimed::new(height));
+    /// Record a height the peer sent. A later claim replaces an earlier
+    /// one, including one raised from an accepted block. The endpoint
+    /// stays.
+    pub fn note_claimed_height(&mut self, height: u64) {
+        self.remote_height = Some(RemoteHeight::Claim(Claimed::new(height)));
+    }
+
+    /// Raise the recorded chain length from a block this node accepted.
+    ///
+    /// A delivered block never lowers the record. A later claim still
+    /// replaces it, through [`Self::note_claimed_height`].
+    pub fn raise_from_accepted_block(&mut self, chain_length: u64) {
+        if chain_length <= self.recorded_height() {
+            return;
+        }
+        self.remote_height = Some(RemoteHeight::AcceptedBlock(Observed::new(chain_length)));
+    }
+
+    fn recorded_height(&self) -> u64 {
+        match &self.remote_height {
+            Some(RemoteHeight::Claim(height)) => *height.claim(),
+            Some(RemoteHeight::AcceptedBlock(height)) => *height.get(),
+            None => 0,
+        }
     }
 
     /// The hash the peer asserted.
@@ -275,8 +353,8 @@ mod tests {
         let id = SocketId::from_ffi(1).expect("id");
         let started = Tick::new(9);
         let mut connection = Connection::open(id, endpoint(18080), started);
-        connection.note_advertised(AdvertisedEndpoint::new(22021));
-        connection.note_remote_height(4);
+        connection.note_advertised(AdvertisedEndpoint::clearnet(22021));
+        connection.note_claimed_height(4);
         connection.note_last_known_hash([9; 32]);
         connection.note_support_flags(7);
         assert_eq!(
@@ -289,7 +367,10 @@ mod tests {
             connection.advertised().expect("claim").claim().port(),
             22021
         );
-        assert_eq!(*connection.remote_height().expect("height").claim(), 4);
+        assert_eq!(
+            connection.remote_height().expect("height"),
+            &RemoteHeight::Claim(Claimed::new(4))
+        );
         assert_eq!(
             *connection.last_known_hash().expect("hash").claim(),
             [9; 32]
@@ -299,8 +380,8 @@ mod tests {
 
     #[test]
     fn a_redial_keeps_the_claim() {
-        let claimed = Claimed::new(AdvertisedEndpoint::new(22021));
-        let redial = Redial::new(claimed, Observed::new(endpoint(18080)));
+        let claimed = Claimed::new(AdvertisedEndpoint::clearnet(22021));
+        let redial = Redial::new(claimed, endpoint(18080)).expect("outbound");
         assert_eq!(redial.claimed().claim().port(), 22021);
         let port = match *redial.observed().get() {
             Endpoint::Clearnet { port, .. } => port,
@@ -308,5 +389,37 @@ mod tests {
         };
         assert_eq!(port, 18080);
         assert_eq!(claimed.claim().port(), 22021);
+    }
+
+    #[test]
+    fn an_overlay_claim_keeps_the_service() {
+        let key = [0x11u8; 32];
+        let host = shekyl_onion_v3::v3_onion_hostname(&key);
+        let advertised = AdvertisedEndpoint::tor(&host, 18081).expect("v3");
+        assert_eq!(advertised, AdvertisedEndpoint::Tor { key, port: 18081 });
+        assert!(AdvertisedEndpoint::tor("not-an-onion", 1).is_none());
+    }
+
+    #[test]
+    fn a_redial_refuses_an_inbound_socket() {
+        let claimed = Claimed::new(AdvertisedEndpoint::clearnet(18080));
+        assert!(Redial::new(claimed, Endpoint::TorInbound).is_none());
+    }
+
+    #[test]
+    fn an_accepted_block_raises_and_a_claim_replaces() {
+        let id = SocketId::from_ffi(1).expect("id");
+        let mut connection = Connection::open(id, endpoint(18080), Tick::new(1));
+        connection.raise_from_accepted_block(4);
+        connection.raise_from_accepted_block(3);
+        assert_eq!(
+            connection.remote_height().expect("height"),
+            &RemoteHeight::AcceptedBlock(Observed::new(4))
+        );
+        connection.note_claimed_height(2);
+        assert_eq!(
+            connection.remote_height().expect("height"),
+            &RemoteHeight::Claim(Claimed::new(2))
+        );
     }
 }
