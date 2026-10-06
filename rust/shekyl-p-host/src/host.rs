@@ -87,8 +87,8 @@ impl fmt::Debug for PersonaServing {
 /// so the requester saw a 200 cut short of its envelope. Under the `ready`
 /// contract a key refuses on policy before the head and fails afterwards
 /// only on a cryptographic fault, so this counter should stay at zero; a
-/// persona whose moves has a key whose pre-flight says yes to what its
-/// signer then refuses (`SF-D8`, amended 2026-10-06).
+/// persona whose counter moves has a key whose pre-flight says yes to what
+/// its signer then refuses (`SF-D8`, amended 2026-10-06).
 ///
 /// `lookup_failures` has **two** causes, deliberately pooled because a
 /// requester cannot distinguish them either: the serving store could not be

@@ -18,8 +18,8 @@ grammar both ends read is `shekyl_curve_tree::serving_route`
 (`SERVING_VIRTUAL_PORT`, `ROUTE_PREFIX`, `CONTENT_TYPE`,
 `RESPONSE_HEADER_NAMES`, `REQUEST_HEADER_NAME`,
 `encode_request_header` / `decode_request_header`);
-the server is `rust/shekyl-p-serve` (`parse_request`, `resolve_body`,
-`render_not_found`); the client is `rust/shekyl-p-fetch` (`PFetchClient`,
+the server is `rust/shekyl-p-serve` (`parse_request`, `admit`,
+`write_response`, `render_not_found`); the client is `rust/shekyl-p-fetch` (`PFetchClient`,
 `RequestHeader`, `ServingEndpoint`, `FetchError`). The onion hostname is
 not route grammar: `shekyl-onion-v3` is the one rend-spec transform,
 typed on the daemon as `ServingEndpoint` and on the wallet as

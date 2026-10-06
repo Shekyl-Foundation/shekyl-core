@@ -1320,9 +1320,10 @@ needed a home that is neither the inner frame nor a header:
   enforce: **`P` does no work that scales with shard size until the
   requester has received the bytes that work is for.** Before the head
   `P` does constant work only — parsing, the gate, opening the shard's
-  header and the pre-flight — so a key that is not ready, an unknown
-  shard and an out-of-window anchor cost `P` the same lookup and render
-  the identical 404. Each read, hash and write after the head is paid
+  header and the pre-flight — so a key that is not ready costs `P` the
+  same lookup as a shard it does not hold, and both render the identical
+  404 (an out-of-window anchor renders it too, and costs less: the gate
+  runs before the store is touched). Each read, hash and write after the head is paid
   for by the requester taking the bytes; a requester that stops
   reading stalls `P` within one chunk, a requester that disconnects
   stops it after about one socket buffer, and in neither case does `P`
