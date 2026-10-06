@@ -23,6 +23,14 @@
 # check walks the stale constants at HEAD's first parent, which in CI is the
 # base branch. On a local branch that parent is the last commit only.
 #
+# An `estimated` constant is a prediction with its arithmetic: a band with
+# a unit, the basis, and the captures the basis is computed from, which
+# must exist. It is the shape a design takes before its path is built. The
+# only edit that makes an estimate current or stale is a capture file that
+# was not in the parent tree: a measurement that landed, not an estimate
+# that hardened. An estimate may be withdrawn to unmeasured; it may not
+# vanish.
+#
 # Exit 0: the ledger tells the truth. Exit 1: it disagrees with the tree.
 # Exit 2: the question could not be asked (rule 47). `--selftest` builds
 # throwaway repositories and bites each failure class.
@@ -31,6 +39,7 @@ from __future__ import annotations
 
 import enum
 import io
+import math
 import re
 import subprocess
 import sys
@@ -71,13 +80,21 @@ REV_SOURCE_HEADER = "capture header"
 C_FAMILY_SUFFIXES = {".rs", ".h", ".hpp", ".c", ".cpp", ".cc", ".inl"}
 HASH_COMMENT_SUFFIXES = {".py", ".sh", ".toml", ".yml", ".yaml"}
 
-HEADER_KEYS = {"tracked_set", "toolchain_file", "path_set", "constant", "toolchain"}
+HEADER_KEYS = {
+    "tracked_set", "toolchain_file", "path_set", "constant", "toolchain",
+    "retired_estimate",
+}
 PATH_SET_KEYS = {"id", "spec", "cleared", "stale_through"}
 CONSTANT_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "path_set"}
 MEASURED_KEYS = {"capture", "capture_rev", "rev_source"}
 STALE_KEYS = {"stale_since", "carrier"}
 UNMEASURED_KEYS = {"carrier"}
+ESTIMATED_KEYS = {"estimate", "basis", "basis_captures", "carrier"}
 TOOLCHAIN_ACK_KEYS = {"commit", "note"}
+BAND_KEYS = {"low", "high", "unit"}
+RETIRED_KEYS = {"name", "estimate", "measured", "capture", "capture_rev", "verdict", "note"}
+VERDICT_HELD = "held"
+VERDICT_FALSIFIED = "falsified"
 
 SHALLOW_MSG = (
     "this checkout is shallow and its history is cut inside the range "
@@ -93,6 +110,7 @@ class Status(enum.Enum):
     CURRENT = "current"
     STALE = "stale"
     UNMEASURED = "unmeasured"
+    ESTIMATED = "estimated"
 
     @classmethod
     def parse(cls, raw: object) -> Status | None:
@@ -136,6 +154,33 @@ class PathSet:
 
 
 @dataclass(frozen=True)
+class Band:
+    """A predicted range in one unit. A point prediction is `low == high`."""
+
+    low: float
+    high: float
+    unit: str
+
+    def holds(self, measured: float) -> bool:
+        return self.low <= measured <= self.high
+
+    def shown(self) -> str:
+        return f"{self.low:g} to {self.high:g} {self.unit}"
+
+
+@dataclass(frozen=True)
+class RetiredEstimate:
+    """A prediction kept beside the measurement that settled it."""
+
+    name: str
+    estimate: Band
+    measured: float
+    capture: str
+    capture_rev: str
+    verdict: str
+
+
+@dataclass(frozen=True)
 class Constant:
     """One cost-justified value. History lives on its path set, not here."""
 
@@ -150,6 +195,9 @@ class Constant:
     rev_source: str | None = None
     stale_since: str | None = None
     carrier: str | None = None
+    estimate: Band | None = None
+    basis: str | None = None
+    basis_captures: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -310,6 +358,39 @@ def _sentence(raw: object) -> str | None:
     return raw.strip()
 
 
+def _number(raw: object) -> float | None:
+    """A finite TOML number. `true` is not a number, and neither is a string."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
+
+
+def parse_band(raw: object, label: str) -> tuple[Band | None, list[str]]:
+    """`{ low, high, unit }`: two numbers in order, and what they count."""
+    if not isinstance(raw, dict):
+        return None, [f"{label}: estimate is a table of low, high and unit"]
+    fails = [
+        f"{label}: estimate key {key!r} is not one of low, high, unit"
+        for key in sorted(set(raw) - BAND_KEYS)
+    ]
+    low, high = _number(raw.get("low")), _number(raw.get("high"))
+    unit = raw.get("unit")
+    if low is None or high is None:
+        fails.append(f"{label}: estimate low and high are numbers")
+    elif low > high:
+        fails.append(f"{label}: estimate low {low:g} is above high {high:g}")
+    if not isinstance(unit, str) or not unit.strip():
+        fails.append(f"{label}: estimate names its unit")
+    if fails or low is None or high is None or not isinstance(unit, str):
+        return None, fails
+    return Band(low, high, unit.strip()), []
+
+
+def _article(word: str) -> str:
+    return "an" if word[:1] in "aeiou" else "a"
+
+
 def parse_acks(
     items: object, *, id_key: str, text_key: str, label: str
 ) -> tuple[tuple[Ack, ...], list[str]]:
@@ -420,12 +501,17 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     allowed = set(CONSTANT_KEYS)
     if status is Status.UNMEASURED:
         allowed |= UNMEASURED_KEYS
+    elif status is Status.ESTIMATED:
+        allowed |= ESTIMATED_KEYS
     else:
         allowed |= MEASURED_KEYS
         if status is Status.STALE:
             allowed |= STALE_KEYS
     for key in sorted(set(table) - allowed):
-        fails.append(f"{name}: key {key!r} is not valid for a {status.value} constant")
+        fails.append(
+            f"{name}: key {key!r} is not valid for "
+            f"{_article(status.value)} {status.value} constant"
+        )
     for key in sorted(CONSTANT_KEYS - set(table)):
         fails.append(f"{name}: missing {key!r}")
     defined_in = _require_str(table, "defined_in", fails, name)
@@ -450,16 +536,36 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
                 ids.append(item)
         measured_t = tuple(ids)
     capture = capture_rev = rev_source = stale_since = carrier = None
-    if status is not Status.UNMEASURED:
+    estimate = basis = None
+    basis_captures: tuple[str, ...] = ()
+    if status in (Status.CURRENT, Status.STALE):
         capture = _require_str(table, "capture", fails, name) or None
         capture_rev = _require_str(table, "capture_rev", fails, name) or None
         rev_source = _require_str(table, "rev_source", fails, name) or None
     if status is not Status.CURRENT:
         carrier = _sentence(table.get("carrier", ""))
         if carrier is None:
-            who = "stale" if status is Status.STALE else "unmeasured"
-            fails.append(f"{name}: a {who} constant names its carrier")
+            fails.append(
+                f"{name}: {_article(status.value)} {status.value} constant names its carrier"
+            )
             carrier = None
+    if status is Status.ESTIMATED:
+        estimate, band_fails = parse_band(table.get("estimate"), name)
+        fails.extend(band_fails)
+        basis = _sentence(table.get("basis", ""))
+        if basis is None:
+            fails.append(f"{name}: an estimated constant states the arithmetic of its basis")
+        raw_captures = table.get("basis_captures")
+        if (
+            not isinstance(raw_captures, list)
+            or not raw_captures
+            or not all(isinstance(item, str) and item.strip() for item in raw_captures)
+        ):
+            fails.append(
+                f"{name}: an estimated constant lists the captures its basis is computed from"
+            )
+        else:
+            basis_captures = tuple(item.strip() for item in raw_captures)
     if status is Status.STALE:
         raw_since = table.get("stale_since", "")
         if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
@@ -471,6 +577,7 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     return Constant(
         name, defined_in, needle, measured_t, status, path_set,
         capture, capture_rev, rev_source, stale_since, carrier,
+        estimate, basis, basis_captures,
     ), fails
 
 
@@ -589,6 +696,16 @@ def load(root: Path) -> tuple[dict, set[str]]:
 def _matches_tracked(root: Path, spec: str) -> bool:
     result = git(root, "ls-files", "--", spec)
     return result.code == 0 and bool(result.out)
+
+
+def _is_tracked_file(root: Path, path: str) -> bool:
+    """`path` is one tracked file, spelled exactly.
+
+    A pathspec is not enough for a capture: a directory or a glob matches
+    files without naming the one the arithmetic read.
+    """
+    result = git(root, "ls-files", "--", f":(literal){path}")
+    return result.code == 0 and result.out == path
 
 
 def audit_spec(root: Path, path_set: PathSet) -> list[str]:
@@ -711,6 +828,13 @@ def audit_constant(
     are already resolved on the path set; a stale constant does not read `cleared`.
     """
     fails = _needle(root, constant)
+    if constant.status is Status.ESTIMATED:
+        for capture in constant.basis_captures:
+            if not _is_tracked_file(root, capture):
+                fails.append(
+                    f"{constant.name}: basis capture {capture} is not a tracked file"
+                )
+        return fails, None
     if constant.status is Status.UNMEASURED or path_set is None or not spec_ok:
         return fails, None
     if not constant.capture or not constant.capture_rev or not constant.rev_source:
@@ -823,6 +947,66 @@ def check_toolchain(
     return fails
 
 
+def parse_retired(
+    root: Path, data: dict
+) -> tuple[list[RetiredEstimate], list[str]]:
+    """Predictions that were measured, each beside its number.
+
+    The verdict is not taken on trust: it is the band applied to the
+    measured value, and a row that says otherwise is refused. That is the
+    point of keeping the row. A wrong estimate recorded next to what was
+    measured is how the next estimate gets calibrated.
+    """
+    raw_rows = data.get("retired_estimate", [])
+    if not isinstance(raw_rows, list):
+        return [], ["retired_estimate must be a list of tables"]
+    retired: list[RetiredEstimate] = []
+    fails: list[str] = []
+    seen: set[str] = set()
+    for index, table in enumerate(raw_rows):
+        if not isinstance(table, dict):
+            fails.append(f"retired_estimate[{index}] must be a table")
+            continue
+        raw_name = table.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else ""
+        label = f"retired estimate {name or f'[{index}]'}"
+        found = [
+            f"{label}: key {key!r} is not valid" for key in sorted(set(table) - RETIRED_KEYS)
+        ]
+        found += [f"{label}: missing {key!r}" for key in sorted(RETIRED_KEYS - set(table))]
+        if name in seen:
+            found.append(f"{label}: duplicate name")
+        band, band_fails = parse_band(table.get("estimate"), label)
+        found.extend(band_fails)
+        measured = _number(table.get("measured"))
+        if measured is None:
+            found.append(f"{label}: measured is a number, in the estimate's unit")
+        capture = table.get("capture")
+        if not isinstance(capture, str) or not _is_tracked_file(root, capture):
+            found.append(f"{label}: capture {capture!r} is not a tracked file")
+        raw_rev = table.get("capture_rev")
+        if not isinstance(raw_rev, str) or resolve(root, raw_rev) is None:
+            if isinstance(raw_rev, str) and COMMIT_ID_RE.fullmatch(raw_rev) and shallow_boundary(root):
+                raise GateError(SHALLOW_MSG)
+            found.append(f"{label}: capture_rev {raw_rev!r} is not a commit in this repository")
+        if _sentence(table.get("note", "")) is None:
+            found.append(f"{label}: note says what the difference is put down to")
+        verdict = table.get("verdict")
+        if band is not None and measured is not None:
+            expected = VERDICT_HELD if band.holds(measured) else VERDICT_FALSIFIED
+            if verdict != expected:
+                found.append(
+                    f"{label}: verdict {verdict!r}, but {measured:g} {band.unit} against "
+                    f"{band.shown()} is {expected}"
+                )
+        fails.extend(found)
+        if found or band is None or measured is None:
+            continue
+        seen.add(name)
+        retired.append(RetiredEstimate(name, band, measured, capture, raw_rev, verdict))
+    return retired, fails
+
+
 def _parent_ledger(root: Path) -> str | None:
     """The ledger at HEAD's first parent, or None when that parent has none.
 
@@ -847,7 +1031,9 @@ def _parent_ledger(root: Path) -> str | None:
     raise GateError(f"cannot read the ledger at HEAD^1: {result.err}")
 
 
-def check_transitions(root: Path, data: dict, constants: list[Constant]) -> list[str]:
+def check_transitions(
+    root: Path, data: dict, constants: list[Constant], retired: list[RetiredEstimate]
+) -> list[str]:
     """A parent stale constant stays stale, or a capture under the same name contains its cause.
 
     Walking the new ledger misses the constant that was deleted or renamed:
@@ -879,6 +1065,7 @@ def check_transitions(root: Path, data: dict, constants: list[Constant]) -> list
         if isinstance(row, dict) and isinstance(row.get("name"), str)
     }
     fails: list[str] = []
+    fails.extend(_estimate_transitions(root, rows, raw_names, by_name, retired))
     for old in rows:
         if not isinstance(old, dict) or old.get("status") != Status.STALE.value:
             continue
@@ -923,6 +1110,54 @@ def check_transitions(root: Path, data: dict, constants: list[Constant]) -> list
     return fails
 
 
+def _estimate_transitions(
+    root: Path, rows: list, raw_names: set, by_name: dict[str, Constant],
+    retired: list[RetiredEstimate],
+) -> list[str]:
+    """An estimate becomes measured only by a capture file new to this history.
+
+    `git cat-file -e HEAD^1:<capture>` says whether the parent tree already
+    held the file. If it did, the "capture" predates the estimate's path and
+    the row has hardened a prediction into a number. The same test applies
+    to an estimate that leaves the constants for `retired_estimate`: it is
+    retired by a measurement that landed, with its verdict, or not at all.
+    """
+    fails: list[str] = []
+    retired_by_name = {item.name: item for item in retired}
+    for old in rows:
+        if not isinstance(old, dict) or old.get("status") != Status.ESTIMATED.value:
+            continue
+        name = old.get("name")
+        if not isinstance(name, str) or not name:
+            name = "<unnamed>"
+        if name not in raw_names:
+            settled = retired_by_name.get(name)
+            if settled is None:
+                fails.append(
+                    f"{name}: was estimated and is gone. An estimate is withdrawn to "
+                    "unmeasured with its reason, measured by a capture, or retired "
+                    "beside its measurement; it does not vanish"
+                )
+            elif git(root, "cat-file", "-e", f"HEAD^1:{settled.capture}").code == 0:
+                fails.append(
+                    f"{name}: was estimated and is now retired on {settled.capture}, "
+                    "which the parent tree already held. Only a capture that lands "
+                    "settles an estimate"
+                )
+            continue
+        now = by_name.get(name)
+        if now is None or now.status in (Status.ESTIMATED, Status.UNMEASURED):
+            continue
+        held = git(root, "cat-file", "-e", f"HEAD^1:{now.capture}")
+        if held.code == 0:
+            fails.append(
+                f"{name}: was estimated and is now {now.status.value} on "
+                f"{now.capture}, which the parent tree already held. Only a capture "
+                "that lands makes an estimate measured"
+            )
+    return fails
+
+
 def run(root: Path) -> int:
     try:
         require_stripper()
@@ -961,7 +1196,9 @@ def run(root: Path) -> int:
             if base is not None:
                 bases[constant.name] = base
         fails.extend(check_toolchain(root, data, bases))
-        fails.extend(check_transitions(root, data, constants))
+        retired, retired_fails = parse_retired(root, data)
+        fails.extend(retired_fails)
+        fails.extend(check_transitions(root, data, constants, retired))
     except GateError as exc:
         print(f"FAIL: {exc}")
         return 2
@@ -971,6 +1208,14 @@ def run(root: Path) -> int:
         if constant.status is Status.STALE:
             since = (constant.stale_since or "")[:OID_SHOWN]
             print(f"stale: {constant.name} — since {since}; carrier: {constant.carrier}")
+        elif constant.status is Status.ESTIMATED:
+            band = constant.estimate.shown() if constant.estimate else "no band"
+            print(f"estimate: {constant.name} — {band}; carrier: {constant.carrier}")
+    for item in retired:
+        print(
+            f"retired estimate: {item.name} — predicted {item.estimate.shown()}, "
+            f"measured {item.measured:g} {item.estimate.unit}: {item.verdict}"
+        )
     if fails:
         print("FAIL: the measurement ledger disagrees with the tree:")
         for finding in fails:
@@ -982,7 +1227,7 @@ def run(root: Path) -> int:
     print(
         f"measurement ledger: {len(constants)} constants tell the truth — "
         f"{counts[Status.CURRENT]} current, {counts[Status.STALE]} stale, "
-        f"{counts[Status.UNMEASURED]} unmeasured"
+        f"{counts[Status.UNMEASURED]} unmeasured, {counts[Status.ESTIMATED]} estimated"
     )
     return 0
 

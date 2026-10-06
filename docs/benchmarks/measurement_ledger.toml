@@ -35,6 +35,18 @@
 # The only edit that retires a stale constant is a capture, under the same
 # name, whose revision contains that constant's `stale_since`.
 #
+# An `estimated` constant is a prediction: its `estimate` (a band,
+# `{ low, high, unit }`), its `basis` (the arithmetic) and `basis_captures`
+# (the capture files the arithmetic reads, each one exact tracked file).
+# It has no capture of its own. It leaves that status only as `unmeasured`
+# with a reason, as a measured row on a capture file the parent tree did
+# not hold, or into `[[retired_estimate]]` on the same condition.
+#
+# `[[retired_estimate]]` keeps a prediction beside the measurement that
+# settled it: the band, `measured` in the band's unit, the capture and its
+# revision, a `note`, and a `verdict` of `held` or `falsified` that the
+# check computes from the two and refuses when the row says otherwise.
+#
 # `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
 # for the whole ledger. It is owed while any constant is current across the
 # change, because a compiler bump is on no path set's spec and moves them
