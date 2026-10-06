@@ -48,6 +48,7 @@ fn actor_and_messages_are_send() {
     assert_send::<VerifyRoot>();
     assert_send::<RootAndDepthAt>();
     assert_send::<AssembleTx>();
+    assert_send::<OfferOwned>();
     assert_send::<PinServeSet>();
     assert_send::<PinCompleteTreePrefix>();
     assert_send::<OwnedTxLeaves>();
