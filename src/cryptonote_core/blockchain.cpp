@@ -405,6 +405,20 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   // cached once for the timestamp-rule shim.
   m_genesis_timestamp = m_db->get_block_timestamp(0);
 
+  // The hash this process computes for block 0 is this build's pin, or
+  // the daemon does not start. `reset_and_set_genesis_block` is not this
+  // check: a fakechain replay installs its own block 0 there.
+  {
+    std::uint8_t pin[32];
+    const crypto::hash got = m_db->get_block_hash_from_height(0);
+    if (shekyl_genesis_hash(static_cast<std::uint8_t>(m_nettype), pin) != 0
+        || std::memcmp(got.data, pin, sizeof(pin)) != 0)
+    {
+      MERROR("refusing to start: block 0 " << got << " is not this build's genesis pin");
+      return false;
+    }
+  }
+
   // check how far behind we are
   uint64_t top_block_timestamp = m_db->get_top_block_timestamp();
   uint64_t timestamp_diff = time(NULL) - top_block_timestamp;
