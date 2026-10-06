@@ -1,7 +1,7 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
 **Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
-BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
+BA-Q3, BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
 disposition in §2 and row of §5 is a *proposal*. No benchmark, workflow,
 baseline or threshold changes with this document.
 
@@ -461,8 +461,8 @@ capture.** PR #968 merged a record and two observation files,
 and pointed the read-capacity row in `docs/FOLLOWUPS.md` at the result.
 Nothing is left to rule.
 
-**BA-Q3 — The order of read, digest and sign on the serve path.** As ruled
-on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
+**BA-Q3 — RULED 2026-10-06: option S, as an abuse mitigation.** The order of
+read, digest and sign on the serve path. As ruled on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
 persona reads the shard once to compute the delivery digest `D`, signs, then
 reads it again to send, holding no more than a chunk. Neither the ruling nor
 the documents that record it state what the second read and the digest cost.
@@ -567,11 +567,52 @@ range is a prediction until BA-T5 times read, hash and sign apart with S as
 an arm. A faster digest (TurboSHAKE or KangarooTwelve) is a separate change
 to the wire and the domain registry and is not part of S.
 
-S changes the order the 2026-10-04 ruling set (sign before the first byte)
-and leaves the digest alone. It is the maintainer's to rule and is **not
-ruled**. Default: S, with the pre-flight method, once BA-T5 has reported the
-cost by phase for both arms and the `SH-2` question above is answered;
-until then two passes stand. T is not an option.
+*The ruling (maintainer, 2026-10-06).* S, framed as an abuse mitigation,
+which gives it a rule that can be tested: **`P` does no work that scales
+with shard size until the requester has received the bytes that work is
+for.** Before the 200 head, `P` does constant work only: parsing, the
+anchor gate, opening the shard's header, and a signer pre-flight. Each
+read, hash and write after the head is paid for by the requester receiving
+the bytes. The signature comes last and only if the whole body was written.
+A requester that disconnects early stops `P` after about one socket buffer
+of work, and `P` never signs. The invariant goes into `SF-D8` as a stated
+property. The costs the ruling accepts are the two above: a rare truncated
+200 on a cryptographic fault after the body, and a store change mid-body
+that is signed rather than withheld, which raises BA-G2's priority. Not
+covered, and left to BA-Q4: a slow reader holding one of the 64 permits to
+the stall timeout, which costs `P` a permit rather than CPU.
+
+*Estimates until S is measured*, derived from the 2026-10-05 floor record
+(BA-G1) and carried in the measurement ledger as `estimated` rows, which
+only a landed capture can turn into measurements:
+
+| Quantity | Two-pass today | S, estimated | Basis |
+| --- | --- | --- | --- |
+| Work `P` does before its first byte | about 80 ms CPU | **under 1 ms** | Nothing before the head reads or hashes the body |
+| CPU per full response, 1 in flight | 103 ms median | **about 50 ms**, band 40–60 | The pre-#954 arm, 24.8 ms, plus one digest pass, 23.9 ms |
+| Responses per second, 8 in flight | 37–38 | **about 50**, band 40–75 | Between the two measured arms; not linear in CPU |
+
+The first row is the abuse figure: if it holds, pre-head amplification
+falls by about two orders of magnitude.
+
+*Build order.* BA-T3 lands first on the two-pass path, so that the
+rolling baseline holds the two-pass instruction count and S's PR carries
+a before-and-after in its gate comment. Then S itself: `SF-D8` amended
+with the new order and the invariant; a `PassKey::ready(shard_id,
+anchor_height)` pre-flight with no default implementation, which
+`NoResidentKey` refuses, run after the store has opened the shard so key
+absence costs the same lookup as an unknown shard; the serve order parse,
+gate, open, `ready`, head, stream-and-fold, sign, envelope; a separate
+counter for a signing failure after the body. Tests enforce the invariant:
+an early disconnect reads at most a bounded number of chunks and never
+signs; a key that is not ready is a 404 with no body read; a body shorter
+or longer than its frame is truncated and not signed; the pinned v3 KAT and
+the fetch client's against-serve test pass unchanged.
+
+*Carried beyond this lane.* The invariant is general: no unpaid work
+proportional to the payload before the first byte. Daemon RPC, Levin block
+and transaction requests, and the fetch client's handling of large
+responses are to be checked against it (a rules-queue row, not this PR).
 
 **BA-Q4 — Derive serve-side `MAX_INFLIGHT`.** Default: derive it from BA-T5
 on the floor, as the constant's own comment promises (BA-D15), and state

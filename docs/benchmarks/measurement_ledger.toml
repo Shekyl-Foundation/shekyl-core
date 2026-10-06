@@ -24,6 +24,12 @@
 #                         set when they share one cost, and that cost is
 #                         acknowledged once.
 #
+# An `estimated` constant is a prediction for a path not yet built: its
+# `estimate` (value and band), its `basis` (the arithmetic) and
+# `basis_captures` (the files the arithmetic reads, which must exist). It
+# becomes current or stale only through a capture file the base branch did
+# not hold; it may be withdrawn to unmeasured; it may not vanish.
+#
 # A path set is heard once. `stale_through` lists the commits to its spec
 # a stale constant has heard, each with a note on what the change does to
 # the cost; a commit that is in none of their histories fails every stale
@@ -338,6 +344,42 @@ needle = "pub const MAX_INFLIGHT: usize = 64;"
 measured_by = ["BA-T5"]
 status = "unmeasured"
 carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment; no run has varied or derived it."
+path_set = "p-serve"
+
+[[constant]]
+name = "s_prehead_work_estimate"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Work `P` does before its first byte | about 80 ms CPU | **under 1 ms** |"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = "under 1 ms of CPU before the 200 head; today about 80 ms (read, digest, sign)."
+basis = "Under S nothing before the head reads or hashes the body: parse, the anchor gate, the shard header and the signer pre-flight are constant work. The 80 ms today is the floor record's digest-twice-and-sign path (103.1 ms per response against 24.8 ms before #954, 78 ms of it CPU)."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md"]
+carrier = "BA-T5 (BA-Q3 ruled S, 2026-10-06). The first floor run of S measures it; until then it is the abuse figure the ruling rests on, estimated."
+path_set = "p-serve"
+
+[[constant]]
+name = "s_cpu_per_response_estimate"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| CPU per full response, 1 in flight | 103 ms median | **about 50 ms**, band 40–60 |"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = "about 50 ms CPU per full-segment response at one in flight, band 40 to 60 ms."
+basis = "The pre-#954 arm of the floor record, 24.8 ms median per response, plus one digest pass over the framed segment, 23.9 ms; S drops the second read and the second digest pass and moves the signature to the end without adding work."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md"]
+carrier = "BA-T5 (BA-Q3 ruled S, 2026-10-06), two arms in one floor session, cost split by read, hash and sign."
+path_set = "p-serve"
+
+[[constant]]
+name = "s_throughput_estimate"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Responses per second, 8 in flight | 37–38 | **about 50**, band 40–75 |"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = "about 50 responses per second at eight in flight, band 40 to 75."
+basis = "Between the floor record's two measured arms, 74 to 84 before #954 and 37 to 38 after; throughput at eight in flight is not linear in CPU per response, so the band is wide."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md"]
+carrier = "BA-T5 (BA-Q3 ruled S, 2026-10-06), the eight-in-flight cell of the S arm."
 path_set = "p-serve"
 
 [[path_set]]

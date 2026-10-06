@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Benchmarks: `BA-T3` gates the archival serve path per PR as instruction counts (`shekyl-p-serve::serve_response_iai`, one leaf to a full segment); the measurement ledger gains an `estimated` status, seeded with option S's three predicted figures, which only a landed capture can turn into measurements (`BENCHMARK_ALIGNMENT.md` `BA-Q3`, ruled 2026-10-06).
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
