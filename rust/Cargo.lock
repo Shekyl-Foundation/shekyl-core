@@ -4540,6 +4540,10 @@ dependencies = [
 name = "shekyl-p-serve"
 version = "3.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "fips204",
+ "gungraun",
+ "rand 0.8.6",
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-curve-tree",

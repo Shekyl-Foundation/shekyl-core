@@ -46,6 +46,18 @@ bench-internals = []
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+# `BA-T3`: the serve-one-response drift gate (`benches/serve_response_iai.rs`),
+# hardware-independent instruction counts gated per PR by `ci/benchmarks`.
+# gungraun rather than criterion: wall clock on this path is the floor
+# device's measurement (`BA-T5`), not a CI runner's.
+gungraun = "0.19"
+# The bench signs under a SEEDED key with a seeded ML-DSA nonce, as
+# `shekyl-tx-builder`'s `transfer_e2e_iai` does: a fresh key or a hedged
+# signature moves the rejection-sampling trajectory and with it the count
+# by tens of millions of instructions between runs of the same input.
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+fips204 = "0.4.6"
+rand = "0.8"
 # Self-dependency: integration tests build the lib without cfg(test), so the
 # test signer must ride the dev graph explicitly (same shape as retention's
 # `consensus-kat` unlock).
@@ -54,3 +66,10 @@ shekyl-p-serve = { path = ".", features = ["test-signer"] }
 [lints]
 workspace = true
 
+# Gated by `bench-internals`, the in-memory composition it times. Its signer
+# is its own seeded key, built inside the bench. Registered as an iai-only
+# row in `scripts/bench/capture_rust_baseline.sh` with that feature.
+[[bench]]
+name = "serve_response_iai"
+harness = false
+required-features = ["bench-internals"]

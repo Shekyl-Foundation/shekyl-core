@@ -780,7 +780,69 @@ re-derivation.
 admission path is the *caller* of these FFI entry points, not an
 independent implementation.
 
-## 12. Known gaps
+## 12. `crypto_bench_serve_response`
+
+**Crate.** `shekyl-p-serve`.
+**Binary.** `benches/serve_response_iai.rs` (gungraun, registered as an
+iai-only row in `capture_rust_baseline.sh` with the `bench-internals`
+feature). No criterion sibling: wall clock on this path is the floor
+device's measurement (`BENCHMARK_ALIGNMENT.md` `BA-T5`).
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** The serve loop's work for one `GET /shard/{id}`:
+parse, the anchor gate, every read of the body, every digest pass over
+it, the countersignature, and the bytes written. Pinned to the endpoint rather than to the
+digest or the signer, so that a change in how many times the body is
+read or hashed moves the count. That is the change `BA-Q3` makes: the
+`SF-D8` v3 path reads and digests each shard twice; option S reads and
+digests once and signs last.
+
+**Fixture shape.** Three cells by shard size: one leaf, one eighth of a
+segment, and a full segment, which is the size a bonded shard is served
+at. The cost has a fixed part (parse, gate, sign) and a part linear in
+the body (read, digest, write); three sizes let a change to either
+show as such. The store is in memory (`ShardBody::flat`): store I/O is
+the floor device's cost, and an on-disk store would put the store's
+read path inside the count. The signer is the bench's own:
+a persona key and an ML-DSA signing nonce fixed by one seed, in the byte
+layout the test signer uses. A fresh key or a hedged signature moves
+ML-DSA's rejection-sampling trajectory, and with it the count by tens of
+millions of instructions between runs of one input (measured: 14 M
+against 45 M for one leaf); the production signer is hedged, and the gate
+pins one trajectory so that what moves the count is the serve. The shard
+bytes come from the same seed.
+
+**Measurement boundary.** Building the shard and the key, and a
+self-witness serve (asserting a `200`, so the gate cannot count the
+miss path) are `setup`. The response buffer is pre-sized to the
+witness's length so that its growth is not measured. The fixture is
+returned from the measured function so that freeing it is not charged.
+
+**On one thread, into a buffer.** The endpoint runs its hops on tokio's
+blocking pool, and Callgrind keeps one collection state per thread. A
+first cut toggled collection on the named hop functions so the pool
+threads would count; the pool's own idle work then drifted the
+per-thread totals by up to 14 % between runs of the same input, which no
+±5 % threshold survives. So the measured function is
+`serve_one_in_memory` (`bench-internals` feature): the endpoint's own
+steps — `gate_and_digest`, `sign_transcript`, `reopen_body`,
+`response_head`, `read_chunk`, the same digest comparison before the
+envelope — composed in the endpoint's order on the calling thread, into
+a pre-sized buffer, with no runtime and no socket. It is not a second
+serve path: `serve_tests.rs` asserts that the composition and the live
+endpoint produce the same bytes ahead of the envelope for the same
+request, and the same 404, so the glue cannot drift from the endpoint
+without a test saying so. What the count leaves out, by construction: the
+socket writes, the blocking-pool hand-offs and the requester's reads,
+which are the floor's wall clock (`BA-T5`), not the serve loop's work.
+
+**Class rationale.** Bidirectional because the failure modes — a serve
+that stops hashing, or stops signing — present as a large
+instruction-count *drop*.
+
+**Apples-to-oranges against C++.** None; the serve path is Rust only.
+
+## 13. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -865,7 +927,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 13. Cross-references
+## 14. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -896,7 +958,7 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 14. Change log for this manifest
+## 15. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
@@ -934,3 +996,10 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   same fixture shape — what moved is the *measured construction
   itself*, by ratified consensus design, which the rolling baseline
   absorbs on the next `dev` rotation.
+- `BA-T3` (`docs/design/BENCHMARK_ALIGNMENT.md`, PR A of the `BA-Q3`
+  build): added §12 (`crypto_bench_serve_response`), the serve-path
+  drift gate on `shekyl-p-serve`, registered as an iai-only row with the
+  `bench-internals` feature. Schema version unchanged (`shekyl_rust_v0`);
+  the function name routes into the existing `crypto_bench_*` class.
+  Sections previously numbered §§12–14 (Known gaps, Cross-references,
+  Change log) renumbered to §§13–15.
