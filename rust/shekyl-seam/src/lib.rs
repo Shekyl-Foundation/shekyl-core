@@ -17,6 +17,7 @@
 
 #![deny(unsafe_code)]
 
+mod connection;
 mod dial;
 mod drive;
 mod endpoint;
@@ -24,6 +25,10 @@ mod hub;
 mod loopback;
 mod registry;
 
+pub use connection::{
+    AdvertisedEndpoint, ChainLength, Claimed, Connection, HeightClaim, HeightMessage, Redial,
+    RedialRefusal,
+};
 pub use dial::{Channel, Dial};
 pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
