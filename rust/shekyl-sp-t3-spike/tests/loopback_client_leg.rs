@@ -127,7 +127,7 @@ async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
 async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     // A `P` whose own height is a day past the apparatus's anchors sees an
     // anchor outside `[own − 720 − L, own − 720 + L]` and renders the
-    // identical 404. The client leg must class that as `Refused`: it is a
+    // bare 400. The client leg must class that as `Refused`: it is a
     // completed exchange, and the rig — not the network — is what is wrong.
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
         APPARATUS_OWN_HEIGHT + 720,
@@ -138,7 +138,7 @@ async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     let outcome = leg.fetch_once(0, &target_for(&signer)).await;
 
     assert_eq!(outcome, Err(FailureKind::Refused));
-    assert_eq!(ep.served_count(), 0, "the identical 404 is not a serve");
+    assert_eq!(ep.served_count(), 0, "a 400 is not a serve");
 }
 
 #[tokio::test]

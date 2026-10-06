@@ -26,12 +26,17 @@
 //!    72-byte [`RequestHeader`] `nonce ‖ anchor_height ‖ anchor_hash`, hex on
 //!    the wire (`SF-D5`).
 //! 4. Read a complete head. `200` → continue; `404` → [`FetchError::Miss`];
-//!    anything else complete → [`FetchError::Malformed`]; no complete head
-//!    → [`FetchError::Stall`] (`SF-D6`, `RF-R1`).
+//!    `400` → [`FetchError::Rejected`]; `503` →
+//!    [`FetchError::Unavailable`]; anything else complete →
+//!    [`FetchError::Malformed`]; no complete head → [`FetchError::Stall`]
+//!    (`SF-D6`, `RF-R1`).
 //! 5. Bound the body from `content-length` **before** reading it, read
 //!    exactly that many bytes, and split the fixed-width countersignature
 //!    envelope off the end. `P` sends it last, so holding it means the
-//!    whole frame arrived.
+//!    whole frame arrived. An envelope that is the refusal trailer is
+//!    [`FetchError::Unsigned`]: `P` served and says it did not sign. A body
+//!    that stops short of its declared length is a stall, wherever it
+//!    stops.
 //! 6. Recompute the delivery digest from the bytes ahead of the envelope,
 //!    under this request's own nonce, and verify `P`'s
 //!    [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)
@@ -60,8 +65,9 @@
 //! obligation the crate cannot check itself (`SF-D7` amendment).
 //!
 //! **It does not retry.** The taxonomy in [`FetchError`] tells the
-//! scheduler what happened; whom to name next and when to give up is the
-//! scheduler's (`SF-D6`: the axis is the caller's).
+//! scheduler what happened and [`FetchError::next_move`] what to do about
+//! this `P`; when to give up is the scheduler's (`SF-D6`: the axis is the
+//! caller's).
 //!
 //! Dependency cut (`SF-D4`): `shekyl-curve-tree` for the shared route
 //! grammar, `shekyl-crypto-pq` for the key and signature types,
@@ -75,7 +81,7 @@ pub mod header;
 pub mod target;
 
 pub use client::{max_body_bytes, PFetchClient, Timeouts, MAX_INFLIGHT, SIGNATURE_ENVELOPE_LEN};
-pub use error::{FetchError, Malformed, Stall};
+pub use error::{FetchError, Malformed, NextMove, Stall};
 pub use header::RequestHeader;
 pub use target::{ContentRefused, ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 

@@ -14,7 +14,8 @@ use std::time::Duration;
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
-    CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX, SERVING_VIRTUAL_PORT,
+    is_refusal_trailer, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
+    SERVING_VIRTUAL_PORT,
 };
 use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use shekyl_socks::{connect as socks_connect, Destination, Isolation};
@@ -244,12 +245,17 @@ impl PFetchClient {
 
         let (head, mut body) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
-        let held = match head.status {
-            404 => {
+        // A bare answer's verdict, or `None` for a 200.
+        let bare = match head.status {
+            400 | 404 | 503 => {
                 if head.content_length != 0 {
                     return Err(FetchError::Malformed(Malformed::ContentLength));
                 }
-                false
+                Some(match head.status {
+                    400 => FetchError::Rejected,
+                    404 => FetchError::Miss,
+                    _ => FetchError::Unavailable,
+                })
             }
             200 => {
                 let declared = head.content_length;
@@ -261,19 +267,29 @@ impl PFetchClient {
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
-                true
+                None
             }
             other => return Err(FetchError::Malformed(Malformed::Status(other))),
         };
 
-        // Both answers are read to the same standard: exactly the declared
-        // bytes, then `P`'s close. A 404 is a *completed* exchange only if
-        // it completes — a "no" with bytes behind it is not the identical
-        // 404, it is a `P` off the contract.
+        // Every answer is read to the same standard: exactly the declared
+        // bytes, then `P`'s close. A bare answer is a *completed* exchange
+        // only if it completes — a "no" with bytes behind it is not the
+        // bare answer, it is a `P` off the contract. And a 200 that stops
+        // short is a stall at every offset: nothing is concluded about `P`
+        // from where a stream ended.
         read_body(&mut stream, &mut body, head.content_length, self.timeouts).await?;
         drop(stream);
-        if !held {
-            return Err(FetchError::Miss);
+        if let Some(verdict) = bare {
+            return Err(verdict);
+        }
+        // The envelope is the body's tail: `declared >= envelope` was
+        // checked at the head and `read_body` read exactly `declared`. If
+        // it is the refusal trailer, `P` has said it served and did not
+        // sign. That is read before anything is verified, and the body
+        // behind it goes no further.
+        if is_refusal_trailer(&body[body.len() - SIGNATURE_ENVELOPE_LEN..]) {
+            return Err(FetchError::Unsigned);
         }
 
         // Off the executor: a hybrid verify is real CPU, and the hole may
@@ -490,7 +506,7 @@ impl From<Stall> for FetchError {
 /// a per-read stall bound and a whole-body deadline.
 ///
 /// "Exactly" is checked in both directions. Fewer bytes before the close is
-/// [`Stall::Truncated`]; more bytes — already buffered behind the head, or
+/// [`Stall::Truncated`], at every offset; more bytes — already buffered behind the head, or
 /// arriving on the probe for the close — is [`Malformed::Overlength`]
 /// (`SF-D6`: body long of agreed `N` is malformed, not trimmed). The probe
 /// is what makes the second direction decidable: `RF-R1` has `P` close
