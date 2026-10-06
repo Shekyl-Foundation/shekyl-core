@@ -571,6 +571,10 @@ spec = [
   "rust/shekyl-fcmp/src",
 ]
 stale_through = [
+  { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
+  { through = "2e3576d34c", note = "The ingest's expectation match returns its result instead of mutating, and the ingest applies it after the store commit. Same lookups, same count; no cost moved. Not measured." },
+  { through = "480a9ba42a", note = "Test-only: four casts in the expectation tests (ct6_oracle/expected.rs) rewritten for clippy. No production code changed, no cost moved." },
+  { through = "34c7daa686", note = "Registration at construction (CT6_PROVING_STATE.md §11.13): ingest_block now looks each transaction up in a map of expected outputs — one BTreeMap lookup per transaction, skipped entirely while the map is empty — and TxLeafInputs carries a transaction hash. Nothing on the spend path changed; not measured." },
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
