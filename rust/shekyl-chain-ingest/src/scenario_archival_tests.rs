@@ -107,8 +107,8 @@ use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, levered_rules, levered_schedule, mine_to,
-    EPOCH_BLOCKS,
+    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
+    mine_to,
 };
 use crate::scenario_spend::Spender;
 use crate::source::{IngestEvent, Injection, ServeCredit};
@@ -168,16 +168,16 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // block after it (the credit and the release) stays in the join's
     // epoch, and neither block is an epoch close — the rows read here are
     // the posts', not a close's.
-    let mut connecting = filled
-        .closed
-        .iter()
-        .map(|&close| first_admissible_compact_join(&rules, close))
-        .max()
-        .expect("two shards closed")
-        .to_raw();
-    while (connecting + 1) % EPOCH_BLOCKS == 0 || (connecting + 2) % EPOCH_BLOCKS == 0 {
-        connecting += 1;
-    }
+    let connecting = inside_one_epoch(
+        filled
+            .closed
+            .iter()
+            .map(|&close| first_admissible_compact_join(&rules, close))
+            .max()
+            .expect("two shards closed"),
+        2,
+    )
+    .to_raw();
     mine_to(&mut scenario, &mut mined, BlockHeight::from_raw(connecting)).await;
     let mut spender = Spender::over(&mined);
 

@@ -239,6 +239,18 @@ pub async fn close_shards(
     Filled { closed }
 }
 
+/// The first height at or after `from` such that it and the `following`
+/// heights after it sit in one levered epoch and none of them is an epoch
+/// close (the block at `last_block(E)`). A scenario whose join block and
+/// the blocks after it must read posts, not a close, starts there.
+pub fn inside_one_epoch(from: BlockHeight, following: u64) -> BlockHeight {
+    let mut height = from.to_raw();
+    while (0..=following).any(|k| (height + k + 1).is_multiple_of(EPOCH_BLOCKS)) {
+        height += 1;
+    }
+    BlockHeight::from_raw(height)
+}
+
 /// The first height a compact JoinMarket onto `shard` connects at under
 /// `rules` — CEN-J15's two post-close operands, read at the parent `P`:
 ///
