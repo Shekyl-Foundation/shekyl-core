@@ -986,6 +986,83 @@ pub(crate) fn funding_record(
     crate::__test_helpers::funding_record_for_test(p_slot, gindex, height, amount, lineage)
 }
 
+// ---- Seeded curve-tree leaves ---------------------------------------------
+
+/// Which of a seeded leaf's three published points a preimage names.
+#[derive(Clone, Copy)]
+enum SeededPoint {
+    OutputKey = 1,
+    Commitment = 2,
+    LeafCommitment = 3,
+}
+
+/// A valid Ed25519 point, byte-distinct per `(chain, height, index, which)`.
+/// `key_image_generator` is a hash-to-point, so any preimage gives one.
+fn seeded_point(chain: u8, height: u64, index: u64, which: SeededPoint) -> [u8; 32] {
+    let mut preimage = [0u8; 32];
+    preimage[0] = chain;
+    preimage[1] = which as u8;
+    preimage[2..10].copy_from_slice(&height.to_le_bytes());
+    preimage[10..18].copy_from_slice(&index.to_le_bytes());
+    shekyl_fcmp::tree::key_image_generator(&preimage)
+}
+
+/// The output key [`seeded_tx_leaves`] gives output `index` of the block at
+/// `height` on `chain`.
+pub(crate) fn seeded_output_key(chain: u8, height: u64, index: u64) -> [u8; 32] {
+    seeded_point(chain, height, index, SeededPoint::OutputKey)
+}
+
+/// The commitment [`seeded_tx_leaves`] gives that same output.
+pub(crate) fn seeded_commitment(chain: u8, height: u64, index: u64) -> [u8; 32] {
+    seeded_point(chain, height, index, SeededPoint::Commitment)
+}
+
+/// One block's leaves for the curve-tree actor: a single non-coinbase
+/// transaction of `n` outputs, so its leaves drain one lock window after
+/// `height`.
+///
+/// Every output's `O`, `C` and leaf commitment is distinct from every other
+/// point in the fixture — a chain of identical leaves cannot show a path
+/// built over the wrong ones. `chain` is the fork: two chains give the same
+/// heights and the same gindexes to different outputs, which is what a
+/// reorg does to a gindex.
+pub(crate) fn seeded_tx_leaves(
+    chain: u8,
+    height: u64,
+    n: u64,
+) -> Arc<Vec<crate::scan::OwnedTxLeaves>> {
+    use shekyl_curve_tree::{CommitmentBytes, OneTimePubkey, RawOutput, TargetKind};
+
+    if n == 0 {
+        return Arc::new(Vec::new());
+    }
+    let mut outputs = Vec::new();
+    let mut blob = Vec::new();
+    for index in 0..n {
+        outputs.push(RawOutput {
+            output_key: OneTimePubkey::from_bytes(seeded_output_key(chain, height, index)),
+            commitment: Some(CommitmentBytes::from_bytes(seeded_commitment(
+                chain, height, index,
+            ))),
+            target: TargetKind::TaggedKey,
+        });
+        let mut entry = [0x07u8; 64];
+        entry[..32].copy_from_slice(&seeded_point(
+            chain,
+            height,
+            index,
+            SeededPoint::LeafCommitment,
+        ));
+        blob.extend_from_slice(&entry);
+    }
+    Arc::new(vec![crate::scan::OwnedTxLeaves {
+        is_miner: false,
+        leaf_entry_blob: Some(blob),
+        outputs,
+    }])
+}
+
 // ---- Shared wallet fixtures (WI-RPC-5 hoist) -----------------------------
 //
 // One home for the never-connecting daemon / deterministic-seed / staker

@@ -66,8 +66,8 @@ pub mod types;
 
 pub use assemble::PathRootFault;
 pub use client::{
-    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration, RawOutput,
-    TxLeafInputs, WriterRecovery,
+    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration,
+    OwnershipSync, RawOutput, TxLeafInputs, WriterRecovery,
 };
 pub use reference::{
     proof_expired, proof_submittable, reference_block_age, select_reference_height,
