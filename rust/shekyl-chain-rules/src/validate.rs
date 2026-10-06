@@ -629,10 +629,11 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    // The rule set reaches one row here: J16's current epoch is the
-    // schedule's at the connecting height (`judge_bond_post`). No 4.I row
-    // reads it yet; the first that does (a schedule step varying a
-    // reference-window constant, Q5) takes it from the same argument.
+    // The rule set reaches two rows here: J15's reorg cap and settlement
+    // schedule, J16's current epoch at the connecting height
+    // (`judge_bond_post`). No 4.I row reads it yet; the first that does (a
+    // schedule step varying a reference-window constant, Q5) takes it from
+    // the same argument.
     let mut coverage = RuleCoverage::EMPTY;
     let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
         Ok(cx) => cx,
@@ -666,8 +667,12 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // Reinstate's open interval and unchanged holdings (J18) then its
     // identity key (J13). Before the signatures, as the C++ pins the key
     // before `verify_transaction_pqc_auth` verifies it — I18 asks whether
-    // the slot's key signed; J13 asks whether it is the right key.
-    match judge_bond_post(&cx, view, rule_set, &mut coverage).map_err(ViewRead::View)? {
+    // the slot's key signed; J13 asks whether it is the right key. A
+    // JoinMarket's held shards are admissible at the parent (J15) between
+    // its statics and its key, as the C++ gathers between the two. J15 is
+    // the first 4.J row to read a per-height record, so the sequence's
+    // fault is a `ViewRead` from here on.
+    match judge_bond_post(&cx, view, rule_set, &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

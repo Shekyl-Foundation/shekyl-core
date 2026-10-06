@@ -201,6 +201,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // Slice 8 row 5: the post against its record — a join's floor and
             // claim slot, a Release's exit, a Reinstate's open interval.
             CenRow::J14,
+            // Slice 8 row 6: a compact join's held shards closed, final,
+            // priced and viable at the parent.
+            CenRow::J15,
             CenRow::J16,
             CenRow::J18,
             CenRow::L1,

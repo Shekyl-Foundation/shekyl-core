@@ -516,6 +516,13 @@ pub trait ChainView<'id> {
 ///
 /// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(empty, r_market from <path>)` — `empty`, except that
+///   `r_market` answers from `self.<path>`, a
+///   `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of planted prices. The
+///   one archival read a no-bonds view may plant: CEN-J15's accept needs a
+///   priced shard, and no driven chain in the tree closes one
+///   (`rules/tx_bond.rs`, J15's witness note). A price is a settled value
+///   the close wrote, not a record, so planting it tests no construction.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
 ///   The expression is pasted into each method, so it is a unit constructor
 ///   or another value that is cheap to repeat.
@@ -529,6 +536,9 @@ pub trait ChainView<'id> {
 macro_rules! archival_reads {
     (empty) => {
         $crate::archival_reads!(@methods {empty});
+    };
+    (empty, r_market from $($field:ident).+) => {
+        $crate::archival_reads!(@methods {priced $($field).+});
     };
     (fault $err:expr) => {
         $crate::archival_reads!(@methods {fault $err});
@@ -609,6 +619,19 @@ macro_rules! archival_reads {
             (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok($empty)
+        }
+    };
+    // The planted price: matched before the generic `priced` arm below, so
+    // only `r_market` reads the map and every other read is `empty`'s.
+    (@emit {priced $($field:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($field).+.get(&($($arg),*)).copied())
+        }
+    };
+    (@emit {priced $($field:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Ok($empty)

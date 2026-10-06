@@ -496,7 +496,7 @@ census_rows! {
         J12 implemented(crate::rules::tx_inputs::J12),
         J13 implemented(crate::rules::tx_bond::J13),
         J14 implemented(crate::rules::tx_bond::J14),
-        J15 pending,
+        J15 implemented(crate::rules::tx_bond::J15),
         J16 implemented(crate::rules::tx_bond::J16),
         // J17 is bucket 3 (REJECTED, immutable-bond 2026-09-20; slice 8 Q1
         // (a) 2026-10-04). The census keeps the id marked REJECTED; this

@@ -49,19 +49,21 @@
 //! session (`archival_write_tests`, ARW-9).
 
 use shekyl_archival_retention::{
-    cold_authority_pin, good_through, serve_credit_epoch_ok, verify_join_market_bond_post,
-    verify_reinstate_bond_post, verify_release_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, BondKind, BondPostKind as RetentionKind, HoldingsDescriptor, HoldingsKind,
-    ShardSet,
+    check_admission, cold_authority_pin, good_through, serve_credit_epoch_ok,
+    verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
+    whole_record_last_served, AdmissionShard, ArchivalBondPostVin, BondKind,
+    BondPostKind as RetentionKind, HoldingsDescriptor, HoldingsKind, ParentStateHoldings,
+    ShardClose, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
 };
 use shekyl_types::archival::{BondRecord, Holdings};
-use shekyl_types::{PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPost, Holdings as WireHoldings, PqcAuth};
 use shekyl_wire::{Ct, Input};
 
-use crate::archival::{BondArm, L7};
+use crate::archival::{closed_and_final, shard_close_height, BondArm, L7};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
 use crate::rules::body::ArchivalKey;
 use crate::rules::tx::TxClass;
@@ -214,6 +216,68 @@ impl Rule for J14 {
     const ROW: CenRow = CenRow::J14;
 }
 
+/// CEN-J15: a compact JoinMarket's held shards are admissible at the
+/// parent — every shard is **valid, closed and final** and **priced**, and
+/// the holding as a whole is **viable** (`blockchain.cpp:4640–4680`; the
+/// predicate `ARCHIVAL_BOND_ADD_ADMISSION.md`, its shape SO-D8 §8.0
+/// input 4; the viability floor D3/R3). Per held shard, in the order the
+/// C++ gathers, reading the view **at the admitting block's parent** — a
+/// join's own block cannot close a shard it holds (`parent_height =
+/// chain_height − 1`, "tip would self-score"):
+///
+/// 1. [`closed_and_final`]`(view, shard, parent, rule_set.reorg_cap())` —
+///    a ghost shard past the frontier, the open frontier shard and a shard
+///    closed fewer than `reorg_cap` blocks below the parent are each
+///    refused here, not at the fold. The cap is the rule set's reorg-cap
+///    job, never the pass-anchor setting (CEN-J15's row; FOLLOWUPS, the
+///    count-versus-height row). The C++ has no site for this step: its
+///    gather marshals a freeze-height *presence* bit for the age and never
+///    asks whether the shard is closed, so a join onto the open frontier
+///    shard is admitted there (rule 16: the predicate was ruled, not
+///    inherited) and refused here.
+/// 2. [`ChainView::r_market`] at the **last settled epoch as of the
+///    parent** ([`SettlementSchedule::last_settled_epoch_as_of_parent`]).
+///    `None` — an epoch that never closed for the shard — refuses the
+///    join (slice 8 Q4, ruled fail-closed). The C++ reads the row's
+///    absence as `0` and scores it; that is the one ruled non-parity on
+///    this row, and a conformance trip over a chain whose join lands
+///    before the shard's first close reproduces it as a Rust refusal
+///    against a C++ accept.
+/// 3. The gather — each shard's `r_market` and the age of its close at the
+///    parent ([`ShardClose::age_milli`] under the rule set's schedule, the
+///    source the epoch close reads SEB from, `ARW-15`; the FFI's
+///    `parent_state_shards_from_gather` builds the same rows from the
+///    process-latched schedule for the C++) — through the retention
+///    crate's [`check_admission`]: the credited work at `r_market + 1`
+///    clears [`ADMISSION_MIN_WORK_MILLI`].
+///
+/// A complete tree names no shard and is admitted without a gather
+/// (`check_admission`'s dominance argument); the C++ skips the gather for
+/// it too. Between J14 and J13 on the join arm, as the C++ verifies the
+/// post (`:4619`), gathers and checks admission (`:4640`), then pins the
+/// identity key (`:4695`).
+///
+/// The first 4.J row to read a per-height record (the archival fold, through
+/// the predicate), so [`judge_bond_post`]'s fault is a [`ViewRead`] from this
+/// row on: a shard the frontier counts closed with no height that closed it
+/// is [`Corrupt::ShardCloseUnplaced`], the writer halt, never a refusal.
+///
+/// # Witness
+///
+/// The accept and the refusals, each one operand from it, are unit tests
+/// over a `MockChain` whose fold is synthesized (`tx_bond_tests.rs`): a
+/// shard closes when the fold reaches `(shard + 1) · W` with
+/// `W = SHARD_LENGTH` — 3 MB of real proof bytes per shard — which no
+/// driven chain in the tree reaches, and the price is a planted `r_market`
+/// row (`MockChain::with_r_market`, the one archival read the harness
+/// plants, for this reason). A compact join on a driven chain is therefore
+/// refused on this row from this commit.
+pub(crate) struct J15;
+
+impl Rule for J15 {
+    const ROW: CenRow = CenRow::J15;
+}
+
 /// CEN-J16: a Release post against the record — the retention crate's
 /// [`verify_release_bond_post`], the function the C++ calls through
 /// `shekyl_archival_verify_release_bond_post` (`blockchain.cpp:4540–4557`).
@@ -263,15 +327,15 @@ impl Rule for J18 {
     const ROW: CenRow = CenRow::J18;
 }
 
-const POST_ROWS: [CenRow; 4] = [J13::ROW, J14::ROW, J16::ROW, J18::ROW];
+const POST_ROWS: [CenRow; 5] = [J13::ROW, J14::ROW, J15::ROW, J16::ROW, J18::ROW];
 
-/// CEN-J13, J14, J16 and J18 as one sequence over the one bond post of a
-/// [`TxClass::BondPost`] transaction, in the C++'s **per-kind order**
+/// CEN-J13, J14, J15, J16 and J18 as one sequence over the one bond post
+/// of a [`TxClass::BondPost`] transaction, in the C++'s **per-kind order**
 /// (`blockchain.cpp`, the three arms of its bond-post check): a JoinMarket
-/// is J14 then J13; a Release is J13 then J16; a Reinstate is J18 then J13.
-/// The order is the row a post failing two of them refuses on, and the
-/// C++'s is the one a conformance trip reproduces. Every other class
-/// records the four rows vacuous. A refusal names the post's vin
+/// is J14, J15, then J13; a Release is J13 then J16; a Reinstate is J18
+/// then J13. The order is the row a post failing two of them refuses on,
+/// and the C++'s is the one a conformance trip reproduces. Every other
+/// class records the five rows vacuous. A refusal names the post's vin
 /// ([`Locus::Input`]).
 ///
 /// One record read per post, shared by the rows that need it, as the C++
@@ -281,6 +345,9 @@ const POST_ROWS: [CenRow; 4] = [J13::ROW, J14::ROW, J16::ROW, J18::ROW];
 /// does not name is [`L7`] at the post's vin, and the four post rows are
 /// not recorded: the post was not judged. The fold's L7 arm stays the belt
 /// for a transition caller that skipped this sequence.
+///
+/// The rule set reaches two rows: J15's reorg cap and settlement schedule,
+/// J16's current epoch.
 ///
 /// The slot H21 pairs with the vin is read by position. A transaction whose
 /// `pqc_auths` is shorter than its inputs is H21's when `tx_form` ran; this
@@ -298,13 +365,16 @@ const POST_ROWS: [CenRow; 4] = [J13::ROW, J14::ROW, J16::ROW, J18::ROW];
 ///
 /// # Errors
 ///
-/// The view's fault, from the record read or J16's serving reads.
+/// The view's fault, from the record read, J15's fold and price reads or
+/// J16's serving reads; [`ViewRead::Corrupt`] from J15's predicate when
+/// the fold counts a shard closed that no height closed
+/// ([`crate::Corrupt::ShardCloseUnplaced`]).
 pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
     rule_set: &RuleSet,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<()>, V::Fault> {
+) -> Result<Verdict<()>, ViewRead<V::Fault>> {
     if matches!(cx.class, TxClass::BondPost { .. }) {
         let pqc_auths: &[PqcAuth] = match &cx.tx.ct {
             Ct::Fcmp { pqc_auths, .. } => pqc_auths,
@@ -323,12 +393,15 @@ pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
             };
             let verdict = match &arm {
                 BondArm::JoinMarket { .. } => {
-                    judge_join_market(view, &arm, pqc_auths, input, locus)?
+                    judge_join_market(view, rule_set, &arm, pqc_auths, input, locus)?
                 }
                 BondArm::Release { .. } => {
-                    judge_release(view, rule_set, &arm, pqc_auths, input, locus)?
+                    judge_release(view, rule_set, &arm, pqc_auths, input, locus)
+                        .map_err(ViewRead::View)?
                 }
-                BondArm::Reinstate { .. } => judge_reinstate(view, &arm, pqc_auths, input, locus)?,
+                BondArm::Reinstate { .. } => {
+                    judge_reinstate(view, &arm, pqc_auths, input, locus).map_err(ViewRead::View)?
+                }
             };
             if verdict.is_err() {
                 return Ok(verdict);
@@ -341,28 +414,93 @@ pub(crate) fn judge_bond_post<'id, V: ChainView<'id>>(
     Ok(Ok(()))
 }
 
-/// JoinMarket, J14 then J13 (`blockchain.cpp:4619`, `:4695`). The statics
-/// do not read the slot, so a join that fails them refuses on J14 even when
-/// the slot is missing or carries the wrong key.
+/// JoinMarket, J14, J15, then J13 (`blockchain.cpp:4619`, `:4640`,
+/// `:4695`). The statics do not read the slot, so a join that fails them
+/// refuses on J14 even when the slot is missing or carries the wrong key;
+/// a holding that is not admissible refuses on J15 before the key is read.
 fn judge_join_market<'id, V: ChainView<'id>>(
     view: &V,
+    rule_set: &RuleSet,
     arm: &BondArm<'_>,
     pqc_auths: &[PqcAuth],
     input: usize,
     locus: Locus,
-) -> Result<Verdict<()>, V::Fault> {
+) -> Result<Verdict<()>, ViewRead<V::Fault>> {
     let post = arm.post();
     let Some(vin) = retention_vin(arm) else {
         return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
     };
-    let record_exists = view.bond_record(&post.p_canonical_id)?.is_some();
+    let record_exists = view
+        .bond_record(&post.p_canonical_id)
+        .map_err(ViewRead::View)?
+        .is_some();
     if verify_join_market_bond_post(&vin, record_exists).is_err() {
         return Ok(Err(InvalidBlock::new(J14::ROW, locus)));
+    }
+    if !holding_admissible(view, rule_set, &vin.holdings)? {
+        return Ok(Err(InvalidBlock::new(J15::ROW, locus)));
     }
     if !identity_signs(pqc_auths, input, post) {
         return Ok(Err(InvalidBlock::new(J13::ROW, locus)));
     }
     Ok(Ok(()))
+}
+
+/// J15's body: the per-shard gather at the admitting block's parent, then
+/// [`check_admission`]. A complete tree gathers nothing and is admitted; a
+/// compact set connecting at genesis has no parent to read and no shard
+/// can be closed, so it is not admissible. Per shard, in list order:
+/// [`closed_and_final`] under the rule set's reorg cap, then the price at
+/// the last settled epoch as of the parent — `None` is not admissible
+/// (slice 8 Q4) — then the age of the close the predicate just read,
+/// under the rule set's schedule.
+///
+/// # Errors
+///
+/// The view's fault, or [`ViewRead::Corrupt`] from the predicate.
+fn holding_admissible<'id, V: ChainView<'id>>(
+    view: &V,
+    rule_set: &RuleSet,
+    holdings: &HoldingsDescriptor,
+) -> Result<bool, ViewRead<V::Fault>> {
+    fn parent_state(shards: &[AdmissionShard]) -> ParentStateHoldings<'_> {
+        ParentStateHoldings {
+            shards,
+            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+        }
+    }
+    if holdings.kind == HoldingsKind::CompleteTree {
+        return Ok(check_admission(holdings, &parent_state(&[])).is_ok());
+    }
+    let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+    let Some(parent) = connecting
+        .to_raw()
+        .checked_sub(1)
+        .map(BlockHeight::from_raw)
+    else {
+        return Ok(false);
+    };
+    let schedule = rule_set.settlement_schedule();
+    let settled =
+        SettlementEpoch::from_raw(schedule.last_settled_epoch_as_of_parent(parent.to_raw()));
+    let mut gathered = Vec::with_capacity(holdings.shard_ids.len());
+    for &raw in holdings.shard_ids.as_slice() {
+        let shard = ShardId::from_raw(raw);
+        if !closed_and_final(view, shard, parent, rule_set.reorg_cap())? {
+            return Ok(false);
+        }
+        let Some(r_market) = view.r_market(shard, settled).map_err(ViewRead::View)? else {
+            return Ok(false);
+        };
+        // The close the predicate found: closed through the parent, so the
+        // search places it (a fold that cannot is the predicate's Corrupt).
+        let close = ShardClose::ClosedAt(shard_close_height(view, shard, parent)?);
+        gathered.push(AdmissionShard {
+            r_market: r_market.to_raw(),
+            age_milli: close.age_milli(parent, schedule.blocks().get()),
+        });
+    }
+    Ok(check_admission(holdings, &parent_state(&gathered)).is_ok())
 }
 
 /// Release, J13 then J16 (`blockchain.cpp:4515`, `:4542`). The pin is gated

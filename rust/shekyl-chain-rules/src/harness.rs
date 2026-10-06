@@ -16,13 +16,14 @@
 use core::convert::Infallible;
 use core::fmt::Debug;
 use core::marker::PhantomData;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
+use shekyl_types::archival::RMarket;
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
-    LongTermWeight, PowHash, Timestamp, TxHash,
+    LongTermWeight, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -112,6 +113,11 @@ pub struct MockChain {
     /// the mock's recorded blocks burn nothing, so a value here is a
     /// planted fold, the way a planted key image is a planted spend.
     total_burned: AtomicUnits,
+    /// Planted market prices — CEN-J15's `r_market` read, keyed as the
+    /// view keys it. The one archival read this chain plants
+    /// ([`with_r_market`](Self::with_r_market)); every other archival read
+    /// answers *no bonds*. Empty unless a fixture prices a shard.
+    r_market: BTreeMap<(ShardId, SettlementEpoch), RMarket>,
 }
 
 impl Default for MockChain {
@@ -123,6 +129,7 @@ impl Default for MockChain {
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
             total_burned: AtomicUnits::ZERO,
+            r_market: BTreeMap::new(),
         }
     }
 }
@@ -173,6 +180,21 @@ impl MockChain {
     /// Record a transaction identity as on the chain (CEN-G1's read).
     pub fn with_transaction(mut self, hash: TxHash) -> Self {
         self.transactions.insert(hash);
+        self
+    }
+
+    /// Plant `shard`'s market price at `epoch`'s close — what CEN-J15
+    /// reads at the last settled epoch as of the parent. The one archival
+    /// state this chain plants, and why: J15's accept needs a shard that
+    /// is closed, final **and priced**, the close is the fold's (which the
+    /// chain already synthesizes), and no driven chain in the tree reaches
+    /// a close — a shard is `SHARD_LENGTH` of real proof bytes. A price is
+    /// a value the epoch close wrote, not a record; planting it tests no
+    /// construction (DRS-E4 §5.2's concern). A shard with no planted price
+    /// reads `None`, which is J15's Q4 refusal.
+    #[must_use]
+    pub fn with_r_market(mut self, shard: ShardId, epoch: SettlementEpoch, price: RMarket) -> Self {
+        self.r_market.insert((shard, epoch), price);
         self
     }
 
@@ -313,7 +335,10 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // epochs; a constructed record would test the construction (DRS-E4
     // §5.2, *No `Mock*` archival state*). The witness for a 4.J rule over a
     // held shard is a real chain that posted the bond, through `connect`.
-    crate::archival_reads!(empty);
+    // The one planted read is the market price (`MockChain::with_r_market`,
+    // which says why): CEN-J15's accept over a closed shard has no driven
+    // witness, a shard being `SHARD_LENGTH` of real proof bytes.
+    crate::archival_reads!(empty, r_market from chain.r_market);
 }
 
 /// The fault a [`FaultingView`] raises.
