@@ -1471,6 +1471,24 @@ record's holdings as they stood → filter → emit in canonical order.
    a different axis. Closed is not enough: the drawable set has to stay
    inside the record's owed set, and a shard inside the reorg cap can
    still change contents (§8.0 input 4, *The `CompleteTree` expansion*).
+
+   **Two bounds on "the shards that exist", and what tells them apart
+   (confirmed 2026-10-06).** The tree has two, and they are not rivals:
+   - **closed** — the archival fold through `at` has reached the shard's
+     end (`closed_shards_through` / `closed_shards_before`,
+     `shard_close_height`);
+   - **closed and final** — closed, and the closing block is at least the
+     in-force reorg cap below `at` (`closed_and_final`).
+
+   The discriminator is what the value bounded by it becomes. **A
+   recomputed operand may be bounded by closed**: it is derived again
+   from the chain every time it is read, so a reorg that reopens a shard
+   re-derives it and nothing stale survives. **A persisted commitment
+   must be bounded by closed and final**: once written, or once it
+   obliges a holder, it has to name a shard whose contents can no longer
+   change. This registry is on the second side. The pairs it yields are
+   what holders are challenged for, and the outcomes are recorded against
+   them, so its bound is closed and final.
 3. **Canonical order sorts `shard_id` numerically.** Not wire bytes.
    The crate-level comment names this as a second-implementation hazard
    and `ChallengeUrn::new` rejects violations, so it fails loudly — but
