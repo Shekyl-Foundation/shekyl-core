@@ -307,6 +307,7 @@ async fn a_signer_that_fails_after_the_body_is_a_failed_read() {
     assert!(matches!(err, FetchError::Unsigned), "{err}");
     assert_eq!(err.next_move(false), NextMove::FailedRead);
     assert!(!err.retries_same_p());
-    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 1);
+    assert_eq!(ep.sign_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 }

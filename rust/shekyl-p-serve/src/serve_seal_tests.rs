@@ -122,7 +122,12 @@ async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer()
         HybridSignature::from_canonical_bytes(trailer).is_err(),
         "the trailer can never be read as a signature"
     );
-    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 1);
+    assert_eq!(
+        ep.sign_failure_count(),
+        0,
+        "not a pre-flight refusal: the key said yes and the shard went out"
+    );
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 }
@@ -178,6 +183,7 @@ async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
         render_unavailable().as_bytes()
     );
     assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 0, "no shard was sent");
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 
