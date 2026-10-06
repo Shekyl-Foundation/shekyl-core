@@ -12,8 +12,9 @@ docs/benchmarks/
 ├── shekyl_rust_v0.manifest.md          Rust baseline: operation lists + fixture shapes
 ├── shekyl_rust_v0.json                 Rust baseline: frozen numbers (criterion + iai)
 ├── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
-└── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
+├── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
                                         DRS-BENCH: consensus-store IBD artifacts
+└── measurement_ledger.toml             which constant rests on which capture, and which path set it budgets
 ```
 
 (The tree above names the baseline set; ad-hoc Pi-4 captures,
@@ -248,6 +249,96 @@ starts from a partial chain is a different experiment.
 
 `scripts/bench/test_drs_bench.py` is the selftest; it and `drs_bench.py
 blockers` run in `docs-gates.yml`.
+
+## Measurement ledger
+
+[`measurement_ledger.toml`](measurement_ledger.toml) holds one row per
+constant whose value is justified by a measured cost or latency: where the
+constant is defined, which tracked benchmark measures it, and the capture
+and revision it was taken at
+([`BENCHMARK_ALIGNMENT.md`](../design/BENCHMARK_ALIGNMENT.md) `BA-Q23`).
+The code a constant budgets is a `[[path_set]]`. Constants that share
+one cost name the same path set, and a commit to that code is acknowledged
+once. `scripts/ci/check_measurement_ledger.py` reads the ledger in
+`docs-gates.yml`. For each measured constant it asks whether any commit
+touching the path set is still unaccounted for at the constant's review
+point.
+
+Each constant states one of three things, and the check fails when the
+statement disagrees with git in either direction:
+
+| Status | Means | Fails when |
+| --- | --- | --- |
+| `current` | Every commit touching the path set is in the history of the review point: the capture, or a `cleared` note on that path set | A commit to the path set is in neither; the failure names it |
+| `stale` | Something is newer; the constant names the commit and the carrier of the re-measurement, and its path set lists in `stale_through` every later commit to those paths it has heard | Nothing is newer; or the named commit did not touch the paths; or a commit to the paths is in none of the `stale_through` histories |
+| `unmeasured` | No capture is in the tree; the constant names what will measure it | It claims a capture, or names no carrier |
+
+A green run means the ledger tells the truth. It does not mean every capture
+is fresh: the stale constants are printed on every run, and each is a
+re-measurement somebody owes.
+
+**When your PR fails it.** You changed a path a constant budgets. Edit that
+path set in the same PR. One acknowledgment covers every constant that
+names the path set.
+
+If every constant on the path set is `current`, one of three:
+
+- Land a newer capture on the constant you re-measured and set `capture`
+  and `capture_rev` to it.
+- Add a `cleared` note on the path set:
+  `{ through = "<commit>", reason = "..." }`. It says every commit to the
+  paths in that commit's history is cost-neutral, and why. The reason is
+  reviewed with the diff. `cleared` is read only by a current constant.
+  A path set whose constants are stale or unmeasured leaves the key off.
+- Set the constant `status = "stale"`, `stale_since` to the commit,
+  `carrier` to the benchmark run that will re-measure it, and start the
+  path set's `stale_through` with that commit.
+
+If a constant on the path set is already `stale`, add a `stale_through`
+entry on the path set:
+`{ through = "<your commit>", note = "what this does to the cost" }`. A
+stale constant asks every change to its paths for a sentence, so a second
+regression on an already-stale path is recorded. The capture is owed when
+the re-measurement lands. A `cleared` note is not consulted while the
+constant is stale.
+
+**Only a newer capture retires a stale constant.** The constant keeps its
+name, and the capture's revision contains the commit that made it stale.
+The check reads the ledger at `HEAD^1`. In CI that parent is the base
+branch, so the pull request as a whole is what is checked. On a local
+branch that parent is the previous commit only.
+
+**When you change `rust/rust-toolchain.toml`,** add a `[[toolchain]]` entry
+naming your commit and what it does to measured cost. One entry covers the
+whole ledger. It is owed while any constant is current across the change.
+The comparison base is the capture's review point. A compiler bump after
+the capture is owed on its own; clearing the path set's code commits
+leaves the toolchain question open.
+A toolchain entry's `commit` is the commit that touched the pin. A
+path-set entry's `through` is a commit whose history the path set has
+heard.
+
+Entries name commits, and they are a set: name your own commit and leave
+the others in place. If two PRs append to the same path set, git will ask
+you to keep both lines.
+
+**When you add a constant that rests on a measurement,** add its row. When
+its cost is one an existing path set already names, point the row at that
+path set. A new cost gets a new path set. A constant with a number behind
+it and no row is the gap this file closes.
+
+The check needs full history. A shallow clone whose cut lies inside a
+constant's range is refused with exit 2.
+
+What it does not see: a path set lists source paths, so a dependency
+upgrade in `Cargo.lock`, or a change in a crate the path set does not
+list, moves no constant. The paths are a reviewed judgement about where
+the cost lives.
+
+It depends on merge commits. Every entry is a commit id that stays in the
+branch's history. A squash-merge or a rebase-and-merge mints new ids and
+orphans the entries. The check then fails, and the repair is a fresh
+acknowledgment of the new ids.
 
 ## Baseline-update policy
 
