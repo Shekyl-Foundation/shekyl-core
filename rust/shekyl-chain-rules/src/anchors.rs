@@ -26,8 +26,12 @@
 //! - **CEN-E1**, the anchor's own rule (`PDM-Q11`): a block connecting at an
 //!   anchored height must carry that anchor's hash.
 //! - **CEN-E5**, the binary's anchors agree with the file it opens. The
-//!   check and its remedy live with the rule (`rules::anchors`): the writer
-//!   calls [`ReleaseAnchors::conflict_with`] once, at open.
+//!   check and its remedy live with the rule (`rules::anchors`). The walk
+//!   is [`ReleaseAnchors::conflict_over`]; [`ReleaseAnchors::conflict_with`]
+//!   is that walk over a `ChainView`. The store's public-network open calls
+//!   `conflict_over` once — its read snapshot is not a `ChainView` — and
+//!   refuses. It does not pop. The pop remains the ingest driver's
+//!   (`docs/FOLLOWUPS.md`).
 //! - **`Trust`** (`CHAIN_RULES_SLICE_3.md` §4.1): the input that carries the
 //!   anchors into `validate`, and — from slice 6 — the below-anchor posture
 //!   `PDM-Q5` `:293` defines as band 1's skeleton. `Trust::below_anchor` is
