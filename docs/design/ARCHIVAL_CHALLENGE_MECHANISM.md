@@ -1877,6 +1877,20 @@ reviewable by reading it. A second consumer, a test-support constructor that
 escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
 the decode all re-open this item at its full weight.
 
+**UPDATE 2026-10-06 (SH-2 resident-key pre-flight,
+[`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §4) — the hazard
+moved one type outward and is NOT discharged.** `ServeSet::from_connected_record`
+no longer exists; `ServeSet` is sealed (`pub(crate)` constructors, minted only
+by `PinnedServeSet::acquire`). What `acquire` consumes is `ReportedSet`
+(`shekyl-p-host/src/serve_set/report.rs`), a public enum any `ServeSetPinner`
+implementation may construct as a literal — so the fabrication path is now
+"a different pinner", injected at the one `spawn_serving_task` call site. The
+criterion above applies to `ReportedSet` verbatim. The SH-2 resident-key PR
+does not build the seal (a provenance-sealing change across three crates is a
+separate validation surface, rule 19); whether it lands as a following PR or
+is re-ruled against the reopen criterion is the maintainer's, put to them with
+that record.
+
 **4. A new load-bearing invariant, in the same class as the vanguards
 one: a serving host must never rebind its listener.** `WalletTorControl`
 republishes the onion on every incarnation from one `OnionServiceSpec`
