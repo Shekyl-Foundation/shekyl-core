@@ -221,6 +221,39 @@ bodies (`SHT-Q1`, `SHT-Q2`) read whole (`SF-D1`):
 The sim's response-size figure follows the record layout Slice C's Round 0 writes
 (`SCV-3`), and the rig's object follows the serving unit.
 
+**`shard_id` has two meanings until family 1's cutover** (design owner's review of
+`4fca05e32b`, 2026-10-05). One integer type names two different objects:
+
+| Where | Shard `k` is | Sites |
+|---|---|---|
+| the Rust store and `shekyl-chain-rules` | the `k`-th byte-cut range of transactions (`SHT-Q2`) | `closed_shards_before` (`rust/shekyl-chain-rules/src/rules/miner.rs:564`); the close and the slash universe (`rust/shekyl-chain-rules/src/archival/close.rs:136`, `rust/shekyl-chain-rules/src/archival/slash.rs:127`); the retention prune (`rust/shekyl-chain-store/src/store/prune.rs`); the bond-admission predicate when it is built |
+| the serving stack and the live C++ verifier | leaf segment `k` | *"Shard ids are segment indices"* (`rust/shekyl-p-serve/src/provider.rs:261`); the wallet pins segment `k` for each held shard id (`rust/shekyl-engine-core/src/engine/curve_tree_actor.rs:378`, `rust/shekyl-engine-core/src/engine/stake_engine/serve_set_source.rs:218`); the serve-credit arm challenges leaf chunks of segment `k` (`src/cryptonote_core/blockchain.cpp:4909-4925`); the coverage list (`src/rpc/archival_shard_coverage.cpp:34`) |
+
+This is the E3 handoff's falsifier, *"two shard geometries"* (§C, `SCC-3`), live
+and known: not in one constants file, but in one identifier. **It is safe only
+while no `shard_id` crosses from one meaning to the other.** Closure is family 1's
+atomic cutover (§F).
+
+*The crossing check, at `e0fb3eaa80` (2026-10-06).* Each path below was read at
+source. No id passes from the Rust store or `shekyl-chain-rules` to the serving
+stack, or to any RPC a wallet reads.
+
+| Path checked | Finding |
+|---|---|
+| the Rust store's bond records (`bond_record`, `bond_records`, `served_shards`; `rust/shekyl-chain-store/src/store/read.rs:900-989`) | read only by `shekyl-chain-rules` (`archival/close.rs:344`), by `shekyl-chain-ingest`'s connector and scenarios, and by tests. No serving crate and no wallet crate depends on `shekyl-chain-store`: `shekyl-p-serve`, `shekyl-p-host`, `shekyl-p-fetch`, `shekyl-curve-tree`, `shekyl-wallet-rpc` and `shekyl-cli` do not name it, and `shekyl-engine-core` names `shekyl-chain-rules` and `shekyl-chain-ingest` as dev-dependencies only (`regtest_e2e.rs`) |
+| `shard_coverage.rs` (`rust/shekyl-archival-retention/src/shard_coverage.rs`) | it belongs to the C++ path, not the Rust store: the C++ fills its operands from LMDB's segment registry, with `freeze_height` (`src/rpc/archival_shard_coverage.cpp`), and it ranks them. Its ids are segment indices, read by `shekyl-cli`'s shard list. Both ends hold the segment meaning |
+| the wallet's holdings source (`get_archival_emission_claim_source`; `rust/shekyl-engine-core/src/engine/emission_source.rs:485`) | served by the C++ daemon from the LMDB bond record (`src/rpc/archival_claim_source.cpp:46`). Its per-shard rows are the segment pair `has_segment` / `freeze_height`, folded on arrival (`emission_source.rs:412-422`). Segment meaning end to end |
+| the Rust RPC server (`shekyl-daemon-rpc`) | a front for the C++ core through `core_rpc_ffi`. It does not depend on `shekyl-chain-store`, so no Rust-store id reaches an RPC |
+| the operator's shard fetch (`request_archival_shard`; `rust/shekyl-archival-fetch-sched/src/lib.rs:42-49`) | a typed miss that reads no id. No production caller hands `shekyl-p-fetch` a target: its only callers are its own tests and the measurement rig |
+| the serve set (`rust/shekyl-p-host/src/serve_set/`) | compares the wallet's held ids against the wallet store's frozen segments. Both sides are the segment meaning |
+| the snapshot digest (`rust/shekyl-ffi/src/e2_trace_ffi.rs:37`) | C++ state is marshalled into the Rust store's snapshot type to be hashed. Ids are compared as integers and interpreted by neither side |
+| **the captured-chain replay** (`shekyl-chain-ingest`; `rust/shekyl-chain-ingest/src/archival_corpus_tests.rs`) | **the one place an integer is read under both meanings.** A chain the C++ daemon produced, whose bond holdings and injected credit name segment ids (the corpus carries shard `0`), is judged by `shekyl-chain-rules` on the byte-cut partition. This is CEN-L10's ruled divergence (row 3 = (b); `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1, whose pass condition is that the two name different shards). It is a conformance path: nothing it computes is served or returned to a wallet |
+
+**What would make it cross:** a Rust-store reader behind any wallet-facing RPC, or
+the serving stack given a list from `shekyl-chain-rules`, before family 1's
+cutover. Falsify by `rg -l 'shekyl[-_]chain[-_]store' rust/*/Cargo.toml` naming a
+serving or wallet crate.
+
 **Class A at this pin** is one small item: the rig's two literal copies of the
 segment leaf count (`fixture.rs:70`, `extract_shard.rs:56-58`, both `25_992`) are a
 second home for a number `shekyl_fcmp::tree::leaves_per_segment()` owns. They are
