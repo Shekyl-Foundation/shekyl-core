@@ -338,14 +338,17 @@ impossible if `verify-tag` passed, but the cross-check is free).
 
 ### 4. Push
 
-Branch first, then tag. CI fires on tag push, and the tag must point
-to a commit already present on the remote `main` or CI will fail
-hard:
+Push the tag, and only the tag. `main` is already on the remote: the
+promotion pull request was merged there, and step 3 checked that the tag
+points at it. CI fires on the tag push:
 
 ```bash
-git push origin main
 git push origin vX.Y.Z-alpha.N
 ```
+
+There is no `git push origin main` in this ceremony. A local `main` that
+could be pushed would be one that diverged from the remote's, which is a
+reason to stop, not a step.
 
 ### 5. Post-ceremony
 
@@ -355,8 +358,8 @@ git push origin vX.Y.Z-alpha.N
   counter series is a useful independent cross-check if a future
   compromise investigation needs to ask "did this key sign
   something we don't have a record of?").
-- Open the reverse-merge PR `main` → `dev` (or fast-forward `dev` to
-  match `main`, depending on the shape of the release commit).
+- `dev` needs no sync with `main` (`docs/RELEASING.md` step 6). No
+  reverse-merge pull request is opened.
 
 ### Failure cheat sheet
 

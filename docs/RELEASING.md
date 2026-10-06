@@ -100,10 +100,15 @@ The CI workflows install all dependencies automatically. For local builds:
    planned version so that un-tagged development builds show the
    correct series.
 
-6. **Reverse-merge `main` into `dev`** so `dev` carries the release
-   merge commit and its tag parent chain stays clean. Either a
-   fast-forward (if `dev` hasn't moved) or a `--no-ff` reverse-merge
-   PR (if it has) is acceptable.
+6. **`dev` is not synced with `main`.** The promotion is a
+   non-fast-forward merge, so `dev`'s history is unchanged and work
+   continues on it; no sync step is needed
+   (`.cursor/rules/06-branching.mdc`, release flow step 6). A reverse-merge
+   pull request from `main` into `dev` is not part of the flow. While `dev`
+   has not moved since the freeze it can be fast-forwarded to the release
+   merge commit, which keeps `git log origin/main ^origin/dev` empty;
+   `v3.1.0-alpha.8` and `v3.1.0-alpha.9` did that. It is optional, and
+   once `dev` has moved it is not done.
 
 7. **GitHub Actions takes over.** The `gitian` workflow automatically:
    - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
@@ -130,9 +135,13 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Tag Naming
 
-- Release tags: `v3.0.3`, `v3.1.0`, `v4.0.0`
-- Pre-release tags: `v3.0.3-RC1`, `v3.1.0-alpha`, `v3.1.0-beta`
-- Tags containing `RC`, `alpha`, or `beta` are automatically marked as pre-releases
+- Release tags: `v3.1.0`, `v3.2.0`, `v4.0.0`
+- Pre-release tags, in the canonical form `docs/VERSIONING.md` defines:
+  `v3.1.0-alpha.9`, `v3.1.0-beta.1`, `v3.1.0-rc.1`
+- The release job marks a tag as a pre-release when its name contains `RC`,
+  `alpha` or `beta` (`.github/workflows/gitian.yml`, the `prerelease:`
+  expression). GitHub's `contains()` is not case sensitive, so the canonical
+  lowercase `rc.N` is covered as well as the older `-RC1` spelling.
 
 ## Release Artifacts
 
