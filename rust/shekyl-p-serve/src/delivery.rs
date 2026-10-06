@@ -144,6 +144,32 @@ mod tests {
     }
 
     #[test]
+    fn a_later_holder_rebuilds_the_write_zero_frame_from_the_leaves() {
+        let nonce = [0x11u8; PASS_NONCE_LEN];
+        for leaves in [0usize, 1, 3] {
+            let frame = ServedFrameHeader::for_segment(leaves).expect("in range");
+            let payload_len = usize::try_from(frame.segment_bytes()).expect("length fits");
+            let payload = vec![0x5a; payload_len];
+            let rebuilt =
+                ServedFrameHeader::for_segment(payload.len() / shekyl_curve_tree::LEAF_BYTES)
+                    .expect("the leaf count is the byte length");
+            assert_eq!(
+                rebuilt, frame,
+                "write-zero padding makes the header a function of the leaves"
+            );
+            let mut framed = rebuilt.to_bytes();
+            framed.extend_from_slice(&payload);
+            let mut running = FramedDigest::start(&rebuilt, &nonce).expect("start");
+            running.absorb(&payload).expect("payload fits the frame");
+            assert_eq!(
+                running.finish(),
+                Some(pass_delivery_digest(&nonce, &framed)),
+                "{leaves} leaves: the holder recomputes the digest from the leaves and the nonce"
+            );
+        }
+    }
+
+    #[test]
     fn an_empty_segment_digests_to_its_header_alone() {
         let frame = ServedFrameHeader::for_segment(0).expect("empty segment");
         let nonce = [0x03u8; PASS_NONCE_LEN];

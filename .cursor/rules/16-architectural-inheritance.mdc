@@ -66,7 +66,8 @@ inherits the half that carries the verdict.
   behaviour varies by nettype. Show the behaviour varies.
 - **Direction.** An enumeration of what a component consumes says nothing
   about what its consumers must read back out of it. Name which direction
-  the sweep ran.
+  the sweep ran, and what the other direction would have enumerated; a
+  measurement that cannot say so has counted one side.
 - **Grouping.** A grouping someone else drew is a claim about its members.
   Test each member against the rule. Do not admit one on the strength of
   its neighbour.

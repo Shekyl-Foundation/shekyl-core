@@ -29,10 +29,12 @@ use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
+use crate::archival::BondArm;
+
 mod archival;
 pub use archival::{
-    claimant, emission_vin, join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR,
-    PRUNED_PASS_RECORD,
+    claimant, emission_vin, join_market, persona, serve_credit_only, serve_credit_vin,
+    FixturePersona, BOND_FLOOR, PRUNED_PASS_RECORD,
 };
 
 /// The well-formed **transaction** shapes this module builds, as a
@@ -84,28 +86,37 @@ impl TxShape {
         }
     }
 
-    /// The bodies that must be listed **before** this shape in the block
-    /// that connects it — the archival state it reads, which only an
-    /// earlier body in the same block can create on a chain that holds
-    /// none. A serve credit names a persona with a record (CEN-L7), so it
-    /// lists behind that persona's [`join_market`]; every other shape
-    /// stands alone. The listed slot in [`valid_at`](Self::valid_at) is
-    /// the one behind these.
-    pub fn precedents(self) -> Vec<Transaction> {
+    /// Whether the shape's view-bound stage reads **bond state** — a
+    /// persona's record on the view the block is judged against (CEN-J4,
+    /// then J5 and J6 over it). `MockChain` holds no records by policy
+    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2), so the
+    /// sanity gate judges such a shape through `tx_form` only: its
+    /// `validate` witness is a driven chain that posted the bond
+    /// (`shekyl-chain-ingest`'s driver), the one place that record can
+    /// honestly exist.
+    ///
+    /// *Records-was:* until E6 slice 8 row 3 this was `precedents()`, which
+    /// listed the persona's [`join_market`] in the **same block** ahead of
+    /// the credit — a premise the rule refuted: the C++ reads the record
+    /// before the block (`check_tx_inputs` before `add_block`), so a
+    /// same-block join opens nothing the credit can be judged against, and
+    /// J4 says so. The archival fold's in-block sequencing had admitted it.
+    pub const fn reads_bond_state(self) -> bool {
         match self {
-            Self::Coinbase | Self::Listed | Self::JoinMarket => Vec::new(),
-            Self::ServeCreditOnly => vec![Self::JoinMarket.build()],
+            Self::Coinbase | Self::Listed | Self::JoinMarket => false,
+            Self::ServeCreditOnly => true,
         }
     }
 
     /// The slots at which the shape is a valid transaction. The coinbase
     /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed — behind its [`precedents`](Self::precedents).
+    /// slot and listed first.
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
-            Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(1)],
+            Self::Listed | Self::JoinMarket | Self::ServeCreditOnly => {
+                &[TxSlot::Lone, TxSlot::Listed(0)]
+            }
         }
     }
 
@@ -635,14 +646,33 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 
 /// The 64-byte "combined shared secret" a fixture input's signing key is
 /// derived from: the key image doubled for a `ToKey`, so the same spend
-/// always signs with the same key and two spends never share one; a
-/// constant per position for the archival arms.
+/// always signs with the same key and two spends never share one; the
+/// **persona's** seed for a bond post — the identity key's for a credit
+/// (JoinMarket, Reinstate, or a kind no arm names), the bond-spend key's
+/// for a Release — found from the post's `hybrid_public_key` through the
+/// seed map [`persona`](archival::persona) fills, since by the time a body
+/// is signed ([`anchored_at`]) the tag that built it is gone and the key is
+/// what the verifier reads (CEN-J13). Which seed is [`BondArm::of`]: the
+/// same classifier the sequence and the fold use, so a test that edits the
+/// kind and then signs is signed as the kind it became. A post whose key
+/// no persona owns — hand-built, a key filled by hand — signs by position
+/// as before; J13 refuses it, and a test that signs such a post is asking
+/// for that; a constant per position for the other archival arms.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
         Input::ToKey { key_image, .. } => {
             seed[..32].copy_from_slice(key_image);
             seed[32..].copy_from_slice(key_image);
+        }
+        Input::BondPost(post) => {
+            if let Some(seeds) = archival::slot_seeds_for(&post.hybrid_public_key) {
+                return match BondArm::of(post) {
+                    Some(BondArm::Release { .. }) => seeds.bond_spend,
+                    _ => seeds.identity,
+                };
+            }
+            seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
         }
         _ => seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs")),
     }

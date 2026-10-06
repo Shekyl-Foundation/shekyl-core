@@ -121,8 +121,11 @@ SCOPE = (
 # (2026-10-02: `ShardClose::ClosedAt` and `shard_age_milli` take
 # `BlockHeight` — the merge with `dev`'s SHT-Q2 close operand surfaced the
 # sites as this gate's first red on a merged tree, and they were typed, not
-# recorded).
-GRANDFATHER_CEILING = 167
+# recorded); 166 at E6 slice 8 PR-a review (2026-10-05: the levered chain's
+# next-block height is `BlockHeight`, and `scenario_archival_tests.rs`'s
+# local `first_spending_height() -> u64` moved to `archival_driver` as
+# `BlockHeight`).
+GRANDFATHER_CEILING = 166
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5
