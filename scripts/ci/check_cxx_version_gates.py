@@ -28,13 +28,18 @@
 # `BOOST_VERSION`, `dwMajorVersion` and `original_version_till_height` alone,
 # and `last_versions` is not an operand either: the name has to end in
 # `version`. `<<`, `>>` and `->` are not comparisons. A lone `<` or `>` is a
-# comparison only when a version stands on its left and a value on its right,
-# which is what separates `tx.version < min_tx_version` from a template
-# (`arg_descriptor<bool>`) and from a placeholder (`<version>`). `<=`, `>=`,
-# `==` and `!=` read both sides, and the other side may be a literal, a macro,
-# a local or another version: the row says which. A grouping parenthesis that
-# closes after the operator (`if (version >= 5)`) is not a call, so the name
-# inside it still counts. The extractor does not decide any of that.
+# comparison in two shapes: a version on its left and a value on its right
+# (`tx.version < min_tx_version`), or a constant on its left and a version on
+# its right (`5 < version`), and never a `>` that closes a bracket the line
+# opened. That is what separates them from a template (`arg_descriptor<bool>`,
+# `std::array<char, 32> version`) and from a placeholder (`<version>`). `<=`,
+# `>=`, `==` and `!=` read both sides, and the other side may be a literal, a
+# macro, a local or another version: the row says which. Parentheses around
+# an operand (`(version) >= 5`) and a grouping parenthesis that closes after
+# the operator (`if (version >= 5)`) are not calls, so the name inside still
+# counts. The contents of string and character literals are blanked first:
+# `"tx version < 3"` in an error message is prose about a comparison. The
+# extractor does not decide any of that.
 #
 # Each hit is keyed on (path, the code text of its line), with a count, and
 # the multiset must equal the inventory's. Line numbers are not part of the
@@ -152,9 +157,31 @@ def _strip_nested(expr):
     return "".join(ch for index, ch in enumerate(expr) if not remove[index])
 
 
+def _unwrap_grouping(expr):
+    """`expr` without parentheses that enclose the whole of it.
+
+    `(version)` and `((tx.version))` denote what is inside them. A call's
+    parentheses do not enclose the whole expression, so `f(version)` is left
+    alone and still denotes `f`.
+    """
+    while len(expr) >= 2 and expr[0] == "(":
+        depth = 0
+        for index, ch in enumerate(expr):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+        if depth != 0 or index != len(expr) - 1:
+            break
+        expr = expr[1:-1]
+    return expr
+
+
 def denoted_identifier(expr):
     """The identifier `expr` denotes: its last name, indexes and arguments aside."""
-    found = _IDENT_RE.findall(_strip_nested(expr))
+    found = _IDENT_RE.findall(_strip_nested(_unwrap_grouping(expr)))
     return found[-1] if found else None
 
 
@@ -181,6 +208,43 @@ def _side_is_value(expr):
     if body.endswith(":") and not body.endswith("::"):
         body = body[:-1]
     return _INT_LITERAL_RE.fullmatch(body) is not None
+
+
+def _side_is_constant(expr):
+    """True when `expr` is an integer literal or an upper-case constant.
+
+    The left side of a reversed comparison, `5 < version` or
+    `CURRENT_TRANSACTION_VERSION < version`. A lower-case name there is as
+    likely to be a type in front of a template bracket, so it does not count.
+    """
+    if expr is None:
+        return False
+    # `if (5 < version)` and `f(5 < version)` hand over `(5` and `f(5`: the
+    # side is what follows the last parenthesis still open.
+    open_at = []
+    for index, ch in enumerate(expr):
+        if ch == "(":
+            open_at.append(index)
+        elif ch == ")" and open_at:
+            open_at.pop()
+    body = _unwrap_grouping(expr[open_at[-1] + 1 :] if open_at else expr)
+    if _INT_LITERAL_RE.fullmatch(body) is not None:
+        return True
+    return re.fullmatch(r"(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Z][A-Z0-9_]*", body) is not None
+
+
+def _closes_a_template(line, index):
+    """True when the lone `>` at `index` has an unclosed lone `<` before it.
+
+    `std::array<char, 32> version` closes the bracket the type opened. In
+    `if (3 > version)` nothing was opened, so the `>` compares.
+    """
+    depth = 0
+    for at, length in comparison_at(line[:index]):
+        if length != 1:
+            continue
+        depth += 1 if line[at] == "<" else -1
+    return depth > 0
 
 
 def comparison_at(line):
@@ -214,12 +278,14 @@ def _trailing_expr(text):
 def line_compares_version(line):
     """A comparison on `line` that denotes a version on one of its sides.
 
-    A lone `<` or `>` counts only when a version stands on its left and a
-    value on its right. The right side of those two is where a template
-    closer meets the next name (`arg_descriptor<bool> arg_version`) and where
-    a `<version>` placeholder is closed by a quote or a `-`, and neither of
-    those is a comparison. `<=` and `>=` are not template brackets, so both
-    sides count there.
+    `<=`, `>=`, `==` and `!=` are not template brackets, so a version on
+    either side counts. A lone `<` or `>` is one as often as it is a
+    comparison, so it counts in two shapes only: a version on its left and a
+    value on its right, or a constant on its left and a version on its right
+    (`5 < version`). The second shape is refused for a `>` that closes a
+    template (`std::array<char, 32> version`). What neither shape admits is
+    where a closer meets the next name (`arg_descriptor<bool> arg_version`)
+    and where a `<version>` placeholder is closed by a quote or a `-`.
     """
     for index, length in comparison_at(line):
         left = _trailing_expr(line[:index].rstrip())
@@ -228,6 +294,13 @@ def line_compares_version(line):
         right = right_match.group() if right_match is not None else None
         if op in "<>":
             if left is not None and _side_is_version(left) and _side_is_value(right):
+                return True
+            if (
+                _side_is_constant(left)
+                and right is not None
+                and _side_is_version(right)
+                and not (op == ">" and _closes_a_template(line, index))
+            ):
                 return True
             continue
         if (left is not None and _side_is_version(left)) or (
@@ -245,8 +318,45 @@ def is_lookup_call(line):
     return not (_DECLARATION_RE.search(stripped) and _TYPE_LED_RE.match(stripped))
 
 
+def mask_literals(line):
+    """`line` with the contents of its string and character literals blanked.
+
+    An error message that says "tx version < 3" is prose about a comparison.
+    The quotes stay, so the code around a literal reads as it did. An
+    apostrophe between two alphanumerics is a digit separator (`1'000`), not
+    a character literal. A raw string that spans lines is not modelled; a
+    line inside one is judged as code, which errs toward a row.
+    """
+    out = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        is_separator = (
+            ch == "'" and 0 < i < n - 1 and line[i - 1].isalnum() and line[i + 1].isalnum()
+        )
+        if ch not in "\"'" or is_separator:
+            out.append(ch)
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+        while i < n and line[i] != ch:
+            if line[i] == "\\" and i + 1 < n:
+                out.append("  ")
+                i += 2
+                continue
+            out.append(" ")
+            i += 1
+        if i < n:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def line_is_site(line):
-    return line_compares_version(line) or is_lookup_call(line)
+    code = mask_literals(line)
+    return line_compares_version(code) or is_lookup_call(code)
 
 
 def require_stripper():

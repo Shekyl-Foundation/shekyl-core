@@ -43,7 +43,6 @@ src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeep
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the index walks forward to the stored fork	delete	hardfork	while (current_fork_index + 1 < heights.size() && heights[current_fork_index].version != lastv)
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the index walks back to the fork a reorg starts from	delete	hardfork	while (current_fork_index > 0 && heights[current_fork_index].version > start_version) {
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
-src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	LOG_ERROR("Creating block template: error: tx version < 3 is not supported on Shekyl");
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	b.major_version = m_hardfork->get_current_version();
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	b.minor_version = m_hardfork->get_ideal_version();
 src/cryptonote_core/blockchain.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
@@ -87,6 +86,5 @@ src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
-src/p2p/net_peerlist_boost_serialization.h	1	peer-list store format	an error string, no comparison runs	none	none	throw std::runtime_error("peerlist_entry version < 6: pre-current peerlist stores must be dropped by load_peers, not read");
 src/rpc/core_rpc_server.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 src/rpc/rpc_facts_ffi.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();

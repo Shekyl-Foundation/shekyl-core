@@ -270,10 +270,12 @@ surface — landing on its own PR per §3, **not** bundled into a Rust crate mov
    `StrongId<BlockHeightTag>` stops height↔index/amount confusion but **not** height↔height;
    give this pair distinct tags (`CreationHeight`/`EvalHeight`) or a named two-field struct.
 3. **The two-bare-`u64` lookups** — `get_output_key(amount, global_index)` (`:2653`),
-   `get_output_key_mask_unlocked(amount, index, …)` (`:2705`),
-   `get_output_distribution(amount, from_height, to_height, start_height, …)` (`:2715`).
+   `get_output_key_mask_unlocked(amount, index, …)` (`:2705`).
    Caveat: these are the legacy amount-indexed ring path §2.1 Q1 says FCMP++ doesn't use
    (`amount` is 0) — resolve **shed-or-type** explicitly rather than leaving them bare.
+   The third of this family, `get_output_distribution(amount, from_height, to_height,
+   start_height, …)` (`:2715`), was shed: deleted 2026-10-05 with its callerless chain
+   ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6).
 4. **Archival consensus scalars are bare** (`bond_wire.rs:70` `shard_ids: Vec<u64>`;
    `settlement_epoch`, `leaf_index_in_segment`, `global_output_index`) — they enter the
    §9.11 sig-preimage; a `ShardId`/`SettlementEpoch` transposition breaks the signature or

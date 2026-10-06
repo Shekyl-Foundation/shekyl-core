@@ -40,7 +40,7 @@ same thing.
 | Block minor version (the vote) | 0 or more | Inert: a vote is counted against a table with one entry |
 | Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly, including where the bound is a local (`min_tx_version`, `max_tx_version`) rather than the literal 3. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
 | A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (a block must equal the current fork, a vote is clamped to the newest entry, the index walks) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |
-| Other things named `version` | their own | The LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument, a peer-list format. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
+| Other things named `version` | their own | The LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
 
 The transaction row is the one that needs care. A comparison such as
 `tx.version >= 2` is always true for a transaction the daemon has admitted.
@@ -67,10 +67,10 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 | Token | Rows, 2026-10-06 | What it is |
 | --- | --- | --- |
 | `template-fill` | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
-| `tx-version` | 29 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 10 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
+| `tx-version` | 28 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 9 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
 | `cen-f21` | 4 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. Live and consensus: it resolves the height the staker emission share decays from. It collapses to the Rust owner's `EMISSION_SPLIT_EPOCH`, with the `core_tests` fork tables that still disagree with the daemon about it (`docs/FOLLOWUPS.md`) |
 | `hardfork` | 41 | §5 |
-| `none` | 15 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument, a peer-list format |
+| `none` | 14 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument |
 
 **Executed in the 2026-10-05 sweep.** These comparisons are gone, so they have no row:
 
@@ -162,6 +162,16 @@ It is written and never read (`docs/FOLLOWUPS.md`).
   lowercase `version`, or the persisted-row spelling `kVersion`, and `.cc`
   is scanned with the other translation units. `hf_version` is compared.
   Those comparisons are rows, and they are deleted with the mechanism (§5).
+
+**What the extractor reads, and what it leaves alone.** A comparison counts
+with a version on either side: `version >= 5`, `5 < version`,
+`(version) >= 5`. A lone `<` or `>` is a template bracket as often as a
+comparison, so it counts only with a version on its left and a value on its
+right, or a constant on its left and a version on its right, and never where
+the `>` closes a bracket the line opened. The contents of string and
+character literals are blanked before a line is judged: an error message that
+says "tx version < 3" is prose, and two such rows left the inventory on
+2026-10-06 when that was made so.
 
 ## 8. Changing the inventory
 

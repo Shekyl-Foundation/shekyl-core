@@ -249,6 +249,53 @@ expect(
     "soon",
 )
 
+# Comparisons the extractor read past: a value on the left of a lone angle
+# bracket, and an operand inside its own parentheses. Each is one line of
+# code with no row, so each fails until the extractor sees it.
+MISSED = {
+    "a literal on the left of <": "return 5 < version;",
+    "a constant on the left of <": "if (CURRENT_TRANSACTION_VERSION < version) return false;",
+    "a literal on the left of >": "if (3 > tx.version) return false;",
+    "a parenthesised operand": "return (version) >= 5;",
+    "a cast operand": "return static_cast<int>(version) == 5;",
+}
+for shape, line in MISSED.items():
+    expect(
+        f"{shape} with no row fails",
+        {"src/pool.cpp": FILL, "src/shape.cpp": line + "\n"},
+        HEADER + FILL_ROWS,
+        1,
+        f"src/shape.cpp: {line}",
+    )
+
+# What must stay quiet beside them. A string or character literal is prose
+# about a comparison, not one, and a template closer followed by a variable
+# named `version` is a declaration.
+PROSE = (
+    'LOG_ERROR("tx version < 3 is not supported");\n'
+    'throw std::runtime_error("entry version < 6: dropped by load_peers");\n'
+    "const char angle = '<'; uint8_t version = read();\n"
+    "std::array<char, 32> version;\n"
+    "std::map<uint8_t, Row> by_version;\n"
+)
+expect(
+    "literal contents and template closers are not rows",
+    {"src/pool.cpp": FILL, "src/prose.cpp": PROSE},
+    HEADER + FILL_ROWS,
+    0,
+)
+
+# A literal beside real code does not hide the code, and the row keeps the
+# line as written.
+MIXED = 'CHECK(tx.version >= 3, "requires tx version >= 3");\n'
+expect(
+    "code beside a literal is still a row",
+    {"src/pool.cpp": FILL, "src/mixed.cpp": MIXED},
+    HEADER + FILL_ROWS,
+    1,
+    'src/mixed.cpp: CHECK(tx.version >= 3, "requires tx version >= 3");',
+)
+
 # The subject must exist (47-gate-subject-assertion).
 expect("no C++ sources is refused", {"README.md": "x\n"}, HEADER + FILL_ROWS, 2, "no subject")
 expect("a missing inventory is refused", {"src/pool.cpp": FILL}, None, 2, "is missing")
