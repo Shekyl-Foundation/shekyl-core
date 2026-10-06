@@ -45,11 +45,11 @@ fn outputs(seed_base: u64) -> Vec<RawOutput> {
 }
 
 /// The `0x07` blob for `n` outputs of the transaction seeded at `seed_base`.
-fn blob(seed_base: u64, n: usize) -> Vec<u8> {
+fn blob(seed_base: u64, n: u64) -> Vec<u8> {
     (0..n)
         .flat_map(|i| {
             let mut entry = [0x07u8; 64];
-            entry[..32].copy_from_slice(&point(2_000_000 + seed_base + i as u64));
+            entry[..32].copy_from_slice(&point(2_000_000 + seed_base + i));
             entry
         })
         .collect()
@@ -70,10 +70,7 @@ fn hash(n: u8) -> TxHash {
 /// the rest are ordinary transactions (which drain after the short lock).
 fn ingest(client: &mut CurveTreeClient, height: u64, txs: &[Tx]) -> Result<(), ClientError> {
     let outs: Vec<Vec<RawOutput>> = txs.iter().map(|t| outputs(t.seed_base)).collect();
-    let blobs: Vec<Vec<u8>> = txs
-        .iter()
-        .map(|t| blob(t.seed_base, PER_TX as usize))
-        .collect();
+    let blobs: Vec<Vec<u8>> = txs.iter().map(|t| blob(t.seed_base, PER_TX)).collect();
     let inputs: Vec<TxLeafInputs<'_>> = txs
         .iter()
         .enumerate()
@@ -187,12 +184,12 @@ fn a_copied_key_in_another_transaction_is_not_registered() {
     // hash, mined a block earlier.
     let copy_outputs = {
         let mut outs = outputs(700);
-        outs[OURS_VOUT as usize].output_key = expectation().output_key;
+        outs[usize::try_from(OURS_VOUT).expect("small")].output_key = expectation().output_key;
         outs
     };
-    let copy_blob = blob(700, PER_TX as usize);
+    let copy_blob = blob(700, PER_TX);
     let coinbase_outs = outputs(100);
-    let coinbase_blob = blob(100, PER_TX as usize);
+    let coinbase_blob = blob(100, PER_TX);
     let txs = [
         TxLeafInputs {
             is_miner: true,
