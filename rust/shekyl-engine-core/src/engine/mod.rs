@@ -342,6 +342,7 @@ pub mod merge;
 pub mod message_signing;
 pub mod network;
 pub mod output_selector;
+pub(crate) mod ownership;
 pub mod payment_requests;
 pub mod pending;
 /// Pending-post family coordination: the seal write lock + the foreground

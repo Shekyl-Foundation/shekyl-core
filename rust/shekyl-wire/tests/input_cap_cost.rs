@@ -303,6 +303,23 @@ fn tree_with(
             })
             .expect("ingest block");
     }
+    // The wallet tells its tree which outputs are its own, in one batch, as
+    // the engine does: assembly reads what was captured for a registered
+    // output and has no other route. Done here rather than in `measure`, so
+    // the one-off reconciliation is part of building the tree and not of any
+    // spend that is timed.
+    let owned: Vec<_> = spent
+        .iter()
+        .map(|s| {
+            (
+                Gindex::from_raw(s.index),
+                shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
+            )
+        })
+        .collect();
+    client
+        .sync_owned(&owned)
+        .expect("register the spendable outputs");
     (client, spent, reference_height)
 }
 

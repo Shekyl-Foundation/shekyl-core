@@ -1464,10 +1464,31 @@ record's holdings as they stood → filter → emit in canonical order.
 1. **Exclude bonds with `E_join ≥ E`.** A bond posted after `h_open(E)`
    is present at tip and was not drawable. The record carries `E_join`;
    the rule is the existing `E_first = E_join + 1`.
-2. **`CompleteTree` expands over the shard registry as of `h_open(E)`,
-   not tip.** `k` grows during an epoch, so a tip-based expansion makes
-   foundation records contribute a time-varying pair count — the same
-   instability on a different axis.
+2. **`CompleteTree` expands over every shard `s` with
+   `closed_and_final(view, s, h_open(E), reorg_cap)`, not over tip.** `k`
+   grows during an epoch, so a tip-based expansion makes foundation
+   records contribute a time-varying pair count — the same instability on
+   a different axis. Closed is not enough: the drawable set has to stay
+   inside the record's owed set, and a shard inside the reorg cap can
+   still change contents (§8.0 input 4, *The `CompleteTree` expansion*).
+
+   **Two bounds on "the shards that exist", and what tells them apart
+   (confirmed 2026-10-06).** The tree has two, and they are not rivals:
+   - **closed** — the archival fold through `at` has reached the shard's
+     end (`closed_shards_through` / `closed_shards_before`,
+     `shard_close_height`);
+   - **closed and final** — closed, and the closing block is at least the
+     in-force reorg cap below `at` (`closed_and_final`).
+
+   The discriminator is what the value bounded by it becomes. **A
+   recomputed operand may be bounded by closed**: it is derived again
+   from the chain every time it is read, so a reorg that reopens a shard
+   re-derives it and nothing stale survives. **A persisted commitment
+   must be bounded by closed and final**: once written, or once it
+   obliges a holder, it has to name a shard whose contents can no longer
+   change. This registry is on the second side. The pairs it yields are
+   what holders are challenged for, and the outcomes are recorded against
+   them, so its bound is closed and final.
 3. **Canonical order sorts `shard_id` numerically.** Not wire bytes.
    The crate-level comment names this as a second-implementation hazard
    and `ChallengeUrn::new` rejects violations, so it fails loudly — but
@@ -2286,6 +2307,59 @@ not wait on them; building does.
    dies with the engine swap. This round re-bases it on the ruled partition
    (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not
    leaf chunks.
+
+   Answered for E6 slice 8 (`CHAIN_RULES_SLICE_8.md` §3.4, asked
+   2026-10-05): the signature `fn closed_and_final(view: &ChainView,
+   shard: ShardId, at: BlockHeight, reorg_cap: BlockCount) -> bool` is
+   confirmed, where `at` is the last height whose state is read (J15
+   passes the admitting block's parent) and `reorg_cap` is the in-force
+   rule set's (`RuleSet::reorg_cap()`); for a compact record Slice C
+   makes no call of its own, because the predicate reads only the
+   cumulative archival-length fold and no slash state, so the
+   same-block-slash question does not arise; closed-and-final is monotone
+   in `at` on any one chain; a reorg that moves a shard's close height
+   also replaces every bond admitted after it; and every pair drawn at `h`
+   comes from a bond admitted through J15. J8's freeze clause is therefore
+   discharged once at admission, and Slice C carries it as an invariant
+   test (every drawn pair's shard satisfies
+   `closed_and_final(view, s, h − 1)`), not as a check. This holds while
+   J15 is the only path by which a shard enters a persona's holdings; any
+   future path must call the predicate.
+
+   *The fourth parameter (amended 2026-10-06 on review of this answer).*
+   As asked and as first answered the signature had three parameters. The
+   finality leg subtracts the reorg cap, and the cap in force is rule-set
+   data: a Fakechain set names its own, shorter than the genesis value
+   (`shekyl-chain-rules/src/reorg.rs`, module docs; rule 71). A
+   `ChainView` carries no rule set, so a three-parameter body could only
+   read the constant and would hold a shortened chain to 720 blocks. Both
+   callers already hold the rule set `validate` was given. The height
+   semantics, and the conclusion that a compact record needs no call,
+   are unchanged.
+
+   *The `CompleteTree` expansion is the other path the last clause
+   anticipates (confirmed 2026-10-06).* A `CompleteTree` record lists no
+   shards, so J15 judges none for it, and its owed set grows as shards
+   close. That set is already ruled: "every closed, final shard"
+   (`WALLET_SIDE_STORE.md` `WSS-Q10`), on the same predicate as bond
+   admission — one definition, two consumers
+   ([`ARCHIVAL_BOND_ADD_ADMISSION.md`](ARCHIVAL_BOND_ADD_ADMISSION.md)
+   §5). The drawable set must stay inside the owed set, or a holder is
+   challenged for a shard it is not yet obliged to hold. So where Slice C
+   expands that record into drawable pairs (§7.4 construction, pin 2), it
+   calls the predicate at `h_open(E)`. The call reads the same side as
+   J15, the fold through `at` inclusive, so the signature above is
+   unchanged and the operand-retry leg is still 0. A compact record makes
+   no call, as the sentence says.
+
+   *Two facts for J15's test, read at source.* For a shard whose closing
+   block is `c` and a cap `D = RuleSet::reorg_cap()`, the predicate is
+   false at every `at < c + D`, `at = c` included, and true from there on;
+   a slash in block `at` and anything in block `at + 1` leave it
+   unchanged; and under a rule set with a shorter cap the same shard turns
+   true that much sooner. And both operands (`closed_shards_through`,
+   `shard_close_height`) are fallible reads, so the body's `bool` arrives
+   inside the view's fault type or the body decides what a fault means.
 
 Also owed with the census change that lands the rows (`SCV-Q6`): a
 `RowStatus` arm for a row retired by ruling, carrying its citation, so the

@@ -72,11 +72,13 @@ impl fmt::Debug for PersonaServing {
 
 /// The serving endpoint's aggregate counters, read through the host.
 ///
-/// Every non-servable outcome renders one identical 404 on the wire; these
-/// are the only place the outcomes are distinguishable, and only in
-/// aggregate. In particular `sign_failures` is how an operator tells "this
-/// persona could not read what it needed" (`lookup_failures`) from "it read
-/// everything and the attestation key refused" — a persona started with
+/// A store fault, an unreadable tip and a missing key render the same 503.
+/// The counters split them into two buckets, in aggregate, and no finer:
+/// `lookup_failures` is "this persona could not read what it needed" (the
+/// store or the tip, pooled), and `sign_failures` is "the shard was held
+/// and no countersignature came of it" — no key resident, decided before
+/// any shard byte is read, pooled with a signer that refused after the
+/// body went out. A persona started with
 /// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
 /// ordinary miss — a shard the persona simply does not hold — is the
 /// deliberate 404 and moves neither counter.
@@ -108,8 +110,9 @@ pub struct ServeCounters {
     /// Requests the serving store could not answer: its tip height for the
     /// gate, or the shard's bytes (I/O, pruned). Not misses.
     pub lookup_failures: u64,
-    /// Requests whose shard was held but whose countersignature the key
-    /// refused.
+    /// Requests whose shard was held and got no countersignature: no key
+    /// resident (the 503, nothing sent), or a signer that refused after the
+    /// body (the refusal trailer).
     pub sign_failures: u64,
     /// Accept-loop errors.
     pub accept_errors: u64,

@@ -170,7 +170,11 @@ fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
         // reselection family. The wallet's rescan re-registers against the
         // chain it now sees, the same remedy a stale input gets, and the
         // registrant preserves this class.
+        // An unregistered input at assembly is the same family: the batch's
+        // sync reported it stale, the wallet's view is behind, and the rescan
+        // re-registers against the chain it now sees.
         ClientError::RegistrationIdentityMismatch { .. }
+        | ClientError::OutputNotRegistered { .. }
         | ClientError::RootMismatch { .. }
         | ClientError::OutputNotDrained { .. }
         | ClientError::IdentityMismatch { .. }
