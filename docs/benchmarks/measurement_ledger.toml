@@ -568,6 +568,7 @@ spec = [
   "rust/shekyl-fcmp/src",
 ]
 stale_through = [
+  { through = "34c7daa686", note = "Registration at construction (CT6_PROVING_STATE.md §11.13): ingest_block now looks each transaction up in a map of expected outputs — one BTreeMap lookup per transaction, skipped entirely while the map is empty — and TxLeafInputs carries a transaction hash. Nothing on the spend path changed; not measured." },
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
