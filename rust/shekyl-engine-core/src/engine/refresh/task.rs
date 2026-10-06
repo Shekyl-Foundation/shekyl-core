@@ -400,10 +400,20 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
         // curve-tree handle and daemon under a brief read guard, then
         // drop the guard before the long-running ingest `.await`s so
         // close / mutation paths are not blocked during backfill.
-        let (curve_tree, daemon) = {
+        // The registration set is read under the same guard: everything the
+        // wallet will hold once this result merges, which the ingest offers
+        // to the tree between its rollback and its first fold
+        // (`engine/ownership.rs`). That read opens the persona's scan seal —
+        // one small synchronous file read, the only I/O this guard spans.
+        let (curve_tree, daemon, owned) = {
             let g = engine_arc.read().await;
-            (g.curve_tree.clone(), g.daemon.clone())
+            (
+                g.curve_tree.clone(),
+                g.daemon.clone(),
+                g.owned_outputs(&result),
+            )
         };
+        owned.report(&sink);
         let producer_leaves = match crate::engine::merge::index_block_leaves(std::mem::take(
             &mut result.block_leaves,
         )) {
@@ -418,6 +428,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             &daemon,
             &result,
             &producer_leaves,
+            &owned.outputs,
         )
         .await
         {

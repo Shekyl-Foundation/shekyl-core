@@ -314,4 +314,19 @@ pub enum RefreshDiagnostic {
         /// The class whose events are being suppressed.
         class: SuppressedClass,
     },
+
+    /// The staking persona's sealed scan state could not be read when the
+    /// refresh gathered the outputs to register with the curve tree
+    /// (`engine/ownership.rs`).
+    ///
+    /// The refresh goes on without the persona's funding outputs, so they
+    /// are registered at their spend instead — later, and at the late
+    /// path's cost. This event is that consequence, named: the cause is the
+    /// seal's, and the wallet's staking read reports it to the user by
+    /// failing closed on the same file.
+    ///
+    /// Emitted by the orchestrator, at most once per merge attempt, so it
+    /// is outside the producer's per-block emission budget. It carries no
+    /// payload: there is nothing about an unreadable file to bucket.
+    PersonaSealUnreadable,
 }

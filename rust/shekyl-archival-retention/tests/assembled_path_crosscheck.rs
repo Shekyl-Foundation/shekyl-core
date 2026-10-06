@@ -107,6 +107,21 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
     }
 }
 
+/// Tell the client the input is the caller's, as the wallet's curve-tree
+/// actor does before every assembly. Assembly reads the membership material
+/// the client captured for registered outputs and has no route for an
+/// unregistered one; here the output drained long before, so this is a late
+/// registration and its one reconciliation writes what the path needs.
+fn register(client: &mut CurveTreeClient, input: &AssembleInput) {
+    let sync = client
+        .sync_owned(&[(input.gindex, input.output_key)])
+        .expect("register the founder output");
+    assert!(
+        sync.stale.is_empty(),
+        "the fixture's key is the one the tree holds at that gindex"
+    );
+}
+
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
@@ -148,6 +163,7 @@ fn assembled_path_verifies_as_segment_opening() {
     };
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let founder = coinbase_input(&blocks, last_drained);
+    register(&mut client, &founder);
 
     let path = client
         .assemble_path(&founder, &reference)
@@ -228,6 +244,7 @@ fn tj_f_forged_material_does_not_verify() {
     };
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let founder = coinbase_input(&blocks, last_drained);
+    register(&mut client, &founder);
     let path = client
         .assemble_path(&founder, &reference)
         .expect("assemble founder path");

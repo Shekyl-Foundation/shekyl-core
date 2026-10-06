@@ -86,7 +86,7 @@
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{AssembleInput, ClientError, Gindex};
+use shekyl_curve_tree::{AssembleInput, ClientError};
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingPostState, PendingRelease, SealAdmission};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
@@ -527,11 +527,7 @@ where
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
             .iter()
-            .map(|r| AssembleInput {
-                gindex: Gindex::from_raw(r.gindex.to_raw()),
-                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-            })
+            .map(crate::engine::ownership::p_assemble_input)
             .collect();
         let paths = curve_tree
             .assemble_tx(reference, assemble_inputs)

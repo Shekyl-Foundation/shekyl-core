@@ -298,6 +298,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
         commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
+    // The wallet tells its tree which output is its own before it asks for
+    // the path, as the engine's curve-tree actor does: assembly reads what
+    // was captured for a registered output and has no other route.
+    client
+        .sync_owned(&[(target.gindex, target.output_key)])
+        .expect("register the spent output");
     let path = client
         .assemble_path(&target, &reference)
         .expect("assemble membership path");
