@@ -24,6 +24,22 @@
   a witness for what was true at capture, not for this rule, until it is
   regenerated over a filled, closed and priced shard.
 
+### Chain rules — the emission claim's statics (CEN-J19, J20, J22, J24)
+
+- The Rust validator now judges the byte-only rows of an emission claim
+  as the C++ does: the emission vin must parse exactly (CEN-J19); the
+  hybrid key in the claim's emission slot must derive the vin's
+  `P_canonical_id`, so the claim is signed by the persona it pays
+  (CEN-J20); the signable hash is the prefix hash with the emission vin
+  removed (CEN-J22; `shekyl-wire` gains `TxPrefix::hash`, the derivation
+  `Transaction::prefix_hash` already was, now callable on an edited
+  prefix); and the reward commit set is the loud outputs in order with a
+  checked sum, refusing a missing commitment or an overflow (CEN-J24).
+  The verify crossing that consumes the hash and the set (CEN-J25) is
+  the next row; until it lands, the Rust side admits an emission claim
+  these four rows pass and the C++ refuses one whose proof fails
+  (`CHAIN_RULES_SLICE_8.md` §5 rows 8–9).
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
