@@ -1,0 +1,310 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The driver's emission claim through the production stack (E6 slice 8
+//! PR-b, `CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): a persona funded by a
+//! coinbase spend joins a closed shard, serves it for one epoch, and —
+//! once that epoch has closed and its `Σwork` and budget are the store's
+//! rows — claims its reward with a transaction `emission_assembly` built
+//! the way the engine handler builds one. `validate` admits it; the fold
+//! writes the claim onto the record; the store holds what the verdict
+//! derived. That is the one admitted claim the row pins. The row's other
+//! half — the driver's bytes and the engine's held identical for one
+//! shape — lives in `shekyl-engine-core`'s `stake_engine_tests`, which
+//! reaches this crate's assembly through the `harness` feature.
+//!
+//! # What the chain has to do first
+//!
+//! A compact join needs a closed shard (CEN-J15), so the chain fills one
+//! under the levered schedule (`scenario_shard`); the claim needs a
+//! settled epoch the persona served, so the credit lands in the join's
+//! epoch for the epoch after it (CEN-J5) and the chain mines through that
+//! epoch's close; and the claim's inputs are the persona's own outputs —
+//! the backing and the fee — paid by the funding spend, which is why the
+//! spend pays a [`Recipient`] and the tree [`Spender::own`]s what it
+//! paid. The reward is the close's own arithmetic re-run over the rows
+//! the test knows it fed: `epoch_close_compute` over the one bond, the
+//! one shard and the one credit pair must equal the close the fold wrote,
+//! and `claimant_reward_share` over the persisted `Σwork` and budget is
+//! the amount the claim names. A reward of zero would stop the test
+//! before the claim: a claim for nothing is not what the row admits.
+//!
+//! Minutes of proofs; the live lane (`cargo test -p shekyl-chain-ingest
+//! --features pipeline -- --ignored the_drivers_emission_claim`).
+//!
+//! # What this does not witness
+//!
+//! The claim's economics against the store (CEN-J21/J23/J25) and its
+//! shape against the record (J19/J20/J22/J24) are rows 8–10's; today the
+//! fold checks the claimed epochs against the record's window and sets
+//! the paying height (CEN-L7's claim arm), and `validate` judges the
+//! class (CEN-H22) and the auth slots (CEN-I18). The claim's own verify
+//! legs — the membership-only backing proof and the dual auth — run here
+//! against the wallet-side root as a self-check, as the spend's FCMP does.
+
+use shekyl_archival_retention::{
+    claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
+    epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim,
+};
+use shekyl_chain_rules::{CenRow, RecordWriteKind};
+use shekyl_fcmp::proof::{self, ShekylFcmpProof};
+use shekyl_fcmp::PqcKeyScalar;
+use shekyl_types::archival::FirstPayingHeight;
+use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_wire::Transaction;
+use zeroize::Zeroizing;
+
+use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
+use crate::scenario::{FreeHash, Mined, Scenario};
+use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_shard::{
+    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
+    mine_to, EPOCH_BLOCKS,
+};
+use crate::scenario_spend::{Owner, Recipient, Spender};
+
+/// The fill spends coinbases from here up; the funding spend rides
+/// coinbase 0, below it.
+const FILL_FROM_COINBASE: u64 = 10;
+
+/// The claim's transaction key. The engine draws one from the OS; the
+/// driver takes it as an argument, and this scenario needs only that it
+/// is not the funding spend's.
+const CLAIM_TX_KEY: [u8; 32] = [0x5c; 32];
+
+/// Feed `spender` every block of `chain` it has not seen.
+fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
+    for block in &chain[*seen..] {
+        spender.push(block);
+    }
+    *seen = chain.len();
+}
+
+#[tokio::test]
+#[ignore = "minutes of proofs; the live lane"]
+async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
+    let rules = levered_rules();
+    let mut scenario = Scenario::open_under("scenario-emission-claim", FreeHash, rules);
+    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let [closed] = filled.closed.as_slice() else {
+        panic!("one shard closed");
+    };
+    assert_eq!(closed.shard.to_raw(), 0);
+
+    // The join and the credit after it sit in one epoch, neither a close.
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1).to_raw();
+    mine_to(
+        &mut scenario,
+        &mut mined,
+        BlockHeight::from_raw(join_height),
+    )
+    .await;
+    let mut spender = Spender::over(&mined);
+    let mut seen = mined.len();
+
+    // The funding spend: coinbase 0 to the persona in two outputs — the
+    // payment (index 0) is the claim's backing, the change (index 1) its
+    // fee — with the persona's join riding it.
+    let persona = Persona::at(1);
+    let join = persona.join(shard_set(vec![0]), ENDPOINT);
+    let funding = spender.spend_coinbase_to(
+        scenario.wallet(),
+        0,
+        join_height,
+        FEE,
+        Some(&join),
+        &Recipient::persona(persona.keys()),
+    );
+    let backing_key = funding.prefix.outputs[0].key;
+    let fee_key = funding.prefix.outputs[1].key;
+    spender.own(backing_key);
+    spender.own(fee_key);
+    let block = scenario
+        .mine_listing(vec![funding])
+        .await
+        .unwrap_or_else(|outcome| panic!("the funding spend and the join connect: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(join_height));
+    assert!(
+        block.judged_by.contains(&CenRow::J15),
+        "J15 judged the join"
+    );
+    mined.push(block);
+    let join_epoch = SettlementEpoch::from_raw(levered_schedule().epoch_at_height(join_height));
+    // The first epoch a persona joining in `join_epoch` may serve (CEN-J5).
+    let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+    let block = scenario
+        .mine_listing(vec![persona.serve_credit(0, served.to_raw())])
+        .await
+        .unwrap_or_else(|outcome| panic!("the credit connects: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(join_height + 1));
+    mined.push(block);
+
+    // Through the close of `served`: the fold closes it when the count
+    // reaches `(served + 1) · SEB`, at the block before that height.
+    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
+    mine_to(
+        &mut scenario,
+        &mut mined,
+        BlockHeight::from_raw(count_at_close),
+    )
+    .await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let close = mined[usize::try_from(count_at_close - 1).expect("small")]
+        .archival
+        .close()
+        .expect("the block that completes the epoch carries its close")
+        .clone();
+    assert_eq!(close.epoch(), served);
+
+    // The close, re-run over the rows this test fed it: one bond that
+    // joined in `join_epoch`, one shard closed where the fill closed it,
+    // one credit pair. The fold's rows are this arithmetic.
+    let bonds = [EpochCloseBond {
+        join_settlement_epoch: join_epoch.to_raw(),
+        is_foundation_complete_tree: false,
+        bad_intervals: &[],
+    }];
+    let shards = [EpochCloseShard {
+        shard_id: 0,
+        close: ShardClose::ClosedAt(closed.close_height),
+    }];
+    let pairs = [CreditPair {
+        bond_idx: 0,
+        shard_idx: 0,
+    }];
+    let inputs = EpochCloseInputs::under_schedule(
+        levered_schedule(),
+        served.to_raw(),
+        count_at_close,
+        &bonds,
+        &shards,
+        &pairs,
+    );
+    let result = epoch_close_compute(&inputs).expect("the pair indexes its bond and shard");
+    let r_market: Vec<(u64, u64)> = close
+        .r_market()
+        .iter()
+        .map(|(shard, r)| (shard.to_raw(), r.to_raw()))
+        .collect();
+    assert_eq!(r_market, vec![(0, result.r_market_by_shard[0])]);
+    assert_eq!(close.sigma_work().to_raw(), result.sigma_work_milli);
+    let share = claimant_reward_share(&EmissionEpochSource {
+        inputs: inputs.clone(),
+        persisted_sigma_work_milli: close.sigma_work().to_raw(),
+        claimant_bond_idx: Some(0),
+        budget: close.budget().to_raw(),
+    })
+    .expect("the claimant indexes its bond");
+    assert!(share.is_member, "the one server is in the market");
+    assert!(
+        share.reward > 0,
+        "the one server of the one shard is owed the epoch's budget share \
+         (budget {}, Σwork {})",
+        close.budget().to_raw(),
+        close.sigma_work().to_raw()
+    );
+    let scarcity = shard_contribution_micro(&inputs, &result.r_market_by_shard, 0);
+    let terms = ClaimTerms {
+        holdings: shard_set(vec![0]),
+        settlement_epochs: vec![served.to_raw()],
+        work_claim: vec![WorkEpochClaim {
+            epoch: served.to_raw(),
+            shard_entries: vec![ShardWorkEntry {
+                shard_id: 0,
+                serve_credit_bit: true,
+                scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits (F-C)"),
+            }],
+        }],
+        reward_amount_plain: vec![share.reward],
+    };
+
+    // The claim connects in the epoch after `served` — at its first
+    // block, which is past the persona outputs' maturity and the
+    // reference window (`DEFAULT_LOCK_WINDOW` and the reorg cap both fit
+    // inside an epoch of twenty from a join that was not its last block).
+    let connecting = count_at_close;
+    let owner = Owner::persona(persona.keys());
+    let backing = spender.owned_input(&owner, backing_key, connecting);
+    let fee_input = spender.owned_input(&owner, fee_key, connecting);
+    let claim = assemble_emission_claim(
+        persona.keys(),
+        &Zeroizing::new(CLAIM_TX_KEY),
+        vec![fee_input.input],
+        backing.input,
+        terms,
+        FEE,
+        &backing.tree,
+    );
+    assert_eq!(claim.persona, persona.id());
+
+    // Self-check every proving leg against the wallet-side root before any
+    // rule judges it: the membership-only backing proof and the dual auth
+    // through the retention crate's verifiers (the consensus operations
+    // CEN-J22/J24 will call), the fee spend's FCMP through CEN-I15's.
+    let root = backing.tree.tree_root.as_bytes();
+    emission_vin_verify_backing(
+        &claim.vin,
+        root,
+        claim.tree_depth,
+        claim.signable.to_bytes(),
+    )
+    .expect("the backing's membership-only proof verifies against the wallet-side root");
+    emission_vin_verify_auth(
+        &claim.vin,
+        &claim.reward_commits,
+        &claim.signable.to_bytes(),
+    )
+    .expect("both auth legs verify over the Q1 messages");
+    let fee_verified = proof::verify(
+        &ShekylFcmpProof {
+            data: claim.fcmp_proof.clone(),
+            num_inputs: 1,
+            tree_depth: claim.tree_depth,
+        },
+        &[shekyl_types::KeyImage::from_canonical_bytes(
+            claim.key_images[0],
+        )],
+        &claim.pseudo_outs,
+        &[PqcKeyScalar::from_pqc_public_key(&claim.fee_pubkeys[0])],
+        root,
+        claim.tree_depth,
+        claim.prefix_hash.to_bytes(),
+    )
+    .expect("verify runs");
+    assert!(fee_verified, "the fee spend's FCMP verifies");
+
+    let claim_tx =
+        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
+    let block = scenario
+        .mine_listing(vec![claim_tx])
+        .await
+        .unwrap_or_else(|outcome| panic!("the driver's emission claim connects: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(connecting));
+    for row in [CenRow::H22, CenRow::I18, CenRow::L7] {
+        assert!(block.judged_by.contains(&row), "{row} judged the claim");
+    }
+
+    // The fold's write: the record updated with the claimed epoch and the
+    // first paying height, set once; the store holds that row.
+    let records = block.archival.records();
+    assert_eq!(records.len(), 1, "the claim is the block's one write");
+    assert_eq!(records[0].persona(), &persona.id());
+    assert_eq!(records[0].kind(), RecordWriteKind::Update);
+    let record = records[0].record();
+    assert_eq!(record.claimed_settlement_epochs, vec![served]);
+    assert_eq!(
+        record.first_paying_emission_height,
+        FirstPayingHeight::new(BlockHeight::from_raw(connecting))
+    );
+    assert_eq!(
+        scenario.bond_record(persona.id()).await.expect("read"),
+        Some(record.clone()),
+        "the claim's update is the store's row"
+    );
+    scenario.close().await;
+}
