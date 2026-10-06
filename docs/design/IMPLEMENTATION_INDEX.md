@@ -30,10 +30,15 @@ by E6 slice 8 PR-a, whose rows changed status (DRS-E6 / `CHAIN_RULES_SLICE_8.md`
 §5 rows 1–5; CEN-J17 to bucket 3 and the census denominator `154 → 153`;
 the `ARW-14` re-key) in `shekyl-chain-rules` (`rules/tx_bond.rs`:
 `judge_serve_credit_bond`, `judge_bond_post`; `rules/tx_inputs.rs`: J11,
-J12; coverage `implemented 97 → 106 / 151`), `shekyl-chain-ingest`
-(`archival_admission_tests.rs`, `fixture::persona`), `shekyl-chain-store`
+J12; `harness/fixture/archival.rs`: `fixture::persona`; coverage
+`implemented 97 → 106 / 151`), `shekyl-chain-ingest`
+(`scenario_archival.rs`: `Persona::{reinstate, reinstate_vin, release_post}`;
+the admission pins — `archival_admission_tests.rs` at the counted tree,
+split on review into `archival_corpus_tests.rs`, `archival_hint_tests.rs`
+and `archival_slash_tests.rs`), `shekyl-chain-store`
 (the slash bench's derived personas and re-pinned `0x04` body) and
-`shekyl-archival-retention` (`Persona::reinstate`, `release_post`). Re-run
+`shekyl-archival-retention` (`bond_post.rs`: `bond_post_block_unique`'s
+pair clause). Re-run
 at that tree from a fresh clone: `cargo test -p shekyl-chain-rules` **334**
 + 17, `-p shekyl-chain-store` **419** + 16, `-p shekyl-chain-ingest` **117**
 + 5; workspace `cargo clippy --all-targets -- -D warnings` clean (413
