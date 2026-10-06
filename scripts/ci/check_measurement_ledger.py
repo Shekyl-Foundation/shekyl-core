@@ -23,6 +23,14 @@
 # check walks the stale constants at HEAD's first parent, which in CI is the
 # base branch. On a local branch that parent is the last commit only.
 #
+# An `estimated` constant is a prediction with its arithmetic: a value and
+# its band, the basis, and the captures the basis is computed from, which
+# must exist. It is the shape a design takes before its path is built. The
+# only edit that makes an estimate current or stale is a capture file that
+# was not in the parent tree: a measurement that landed, not an estimate
+# that hardened. An estimate may be withdrawn to unmeasured; it may not
+# vanish.
+#
 # Exit 0: the ledger tells the truth. Exit 1: it disagrees with the tree.
 # Exit 2: the question could not be asked (rule 47). `--selftest` builds
 # throwaway repositories and bites each failure class.
@@ -77,6 +85,7 @@ CONSTANT_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "path_
 MEASURED_KEYS = {"capture", "capture_rev", "rev_source"}
 STALE_KEYS = {"stale_since", "carrier"}
 UNMEASURED_KEYS = {"carrier"}
+ESTIMATED_KEYS = {"estimate", "basis", "basis_captures", "carrier"}
 TOOLCHAIN_ACK_KEYS = {"commit", "note"}
 
 SHALLOW_MSG = (
@@ -93,6 +102,7 @@ class Status(enum.Enum):
     CURRENT = "current"
     STALE = "stale"
     UNMEASURED = "unmeasured"
+    ESTIMATED = "estimated"
 
     @classmethod
     def parse(cls, raw: object) -> Status | None:
@@ -150,6 +160,9 @@ class Constant:
     rev_source: str | None = None
     stale_since: str | None = None
     carrier: str | None = None
+    estimate: str | None = None
+    basis: str | None = None
+    basis_captures: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -420,6 +433,8 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     allowed = set(CONSTANT_KEYS)
     if status is Status.UNMEASURED:
         allowed |= UNMEASURED_KEYS
+    elif status is Status.ESTIMATED:
+        allowed |= ESTIMATED_KEYS
     else:
         allowed |= MEASURED_KEYS
         if status is Status.STALE:
@@ -450,16 +465,35 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
                 ids.append(item)
         measured_t = tuple(ids)
     capture = capture_rev = rev_source = stale_since = carrier = None
-    if status is not Status.UNMEASURED:
+    estimate = basis = None
+    basis_captures: tuple[str, ...] = ()
+    if status in (Status.CURRENT, Status.STALE):
         capture = _require_str(table, "capture", fails, name) or None
         capture_rev = _require_str(table, "capture_rev", fails, name) or None
         rev_source = _require_str(table, "rev_source", fails, name) or None
     if status is not Status.CURRENT:
         carrier = _sentence(table.get("carrier", ""))
         if carrier is None:
-            who = "stale" if status is Status.STALE else "unmeasured"
-            fails.append(f"{name}: a {who} constant names its carrier")
+            fails.append(f"{name}: a {status.value} constant names its carrier")
             carrier = None
+    if status is Status.ESTIMATED:
+        estimate = _sentence(table.get("estimate", ""))
+        if estimate is None:
+            fails.append(f"{name}: an estimated constant states its estimate, value and band")
+        basis = _sentence(table.get("basis", ""))
+        if basis is None:
+            fails.append(f"{name}: an estimated constant states the arithmetic of its basis")
+        raw_captures = table.get("basis_captures")
+        if (
+            not isinstance(raw_captures, list)
+            or not raw_captures
+            or not all(isinstance(item, str) and item.strip() for item in raw_captures)
+        ):
+            fails.append(
+                f"{name}: an estimated constant lists the captures its basis is computed from"
+            )
+        else:
+            basis_captures = tuple(item.strip() for item in raw_captures)
     if status is Status.STALE:
         raw_since = table.get("stale_since", "")
         if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
@@ -471,6 +505,7 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     return Constant(
         name, defined_in, needle, measured_t, status, path_set,
         capture, capture_rev, rev_source, stale_since, carrier,
+        estimate, basis, basis_captures,
     ), fails
 
 
@@ -711,6 +746,13 @@ def audit_constant(
     are already resolved on the path set; a stale constant does not read `cleared`.
     """
     fails = _needle(root, constant)
+    if constant.status is Status.ESTIMATED:
+        for capture in constant.basis_captures:
+            if not _matches_tracked(root, capture):
+                fails.append(
+                    f"{constant.name}: basis capture {capture} is not a tracked file"
+                )
+        return fails, None
     if constant.status is Status.UNMEASURED or path_set is None or not spec_ok:
         return fails, None
     if not constant.capture or not constant.capture_rev or not constant.rev_source:
@@ -879,6 +921,7 @@ def check_transitions(root: Path, data: dict, constants: list[Constant]) -> list
         if isinstance(row, dict) and isinstance(row.get("name"), str)
     }
     fails: list[str] = []
+    fails.extend(_estimate_transitions(root, rows, raw_names, by_name))
     for old in rows:
         if not isinstance(old, dict) or old.get("status") != Status.STALE.value:
             continue
@@ -919,6 +962,41 @@ def check_transitions(root: Path, data: dict, constants: list[Constant]) -> list
                 f"{name}: was stale since {since[:OID_SHOWN]} and is now current "
                 f"on a capture at {shown}, which does not include that commit. "
                 "Only a newer capture retires a stale constant"
+            )
+    return fails
+
+
+def _estimate_transitions(
+    root: Path, rows: list, raw_names: set, by_name: dict[str, Constant]
+) -> list[str]:
+    """An estimate becomes measured only by a capture file new to this history.
+
+    `git cat-file -e HEAD^1:<capture>` says whether the parent tree already
+    held the file. If it did, the "capture" predates the estimate's path and
+    the row has hardened a prediction into a number.
+    """
+    fails: list[str] = []
+    for old in rows:
+        if not isinstance(old, dict) or old.get("status") != Status.ESTIMATED.value:
+            continue
+        name = old.get("name")
+        if not isinstance(name, str) or not name:
+            name = "<unnamed>"
+        if name not in raw_names:
+            fails.append(
+                f"{name}: was estimated and is gone. An estimate is withdrawn to "
+                "unmeasured with its reason, or replaced by a capture; it does not vanish"
+            )
+            continue
+        now = by_name.get(name)
+        if now is None or now.status in (Status.ESTIMATED, Status.UNMEASURED):
+            continue
+        held = git(root, "cat-file", "-e", f"HEAD^1:{now.capture}")
+        if held.code == 0:
+            fails.append(
+                f"{name}: was estimated and is now {now.status.value} on "
+                f"{now.capture}, which the parent tree already held. Only a capture "
+                "that lands makes an estimate measured"
             )
     return fails
 
@@ -971,6 +1049,8 @@ def run(root: Path) -> int:
         if constant.status is Status.STALE:
             since = (constant.stale_since or "")[:OID_SHOWN]
             print(f"stale: {constant.name} — since {since}; carrier: {constant.carrier}")
+        elif constant.status is Status.ESTIMATED:
+            print(f"estimate: {constant.name} — {constant.estimate}; carrier: {constant.carrier}")
     if fails:
         print("FAIL: the measurement ledger disagrees with the tree:")
         for finding in fails:
@@ -982,7 +1062,7 @@ def run(root: Path) -> int:
     print(
         f"measurement ledger: {len(constants)} constants tell the truth — "
         f"{counts[Status.CURRENT]} current, {counts[Status.STALE]} stale, "
-        f"{counts[Status.UNMEASURED]} unmeasured"
+        f"{counts[Status.UNMEASURED]} unmeasured, {counts[Status.ESTIMATED]} estimated"
     )
     return 0
 

@@ -125,6 +125,23 @@ def constant(
     return text + body + "\n"
 
 
+def estimated(
+    name: str,
+    *,
+    set_id: str = "hot",
+    body: str = "",
+    captures: str = '["docs/benchmarks/cap.txt"]',
+    estimate: str = "about 50 ms, band 40 to 60",
+    basis: str = "24.8 ms before plus one 23.9 ms digest pass",
+) -> str:
+    return (
+        f'[[constant]]\nname = "{name}"\ndefined_in = "src/consts.txt"\n'
+        f'needle = "LIMIT = 4"\nmeasured_by = ["BA-T1"]\nstatus = "estimated"\n'
+        f'path_set = "{set_id}"\nestimate = "{estimate}"\nbasis = "{basis}"\n'
+        f"basis_captures = {captures}\n{CARRIER}" + body + "\n"
+    )
+
+
 def document(
     sets: str, rows: str, toolchain: str = "", toolchain_file: str = "toolchain.toml"
 ) -> str:
@@ -788,8 +805,79 @@ def scenario_toolchain(results: Results) -> None:
         )
 
 
+def scenario_estimated(results: Results) -> None:
+    """A prediction with its arithmetic, and the one way it becomes a measurement."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        control = constant("control", "current", c1)
+        guess = estimated("guess")
+        results.expect(
+            root, document(path_set(), control + guess), 0,
+            "control: an estimate beside a current constant passes",
+            "estimate: guess",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures='["docs/benchmarks/nope.txt"]')), 1,
+            "an estimate whose basis capture is not in the tree is refused",
+            "not a tracked file",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", estimate="x")), 1,
+            "an estimate without a value and band is refused", "value and band",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", basis="x")), 1,
+            "an estimate without its arithmetic is refused", "arithmetic",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures="[]")), 1,
+            "an estimate that names no basis capture is refused", "captures its basis",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated(
+                "guess", body='capture = "docs/benchmarks/cap.txt"\n'
+            )), 1,
+            "an estimate may not claim a capture", "not valid for a estimated",
+        )
+        # The transition. The parent holds the estimate; the child calls it
+        # current on a capture the parent tree already had.
+        write(root, LEDGER, document(path_set(), control + guess))
+        commit(root, "the ledger as the base branch holds it", ledger=True)
+        commit(root, "the pull request's commit")
+        hardened = document(path_set(), control + constant("guess", "current", c1))
+        results.expect(
+            root, hardened, 1,
+            "AN ESTIMATE MAY NOT HARDEN: current on a capture the parent already held",
+            "parent tree already held",
+        )
+        results.expect(
+            root, document(path_set(), control), 1,
+            "an estimate that vanishes is refused", "is gone",
+        )
+        withdrawn = document(path_set(), control + constant(
+            "guess", "unmeasured", body=CARRIER
+        ))
+        results.expect(
+            root, withdrawn, 0, "an estimate withdrawn to unmeasured passes",
+        )
+        write(root, "docs/benchmarks/new_cap.txt", f"# git_rev={c1}\nvalue=51\n")
+        commit(root, "the measurement lands")
+        measured = document(path_set(), control + constant("guess", "current", c1).replace(
+            'capture = "docs/benchmarks/cap.txt"', 'capture = "docs/benchmarks/new_cap.txt"'
+        ))
+        # The capture file is new to the parent tree, which is the shape a PR
+        # that lands a measurement and updates the ledger has.
+        results.expect(
+            root, measured, 0,
+            "a capture file the parent tree did not hold makes the estimate current",
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_estimated(results)
     scenario_current(results)
     scenario_stale_and_comments(results)
     scenario_listening(results)

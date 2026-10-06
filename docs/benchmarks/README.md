@@ -272,6 +272,7 @@ statement disagrees with git in either direction:
 | `current` | Every commit touching the path set is in the history of the review point: the capture, or a `cleared` note on that path set | A commit to the path set is in neither; the failure names it |
 | `stale` | Something is newer; the constant names the commit and the carrier of the re-measurement, and its path set lists in `stale_through` every later commit to those paths it has heard | Nothing is newer; or the named commit did not touch the paths; or a commit to the paths is in none of the `stale_through` histories |
 | `unmeasured` | No capture is in the tree; the constant names what will measure it | It claims a capture, or names no carrier |
+| `estimated` | A prediction for a path not yet built: the value and its band, the arithmetic, and the captures the arithmetic reads | A basis capture is not in the tree; it claims a capture of its own; or it becomes current or stale on a capture the base branch already held |
 
 A green run means the ledger tells the truth. It does not mean every capture
 is fresh: the stale constants are printed on every run, and each is a
@@ -321,6 +322,12 @@ heard.
 Entries name commits, and they are a set: name your own commit and leave
 the others in place. If two PRs append to the same path set, git will ask
 you to keep both lines.
+
+**When you estimate a value for a path that is not built yet,** add it as
+`estimated` with its band, its arithmetic and the captures the arithmetic
+reads. The estimate is the falsifier the first measurement is checked
+against. It becomes `current` only through a capture file that lands with
+the change; it may be withdrawn to `unmeasured`; it may not be deleted.
 
 **When you add a constant that rests on a measurement,** add its row. When
 its cost is one an existing path set already names, point the row at that
