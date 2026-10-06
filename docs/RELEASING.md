@@ -66,10 +66,15 @@ The CI workflows install all dependencies automatically. For local builds:
    # misleading "No secret key" error even when the card is plugged in.
    gpg --card-status
 
+   # The merge happened on the remote. Fetch, and tag the merge commit by
+   # name: a local main, or an origin/main from before the fetch, is the
+   # previous release.
+   git fetch origin
+
    # Sign with the Foundation release-signing subkey explicitly.
    # -u overrides git config user.signingkey for this single command,
    # so your personal commit-signing key stays configured for normal work.
-   git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 -m "Shekyl v3.0.3-RC1"
+   git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main -m "Shekyl v3.0.3-RC1"
 
    # Verify BEFORE pushing. A wrong signer can still be undone locally.
    git verify-tag v3.0.3-RC1
@@ -206,11 +211,12 @@ If a tag needs to be moved (e.g. to include a last-minute fix):
 ```bash
 git tag -d v3.0.3-RC1                              # delete local
 git push origin :refs/tags/v3.0.3-RC1               # delete remote
+git fetch origin                                    # the fix reached main by pull request
 gpg --card-status                                   # warm the agent
-git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 \
-  -m "Shekyl v3.0.3-RC1"                           # recreate on HEAD, signed
+git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main \
+  -m "Shekyl v3.0.3-RC1"                           # recreate on the new merge commit, signed
 git verify-tag v3.0.3-RC1                           # MUST pass before pushing
-git push origin main && git push origin v3.0.3-RC1
+git push origin v3.0.3-RC1
 ```
 
 Re-tagging goes through the same signing ceremony as a fresh release;

@@ -160,9 +160,12 @@ check below has caught a real failure at least once in a neighbouring
 project, and the order matters.
 
 The ceremony assumes you have already performed `docs/RELEASING.md`
-steps 1 (changelog rename on `dev`) and 2 (`git merge --no-ff dev` on
-`main`). You should be on `main` with the release merge commit as
-`HEAD`. The tag is placed on that commit.
+steps 1 (changelog rename on `dev`) and 2 (the promotion pull request,
+merged into `main` with a merge commit). That merge happened on the
+remote: your local `main` does not have it, and your `origin/main` has it
+only after a fetch. The tag is placed on that merge commit, named
+explicitly — never on whatever `HEAD` happens to be. Step 2 below
+identifies the commit before anything is signed.
 
 ### 0. Pre-flight (one time, before your first release)
 
@@ -250,10 +253,30 @@ for release tags — that config is pointed at your personal commit-
 signing key and should stay there. `-u` overrides it for this single
 invocation.
 
+First identify the commit, so that the signature goes on the release and
+not on a stale ref:
+
 ```bash
-git tag -u 6914D74823DDA8DC -a -s vX.Y.Z-alpha.N \
+git fetch origin
+git log -1 --format='%H%n  parents: %P%n  %s' origin/main
+```
+
+Expected: the subject is the promotion pull request's merge
+(`Merge pull request #N from …/dev`), and there are **two** parents — the
+previous release's commit and the frozen `dev` SHA. One parent, or the
+previous release's own subject, means the fetch did not happen or the
+pull request was not merged with a merge commit: stop.
+
+Then tag that commit by name:
+
+```bash
+git tag -u 6914D74823DDA8DC -a -s vX.Y.Z-alpha.N origin/main \
   -m "Shekyl vX.Y.Z-alpha.N"
 ```
+
+`-s` alone would also produce an annotated tag; `-a` is written out
+because the policy above is "signed annotated tag" and the command says
+both.
 
 gpg will prompt for the YubiKey's Signature PIN via pinentry. The
 YubiKey's amber LED will blink on the touch-confirm step (UIF may be
@@ -288,8 +311,16 @@ Checks:
   `F5F7 5A47 70C9 4FE1 D5A5 AE59 844E 424F 9866 4F44`.
 - The UID is `Shekyl Foundation (Release Signing Key) ...`.
 
-If any of the three are wrong, delete the tag locally and re-run from
-step 1 after diagnosing:
+Then check the tag points at the remote's `main`, read from the remote
+and not from a local ref:
+
+```bash
+test "$(git rev-parse 'vX.Y.Z-alpha.N^{commit}')" = \
+     "$(git ls-remote origin refs/heads/main | cut -f1)" && echo on-main
+```
+
+If any of the three are wrong, or `on-main` is not printed, delete the
+tag locally and re-run from step 1 after diagnosing:
 
 ```bash
 git tag -d vX.Y.Z-alpha.N

@@ -25,10 +25,11 @@ Companion docs: `RELEASING.md` (tag → CI → artifact mechanics),
 - `main` advances **only** by promoting a tagged release. No feature work, no
   independent commits land on `main`.
 - Each release is cut from a **frozen `dev` SHA**. Through `beta.N` the
-  promotion is a pull request from `dev` to `main` (§4): pre-releases
-  regenerate every few weeks, and the next one is cheaper than a backport. A
-  `release-vX.Y` branch, with only critical fixes backported to it, starts at
-  `rc.1`, when backports become plausible.
+  promotion is a pull request from `dev` to `main` (§4): a pre-release is
+  superseded by the next incompatibility on `dev`, so the next pre-release is
+  cheaper than a backport to this one. A `release-vX.Y` branch, with only
+  critical fixes backported to it, starts at `rc.1`, when backports become
+  plausible.
 - The `dev → main` diff size is irrelevant: every commit in it was reviewed when
   it landed on `dev`. Promotion is a release event, not a re-review.
 - Cadence is **feature-driven**, mapped to testnet milestones, not a calendar
@@ -133,9 +134,11 @@ then tag** (avoids the "tag not on the default branch" trap that
    fast-forward: the merge commit is the branch-topology release marker. Its
    tree must equal the frozen SHA's tree.
 6. **Sign the tag** on that merge commit with the Foundation signing subkey
-   (`6914D74823DDA8DC`; `SIGNING.md` has the ceremony):
-   `git tag -u 6914D74823DDA8DC -a -s vX.Y.Z origin/main -m "Shekyl vX.Y.Z"`,
-   then `git verify-tag vX.Y.Z` before anything is pushed.
+   (`6914D74823DDA8DC`), by the ceremony in `SIGNING.md`
+   §"Release-tag signing ceremony". The merge happened on the remote, so the
+   ceremony fetches first and names the commit it tags; a local `main` or a
+   stale `origin/main` is the previous release's commit. `git verify-tag`
+   before anything is pushed.
 7. **Push the tag** to `origin` (`main` is already there: the merge happened on
    the remote). Before pushing, confirm the tag's commit is an ancestor of
    `origin/main`: `git merge-base --is-ancestor vX.Y.Z origin/main`.
@@ -215,8 +218,8 @@ with a hard, irreversible deadline.
 ## 8. Failure / rollback
 
 If a rehearsal release is bad, move the tag per the `RELEASING.md` procedure
-(`git tag -d`, delete on `origin`, recreate on the corrected commit, re-push
-`main` then tag). If a frozen-tuple element was wrong, the network must be
+(`git tag -d`, delete on `origin`, fetch, recreate on the corrected merge
+commit, push the tag). If a frozen-tuple element was wrong, the network must be
 re-rehearsed from clean datadirs — a moved tag does not unfork a started network.
 
 Post-mortem any guardrail that failed to hold, within the rehearsal record, so
