@@ -49,19 +49,30 @@ pub enum FetchError {
     /// refuses a fresh anchor is itself out of step.
     /// [`Self::next_move`] holds that rule.
     Rejected,
-    /// **`P` sent the whole frame and no countersignature.** A 200 whose
-    /// body ended, with a clean close, exactly one signature envelope short
-    /// of its declared length. `P` holds the shard and served it; its
-    /// signer then failed. The body is discarded unverified — without the
-    /// signature nothing binds it to this request.
+    /// **A completed exchange whose answer is "I cannot serve this right
+    /// now."** `P` rendered its bare 503: the fault is `P`'s own — a tip or
+    /// a store it could not read, or no resident key — and the response does
+    /// not say which. A held shard never 404s, so this is how `P` failing
+    /// before the body shows.
     ///
-    /// **A failed read: name another `P`.** Typed apart from
-    /// [`Stall::Truncated`], which is every other short body and is
-    /// retried: a response cut exactly at the frame's end is `P` finishing
-    /// the send and declining to sign, not a transfer that died.
+    /// **A failed read: name another `P`.** No retry of this one.
+    Unavailable,
+    /// **`P` sent the whole frame and then said it would not sign.** A 200
+    /// of its full declared length whose envelope is the refusal trailer
+    /// (`serving_route::is_refusal_trailer`) in place of a signature. `P`
+    /// holds the shard and served it; its signer then failed. The body is
+    /// discarded unverified — without a signature nothing binds it to this
+    /// request.
+    ///
+    /// **A failed read: name another `P`.** No retry. This is `P`'s own
+    /// statement, in bytes only `P` can put on the stream, and that is why
+    /// it is not inferred from a response that stopped: a relay can cut a
+    /// stream at any byte, the frame's end included, and the same guard
+    /// sits on every retry. A cut is [`Stall::Truncated`] wherever it
+    /// falls.
     Unsigned,
     /// **A completed exchange that is not the contract.** A status other
-    /// than 200, 400 or 404, a header set other than the ruled two, a
+    /// than 200, 400, 404 or 503, a header set other than the ruled two, a
     /// `content-length` that is missing, unparseable, below the envelope
     /// width, or above the ceiling, or an envelope that is not a canonical
     /// `HybridSignature`. Refused before, or without, reading the body.
@@ -118,6 +129,7 @@ impl FetchError {
             Self::Miss => NextMove::NotHeld,
             Self::Rejected if !rejected_before => NextMove::RetryFreshAnchor,
             Self::Rejected
+            | Self::Unavailable
             | Self::Unsigned
             | Self::Malformed(_)
             | Self::BadCountersignature
@@ -132,7 +144,10 @@ impl fmt::Display for FetchError {
             Self::Stall(s) => write!(f, "stall: {s}"),
             Self::Miss => f.write_str("miss: P answered 404"),
             Self::Rejected => f.write_str("rejected: P answered 400"),
-            Self::Unsigned => f.write_str("P sent the whole frame and no countersignature"),
+            Self::Unavailable => f.write_str("unavailable: P answered 503"),
+            Self::Unsigned => {
+                f.write_str("P sent the whole frame and a refusal in place of the countersignature")
+            }
             Self::Malformed(m) => write!(f, "malformed response: {m}"),
             Self::BadCountersignature => {
                 f.write_str("countersignature does not verify under the target key")
@@ -175,8 +190,9 @@ pub enum Stall {
     /// body did not arrive within its deadline.
     BodyTimeout,
     /// The connection closed with fewer body bytes than `content-length`
-    /// declared — at any point other than exactly one signature envelope
-    /// short, which is [`FetchError::Unsigned`].
+    /// declared, at whatever offset. Never read as `P` declining to sign:
+    /// that is the refusal trailer ([`FetchError::Unsigned`]), which `P`
+    /// writes and a relay cannot.
     Truncated {
         /// Bytes `content-length` declared.
         declared: u64,
@@ -221,15 +237,15 @@ pub enum Malformed {
     HeadTooLong,
     /// The status line did not parse as `HTTP/1.x <3-digit> …`.
     StatusLine,
-    /// A parseable status that is not 200, 400 or 404.
+    /// A parseable status that is not 200, 400, 404 or 503.
     Status(u16),
     /// The header set is not exactly `RESPONSE_HEADER_NAMES`, or a name
     /// repeats, or a line is not `name: value`.
     HeaderSet,
     /// `content-type` is not the ruled type.
     ContentType,
-    /// `content-length` is missing, unparseable, or (on a 400 or a 404)
-    /// non-zero.
+    /// `content-length` is missing, unparseable, or (on a 400, a 404 or a
+    /// 503) non-zero.
     ContentLength,
     /// `content-length` is shorter than the fixed-width signature envelope
     /// — there cannot be a countersignature in it.
@@ -263,7 +279,7 @@ impl fmt::Display for Malformed {
         match self {
             Self::HeadTooLong => f.write_str("head exceeded its bound without terminating"),
             Self::StatusLine => f.write_str("status line does not parse"),
-            Self::Status(code) => write!(f, "status {code} is not 200, 400 or 404"),
+            Self::Status(code) => write!(f, "status {code} is not 200, 400, 404 or 503"),
             Self::HeaderSet => f.write_str("header set is not the ruled two"),
             Self::ContentType => f.write_str("content-type is not the ruled type"),
             Self::ContentLength => f.write_str("content-length missing or invalid"),

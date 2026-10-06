@@ -56,19 +56,26 @@
 //! requester holds the signature only once the whole frame has crossed
 //! this persona's link, and a transfer that fails mid-body yields none.
 //!
-//! # Four answers to a complete head
+//! # Five answers to a complete head
 //!
 //! | Response | Meaning |
 //! | --- | --- |
 //! | `400`, empty | The request is invalid. Decided from the head and the persona's own height; the shard store is not consulted. |
-//! | `404`, empty | Not held. Only a valid request reaches this. |
+//! | `404`, empty | Not held. Only a valid request reaches this, and nothing else does. |
+//! | `503`, empty | The persona cannot serve right now and the fault is its own: an unreadable tip, a store that failed, or no resident key. |
 //! | `200`, body, signature | A good read. |
-//! | `200`, body, no signature | The persona failed after serving: its signer refused. The response ends short of `content-length` by exactly the envelope. |
+//! | `200`, body, refusal trailer | The signer failed after the body went out. The envelope holds [`REFUSAL_TRAILER_BYTE`] in place of a signature. |
 //!
-//! Holdings are chain-public, so the 400/404 split hides nothing a
-//! requester could not already learn; it lets one code mean one thing. The
-//! 400 and the 404 are each one fixed byte string, with the same two
-//! headers as a 200 and nothing that names which check refused.
+//! A held shard shows a failure and never a 404. Holdings are
+//! chain-public, so a 404 for a bonded shard would already tell anyone
+//! watching that the persona is failing, and would say it as "not held".
+//! The three bare answers are each one fixed byte string, with the same two
+//! headers as a 200 and nothing that names which check or which fault.
+//!
+//! A 200 is always its full declared length. A response that stops short,
+//! at any offset, is transport and is retried; only the trailer says the
+//! persona refused. A relay can cut a stream at a byte of its choosing and
+//! cannot write into it.
 //!
 //! # No request logging, at any level
 //!
@@ -109,7 +116,8 @@ use delivery::FramedDigest;
 // not). Re-exported so this crate's public surface and its tests are
 // unchanged.
 pub use shekyl_curve_tree::serving_route::{
-    decode_request_header, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
+    decode_request_header, is_refusal_trailer, CONTENT_TYPE, REFUSAL_TRAILER_BYTE,
+    REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
 };
 
 /// Cap on the request head, applied **while reading** rather than after —
@@ -236,8 +244,8 @@ impl PServeEndpoint {
     /// `signer` supplies the persona's height for the `SF-D5` gate and the
     /// `SF-D8` countersignature. A host whose key is not yet resident binds
     /// a signer that refuses (`shekyl-p-host`'s `NoResidentKey`): the
-    /// endpoint stays up, and a valid request for a held shard is sent the
-    /// body with no signature behind it — a failed read, counted in
+    /// endpoint stays up, and a valid request for a held shard gets the
+    /// bare 503 before any shard byte, counted in
     /// [`Self::sign_failure_count`].
     ///
     /// # Errors
@@ -351,17 +359,17 @@ impl PServeEndpoint {
 
     /// Store faults while answering a parsed shard read.
     ///
-    /// Nothing here is a distinct wire outcome: the cases that fail before
-    /// a byte is written are the 404, and the cases that fail after the head
-    /// is out are a connection closed mid-body.
+    /// The cases that fail before a byte is written are the 503, shared with
+    /// a missing key, and the cases that fail after the head is out are a
+    /// connection closed mid-body.
     ///
     /// Counted:
     ///
     /// * the tip the anchor gate needs could not be read, so the gate never
     ///   ran, or the shard could not be opened (I/O, or bytes pruned out
-    ///   from under a serve-set that was not pinned) — the 404;
+    ///   from under a serve-set that was not pinned) — the 503;
     /// * the body read failed part-way, ran past its frame, or ended short
-    ///   of it — a response cut off mid-body, with no signature.
+    ///   of it — a response cut off mid-body.
     ///
     /// An invalid request (the 400) and an ordinary not-held answer (unknown
     /// id, unfrozen segment: the 404) are deliberate and **not** counted.
@@ -371,13 +379,13 @@ impl PServeEndpoint {
         self.lookup_failures.load(Ordering::Relaxed)
     }
 
-    /// Bodies sent in full that did not get a canonical
-    /// [`SIGNATURE_ENVELOPE_LEN`]-byte signature. On the wire, a 200 whose
-    /// body ends short of `content-length` by exactly the envelope. The
-    /// request was valid and the whole frame went out. The signer then
-    /// refused — key not resident, signer offline, or a host-side refusal —
-    /// or returned an envelope of the wrong length. An invalid request and
-    /// an unheld shard never reach this counter.
+    /// Valid requests for a held shard that got no countersignature. Two
+    /// wire outcomes share it. No key resident
+    /// ([`PassKey::can_sign`](crate::countersign::PassKey::can_sign) said
+    /// no): the 503, before any shard byte. A signer that said it could
+    /// and then refused, or returned an envelope of the wrong length: a 200
+    /// whose envelope is the refusal trailer. An invalid request and an
+    /// unheld shard never reach this counter.
     #[must_use]
     pub fn sign_failure_count(&self) -> u64 {
         self.sign_failures.load(Ordering::Relaxed)
@@ -425,33 +433,32 @@ impl std::fmt::Debug for PServeEndpoint {
 ///   One response for every such cause: nothing in it names the check that
 ///   refused. It is decided before the shard store is consulted, so it is
 ///   the same whether or not the shard is held.
-/// * **Complete head, valid request, shard not served** (unknown or
-///   unfrozen shard, or a store that could not answer) → the bare
-///   [`render_not_found`] 404. A store failure is not given a response of
-///   its own: that would be a live health oracle. Holdings are
-///   chain-public — 200 against 404 is already the availability oracle —
-///   and are not what this hides.
+/// * **Complete head, valid request, shard not held** (unknown or unfrozen
+///   shard) → the bare [`render_not_found`] 404.
+/// * **Complete head, the persona at fault** (the tip could not be read,
+///   the store failed to open the shard, or no key is resident) → the bare
+///   [`render_unavailable`] 503. One response for all three; which one is
+///   the counters' to say, not the wire's.
 /// * **No complete head** (oversized buffer, mid-head EOF, read timeout)
 ///   or **over capacity** → connection close with no HTTP bytes. Same
 ///   class as ordinary circuit death; not a status-code oracle. Writing a
 ///   status after a failed head read would invent a response for peers that
 ///   never finished speaking HTTP, and would not match the capacity path.
 ///
-/// # The residual: a short `200`
+/// # After the head of a `200`
 ///
-/// Which of 400, 404 and 200 a complete head gets is decided before any
-/// byte is written. A 200 can still end short of its declared length:
+/// Which of 400, 404, 503 and 200 a complete head gets is decided before
+/// any byte is written. Two things can still happen to a 200:
 ///
-/// * mid-body — a stalled or vanished peer, or a store that changed under
-///   a segment whose servability was already established (corruption, or a
-///   prune of a segment being served without a pin). The first is
-///   indistinguishable from ordinary circuit death; the second is a store
-///   fault this crate does not hide from the operator
-///   ([`PServeEndpoint::lookup_failure_count`]);
-/// * after the whole body, by exactly the envelope — the signer refused
-///   ([`PServeEndpoint::sign_failure_count`]). The signature covers the
-///   bytes sent, so it cannot be asked for before them, and a body with no
-///   signature is how a held shard whose signer fails shows on the wire.
+/// * it ends short, mid-body — a stalled or vanished peer, or a store that
+///   changed under a segment whose servability was already established
+///   (corruption, or a prune of a segment being served without a pin). The
+///   first is indistinguishable from ordinary circuit death; the second is
+///   a store fault this crate does not hide from the operator
+///   ([`PServeEndpoint::lookup_failure_count`]). Either way the requester
+///   reads a stall;
+/// * it completes with the refusal trailer where the signature goes — the
+///   signer refused after the body ([`PServeEndpoint::sign_failure_count`]).
 ///
 /// Named here so a future change that lets an *ordinary* not-held answer
 /// truncate — for instance a body that resolves its own servability lazily
@@ -468,7 +475,14 @@ async fn handle_connection(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
 
-    let resolved = resolve(&head, provider, Arc::clone(&signer), lookup_failures).await;
+    let resolved = resolve(
+        &head,
+        provider,
+        Arc::clone(&signer),
+        lookup_failures,
+        sign_failures,
+    )
+    .await;
 
     let written = tokio::time::timeout(
         WRITE_TIMEOUT,
@@ -496,7 +510,7 @@ async fn handle_connection(
 /// Linux send RST rather than FIN, and an RST can destroy response bytes
 /// still sitting in the send buffer. Any request with a body — every `POST`
 /// on the wrong-method path — or a pipelined second request would otherwise
-/// see a reset instead of the shared 404, and a witness that pipelines could
+/// see a reset instead of the bare 400, and a witness that pipelines could
 /// see a *truncated shard*, failing content verification on bytes this
 /// endpoint sent correctly. `connection: close` would say as much in one
 /// header, but [`RESPONSE_HEADER_NAMES`] is the cross-persona fingerprint
@@ -531,9 +545,14 @@ enum Resolved {
     /// bare 400.
     Invalid,
     /// A valid request for a shard this persona does not serve (unknown id,
-    /// unfrozen segment), or one the store could not answer. The bare 404.
+    /// unfrozen segment). The bare 404, and nothing else is.
     NotHeld,
-    /// A valid request for a held shard: stream it, then countersign.
+    /// The persona cannot answer right now and the fault is its own: the
+    /// tip the gate needs could not be read, the store failed to open the
+    /// shard, or no key is resident to countersign with. The bare 503.
+    Unavailable,
+    /// A valid request for a held shard, with a signer that says it can
+    /// sign: stream it, then countersign.
     Held(Held),
 }
 
@@ -544,24 +563,43 @@ struct Held {
     fields: PassRequestHeader,
 }
 
-/// Complete-head resolution: parse, gate, look up. The gate and the store
-/// lookup run on one blocking-pool hop — `own_height` may be a bounded
-/// store read (the host's choice) and opening the shard is one regardless.
+/// What the gate-and-lookup hop found, before it is counted.
+enum Lookup {
+    OutOfGate,
+    NotHeld,
+    /// The tip or the store could not be read.
+    StoreFault,
+    /// The shard is held and the signer says it cannot sign.
+    NoKey,
+    Held(ShardBody),
+}
+
+/// Complete-head resolution: parse, gate, look up, ask the signer whether
+/// it can sign. The last three run on one blocking-pool hop — `own_height`
+/// may be a bounded store read (the host's choice) and opening the shard is
+/// one regardless.
 ///
 /// The request is judged first and on its own: an invalid head or an
 /// out-of-window anchor is [`Resolved::Invalid`] whether or not the shard
-/// is held, and never reaches the shard store. Only a valid request can be
-/// [`Resolved::NotHeld`]. A height the host cannot read and a store that
-/// fails are this persona's faults, not the request's: they are counted and
-/// answered as `NotHeld`, so a requester moves on to another holder.
+/// is held, and never reaches the shard store. Only a valid request for a
+/// shard that is not served is [`Resolved::NotHeld`]. A fault of this
+/// persona's own is [`Resolved::Unavailable`], and is never dressed as
+/// "not held": holdings are chain-public, so a 404 for a bonded shard
+/// would tell a requester the same thing and say it falsely.
 ///
 /// Nothing is signed here. The signature covers the bytes that are sent,
-/// so it is made after them ([`write_response`]).
+/// so it is made after them ([`write_response`]). What *is* settled here is
+/// whether a key is resident at all ([`PassKey::can_sign`]), because that
+/// is known before the first byte and a shard that cannot be countersigned
+/// is not worth sending.
+///
+/// [`PassKey::can_sign`]: crate::countersign::PassKey::can_sign
 async fn resolve(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
     signer: Arc<dyn PassSigner>,
     lookup_failures: &AtomicU64,
+    sign_failures: &AtomicU64,
 ) -> Resolved {
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Resolved::Invalid;
@@ -570,25 +608,34 @@ async fn resolve(
     let anchor_height = fields.anchor_height();
     let looked_up = tokio::task::spawn_blocking(move || {
         let Some(own_height) = signer.own_height() else {
-            return Err(());
+            return Lookup::StoreFault;
         };
         if !anchor_within_gate(own_height, anchor_height) {
-            return Ok(None);
+            return Lookup::OutOfGate;
         }
-        provider.shard_bytes(shard_id).map(Some).map_err(|_| ())
+        match provider.shard_bytes(shard_id) {
+            Err(_) => Lookup::StoreFault,
+            Ok(None) => Lookup::NotHeld,
+            Ok(Some(_)) if !signer.can_sign() => Lookup::NoKey,
+            Ok(Some(body)) => Lookup::Held(body),
+        }
     })
     .await;
     match looked_up {
-        Ok(Ok(None)) => Resolved::Invalid,
-        Ok(Ok(Some(None))) => Resolved::NotHeld,
-        Ok(Ok(Some(Some(body)))) => Resolved::Held(Held {
+        Ok(Lookup::OutOfGate) => Resolved::Invalid,
+        Ok(Lookup::NotHeld) => Resolved::NotHeld,
+        Ok(Lookup::Held(body)) => Resolved::Held(Held {
             body,
             shard_id,
             fields,
         }),
-        Ok(Err(())) | Err(_) => {
+        Ok(Lookup::NoKey) => {
+            sign_failures.fetch_add(1, Ordering::Relaxed);
+            Resolved::Unavailable
+        }
+        Ok(Lookup::StoreFault) | Err(_) => {
             lookup_failures.fetch_add(1, Ordering::Relaxed);
-            Resolved::NotHeld
+            Resolved::Unavailable
         }
     }
 }
@@ -604,17 +651,24 @@ async fn resolve(
 ///
 /// `content-length` is [`ServedFrameHeader::framed_len`] plus
 /// [`SIGNATURE_ENVELOPE_LEN`], both exact before a single leaf is read, so
-/// the head is committed before the store is touched. What happens after it
-/// can only shorten the response:
+/// the head is committed before the store is touched. Two things can go
+/// wrong after it:
 ///
 /// * the store fails mid-body, or yields a body that is not the length its
-///   frame declares — the response ends there, counted in
+///   frame declares — the response ends there, short, counted in
 ///   [`PServeEndpoint::lookup_failure_count`];
 /// * the body completes and the signer refuses, or returns an envelope of
-///   the wrong length — the response ends after the last body byte, short
-///   of its declared length by exactly the envelope, counted in
-///   [`PServeEndpoint::sign_failure_count`]. A requester reads that as a
-///   read this persona failed, which it is.
+///   the wrong length — the envelope is written as the **refusal trailer**
+///   ([`REFUSAL_TRAILER_BYTE`] at the envelope's width), so the response
+///   is its full declared length and says in the persona's own bytes that
+///   it served and did not sign. Counted in
+///   [`PServeEndpoint::sign_failure_count`].
+///
+/// The trailer is why a failure is never inferred from a response that
+/// stopped. A relay on the circuit can cut a response at any byte it likes,
+/// the frame's end included, and guard pinning puts the same relay on every
+/// retry; it cannot write bytes into the stream. So a short response is
+/// always transport, and only the persona can say it refused.
 ///
 /// The frame header ([`RF-D4`]) is [`ShardBody::header`], fixed when the
 /// body was opened. The bytes written are [`FramedDigest::frame_bytes`]: the
@@ -637,6 +691,9 @@ async fn write_response(
     } = match resolved {
         Resolved::Invalid => return write_bounded(stream, render_bad_request().as_bytes()).await,
         Resolved::NotHeld => return write_bounded(stream, render_not_found().as_bytes()).await,
+        Resolved::Unavailable => {
+            return write_bounded(stream, render_unavailable().as_bytes()).await
+        }
         Resolved::Held(held) => held,
     };
     // One write for the head and the frame header, not two. The wire bytes
@@ -708,8 +765,11 @@ async fn write_response(
     {
         Some(Ok(signature)) => signature,
         _ => {
+            // The body is out and cannot be taken back. Say so, in bytes
+            // only this end can write.
             sign_failures.fetch_add(1, Ordering::Relaxed);
-            return Err(io::Error::other("no countersignature for a served body"));
+            write_bounded(stream, &[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]).await?;
+            return Ok(());
         }
     };
     write_bounded(stream, &signature).await?;
@@ -815,7 +875,7 @@ fn parse_request(head: &[u8]) -> Option<Request> {
 }
 
 /// Status line plus exactly [`RESPONSE_HEADER_NAMES`]. One function so
-/// 200 and 404 cannot grow a second fingerprint.
+/// 200 and the bare answers cannot grow a second fingerprint.
 fn render_head(status: &str, len: u64) -> String {
     format!("HTTP/1.1 {status}\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
 }
@@ -827,11 +887,17 @@ fn render_ok(len: u64) -> String {
     render_head("200 OK", len)
 }
 
-/// The answer to a valid request for a shard this persona does not serve,
+/// The answer to a valid request for a shard this persona does not hold,
 /// byte-identical every time. Built from the same header names/values as
 /// success so the declared set stays one source of truth.
 fn render_not_found() -> String {
     render_head("404 Not Found", 0)
+}
+
+/// The answer when this persona cannot serve and the fault is its own,
+/// byte-identical whichever fault: same two headers, empty body.
+fn render_unavailable() -> String {
+    render_head("503 Service Unavailable", 0)
 }
 
 /// The answer to a request that is not valid, byte-identical whichever

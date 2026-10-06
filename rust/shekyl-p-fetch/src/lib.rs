@@ -26,14 +26,17 @@
 //!    72-byte [`RequestHeader`] `nonce ‖ anchor_height ‖ anchor_hash`, hex on
 //!    the wire (`SF-D5`).
 //! 4. Read a complete head. `200` → continue; `404` → [`FetchError::Miss`];
-//!    `400` → [`FetchError::Rejected`]; anything else complete →
+//!    `400` → [`FetchError::Rejected`]; `503` →
+//!    [`FetchError::Unavailable`]; anything else complete →
 //!    [`FetchError::Malformed`]; no complete head → [`FetchError::Stall`]
 //!    (`SF-D6`, `RF-R1`).
 //! 5. Bound the body from `content-length` **before** reading it, read
 //!    exactly that many bytes, and split the fixed-width countersignature
 //!    envelope off the end. `P` sends it last, so holding it means the
-//!    whole frame arrived. A body that ends cleanly at exactly the frame,
-//!    with no envelope, is [`FetchError::Unsigned`].
+//!    whole frame arrived. An envelope that is the refusal trailer is
+//!    [`FetchError::Unsigned`]: `P` served and says it did not sign. A body
+//!    that stops short of its declared length is a stall, wherever it
+//!    stops.
 //! 6. Recompute the delivery digest from the bytes ahead of the envelope,
 //!    under this request's own nonce, and verify `P`'s
 //!    [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)

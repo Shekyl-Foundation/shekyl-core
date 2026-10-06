@@ -322,8 +322,8 @@ fn served_segment_len(response: &[u8]) -> u64 {
     frame.segment_bytes()
 }
 
-/// Whether a response is the endpoint's bare 404. A shard that is not held
-/// and a store or tip the persona could not read render the same one, so
+/// Whether a response is the endpoint's bare 503: a store or tip the
+/// persona could not read, or no resident key. They render the same one, so
 /// this is all a requester can tell — which is the point of asserting
 /// through it rather than through a counter.
 fn is_refused(response: &[u8]) -> bool {
@@ -331,7 +331,7 @@ fn is_refused(response: &[u8]) -> bool {
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    String::from_utf8_lossy(&response[..head_end]).contains(" 404 ")
+    String::from_utf8_lossy(&response[..head_end]).contains(" 503 ")
 }
 
 /// One request as a daemon at `own_height` sends it: the ruled route plus

@@ -67,17 +67,30 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
 pub trait PassKey: Send + Sync {
+    /// Whether this key can sign at all right now.
+    ///
+    /// Asked once per request, before the first response byte, so it must
+    /// be cheap and must not sign. `false` means the answer is already
+    /// known — no key is resident — and the serve loop answers the bare 503
+    /// without sending a shard it could not countersign. `true` is not a
+    /// promise: a signer can still fail at [`Self::sign_pass`], after the
+    /// body, and that is the refusal trailer.
+    fn can_sign(&self) -> bool {
+        true
+    }
+
     /// Sign the 112-byte SF-D8 transcript under the attestation domain.
     ///
     /// # Errors
     ///
-    /// Returns [`SignRefused`] when the host cannot sign — key not
-    /// resident, signer offline, or a host-side policy refusal. The serve
-    /// loop asks only after the body is out, so it ends the response there,
-    /// with no signature, and counts it in `sign_failure_count`, separately from `lookup_failure_count`
-    /// (store-read faults), so an operator can tell "key not available"
-    /// from "store not readable". An ordinary miss — a shard the persona
-    /// does not hold — is counted by neither.
+    /// Returns [`SignRefused`] when the host cannot sign — signer offline,
+    /// or a host-side policy refusal. The serve loop asks only after the
+    /// body is out, so it closes the response with the refusal trailer in
+    /// place of the signature and counts it in `sign_failure_count`,
+    /// separately from `lookup_failure_count` (store-read faults), so an
+    /// operator can tell "key not available" from "store not readable". An
+    /// ordinary miss — a shard the persona does not hold — is counted by
+    /// neither.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -99,7 +112,7 @@ pub trait PassSigner: PassKey {
     ///
     /// `None` means the height could not be read — the serving store is
     /// unreadable, or whatever the host reads it from is gone. The serve
-    /// loop renders the 404 and counts a **lookup failure**
+    /// loop renders the 503 and counts a **lookup failure**
     /// (the same bucket as a store read that fails on the shard itself),
     /// so a host that has lost its store is visible in the aggregate
     /// rather than refusing every anchor silently. A fresh store at

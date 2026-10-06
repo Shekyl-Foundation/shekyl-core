@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The countersignature's place in the response: it is the last bytes, it
-//! covers the bytes ahead of it, and a held shard whose signer fails goes
-//! out as a body with no signature. Split out of the endpoint suite so that
+//! covers the bytes ahead of it, a signer that fails after the body leaves
+//! the refusal trailer there, and a persona with no key sends no shard. Split out of the endpoint suite so that
 //! file stays under a thousand lines.
 
 use std::sync::Arc;
@@ -16,8 +16,9 @@ use shekyl_curve_tree::ServedFrameHeader;
 use shekyl_types::BlockHeight;
 
 use super::{
-    bind, fetch, head_of, leaves, render_not_found, FixtureProvider, PServeEndpoint, ANCHOR_HASH,
-    IN_GATE_ANCHOR, NONCE, OWN_HEIGHT, SIGNATURE_ENVELOPE_LEN,
+    bind, fetch, head_of, is_refusal_trailer, leaves, render_not_found, render_unavailable,
+    FixtureProvider, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
+    REFUSAL_TRAILER_BYTE, SIGNATURE_ENVELOPE_LEN,
 };
 use crate::countersign::{PassKey, PassSigner, SignRefused};
 
@@ -63,31 +64,32 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
     );
 }
 
-/// A signer that holds no key: it knows its height and refuses to sign.
-struct Refusing;
-impl PassKey for Refusing {
+/// A signer that says it can sign and then refuses: the fault that is only
+/// discovered after the body has gone out.
+struct RefusesLate;
+impl PassKey for RefusesLate {
     fn sign_pass(
         &self,
         _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<HybridSignature, SignRefused> {
-        Err(SignRefused::new("not resident"))
+        Err(SignRefused::new("signer went away"))
     }
 }
-impl PassSigner for Refusing {
+impl PassSigner for RefusesLate {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
 }
 
 #[tokio::test]
-async fn a_signer_that_refuses_leaves_a_whole_body_with_no_signature() {
+async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer() {
     // The signature covers the bytes sent, so it is asked for after them.
-    // A signer that refuses then cannot be a 404: the shard is held, the
-    // 200 and the whole frame are already out. The response ends there,
-    // short of its `content-length` by exactly one envelope, which a
-    // fetcher reads as a read this persona failed.
+    // A signer that refuses then cannot change the status. The persona
+    // says so itself: the envelope is the refusal trailer, and the response
+    // is its full declared length. A requester never has to infer a refusal
+    // from a response that stopped.
     let payload = leaves(9, 0x40);
-    let signer: Arc<dyn PassSigner> = Arc::new(Refusing);
+    let signer: Arc<dyn PassSigner> = Arc::new(RefusesLate);
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]), signer)
         .await
         .expect("bind");
@@ -99,34 +101,86 @@ async fn a_signer_that_refuses_leaves_a_whole_body_with_no_signature() {
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head")
         + 4;
-    let mut framed = &r[end..];
+    let (before, trailer) = r.split_at(r.len() - SIGNATURE_ENVELOPE_LEN);
+    let mut framed = &before[end..];
     let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
-    assert_eq!(
-        framed,
-        &payload[..],
-        "the whole segment, and nothing after it"
+    assert_eq!(framed, &payload[..], "the whole segment went out");
+    assert!(
+        head_of(&r).contains(&format!("content-length: {}", (r.len() - end) as u64)),
+        "the response is exactly its declared length"
     );
     assert_eq!(
         (r.len() - end) as u64,
-        frame.framed_len(),
-        "the response stops at the end of the frame: no envelope follows"
+        frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64
     );
+    assert!(is_refusal_trailer(trailer));
+    assert_eq!(trailer, [REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]);
     assert!(
-        head_of(&r).contains(&format!(
-            "content-length: {}",
-            frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64
-        )),
-        "so it is short of its declared length by exactly one signature"
+        HybridSignature::from_canonical_bytes(trailer).is_err(),
+        "the trailer can never be read as a signature"
+    );
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.lookup_failure_count(), 0);
+    assert_eq!(ep.served_count(), 0);
+}
+
+#[test]
+fn a_real_signature_is_never_the_refusal_trailer() {
+    // The other direction of the same disjointness: a good read's envelope
+    // is not mistaken for a refusal.
+    let signer = crate::countersign::TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
+    let signature = signer
+        .sign_pass(
+            &[0x5a; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        )
+        .expect("sign")
+        .to_canonical_bytes()
+        .expect("canonical");
+    assert_eq!(signature.len(), SIGNATURE_ENVELOPE_LEN);
+    assert!(!is_refusal_trailer(&signature));
+    assert!(!is_refusal_trailer(&[]));
+}
+
+/// A persona with no resident key: it knows before the first byte.
+struct Keyless;
+impl PassKey for Keyless {
+    fn can_sign(&self) -> bool {
+        false
+    }
+    fn sign_pass(
+        &self,
+        _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Err(SignRefused::new("not resident"))
+    }
+}
+impl PassSigner for Keyless {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
+}
+
+#[tokio::test]
+async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
+    // No key is known before the first byte, so the shard is not sent only
+    // to go uncountersigned. A held shard never 404s: the answer is the
+    // bare 503. An unheld shard is still the 404, and an invalid request
+    // still the 400 — the key is not what decides either.
+    let signer: Arc<dyn PassSigner> = Arc::new(Keyless);
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(9, 0x40))]), signer)
+        .await
+        .expect("bind");
+    assert_eq!(
+        fetch(ep.addr(), "/shard/0").await,
+        render_unavailable().as_bytes()
     );
     assert_eq!(ep.sign_failure_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 
-    // An unheld shard is the ordinary 404 — neither a lookup failure nor a
-    // sign failure: the signer is never asked about a shard that is not
-    // sent.
-    let r = fetch(ep.addr(), "/shard/9").await;
-    assert_eq!(r, render_not_found().as_bytes());
-    assert_eq!(ep.sign_failure_count(), 1);
-    assert_eq!(ep.lookup_failure_count(), 0);
+    assert_eq!(
+        fetch(ep.addr(), "/shard/9").await,
+        render_not_found().as_bytes()
+    );
+    assert_eq!(ep.sign_failure_count(), 1, "an unheld shard asks no key");
 }

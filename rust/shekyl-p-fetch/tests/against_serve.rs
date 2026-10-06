@@ -172,7 +172,7 @@ async fn fetch_client_accepts_a_real_served_body() {
 }
 
 #[tokio::test]
-async fn the_four_answers_reach_the_client_as_four_outcomes() {
+async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     // The serve side's answers and the client's taxonomy, end to end: an
     // out-of-gate anchor is the 400 whether or not the shard is held, a
     // valid request for an unheld shard is the 404, and a held shard is
@@ -219,10 +219,14 @@ async fn the_four_answers_reach_the_client_as_four_outcomes() {
     assert_eq!(ep.lookup_failure_count(), 0);
 }
 
-/// A signer with a height and no key.
+/// A signer with a height and no key: it knows before the first byte.
 struct Keyless;
 
 impl PassKey for Keyless {
+    fn can_sign(&self) -> bool {
+        false
+    }
+
     fn sign_pass(
         &self,
         _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -237,18 +241,60 @@ impl PassSigner for Keyless {
     }
 }
 
-#[tokio::test]
-async fn a_served_body_whose_signer_failed_is_a_failed_read() {
-    // `P` holds the shard and sends all of it; its signer then refuses.
-    // The client reads a whole frame with no signature behind it: a failed
-    // read, not a miss and not a stall to retry.
-    let (ep, client) = stacks(Arc::new(Keyless)).await;
-    let verifying_key = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+/// A signer that says it can sign and then fails: found out after the body.
+struct RefusesLate;
+
+impl PassKey for RefusesLate {
+    fn sign_pass(
+        &self,
+        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Err(SignRefused::new("signer went away"))
+    }
+}
+
+impl PassSigner for RefusesLate {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
+}
+
+fn any_key() -> HybridPublicKey {
+    TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
         .public_key()
-        .clone();
+        .clone()
+}
+
+#[tokio::test]
+async fn a_persona_with_no_key_is_unavailable_and_sends_no_shard() {
+    // `P` holds the shard and has no key. It says so up front with the 503:
+    // a failed read, not a miss — a held shard never 404s — and no shard
+    // crosses the wire to go uncountersigned.
+    let (ep, client) = stacks(Arc::new(Keyless)).await;
     let err = client
         .fetch(
-            &target(verifying_key, SHARD),
+            &target(any_key(), SHARD),
+            &header_at(ANCHOR),
+            Arc::new(Accepting),
+        )
+        .await
+        .expect_err("no key");
+    assert!(matches!(err, FetchError::Unavailable), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.served_count(), 0);
+}
+
+#[tokio::test]
+async fn a_signer_that_fails_after_the_body_is_a_failed_read() {
+    // `P` sends all of the shard; its signer then refuses, and `P` closes
+    // the response with the refusal trailer. The client reads `P`'s own
+    // statement: a failed read, not a miss and not a stall to retry.
+    let (ep, client) = stacks(Arc::new(RefusesLate)).await;
+    let err = client
+        .fetch(
+            &target(any_key(), SHARD),
             &header_at(ANCHOR),
             Arc::new(Accepting),
         )

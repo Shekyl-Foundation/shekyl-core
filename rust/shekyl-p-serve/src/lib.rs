@@ -83,16 +83,17 @@
 //!   request header, out-of-gate anchor — renders one bare 400, decided
 //!   before the shard store is consulted, so it does not vary with what is
 //!   held and names no check;
-//! - every valid request for a shard that is not served — **unknown
-//!   shard, unfrozen shard, store failure** — renders one bare 404, so
-//!   store health is not probeable by **response bytes**;
-//! - a held shard whose signer refuses is sent whole, with no signature
-//!   behind it. The signature covers the bytes sent, so key residency
-//!   cannot be decided before them;
+//! - every valid request for a shard that is not held — **unknown shard,
+//!   unfrozen shard** — renders one bare 404, and nothing else does;
+//! - a fault of the persona's own — **an unreadable tip, a store failure,
+//!   no resident key** — renders one bare 503, which does not say which;
+//! - a held shard whose signer refuses after the body went out is a full
+//!   200 whose envelope is the refusal trailer, so the failure is stated
+//!   by the persona and never inferred from a response that stopped;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
-//! - which of 400, 404 and 200 a complete head gets is settled **before
+//! - which of 400, 404, 503 and 200 a complete head gets is settled **before
 //!   any byte is written**, so no miss can leak as a truncated `200`; the
 //!   residual
 //!   ([`serve`], "the residual") is a body cut short by a stalled peer or a

@@ -281,10 +281,14 @@ async fn two_personas_are_header_identical() {
 
 #[test]
 fn the_bare_answers_use_the_declared_header_set_and_content_type() {
-    // One source of truth: neither the 404 nor the 400 is a second
+    // One source of truth: none of the three bare answers is a second
     // fingerprint with a divergent header list or content-type spelling,
     // and they differ from each other in the status line alone.
-    for bare in [render_not_found(), render_bad_request()] {
+    for bare in [
+        render_not_found(),
+        render_bad_request(),
+        render_unavailable(),
+    ] {
         assert!(bare.contains(&format!("content-type: {CONTENT_TYPE}")));
         assert!(bare.ends_with("content-length: 0\r\n\r\n"), "empty body");
         let head = bare.split("\r\n\r\n").next().expect("status + headers");
@@ -300,7 +304,19 @@ fn the_bare_answers_use_the_declared_header_set_and_content_type() {
             .expect("status line")
             .1,
     );
+    assert_eq!(
+        render_not_found()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+        render_unavailable()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+    );
     assert_ne!(render_not_found(), render_bad_request());
+    assert_ne!(render_not_found(), render_unavailable());
+    assert_ne!(render_bad_request(), render_unavailable());
 }
 
 #[tokio::test]
@@ -406,25 +422,26 @@ async fn every_invalid_request_is_the_one_bare_400_held_or_not() {
 }
 
 #[tokio::test]
-async fn a_valid_request_for_an_unserved_shard_is_the_one_bare_404() {
-    // Only a valid request reaches the 404. Not held, and a store that
-    // could not answer, are the same bytes: a distinct store-failure
-    // response would be a live health oracle. Holdings are chain-public —
-    // 200 against 404 is already the availability oracle.
+async fn only_a_valid_request_for_an_unheld_shard_is_the_404() {
+    // The 404 means one thing: the request was valid and the shard is not
+    // held. A store that could not answer is this persona's fault and is
+    // the bare 503 — never the 404, which would say "not held" of a shard
+    // the chain says is.
     let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
     assert_eq!(
         fetch(ep.addr(), "/shard/4").await,
         render_not_found().as_bytes()
     );
     assert_eq!(ep.lookup_failure_count(), 0, "not held is not a fault");
+    assert_eq!(ep.served_count(), 0, "a 404 is not counted as a serve");
 
     let (failing, _) = bind(Arc::new(FailingProvider)).await;
     assert_eq!(
         fetch(failing.addr(), "/shard/3").await,
-        render_not_found().as_bytes()
+        render_unavailable().as_bytes()
     );
     assert_eq!(failing.lookup_failure_count(), 1);
-    assert_eq!(ep.served_count(), 0, "a 404 is not counted as a serve");
+    assert_eq!(failing.sign_failure_count(), 0);
 }
 
 #[tokio::test]
@@ -689,11 +706,11 @@ async fn the_gate_is_two_sided_with_the_admission_lag() {
 }
 
 #[tokio::test]
-async fn an_unreadable_height_renders_the_404_and_counts_a_lookup_failure() {
+async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     // The host cannot read its own height — its serving store is gone.
     // The gate cannot run, so the request cannot be judged invalid; the
     // fault is this persona's, and a requester should move on. Nothing is
-    // looked up and nothing is signed: the bare 404, and the fault lands
+    // looked up and nothing is signed: the bare 503, and the fault lands
     // in `lookup_failure_count` (a store read that failed), not in
     // `sign_failure_count` and not silently in neither.
     struct Storeless(Arc<TestKeySigner>);
@@ -716,7 +733,7 @@ async fn an_unreadable_height_renders_the_404_and_counts_a_lookup_failure() {
         .await
         .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(r, render_unavailable().as_bytes());
     assert_eq!(ep.lookup_failure_count(), 1);
     assert_eq!(ep.sign_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);

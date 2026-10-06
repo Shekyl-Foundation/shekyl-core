@@ -1037,6 +1037,7 @@ fn classify(e: &FetchError) -> FailureKind {
         FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
         FetchError::Miss
         | FetchError::Rejected
+        | FetchError::Unavailable
         | FetchError::Unsigned
         | FetchError::Malformed(_)
         | FetchError::BadCountersignature

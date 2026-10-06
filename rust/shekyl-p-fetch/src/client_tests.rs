@@ -449,6 +449,10 @@ fn a_second_400_is_a_failed_read() {
         assert_eq!(FetchError::Miss.next_move(seen), NextMove::NotHeld);
         assert_eq!(FetchError::Unsigned.next_move(seen), NextMove::FailedRead);
         assert_eq!(
+            FetchError::Unavailable.next_move(seen),
+            NextMove::FailedRead
+        );
+        assert_eq!(
             FetchError::BadCountersignature.next_move(seen),
             NextMove::FailedRead
         );
@@ -475,39 +479,96 @@ async fn a_400_with_a_body_is_not_the_contract() {
 }
 
 #[tokio::test]
-async fn a_complete_body_with_no_signature_is_a_failed_read_not_a_stall() {
-    // `P` declared frame + envelope, sent the whole frame, and closed. Its
-    // signer failed after it served. That is a failed read: not retried
-    // like a transfer that died, and not a miss — `P` holds the shard. The
-    // unsigned bytes never reach the hole.
+async fn a_503_is_a_failed_read_with_no_retry() {
+    // `P` could not serve and says the fault is its own. A held shard never
+    // 404s, so this is not a miss; and it is a completed answer, so it is
+    // not retried.
     let keys = keys();
     let hole = Hole::accepting();
-    let mut unsigned = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n",
-        shekyl_curve_tree::serving_route::CONTENT_TYPE,
-        CONTENT.len() + SIGNATURE_ENVELOPE_LEN
+    let two = "content-type: application/octet-stream\r\ncontent-length: 0";
+    let (out, _) = run(
+        Script::Respond(head_only("HTTP/1.1 503 Service Unavailable", two)),
+        Arc::clone(&hole),
+        &keys,
     )
-    .into_bytes();
-    unsigned.extend_from_slice(CONTENT);
-    let (out, _) = run(Script::Respond(unsigned.clone()), Arc::clone(&hole), &keys).await;
+    .await;
+    let err = out.expect_err("unavailable");
+    assert!(matches!(err, FetchError::Unavailable), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert!(hole.shown().is_empty());
+
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 503 Service Unavailable",
+            "content-type: application/octet-stream\r\ncontent-length: 5",
+        )),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::ContentLength);
+}
+
+#[tokio::test]
+async fn a_body_closed_with_the_refusal_trailer_is_a_failed_read() {
+    // `P` sent the whole frame and wrote the refusal trailer where the
+    // signature goes. That is `P` saying it did not sign: a failed read,
+    // no retry. The unsigned bytes never reach the hole.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let trailer = [shekyl_curve_tree::serving_route::REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN];
+    let (out, _) = run(
+        Script::Respond(ok_response(&trailer, CONTENT)),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
     let err = out.expect_err("unsigned");
     assert!(matches!(err, FetchError::Unsigned), "{err}");
     assert_eq!(err.next_move(false), NextMove::FailedRead);
     assert!(!err.retries_same_p());
     assert!(hole.shown().is_empty());
 
-    // One byte either side of the frame's end is an ordinary short body:
-    // a transfer that died, retried with the same header.
-    let mut one_short = unsigned.clone();
-    one_short.pop();
-    let mut one_past = unsigned.clone();
-    one_past.push(0);
-    for short in [one_short, one_past] {
-        let (out, _) = run(Script::Respond(short), Hole::accepting(), &keys).await;
+    // One byte off the trailer is not a refusal. It is an envelope that is
+    // not a signature either, which is a `P` off the contract.
+    let mut near = trailer;
+    near[SIGNATURE_ENVELOPE_LEN - 1] = 0xFE;
+    let (out, _) = run(
+        Script::Respond(ok_response(&near, CONTENT)),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::Envelope);
+}
+
+#[tokio::test]
+async fn a_good_response_cut_exactly_at_the_frames_end_is_a_stall() {
+    // The attack the trailer exists for. A relay on the circuit counts
+    // bytes against a public frame length and cuts a good, signed response
+    // exactly where the signature would begin. The client must read that
+    // as transport — retried with the same header — and never as `P`
+    // declining to sign. So must a cut one byte either side of it.
+    let keys = keys();
+    let whole = signed_response(&keys, &header(), SHARD);
+    let frame_end = whole.len() - SIGNATURE_ENVELOPE_LEN;
+    for cut in [frame_end, frame_end - 1, frame_end + 1, whole.len() - 1] {
+        let hole = Hole::accepting();
+        let (out, _) = run(
+            Script::Respond(whole[..cut].to_vec()),
+            Arc::clone(&hole),
+            &keys,
+        )
+        .await;
+        let err = out.expect_err("cut");
         assert!(
-            matches!(stall(out), Stall::Truncated { .. }),
-            "a body that ends anywhere but the frame's end is a stall"
+            matches!(err, FetchError::Stall(Stall::Truncated { .. })),
+            "cut at {cut}: {err}"
         );
+        assert_eq!(err.next_move(false), NextMove::RetrySameHeader);
+        assert!(err.retries_same_p());
+        assert!(hole.shown().is_empty());
     }
 }
 
@@ -704,7 +765,9 @@ async fn an_envelope_that_is_not_a_canonical_signature_is_malformed() {
     let keys = keys();
     let hole = Hole::accepting();
     let (out, _) = run(
-        Script::Respond(ok_response(&[0xffu8; SIGNATURE_ENVELOPE_LEN], CONTENT)),
+        // Not `0xff`: that fill is the refusal trailer, which is `P`
+        // speaking and is typed apart.
+        Script::Respond(ok_response(&[0xa5u8; SIGNATURE_ENVELOPE_LEN], CONTENT)),
         Arc::clone(&hole),
         &keys,
     )

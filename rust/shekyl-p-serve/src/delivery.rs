@@ -12,10 +12,10 @@
 //! serve ceiling stays a count of connections, not a whole-shard memory
 //! budget.
 //!
-//! Signing therefore comes after the body. A signer that fails cannot turn
-//! the response into a 404 — the 200 is already out — so it shows as a body
-//! with no signature behind it. The 404 means "not held" and does not cover
-//! a held shard whose signer failed.
+//! Signing therefore comes after the body. A signer that fails then cannot
+//! change the status — the 200 is already out — so the envelope is written
+//! as the refusal trailer in place of the signature. A persona that knows
+//! before the first byte that it has no key answers 503 and sends nothing.
 //!
 //! One fold, rather than a hasher opened by hand at the call site, so the
 //! signed bytes are defined once: the `RF-D4` frame header, then every

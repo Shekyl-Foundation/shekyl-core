@@ -34,9 +34,9 @@ use shekyl_curve_tree::{
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
-/// when it is a lookup failure and **never distinguishable on the wire** —
-/// the peer sees the same 404 as any other miss, because a distinct failure
-/// response would let a prober read store health through the rendezvous.
+/// when it is a lookup failure. On the wire it is the bare 503 the endpoint
+/// gives for every fault of its own — never the 404, which means "not
+/// held", and never a response that says which fault.
 ///
 /// Variants are for operator-side / harness diagnostics only; the wire path
 /// collapses them.
@@ -235,17 +235,17 @@ impl ShardBody {
 ///
 /// `Ok(None)` is the *unservable* case — unknown id, or a segment that has
 /// not frozen yet (no committed `R_k`, so nothing content-verifiable to
-/// serve). `Err` is infrastructure failure. The endpoint renders both as
-/// the same bare 404; only the local counters tell them apart.
+/// serve). `Err` is infrastructure failure. The endpoint renders the first
+/// as the bare 404 and the second as the bare 503.
 pub trait ShardProvider: Send + Sync + 'static {
     /// Open the body for `shard_id` — the frozen segment's leaf bytes in
     /// tree order, exactly what the witness hashes against `R_k`.
     ///
     /// Servability is settled by this call, before any byte of response is
     /// written; the returned [`ShardBody`] then only streams. That
-    /// ordering is what keeps store health off the wire — a body that
-    /// discovered missing bytes half-way through would leak it as a
-    /// truncated `200` that no 404 can be mistaken for.
+    /// ordering is what lets the endpoint answer a fault with a status — a
+    /// body that discovered missing bytes half-way through could only stop,
+    /// and a requester would read that as a stall and retry it.
     ///
     /// # Errors
     ///
