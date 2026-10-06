@@ -1335,10 +1335,12 @@ read at source.
 
 **Ruling.** Decided by rulings that already exist: Q2 makes retention
 per-shard and uniform; Q9 / #775 remove every daemon-side archival
-serving surface (`get_prunable_range` withdrawn); `RF-R1` collapses
-whatever a wallet learns to one identical 404 at the onion (since
-2026-10-05 an invalid request is a separate bare 400, which says nothing
-about holdings). So the
+serving surface (`get_prunable_range` withdrawn); `RF-R1` keeps what
+the onion answers to a whole-shard read and a fixed set of bare statuses
+— as ruled, one identical 404; since 2026-10-06 a 400 for an invalid
+request, a 404 for a shard not held and a 503 for a fault of the
+persona's own (`ARCHIVAL_SERVING_ROUTE.md`). None of them is a
+daemon-side retention read. So the
 contract is **the ordinary transaction read's split form**:
 `get_transactions` with `prune` / `split` returns, per tx, `pruned`,
 `prunable`, `prunable_hash` and a `pruned_flag` (the

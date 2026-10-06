@@ -31,9 +31,10 @@ pub enum FetchError {
     /// never happened. How many times is the caller's budget.
     Stall(Stall),
     /// **A completed exchange whose answer is "not here."** `P` rendered
-    /// its bare 404: the request was valid and `P` does not serve that
-    /// shard — unknown, unfrozen, or a store it could not read, deliberately
-    /// one outcome (`RF-R1`). **Name another `P`.** Not a retry of this one:
+    /// its bare 404: the request was valid and `P` does not hold that
+    /// shard — unknown or unfrozen, one outcome for both (`RF-R1`). A
+    /// fault of `P`'s own is never this; it is [`Self::Unavailable`].
+    /// **Name another `P`.** Not a retry of this one:
     /// the same request would render the same 404.
     Miss,
     /// **A completed exchange whose answer is "this request is not valid."**
