@@ -7,7 +7,10 @@
 //! §5 row 4).
 //!
 //! Three personas on a genesis-schedule chain: `bonded` joins; `stranger`
-//! and `signer` never do.
+//! and `signer` never do. Every join here is a complete tree: the holding's
+//! shape is not the subject, and a compact join needs a closed, final,
+//! priced shard (CEN-J15, §5 row 6) — the live lane's `scenario_shard`
+//! fill, which these two refusals do not need.
 //!
 //! - **J11:** `signer`'s JoinMarket with its `p_canonical_id` overwritten to
 //!   `stranger`'s is refused at the transaction. The hint is the recompute
@@ -29,7 +32,7 @@ use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
 };
 use crate::scenario::{Mined, Scenario};
-use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_archival::{complete_tree, Persona};
 use crate::scenario_spend::Spender;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -42,7 +45,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     let (bonded, stranger, signer) = (Persona::at(21), Persona::at(22), Persona::at(23));
     let total = ARCHIVAL_BOND_FLOOR_ATOMIC;
 
-    // `bonded` joins one shard.
+    // `bonded` joins.
     {
         let spender = Spender::over(&chain);
         let height = next(&chain);
@@ -51,7 +54,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
             0,
             height,
             FEE,
-            Some(&bonded.join(shard_set(vec![7]), ENDPOINT)),
+            Some(&bonded.join(complete_tree(), ENDPOINT)),
         );
         chain.push(
             scenario
@@ -67,7 +70,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     {
         let spender = Spender::over(&chain);
         let height = next(&chain);
-        let mut post = signer.join_post(shard_set(vec![9]), ENDPOINT);
+        let mut post = signer.join_post(complete_tree(), ENDPOINT);
         assert_eq!(
             p_canonical_id_from_hybrid_pubkey(&post.hybrid_public_key),
             signer.id(),
