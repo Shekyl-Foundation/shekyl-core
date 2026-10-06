@@ -25,6 +25,7 @@ use shekyl_transport_layer::{
     Sockets,
 };
 
+use crate::connection::Connection;
 use crate::dial::Dial;
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
@@ -100,9 +101,9 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
-    /// The endpoint this row was adopted with. Posts name its connector.
-    /// The address is the one observed at adopt and is not rewritten.
-    endpoint: Endpoint,
+    /// The identity observed at adopt. The address is not rewritten.
+    /// Claims recorded later do not replace it.
+    connection: Connection,
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
@@ -280,6 +281,7 @@ impl Hub {
         gap: Option<oneshot::Sender<()>>,
     ) -> Result<Attached, CloseCause> {
         let id = open.id();
+        let started = self.now();
         let send = session.send_half();
         let poster = Arc::clone(&self.post);
         let mut inner = self.lock();
@@ -295,7 +297,7 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
-                endpoint,
+                connection: Connection::open(id, endpoint, started),
                 established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
@@ -328,7 +330,7 @@ impl Hub {
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| Row::new(id, conn.endpoint, conn.established))
+            .map(|(&id, conn)| Row::new(id, *conn.connection.endpoint().get(), conn.established))
             .collect();
         inner.board = Board::from_rows(rows);
     }
@@ -476,7 +478,7 @@ impl Hub {
                 }
                 conn.phase = Phase::Delivering;
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                let connector = conn.endpoint.connector();
+                let connector = conn.connection.endpoint().get().connector();
                 let frame = bytes.take().expect("checked above");
                 (self.post)(Post::Deliver {
                     id,
@@ -733,7 +735,7 @@ impl Hub {
             let open = conn.open.take();
             let send = conn.send.take();
             let gap = conn.gap.take();
-            let connector = conn.endpoint.connector();
+            let connector = conn.connection.endpoint().get().connector();
             poster(Post::Closed {
                 id,
                 connector,
