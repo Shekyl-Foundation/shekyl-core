@@ -559,8 +559,9 @@ than its title suggests.
 
 > **Amendment proposed 2026-10-06, not ruled:**
 > [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-1`…`TB-3`
-> propose that Tor is mandatory and that the seam row "tor control unavailable"
-> below splits into a refused start and a runtime degrade. Until those rows are
+> propose that a node has Tor unless its operator explicitly declines it, and
+> that the seam row "tor control unavailable" below splits into a refused start
+> and a runtime degrade. Until those rows are
 > signed, this section is the ruling in force.
 
 **RULED by Rick, 2026-09-07.** PWD-E1/E2 answer the clearnet question — a
