@@ -8,9 +8,10 @@
 //! A count is an integer: [`shekyl_seam_board_count`] for one connector
 //! and direction, [`shekyl_seam_board_direction_count`] for that direction
 //! on every connector. Both count a row whether or not the handshake has
-//! finished. Address walks use [`shekyl_seam_board`]. The row is the
-//! admission id, the handshake flag, and the endpoint. Connector and
-//! direction are fields of that endpoint.
+//! finished. Address walks use [`shekyl_seam_board`]: one snapshot, and
+//! each visit is one fixed-size row. The row is the admission id, the
+//! handshake flag, and the endpoint. Connector and direction are fields
+//! of that endpoint.
 
 use std::ffi::c_void;
 
@@ -85,33 +86,35 @@ pub extern "C" fn shekyl_seam_board_direction_count(direction: u32) -> u64 {
     u64::try_from(hub.board().direction_count(direction)).unwrap_or(u64::MAX)
 }
 
-/// Visit the process hub's board.
+/// Visit the process hub's board, one fixed-size row per call.
 ///
-/// There is one hub. The row pointer is valid only for the visit. A
-/// missing hub visits with a null pointer and a count of zero.
+/// There is one hub and one snapshot. Each call of `visit` receives one
+/// row, and the pointer is valid only for that call. A missing hub, or a
+/// board with no rows, visits once with a null row.
 ///
 /// # Safety
-/// `visit` receives `ctx` and a pointer into this call's row buffer.
-/// `visit` does not call back into the seam.
+/// `visit` receives `ctx` and a pointer to one row of this call's buffer,
+/// or null when the board is empty. `visit` does not call back into the seam.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_seam_board(
     ctx: *mut c_void,
-    visit: Option<unsafe extern "C" fn(*mut c_void, *const ShekylSeamBoardRow, usize)>,
+    visit: Option<unsafe extern "C" fn(*mut c_void, *const ShekylSeamBoardRow)>,
 ) -> i32 {
     let Some(visit) = visit else {
         return -1;
     };
     let Some(hub) = hub() else {
-        unsafe { visit(ctx, std::ptr::null(), 0) };
+        unsafe { visit(ctx, std::ptr::null()) };
         return 0;
     };
     let rows: Vec<ShekylSeamBoardRow> = hub.board().rows().iter().map(board_row).collect();
-    let ptr = if rows.is_empty() {
-        std::ptr::null()
-    } else {
-        rows.as_ptr()
-    };
-    unsafe { visit(ctx, ptr, rows.len()) };
+    if rows.is_empty() {
+        unsafe { visit(ctx, std::ptr::null()) };
+        return 0;
+    }
+    for row in &rows {
+        unsafe { visit(ctx, row) };
+    }
     0
 }
 
@@ -145,15 +148,15 @@ mod tests {
         pointer_was_null: bool,
     }
 
-    unsafe extern "C" fn collect(ctx: *mut c_void, rows: *const ShekylSeamBoardRow, count: usize) {
+    unsafe extern "C" fn collect(ctx: *mut c_void, row: *const ShekylSeamBoardRow) {
         let seen = unsafe { &mut *ctx.cast::<Seen>() };
-        seen.pointer_was_null = rows.is_null();
-        seen.rows.clear();
-        // The typed seam owns the null, empty, and byte-bound checks.
-        let Some(rows) = (unsafe { crate::legacy_util::slice_from_typed_ptr(rows, count) }) else {
+        if row.is_null() {
+            seen.pointer_was_null = true;
             return;
-        };
-        seen.rows.extend_from_slice(rows);
+        }
+        // One fixed-size row. The pointer is valid only for this call.
+        seen.pointer_was_null = false;
+        seen.rows.push(unsafe { row.read() });
     }
 
     /// Stores the admission id. The post runs under the hub lock, so this
@@ -198,6 +201,8 @@ mod tests {
     }
 
     fn visit(seen: &mut Seen) -> i32 {
+        seen.rows.clear();
+        seen.pointer_was_null = false;
         unsafe { shekyl_seam_board((seen as *mut Seen).cast::<c_void>(), Some(collect)) }
     }
 

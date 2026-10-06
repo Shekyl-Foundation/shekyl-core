@@ -1582,7 +1582,7 @@ direction, handshake or not. `direction_count` is that count summed
 across `ConnectorId::ALL`. `shekyl_seam_board_count` is the integer the
 cap reads. A dial already past the cap closes the newest outbound row
 of that connector. Lowering the public cap closes that many newest
-rows. Both close by id. `shekyl_seam_board` is the address snapshot.
+rows. Both close by id. Each `shekyl_seam_board` visit is one fixed-size row.
 *Records-was: the cap read
 `outbound_dial_refused` on a copied board whose row repeated connector
 and direction, and before that the cap walked `foreach_connection`.* Slice 3 keeps the fill

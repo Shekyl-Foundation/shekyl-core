@@ -4418,11 +4418,11 @@ std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t dir
 /// or a direction index that is not one, is 0.
 std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
 
-/// Copy the process hub's board into `visit` for the duration of the call.
-/// There is one hub. A missing hub visits with a null row pointer and a
-/// count of 0. The row pointer is valid only inside `visit`. Returns 0,
-/// or -1 when `visit` is null.
-using shekyl_seam_board_visit = void (*)(void* ctx, const shekyl_seam_board_row* rows, std::size_t count);
+/// Copy the process hub's board through `visit`, one fixed-size row per
+/// call. There is one hub. A missing hub, or a board with no rows, visits
+/// once with a null row. The pointer is valid only for that call. Returns
+/// 0, or -1 when `visit` is null.
+using shekyl_seam_board_visit = void (*)(void* ctx, const shekyl_seam_board_row* row);
 int shekyl_seam_board(void* ctx, shekyl_seam_board_visit visit);
 
 /// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.

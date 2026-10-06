@@ -557,8 +557,10 @@ fn published_rows_follow_admission_order() {
     assert_eq!(board.direction_count(Direction::Inbound), 0);
 }
 
+/// `Board::count` for one connector. The handshake does not change it.
+/// `shekyl_seam_board_count` is the integer the dial cap reads.
 #[test]
-fn an_unestablished_outbound_row_still_fills_the_dial_cap() {
+fn an_unestablished_outbound_row_still_counts_toward_the_dial_cap() {
     let rig = rig();
     let opened: Vec<_> = (0..12)
         .map(|_| adopt(&rig, Direction::Outbound, 32))

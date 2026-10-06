@@ -5,15 +5,15 @@
 
 //! A copy of the seam board a walk can hold.
 //!
-//! `shekyl_seam_board` hands the rows to the visit for that call only.
-//! The vector this header builds is the snapshot the walk keeps. A later
-//! publish does not change it. A count is `shekyl_seam_board_count`, not
-//! a scan of this copy. The handshake flag is not part of that count.
+//! `shekyl_seam_board` visits one fixed-size row per call. The pointer is
+//! valid only for that call. A missing hub, or a board with no rows,
+//! visits once with a null row, and this assign ignores it. The vector
+//! starts empty, so that visit leaves the snapshot empty. A later publish
+//! does not change the copy. A count is `shekyl_seam_board_count`, not a
+//! scan of this copy. The handshake flag is not part of that count.
 
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
 #include <vector>
 
 #include "p2p/seam_endpoint.h"
@@ -21,12 +21,12 @@
 
 namespace shekyl
 {
-  extern "C" inline void seam_board_assign(void* ctx, const shekyl_seam_board_row* rows, std::size_t count)
+  extern "C" inline void seam_board_assign(void* ctx, const shekyl_seam_board_row* row)
   {
+    if (row == nullptr)
+      return;
     auto* out = static_cast<std::vector<shekyl_seam_board_row>*>(ctx);
-    out->clear();
-    if (rows != nullptr && count != 0)
-      out->insert(out->end(), rows, rows + count);
+    out->push_back(*row);
   }
 
   /// The bound process hub's rows. Empty when no hub is bound.
