@@ -152,9 +152,10 @@ pub use debit_auth::{
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,
-    emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
-    BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
-    EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
+    emission_vin_verify_backing, emission_vin_verify_claims, emission_vin_verify_claims_under,
+    epoch_is_before_join, AuthVerified, BackingVerified, ClaimantBondRecord, ClaimantShare,
+    ClaimantShareError, ClaimsVerified, EmissionEpochSource, EmissionVerified,
+    EmissionVerifyContext, EmissionVerifyError,
 };
 pub use pass_anchor::{
     pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
