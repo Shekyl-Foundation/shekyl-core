@@ -75,11 +75,20 @@ impl fmt::Debug for PersonaServing {
 /// Every non-servable outcome renders one identical 404 on the wire; these
 /// are the only place the outcomes are distinguishable, and only in
 /// aggregate. In particular `sign_failures` is how an operator tells "this
-/// persona could not read what it needed" (`lookup_failures`) from "it read
-/// everything and the attestation key refused" — a persona started with
-/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
-/// ordinary miss — a shard the persona simply does not hold — is the
-/// deliberate 404 and moves neither counter.
+/// persona could not read what it needed" (`lookup_failures`) from "it
+/// opened the shard and the attestation key refused its pre-flight"
+/// (`PassKey::ready`, asked before the 200 head and before any body byte
+/// is read) — a persona started with [`NoResidentKey`](crate::NoResidentKey)
+/// accrues only the latter. An ordinary miss — a shard the persona simply
+/// does not hold — is the deliberate 404 and moves neither counter.
+///
+/// `late_sign_failures` is the one outcome here that is not a 404: the key
+/// passed its pre-flight, the body went out, and the signature then failed,
+/// so the requester saw a 200 cut short of its envelope. Under the `ready`
+/// contract a key refuses on policy before the head and fails afterwards
+/// only on a cryptographic fault, so this counter should stay at zero; a
+/// persona whose moves has a key whose pre-flight says yes to what its
+/// signer then refuses (`SF-D8`, amended 2026-10-06).
 ///
 /// `lookup_failures` has **two** causes, deliberately pooled because a
 /// requester cannot distinguish them either: the serving store could not be
@@ -108,9 +117,12 @@ pub struct ServeCounters {
     /// Requests the serving store could not answer: its tip height for the
     /// gate, or the shard's bytes (I/O, pruned). Not misses.
     pub lookup_failures: u64,
-    /// Requests whose shard was held but whose countersignature the key
-    /// refused.
+    /// Requests whose shard was held but whose key refused its pre-flight
+    /// (`PassKey::ready`): the identical 404, before any body byte is read.
     pub sign_failures: u64,
+    /// Responses whose body went out and whose countersignature then
+    /// failed: a 200 short of its envelope, by cryptographic fault.
+    pub late_sign_failures: u64,
     /// Accept-loop errors.
     pub accept_errors: u64,
 }
@@ -500,6 +512,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
             refused: self.endpoint.refused_count(),
             lookup_failures: self.endpoint.lookup_failure_count(),
             sign_failures: self.endpoint.sign_failure_count(),
+            late_sign_failures: self.endpoint.late_sign_failure_count(),
             accept_errors: self.endpoint.accept_error_count(),
         }
     }

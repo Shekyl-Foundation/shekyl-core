@@ -1801,3 +1801,61 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
 
     host.shutdown().await;
 }
+
+/// A persona started before its attestation key is wired (`NoResidentKey`)
+/// answers the identical 404 **before** any body byte is read: the key
+/// refuses its pre-flight (`PassKey::ready`), which the host surfaces as
+/// `sign_failures`, apart from both `lookup_failures` (the store and the
+/// tip were fine) and `late_sign_failures` (nothing was signed late,
+/// because nothing was signed). `SF-D8`, amended 2026-10-06.
+#[tokio::test]
+async fn a_keyless_persona_refuses_at_the_pre_flight_and_the_host_counts_it_there() {
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
+        .expect("freeze segment 0");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(10_000));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+            key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
+        },
+        &pinner,
+    )
+    .await
+    .expect("start");
+
+    let refused = fetch(host.serve_addr(), "/shard/0", 10_000).await;
+    assert!(
+        is_refused(&refused),
+        "a persona without its key must not serve an unsigned shard"
+    );
+    let ServeCounters {
+        served,
+        lookup_failures,
+        sign_failures,
+        late_sign_failures,
+        ..
+    } = host.counters();
+    assert_eq!(served, 0);
+    assert_eq!(
+        sign_failures, 1,
+        "the pre-flight refusal is the bucket a keyless persona accrues"
+    );
+    assert_eq!(
+        lookup_failures, 0,
+        "the store and the daemon tip were both readable"
+    );
+    assert_eq!(
+        late_sign_failures, 0,
+        "nothing was signed, so nothing failed to sign after a body"
+    );
+
+    host.shutdown().await;
+}
