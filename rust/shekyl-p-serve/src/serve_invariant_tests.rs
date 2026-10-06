@@ -60,14 +60,14 @@ use crate::provider::{ProviderError, ShardBody, ShardProvider};
 
 /// Shard 0, in memory, counting how often it is opened and how many
 /// chunks of it are then yielded.
-struct CountingProvider {
+pub(super) struct CountingProvider {
     bytes: Arc<[u8]>,
     opens: AtomicUsize,
     reads: Arc<AtomicUsize>,
 }
 
 impl CountingProvider {
-    fn new(bytes: Vec<u8>) -> Arc<Self> {
+    pub(super) fn new(bytes: Vec<u8>) -> Arc<Self> {
         Arc::new(Self {
             bytes: Arc::from(bytes.into_boxed_slice()),
             opens: AtomicUsize::new(0),
@@ -75,11 +75,11 @@ impl CountingProvider {
         })
     }
 
-    fn opens(&self) -> usize {
+    pub(super) fn opens(&self) -> usize {
         self.opens.load(Ordering::SeqCst)
     }
 
-    fn reads(&self) -> usize {
+    pub(super) fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
     }
 
@@ -104,27 +104,54 @@ impl ShardProvider for CountingProvider {
     }
 }
 
+/// How a [`CountingSigner`] answers: each is one of the signer-side
+/// outcomes the endpoint has a response for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Signs {
+    /// Ready, and signs.
+    Always,
+    /// Refuses its pre-flight: the 503 before any shard byte.
+    NotReady,
+    /// Ready, then fails to sign after the body: the refusal trailer.
+    FailsLate,
+    /// Cannot read its own height: the 503, a lookup failure.
+    NoHeight,
+}
+
 /// The test key, counting the signatures it is asked for.
-struct CountingSigner {
+pub(super) struct CountingSigner {
     key: TestKeySigner,
+    signs: Signs,
     asked_to_sign: AtomicUsize,
 }
 
 impl CountingSigner {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
+        Self::that(Signs::Always)
+    }
+
+    pub(super) fn that(signs: Signs) -> Arc<Self> {
         Arc::new(Self {
             key: TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)),
+            signs,
             asked_to_sign: AtomicUsize::new(0),
         })
     }
 
-    fn asked_to_sign(&self) -> usize {
+    pub(super) fn asked_to_sign(&self) -> usize {
         self.asked_to_sign.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn key(&self) -> &TestKeySigner {
+        &self.key
     }
 }
 
 impl PassKey for CountingSigner {
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        if self.signs == Signs::NotReady {
+            return Err(SignRefused::new("counting signer: not ready"));
+        }
         self.key.ready(shard_id, anchor_height)
     }
 
@@ -133,12 +160,18 @@ impl PassKey for CountingSigner {
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<HybridSignature, SignRefused> {
         self.asked_to_sign.fetch_add(1, Ordering::SeqCst);
+        if self.signs == Signs::FailsLate {
+            return Err(SignRefused::new("counting signer: fails late"));
+        }
         self.key.sign_pass(message)
     }
 }
 
 impl PassSigner for CountingSigner {
     fn own_height(&self) -> Option<BlockHeight> {
+        if self.signs == Signs::NoHeight {
+            return None;
+        }
         self.key.own_height()
     }
 }
