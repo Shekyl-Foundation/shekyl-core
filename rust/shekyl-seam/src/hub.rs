@@ -25,7 +25,9 @@ use shekyl_transport_layer::{
     Sockets,
 };
 
-use crate::connection::Connection;
+use crate::connection::{
+    AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
+};
 use crate::dial::Dial;
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
@@ -101,8 +103,8 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
-    /// The identity observed at adopt. The address is not rewritten.
-    /// Claims recorded later do not replace it.
+    /// The session. Adoption fixes the endpoint. A claim does not replace
+    /// it. A clone of this value is not the row.
     connection: Connection,
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
@@ -281,15 +283,135 @@ impl Hub {
         gap: Option<oneshot::Sender<()>>,
     ) -> Result<Attached, CloseCause> {
         let id = open.id();
+        let connection = Connection::open(id, endpoint, self.now());
+        self.place(connection, open, session, gap)
+    }
+
+    /// Admit `open` as a re-dial of `origin`'s advertisement.
+    ///
+    /// The origin's claim is not written. The new row's endpoint is
+    /// `observed`. [`RedialRefusal::NotThisClaim`] when that observation
+    /// is not the advertisement.
+    pub fn adopt_redial(
+        &self,
+        origin: SocketId,
+        open: OpenSocket,
+        session: Session,
+        observed: Endpoint,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Result<Attached, RedialRefusal> {
+        let id = open.id();
         let started = self.now();
-        let send = session.send_half();
-        let poster = Arc::clone(&self.post);
         let mut inner = self.lock();
+        let redial = inner.conns.get(&origin).and_then(|conn| {
+            if matches!(conn.phase, Phase::Closed) {
+                None
+            } else {
+                conn.connection.redial(id, observed, started)
+            }
+        });
+        let Some(redial) = redial else {
+            drop(inner);
+            drop(open);
+            return Err(RedialRefusal::NotThisClaim);
+        };
         if inner.conns.contains_key(&id) {
+            drop(inner);
+            drop(open);
+            return Err(RedialRefusal::AlreadyAdmitted);
+        }
+        Ok(Self::write_row(
+            &mut inner,
+            &self.post,
+            redial.into_session(),
+            open,
+            session,
+            gap,
+        ))
+    }
+
+    /// A copy of the session. Recording on the copy does not change the row.
+    #[must_use]
+    pub fn snapshot(&self, id: SocketId) -> Option<Connection> {
+        self.lock()
+            .conns
+            .get(&id)
+            .map(|conn| conn.connection.clone())
+    }
+
+    /// Record a height the peer sent on a live row.
+    ///
+    /// `false` when `id` is missing or the row is closed.
+    pub fn note_claimed_height(&self, id: SocketId, height: u64, message: HeightMessage) -> bool {
+        self.edit(id, |connection| {
+            connection.note_claimed_height(height, message);
+        })
+        .is_some()
+    }
+
+    /// Raise the accepted chain length on a live row.
+    ///
+    /// `false` when `id` is missing or the row is closed. A shorter length
+    /// does not replace a longer one.
+    pub fn raise_accepted_chain_length(&self, id: SocketId, length: ChainLength) -> bool {
+        self.edit(id, |connection| {
+            connection.raise_accepted_chain_length(length);
+        })
+        .is_some()
+    }
+
+    /// Record the hash the peer asserted on a live row.
+    pub fn note_last_known_hash(&self, id: SocketId, hash: [u8; 32]) -> bool {
+        self.edit(id, |connection| connection.note_last_known_hash(hash))
+            .is_some()
+    }
+
+    /// Record the support flags the peer asserted on a live row.
+    pub fn note_support_flags(&self, id: SocketId, flags: u32) -> bool {
+        self.edit(id, |connection| connection.note_support_flags(flags))
+            .is_some()
+    }
+
+    /// Record the handshake's advertisement on a live row.
+    ///
+    /// The observed endpoint stays.
+    pub fn note_advertised(&self, id: SocketId, advertised: AdvertisedEndpoint) -> bool {
+        self.edit(id, |connection| connection.note_advertised(advertised))
+            .is_some()
+    }
+
+    /// Insert `connection` when its id is free.
+    ///
+    /// A duplicate id releases `open` and is [`CloseKind::DialFailed`].
+    fn place(
+        &self,
+        connection: Connection,
+        open: OpenSocket,
+        session: Session,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Result<Attached, CloseCause> {
+        let mut inner = self.lock();
+        if inner.conns.contains_key(&connection.id()) {
             drop(inner);
             drop(open);
             return Err(CloseCause::new(CloseKind::DialFailed));
         }
+        Ok(Self::write_row(
+            &mut inner, &self.post, connection, open, session, gap,
+        ))
+    }
+
+    fn write_row(
+        inner: &mut Inner,
+        post: &Arc<dyn Fn(Post) + Send + Sync>,
+        connection: Connection,
+        open: OpenSocket,
+        session: Session,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Attached {
+        let id = connection.id();
+        let endpoint = *connection.endpoint();
+        let send = session.send_half();
         inner.conns.insert(
             id,
             Conn {
@@ -297,7 +419,7 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
-                connection: Connection::open(id, endpoint, started),
+                connection,
                 established: false,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
@@ -305,9 +427,19 @@ impl Hub {
                 gap,
             },
         );
-        Self::republish(&mut inner);
-        poster(Post::Established { id, endpoint });
-        Ok(Attached { id, session })
+        Self::republish(inner);
+        post(Post::Established { id, endpoint });
+        Attached { id, session }
+    }
+
+    /// Run `f` on a live row. `None` when `id` is missing or closed.
+    fn edit<R>(&self, id: SocketId, f: impl FnOnce(&mut Connection) -> R) -> Option<R> {
+        let mut inner = self.lock();
+        let conn = inner.conns.get_mut(&id)?;
+        if matches!(conn.phase, Phase::Closed) {
+            return None;
+        }
+        Some(f(&mut conn.connection))
     }
 
     /// The sessions as of the last publish. The returned board does not
@@ -330,7 +462,7 @@ impl Hub {
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| Row::new(id, *conn.connection.endpoint().get(), conn.established))
+            .map(|(&id, conn)| Row::new(id, *conn.connection.endpoint(), conn.established))
             .collect();
         inner.board = Board::from_rows(rows);
     }
@@ -478,7 +610,7 @@ impl Hub {
                 }
                 conn.phase = Phase::Delivering;
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                let connector = conn.connection.endpoint().get().connector();
+                let connector = conn.connection.endpoint().connector();
                 let frame = bytes.take().expect("checked above");
                 (self.post)(Post::Deliver {
                     id,
@@ -735,7 +867,7 @@ impl Hub {
             let open = conn.open.take();
             let send = conn.send.take();
             let gap = conn.gap.take();
-            let connector = conn.connection.endpoint().get().connector();
+            let connector = conn.connection.endpoint().connector();
             poster(Post::Closed {
                 id,
                 connector,

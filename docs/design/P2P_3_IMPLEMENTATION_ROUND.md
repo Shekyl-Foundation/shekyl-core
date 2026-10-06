@@ -77,7 +77,7 @@ silently.
 
 ## 2. The structural finding this round exists to fix
 
-**Nothing in Rust owns a CONNECTION.**
+**UPDATE 2026-10-06:** `Connection` in `shekyl-seam` is that noun for step a. The ownership cut (step b) and the remaining sync walks (step c) are open. *Records-was: nothing in Rust owns a CONNECTION.*
 
 | Crate | Owns | Does not own |
 | --- | --- | --- |
@@ -85,8 +85,10 @@ silently.
 | `shekyl-peer-policy` | **stateless verdicts** — `DropVerdict`, `BlockIngest`, `HostInboundCap` | the peer the verdict is about |
 
 Every one of those verdicts is a function C++ calls **with values C++ walked
-itself**. The connection lives in `net_node.inl`'s `foreach_connection` lambda
-and in epee's context object.
+itself**. *Records-was: the connection lives in `net_node.inl`'s
+`foreach_connection` lambda and in epee's context object.* The session
+record is `Connection`. The sync walks that still read the handler's
+context are steps b and c.
 
 **That is why the per-host cap became an address comparison inside a loop:
 there was no object to hang a category on.** PWD-I8 is a missing **noun**, and

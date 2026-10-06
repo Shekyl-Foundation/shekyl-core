@@ -13,11 +13,12 @@
 //! the open rows and sorts that copy. The sort is the admission order a
 //! reader sees. The hash map is the lookup.
 //!
-//! This is not the C++ connection context. A walker that needs a fact asks
-//! the board. It does not borrow the row the strand is writing. Support
-//! flags and the pull relationship are not here: the seam does not know
-//! them, and a blank field would be a second context. They arrive when
-//! their owner publishes them.
+//! This is not the session. A walker that needs a fact asks the board.
+//! It does not borrow the row the strand is writing. Support flags and
+//! the pull relationship are not on the board: a blank field here would
+//! be a second context. The session holds a claim when one has been
+//! recorded. The board publishes it when that record is part of the row
+//! a walker is allowed to see.
 //!
 //! Republishing copies the slice. An accept flood against a large inbound
 //! cap is O(N) per accept, so O(N²) across the flood. The readers' guarantee
