@@ -13,12 +13,8 @@
 //! the id those recompute to (CEN-J11), so a credit for `p` names the
 //! record a join for `p` opened.
 
-use shekyl_archival_retention::{
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, HoldingsDescriptor, HoldingsKind,
-    MembershipOnlyBacking, ShardSet, ShardWorkEntry, WorkEpochClaim,
-};
+use shekyl_archival_retention::ArchivalServeCreditResponse;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_wire::{Input, Transaction};
 
 /// A **serve-credit-only** body (CEN-H20's shape, the harness's
@@ -57,46 +53,4 @@ pub fn serve_credit_body(p: [u8; 32], shard: u64, epoch: u64) -> Transaction {
 /// duplicate-post pass), so the Release pair never reached G10 there.
 pub fn join_body(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
     fixture::join_market(key_image, p)
-}
-
-/// A spend of `key_image` that also carries an emission claim by the
-/// persona tagged `[p_pubkey_fill; 32]` (the harness's `claimant`), for `epochs` —
-/// one `(P, E)` pair per epoch, CEN-G9's keys — the harness's balanced
-/// emission (CEN-H22's shape) paying a reward of one atomic unit. The vin
-/// is the `emission_wire` round-trip shape, one work claim and one amount
-/// per epoch; the emission rows that judge its content are slice 8's.
-pub fn emission_claim_body(key_image: [u8; 32], p_pubkey_fill: u8, epochs: &[u64]) -> Transaction {
-    let vin = ArchivalRewardEmissionVin {
-        p_pubkey: fixture::persona([p_pubkey_fill; 32]).identity,
-        holdings: HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![7]).expect("one shard"),
-        },
-        settlement_epochs: epochs.to_vec(),
-        work_claim: epochs
-            .iter()
-            .map(|&epoch| WorkEpochClaim {
-                epoch,
-                shard_entries: vec![ShardWorkEntry {
-                    shard_id: 7,
-                    serve_credit_bit: true,
-                    scarcity_micro: 1_000,
-                }],
-            })
-            .collect(),
-        backing: MembershipOnlyBacking {
-            proof: vec![0xee; 64],
-            pseudo_out: [0x22; 32],
-            backing_pubkey: vec![0xb2; SINGLE_KEY_CANONICAL_LEN],
-            tree_depth: 3,
-        },
-        reward_amount_plain: epochs.iter().map(|_| 1_000_000).collect(),
-        auth_backing: vec![0xc3; SINGLE_SIG_CANONICAL_LEN],
-        auth_claim: vec![0xd4; SINGLE_SIG_CANONICAL_LEN],
-    };
-    fixture::balanced_emission(
-        key_image,
-        vin.serialize().expect("an emission vin serializes"),
-        1,
-    )
 }

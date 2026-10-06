@@ -25,9 +25,9 @@ use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    block_with_nonce, chain_listing, chain_listing_with, cleanup, emission_claim_body, h,
-    join_body, key_image, open_store, serve_credit_body, spend, tmp, trace_of, Family, GrownTree,
-    Scripted, FIRST_SPEND_HEIGHT,
+    block_with_nonce, chain_listing, chain_listing_with, cleanup, h, join_body, key_image,
+    open_store, serve_credit_body, spend, tmp, trace_of, Family, GrownTree, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -378,24 +378,16 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         // A chain whose block `AT` lists one archival body of the kind the
         // mutation duplicates, beside the spend `chain(n)` would list. The
         // serve credit's twin is the body itself, `unlock_time` moved; the
-        // emission's and the bond post's are signed over their content, so
-        // the run supplies a second valid body with the same key — for the
-        // bond post a second **join** for `P1` (`join_body` docs: a Release
-        // over no record is J16's in the slot loop, before G10). A credit
-        // names a persona with a record read off the view before its block
-        // (CEN-J4), so the block below `AT` lists `P1`'s join beside its
-        // spend; the credit's epoch is past the join's (CEN-J5).
-        Mutation::DuplicateServeCredit | Mutation::DuplicateClaim | Mutation::DuplicateBondPost => {
+        // bond post's is signed over its content, so the run supplies a
+        // second valid body with the same key — a second **join** for `P1`
+        // (`join_body` docs: a Release over no record is J16's in the slot
+        // loop, before G10). A credit names a persona with a record read
+        // off the view before its block (CEN-J4), so the block below `AT`
+        // lists `P1`'s join beside its spend; the credit's epoch is past
+        // the join's (CEN-J5). (G9's pair is the driver's — `Mutation` docs.)
+        Mutation::DuplicateServeCredit | Mutation::DuplicateBondPost => {
             let (archival, twin): (Transaction, Option<Transaction>) = match mutation {
                 Mutation::DuplicateServeCredit => (serve_credit_body(P1, 7, 11), None),
-                Mutation::DuplicateClaim => (
-                    emission_claim_body(key_image(Family::Fork, AT), 0xa1, &[11, 12]),
-                    Some(emission_claim_body(
-                        key_image(Family::Fork, AT + 1),
-                        0xa1,
-                        &[12],
-                    )),
-                ),
                 _ => (
                     join_body(key_image(Family::Fork, AT), P1),
                     Some(join_body(key_image(Family::Fork, AT + 1), P1)),
@@ -711,12 +703,12 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::MissingBody, ExpectedPlace::Block),
             (Mutation::SubstitutedBody, ExpectedPlace::Listed),
             // Slice 7 commit 7 (Q8): G1 names the slot whose hash it looked
-            // up; the three archival passes name the second vin; F14 the
-            // block's summed weight.
+            // up; the archival passes name the second vin; F14 the block's
+            // summed weight. (G9's `DuplicateClaim` retired to the driver,
+            // slice 8 row 9 — `Mutation` docs.)
             (Mutation::RelistedTransaction, ExpectedPlace::Listed),
             (Mutation::DoubledListing, ExpectedPlace::Listed),
             (Mutation::DuplicateServeCredit, ExpectedPlace::Input),
-            (Mutation::DuplicateClaim, ExpectedPlace::Input),
             (Mutation::DuplicateBondPost, ExpectedPlace::Input),
             (Mutation::OverweightBlock, ExpectedPlace::Block),
             (Mutation::DoubleSpend, ExpectedPlace::Input),

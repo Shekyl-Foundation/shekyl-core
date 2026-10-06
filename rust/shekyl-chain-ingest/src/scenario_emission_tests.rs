@@ -10,10 +10,14 @@
 //! rows — claims its reward with a transaction `emission_assembly` built
 //! the way the engine handler builds one. `validate` admits it; the fold
 //! writes the claim onto the record; the store holds what the verdict
-//! derived. That is the one admitted claim the row pins. The row's other
-//! half — the driver's bytes and the engine's held identical for one
-//! shape — lives in `shekyl-engine-core`'s `stake_engine_tests`, which
-//! reaches this crate's assembly through the `harness` feature.
+//! derived. That is the one admitted claim the row pins. Beside it, the
+//! block pass's one emission row with a pipeline witness nowhere else:
+//! the same claim listed with a twin is CEN-G9's refusal (slice 8 row 9
+//! retired the mutation family's `DuplicateClaim` here — `Mutation`
+//! docs). The row's other half — the driver's bytes and the engine's
+//! held identical for one shape — lives in `shekyl-engine-core`'s
+//! `stake_engine_tests`, which reaches this crate's assembly through the
+//! `harness` feature.
 //!
 //! # What the chain has to do first
 //!
@@ -49,7 +53,7 @@ use shekyl_archival_retention::{
     epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim,
 };
-use shekyl_chain_rules::{CenRow, RecordWriteKind};
+use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::archival::FirstPayingHeight;
@@ -57,7 +61,7 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
-use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
@@ -75,6 +79,10 @@ const FILL_FROM_COINBASE: u64 = 10;
 /// driver takes it as an argument, and this scenario needs only that it
 /// is not the funding spend's.
 const CLAIM_TX_KEY: [u8; 32] = [0x5c; 32];
+
+/// The twin claim's transaction key — a second claim for the same terms,
+/// so G9 has a pair to refuse.
+const TWIN_TX_KEY: [u8; 32] = [0x5d; 32];
 
 /// Feed `spender` every block of `chain` it has not seen.
 fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
@@ -111,6 +119,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // payment (index 0) is the claim's backing, the change (index 1) its
     // fee — with the persona's join riding it.
     let persona = Persona::at(1);
+    let recipient = Recipient::persona(persona.keys());
     let join = persona.join(shard_set(vec![0]), ENDPOINT);
     let funding = spender.spend_coinbase_to(
         scenario.wallet(),
@@ -118,7 +127,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         join_height,
         FEE,
         Some(&join),
-        &Recipient::persona(persona.keys()),
+        &recipient,
     );
     let backing_key = funding.prefix.outputs[0].key;
     let fee_key = funding.prefix.outputs[1].key;
@@ -137,11 +146,22 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let join_epoch = SettlementEpoch::from_raw(levered_schedule().epoch_at_height(join_height));
     // The first epoch a persona joining in `join_epoch` may serve (CEN-J5).
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+    // Beside the credit, a second funding spend — coinbase 1 to the same
+    // persona, no post — for the twin claim G9 refuses below. Its own
+    // block: the spender's output keys are drawn from the connecting
+    // height, so two spends to one recipient at one height would pay the
+    // same keys, and the twin's fee would be the claim's.
+    let twin_height = join_height + 1;
+    let twin_funding =
+        spender.spend_coinbase_to(scenario.wallet(), 1, twin_height, FEE, None, &recipient);
+    let twin_fee_key = twin_funding.prefix.outputs[1].key;
+    assert_ne!(twin_fee_key, fee_key, "the twin's fee is its own output");
+    spender.own(twin_fee_key);
     let block = scenario
-        .mine_listing(vec![persona.serve_credit(0, served.to_raw())])
+        .mine_listing(vec![persona.serve_credit(0, served.to_raw()), twin_funding])
         .await
-        .unwrap_or_else(|outcome| panic!("the credit connects: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(join_height + 1));
+        .unwrap_or_else(|outcome| panic!("the credit and the twin's funding connect: {outcome}"));
+    assert_eq!(block.height, BlockHeight::from_raw(twin_height));
     mined.push(block);
 
     // Through the close of `served`: the fold closes it when the count
@@ -236,11 +256,43 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &Zeroizing::new(CLAIM_TX_KEY),
         vec![fee_input.input],
         backing.input,
-        terms,
+        terms.clone(),
         FEE,
         &backing.tree,
     );
     assert_eq!(claim.persona, persona.id());
+
+    // CEN-G9 on the pipeline: a block listing this claim beside a twin —
+    // the same persona and terms, its own fee input and transaction key,
+    // so every per-transaction row admits both — is refused at the twin's
+    // emission vin (the second occurrence of `(P, served)`; input 1, after
+    // the one fee slot). The block does not connect, so the claim below
+    // still lands at `connecting`. This is the witness the mutation
+    // family's `DuplicateClaim` was, retired with slice 8 row 9: a claim
+    // the family hand-built cannot pass the emission rows, and a claim
+    // that passes them is this assembly's.
+    let twin_fee_input = spender.owned_input(&owner, twin_fee_key, connecting);
+    let twin_backing = spender.owned_input(&owner, backing_key, connecting);
+    let twin = assemble_emission_claim(
+        persona.keys(),
+        &Zeroizing::new(TWIN_TX_KEY),
+        vec![twin_fee_input.input],
+        twin_backing.input,
+        terms,
+        FEE,
+        &twin_backing.tree,
+    );
+    let claim_tx =
+        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
+    let twin_tx = Transaction::from_bytes(&twin.bytes).expect("the twin's bytes parse");
+    refused_at(
+        scenario.mine_listing(vec![claim_tx.clone(), twin_tx]).await,
+        CenRow::G9,
+        Locus::Input {
+            slot: TxSlot::Listed(1),
+            input: 1,
+        },
+    );
 
     // Self-check every proving leg against the wallet-side root before any
     // rule judges it: the membership-only backing proof and the dual auth
@@ -278,8 +330,6 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     .expect("verify runs");
     assert!(fee_verified, "the fee spend's FCMP verifies");
 
-    let claim_tx =
-        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
     let block = scenario
         .mine_listing(vec![claim_tx])
         .await

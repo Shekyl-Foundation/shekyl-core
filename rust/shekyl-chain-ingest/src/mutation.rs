@@ -165,11 +165,16 @@ pub enum Mutation {
     /// `unlock_time` moved (a different transaction, the same key).
     /// CEN-G7, at the second vin.
     DuplicateServeCredit,
-    /// A second emission body claiming a `(P, E)` the block already claims,
-    /// the same way. CEN-G9, at the second vin.
-    DuplicateClaim,
     /// A second bond post for a `P` the block already posts for, the same
     /// way. CEN-G10, at the second vin.
+    ///
+    /// There is no `DuplicateClaim` beside it. An emission claim's twin
+    /// has to be a claim the emission rows admit — a proof over the tree
+    /// at its reference (CEN-J21), a budget row for its epoch (J23) — and
+    /// no body this family can hand-build is one. CEN-G9's witness through
+    /// the production pipeline is the driver's: two assembled claims by
+    /// one persona for one epoch, listed in one block
+    /// (`scenario_emission_tests`, E6 slice 8 row 9).
     DuplicateBondPost,
     /// Bodies from the environment's supply listed until the block's weight
     /// exceeds the bound the caller states (`2 × M`). CEN-F14, at the block.
@@ -230,7 +235,7 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 19] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -244,7 +249,6 @@ impl Mutation {
         Self::RelistedTransaction,
         Self::DoubledListing,
         Self::DuplicateServeCredit,
-        Self::DuplicateClaim,
         Self::DuplicateBondPost,
         Self::OverweightBlock,
         Self::DoubleSpend,
@@ -268,7 +272,6 @@ impl Mutation {
             Self::ReorderedBodies | Self::MissingBody | Self::SubstitutedBody => CenRow::G2,
             Self::RelistedTransaction | Self::DoubledListing => CenRow::G1,
             Self::DuplicateServeCredit => CenRow::G7,
-            Self::DuplicateClaim => CenRow::G9,
             Self::DuplicateBondPost => CenRow::G10,
             Self::OverweightBlock => CenRow::F14,
             Self::DoubleSpend => CenRow::I7,
@@ -298,7 +301,6 @@ impl Mutation {
             Self::DoubleSpend
             | Self::ForgedSignature
             | Self::DuplicateServeCredit
-            | Self::DuplicateClaim
             | Self::DuplicateBondPost => ExpectedPlace::Input,
             // I10/I11 name the transaction; so does CEN-G2's index arm (slice
             // 7 Q8: the first mismatching index — `Listed(0)` for both G2
@@ -455,9 +457,6 @@ impl Mutation {
                 candidate.transactions.push(twin);
                 relist(&mut candidate);
             }
-            Self::DuplicateClaim => {
-                Self::list_supplied_twin(&mut candidate, env, ArchivalKind::EmissionClaim)?;
-            }
             Self::DuplicateBondPost => {
                 Self::list_supplied_twin(&mut candidate, env, ArchivalKind::BondPost)?;
             }
@@ -552,8 +551,6 @@ impl Mutation {
 pub enum ArchivalKind {
     /// A parseable serve-credit vin (`ArchivalServeCreditResponse`).
     ServeCredit,
-    /// A parseable emission vin claiming at least one epoch.
-    EmissionClaim,
     /// A bond post.
     BondPost,
 }
@@ -563,26 +560,19 @@ impl ArchivalKind {
     /// parse (`ArchivalKey::of`), so the family and the validator agree on
     /// what has a key; an unparseable vin is another row's and has none.
     fn carried_by(self, input: &Input) -> bool {
-        match (self, ArchivalKey::of(input)) {
+        matches!(
+            (self, ArchivalKey::of(input)),
             (Self::ServeCredit, Some(ArchivalKey::ServeCredit { .. }))
-            | (Self::BondPost, Some(ArchivalKey::BondPost { .. })) => true,
-            (Self::EmissionClaim, Some(ArchivalKey::Claims { epochs, .. })) => !epochs.is_empty(),
-            _ => false,
-        }
+                | (Self::BondPost, Some(ArchivalKey::BondPost { .. }))
+        )
     }
 }
 
 /// Whether two archival keys collide under their rule: one `(P, shard, E)`
-/// (G7), a shared `(P, E)` pair (G9), one `P` (G10).
+/// (G7), one `P` (G10). G9's shared-`(P, E)` rule has no mutation here
+/// (`DuplicateBondPost` docs), so a claim key collides only with itself.
 fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
     match (a, b) {
-        (
-            ArchivalKey::Claims { p, epochs },
-            ArchivalKey::Claims {
-                p: q,
-                epochs: theirs,
-            },
-        ) => p == q && epochs.iter().any(|e| theirs.contains(e)),
         (ArchivalKey::BondPost { p }, ArchivalKey::BondPost { p: q }) => p == q,
         (a, b) => a == b,
     }
@@ -590,10 +580,10 @@ fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
 
 impl Mutation {
     /// List a body from the environment's twins that collides, under
-    /// `kind`'s rule, with a key the candidate already carries. An emission
-    /// or bond-post body is signed over its content (its `pqc_auths` slot,
-    /// CEN-I18), so a second valid body with the same key cannot be made
-    /// from the first — the caller supplies one it built with the keys.
+    /// `kind`'s rule, with a key the candidate already carries. A bond-post
+    /// body is signed over its content (its `pqc_auths` slot, CEN-I18), so
+    /// a second valid body with the same key cannot be made from the first
+    /// — the caller supplies one it built with the keys.
     fn list_supplied_twin(
         candidate: &mut Candidate,
         env: &Environment<'_>,
@@ -672,12 +662,11 @@ pub struct Environment<'a> {
     /// carries no spare bodies, and the bound (`2 × M`) is the validator's
     /// to know, not this wrapper's.
     pub overweight: Option<Overweight<'a>>,
-    /// Twins for [`Mutation::DuplicateClaim`] and
-    /// [`Mutation::DuplicateBondPost`]: bodies valid at the mutated height
-    /// whose archival key collides with one the block already carries. An
-    /// emission or bond-post body is signed over its content, so the family
-    /// cannot forge a second from the first; a serve-credit body carries no
-    /// signature slot and needs none. Empty for a corpus chain.
+    /// Twins for [`Mutation::DuplicateBondPost`]: bodies valid at the
+    /// mutated height whose archival key collides with one the block
+    /// already carries. A bond-post body is signed over its content, so
+    /// the family cannot forge a second from the first; a serve-credit body
+    /// carries no signature slot and needs none. Empty for a corpus chain.
     pub twins: &'a [Transaction],
 }
 

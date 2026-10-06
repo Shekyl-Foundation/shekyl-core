@@ -839,8 +839,8 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
 fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     let chains = captured_chains();
     // A corpus chain brings no spare bodies and no twins, and the bound
-    // is the validator's: the weight and the two signed-twin mutations
-    // are `Unmutable` here by construction, and the census says so below.
+    // is the validator's: the weight and the signed-twin mutation are
+    // `Unmutable` here by construction, and the census says so below.
     let env = Environment {
         clock: MockSubstrate::CLOCK,
         pow: None,
@@ -902,15 +902,16 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // Five entries, and the census says whose — the environment's or the
+    // Four entries, and the census says whose — the environment's or the
     // corpus's, never the family's. `PowUnderWrongSeed`: this census
     // carries no PoW leg. `OverweightBlock`: no body supply — the corpus
-    // census judges captured blocks as they are. `DuplicateClaim` and
-    // `DuplicateBondPost`: this census supplies no twins, and the *other*
-    // cause on each — `NoArchivalBodyToDuplicate` — is the heights that
-    // carry no claim or no post, which is a reading of the corpus: the
-    // emission-claim and bond-post captures do carry the bodies, so a twin
-    // supply would reach both. `DuplicateServeCredit` needs no supply (its
+    // census judges captured blocks as they are. `DuplicateBondPost`: this
+    // census supplies no twins, and the *other* cause —
+    // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
+    // which is a reading of the corpus: the bond-post capture does carry
+    // the body, so a twin supply would reach it. (`DuplicateClaim` was the
+    // fifth until slice 8 row 9 retired it to the driver — `Mutation`
+    // docs.) `DuplicateServeCredit` needs no supply (its
     // twin is the body itself) and is unreachable on the corpus alone: no
     // captured chain carries a serve credit. `ReorderedBodies` was the
     // corpus's until 2026-09-28 — every captured block listed at most one
@@ -919,12 +920,6 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     // 4 (c)): its block 211 lists 23 bodies, so the mutations that need two
     // have a corpus witness there. A change here is a change in the
     // corpus's shape or in the family, and §3.7 moves with it.
-    let supplied_twin = |kind: ArchivalKind| {
-        vec![
-            Unmutable::NoArchivalBodyToDuplicate { kind },
-            Unmutable::NoTwinSupplied { kind },
-        ]
-    };
     assert_eq!(
         unreachable,
         vec![
@@ -939,12 +934,15 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
                 }]
             ),
             (
-                Mutation::DuplicateClaim,
-                supplied_twin(ArchivalKind::EmissionClaim)
-            ),
-            (
                 Mutation::DuplicateBondPost,
-                supplied_twin(ArchivalKind::BondPost)
+                vec![
+                    Unmutable::NoArchivalBodyToDuplicate {
+                        kind: ArchivalKind::BondPost
+                    },
+                    Unmutable::NoTwinSupplied {
+                        kind: ArchivalKind::BondPost
+                    },
+                ]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
         ],
