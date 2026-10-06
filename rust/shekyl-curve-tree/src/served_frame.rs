@@ -194,8 +194,8 @@ impl ServedFrameHeader {
     /// `R_k` hash input.
     ///
     /// Zero on every response this codebase writes today
-    /// ([`Self::for_segment`]). Two constraints bind whatever scheme fills
-    /// it later, and both are properties of *this field*, not of the
+    /// ([`Self::for_segment`]). Three constraints bind whatever scheme fills
+    /// it later, and all three are properties of *this field*, not of the
     /// current implementation:
     ///
     /// - **The value must be decidable without a store read.** It is
@@ -203,6 +203,14 @@ impl ServedFrameHeader {
     ///   body chunk, so a padding decision that needed to look at leaves
     ///   could not be made in time. A scheme requiring one is a format
     ///   change, not an implementation detail.
+    /// - **A later holder rebuilds the frame from the shard.** `SF-D8`
+    ///   (`ARCHIVAL_SHARD_FETCH.md`) recomputes the recorded delivery
+    ///   digest from the shard and the pass record. Padding fixed by the
+    ///   pre-read inputs — this length, and bytes fixed by the leaf count
+    ///   or the shard id — is recomputable from the shard. Any other
+    ///   padding keeps that property only when the pass record carries its
+    ///   exact bytes. Deriving those bytes from the leaves is the store
+    ///   read the constraint above already refuses.
     /// - **It is bounded** at `leaf_count x LEAF_BYTES`, so a body never
     ///   exceeds twice a segment. The declaration comes from a potentially
     ///   adversarial server, and an unbounded one is a
