@@ -385,20 +385,6 @@ namespace cryptonote
     if(context.m_state == cryptonote_connection_context::state_synchronizing)
       return true;
 
-    // from v6, if the peer advertises a top block version, reject if it's not what it should be (will only work if no voting)
-    if (hshd.current_height > 0)
-    {
-      const uint8_t version = m_core.get_ideal_hard_fork_version(hshd.current_height - 1);
-      if (version >= 6 && version != hshd.top_version)
-      {
-        if (version < hshd.top_version && version == m_core.get_ideal_hard_fork_version())
-          MDEBUG(context << " peer claims higher version than we think (" <<
-              (unsigned)hshd.top_version << " for " << (hshd.current_height - 1) << " instead of " << (unsigned)version <<
-              ") - we may be forked from the network and a software upgrade may be needed, or that peer is broken or malicious");
-        return false;
-      }
-    }
-
     if (hshd.current_height < context.m_remote_blockchain_height)
     {
       MINFO(context << "Claims " << hshd.current_height << ", claimed " << context.m_remote_blockchain_height << " before");

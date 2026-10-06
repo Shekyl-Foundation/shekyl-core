@@ -79,7 +79,6 @@ public:
   virtual uint64_t get_block_height(const crypto::hash& h) const override { return 0; }
   virtual cryptonote::block_header get_block_header(const crypto::hash& h) const override { return cryptonote::block_header(); }
   virtual uint64_t get_block_timestamp(const uint64_t& height) const override { return 0; }
-  virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const override { return {}; }
   virtual uint64_t get_top_block_timestamp() const override { return 0; }
   virtual size_t get_block_weight(const uint64_t& height) const override { return 128; }
   virtual std::vector<uint64_t> get_block_weights(uint64_t start_height, size_t count) const override { return {}; }
@@ -142,7 +141,6 @@ public:
   virtual bool for_all_outputs(std::function<bool(uint64_t amount, const crypto::hash &tx_hash, uint64_t height, size_t tx_idx)> f) const override { return true; }
   virtual bool for_all_outputs(uint64_t amount, const std::function<bool(uint64_t height)> &f) const override { return true; }
   virtual bool is_read_only() const override { return false; }
-  virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const override { return false; }
 
   virtual void add_txpool_tx(const crypto::hash &txid, const cryptonote::blobdata_ref &blob, const cryptonote::txpool_tx_meta_t& details) override {}
   virtual void update_txpool_tx(const crypto::hash &txid, const cryptonote::txpool_tx_meta_t& details) override {}
