@@ -550,16 +550,16 @@ fn a_rollback_keeps_the_registry_and_drops_cut_positions() {
     );
 }
 
-/// A leaf row missing under a closing chunk refuses the block.
+/// A client whose next block closes an owned chunk with a committed
+/// sibling row gone.
 ///
-/// `prune_frozen` is the only thing that produces this shape — a position
-/// the store still counts whose leaf bytes are gone — and it has no
-/// production caller, so without a standing pass this refusal would be
-/// shown only by mutating the code it guards. Writing a short chunk instead
-/// would be the worse outcome by far: the merge accepts it, and the defect
-/// surfaces at spend time as a path that does not hash to its root.
-#[test]
-fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
+/// The setup of [`a_missing_leaf_row_refuses_rather_than_capturing_short`]:
+/// the owned leaf has not drained, the store holds the chunk's earlier
+/// half, and one of those rows has been removed. Ingesting `closing`
+/// refuses with [`crate::ClientError::CaptureIdentitiesIncomplete`] and
+/// applies nothing. Another pass puts its own transaction on that block
+/// instead of rebuilding the chunk geometry.
+pub(super) fn client_before_capture_refusal() -> (CurveTreeClient, BlockHeight) {
     let counts = counts();
     let owned_creation = creation_block_of(OWNED_POSITION);
     // The owned leaf drains at `maturity + 1`, because the root at `h`
@@ -591,8 +591,20 @@ fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
         .store
         .drop_leaf_rows_for_test(TreePosition::from_raw(start), TreePosition::from_raw(start))
         .expect("the rows drop");
+    (client, maturity + BlockCount::ONE)
+}
 
-    let closing = maturity + BlockCount::ONE;
+/// A leaf row missing under a closing chunk refuses the block.
+///
+/// `prune_frozen` is the only thing that produces this shape — a position
+/// the store still counts whose leaf bytes are gone — and it has no
+/// production caller, so without a standing pass this refusal would be
+/// shown only by mutating the code it guards. Writing a short chunk instead
+/// would be the worse outcome by far: the merge accepts it, and the defect
+/// surfaces at spend time as a path that does not hash to its root.
+#[test]
+fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
+    let (mut client, closing) = client_before_capture_refusal();
     let txs: Vec<TxLeafInputs<'_>> = Vec::new();
     let err = client
         .ingest_block(BlockLeaves {
@@ -618,7 +630,13 @@ fn a_missing_leaf_row_refuses_rather_than_capturing_short() {
             // remain. That is the honest reading of a ranged read over a
             // table with a hole in it, and the reason the refusal is keyed
             // on the total rather than on a diff.
-            let own_half = usize::try_from(OWNED_POSITION + 1 - base).expect("half fits usize");
+            //
+            // The drop removes rows and leaves the frontier's count where
+            // the ingest left it, and a refused block does not advance the
+            // frontier: this is the leaf count committed before the close.
+            let committed = client.frontier.leaf_count();
+            let own_half =
+                usize::try_from(OWNED_POSITION + 1 - committed).expect("half fits usize");
             assert_eq!(
                 got, own_half,
                 "a hole stops the ranged read, so only the block's own leaves counted"

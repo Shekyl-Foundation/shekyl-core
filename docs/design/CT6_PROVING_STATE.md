@@ -308,7 +308,7 @@ have re-imported the dependency this round exists outside of.
 | **2** | **The C1 oracle, height-keyed.** At every fixture height `h`, root, depth, and drained-leaf count equal `assemble_leaf_stream` + `root_from_scalars` over the leaves drained through `h - 1`. That cutoff is written in the test, not read from `drained_through`. Depth is graded at the two leaf counts where `layer_count_for_leaves` steps (`0`, and `SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH`). **Q2 examiner armed here, graded at increment 4:** `examine_tier_readings` compares a `TierReading` (root and depth) per tier. `TierCoverage::OutsideSpan` is the only non-answer; a tier error has no variant to hide in. Agreeing overlap is success, a root or depth mismatch is `Disagree`, and a height in neither `HeightSpan` is `Uncovered`. The 2026-09-23 decision-log row records why the examiner is armed before its tiers exist | §6.3.4 row 4; Q2 | Q2 (**ruled**); Q1's *shape* only — its constants are not inputs to the oracle |
 | **3** | **Per-transaction reconstruction reuse.** `drained`/`layers` once per tx, `gindex → drain-position` index | **Closeout (a)** — F3b | 2 |
 | **4** | **The snapshot ring + advance — BUILT (§10).** One dense ring over the reorg horizon, total by construction (`Q1` RULED 2026-09-28, §9) — no tiers, no spacing, no eviction. `shekyl_curve_tree::frontier::Frontier` advances inside `ingest_block`; the ring is the `frontier_snapshots` table of the wallet's own `LeafStore`, written and evicted in the block's own transaction; `root_and_depth_at` reads it for in-horizon heights and falls through to `root_at_count` elsewhere. `per_block_advance_worst_case_s` is **re-derived from the built advance** (Q4). The increment-2 examiner grades the real segment tier against the real snapshot tier, **unmodified** | **Closeout (b)** — F3a | 2, 3; Q2, Q3 (**ruled**); **`Q1` RULED by derivation (§9); `Q4` pre-registered with its re-point as a landing condition** — the gate is open |
-| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
+| **5** | **Path capture** — **one capture side, not two** (Q5 closed) — and the reorg refusal path (C7) with its rule-82 copy. **C7 BUILT 2026-09-30** (the fork walk and the tree-tip backstop share one comparison; the hash window holds `W` plus the kept block; `ResyncRequired` is `-29211`; a rescan sets `history_cleared`; §10.3's framing corrected); **path capture is BUILT** — its *instrument* landed first (the structural red-bite, the O(chain) before-figure, and §11.6's gate spec, PRs #927/#931), and **§11.6's integrity gate is BUILT**: `verify_path_against_its_branches` recomputes the root from an assembled path's own branches and refuses with `PathRootMismatch`, so the artifact is checked rather than the store compared with itself. **The capture mechanism is BUILT** (PR #945): the fold captures every chunk that closes over a registered output, reconciliation backfills what a late registration is owed, and assembly reads captures and the frontier snapshot without touching `entries` — `assembly_today_depends_on_every_foreign_leaf` is at **state 3 of 3** as `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`. **The registrant is BUILT** (PR #966, its own by rule 19) and **the rebuild is deleted**: the curve-tree actor registers a spend's inputs in the same handler invocation that assembles them, and the refresh's ingest offers everything the wallet will hold once it has merged — ledger, the persona's funding outputs, and that result's own detections — between its rollback and its first fold, so a found output is captured as it folds and a resume is a mass late registration, cheap because a held pair is `AlreadyHeld` — §11.12. **Registration at construction is BUILT** (the PR after #966): the persona's pending records already hold its unconfirmed transactions, so their outputs are named to the tree by `(tx_hash, vout, O)` and registered as their block folds — §11.13. `assemble_paths` has no fallback; an unregistered input is refused by name. The §6.3.3 precondition this row used to carry is **discharged** — that sentence was reconciled on `dev` (`WALLET_SIDE_STORE.md` §6.3.3 now reads *"There is one capture side, not two"*), so nothing waits on it | §6.3.3; C7; §11.6 | 4. **Q5's gate is removed**: the dissolution leaves nothing for this increment to wait on |
 | **6** | **Re-grade rows 2 and 3** on the amortized form, same harness, same rig — **and it is also `Q4`'s only seat.** Increment 4 re-derived the advance field and measured it off-rig; a fraction of cadence computed anywhere but the pinned Pi 4 is a property of the machine that computed it (rule 76). The blocker is the board, not the code | §6.3.4; Q4 | 4 |
 | **7** | **`.curvetree` retirement** | `WSS-18` | **P-store lane** (Q6) |
 
@@ -1452,10 +1452,13 @@ closed, while the chain does. But it is the worst case that remains, and
 **How often depends on whose output it is.** For the principal it is rare:
 ownership has to be learned long after the fact for a *high* chunk to be the
 missing one, and §11.12 registers a detection before its leaf folds. For the
-persona it is the **only** case, because the persona's scan learns of every
-output about 710 blocks after it drained (§11.12). An earlier revision of
-this paragraph said "it is rare" without the qualifier, and was written
-before anyone had asked when the persona's scan runs.
+persona it was the **only** case until §11.13, because the persona's scan
+learns of every output about 710 blocks after it drained; it is now the case
+for the outputs the wallet did not build (anything a third party sends to
+the persona's public address), for the stake-in (§11.13 names why), and for
+the restart window §11.13 states. An earlier revision of this paragraph said
+"it is rare" without the qualifier, and was written before anyone had asked
+when the persona's scan runs.
 
 What stays `O(n)` is `drained_sorted`, for the positions and the drift check.
 It is a sort, not a hash, and it goes with `entries` at increment 7.
@@ -1557,8 +1560,14 @@ would also not survive a restart: the registry is not persisted and the scan
 names each output once. So the refresh carries them, from the seal, on every
 pass.
 
-That makes the persona's first registration **structurally late**, and what
-it costs is §11.10's table read at the chunks that closed in the meantime.
+**For an output registered this way the first registration is late by
+construction**, and what it costs is §11.10's table read at the chunks that
+closed in the meantime. Since §11.13 that is the fallback, not the normal
+path: it is what an output pays when the wallet did not build the
+transaction that created it, when it is the stake-in, or when the wallet
+restarted between that transaction's mining and the scan's confirmation —
+§11.13 lists the three. The outputs of the transactions the persona builds
+are registered as their block folds and pay none of it.
 The bound is the trail, not the output's age: registered at the first
 refresh after the scan sealed it, the output is under whatever closed in
 roughly 710 blocks, and every chunk closing afterwards is captured by the
@@ -1688,6 +1697,107 @@ is held, and a spend assembles through the actor from captures with no
 rebuild to fall back to; the real-proof builds there run through the syncing
 handler as well.
 
+### 11.13 Registration at construction: the outputs the wallet built
+
+**The persona's outputs are known before the chain carries them.** Every
+output the persona receives in normal operation is created by a transaction
+this wallet built — the bond post's change, a claim's mint, a release's
+return, a drain's change — and the wallet knows each one's key `O` the moment
+it builds it. What it does not know is the gindex, which exists only once
+the block is mined and ingested. So the registration is made in two halves:
+the wallet names the output ahead of time, and the tree's ingest completes
+the pair at the one moment both halves are known and the leaf has not yet
+drained. Every chunk over it is then captured by the fold, and §11.12's
+structurally-late path is no longer the persona's normal path.
+
+**The record already existed.** `PendingBondPost`, `PendingEmissionClaim`,
+`PendingDrain` and `PendingRelease` each carry the full signed transaction
+bytes, sealed on the StakeEngine's side before the first send
+(persist-before-dispatch), and retired only on the persona scan's evidence
+that the transaction confirmed — `remove_confirmed` for a post,
+`remove_settled` for the rest — which is the archival reorg depth after
+mining, when the outputs appear in the scan seal as funding records. So the
+expectation's lifetime *is* the record's: it is derived from the live records
+on every refresh (`Engine::persona_expected_outputs`, from
+`expected_outputs_of` over each record's bytes), offered to the tree as a
+whole set that **replaces** the last one, and disappears when its record
+does, by which time the funding record names the same output by its pair.
+Nothing new is persisted, no schema moves, and the persona's keys stay
+inside the StakeEngine: the engine reads bytes the persona sealed, not
+secrets. Every output of each transaction is offered rather than a chosen
+subset, because all of them are this wallet's — the persona's, or the
+principal's for a drain's payment, which the principal's own scan also
+finds; a pair offered twice is one pair.
+
+**Match on the transaction, not the key.** A key is public the moment its
+transaction is relayed. Matching by `O` alone, someone who copied one of our
+keys into an output of their own, mined first, would take the registration:
+the identity check passes, because the key is the same, and the wallet's
+real output — at another gindex — would be left to the late path. Bounded
+damage, but exactly the cost this mechanism exists to remove, and an
+outsider could trigger it at will. So the expectation is
+`(tx_hash, vout, O)` (`ExpectedOutput`); `TxLeafInputs` carries the block's
+transaction hash beside its outputs; and `CurveTreeClient::ingest_block`
+looks each transaction up by hash, confirms the key at that `vout`, and
+registers the pair at the gindex `collect_block_leaves` assigned.
+`match_expected_outputs` reads that assignment; it does not count vouts
+a second time. A transaction hash is the block feed's, not the
+wallet's, so a hash that resolves to a different key is **counted and
+skipped**, never an error (`expected_output_mismatches`): a feed that
+mislabels can cost the wallet an early registration and nothing else. A
+`vout` the transaction does not have is treated the same way.
+
+**The hash is optional on the type and mandatory in use.** The daemon-side
+replica and the fixtures serve no expectations and pass `None`. A producer
+that passes `None` while expectations are live would make every expected
+output a late registration without a trace, so the ingest refuses the block
+(`ClientError::TxHashMissing`), with nothing applied. The engine's one
+producer (`curve_tree_decode::decode_block_leaves`) always supplies it —
+the block's listed hash for a body, computed for the coinbase.
+
+**Where it sits.** The expectations ride the same registration step as the
+pairs (`ownership::curve_tree_offer`): inside the ingest, after its
+rollback, before its first fold, inside the respawn wrapper — for §11.12's
+reasons, and one more: a rollback leaves the expectations in place, so a
+transaction mined again on the other fork is matched again at its new
+gindex (`a_re_mined_transaction_is_matched_again_after_a_rollback`).
+
+**What stays late, stated.**
+
+- *Outputs the wallet did not build.* The persona's receive address is
+  public; anything a third party sends to it (`ExternalTransfer`) has no
+  record here and is registered from the scan seal, as before.
+- *The stake-in.* It is an ordinary principal transfer, and the principal's
+  send journal keeps recipients and inputs, not the transaction's bytes or
+  output keys. Its key is derivable — the retained transaction secret plus
+  the persona's address — but that is a principal-side record of a persona
+  output, a placement question of its own; it stays on the seal path and
+  `FOLLOWUPS.md` carries the row. One output per funding, spent by the bond
+  post that sweeps it.
+- *A restart between mining and the scan seal.* `entries` hold no
+  transaction hashes, so an expectation set after its block has already
+  folded cannot be matched, and the output waits for the scan seal — up to
+  about 720 blocks of closures, the same cost as §11.12's. Not papered over
+  by matching on keys over `entries` (that reopens the copied-key case at
+  the one place it is exploitable), and not by asking the daemon for the
+  transaction by hash from the principal's refresh (a by-hash query is a
+  persona-interest signal at the daemon, which is a firewall question).
+
+**Where this is graded.** Client, `ct6_oracle::expected`: registered at
+ingest and nothing owed at the spend; the copied key in another transaction
+not registered (fails with the match made on the key alone); a key the
+transaction does not carry counted and skipped; the re-mined transaction
+matched again after a rollback; a hash-less transaction refused under live
+expectations and accepted without; a new set replacing the old; and a block
+the ingest then refuses leaving no mismatch counted — the match is read-only
+and the ingest applies its result with the rest of the block's effect, so a
+refused block retried does not count one mislabelled transaction twice
+(fails with the count applied before the commit). Engine,
+`ownership::tests`: the sealed pending transaction's outputs are the offer,
+registered as its block folds and held with nothing owed at the spend
+(fails with the offer's expectations dropped); a retired record withdraws
+its expectations; unparseable bytes expect nothing.
+
 ### 11.11 What capture still does not do
 
 **Two FOLLOWUPS rows keep their rationale here, not in the queue (rule 95).**
@@ -1716,7 +1826,8 @@ produce, each case supplied or refused.
 
 A third reader is not of `entries` but belongs in the same account, because
 it is the standing consumer of the late path: **the persona's registration is
-always late** (§11.12). Its rebuild reads the store's drained leaf rows over
+late for every output the wallet did not build** (§11.12, narrowed by
+§11.13). Its rebuild reads the store's drained leaf rows over
 the missing chunk's own span (`read_drained_range`), so it survives the
 retirement of the in-memory vector as it stands — and it stops working the
 day those rows are pruned below a chunk a persona output has yet to be

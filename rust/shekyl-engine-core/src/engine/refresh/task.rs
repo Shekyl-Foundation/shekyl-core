@@ -428,7 +428,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
             &daemon,
             &result,
             &producer_leaves,
-            &owned.outputs,
+            &owned,
         )
         .await
         {

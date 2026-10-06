@@ -204,6 +204,15 @@ jobs:
             scripts/ci/check_transit_marker.sh
           run_one "No unbounded blob dump in a log line" \
             python3 scripts/ci/check_log_blob_dumps.py
+          # Every version comparison and hard-fork table call in the C++ has
+          # a classified row, in both directions: Shekyl's block version is 1,
+          # so a gate on another number selects one arm forever, and the
+          # reward-aware template fill sat dead behind one. No path filter
+          # here, so a new gate in any file is seen.
+          run_one "C++ version gates match their inventory" \
+            python3 scripts/ci/check_cxx_version_gates.py
+          run_one "C++ version-gate inventory self-test" \
+            python3 scripts/ci/test_check_cxx_version_gates.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'

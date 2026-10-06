@@ -114,6 +114,7 @@ fn client_over(blocks: &[Block]) -> CurveTreeClient {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];

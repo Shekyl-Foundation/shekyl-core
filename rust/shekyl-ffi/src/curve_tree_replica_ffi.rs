@@ -236,6 +236,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
         .iter()
         .map(|(is_miner, blob, outputs)| TxLeafInputs {
             is_miner: *is_miner,
+            tx_hash: None,
             leaf_entry_blob: *blob,
             outputs,
         })

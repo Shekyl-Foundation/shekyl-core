@@ -1018,6 +1018,16 @@ pub(crate) fn seeded_commitment(chain: u8, height: u64, index: u64) -> [u8; 32] 
     seeded_point(chain, height, index, SeededPoint::Commitment)
 }
 
+/// The hash [`seeded_tx_leaves`] gives the one transaction of the block at
+/// `height` on `chain`.
+pub(crate) fn seeded_tx_hash(chain: u8, height: u64) -> shekyl_types::TxHash {
+    let mut bytes = [0u8; 32];
+    bytes[0] = chain;
+    bytes[1] = 0xee;
+    bytes[2..10].copy_from_slice(&height.to_le_bytes());
+    shekyl_types::TxHash::from_bytes(bytes)
+}
+
 /// One block's leaves for the curve-tree actor: a single non-coinbase
 /// transaction of `n` outputs, so its leaves drain one lock window after
 /// `height`.
@@ -1058,6 +1068,7 @@ pub(crate) fn seeded_tx_leaves(
     }
     Arc::new(vec![crate::scan::OwnedTxLeaves {
         is_miner: false,
+        tx_hash: seeded_tx_hash(chain, height),
         leaf_entry_blob: Some(blob),
         outputs,
     }])

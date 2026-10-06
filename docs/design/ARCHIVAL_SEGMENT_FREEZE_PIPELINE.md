@@ -235,9 +235,10 @@ argument.
 ### 4.1 Connect hook
 
 In `BlockchainDB::add_block` (`blockchain_db.cpp`), inside the
-existing `HF_VERSION_FCMP_PLUS_PLUS_PQC` block, **immediately after
-`grow_curve_tree` and before `process_archival_epoch_close_at_height`**
-(ordering is load-bearing: a segment completed at height `H` must be
+curve-tree scope that runs on every connect (`:434`–`:613`) and inside
+`if (new_output_count > 0)` (`:587`–`:598`), **immediately after
+`grow_curve_tree` and before `process_archival_epoch_close_at_height`
+(`:652`)** (ordering is load-bearing: a segment completed at height `H` must be
 countable by an epoch close at `H` — M1 §1.1 takes the count "inside
 the same write transaction that performs the close" with
 `freeze_height ≤ H_close` inclusive):

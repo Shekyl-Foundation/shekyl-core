@@ -2029,12 +2029,13 @@ owes the store lane the requirement, not a patch.
   `start = h > W ? h − W : 0`, `W` = `SHEKYL_TX_VOLUME_WINDOW`, and the
   `h` = 0 / `cum(−1)` = 0 edges as the walk defines them
   (`blockchain.cpp:2055–2061`).
-- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` is a
-  cumulative-at-write, differenced-at-read per-block counter
-  (`db_lmdb.cpp`, `bi.bi_cum_rct = num_rct_outs; bi.bi_cum_rct +=
-  bi_prev->bi_cum_rct`), pop-symmetric for free because the row goes with
-  the block. The redb block row carries the same field in the same
-  discipline. Eight bytes per block.
+- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` was
+  written as a cumulative-at-write, differenced-at-read counter
+  (`bi.bi_cum_rct = num_rct_outs` plus the parent's total), pop-symmetric
+  because the row goes with the block. That add was deleted 2026-10-05:
+  the column stores this block's count only (`db_lmdb.cpp:1019`) and is
+  never read, so it is no longer an example of the pattern. The shape this
+  requirement asks for is that cumulative one. Eight bytes per block.
 - **Consensus bit-identity gate (rule 47).** `get_tx_volume_avg` is not a
   fee-estimate convenience: it feeds `get_block_reward` inside
   `validate_miner_transaction` (`blockchain.cpp:1669`), i.e. **block
