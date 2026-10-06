@@ -267,11 +267,17 @@ impl Rule for J14 {
 /// The accept and the refusals, each one operand from it, are unit tests
 /// over a `MockChain` whose fold is synthesized (`tx_bond_tests.rs`): a
 /// shard closes when the fold reaches `(shard + 1) · W` with
-/// `W = SHARD_LENGTH` — 3 MB of real proof bytes per shard — which no
-/// driven chain in the tree reaches, and the price is a planted `r_market`
-/// row (`MockChain::with_r_market`, the one archival read the harness
-/// plants, for this reason). A compact join on a driven chain is therefore
-/// refused on this row from this commit.
+/// `W = SHARD_LENGTH` — 3 MB of real proof bytes per shard — and the price
+/// is a planted `r_market` row (`MockChain::with_r_market`, the one
+/// archival read the harness plants, for this reason). On a driven chain
+/// the operands are reached, not planted: the ingest crate's
+/// `scenario_shard::close_shards` fills a shard with real spends and lets
+/// it close, and the join scenario, the slash chain and the LMDB
+/// slash-fixture replica join it at `first_admissible_compact_join` —
+/// refused on this row one block earlier, admitted there. Those run in the
+/// ingest crate's live lane (`--ignored`; minutes of real proofs), which
+/// no CI workflow runs; the default lane's driven joins are onto the
+/// complete tree, which this row admits without a gather.
 pub(crate) struct J15;
 
 impl Rule for J15 {
