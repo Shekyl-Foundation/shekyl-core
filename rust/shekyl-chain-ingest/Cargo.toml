@@ -34,6 +34,21 @@ replay-cli = [
     "dep:shekyl-rpc-transport",
     "dep:shekyl-archival-retention",
 ]
+# harness: the driver's emission-claim assembly (`emission_assembly.rs`,
+# E6 slice 8 row 7) for the one test outside this crate that needs it —
+# `shekyl-engine-core`'s byte-identity pin against its own handler. A
+# TEST_ONLY feature (check_test_only_features.py): no feature here enables
+# it, `default` included, and the only enabler is that crate's
+# [dev-dependencies] edge. A shipping build never carries a second producer.
+harness = [
+    "dep:shekyl-archival-retention",
+    "dep:shekyl-crypto-pq",
+    "dep:shekyl-tx-builder",
+    "dep:shekyl-bulletproofs",
+    "dep:shekyl-curve-generators",
+    "dep:curve25519-dalek",
+    "dep:zeroize",
+]
 
 [[bin]]
 name = "shekyl-chain-replay"
@@ -91,6 +106,16 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
+
+# harness: what `emission_assembly.rs` signs and encodes with — the same
+# crates the [dev-dependencies] below name unconditionally for the rest of
+# the driver. Optional here, enabled by `harness` alone.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs", optional = true }
+shekyl-curve-generators = { path = "../shekyl-curve-generators", optional = true }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"], optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature

@@ -50,6 +50,14 @@
 //!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
 //!   nothing outside this crate's tests can reach it — by design: a driver
 //!   that shipped would be a second producer.
+//! - [`emission_assembly`] — the one exception to that sentence, and a
+//!   narrow one: the driver's emission-claim assembly (E6 slice 8 row 7,
+//!   Q3), compiled under `cfg(test)` **or** the `harness` feature. The
+//!   feature exists for one consumer — `shekyl-engine-core`'s byte-identity
+//!   test, which holds this assembly and the engine handler's to the same
+//!   bytes — and `check_test_only_features.py` registers it TEST_ONLY: no
+//!   feature of this crate enables it, and every enabler is a
+//!   `[dev-dependencies]` edge, so no shipping build carries it either.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
 //! actor, the grader and the replay driver live behind `feature = "pipeline"`.
@@ -99,6 +107,11 @@ mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's
+/// emission claim, assembled as the engine handler assembles it. Reachable
+/// under `harness` for the byte-identity pin alone (crate docs).
+#[cfg(any(test, feature = "harness"))]
+pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 #[cfg(feature = "pipeline")]
