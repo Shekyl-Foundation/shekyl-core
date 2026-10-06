@@ -405,9 +405,13 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   // cached once for the timestamp-rule shim.
   m_genesis_timestamp = m_db->get_block_timestamp(0);
 
-  // The hash this process computes for block 0 is this build's pin, or
-  // the daemon does not start. `reset_and_set_genesis_block` is not this
-  // check: a fakechain replay installs its own block 0 there.
+  // The hash this process has stored for block 0 is this build's pin, or
+  // a public network does not start. FAKECHAIN is the harness nettype:
+  // its fixtures name blocks with synthetic ids, and a replay installs its
+  // own block 0 through reset_and_set_genesis_block after init. Those ids
+  // are not the pin, and stuffing the pin into them would break the
+  // fixtures. The three public networks are the check.
+  if (m_nettype != FAKECHAIN)
   {
     std::uint8_t pin[32];
     const crypto::hash got = m_db->get_block_hash_from_height(0);

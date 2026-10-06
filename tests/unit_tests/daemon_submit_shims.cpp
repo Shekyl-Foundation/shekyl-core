@@ -1634,3 +1634,19 @@ TEST(daemon_submit_shims, relay_nudge_on_absent_tx_is_a_skipped_fault_without_di
     << "raced-away post-commit: the periodic loop owns whatever remains (§4.3)";
   EXPECT_EQ(protocol.calls, 0u);
 }
+
+TEST(genesis_pin, a_public_network_refuses_a_synthetic_block0)
+{
+  BlockchainAndPool bap;
+  // init takes the database. A false return still leaves it owned, and
+  // deinit deletes it.
+  EXPECT_FALSE(bap.bc.init(new SubmitTestDB(1), TESTNET, true, nullptr, 1));
+  bap.bc.deinit();
+}
+
+TEST(genesis_pin, fakechain_keeps_a_synthetic_block0)
+{
+  BlockchainAndPool bap;
+  EXPECT_TRUE(init_blockchain(bap.bc, new SubmitTestDB(1)));
+  bap.bc.deinit();
+}
