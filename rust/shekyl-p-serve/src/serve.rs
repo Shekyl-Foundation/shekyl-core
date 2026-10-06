@@ -644,6 +644,39 @@ fn read_chunk(mut body: ShardBody) -> (ShardBody, Result<Option<Vec<u8>>, Provid
     (body, chunk)
 }
 
+/// What folding one read of the body into the delivery digest produced.
+enum Folded {
+    /// Bytes inside the frame, now part of the digest: write them.
+    Bytes(Vec<u8>),
+    /// The body ended. Whether it ended at the frame's declared length is
+    /// [`FramedDigest::finish`]'s to say.
+    End,
+    /// The store failed part-way.
+    StoreFault,
+    /// The store yielded a byte past the frame's declared length. Not
+    /// folded, and not to be written.
+    PastFrame,
+}
+
+/// Fold one read of the body into the running digest.
+///
+/// The one place a served byte enters the digest. [`write_response`] calls
+/// it between the read and the write, and the `BA-T3` compositions call it
+/// in the same place, so the gate counts the fold the endpoint runs and
+/// not a copy of it: a second digest pass added here moves the gate, and
+/// one added anywhere else in `write_response` is a second call site of a
+/// function that has one.
+fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
+    match chunk {
+        Ok(Some(bytes)) => match running.absorb(&bytes) {
+            Some(()) => Folded::Bytes(bytes),
+            None => Folded::PastFrame,
+        },
+        Ok(None) => Folded::End,
+        Err(_) => Folded::StoreFault,
+    }
+}
+
 /// The countersignature over one transcript, as canonical envelope bytes.
 /// `None` when the signer refuses or returns an envelope of another
 /// length. The length is the type, so a short or long envelope cannot
@@ -807,18 +840,16 @@ async fn write_response<W: AsyncWrite + Unpin>(
             .await
             .map_err(|_| io::Error::other("shard body task"))?;
         body = returned;
-        match chunk {
-            Ok(Some(bytes)) => {
-                // Past the frame: do not write a byte the frame does not
-                // describe, and sign nothing.
-                if running.absorb(&bytes).is_none() {
-                    lookup_failures.fetch_add(1, Ordering::Relaxed);
-                    return Err(io::Error::other("shard body longer than its frame"));
-                }
-                write_bounded(stream, &bytes).await?;
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(bytes) => write_bounded(stream, &bytes).await?,
+            Folded::End => break,
+            Folded::PastFrame => {
+                // Do not write a byte the frame does not describe, and
+                // sign nothing.
+                lookup_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(io::Error::other("shard body longer than its frame"));
             }
-            Ok(None) => break,
-            Err(_) => {
+            Folded::StoreFault => {
                 // The head is already out; all that is left is to close.
                 // The counter is the only place this is visible.
                 lookup_failures.fetch_add(1, Ordering::Relaxed);
@@ -892,8 +923,8 @@ fn admit_in_memory(
 /// keeps one collection state per thread and the endpoint's steps run on
 /// tokio's blocking pool, whose idle work made per-thread counts drift by
 /// up to 14 % between runs of one input. So the gate measures the steps
-/// here: [`gate_and_open`], [`response_head`], [`read_chunk`] with the
-/// fold, [`sign_envelope`], in the order [`resolve`] and [`write_response`]
+/// here: [`gate_and_open`], [`response_head`], [`read_chunk`],
+/// [`fold_chunk`], [`sign_envelope`], in the order [`resolve`] and [`write_response`]
 /// run them. It is not a second serve path. The steps are the endpoint's
 /// own functions, and `serve_bench_seam_tests.rs` holds this composition
 /// to the live endpoint for every outcome: the same bytes, and the same
@@ -930,15 +961,10 @@ pub fn serve_one_in_memory(
     loop {
         let (returned, chunk) = read_chunk(body);
         body = returned;
-        match chunk {
-            Ok(Some(bytes)) => {
-                if running.absorb(&bytes).is_none() {
-                    return InMemoryServe::Truncated;
-                }
-                out.extend_from_slice(&bytes);
-            }
-            Ok(None) => break,
-            Err(_) => return InMemoryServe::Truncated,
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
+            Folded::End => break,
+            Folded::PastFrame | Folded::StoreFault => return InMemoryServe::Truncated,
         }
     }
     let Some(digest) = running.finish() else {
@@ -1005,9 +1031,10 @@ pub fn read_and_fold_in_memory(
     loop {
         let (returned, chunk) = read_chunk(body);
         body = returned;
-        match chunk.ok()? {
-            Some(bytes) => running.absorb(&bytes)?,
-            None => return running.finish(),
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(_) => {}
+            Folded::End => return running.finish(),
+            Folded::PastFrame | Folded::StoreFault => return None,
         }
     }
 }

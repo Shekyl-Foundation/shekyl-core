@@ -814,9 +814,9 @@ of what the first reading said):
 
 | Function | one leaf | eighth segment | full segment |
 | --- | ---: | ---: | ---: |
-| `serve_response` | 12,357,065 | 26,972,522 | 191,334,461 |
+| `serve_response` | 12,357,069 | 26,972,550 | 191,334,665 |
 | `serve_prehead` | 13,527 | — | 13,579 |
-| `serve_read_and_fold` | 26,871 | 19,395,094 | 154,999,457 |
+| `serve_read_and_fold` | 26,864 | 19,395,051 | 154,999,150 |
 | `serve_digest_alone` | 25,786 | 18,973,074 | 151,641,265 |
 
 Three readings. The fixed part of a response is the hybrid signature,

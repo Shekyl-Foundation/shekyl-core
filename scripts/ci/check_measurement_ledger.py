@@ -974,6 +974,8 @@ def parse_retired(
             f"{label}: key {key!r} is not valid" for key in sorted(set(table) - RETIRED_KEYS)
         ]
         found += [f"{label}: missing {key!r}" for key in sorted(RETIRED_KEYS - set(table))]
+        if "name" in table and not name:
+            found.append(f"{label}: name is a non-empty string")
         if name in seen:
             found.append(f"{label}: duplicate name")
         band, band_fails = parse_band(table.get("estimate"), label)
@@ -1198,6 +1200,15 @@ def run(root: Path) -> int:
         fails.extend(check_toolchain(root, data, bases))
         retired, retired_fails = parse_retired(root, data)
         fails.extend(retired_fails)
+        # One name, one state. A prediction is open as a constant or
+        # settled as a retired estimate, never both.
+        constant_names = {constant.name for constant in constants}
+        fails.extend(
+            f"retired estimate {item.name}: a constant has this name too. A "
+            "prediction is open or settled, not both"
+            for item in retired
+            if item.name in constant_names
+        )
         fails.extend(check_transitions(root, data, constants, retired))
     except GateError as exc:
         print(f"FAIL: {exc}")

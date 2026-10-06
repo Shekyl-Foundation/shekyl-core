@@ -983,6 +983,26 @@ def scenario_retired(results: Results) -> None:
             root, document(path_set(), control + retired("old", c1) + retired("old", c1)), 1,
             "two retired estimates may not share a name", "duplicate name",
         )
+        results.expect(
+            root, document(path_set(), control + retired("", c1)), 1,
+            "a retired estimate with an empty name is refused", "non-empty string",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1).replace(
+                'name = "old"', "name = 7"
+            )), 1,
+            "a retired estimate whose name is not a string is refused", "non-empty string",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess") + retired("guess", c1)), 1,
+            "OPEN OR SETTLED, NOT BOTH: one name as an estimate and as a retired estimate",
+            "open or settled, not both",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("control", c1)), 1,
+            "a retired estimate may not take a measured constant's name either",
+            "open or settled, not both",
+        )
 
 
 def selftest() -> int:
