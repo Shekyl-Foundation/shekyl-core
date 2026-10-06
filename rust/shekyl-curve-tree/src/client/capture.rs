@@ -17,7 +17,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration, OwnershipSync,
+    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
+    OwnedRegistration, OwnershipSync,
 };
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::drained_sorted;
@@ -27,6 +28,7 @@ use crate::types::{BlockHeight, Gindex, LeafEntry, OneTimePubkey, TreePosition};
 use shekyl_fcmp::tree::{
     build_layers, layer_count_for_leaves, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+use shekyl_types::TxHash;
 
 /// Width of one curve element in a capture body: a compressed point or a scalar.
 pub(crate) const CURVE_ELEMENT_BYTES: usize = 32;
@@ -254,6 +256,108 @@ impl CurveTreeClient {
     ///
     /// [`ClientError::Poisoned`]; and whatever
     /// [`Self::reconcile_captures`] refuses with, if a reconciliation ran.
+    /// Replace the outputs the wallet expects the chain to carry
+    /// ([`ExpectedOutput`]), for [`Self::ingest_block`] to register as it
+    /// sees their transactions.
+    ///
+    /// Replaced whole, not merged: the wallet derives the set on every pass
+    /// from its records of unconfirmed transactions, so an expectation ends
+    /// when its record does. Registrations already made from an earlier set
+    /// are not touched — they are owned outputs now, held in the registry
+    /// like any other. An expectation for a transaction the client has
+    /// *already* ingested is not resolved here: the client keeps no
+    /// transaction hashes for ingested leaves, and resolving by key alone
+    /// would reopen the copied-key case this type exists to close. Such an
+    /// output is registered by its pair, later, when the wallet learns its
+    /// gindex (§11.13 names that window).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`].
+    pub fn set_expected_outputs(&mut self, expected: &[ExpectedOutput]) -> Result<(), ClientError> {
+        self.ensure_live()?;
+        let mut by_tx: BTreeMap<TxHash, Vec<(u64, OneTimePubkey)>> = BTreeMap::new();
+        for output in expected {
+            by_tx
+                .entry(output.tx_hash)
+                .or_default()
+                .push((output.vout, output.output_key));
+        }
+        self.expected_outputs = by_tx;
+        Ok(())
+    }
+
+    /// How many expected outputs this client has seen arrive under a
+    /// different key than the wallet named (none of them registered), since
+    /// it was opened.
+    #[must_use]
+    pub fn expected_output_mismatches(&self) -> u64 {
+        self.expected_output_mismatches
+    }
+
+    /// The expected outputs this block carries, as the pairs to register.
+    ///
+    /// Called by [`Self::ingest_block`] once the block's gindexes are
+    /// assigned and before anything is committed. A transaction is looked
+    /// up by its hash; each expected `vout` of it is confirmed against the
+    /// key the transaction actually carries there, and a confirmed output
+    /// that became a leaf is returned with the gindex it was just given.
+    /// Every `vout` consumes a gindex whether or not it becomes a leaf
+    /// (`collect_block_leaves`), which is why the gindex is counted here
+    /// rather than read off `new_leaves`.
+    ///
+    /// A key that does not match is counted and skipped, never an error:
+    /// the hash is the block feed's and only the key is the wallet's own, so
+    /// a feed that mislabels a transaction can cost the wallet an early
+    /// registration and nothing else. A `vout` the transaction does not
+    /// have is treated the same way.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::TxHashMissing`] when expectations are live and a
+    /// transaction arrives without its hash.
+    pub(super) fn match_expected_outputs(
+        &mut self,
+        block: &BlockLeaves<'_>,
+        new_leaves: &[LeafEntry],
+    ) -> Result<Vec<(Gindex, OneTimePubkey)>, ClientError> {
+        let mut matched = Vec::new();
+        if self.expected_outputs.is_empty() {
+            return Ok(matched);
+        }
+        let mut gindex = self.next_gindex;
+        for (tx_index, tx) in block.txs.iter().enumerate() {
+            let first_gindex = gindex;
+            gindex += u64::try_from(tx.outputs.len()).expect("a transaction's vout count fits u64");
+            let Some(tx_hash) = tx.tx_hash else {
+                return Err(ClientError::TxHashMissing {
+                    height: block.height,
+                    tx_index,
+                });
+            };
+            let Some(expected) = self.expected_outputs.get(&tx_hash) else {
+                continue;
+            };
+            for (vout, output_key) in expected {
+                let confirmed = usize::try_from(*vout)
+                    .ok()
+                    .and_then(|i| tx.outputs.get(i))
+                    .is_some_and(|raw| raw.output_key == *output_key);
+                if !confirmed {
+                    self.expected_output_mismatches += 1;
+                    continue;
+                }
+                let gindex = Gindex::from_raw(first_gindex + vout);
+                // Only a leaf can be captured; an output that consumed an
+                // index without becoming one has no path to prepare.
+                if new_leaves.iter().any(|leaf| leaf.gindex == gindex) {
+                    matched.push((gindex, *output_key));
+                }
+            }
+        }
+        Ok(matched)
+    }
+
     pub fn sync_owned(
         &mut self,
         outputs: &[(Gindex, OneTimePubkey)],

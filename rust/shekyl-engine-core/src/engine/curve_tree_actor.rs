@@ -350,6 +350,7 @@ impl Message<IngestBlock> for CurveTreeActor {
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
+                tx_hash: Some(tx.tx_hash),
                 leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })
@@ -551,6 +552,28 @@ impl Message<SyncOwned> for CurveTreeActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.client.sync_owned(&msg.outputs)
+    }
+}
+
+/// Replace the outputs the wallet expects the chain to carry — those of
+/// transactions it built and has not yet seen mined — for the ingest to
+/// register as it assigns their gindexes
+/// ([`CurveTreeClient::set_expected_outputs`]). The refresh sends the set
+/// on every pass, derived from the persona's sealed pending records.
+pub(crate) struct SetExpectedOutputs {
+    /// `(tx_hash, vout, O)` per output.
+    pub(crate) expected: Vec<shekyl_curve_tree::ExpectedOutput>,
+}
+
+impl Message<SetExpectedOutputs> for CurveTreeActor {
+    type Reply = Result<(), ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: SetExpectedOutputs,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client.set_expected_outputs(&msg.expected)
     }
 }
 
@@ -993,6 +1016,18 @@ impl CurveTreeHandle {
     ) -> Result<Vec<AssembledPath>, CurveTreeHandleError> {
         self.actor_ref()
             .ask(AssembleTx { reference, inputs })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Replace the outputs the wallet expects the chain to carry
+    /// ([`SetExpectedOutputs`]).
+    pub(crate) async fn set_expected_outputs(
+        &self,
+        expected: Vec<shekyl_curve_tree::ExpectedOutput>,
+    ) -> Result<(), CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(SetExpectedOutputs { expected })
             .await
             .map_err(collapse_send_error)
     }

@@ -94,6 +94,10 @@ pub struct OwnedTxLeaves {
     /// Whether this is the block's coinbase (miner) transaction. Drives the
     /// per-target maturity offset in the daemon's drain order.
     pub is_miner: bool,
+    /// The transaction's hash: the block's listed hash for a body, computed
+    /// for the coinbase. The tree matches the outputs the wallet expects
+    /// from transactions it built against this (`engine/ownership.rs`).
+    pub tx_hash: shekyl_types::TxHash,
     /// The `tx_extra 0x07` curve-tree leaf-hash blob, if the tag is present.
     /// Carried verbatim; the client validates and slices it at ingest.
     pub leaf_entry_blob: Option<Vec<u8>>,

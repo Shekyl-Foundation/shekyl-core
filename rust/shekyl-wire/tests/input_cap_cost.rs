@@ -293,6 +293,7 @@ fn tree_with(
         };
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];

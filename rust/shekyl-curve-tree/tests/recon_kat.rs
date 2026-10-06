@@ -291,6 +291,7 @@ fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
 fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
     let txs = [TxLeafInputs {
         is_miner: true,
+        tx_hash: None,
         leaf_entry_blob: Some(&blk.blob),
         outputs: &blk.outputs,
     }];
@@ -323,6 +324,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
         for blk in &blocks {
             let txs = [TxLeafInputs {
                 is_miner: true,
+                tx_hash: None,
                 leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
@@ -401,6 +403,7 @@ fn client_path_matches_recon_path() {
         for (blk, recon_root) in client_blocks.iter().zip(&recon) {
             let txs = [TxLeafInputs {
                 is_miner: true,
+                tx_hash: None,
                 leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];

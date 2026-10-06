@@ -75,6 +75,7 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
@@ -202,11 +203,13 @@ fn store_root_mixed_maturity_drain_order() {
     let txs = [
         TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(&blob_cb),
             outputs: &[coinbase],
         },
         TxLeafInputs {
             is_miner: false,
+            tx_hash: None,
             leaf_entry_blob: Some(&blob_reg),
             outputs: &[regular],
         },
@@ -226,6 +229,7 @@ fn store_root_mixed_maturity_drain_order() {
         let (later, blob_later) = fixture_output(u8::try_from(height + 1).expect("slot fits u8"));
         let txs_cb = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(&blob_later),
             outputs: &[later],
         }];

@@ -95,15 +95,25 @@ pub(crate) fn decode_block_leaves(
     scannable: &ScannableBlock,
 ) -> Result<Vec<OwnedTxLeaves>, DecodeError> {
     let mut txs = Vec::with_capacity(1 + scannable.transactions.len());
-    txs.push(decode_tx(&scannable.block.miner_transaction, true)?);
-    for tx in &scannable.transactions {
-        txs.push(decode_tx(tx, false)?);
+    // The coinbase carries no listed hash; the bodies pair positionally
+    // with the block's list (the scanner enforces the lengths agree).
+    let miner = &scannable.block.miner_transaction;
+    txs.push(decode_tx(miner, miner.hash(), true)?);
+    for (tx, tx_hash) in scannable
+        .transactions
+        .iter()
+        .zip(&scannable.block.transaction_hashes)
+    {
+        txs.push(decode_tx(tx, *tx_hash, false)?);
     }
     Ok(txs)
 }
 
-/// Decode one transaction's leaf inputs in `vout` order.
-fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeError> {
+fn decode_tx(
+    tx: &Transaction,
+    tx_hash: shekyl_types::TxHash,
+    is_miner: bool,
+) -> Result<OwnedTxLeaves, DecodeError> {
     let prefix = &tx.prefix;
 
     // X7: bound the per-tx leaf buffer by the consensus output ceiling
@@ -148,6 +158,7 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
 
     Ok(OwnedTxLeaves {
         is_miner,
+        tx_hash,
         leaf_entry_blob,
         outputs,
     })
@@ -281,7 +292,7 @@ mod tests {
                 }
 
                 let tx = null_tx(outputs, commitments.clone(), Some(blob.clone()));
-                let decoded = decode_tx(&tx, true).expect("coinbase decodes");
+                let decoded = decode_tx(&tx, tx.hash(), true).expect("coinbase decodes");
 
                 assert!(decoded.is_miner, "coinbase is_miner");
                 assert_eq!(
@@ -345,7 +356,7 @@ mod tests {
         // decoded commitment is None (the C++ skip (b)).
         let outputs = vec![tagged_output([4u8; 32]), tagged_output([5u8; 32])];
         let tx = null_tx(outputs, vec![[9u8; 32]], None);
-        let decoded = decode_tx(&tx, false).expect("decodes");
+        let decoded = decode_tx(&tx, tx.hash(), false).expect("decodes");
         assert_eq!(
             decoded.outputs[0].commitment,
             Some(shekyl_curve_tree::CommitmentBytes::from_bytes([9u8; 32]))
@@ -356,7 +367,7 @@ mod tests {
     #[test]
     fn malformed_or_absent_extra_yields_no_blob() {
         let tx = null_tx(vec![tagged_output([6u8; 32])], vec![[1u8; 32]], None);
-        let decoded = decode_tx(&tx, true).expect("decodes");
+        let decoded = decode_tx(&tx, tx.hash(), true).expect("decodes");
         assert_eq!(decoded.leaf_entry_blob, None);
     }
 
@@ -370,7 +381,7 @@ mod tests {
         let outputs: Vec<Output> = (0..n).map(|_| tagged_output([0u8; 32])).collect();
         let tx = null_tx(outputs, vec![[0u8; 32]; n], None);
         assert_eq!(
-            decode_tx(&tx, false),
+            decode_tx(&tx, tx.hash(), false),
             Err(DecodeError::ExcessiveOutputs {
                 is_miner: false,
                 count: n

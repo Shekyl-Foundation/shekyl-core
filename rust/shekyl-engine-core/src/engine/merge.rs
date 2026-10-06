@@ -91,7 +91,7 @@ use crate::{
         curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError},
         curve_tree_decode,
         local_ledger::LocalLedger,
-        ownership::{curve_tree_sync_owned, OwnedOutput},
+        ownership::{curve_tree_offer, OwnedSet},
         reorg_finality::{overlap_disagreed, overlap_record_ended, rollback_past_finality},
         traits::{DaemonEngine, LedgerEngine},
         CurveTreeIngestFault, Engine, EngineSignerKind, RefreshError,
@@ -363,7 +363,7 @@ impl<
             &self.daemon,
             result,
             &producer_leaves,
-            &owned.outputs,
+            &owned,
         )
         .await
     }
@@ -407,7 +407,7 @@ impl<
             &self.daemon,
             result,
             &producer_leaves,
-            &owned.outputs,
+            &owned,
         )
         .await
     }
@@ -454,7 +454,7 @@ pub(super) async fn curve_tree_ingest_scan_result_with_respawn<D: super::traits:
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-    owned: &[OwnedOutput],
+    owned: &OwnedSet,
 ) -> Result<OwnershipSync, RefreshError> {
     match curve_tree_ingest_scan_result(curve_tree, daemon, result, producer_leaves, owned).await {
         Err(RefreshError::CurveTreeIngest { fault }) if fault.recoverable_by_respawn() => {
@@ -593,7 +593,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     daemon: &D,
     result: &ScanResult,
     producer_leaves: &BTreeMap<BlockHeight, Arc<Vec<OwnedTxLeaves>>>,
-    owned: &[OwnedOutput],
+    owned: &OwnedSet,
 ) -> Result<OwnershipSync, RefreshError> {
     // Range well-formedness (O5/O2). This pre-pass runs *before* the ledger
     // merge's own `end >= start` check (`apply_scan_result_to_state`), so guard
@@ -664,7 +664,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
 
     // Ownership: after any rollback, before the first fold (`ownership.rs`).
     // Returned, because what it cost is the only evidence of when it ran.
-    let ownership = curve_tree_sync_owned(curve_tree, owned).await?;
+    let ownership = curve_tree_offer(curve_tree, owned).await?;
 
     loop {
         let tip = curve_tree
