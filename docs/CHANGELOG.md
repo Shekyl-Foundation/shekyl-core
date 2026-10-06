@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
+
+- The Rust validator now refuses a JoinMarket whose shard set names a
+  shard the chain has not closed, one closed fewer than the reorg cap
+  of blocks before the admitting block's parent, or one the last settled
+  epoch did not price — and then judges the priced, aged shards for
+  viability through the retention crate's admission check, as the C++
+  does. A complete-tree join gathers nothing and is unaffected. Until this
+  change the Rust side admitted a compact join onto any shard id, and the
+  C++ still does for an unclosed one (it has no closure step and scores a
+  missing price as zero), so the Rust refuses a strict superset of what
+  the C++ refuses; the difference is recorded for cutover day beside
+  `DEL-008` (`DAEMON_REDB_STORE.md` §12), not patched into the C++
+  (`CHAIN_RULES_SLICE_8.md` §5 row 6). An unclosed shard is not available
+  to bond; there is an epoch to claim one once it is.
+- The captured `emission-claim` chain predates this rule: its market bond
+  at height 98 joins a shard no block had closed. The replay connects it
+  through 97, refuses 98 on CEN-J15 as recorded, and compares nothing at
+  its tip (`shekyl-chain-ingest` `vectors_tests::PREDATES`); the chain is
+  a witness for what was true at capture, not for this rule, until it is
+  regenerated over a filled, closed and priced shard.
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
