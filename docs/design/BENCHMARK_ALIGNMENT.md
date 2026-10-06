@@ -609,6 +609,16 @@ signs; a key that is not ready is a 404 with no body read; a body shorter
 or longer than its frame is truncated and not signed; the pinned v3 KAT and
 the fetch client's against-serve test pass unchanged.
 
+*Built.* `SF-D8` carries the order and the invariant
+(`docs/design/ARCHIVAL_SHARD_FETCH.md`, "Response carrier", amended
+2026-10-06) and the decision log carries the ruling (`2026-10-06 — The
+serve path reads a shard once and signs last`). `shekyl-p-serve` serves
+in that order, `PassKey::ready` is the pre-flight, `late_sign_failure_count`
+is the separate counter, and the tests `SF-D8` names enforce the
+invariant. The BA-T3 before-and-after is in the measurement ledger's
+`archival-serve-fetch` entry for the change. The three `estimated` rows
+above stay estimates until BA-T5 runs on the floor with S as an arm.
+
 *Carried beyond this lane.* The invariant is general: no unpaid work
 proportional to the payload before the first byte. Daemon RPC, Levin block
 and transaction requests, and the fetch client's handling of large

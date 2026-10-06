@@ -5940,3 +5940,76 @@ signature at all are Slice C's Round 0
   domain.
 
 ---
+
+## 2026-10-06 — The serve path reads a shard once and signs last: `P` does no work that scales with shard size until the requester has received the bytes that work is for
+
+**Ruled by the maintainer, 2026-10-06, as an abuse mitigation**
+(`BENCHMARK_ALIGNMENT.md` `BA-Q3`, option S). The 2026-10-04 entry's item 4
+had `P` read the shard once to compute the delivery digest `D`, sign, and
+then read it again to send, holding no more than a chunk. The floor-device
+record of 2026-10-05 (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`,
+`BA-G1`) put what that costs at about 78 ms of CPU per response, of which
+one digest pass is 23.9 ms — and all of it was spent before the first
+response byte, on a request whose sender had paid nothing yet. A requester
+that opened a connection, sent one head and left cost `P` a read and a hash
+of a 3.33 MB shard and one hybrid signature, every time.
+
+**The rule.** `P` does no work that scales with shard size until the
+requester has received the bytes that work is for. Before the 200 head `P`
+does constant work only: parsing, the anchor gate, opening the shard — which
+fixes the `RF-D4` frame and `content-length` — and a signer pre-flight. Each
+read, hash and write after the head is paid for by the requester taking the
+bytes. The signature comes last, over the digest of exactly the bytes
+written, and only when the whole frame has been written. A requester that
+stops reading stalls `P` within one chunk; one that disconnects stops `P`
+after about one socket buffer of work; `P` signs for neither.
+
+**What moves.**
+
+1. **The order** becomes parse, gate, open, pre-flight, head, stream-and-fold,
+   sign, envelope. The second read and the second digest pass are gone, and
+   with them the comparison of the two digests: there is one digest, of
+   the bytes on the wire.
+2. **`PassKey::ready(shard_id, anchor_height)`** is the pre-flight: may this
+   key sign a pass for this shard at this anchor? It has no default
+   implementation, so every key answers it on purpose. The host's
+   placeholder, `NoResidentKey`, refuses, so a persona without its key
+   answers the identical 404 before any body byte is read — the same
+   lookup an unknown shard costs. After `ready` succeeds, `sign_pass` on
+   the transcript it was asked about fails only on a cryptographic fault.
+3. **Two counters, not one.** A pre-flight refusal stays in
+   `sign_failure_count`, where the keyless persona has always been visible.
+   A signing fault after the body is `late_sign_failure_count`, separate,
+   because its response is different: a truncated 200, not a 404.
+
+**Costs the ruling accepts.** A signing fault after the body yields a
+truncated 200 rather than a 404 — rare, cryptographic, counted. A store
+that changes a shard under a response is signed for the bytes it sent
+rather than withheld; the requester's content verification against `R_k`
+(`SF-D6`) refuses such a response, and `BA-G2`'s priority rises for it. A
+slow reader holding one of the in-flight permits to the stall timeout
+costs `P` a permit, not CPU; that is `BA-Q4`'s question, not this one.
+
+**What the digest still establishes.** Unchanged from the 2026-10-04 entry:
+the signature commits to the bytes delivered under this request's nonce,
+and does not show that `P` stores them. The audit property stated in
+`SF-D8` — a recorded pass is checkable by any later holder of the leaves —
+is unchanged, since `D` is the same function of the same bytes.
+
+**Superseded by this entry.** The 2026-10-04 entry's item 4 ("`P` reads the
+body once to compute `D`, signs, then reads it again…"), and the `SF-D8`
+response-carrier text and `ARCHIVAL_SERVING_ROUTE.md` sentence that
+restated it, both amended today.
+
+**Not decided here.** A faster digest (TurboSHAKE or KangarooTwelve) is a
+wire and domain-registry change, not part of this. The slow-reader permit
+cost is `BA-Q4`. Whether the pre-flight stays mandatory once `SH-2` wires
+the resident key is `SH-2`'s to say.
+
+**Vectors unchanged under this entry.** No wire byte moves: the request
+header, the transcript, the frame, the envelope and `D`'s preimage are
+what they were, so `attestation_pass_countersignature_v3_pinned.json` and
+the `attestation_wire_kat.rs` pins stand, and the fetch client's
+against-serve test passes without change.
+
+---

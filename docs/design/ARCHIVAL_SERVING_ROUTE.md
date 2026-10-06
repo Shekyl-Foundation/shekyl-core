@@ -111,10 +111,12 @@ the tests are the spec.
   `content-length: 0`.
 - On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`;
   the body is the `RF-D4` frame, then the countersignature as its last
-  bytes. `P` reads the shard twice — once to digest and sign, once to
-  send — and appends the signature only if the bytes it sent hash to the
-  digest it signed. A body that fails mid-stream, or that differs from
-  the signed read, ends without one.
+  bytes. `P` reads the shard once: it streams the body while folding
+  the bytes it writes into the delivery digest, then signs that digest
+  and appends the envelope. Nothing that scales with the shard happens
+  before the head (`SF-D8`, amended 2026-10-06). A body that fails
+  mid-stream, or that is not the length its frame declares, ends
+  without an envelope.
 - **One response, then close.** `P` shuts its write half as soon as
   the last body byte is written (`close_gracefully`), so the client's
   EOF is behind the body, not behind a keep-alive. The client reads

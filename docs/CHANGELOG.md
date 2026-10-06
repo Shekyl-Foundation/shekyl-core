@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Archival serving: `P` reads a shard once and signs last (`SF-D8` amended 2026-10-06, `BA-Q3` option S). Nothing that scales with the shard happens before the 200 head: parse, gate, open, a `PassKey::ready` pre-flight (which the keyless placeholder refuses, so a persona without its key answers 404 at the cost of an unknown-shard lookup), then stream-and-fold, sign, envelope. A requester that stops taking bytes stops `P` within one chunk and is never signed for. A signing fault after the body is a truncated 200 counted under `late_sign_failure_count`; a store change under a response is signed for the bytes sent and refused by the client's content check (`BA-G2`).
 - Benchmarks: `BA-T3` gates the archival serve path per PR as instruction counts (`shekyl-p-serve::serve_response_iai`, one leaf to a full segment); the measurement ledger gains an `estimated` status, seeded with option S's three predicted figures, which only a landed capture can turn into measurements (`BENCHMARK_ALIGNMENT.md` `BA-Q3`, ruled 2026-10-06).
 ## [3.1.0-alpha.9] - 2026-10-05
 

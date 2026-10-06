@@ -1294,8 +1294,8 @@ regenerator with the decision-log entry of 2026-10-04. The digest has
 its own independent pins (computed outside the crate) in
 `tests/attestation_wire_kat.rs`. The `P`-side gate and header parse are (a)'s.
 
-**Response carrier — RULED 2026-09-13; AMENDED 2026-10-04; LANDED
-(`SIGNATURE_ENVELOPE_LEN` on both ends).** `RF-D4`'s
+**Response carrier — RULED 2026-09-13; AMENDED 2026-10-04 and
+2026-10-06; LANDED (`SIGNATURE_ENVELOPE_LEN` on both ends).** `RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
 the pre-(a) HTTP response carried no countersignature, so the signature
 needed a home that is neither the inner frame nor a header:
@@ -1306,21 +1306,54 @@ needed a home that is neither the inner frame nor a header:
   from `shekyl-crypto-pq`) as the response's **last** bytes.
 - **The envelope closes the body because the signature covers it.**
   `D` is a digest of every byte ahead of the envelope, so the signature
-  is the last thing `P` can send. `P` serves in two passes over the
-  shard: it reads the body once to compute `D`, signs, then reads it
-  again and streams it, hashing what it writes. It appends the signature
-  only if the bytes it sent hash to the `D` it signed; otherwise the
-  response ends short, with no signature, and counts as a lookup
-  failure. No pass holds more than one chunk of the shard, so the
-  in-flight ceiling keeps its memory bound. `P` signs before the first
-  byte goes out, so a signing failure remains the identical 404. A
-  response that fails or stalls mid-body yields no signature. The
-  client refuses a response whose recomputed `D` does not verify
-  (`BadCountersignature`); a signature placed anywhere but last is
-  refused as that or as a malformed envelope. Tests:
+  is the last thing `P` can send. **One pass, signed last (AMENDED
+  2026-10-06, `BENCHMARK_ALIGNMENT.md` `BA-Q3`, as an abuse
+  mitigation).** `P` serves in this order: parse the head and run the
+  anchor gate; open the shard, which fixes its `RF-D4` frame header and
+  with it `content-length`; ask the key whether it will sign for this
+  shard at this anchor (`PassKey::ready`, a pre-flight with no default
+  implementation, which a host without a resident key refuses); write
+  the 200 head; stream the body one chunk at a time, folding exactly
+  the bytes it writes into the delivery digest and refusing a byte past
+  the frame; then sign the transcript over the digest of the bytes it
+  sent, and write the envelope. The stated property, which the tests
+  enforce: **`P` does no work that scales with shard size until the
+  requester has received the bytes that work is for.** Before the head
+  `P` does constant work only — parsing, the gate, opening the shard's
+  header and the pre-flight — so a key that is not ready, an unknown
+  shard and an out-of-window anchor cost `P` the same lookup and render
+  the identical 404. Each read, hash and write after the head is paid
+  for by the requester taking the bytes; a requester that stops
+  reading stalls `P` within one chunk, a requester that disconnects
+  stops it after about one socket buffer, and in neither case does `P`
+  sign. The signature is released only when every byte of the frame
+  has been written and the fold equals the frame's declared length; a
+  body the store ends short or runs long, or fails to read mid-stream,
+  ends the response without an envelope and counts as a lookup
+  failure. No step holds more than one chunk, so the in-flight ceiling
+  keeps its memory bound.
+  *Costs the amendment accepts.* A signing fault after the body — the
+  key said it was ready and then failed — is a truncated 200, not a
+  404, since the head is already out; it is counted apart
+  (`late_sign_failure_count`) from a pre-flight refusal
+  (`sign_failure_count`), and it is a cryptographic fault, not a
+  policy outcome. And a store that changes a shard under a response is
+  now signed for the bytes it sent rather than withheld, because the
+  digest is of those bytes; the requester's content verification
+  against `R_k` (`SF-D6`) is what refuses such a response, and this is
+  what raises `BA-G2`'s priority. A slow reader holding one of the
+  in-flight permits to the stall timeout costs `P` a permit, not CPU,
+  and is `BA-Q4`'s. The client refuses a response whose recomputed `D`
+  does not verify (`BadCountersignature`); a signature placed anywhere
+  but last is refused as that or as a malformed envelope. Tests:
   `the_countersignature_is_released_only_after_the_whole_frame`,
-  `a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature`,
-  `a_shard_that_vanishes_between_the_two_reads_is_the_identical_404`
+  `a_requester_that_stops_taking_bytes_stops_p_within_one_chunk_and_nothing_is_signed`,
+  `a_requester_that_disconnects_after_the_head_is_never_signed_for`,
+  `a_key_that_is_not_ready_is_the_shared_404_with_no_body_read`,
+  `a_body_shorter_than_its_frame_ends_without_a_signature`,
+  `a_body_longer_than_its_frame_ends_at_the_frame_without_a_signature`,
+  `a_store_fault_after_the_head_ends_the_response_unsigned`,
+  `a_key_that_fails_after_the_body_yields_a_truncated_200_counted_apart`
   (`shekyl-p-serve`);
   `garbage_with_a_valid_signature_appended_is_refused`,
   `a_signature_sent_ahead_of_the_body_is_refused` (`shekyl-p-fetch`).
