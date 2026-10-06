@@ -23,6 +23,7 @@
 #include "gtest/gtest.h"
 
 #include "net/levin_base.h"
+#include "p2p/seam_board.h"
 #include "p2p/seam_endpoint.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -218,6 +219,56 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
   threads.join_all();
   shekyl_seam_bind(nullptr, nullptr, nullptr);
   shekyl_executor_release(handle);
+}
+
+// The dial cap reads `shekyl_seam_board_count`. This is that integer, and
+// the one-row snapshot `release_outbound` walks, on a dial whose handshake
+// has not finished. `try_to_connect_and_handshake_with_new_peer` is private
+// and the board is the process hub, so the comparison itself is not driven
+// from a second fake board.
+TEST(seam_endpoint, an_unestablished_clearnet_dial_counts_before_the_handshake)
+{
+  commands cmds;
+  pool ex;
+  ex.config.set_handler(&cmds, nullptr);
+  bind_harness(ex);
+
+  boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work(ex.io.get_executor());
+  boost::thread runner([&ex] { ex.io.run(); });
+
+  EXPECT_TRUE(shekyl::seam_board_snapshot().empty());
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND), 0u);
+
+  const std::uint64_t id = open_clearnet(0);
+  ASSERT_NE(id, 0u);
+
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND), 1u);
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_INBOUND), 0u);
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_TOR, SHEKYL_DIRECTION_OUTBOUND), 0u);
+  EXPECT_EQ(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_OUTBOUND), 1u);
+
+  const auto before = shekyl::seam_board_snapshot();
+  ASSERT_EQ(before.size(), 1u);
+  EXPECT_EQ(before[0].id, id);
+  EXPECT_EQ(before[0].established, std::uint8_t{0});
+  EXPECT_EQ(before[0].endpoint.connector, static_cast<std::uint8_t>(SHEKYL_CONNECTOR_CLEARNET));
+  EXPECT_EQ(before[0].endpoint.direction, static_cast<std::uint8_t>(SHEKYL_DIRECTION_OUTBOUND));
+
+  shekyl_zone_session_established(id);
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND), 1u);
+  const auto after = shekyl::seam_board_snapshot();
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_EQ(after[0].id, id);
+  EXPECT_EQ(after[0].established, std::uint8_t{1});
+
+  shekyl_seam_close(id);
+  EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND), 0u);
+  EXPECT_TRUE(shekyl::seam_board_snapshot().empty());
+
+  wait_until_links_close(ex);
+  ex.io.stop();
+  runner.join();
+  shekyl_seam_bind(nullptr, nullptr, nullptr);
 }
 
 TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)

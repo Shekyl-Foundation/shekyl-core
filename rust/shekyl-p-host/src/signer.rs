@@ -46,8 +46,9 @@
 //! resident shape). This crate holds an `Arc<dyn PassKey>` and calls it
 //! once per served shard from the blocking pool; it never sees the secret.
 //! Until the resident key is wired, the caller passes [`NoResidentKey`] and
-//! the endpoint answers every request with the identical 404 — up,
-//! counted, and never serving an unsigned body.
+//! the endpoint stays up and counted. It cannot produce a pass: a valid
+//! request for a held shard is answered with the bare 503, before any
+//! shard byte is sent.
 
 use std::sync::Arc;
 
@@ -59,18 +60,15 @@ use crate::daemon_tip::DaemonTipCache;
 
 /// The key a host binds before its resident attestation key is wired.
 ///
-/// Refuses every transcript with a fixed reason, so a persona whose serving
-/// stack is up but whose key is not answers 404 (counted under
-/// `sign_failure_count`) rather than serving bytes a daemon cannot verify.
-/// This is the SH-2 placeholder made a type: there is no unsigned code path
-/// to fall back to, only a key that says no.
+/// Says it cannot sign, and refuses every transcript with a fixed reason
+/// if asked anyway. This is the SH-2 placeholder made a type: a key that
+/// says no.
 ///
-/// The refusal comes late, and that is expected: the transcript covers a
-/// digest of the body, so the serving loop reads and hashes the whole shard
-/// before it asks for a signature. A keyless persona therefore does that
-/// work for every servable request and then answers 404. A rising
-/// `sign_failure_count` with no `lookup_failure_count` is this state, not a
-/// store fault.
+/// The serve loop asks [`PassKey::can_sign`] before the first response
+/// byte, so a keyless persona answers a valid request for a held shard with
+/// the bare 503 and sends no shard. It is counted under
+/// `sign_failure_count`: a rising `sign_failure_count` with no
+/// `lookup_failure_count` is this state, not a store fault.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoResidentKey;
 
@@ -80,6 +78,10 @@ impl NoResidentKey {
 }
 
 impl PassKey for NoResidentKey {
+    fn can_sign(&self) -> bool {
+        false
+    }
+
     fn sign_pass(
         &self,
         _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -108,6 +110,13 @@ impl HostSigner {
 }
 
 impl PassKey for HostSigner {
+    /// The wrapped key's answer. Forwarded, not defaulted: the trait's
+    /// default is `true`, which would have a keyless host send shards it
+    /// cannot countersign.
+    fn can_sign(&self) -> bool {
+        self.key.can_sign()
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -123,7 +132,7 @@ impl PassSigner for HostSigner {
     /// `None` when there is no usable tip — nothing stamped yet, the daemon
     /// stopped following the chain, or the last stamp has aged out. All three
     /// take the path the unreadable store took before them: the serve loop
-    /// renders the identical 404 and counts a lookup failure, so a persona
+    /// renders the 503 and counts a lookup failure, so a persona
     /// that has lost sight of the chain shows up in `ServeCounters` rather
     /// than refusing every anchor behind an indistinguishable sentinel.
     fn own_height(&self) -> Option<BlockHeight> {
