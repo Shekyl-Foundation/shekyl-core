@@ -1251,14 +1251,22 @@ mod s6_self_cert {
 mod emission_claim_assembly {
     use super::*;
 
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    use shekyl_chain_ingest::emission_assembly::{assemble_emission_claim, ClaimTerms};
+    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+    use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
+    use shekyl_tx_builder::{LeafEntry, SpendInput};
     use shekyl_types::BlockHeight;
     use shekyl_wire::{Ct, Transaction};
+    use zeroize::Zeroizing;
 
-    use crate::engine::backing_set::{BackingSet, MembershipPath};
+    use crate::engine::backing_set::{BackingSet, ClaimOperands, MembershipPath};
     use crate::engine::bond_assembly::SpentRecordsDurablyPruned;
     use crate::engine::emission_claim::test_fixtures::{snapshot, source_with};
+    use crate::engine::emission_claim::{
+        assemble_claims, derive_claimable_epochs, EMISSION_CLAIMS_SIZE_BUDGET,
+    };
     use crate::engine::emission_source::EmissionClaimSource;
+    use crate::engine::stake_engine::helpers::derive_spend_parts;
     use crate::engine::synthetic_tree::consistent_synthetic_path;
 
     /// The known-claimable source shape shared with the `emission_claim`
@@ -1267,6 +1275,110 @@ mod emission_claim_assembly {
     /// `test_fixtures` module doc.
     fn claimable_source() -> EmissionClaimSource {
         source_with(10, vec![], vec![snapshot(4), snapshot(5)])
+    }
+
+    /// The differential's shape, built once for both tests here: two real
+    /// P-paid outputs in ONE leaf chunk — the backing (rung-2 lineage) and
+    /// the fee spend (rung 3) — under one depth-consistent single-path
+    /// synthetic tree shared by both proofs, plus the fee and the
+    /// claimable source. [`Self::operands`] seals it the only way there
+    /// is; the byte-identity test reads the same records through the
+    /// driver's seam instead.
+    struct DifferentialShape {
+        keys: ArchivalPKeys,
+        source: EmissionClaimSource,
+        backing_record: PFundingOutputRecord,
+        fee_record: PFundingOutputRecord,
+        leaf_chunk: Vec<LeafEntry>,
+        c1_layers: Vec<Vec<[u8; 32]>>,
+        c2_layers: Vec<Vec<[u8; 32]>>,
+        tree_ctx: TreeContext,
+        fee: u64,
+    }
+
+    impl DifferentialShape {
+        fn build() -> Self {
+            let keys = derive_bundle(0);
+            let (backing_record, backing_leaf) =
+                constructed_record(&keys, 11, 5, 750_000, 0, MintLineageOutput::BondPostChange);
+            let (fee_record, fee_leaf) =
+                constructed_record(&keys, 22, 6, 90_000, 1, MintLineageOutput::ExternalTransfer);
+            let leaf_chunk = vec![backing_leaf, fee_leaf];
+            // Depth 2 — the wire encoder's spendable minimum (`fcmp_layers >=
+            // 2`); the synthetic single-path tree is depth-consistent at any
+            // depth.
+            let depth = 2u8;
+            let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
+            Self {
+                keys,
+                source: claimable_source(),
+                backing_record,
+                fee_record,
+                leaf_chunk,
+                c1_layers,
+                c2_layers,
+                tree_ctx: TreeContext {
+                    reference_block: BlockHash::from_bytes([7u8; 32]),
+                    tree_root,
+                    tree_depth: depth,
+                },
+                fee: 10_000,
+            }
+        }
+
+        /// Mint the sealed operands through the ONLY route there is:
+        /// designate the backing at the source's tip, sweep the fee inputs
+        /// against it (the Q11 exclusion and the item-6 same-tip check
+        /// fire in the mint, exercised by the `backing_set.rs` KATs), then
+        /// zip the assembled paths in. Both leaves share the single
+        /// synthetic path, so every witness record gets the same path
+        /// data.
+        fn operands(&self) -> ClaimOperands {
+            let tip = self.source.chain_height.to_raw() - 1;
+            let records = [self.backing_record.clone(), self.fee_record.clone()];
+            let swept = BackingSet::from_spendable(
+                std::slice::from_ref(&self.backing_record),
+                PSlot::from_raw(0),
+                BlockHeight::from_raw(tip),
+                BlockHeight::from_raw(0),
+            )
+            .designate_backing()
+            .expect("the rung-2 record designates")
+            .fee_sweep(
+                self.source.clone(),
+                &SpentRecordsDurablyPruned::for_test(),
+                &records,
+                PSlot::from_raw(0),
+                &Default::default(),
+                AtomicUnits::from_raw(self.fee),
+            )
+            .expect("the fee sweep mints the sealed witness");
+            let paths: Vec<MembershipPath> = swept
+                .path_records()
+                .map(|_| MembershipPath {
+                    leaf_chunk: self.leaf_chunk.clone(),
+                    c1_layers: self.c1_layers.clone(),
+                    c2_layers: self.c2_layers.clone(),
+                })
+                .collect();
+            swept
+                .with_paths(paths)
+                .expect("one path per witness record")
+        }
+
+        /// One record as the driver's seam sees it: the tx-builder
+        /// [`SpendInput`] over the same `derive_spend_parts` the handler
+        /// runs, with the shape's one path.
+        fn spend_input(&self, record: &PFundingOutputRecord) -> SpendInput {
+            derive_spend_parts(&self.keys, record, &self.leaf_chunk)
+                .expect("the record's parts derive")
+                .into_spend_input(
+                    record,
+                    self.leaf_chunk.clone(),
+                    self.c1_layers.clone(),
+                    self.c2_layers.clone(),
+                )
+        }
     }
 
     /// The end-to-end daemon-side differential. Assembly runs over a
@@ -1298,79 +1410,30 @@ mod emission_claim_assembly {
             .mint_handle(PSlot::from_raw(0))
             .await
             .expect("slot 0 held");
-        let keys = derive_bundle(0);
-        let source = claimable_source();
-        let tip = source.chain_height.to_raw() - 1;
-
-        // Two real P-paid outputs in ONE leaf chunk — the backing
-        // (rung-2 lineage) and the fee spend (rung 3) — under one
-        // depth-consistent single-path tree shared by both proofs.
-        let (backing_record, backing_leaf) =
-            constructed_record(&keys, 11, 5, 750_000, 0, MintLineageOutput::BondPostChange);
-        let (fee_record, fee_leaf) =
-            constructed_record(&keys, 22, 6, 90_000, 1, MintLineageOutput::ExternalTransfer);
-        let backing_gindex = backing_record.gindex;
-        let leaf_chunk = vec![backing_leaf, fee_leaf];
-        // Depth 2 — the wire encoder's spendable minimum (`fcmp_layers >=
-        // 2`); the synthetic single-path tree is depth-consistent at any
-        // depth.
-        let depth = 2u8;
-        let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
-        let tree_ctx = TreeContext {
-            reference_block: BlockHash::from_bytes([7u8; 32]),
-            tree_root,
-            tree_depth: depth,
-        };
-
-        // Mint the sealed operands through the ONLY route there is:
-        // designate the backing at the source's tip, sweep the fee
-        // inputs against it (the Q11 exclusion and the item-6 same-tip
-        // check fire in the mint, exercised by the `backing_set.rs`
-        // KATs), then zip the assembled paths in. Both leaves share the
-        // single synthetic path, so every witness record gets the same
-        // path data — exactly the old hand-built shape, now sealed.
-        let fee = 10_000u64;
-        let records = [backing_record.clone(), fee_record];
-        let swept = BackingSet::from_spendable(
-            &[backing_record],
-            PSlot::from_raw(0),
-            BlockHeight::from_raw(tip),
-            BlockHeight::from_raw(0),
-        )
-        .designate_backing()
-        .expect("the rung-2 record designates")
-        .fee_sweep(
-            source.clone(),
-            &SpentRecordsDurablyPruned::for_test(),
-            &records,
-            PSlot::from_raw(0),
-            &Default::default(),
-            AtomicUnits::from_raw(fee),
-        )
-        .expect("the fee sweep mints the sealed witness");
-        let paths: Vec<MembershipPath> = swept
-            .path_records()
-            .map(|_| MembershipPath {
-                leaf_chunk: leaf_chunk.clone(),
-                c1_layers: c1_layers.clone(),
-                c2_layers: c2_layers.clone(),
-            })
-            .collect();
-        let operands = swept
-            .with_paths(paths)
-            .expect("one path per witness record");
+        let shape = DifferentialShape::build();
+        let DifferentialShape {
+            keys,
+            source,
+            tree_ctx,
+            fee,
+            ..
+        } = &shape;
+        let backing_gindex = shape.backing_record.gindex;
+        let (tree_root, depth) = (tree_ctx.tree_root, tree_ctx.tree_depth);
+        let fee = *fee;
 
         let reply = handle
             .assemble_emission_claim(AssembleEmissionClaim {
                 handle: h,
-                operands,
-                tree_ctx,
+                operands: shape.operands(),
+                tree_ctx: tree_ctx.clone(),
                 // Value gate disabled: this differential's subject is the
                 // daemon-side wire re-derivation, not the §4 floor (the
                 // fixture-family rewards sit below the production floor by
                 // construction; the gate has its own boundary test in
                 // `emission_claim.rs`).
                 fee_floor: 0,
+                tx_key: TxKeyDraw::Fresh,
             })
             .await
             .expect("emission-claim assembly completes end-to-end");
@@ -1496,8 +1559,186 @@ mod emission_claim_assembly {
             .expect("backing leg verifies against the erase-rule hash");
         emission_vin_verify_auth(&vin, &reward_commits, signable.as_bytes())
             .expect("both auth legs verify against the erase-rule hash");
-        self_check_claims(&source, &vin, vout_reward_sum)
+        self_check_claims(source, &vin, vout_reward_sum)
             .expect("claims leg verifies against the paired source");
+    }
+
+    /// The legs a claim's prover randomizes — every byte that two honest
+    /// assemblies of one claim legitimately differ in. Zeroed here so the
+    /// rest of the transaction can be compared whole.
+    ///
+    /// Each is a fresh draw inside a prover: the membership-only proof and
+    /// its rerandomized `C~`; the two hybrid auths and every `pqc_auths`
+    /// signature (ML-DSA-65 signs hedged); the Bulletproof+; the fee
+    /// spends' FCMP and their pseudo-outs. Nothing else in the transaction
+    /// is drawn: the tx key is fixed by the test, and everything downstream
+    /// of it (output keys, KEM ciphertexts, leaf entries, masks and so the
+    /// commitments, encrypted amounts and labels) is a derivation.
+    struct Normalized {
+        tx: Transaction,
+        vin: ArchivalRewardEmissionVin,
+    }
+
+    fn normalized(bytes: &[u8]) -> Normalized {
+        let mut tx = Transaction::from_bytes(bytes).expect("the claim parses");
+        let emission_index = tx
+            .prefix
+            .inputs
+            .iter()
+            .position(|i| matches!(i, Input::ArchivalRewardEmission { .. }))
+            .expect("emission vin present");
+        let Input::ArchivalRewardEmission { canonical_bytes } = &tx.prefix.inputs[emission_index]
+        else {
+            unreachable!("position() matched this variant");
+        };
+        let mut vin = ArchivalRewardEmissionVin::read(&mut canonical_bytes.as_slice())
+            .expect("vin blob parses");
+        vin.backing.proof = Vec::new();
+        vin.backing.pseudo_out = [0u8; 32];
+        vin.auth_backing = Vec::new();
+        vin.auth_claim = Vec::new();
+        tx.prefix.inputs[emission_index] = Input::ArchivalRewardEmission {
+            canonical_bytes: Vec::new(),
+        };
+        let Ct::Fcmp {
+            pqc_auths,
+            prunable: Some(prunable),
+            ..
+        } = &mut tx.ct
+        else {
+            panic!("an emission claim is a full Fcmp ct");
+        };
+        for auth in pqc_auths {
+            auth.hybrid_signature = Vec::new();
+        }
+        prunable.bulletproofs = Vec::new();
+        prunable.fcmp_proof = Vec::new();
+        prunable.pseudo_outs = Vec::new();
+        Normalized { tx, vin }
+    }
+
+    /// E6 slice 8 row 7, Q3's pin: the driver's assembly
+    /// (`shekyl-chain-ingest::emission_assembly`, reached through the
+    /// `harness` feature) and this handler emit **identical bytes for one
+    /// shape** — the differential's — once both draw the same transaction
+    /// key. Identical outside the randomized legs [`normalized`] names,
+    /// and the same length including them; and the driver's randomized
+    /// legs verify under the shape's root as the handler's did, so the
+    /// driver's claim is a valid claim of this shape and not merely one of
+    /// this layout.
+    ///
+    /// The hazard this closes is I17's: a driver whose claim differs from
+    /// the engine's tests a transaction the wallet never produces. The two
+    /// assemblies share the tx-builder from the signable hash on; what
+    /// each does before that — the change split, the vout order, the
+    /// extra's fields, the fee spends' order — is what this test holds
+    /// equal. A mismatch is the finding this test exists for; the third
+    /// re-made assembly is the trigger (`CHAIN_RULES_SLICE_8.md` §6) that
+    /// makes extraction the answer instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_drivers_assembly_and_the_handler_emit_identical_bytes() {
+        let handle = spawn_over(&[0], &[], None);
+        let h = handle
+            .mint_handle(PSlot::from_raw(0))
+            .await
+            .expect("slot 0 held");
+        let shape = DifferentialShape::build();
+        let tx_key = Zeroizing::new([0x5cu8; 32]);
+
+        // The handler's claim, drawing the fixed key.
+        let reply = handle
+            .assemble_emission_claim(AssembleEmissionClaim {
+                handle: h,
+                operands: shape.operands(),
+                tree_ctx: shape.tree_ctx.clone(),
+                fee_floor: 0,
+                tx_key: TxKeyDraw::Fixed(tx_key.clone()),
+            })
+            .await
+            .expect("the handler assembles the differential's claim");
+
+        // The driver's claim over the same records, the same terms the
+        // handler derived (the claims leg is the handler's own
+        // `derive_claimable_epochs` → `assemble_claims`; the driver
+        // takes the terms as given), the same fee, tree and key.
+        let derived = derive_claimable_epochs(&shape.source).expect("epochs 4 and 5 derive");
+        let claims = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, 0)
+            .expect("the differential's claims assemble");
+        assert_eq!(claims.total_reward, reply.total_reward);
+        let drivers = assemble_emission_claim(
+            &shape.keys,
+            &tx_key,
+            vec![shape.spend_input(&shape.fee_record)],
+            shape.spend_input(&shape.backing_record),
+            ClaimTerms {
+                holdings: claims.holdings,
+                settlement_epochs: claims.settlement_epochs,
+                work_claim: claims.work_claim,
+                reward_amount_plain: claims.reward_amount_plain,
+            },
+            shape.fee,
+            &shape.tree_ctx,
+        );
+
+        // Same length with the randomized legs in; identical with them out.
+        let engines = reply.bound_tx.bytes();
+        assert_eq!(
+            engines.len(),
+            drivers.bytes.len(),
+            "the two claims are the same size"
+        );
+        let engine = normalized(engines);
+        let driver = normalized(&drivers.bytes);
+        assert_eq!(
+            engine.vin, driver.vin,
+            "the vin, outside its proof and auths"
+        );
+        assert_eq!(
+            engine.tx, driver.tx,
+            "the transaction, outside the legs a prover randomizes"
+        );
+        // The premise arm: the comparison is not vacuous — the raw bytes
+        // DO differ (the randomized legs are random), so the equality
+        // above is the normalization's, not a shared constant's.
+        assert_ne!(engines, &drivers.bytes[..], "the randomized legs differ");
+
+        // The driver's randomized legs verify under the shape's root as the
+        // handler's self-check verified its own: the driver's claim is
+        // valid, not merely shaped.
+        let root = shape.tree_ctx.tree_root.as_bytes();
+        let depth = shape.tree_ctx.tree_depth;
+        let full = Transaction::from_bytes(&drivers.bytes).expect("parses");
+        assert_eq!(
+            full.prefix_hash(),
+            drivers.prefix_hash,
+            "the prefix hash the proofs bound"
+        );
+        let mut erased = full.clone();
+        erased
+            .prefix
+            .inputs
+            .retain(|i| !matches!(i, Input::ArchivalRewardEmission { .. }));
+        assert_eq!(
+            erased.prefix_hash(),
+            drivers.signable,
+            "the erase-rule signable hash"
+        );
+        emission_vin_verify_backing(&drivers.vin, root, depth, drivers.signable.to_bytes())
+            .expect("the driver's backing proof verifies");
+        emission_vin_verify_auth(
+            &drivers.vin,
+            &drivers.reward_commits,
+            drivers.signable.as_bytes(),
+        )
+        .expect("the driver's dual auth verifies");
+        self_check_claims(
+            &shape.source,
+            &drivers.vin,
+            drivers.reward_commits[0].amount_plain,
+        )
+        .expect("the driver's claims leg verifies against the paired source");
+        full.validate()
+            .expect("the driver's claim passes shekyl-wire context-free validation");
     }
 }
 
