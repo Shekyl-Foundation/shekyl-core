@@ -1594,11 +1594,15 @@ the persona registers and what it spends cannot differ.
 
 **The persona's rows are in the plaintext table from the refresh after
 discovery**, where before they appeared at its spend. Same table, same §11.8
-ruling, same retirement row. What that row's successor has to answer is new,
-though: it names "sealed persistence on the wallet's own ledger", and the
-persona's outputs are not in the ledger. Where the persona's path set is
-sealed is a placement question between two identities, and it is owed with
-Q3 — not settled here.
+ruling, same retirement row, and the same home afterwards: Q3 governs *the
+wallet's single proving state*, which is what Q5's dissolution established
+there is, and rules that path sets ride the sealed file. The persona's
+captures are part of that one proving state — not a second home, any more
+than the principal's are. The retirement row used to say the path set rides
+"the wallet's own ledger", which is narrower than the ruling it carries out
+and does not hold the persona's outputs; it now names the sealed proving
+state Q3 names (RULED by Rick, 2026-10-05, on the review's reading of the
+row).
 
 **And the rebuild is deleted.** #945's dispatch comment promised the registrant
 PR would retire the fallback, and the first site is what makes that honest
