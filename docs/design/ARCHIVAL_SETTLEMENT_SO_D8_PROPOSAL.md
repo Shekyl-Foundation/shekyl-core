@@ -2295,8 +2295,9 @@ not wait on them; building does.
    shard: ShardId, at: BlockHeight, reorg_cap: BlockCount) -> bool` is
    confirmed, where `at` is the last height whose state is read (J15
    passes the admitting block's parent) and `reorg_cap` is the in-force
-   rule set's (`RuleSet::reorg_cap()`); Slice C makes no call of its own, because the predicate reads
-   only the cumulative archival-length fold and no slash state, so the
+   rule set's (`RuleSet::reorg_cap()`); for a compact record Slice C
+   makes no call of its own, because the predicate reads only the
+   cumulative archival-length fold and no slash state, so the
    same-block-slash question does not arise; closed-and-final is monotone
    in `at` on any one chain; a reorg that moves a shard's close height
    also replaces every bond admitted after it; and every pair drawn at `h`
@@ -2315,7 +2316,8 @@ not wait on them; building does.
    `ChainView` carries no rule set, so a three-parameter body could only
    read the constant and would hold a shortened chain to 720 blocks. Both
    callers already hold the rule set `validate` was given. The height
-   semantics and the no-call conclusion are unchanged.
+   semantics, and the conclusion that a compact record needs no call,
+   are unchanged.
 
    *The `CompleteTree` expansion is the other path the last clause
    anticipates (confirmed 2026-10-06).* A `CompleteTree` record lists no
