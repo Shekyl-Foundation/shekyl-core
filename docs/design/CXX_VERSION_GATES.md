@@ -58,7 +58,6 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 | `move-to-rust` | A dead arm that is the design. The owner moves to Rust and the C++ and its gate are deleted with it |
 | `delete` | A dead arm that is not the design: pre-fork Monero behaviour nobody wants, deleted once its blocker is gone |
 | `collapse` | A live arm. The gate is noise; it collapses to the one arm |
-| `with-the-mechanism` | Not a gate on a number. Part of the hard-fork machinery itself, correct for any table, and decided with it (§5) |
 | `none` | A row for another operand |
 
 ## 4. Where each row lands
@@ -91,26 +90,41 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
   epoch lookup. `HF_VERSION_EXACT_COINBASE`, `HF_VERSION_VIEW_TAGS` and
   `HF_VERSION_2021_SCALING` are read only by tests.
 
-## 5. The hard-fork mechanism is one decision
+## 5. The hard-fork mechanism is deleted
 
-These rows are the machinery, not gates on a number: `HardFork`
-itself, the comparisons inside it, the wrappers that expose it, the version
-it hands the template, the `hf_version` read from it and compared where the
-pool is revalidated (on connect and on pop) and where non-input consensus is
-skipped because the transaction already passed at that fork, and the
-start-up loop that pops blocks made under an older fork
-(`ideal_hf_version <= 1`, which is correct for any table and simply has
-nothing to do with one entry). The handshake's `top_version` is written and
-read by nobody; the field is deleted with the handshake port, which is that
-one row and not a sentence repeated through the table.
+**RULED 2026-10-06 (Rick):** "delete the fork table - when we need one, we
+will write a fresh one, not try to recycle Monero's."
 
-Collapsing them one at a time would be deciding, row by row, that Shekyl has
-no fork mechanism. That is one decision, and it is Rick's: keep a fork table
-for a future transition (the V4 lattice-only transition is the named one),
-or delete `HardFork` and carry the version as the constant it is. Asked
-2026-10-05. Until it is answered these rows stay as rows, which is not the
-same as leaving them: each names this decision as its landing, and none can
-gain a sibling without a row of its own.
+The rows landing at `hardfork` are the machinery, not gates on a number:
+`HardFork` itself, the comparisons inside it, the wrappers that expose it,
+the version it hands the template, the `hf_version` read from it and
+compared where the pool is revalidated (on connect and on pop) and where
+non-input consensus is skipped because the transaction already passed at
+that fork, and the start-up loop that pops blocks made under an older fork.
+The handshake's `top_version` is written and read by nobody. All of them are
+`delete`.
+
+They go in one PR, because collapsing them a row at a time would leave a
+fork mechanism with pieces missing. What that PR has to carry, beyond
+removing the class:
+
+- **The block-version rule stays, stated directly.** `HardFork::check` is
+  what requires a block's major version to equal 1 today. The rule moves to
+  where blocks are validated, as a comparison against the constant, and its
+  CEN row is updated to say so.
+- **CEN-F21's epoch stops being a table lookup.** The four `cen-f21` rows
+  resolve the staker-emission epoch through
+  `get_earliest_ideal_height_for_version`. They take the Rust owner's
+  `EMISSION_SPLIT_EPOCH`, and the `core_tests` fork tables that disagree
+  with the daemon about that height (`docs/FOLLOWUPS.md`) are settled in the
+  same change, since the tables are what is being deleted.
+- **The persisted fork tables and the RPC that reports them go too**: LMDB's
+  `hf_versions`, the `hard_fork_info` surface, and the handshake field. The
+  first is a schema change and follows the serialization policy.
+- **Tests that fork to version 2.** `core_tests` builds fakechain tables at
+  `HF_VERSION_VIEW_TAGS + 1`. Those tests are of a mechanism that will not
+  exist; each is kept for the rule it really exercises, on a chain at
+  version 1, or deleted.
 
 ## 6. What the output-count gate was guarding
 
@@ -147,8 +161,7 @@ It is written and never read (`docs/FOLLOWUPS.md`).
   Widened 2026-10-06: a version operand is an identifier that ends in
   lowercase `version`, or the persisted-row spelling `kVersion`, and `.cc`
   is scanned with the other translation units. `hf_version` is compared.
-  Those comparisons are rows, and they land with the mechanism (§5), which
-  is the decision they were already part of.
+  Those comparisons are rows, and they are deleted with the mechanism (§5).
 
 ## 8. Changing the inventory
 

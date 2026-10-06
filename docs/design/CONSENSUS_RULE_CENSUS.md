@@ -1143,7 +1143,7 @@ input, not fixes.
     2026-09-15, C++ read at `dev` (all at `0aeb67619`) — the pin governs this
     item's cites; item 23 below carries its own). **UPDATE 2026-10-06:** the
     `HF_VERSION_FCMP_PLUS_PLUS_PQC` gate named below was removed. The write
-    is unconditional at `blockchain_db.cpp:612`, outside
+    is unconditional at `src/blockchain_db/blockchain_db.cpp:612`, outside
     `if (new_output_count > 0)` (closes at `:598`). The reader is
     `db_lmdb.cpp:8943`–`:8958`. The line numbers in the walk are the pin's.
     **What was walked.** The

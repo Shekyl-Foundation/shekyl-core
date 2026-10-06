@@ -67,7 +67,7 @@ NAMED_ROW = (
 FORK = "return block_version == heights[i].version;\n"
 FORK_ROW = (
     "src/fork.cpp\t1\thard-fork table\tthe mechanism's own bookkeeping\t"
-    "with-the-mechanism\thardfork\treturn block_version == heights[i].version;\n"
+    "delete\thardfork\treturn block_version == heights[i].version;\n"
 )
 ROWVER = "if (p[0] != kVersion)\n  return false;\n"
 ROWVER_ROW = (
@@ -175,7 +175,7 @@ expect(
     "a table call is a row, a definition is not",
     {"src/chain.cpp": LOOKUP},
     HEADER
-    + "src/chain.cpp\t1\thard-fork table\talways 1\twith-the-mechanism\thardfork\t"
+    + "src/chain.cpp\t1\thard-fork table\talways 1\tdelete\thardfork\t"
     "return m_hardfork->get_ideal_version(height);\n",
     0,
 )

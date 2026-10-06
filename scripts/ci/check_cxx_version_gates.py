@@ -82,7 +82,6 @@ DISPOSITIONS = (
     "collapse",
     "delete",
     "move-to-rust",
-    "with-the-mechanism",
     "none",
 )
 LANDINGS = (
