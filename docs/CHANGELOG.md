@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Archival serving — one store read, a 400 for an invalid request, an unsigned body for a signer fault
+
+- `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends
+  it, then signs the finished digest and appends the signature. The second
+  read and the comparison between two digests are gone.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). A
+  request that is not valid — wrong route or method, a request header that
+  is missing or malformed, an anchor outside the gate — gets a bare `400`,
+  decided before the shard is looked up. The `404` now means only "not
+  held". A held shard whose signer fails is sent whole with no signature
+  behind it; it was a `404` before. The signed message and the pass record
+  are unchanged.
+- `shekyl-p-fetch` types both: `FetchError::Rejected` for the 400 and
+  `FetchError::Unsigned` for a whole frame with no signature.
+  `FetchError::next_move` gives the scheduler's rule: a first 400 earns one
+  retry of the same `P` with a freshly derived anchor, a second is a failed
+  read, and an unsigned body is a failed read at once.
+- A persona bound without a resident key (`NoResidentKey`) now sends the
+  shard and no signature for every valid request, where it used to answer
+  404.
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).

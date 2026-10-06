@@ -1336,7 +1336,9 @@ read at source.
 **Ruling.** Decided by rulings that already exist: Q2 makes retention
 per-shard and uniform; Q9 / #775 remove every daemon-side archival
 serving surface (`get_prunable_range` withdrawn); `RF-R1` collapses
-whatever a wallet learns to one identical 404 at the onion. So the
+whatever a wallet learns to one identical 404 at the onion (since
+2026-10-05 an invalid request is a separate bare 400, which says nothing
+about holdings). So the
 contract is **the ordinary transaction read's split form**:
 `get_transactions` with `prune` / `split` returns, per tx, `pruned`,
 `prunable`, `prunable_hash` and a `pruned_flag` (the

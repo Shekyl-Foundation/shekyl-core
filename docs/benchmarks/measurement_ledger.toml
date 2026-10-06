@@ -256,6 +256,7 @@ spec = [
 stale_through = [
   { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "bfbd0d915c", note = "The serve path reads each shard once and digests it once, where #954 read and digested twice; the signature is made after the send. An invalid request is refused before the store is consulted. The client gains two outcome classifications and no read or hash pass. Expected to remove about half of the 78 ms #954 added; the floor-device run with this tree as a fourth arm is owed in this pull request." },
 ]
 
 [[constant]]
