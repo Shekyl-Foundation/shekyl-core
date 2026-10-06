@@ -68,6 +68,9 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
 /// discovered after the body has gone out.
 struct RefusesLate;
 impl PassKey for RefusesLate {
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
     fn sign_pass(
         &self,
         _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -144,8 +147,8 @@ fn a_real_signature_is_never_the_refusal_trailer() {
 /// A persona with no resident key: it knows before the first byte.
 struct Keyless;
 impl PassKey for Keyless {
-    fn can_sign(&self) -> bool {
-        false
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new("not resident"))
     }
     fn sign_pass(
         &self,

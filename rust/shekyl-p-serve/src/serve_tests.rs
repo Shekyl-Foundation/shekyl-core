@@ -715,6 +715,9 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     // `sign_failure_count` and not silently in neither.
     struct Storeless(Arc<TestKeySigner>);
     impl PassKey for Storeless {
+        fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+            self.0.ready(shard_id, anchor_height)
+        }
         fn sign_pass(
             &self,
             m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],

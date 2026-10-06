@@ -64,7 +64,7 @@ use crate::daemon_tip::DaemonTipCache;
 /// if asked anyway. This is the SH-2 placeholder made a type: a key that
 /// says no.
 ///
-/// The serve loop asks [`PassKey::can_sign`] before the first response
+/// The serve loop asks [`PassKey::ready`] before the first response
 /// byte, so a keyless persona answers a valid request for a held shard with
 /// the bare 503 and sends no shard. It is counted under
 /// `sign_failure_count`: a rising `sign_failure_count` with no
@@ -78,8 +78,8 @@ impl NoResidentKey {
 }
 
 impl PassKey for NoResidentKey {
-    fn can_sign(&self) -> bool {
-        false
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new(Self::REASON))
     }
 
     fn sign_pass(
@@ -110,11 +110,10 @@ impl HostSigner {
 }
 
 impl PassKey for HostSigner {
-    /// The wrapped key's answer. Forwarded, not defaulted: the trait's
-    /// default is `true`, which would have a keyless host send shards it
-    /// cannot countersign.
-    fn can_sign(&self) -> bool {
-        self.key.can_sign()
+    /// The wrapped key's answer, forwarded: a keyless host must not send
+    /// shards it cannot countersign.
+    fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        self.key.ready(shard_id, anchor_height)
     }
 
     fn sign_pass(
@@ -151,6 +150,27 @@ mod tests {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
         let signer = HostSigner::new(Arc::clone(&tip), Arc::new(NoResidentKey));
         (tip, signer)
+    }
+
+    /// The refusal is the pre-flight's, so a keyless persona is a 503
+    /// before the body rather than a shard that ends in the refusal
+    /// trailer; the host signer passes the question through to its key.
+    #[test]
+    fn no_resident_key_refuses_at_the_pre_flight_and_the_host_passes_it_through() {
+        let err = NoResidentKey
+            .ready(7, BlockHeight::from_raw(9_280))
+            .unwrap_err();
+        assert_eq!(err.detail, NoResidentKey::REASON);
+        let (tip, signer) = signer();
+        tip.stamp_synced(BlockHeight::from_raw(10_000));
+        assert_eq!(
+            signer
+                .ready(7, BlockHeight::from_raw(9_280))
+                .unwrap_err()
+                .detail,
+            NoResidentKey::REASON,
+            "the host signer's pre-flight is its key's"
+        );
     }
 
     #[test]

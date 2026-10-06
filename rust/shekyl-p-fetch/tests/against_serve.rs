@@ -223,8 +223,8 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 struct Keyless;
 
 impl PassKey for Keyless {
-    fn can_sign(&self) -> bool {
-        false
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new("no key"))
     }
 
     fn sign_pass(
@@ -245,6 +245,10 @@ impl PassSigner for Keyless {
 struct RefusesLate;
 
 impl PassKey for RefusesLate {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],

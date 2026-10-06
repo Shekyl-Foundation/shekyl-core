@@ -381,7 +381,7 @@ impl PServeEndpoint {
 
     /// Valid requests for a held shard that got no countersignature. Two
     /// wire outcomes share it. No key resident
-    /// ([`PassKey::can_sign`](crate::countersign::PassKey::can_sign) said
+    /// ([`PassKey::ready`](crate::countersign::PassKey::ready) said
     /// no): the 503, before any shard byte. A signer that said it could
     /// and then refused, or returned an envelope of the wrong length: a 200
     /// whose envelope is the refusal trailer. An invalid request and an
@@ -589,11 +589,11 @@ enum Lookup {
 ///
 /// Nothing is signed here. The signature covers the bytes that are sent,
 /// so it is made after them ([`write_response`]). What *is* settled here is
-/// whether a key is resident at all ([`PassKey::can_sign`]), because that
+/// whether the key will sign at all ([`PassKey::ready`]), because that
 /// is known before the first byte and a shard that cannot be countersigned
 /// is not worth sending.
 ///
-/// [`PassKey::can_sign`]: crate::countersign::PassKey::can_sign
+/// [`PassKey::ready`]: crate::countersign::PassKey::ready
 async fn resolve(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
@@ -616,8 +616,10 @@ async fn resolve(
         match provider.shard_bytes(shard_id) {
             Err(_) => Lookup::StoreFault,
             Ok(None) => Lookup::NotHeld,
-            Ok(Some(_)) if !signer.can_sign() => Lookup::NoKey,
-            Ok(Some(body)) => Lookup::Held(body),
+            Ok(Some(body)) => match signer.ready(shard_id, anchor_height) {
+                Ok(()) => Lookup::Held(body),
+                Err(_) => Lookup::NoKey,
+            },
         }
     })
     .await;
