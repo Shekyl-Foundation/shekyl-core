@@ -35,11 +35,16 @@ describes that repo's artifact, nothing more.
 | `rc.N` | Release candidate. No known blocking issues. | Stressnet stable; audit findings addressed. |
 | *(none)* | Stable release. | RC period elapsed without blocking findings. |
 
-Incrementing the counter within a stage (alpha.1 to alpha.2, etc.) is at
-maintainer discretion. The threshold is "enough has changed to warrant a
-new pre-release artifact for testing." In practice: tag a new alpha when
-a testing milestone is reached, or roughly every two weeks if meaningful
-merges have landed. There is no automatic trigger.
+Incrementing the counter within a stage (alpha.1 to alpha.2, etc.) follows
+incompatibility, not the calendar (`RELEASE_PROMOTION.md` §1). Pre-genesis a
+pre-release marks a testnet epoch: a change on `dev` that an already-deployed
+node or client cannot interoperate with (a regenesis, a wire change, a store
+layout change) is what calls for the next tag, so that each such change is
+run on the fleet as its own epoch. The handshake id is derived from the
+genesis block hash, so a regenesis separates the epochs on the wire without a
+second step. Compatible work accumulates on `dev` until the next
+incompatibility; a tag for a testing milestone with no incompatibility is at
+maintainer discretion.
 
 Pre-release identifiers use lowercase with dot-separated numeric
 counters, per SemVer: `3.1.0-alpha.1 < 3.1.0-beta.1 < 3.1.0-rc.1 < 3.1.0`.

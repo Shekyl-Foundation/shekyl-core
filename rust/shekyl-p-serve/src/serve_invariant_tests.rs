@@ -18,14 +18,20 @@
 //! # The bound, and where it comes from
 //!
 //! The serve loop reads a chunk, folds it, writes it, and does not read
-//! the next until that write has returned. So the chunks it reads are
-//! bounded by the bytes the requester's side has *accepted*:
+//! the next until that write has returned. So it is always at most one
+//! chunk ahead of what the requester's side has *accepted*:
 //!
 //! ```text
-//! reads <= ceil(body_bytes_accepted / WRITE_CHUNK_BYTES)
+//! reads <= floor(body_bytes_accepted / WRITE_CHUNK_BYTES) + 1
 //! ```
 //!
-//! with equality when the last accepted chunk was accepted only in part.
+//! The `+ 1` is the lookahead, and it is real work: the loop has to read
+//! a chunk to find out that the write of it is refused. A requester that
+//! accepts nothing costs one read, and one that accepts four whole chunks
+//! costs five. When the last chunk was accepted in part the bound is
+//! `ceil(accepted / chunk)`, the same number. So the cost of a requester
+//! that leaves is one chunk past what it took, whatever the shard's size.
+//!
 //! "Accepted" is the requester's own buffer in the sink tests, where it is
 //! exact, and the two kernel buffers between the ends (the persona's send
 //! buffer and the requester's receive buffer) over a real socket.
@@ -330,8 +336,8 @@ async fn a_requester_that_takes_only_the_head_costs_one_chunk_read_and_no_signat
 #[tokio::test]
 async fn a_requester_that_takes_half_the_body_costs_half_the_reads_and_no_signature() {
     // Half of an eight-chunk body, to the byte: four chunks accepted whole.
-    // The fifth is read and refused. reads = ceil(accepted / chunk) + 1 at
-    // an exact chunk boundary, and the key is never asked.
+    // The fifth is read and refused: reads = floor(accepted / chunk) + 1,
+    // and the key is never asked.
     let (reads, asked_to_sign, counters) =
         serve_to_a_requester_that_accepts(8, 4 * WRITE_CHUNK_BYTES).await;
     assert_eq!(reads, 5, "four chunks delivered and one refused, of eight");
@@ -344,10 +350,10 @@ async fn a_requester_that_takes_half_the_body_costs_half_the_reads_and_no_signat
 async fn a_requester_that_stops_mid_chunk_stops_p_within_that_chunk() {
     // Two chunks and a hundred bytes of a third. The third was read in
     // full, since a chunk is the unit, and nothing after it was:
-    // reads = ceil(accepted / chunk) = 3, of eight.
+    // reads = floor(accepted / chunk) + 1 = 3, of eight.
     let accepted = 2 * WRITE_CHUNK_BYTES + 100;
     let (reads, asked_to_sign, _) = serve_to_a_requester_that_accepts(8, accepted).await;
-    assert_eq!(reads, accepted.div_ceil(WRITE_CHUNK_BYTES));
+    assert_eq!(reads, accepted / WRITE_CHUNK_BYTES + 1);
     assert_eq!(reads, 3);
     assert_eq!(asked_to_sign, 0);
 }
