@@ -178,8 +178,8 @@ inherited as "the client waits."
 | Endpoint = raw 32-byte Ed25519; address is display form; discovery is a chain read at the epoch-open drawable snapshot | `EU-D3`, `EU-D4` |
 | Onions are enumerable (every `JoinMarket` publishes one; public is its normal state); the serve-side limiter (`shekyl-p-serve::serve::MAX_INFLIGHT`, SPIKE-PIN-2) is load-bearing. **`EU-D6` REJECTED 2026-09-13** as a rotation-rate argument; the enumerability fact and the limiter survive on their own code anchors, not on `EU-D6` |
 | **`EndpointUpdate` (kind 4) REJECTED 2026-09-13** — a bonded persona's endpoint never changes; the endpoint is mandatory on `JoinMarket`, non-zero by consensus, immutable for the record's life (`EU-D3` narrowed). A new address is a new persona via Release + fresh `JoinMarket`. `EU-D2`, `EU-D5`…`EU-D13` rejected with it. Consequence for this round: "no endpoint on record" is unrepresentable, so `SF-D6`'s no-endpoint non-row collapses (see `SF-D6`), and `SF-D13`'s "onion key may rotate" reason is refuted (see `SF-D13`) | `EU` §1, §5 |
-| `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
-| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0); serve half and client LANDED by (a)+(b): header `shekyl-pass-request`, value lowercase hex of the 72 bytes, `serving_route::{REQUEST_HEADER_NAME, encode_request_header, decode_request_header}`):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the identical 404. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
+| `GET /shard/{id}`; one bare 400 for every invalid request, decided ahead of the shard lookup; one bare 404 for a valid request whose shard is not held, and for nothing else; one bare 503 for a fault of `P`'s own; a refusal trailer in the signature's place when the signer fails after the body; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1`; 400 RULED 2026-10-05; 503 and trailer RULED 2026-10-06 |
+| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0); serve half and client LANDED by (a)+(b): header `shekyl-pass-request`, value lowercase hex of the 72 bytes, `serving_route::{REQUEST_HEADER_NAME, encode_request_header, decode_request_header}`):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the bare 400. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same bare complete-head 400, decided before the shard lookup (RULED 2026-10-05; these were the shared 404 before). All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
@@ -509,9 +509,9 @@ name matched case-insensitively, value strict), pinned by
 `request_header_parsing_is_http_lenient_and_value_strict` and recorded
 in [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) in the same
 change. This is a concrete carrier, not permission for more fields.
-Missing, duplicate, malformed, or wrong-length values are a
-complete-head miss and render the same byte-identical 404 as every
-other non-servable outcome. All other request headers remain ignored.
+Missing, duplicate, malformed, or wrong-length values are an invalid
+request and render the same byte-identical 400 as every other one
+(RULED 2026-10-05). All other request headers remain ignored.
 
 **The only semantic request fields.** The 72-byte header is the only
 recognized caller-supplied field other than the selected shard id.
@@ -636,14 +636,47 @@ challenge side it means bounded retries of **that** `P` inside the
 deadline — and retrying a `P` that is deliberately truncating spends
 the deadline on an outcome that will not change.
 
-**404 is a response, not transport.** `RF-R1` makes every non-servable
-outcome one identical 404, so the client cannot tell never-held from
-dropped from refusing — that is the reason **not to distinguish**.
+**404 is a response, not transport.** `RF-R1` makes every valid request
+for a shard `P` does not hold one identical 404, and since 2026-10-06
+nothing else is one: a fault of `P`'s own is the 503 below.
 The reason **not to retry** the assigned `P` is separate: a clean
 404 is a completed HTTP exchange in which `P` answered and the
 answer was "no." Truncation can be a dead circuit; a 404 cannot.
 Challenge: immediate **miss**. Organic: exclude, draw next (a
 different `P` may hold `s`).
+
+**400 is a response too, and it is about the request (RULED
+2026-10-05).** `P` judges the request before it looks up the shard, so a
+400 says nothing about holdings. From this client the route and the
+header encoding are fixed, so in practice it means the anchor fell
+outside `P`'s gate, and clock or chain skew on either side can do that.
+The first 400 is therefore neither a miss nor `P`'s failure: the caller
+names the same `P` **once** more with a header built from a freshly
+derived anchor. A fresh nonce is safe, because no signature came back
+for the old one. A second 400 is a failed read: `P`'s gate sits within
+±`L` of `P`'s own height, so a `P` that refuses a fresh anchor is itself
+out of step. The client does not retry — the anchor is the caller's,
+from chain state — so the once-count is the scheduler's, and
+`FetchError::next_move` is the rule it reads.
+
+**503 is `P` saying it cannot serve (RULED 2026-10-06).** A held shard
+never answers 404. A store that fails to open the shard, a tip `P` cannot
+read, and a persona with no resident key all answer one bare 503, which
+does not say which. It is a completed answer and it is `P`'s failure: a
+failed read, no retry of that `P` (`FetchError::Unavailable`).
+
+**`P` states a late failure; the client never infers one (RULED
+2026-10-06).** `P` signs after it sends. If the signer fails then, `P`
+writes the refusal trailer where the signature goes, so the 200 is its
+full declared length (`FetchError::Unsigned`: a failed read, no retry).
+A body that stops short of `content-length` is a stall **at every
+offset**, the frame's end included. The reason is who can do what on the
+circuit. A relay can count bytes against a public frame length and cut a
+good response exactly where the signature would begin, and guard pinning
+puts the same relay on every retry, so a client that read that cut as
+`P` declining to sign would let one relay fail an honest `P` at every
+challenge. A relay cannot write into an onion-service stream, so the
+trailer can only come from `P`.
 
 **W₂ measurement input (not a taxonomy change).** The challenge-side
 bounded-retry budget (timeout / stall / truncation / intro failure,
@@ -693,14 +726,17 @@ an implementation.
 | Outcome | Challenge (assigned `P`) | Organic (`SF-D10` draw) |
 | --- | --- | --- |
 | Circuit timeout / HTTP stall / SOCKS CONNECT or intro failure / over-capacity silent close (endpoint *was* on the record). `RF-R1`: over-capacity arrivals are closed with **no HTTP bytes**, not a 404 | Stall-class: bounded retries of **that** `P` inside the deadline, then **miss** | Stall-class: same per-attempt retries; then exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Body short of agreed `N` (truncated transfer) | Stall-class | Stall-class |
+| Body short of agreed `N` (truncated transfer), at any offset — the frame's end included | Stall-class | Stall-class |
 | Body long of agreed `N` (overlength) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `content-length` > `signature_envelope_len + max framed_len()` (refused from the HTTP headers, before any body byte) **or** `content-length` ≠ `signature_envelope_len + framed_len()` (known after the frame header, before segment bytes) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Identical 404 (`RF-R1`) | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Complete-head that is not `200` with exactly `content-type` + `content-length`, and not the identical 404 (`301`, `500`, extra headers, wrong content-type) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 404 (`RF-R1`): valid request, shard not held | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 400 (`RF-R1`): `P` judged the request invalid — from this client, an anchor outside `P`'s gate. `Rejected` | First: **one** retry of **that** `P` with a freshly derived anchor (new header), inside the deadline. Second: failed read → **miss** | First: one retry of that `P` with a freshly derived anchor. Second: failed read; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Identical 503 (`RF-R1`): `P` cannot serve through its own fault (store, tip, or no resident key). `Unavailable` | Failed read → **miss**. Completed exchange; no retry of that `P` | Failed read: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| `200` of full declared length whose envelope is the refusal trailer (`serving_route::is_refusal_trailer`). `Unsigned` | Failed read → **miss**. `P` served and says it did not sign; completed response, so no retry of that `P`. The body is discarded unverified | Failed read: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Complete-head that is not `200`, `400`, `404` or `503` with exactly `content-type` + `content-length` (`301`, `500`, extra headers, wrong content-type), or a `400`/`404`/`503` declaring a body | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id ‖ D` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 
 - **Amendment 2026-09-13:** the last three rows split parse failure,
   `R_k` mismatch, and bad countersignature into distinct verdicts.
@@ -1306,24 +1342,29 @@ needed a home that is neither the inner frame nor a header:
   from `shekyl-crypto-pq`) as the response's **last** bytes.
 - **The envelope closes the body because the signature covers it.**
   `D` is a digest of every byte ahead of the envelope, so the signature
-  is the last thing `P` can send. `P` serves in two passes over the
-  shard: it reads the body once to compute `D`, signs, then reads it
-  again and streams it, hashing what it writes. It appends the signature
-  only if the bytes it sent hash to the `D` it signed; otherwise the
-  response ends short, with no signature, and counts as a lookup
-  failure. No pass holds more than one chunk of the shard, so the
-  in-flight ceiling keeps its memory bound. `P` signs before the first
-  byte goes out, so a signing failure remains the identical 404. A
-  response that fails or stalls mid-body yields no signature. The
+  is the last thing `P` can send. `P` reads the shard **once**: it
+  hashes each chunk as it sends it, then finishes `D`, signs, and
+  appends the signature (RULED 2026-10-05). The signed bytes are the
+  sent bytes by construction, and no more than one chunk of the shard is
+  resident, so the in-flight ceiling keeps its memory bound. Signing
+  comes after the body, so a signer fault there cannot change the
+  status: `P` writes the refusal trailer in the signature's place
+  (RULED 2026-10-06), the response is its full declared length, and the
+  client classifies it as a failed read (`Unsigned`). A persona that
+  knows before the first byte that it has no key answers 503 and sends
+  no shard. A response that stops short, anywhere, is a stall. The
   client refuses a response whose recomputed `D` does not verify
   (`BadCountersignature`); a signature placed anywhere but last is
   refused as that or as a malformed envelope. Tests:
   `the_countersignature_is_released_only_after_the_whole_frame`,
-  `a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature`,
-  `a_shard_that_vanishes_between_the_two_reads_is_the_identical_404`
+  `a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`,
+  `a_persona_with_no_key_answers_503_and_sends_no_shard`
   (`shekyl-p-serve`);
   `garbage_with_a_valid_signature_appended_is_refused`,
-  `a_signature_sent_ahead_of_the_body_is_refused` (`shekyl-p-fetch`).
+  `a_signature_sent_ahead_of_the_body_is_refused`,
+  `a_body_closed_with_the_refusal_trailer_is_a_failed_read`,
+  `a_good_response_cut_exactly_at_the_frames_end_is_a_stall`
+  (`shekyl-p-fetch`).
   The HTTP response headers stay
   exactly `content-type` and `content-length`; no signature leg is
   text-encoded into a header — a 3,309-byte ML-DSA leg does not belong
@@ -1698,8 +1739,8 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   anything depends on it.
 - **(a) serve side — BUILT 2026-09-13 (commits `0ed3e11e0`,
   `1a0ea3e90`, `64a81697a` of the sub-PR 1 branch).** `RF-R1` header parse (one required header
-  decoding to the 72 bytes, same identical 404 on
-  absence/malformation/out-of-gate), the `P`-side anchor gate ±`L`
+  decoding to the 72 bytes; absence, malformation and out-of-gate were
+  the shared 404 as built and are the bare 400 since 2026-10-05), the `P`-side anchor gate ±`L`
   against the host-supplied height, signing over the **decoded**
   bytes, the fixed-length
   `HybridSignature` envelope closing the body after the unchanged

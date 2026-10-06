@@ -76,9 +76,9 @@ pub enum FailureKind {
     /// sample because a mid-body RST is Tor. A complete exchange of the
     /// wrong body length is [`Self::Refused`] instead (the apparatus).
     Truncated,
-    /// A **completed** exchange the production client refused: the identical
-    /// 404, a malformed head or envelope, a countersignature that does not
-    /// verify under `P`'s key. `SF-D6` classes every one of these as a miss,
+    /// A **completed** exchange the production client refused: a bare 404 or
+    /// 400, a malformed head or envelope, a countersignature that is missing
+    /// or does not verify under `P`'s key. `SF-D6` classes every one of these as a miss,
     /// not a stall, and none of them is Tor's doing — a non-zero count here
     /// means the apparatus is wrong (anchor gate, key, fixture), never that
     /// the path was slow.
@@ -546,7 +546,7 @@ pub struct ChurnRow {
     /// and it is never the ratio baseline.
     pub cap_refusals: u64,
     /// Observations at this width the **client** refused after a completed
-    /// exchange ([`FailureKind::Refused`]: `404`, malformed protocol, bad
+    /// exchange ([`FailureKind::Refused`]: `404`, `400`, malformed protocol, bad
     /// countersignature). Any non-zero count is the apparatus being wrong
     /// (this module's own reading of the class), so the row is **void** on
     /// the same footing as a cap-bound one: what it measured was not Tor.

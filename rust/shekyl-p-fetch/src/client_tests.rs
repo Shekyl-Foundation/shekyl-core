@@ -24,7 +24,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::{
-    max_body_bytes, ContentRefused, ContentVerify, FetchError, FetchTarget, Malformed,
+    max_body_bytes, ContentRefused, ContentVerify, FetchError, FetchTarget, Malformed, NextMove,
     PFetchClient, RequestHeader, Stall, Timeouts, VerifiedShard, MAX_INFLIGHT,
     SIGNATURE_ENVELOPE_LEN,
 };
@@ -412,6 +412,167 @@ async fn a_404_is_a_miss_and_is_not_retried_on_the_same_p() {
 }
 
 #[tokio::test]
+async fn a_400_is_rejected_and_earns_one_retry_with_a_fresh_anchor() {
+    // `P` judged the request invalid. From this client that means the
+    // anchor missed `P`'s gate, which skew on either side can cause — so
+    // the first one is neither a miss nor `P`'s failure: the scheduler
+    // names the same `P` once more with a freshly derived anchor.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 400 Bad Request",
+            "content-type: application/octet-stream\r\ncontent-length: 0",
+        )),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    let err = out.expect_err("rejected");
+    assert!(matches!(err, FetchError::Rejected), "{err}");
+    assert_eq!(err.next_move(false), NextMove::RetryFreshAnchor);
+    assert!(
+        !err.retries_same_p(),
+        "the same header would be refused again"
+    );
+    assert!(hole.shown().is_empty());
+}
+
+#[test]
+fn a_second_400_is_a_failed_read() {
+    // `P`'s gate sits within ±L of `P`'s own height. A `P` that refuses a
+    // freshly derived anchor too is itself out of step, and that is `P`'s
+    // failure — not a miss, and not a third attempt.
+    assert_eq!(FetchError::Rejected.next_move(true), NextMove::FailedRead);
+    // The flag belongs to the 400 alone.
+    for seen in [false, true] {
+        assert_eq!(FetchError::Miss.next_move(seen), NextMove::NotHeld);
+        assert_eq!(FetchError::Unsigned.next_move(seen), NextMove::FailedRead);
+        assert_eq!(
+            FetchError::Unavailable.next_move(seen),
+            NextMove::FailedRead
+        );
+        assert_eq!(
+            FetchError::BadCountersignature.next_move(seen),
+            NextMove::FailedRead
+        );
+        assert_eq!(
+            FetchError::Stall(Stall::HeadTimeout).next_move(seen),
+            NextMove::RetrySameHeader
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_400_with_a_body_is_not_the_contract() {
+    let keys = keys();
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 400 Bad Request",
+            "content-type: application/octet-stream\r\ncontent-length: 5",
+        )),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::ContentLength);
+}
+
+#[tokio::test]
+async fn a_503_is_a_failed_read_with_no_retry() {
+    // `P` could not serve and says the fault is its own. A held shard never
+    // 404s, so this is not a miss; and it is a completed answer, so it is
+    // not retried.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let two = "content-type: application/octet-stream\r\ncontent-length: 0";
+    let (out, _) = run(
+        Script::Respond(head_only("HTTP/1.1 503 Service Unavailable", two)),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    let err = out.expect_err("unavailable");
+    assert!(matches!(err, FetchError::Unavailable), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert!(hole.shown().is_empty());
+
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 503 Service Unavailable",
+            "content-type: application/octet-stream\r\ncontent-length: 5",
+        )),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::ContentLength);
+}
+
+#[tokio::test]
+async fn a_body_closed_with_the_refusal_trailer_is_a_failed_read() {
+    // `P` sent the whole frame and wrote the refusal trailer where the
+    // signature goes. That is `P` saying it did not sign: a failed read,
+    // no retry. The unsigned bytes never reach the hole.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let trailer = [shekyl_curve_tree::serving_route::REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN];
+    let (out, _) = run(
+        Script::Respond(ok_response(&trailer, CONTENT)),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    let err = out.expect_err("unsigned");
+    assert!(matches!(err, FetchError::Unsigned), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert!(hole.shown().is_empty());
+
+    // One byte off the trailer is not a refusal. It is an envelope that is
+    // not a signature either, which is a `P` off the contract.
+    let mut near = trailer;
+    near[SIGNATURE_ENVELOPE_LEN - 1] = 0xFE;
+    let (out, _) = run(
+        Script::Respond(ok_response(&near, CONTENT)),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::Envelope);
+}
+
+#[tokio::test]
+async fn a_good_response_cut_exactly_at_the_frames_end_is_a_stall() {
+    // The attack the trailer exists for. A relay on the circuit counts
+    // bytes against a public frame length and cuts a good, signed response
+    // exactly where the signature would begin. The client must read that
+    // as transport — retried with the same header — and never as `P`
+    // declining to sign. So must a cut one byte either side of it.
+    let keys = keys();
+    let whole = signed_response(&keys, &header(), SHARD);
+    let frame_end = whole.len() - SIGNATURE_ENVELOPE_LEN;
+    for cut in [frame_end, frame_end - 1, frame_end + 1, whole.len() - 1] {
+        let hole = Hole::accepting();
+        let (out, _) = run(
+            Script::Respond(whole[..cut].to_vec()),
+            Arc::clone(&hole),
+            &keys,
+        )
+        .await;
+        let err = out.expect_err("cut");
+        assert!(
+            matches!(err, FetchError::Stall(Stall::Truncated { .. })),
+            "cut at {cut}: {err}"
+        );
+        assert_eq!(err.next_move(false), NextMove::RetrySameHeader);
+        assert!(err.retries_same_p());
+        assert!(hole.shown().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn a_404_with_a_body_is_not_the_contract() {
     let keys = keys();
     let (out, _) = run(
@@ -604,7 +765,9 @@ async fn an_envelope_that_is_not_a_canonical_signature_is_malformed() {
     let keys = keys();
     let hole = Hole::accepting();
     let (out, _) = run(
-        Script::Respond(ok_response(&[0xffu8; SIGNATURE_ENVELOPE_LEN], CONTENT)),
+        // Not `0xff`: that fill is the refusal trailer, which is `P`
+        // speaking and is typed apart.
+        Script::Respond(ok_response(&[0xa5u8; SIGNATURE_ENVELOPE_LEN], CONTENT)),
         Arc::clone(&hole),
         &keys,
     )

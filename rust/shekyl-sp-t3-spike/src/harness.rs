@@ -518,15 +518,15 @@ pub enum ApparatusError {
     /// Not every persona became reachable within [`PUBLISH_TIMEOUT`].
     NotReachable,
     /// A persona answered and the production client **refused** the
-    /// exchange — the identical 404, a bad countersignature, a malformed
-    /// envelope. The onion is up, so this is not publication delay; it is
+    /// exchange — a bare 404 or 400, a missing or bad countersignature, a
+    /// malformed envelope. The onion is up, so this is not publication delay; it is
     /// the apparatus disagreeing with itself (anchor gate, key, fixture),
     /// and retrying it until the deadline would only relabel that as
     /// [`Self::NotReachable`].
     Refused {
         /// Index of the persona whose exchange was refused.
         persona: usize,
-        /// The client's own words for it (`404`, which malformation, bad
+        /// The client's own words for it (`404`, `400`, which malformation, bad
         /// countersignature) — the one thing a reader needs to fix the rig.
         reason: String,
     },
@@ -1036,6 +1036,9 @@ fn classify(e: &FetchError) -> FailureKind {
         // emission site — `Stall::Io` is body-phase only.
         FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
         FetchError::Miss
+        | FetchError::Rejected
+        | FetchError::Unavailable
+        | FetchError::Unsigned
         | FetchError::Malformed(_)
         | FetchError::BadCountersignature
         | FetchError::ContentRefused(_) => FailureKind::Refused,
@@ -1270,7 +1273,7 @@ mod tests {
     fn anchor_is_the_burial_depth_below_own_height() {
         // The one number both sides read: P gates the anchor against its own
         // height ± L, and the client anchors at tip − 720. If these drifted
-        // apart every fetch would be the identical 404 and the taxonomy would
+        // apart every fetch would be the bare 400 and the taxonomy would
         // call it `Refused` — visible, but for the wrong reason.
         assert_eq!(
             APPARATUS_OWN_HEIGHT - APPARATUS_ANCHOR_HEIGHT,
