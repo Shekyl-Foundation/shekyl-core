@@ -67,6 +67,8 @@ use crate::engine::{
 };
 use crate::scan::{DetectedTransfer, ScanResult};
 use shekyl_curve_tree::ExpectedOutput;
+use shekyl_types::KeyImage;
+use std::collections::BTreeSet;
 
 /// One owned output as the curve tree registers it: `(gindex, O)`.
 ///
@@ -263,13 +265,20 @@ impl<
     ///    height otherwise — so offering it would register a pair the merge
     ///    is about to rewind.
     /// 2. **`P`'s held funding outputs** ([`Self::p_funding_outputs`]).
-    /// 3. **What `result` detected**, less what it also saw spent. These are
-    ///    not in the ledger yet — the merge follows the ingest — and they
-    ///    are the outputs the fold is about to reach.
+    /// 3. **What `result` detected.** These are not in the ledger yet — the
+    ///    merge follows the ingest — and they are the outputs the fold is
+    ///    about to reach.
     ///
-    /// Unspent only, throughout: capture serves spending, and a spent
-    /// output's chunks are rows for nothing. An output a reorg makes unspent
-    /// again is offered by the next refresh, when its flag has flipped.
+    /// Unspent only, throughout, and "unspent" is read against this result
+    /// too: a ledger row the merge has not yet flagged, or a detection, whose
+    /// key image the result saw spent is left out — capture serves spending,
+    /// and a spent output's chunks are rows for nothing. The result's key
+    /// images are every input in its range, unfiltered, so the test is made
+    /// the other way round: the wallet's own key images (ledger rows and
+    /// detections, a small set) are collected once, and the result's list is
+    /// walked once against them — linear in the result, never the product.
+    /// An output a reorg makes unspent again is offered by the next refresh,
+    /// when its flag has flipped.
     ///
     /// Sent whole on every refresh. The registry does not persist, so the
     /// first refresh after open is a mass late registration; a re-offer of a
@@ -282,7 +291,7 @@ impl<
     /// offered by the next refresh.
     pub(crate) fn owned_outputs(&self, result: &ScanResult) -> OwnedSet {
         let range_start = result.processed_height_range.start;
-        let mut outputs: Vec<OwnedOutput> = {
+        let (mut outputs, ledger_key_images): (Vec<OwnedOutput>, Vec<Option<KeyImage>>) = {
             let guard = self.ledger.read();
             guard
                 .ledger
@@ -290,9 +299,26 @@ impl<
                 .transfers()
                 .iter()
                 .filter(|td| !td.spent && td.block_height < range_start)
-                .map(owned_output)
-                .collect()
+                .map(|td| (owned_output(td), td.key_image))
+                .unzip()
         };
+        // The spends this result observed of what is being offered.
+        let own: BTreeSet<KeyImage> = ledger_key_images
+            .iter()
+            .flatten()
+            .chain(result.new_transfers.iter().map(|d| d.output.key_image()))
+            .copied()
+            .collect();
+        let spent_here: BTreeSet<KeyImage> = result
+            .spent_key_images
+            .iter()
+            .map(|observed| observed.key_image)
+            .filter(|ki| own.contains(ki))
+            .collect();
+        let mut kept = ledger_key_images
+            .iter()
+            .map(|ki| !ki.is_some_and(|ki| spent_here.contains(&ki)));
+        outputs.retain(|_| kept.next().expect("one flag per row"));
         // The pending seal before the scan seal, in the order the persona
         // writes them (`PendingPostBlock`'s removal-ordering contract): a
         // record retired between the two reads has its outputs in the scan
@@ -305,12 +331,7 @@ impl<
             result
                 .new_transfers
                 .iter()
-                .filter(|detected| {
-                    !result
-                        .spent_key_images
-                        .iter()
-                        .any(|spent| spent.key_image == *detected.output.key_image())
-                })
+                .filter(|detected| !spent_here.contains(detected.output.key_image()))
                 .map(detected_output),
         );
         OwnedSet {
@@ -836,6 +857,32 @@ mod tests {
         assert!(
             from(1).is_empty(),
             "a row at the range start is the result's to re-derive"
+        );
+
+        // A row the result saw spent is not offered either, though the
+        // merge has not flagged it yet: the ingest runs first. The runtime
+        // scanner computes every row's key image; the test detection carries
+        // the fixture sentinel, so the row is given one the way a view-only
+        // wallet's rederivation does.
+        let key_image = KeyImage::from_bytes([0x5e; 32]);
+        {
+            let mut state = engine.ledger.write();
+            let crate::engine::local_ledger::LedgerState {
+                ledger, indexes, ..
+            } = &mut *state;
+            indexes.set_key_image(&mut ledger.ledger, 0, key_image);
+        }
+        let mut spending = ScanResult::empty_at(BlockHeight::from_raw(2), None);
+        spending
+            .spent_key_images
+            .push(crate::scan::KeyImageObserved {
+                block_height: BlockHeight::from_raw(2),
+                key_image,
+                containing_tx_hash: shekyl_types::TxHash::from_bytes([0x44; 32]),
+            });
+        assert!(
+            engine.owned_outputs(&spending).outputs.is_empty(),
+            "a row whose spend this result observed is rows for nothing"
         );
     }
 

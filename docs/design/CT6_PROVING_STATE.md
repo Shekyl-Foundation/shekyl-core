@@ -1660,9 +1660,25 @@ each failed by the mutation beside it:
 | `a_reorged_result_registers_against_the_chain_it_keeps` | the registration moved ahead of the rollback (the new pair is reported stale) |
 | `a_respawned_actor_is_re_offered_the_set_before_it_folds` | the respawn retry offering nothing |
 | `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
-| `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed |
+| `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed; the result's observed spends ignored |
+| `refresh::start_refresh_integration_tests::refresh_registers_a_found_output_before_the_fold_reaches_it` | the refresh task handing the ingest an empty set |
 | `a_persona_funding_output_is_registered_by_the_refresh_not_by_its_spend` | the persona's set left out of the offer |
 | `an_undecodable_persona_seal_is_offered_without_and_reported` | the unreadable-seal arm made to fail; the report firing regardless; the unreadable state dropped before it reaches the set |
+
+The last row is the production refresh itself: a chain that pays the
+wallet at height 2 and runs on past the lock window, scanned by the real
+scanner in one result, leaves the output held with nothing owed — the task
+built the set from the result's own detections and the ingest registered
+it before the fold reached its leaf. The engine-level rows drive
+`ingest_scan_result_into_curve_tree`, which builds its own set; only this
+row sees what `run_refresh_task` hands over.
+
+"Unspent" is read against the result as well as the ledger's flag: a row
+the merge has not yet flagged, or a detection, whose key image the result
+saw spent is left out. The result's key images are every input in its
+range, unfiltered, so the wallet's own key images are collected once and the
+result's list walked once against them — linear in the result, not the
+product of the two.
 
 The persona test is the one that carries the claim above: registered by a
 refresh, the output rebuilds **exactly** its one closed leaf chunk
@@ -1807,22 +1823,6 @@ day those rows are pruned below a chunk a persona output has yet to be
 registered under. Whatever increment 7 does to the leaf rows has to keep
 them for at least the persona scan's trail plus its catch-up, or give the
 persona a way to name its outputs before they drain.
-
-**Superseded by §11.12 for the registrant and the fallback** — the
-paragraph below described the state between #945 and the registrant PR, and
-is kept as that record.
-
-**The engine registrant is the outstanding production work.** Nothing in the
-engine calls `register_owned`. Until it does, no production batch is
-registered, and assembly takes the rebuild it keeps for that batch. The
-mechanism the registrant will call is built: the fold writes a chunk when it
-closes over a registered output, `reconcile_captures` backfills what
-`AfterDrain` names, and a registered batch is assembled from captures and the
-frontier snapshot. The state-3 oracle
-`capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`
-is green. The registrant is the refresh driver, its own PR (rule 19: a
-different validation surface). It preserves the reselection class of
-`RegistrationIdentityMismatch`.
 
 Two limits the oracle does not cover, named so a later commit does not
 inherit them silently. The fixture's depth puts only layer 1 under a closed

@@ -1676,3 +1676,182 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
         mismatches.len().min(10),
     );
 }
+
+// ---------------------------------------------------------------------------
+// The registrant through the production refresh (CT-6 §11.12)
+// ---------------------------------------------------------------------------
+
+/// A transaction paying `amount` to the hybrid wallet, as a block would
+/// carry it: the output constructed with the wallet's own view material, the
+/// KEM ciphertext and the `0x07` leaf entry in `extra`, the encrypted amount
+/// and label in the committed base — everything the scanner recovers from.
+fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
+    use shekyl_crypto_pq::output::construct_output;
+    use shekyl_scanner::Extra;
+    use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
+
+    let blob = rederive_account(
+        &HYBRID_WALLET_SEED,
+        DerivationNetwork::Stagenet,
+        SeedFormat::Bip39,
+    )
+    .expect("rederive_account for hybrid wallet seed (stagenet/bip39)");
+    let tx_key_secret = [0x2du8; 32];
+    let tx_pubkey = &Scalar::from_bytes_mod_order(tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let constructed = construct_output(
+        &tx_key_secret,
+        &blob.x25519_pk,
+        &blob.ml_kem_ek,
+        blob.spend_pk.as_canonical_bytes(),
+        amount,
+        0,
+    )
+    .expect("construct an output to the hybrid wallet");
+
+    let mut kem = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+    kem.extend_from_slice(&constructed.kem_ciphertext_x25519);
+    kem.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, [kem]);
+    extra.push_pqc_leaf_entries(constructed.pqc_leaf.entry_bytes().to_vec());
+
+    Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::Gen(0)],
+            outputs: vec![Output {
+                amount: 0,
+                key: constructed.output_key,
+                view_tag: constructed.view_tag_prefilter,
+            }],
+            extra: extra.serialize(),
+        },
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![constructed.enc_amount_wire().to_bytes()],
+            enc_labels: vec![constructed.enc_label_wire().to_bytes()],
+            commitments: vec![constructed.commitment],
+        }),
+    }
+}
+
+/// A chain of `n` blocks whose block `paying_at` carries one transaction
+/// paying the hybrid wallet, with every header's `curve_tree_root` the root
+/// a tree fed these blocks reconstructs (CT-5b §3.3 verifies each height),
+/// and `first_output_index` kept as the daemon keeps it.
+fn chain_paying_the_hybrid_wallet(
+    n: u64,
+    paying_at: u64,
+    amount: u64,
+) -> (Vec<shekyl_scanner::ScannableBlock>, u64) {
+    use crate::engine::curve_tree_decode::decode_block_leaves;
+    use crate::engine::test_support::make_synthetic_block;
+    use shekyl_curve_tree::{BlockLeaves, CurveTreeClient, TxLeafInputs};
+
+    let mut shadow = CurveTreeClient::new();
+    let mut chain = Vec::with_capacity(usize::try_from(n).expect("small"));
+    let mut parent = BlockHash::NULL;
+    let mut next_output = 0u64;
+    let mut paid_gindex = None;
+    for h in 0..n {
+        let mut block = make_synthetic_block(h, parent);
+        block.first_output_index = Some(next_output);
+        if h == paying_at {
+            let tx = transaction_paying_the_hybrid_wallet(amount);
+            block.block.transaction_hashes.push(tx.hash());
+            block.transactions.push(tx);
+            // The coinbase has no outputs, so the payment is the block's
+            // first output.
+            paid_gindex = Some(next_output);
+        }
+        // Feed the shadow tree what the engine's decoder will feed the
+        // real one, and read back the root this height's header commits.
+        let leaves = decode_block_leaves(&block).expect("the block decodes");
+        let inputs: Vec<TxLeafInputs<'_>> = leaves
+            .iter()
+            .map(|tx| TxLeafInputs {
+                is_miner: tx.is_miner,
+                leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
+                outputs: tx.outputs.as_slice(),
+            })
+            .collect();
+        shadow
+            .ingest_block(BlockLeaves {
+                height: shekyl_curve_tree::BlockHeight::from_raw(h),
+                txs: &inputs,
+            })
+            .expect("the shadow tree ingests");
+        block.block.header.curve_tree_root = shadow
+            .root_at(shekyl_curve_tree::BlockHeight::from_raw(h))
+            .expect("the shadow tree answers at its tip");
+        next_output += leaves.iter().map(|tx| tx.outputs.len() as u64).sum::<u64>();
+        parent = block.block.hash();
+        chain.push(block);
+    }
+    (
+        chain,
+        paid_gindex.expect("the paying height is in the chain"),
+    )
+}
+
+/// The production refresh registers what its scan finds before the fold
+/// reaches it. One refresh over a chain that pays the wallet at height 2
+/// and runs on past the lock window — so the payment is found, drained and
+/// its chunk closed inside one scan result — leaves the output held with
+/// nothing owed: the task offered the result's own detections to the tree
+/// between the ingest's rollback and its first fold.
+///
+/// This is the test the engine-level passes in `ownership::tests` cannot
+/// stand in for: they drive `ingest_scan_result_into_curve_tree`, which
+/// builds its own set, while `run_refresh_task` builds the set itself and
+/// hands it to the ingest. With the task handing over an empty set
+/// instead, the probe below is the output's first registration and reads
+/// `after_drain == 1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refresh_registers_a_found_output_before_the_fold_reaches_it() {
+    const MASTER_SEED: [u8; 32] = [
+        0x71, 0x3b, 0x2c, 0x9e, 0x44, 0x0d, 0x5f, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18,
+        0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07,
+        0x18, 0x29,
+    ];
+    let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+    // Paid at height 2; the lock window is 10 blocks; 30 blocks is past
+    // the drain by a margin and the whole span is one scan result.
+    let (chain, paid_gindex) = chain_paying_the_hybrid_wallet(30, 2, 1_000_000);
+    let paid_key = chain[2].transactions[0].prefix.outputs[0].key;
+    let mock = TestDaemon::with_seed_and_chain(daemon_seed, chain);
+    let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+    let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh claims the slot");
+    let summary = handle.join().await.expect("the refresh joins");
+    assert_eq!(
+        summary.transfers_detected, 1,
+        "the scan found the payment; the fixture is live"
+    );
+
+    let g = arc.read().await;
+    assert_eq!(
+        g.ledger.read().ledger.ledger.transfers().len(),
+        1,
+        "and the merge kept it"
+    );
+    let pair = (
+        shekyl_curve_tree::Gindex::from_raw(paid_gindex),
+        shekyl_curve_tree::OneTimePubkey::from_bytes(paid_key),
+    );
+    let probe = g
+        .curve_tree
+        .sync_owned(vec![pair])
+        .await
+        .expect("sync on the live actor");
+    assert_eq!(
+        probe.already_held, 1,
+        "registered by the refresh before its leaf folded"
+    );
+    assert_eq!(
+        probe.reconciliation, None,
+        "and captured by the fold, so the spend-time sync owes nothing"
+    );
+}
