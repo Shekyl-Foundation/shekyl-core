@@ -166,7 +166,7 @@ missing row is named with what removed it):
 | the KATs and FFI tests | `rust/shekyl-archival-retention/tests/{gate2_serve_credit_kat,gate4_lifecycle_kat,tj_red_challenge_scope,assembled_path_crosscheck}.rs`; `rust/shekyl-ffi/src/archival_ffi/tests.rs:1045`, `:1091` | hold the rows above |
 | the C++ side | `src/cryptonote_core/blockchain.{cpp,h}`, `src/cryptonote_core/cryptonote_tx_utils.{cpp,h}`, `src/blockchain_db/{blockchain_db.{cpp,h},shekyl_types.h,lmdb/db_lmdb.{cpp,h}}`, `src/rpc/archival_shard_coverage.cpp:34`, `src/shekyl/{economics.h,shekyl_ffi.h}`, and their tests under `tests/` | row 3 = (b): not this cutover's |
 | the gates over them | `scripts/ci/check_segment_freeze_sites.sh`, `scripts/ci/check_consensus_invariants.sh:250` | key on these symbol names; a rename would turn them into silent no-ops |
-| **the serve-credit verifier's successor** (ruled 2026-10-04) | the verifier is the serve-credit row above, on both sides of the FFI: the C++ `check_archival_serve_credit_input` and the three exports it calls | **It dies with the engine swap, and it is not ported.** Its successor is SO-D8 Slice C (authorized at `4149c7a4d7`; [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §8.0). CEN-J8's second clause, *"the shard's frozen segment must exist at `H_fire`"*, is stated on the leaf segment. Slice C's Round 0 must re-base it on the ruled partition (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not leaf chunks. The same note sits in Slice C's Round-0 inputs as a cross-reference |
+| **the serve-credit verifier's successor** (ruled 2026-10-04) | the verifier is the serve-credit row above, on both sides of the FFI: the C++ `check_archival_serve_credit_input` and the three exports it calls | **It dies with the engine swap, and it is not ported.** Its successor is SO-D8 Slice C (authorized at `4149c7a4d7`; [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §8.0). CEN-J8's second clause, *"the shard's frozen segment must exist at `H_fire`"*, is stated on the leaf segment. Slice C's Round 0 must re-base it on the ruled partition (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not leaf chunks. **Possession is verified against what the txid binds** (added 2026-10-05): the digests `txs_prunable_hash` and `txs_pqc_auth_hash`, and the length `txs_archival_len` (`SHT-Q2`). The Rust store keeps all three after pruning (`rust/shekyl-chain-store/src/store/prune.rs:51-52`, `:99-100`), so a pruned validator can check a whole-shard read. **Slice C is a precondition of the engine swap:** `DEL-008` ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §12; `SCV-Q5`) allows no genesis and no cutover until Slice C's admission rows are `implemented` in `census.rs` and J8–J10 are retired. The same note sits in Slice C's Round-0 inputs as a cross-reference |
 
 **Class C — kept. The curve tree's own segment.** A level-2 subtree of the tree is a
 unit of *tree* storage: the store freezes it once buried, keeps its sub-root `R_k`,
@@ -390,9 +390,21 @@ ceremony raises the asymptote, which is exactly the kind of defect that ships
 unnoticed and detonates later. `escalation_knee_n`'s re-expression rides the same
 change so the ceremony is never handed a number in the wrong unit.
 
-**Family 1 — daemon + wallet, as one.** Bond admission checks domain membership,
-and the wallet posts the holdings it will be judged on. A daemon on the domain
-ordinal and a wallet on storage ids name different shards with the same integer.
+**Family 1 — five components, as one, at or before the engine swap** (boundary
+restated 2026-10-05; it read "daemon + wallet"). What moves together:
+
+- **the bond-admission predicate** (closed-and-final shard; ruled, unbuilt);
+- **SO-D8 Slice C**, the serve-credit admission rows and the settlement writer's
+  call site;
+- **the archiver serving-store rebuild** (`WSS-`, the wallet lane);
+- **fetch Sub-PR 2**;
+- **the wallet's holdings and serve-set source**.
+
+Bond admission checks domain membership, and the wallet posts the holdings it will
+be judged on, pins what it holds and serves what it pinned. A validator on the
+byte-cut partition and a serving stack on leaf segments name different shards with
+the same integer (§B family 2, *`shard_id` has two meanings*), so no one of the five
+moves alone.
 
 **Amended 2026-09-29 (`SHT-Q2`): family 1 now also carries the txid change, and that
 makes it the larger group.** Everything below lands in the one ratified change,
