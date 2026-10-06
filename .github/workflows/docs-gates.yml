@@ -637,3 +637,24 @@ jobs:
         # A gate never shown to fire is indistinguishable from one that cannot.
         if: '!cancelled()'
         run: python3 scripts/ci/check_bench_not_a_dependency.py --selftest
+
+      - name: Run measurement-ledger gate
+        # A constant derived from a capture must not outlive the code the
+        # capture was taken on without the ledger saying so. Each constant
+        # in `docs/benchmarks/measurement_ledger.toml` names its definition,
+        # its capture and revision, and one path set: the pathspecs whose
+        # cost it shares, acknowledged once. The gate fails when a
+        # constant's stated status (current / stale / unmeasured) disagrees
+        # with git in either direction. A stale constant keeps its name
+        # until a newer capture retires it. Needs the full history this
+        # job already fetches (`fetch-depth: 0`); a shallow checkout whose
+        # cut lies inside a constant's range is exit 2, never a pass
+        # (47-gate-subject-assertion.mdc).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_measurement_ledger.py
+
+      - name: Run measurement-ledger gate selftest
+        # Builds throwaway repositories and bites each failure class red,
+        # beside a control row that must stay green.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_measurement_ledger.py --selftest
