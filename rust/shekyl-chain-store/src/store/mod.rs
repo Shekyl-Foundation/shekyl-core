@@ -140,6 +140,7 @@ pub use write::WriteBatch;
 use std::path::Path;
 
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
+use shekyl_chain_rules::{AtHeight, ReleaseAnchors};
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::SettlementEpochBlocks;
@@ -206,6 +207,11 @@ impl ChainStore {
     /// the settlement-epoch schedule `epoch` (a fresh file is pinned to it;
     /// an existing file must have been built under it).
     ///
+    /// This door does not admit a release pin. Harness chains, synthetic
+    /// block ids, and Fakechain open here: nothing they record is a pin
+    /// this binary vouches for. A public network opens through
+    /// [`with_release`](Self::with_release).
+    ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file cannot be created or opened; the
@@ -220,6 +226,8 @@ impl ChainStore {
     /// Create or open the store with an explicit [`ApplyPolicy`] under the
     /// **production** undo-log retention, `D_max`
     /// ([`Horizons::production`]).
+    ///
+    /// Does not admit a release pin, as [`with_horizons`](Self::with_horizons).
     ///
     /// # Errors
     ///
@@ -253,6 +261,12 @@ impl ChainStore {
     /// file's pin must equal it (SCW-2). The retention is a session
     /// parameter, not pinned: what it has retired is recorded by the
     /// `undo_log_floor` cell.
+    ///
+    /// This door does not admit a release pin. A public network opens
+    /// through [`with_release`](Self::with_release), which cannot skip the
+    /// comparison. Calling it after this returns is not a step a caller
+    /// can forget and still be holding a checked handle: admission is the
+    /// constructor, not a method on a store this door already returned.
     ///
     /// # Errors
     ///
@@ -390,6 +404,9 @@ impl ChainStore {
     /// retired — so a reader reports the retention it was given, and that
     /// pair has already passed [`Horizons::new`]. A reader retires nothing.
     ///
+    /// Does not admit a release pin. A public-network reader opens through
+    /// [`open_read_only_with_release`](Self::open_read_only_with_release).
+    ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file is absent or cannot be opened; the
@@ -409,6 +426,90 @@ impl ChainStore {
             horizons,
             shared: Shared::new(provenance),
         })
+    }
+
+    /// Create or open the store and admit `anchors` (CEN-E5).
+    ///
+    /// The unanchored doors — [`create`](Self::create),
+    /// [`with_apply_policy`](Self::with_apply_policy),
+    /// [`with_horizons`](Self::with_horizons) — do not do this. Harness
+    /// chains, synthetic block ids, and Fakechain open there.
+    /// [`ReleaseAnchors::EMPTY`] agrees with any chain the snapshot can
+    /// read, which is what those files are. A public network passes the
+    /// table [`ReleaseAnchors::for_network`] returns. The store does not
+    /// know which networks exist: the table is the data, and nettype does
+    /// not select a branch here (rule 71).
+    ///
+    /// Admission runs once, in this constructor. An empty file agrees:
+    /// there is no block for a pin to contradict. A recorded pin that is
+    /// not the table's is [`StoreCannot::ReleasePin`]. The open does not
+    /// pop. A genesis conflict's remedy is refuse-to-run, which is this
+    /// error. A later checkpoint's remedy is a pop the ingest driver still
+    /// owes (`docs/FOLLOWUPS.md`); this door reports that conflict the same
+    /// way, so a session cannot start on a chain that disagrees with its
+    /// pins and then forget to rewind.
+    ///
+    /// The walk is [`ReleaseAnchors::conflict_over`], the same one
+    /// [`ReleaseAnchors::conflict_with`] runs over a `ChainView`. The
+    /// snapshot is not a `ChainView` — that impl is deferred — so admission
+    /// reads [`ReadSnapshot::tip`] and [`ReadSnapshot::block_info`] and
+    /// hands those to the walk. A hole at or below the tip is the read's
+    /// own fault, not a pin mismatch.
+    ///
+    /// # Errors
+    ///
+    /// The header refusals of [`with_horizons`](Self::with_horizons);
+    /// [`StoreCannot::ReleasePin`] when a pin at or below the tip is not
+    /// the block recorded there; a read fault when the snapshot cannot
+    /// answer.
+    pub fn with_release(
+        path: impl AsRef<Path>,
+        apply_policy: ApplyPolicy,
+        horizons: Horizons,
+        anchors: &ReleaseAnchors,
+    ) -> Result<Self, StoreError> {
+        let store = Self::with_horizons(path, apply_policy, horizons)?;
+        store.admit(anchors)?;
+        Ok(store)
+    }
+
+    /// Open an existing store read-only and admit `anchors`.
+    ///
+    /// The reader twin of [`with_release`](Self::with_release): the same
+    /// admission, and no write. [`open_read_only`](Self::open_read_only)
+    /// does not admit, so a reader of a public file cannot skip the pin
+    /// by opening the unanchored door and calling it a check.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_read_only`](Self::open_read_only), then the admission
+    /// errors of [`with_release`](Self::with_release).
+    pub fn open_read_only_with_release(
+        path: impl AsRef<Path>,
+        horizons: Horizons,
+        anchors: &ReleaseAnchors,
+    ) -> Result<Self, StoreError> {
+        let store = Self::open_read_only(path, horizons)?;
+        store.admit(anchors)?;
+        Ok(store)
+    }
+
+    /// CEN-E5 over this file. `Ok` agrees, including an empty file and an
+    /// empty table. A contradiction is [`StoreCannot::ReleasePin`]. A read
+    /// that cannot answer is that read's error: a fault is not agreement
+    /// and not a pin mismatch.
+    fn admit(&self, anchors: &ReleaseAnchors) -> Result<(), StoreError> {
+        let snap = self.begin_read()?;
+        let tip = snap.tip()?.recorded;
+        match anchors.conflict_over(tip, |height| -> Result<_, StoreError> {
+            Ok(match snap.block_info(height)? {
+                AtHeight::Recorded(info) => Some(info.hash),
+                AtHeight::AboveTip => None,
+            })
+        })? {
+            None => Ok(()),
+            Some(conflict) => Err(StoreCannot::ReleasePin(conflict).into()),
+        }
     }
 
     /// Whether the writer is live or halted (`DAEMON_REDB_STORE.md` §3.6.2).
@@ -605,6 +706,11 @@ mod store_tests;
 #[cfg(test)]
 #[path = "header_tests.rs"]
 mod header_tests;
+
+/// CEN-E5 at the public-network open (`with_release`).
+#[cfg(test)]
+#[path = "release_admission_tests.rs"]
+mod release_admission_tests;
 
 #[cfg(test)]
 #[path = "undo_tests.rs"]
