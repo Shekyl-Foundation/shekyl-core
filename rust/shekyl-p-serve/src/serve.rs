@@ -93,7 +93,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -705,10 +705,14 @@ async fn resolve(
 /// body was opened. The bytes written are [`FramedDigest::frame_bytes`]: the
 /// header that was hashed, not a second encoding of it.
 ///
+/// Generic over the writer so the invariant tests can stand a sink in for
+/// the socket and say exactly how many bytes a requester took before it
+/// stopped (`serve_invariant_tests.rs`).
+///
 /// [`RF-D4`]: shekyl_curve_tree::served_frame
 /// [`ServedFrameHeader::framed_len`]: shekyl_curve_tree::served_frame::ServedFrameHeader::framed_len
-async fn write_response(
-    stream: &mut TcpStream,
+async fn write_response<W: AsyncWrite + Unpin>(
+    stream: &mut W,
     resolved: Resolved,
     signer: Arc<dyn PassSigner>,
     served: &AtomicU64,
@@ -810,7 +814,7 @@ async fn write_response(
 
 /// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
 /// why the per-write bound, not the total, is what a stalled peer costs.
-async fn write_bounded(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> io::Result<()> {
     tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write_all(bytes))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))?

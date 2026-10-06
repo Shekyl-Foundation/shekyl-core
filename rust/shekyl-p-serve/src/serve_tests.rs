@@ -986,3 +986,6 @@ fn request_header_parsing_is_http_lenient_and_value_strict() {
 
 #[path = "serve_seal_tests.rs"]
 mod seal;
+
+#[path = "serve_invariant_tests.rs"]
+mod invariant;
