@@ -23,7 +23,7 @@ use std::thread;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
     connector_from_index, deadline_after, direction_from_index, drive_inbound, BanLeft, CloseCause,
-    CloseKind, ConnectorId, Direction, Endpoint, Hub, Ipv4Subnet, ListedBan, Post, Row, SocketId,
+    CloseKind, ConnectorId, Direction, Endpoint, Hub, Ipv4Subnet, ListedBan, Post, SocketId,
     TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
@@ -39,7 +39,7 @@ use crate::legacy_util::slice_from_ptr;
 const HARNESS_SEND_CAP: usize = 64 * 1024;
 
 /// `established`. Matches the C header.
-const POST_ESTABLISHED: u32 = 1;
+pub(crate) const POST_ESTABLISHED: u32 = 1;
 /// `deliver`.
 const POST_DELIVER: u32 = 2;
 /// `closed`.
@@ -55,9 +55,9 @@ pub const SHEKYL_DIRECTION_INBOUND: u32 = 0;
 pub const SHEKYL_DIRECTION_OUTBOUND: u32 = 1;
 
 /// `epee::net_utils::address_type`. The encoding uses these tags.
-const ADDR_IPV4: u8 = 1;
-const ADDR_IPV6: u8 = 2;
-const ADDR_TOR: u8 = 4;
+pub(crate) const ADDR_IPV4: u8 = 1;
+pub(crate) const ADDR_IPV6: u8 = 2;
+pub(crate) const ADDR_TOR: u8 = 4;
 
 const _: () = {
     assert!(ConnectorId::Clearnet as u8 as u32 == SHEKYL_CONNECTOR_CLEARNET);
@@ -139,6 +139,17 @@ static STATE: Mutex<Option<Hub>> = Mutex::new(None);
 
 pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
+}
+
+/// Tests that bind the process hub take this for the whole test.
+///
+/// The hub is one static. Two tests binding it at once would publish over
+/// each other. A poisoned lock is the previous test's panic; the next test
+/// still needs the gate.
+#[cfg(test)]
+pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    &LOCK
 }
 
 /// One admission table for the process. A new binding does not mint ids
@@ -504,68 +515,6 @@ pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
     hub().map(|hub| hub.inbound_held()).unwrap_or(0)
 }
 
-/// One published row. `endpoint` is the admission address. `connector` and
-/// `direction` repeat it. `established` is the handshake and is not part
-/// of a direction count.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ShekylSeamBoardRow {
-    pub id: u64,
-    pub connector: u8,
-    pub direction: u8,
-    pub established: u8,
-    pub _pad: u8,
-    pub endpoint: ShekylSeamObserved,
-}
-
-const _: () = {
-    assert!(std::mem::size_of::<ShekylSeamObserved>() == 70);
-    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 88);
-};
-
-fn board_row(row: &Row) -> ShekylSeamBoardRow {
-    let endpoint = observed_c(&row.endpoint());
-    debug_assert_eq!(endpoint.connector, row.connector() as u8);
-    debug_assert_eq!(endpoint.direction, direction_byte(row.direction()));
-    ShekylSeamBoardRow {
-        id: row.id().get(),
-        connector: endpoint.connector,
-        direction: endpoint.direction,
-        established: u8::from(row.established()),
-        _pad: 0,
-        endpoint,
-    }
-}
-
-/// Visit the process hub's board.
-///
-/// There is one hub. The row pointer is valid only for the visit. A
-/// missing hub visits with a null pointer and a count of zero.
-///
-/// # Safety
-/// `visit` receives `ctx` and a pointer into this call's row buffer.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_board(
-    ctx: *mut c_void,
-    visit: Option<unsafe extern "C" fn(*mut c_void, *const ShekylSeamBoardRow, usize)>,
-) -> i32 {
-    let Some(visit) = visit else {
-        return -1;
-    };
-    let Some(hub) = hub() else {
-        unsafe { visit(ctx, std::ptr::null(), 0) };
-        return 0;
-    };
-    let rows: Vec<ShekylSeamBoardRow> = hub.board().rows().iter().map(board_row).collect();
-    let ptr = if rows.is_empty() {
-        std::ptr::null()
-    } else {
-        rows.as_ptr()
-    };
-    unsafe { visit(ctx, ptr, rows.len()) };
-    0
-}
-
 /// One ban, as `getbans` reads it. `text` is a host or `address/prefix`.
 /// `permanent` is 1 when the ban has no deadline. `remaining_ns` is
 /// time left on a deadline, and 0 when the ban is permanent.
@@ -866,7 +815,7 @@ fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> 
     }
 }
 
-fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
+pub(crate) fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
     let mut out = ShekylSeamObserved {
         connector: endpoint.connector() as u8,
         direction: direction_byte(endpoint.direction()),
@@ -987,26 +936,5 @@ fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
         port: 0,
         len: 0,
         bytes: [0; TOR_HOST_MAX],
-    }
-}
-
-#[cfg(test)]
-mod board_ffi_tests {
-    use super::*;
-
-    unsafe extern "C" fn ignore(
-        _ctx: *mut c_void,
-        _rows: *const ShekylSeamBoardRow,
-        _count: usize,
-    ) {
-    }
-
-    #[test]
-    fn the_board_call_refuses_a_null_visit() {
-        assert_eq!(unsafe { shekyl_seam_board(std::ptr::null_mut(), None) }, -1);
-        assert_eq!(
-            unsafe { shekyl_seam_board(std::ptr::null_mut(), Some(ignore)) },
-            0
-        );
     }
 }

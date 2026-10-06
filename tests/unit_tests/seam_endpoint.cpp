@@ -23,7 +23,6 @@
 #include "gtest/gtest.h"
 
 #include "net/levin_base.h"
-#include "p2p/seam_board.h"
 #include "p2p/seam_endpoint.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -464,29 +463,4 @@ TEST(seam_endpoint, add_ref_fails_once_closed_and_does_not_use_a_destroyed_handl
   EXPECT_TRUE(raw->destroyed());
   EXPECT_EQ(failures.load(), 0);
   EXPECT_FALSE(raw->add_ref());
-}
-
-TEST(seam_board, the_dial_cap_counts_a_handshake_that_has_not_finished)
-{
-  // `--out-peers 1` never reaches a running node: the F-8b floor refuses
-  // it at startup. Two hosts also cannot fill an outbound cap of 12.
-  // The predicate is the comparison those rigs do not reach.
-  shekyl_seam_board_row open{};
-  open.connector = static_cast<std::uint8_t>(SHEKYL_CONNECTOR_CLEARNET);
-  open.direction = static_cast<std::uint8_t>(SHEKYL_DIRECTION_OUTBOUND);
-  open.established = 0;
-  shekyl_seam_board_row done = open;
-  done.established = 1;
-  done.id = 2;
-
-  const std::vector<shekyl_seam_board_row> at_one{open};
-  EXPECT_TRUE(shekyl::outbound_dial_refused(at_one, open.connector, 1));
-  EXPECT_FALSE(shekyl::outbound_dial_refused({}, open.connector, 1));
-
-  std::vector<shekyl_seam_board_row> at_floor(11, open);
-  at_floor.push_back(done);
-  EXPECT_EQ(shekyl::board_direction_count(at_floor, open.connector, open.direction), 12u);
-  EXPECT_TRUE(shekyl::outbound_dial_refused(at_floor, open.connector, 12));
-  EXPECT_FALSE(shekyl::outbound_dial_refused(at_floor, open.connector, 13));
-  EXPECT_EQ(shekyl::board_direction_count(at_floor, open.connector, static_cast<std::uint8_t>(SHEKYL_DIRECTION_INBOUND)), 0u);
 }

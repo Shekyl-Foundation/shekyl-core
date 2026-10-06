@@ -566,9 +566,17 @@ fn an_unestablished_outbound_row_still_fills_the_dial_cap() {
     let board = rig.hub.board();
     assert_eq!(board.len(), 12);
     assert!(board.rows().iter().all(|row| !row.established()));
-    assert_eq!(board.direction_count(Direction::Outbound), 12);
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Outbound), 12);
+    assert_eq!(board.count(ConnectorId::Tor, Direction::Outbound), 0);
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Inbound), 0);
+    assert_eq!(
+        board.direction_count(Direction::Outbound),
+        board.count(ConnectorId::Clearnet, Direction::Outbound)
+            + board.count(ConnectorId::Tor, Direction::Outbound)
+    );
     rig.hub.session_established(opened[0].id);
     let after = rig.hub.board();
     assert!(after.get(opened[0].id).expect("row").established());
+    assert_eq!(after.count(ConnectorId::Clearnet, Direction::Outbound), 12);
     assert_eq!(after.direction_count(Direction::Outbound), 12);
 }

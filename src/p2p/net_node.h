@@ -609,7 +609,7 @@ namespace nodetool
     bool do_handshake_with_peer(p2p_connection_context& context, bool just_take_peerlist = false);
     bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context);
 
-    bool make_new_connection_from_peerlist(network_zone& zone, bool use_white_list);
+    bool make_new_connection_from_peerlist(epee::net_utils::connector_id connector, network_zone& zone, bool use_white_list);
     bool try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist = false, uint64_t last_seen_stamp = 0, PeerType peer_type = white);
     size_t get_random_index_with_fixed_probability(size_t max_index);
     bool is_peer_used(const peerlist_entry& peer);
@@ -623,7 +623,7 @@ namespace nodetool
     void delete_upnp_port_mapping_v6(uint32_t port);
     void delete_upnp_port_mapping(uint32_t port);
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
-    bool make_expected_connections_count(network_zone& zone, PeerType peer_type, size_t expected_connections);
+    bool make_expected_connections_count(epee::net_utils::connector_id connector, network_zone& zone, PeerType peer_type, size_t expected_connections);
     void record_addr_failed(const epee::net_utils::network_address& addr);
     /*! Clear an address's failure record after a successful handshake. */
     void record_addr_success(const epee::net_utils::network_address& addr);
@@ -650,13 +650,16 @@ namespace nodetool
     bool set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit);
     bool set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit);
 
-    //! \return True if this zone already holds an outbound connection to `adr`'s host.
-    bool has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr);
+    //! \return True if `connector` already holds an outbound connection to `adr`'s host.
+    bool has_outbound_connection_to_host(epee::net_utils::connector_id connector, const epee::net_utils::network_address& adr);
     size_t get_incoming_connections_count();
-    size_t get_incoming_connections_count(network_zone&);
+    size_t get_incoming_connections_count(epee::net_utils::connector_id connector);
     size_t get_outgoing_connections_count();
-    size_t get_outgoing_connections_count(network_zone&);
-    std::uint8_t zone_connector(const network_zone& zone) const;
+    size_t get_outgoing_connections_count(epee::net_utils::connector_id connector);
+    //! Close the `how_many` newest outbound rows of `connector`. The board
+    //! names the ids. The zone's handler is closed when it still holds one,
+    //! and `shekyl_seam_close` drops a row the handler table does not.
+    void release_outbound(epee::net_utils::connector_id connector, size_t how_many);
 
     bool check_connection_and_handshake_with_peer(const epee::net_utils::network_address& na, uint64_t last_seen_stamp);
     bool gray_peerlist_housekeeping();

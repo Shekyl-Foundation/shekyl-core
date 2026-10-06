@@ -4394,21 +4394,29 @@ void shekyl_seam_close(std::uint64_t id);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 
-/// One row of the published seam board. `endpoint` is the address observed
-/// at admission. `connector` and `direction` repeat that endpoint so a
-/// count does not decode it. `established` is 1 after the Levin handshake
-/// and is not part of a direction count: a dial occupies its slot before
-/// the handshake finishes.
+/// One row of the published seam board. `endpoint` is the address, the
+/// connector, and the direction observed at admission. `established` is 1
+/// after the Levin handshake and is not an input to
+/// `shekyl_seam_board_count`: a dial occupies its slot before the handshake
+/// finishes.
 struct shekyl_seam_board_row {
   std::uint64_t id;
-  std::uint8_t connector;
-  std::uint8_t direction;
   std::uint8_t established;
-  std::uint8_t _pad;
+  std::uint8_t _pad[7];
   shekyl_seam_observed endpoint;
 };
 static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
+static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
+static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
 static_assert(sizeof(shekyl_seam_board_row) == 88, "seam board row");
+
+/// Rows of `connector` and `direction` on the process hub, handshake or
+/// not. A missing hub, or an index that is not a connector or a direction,
+/// is 0.
+std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t direction);
+/// Rows in `direction` on every connector, handshake or not. A missing hub,
+/// or a direction index that is not one, is 0.
+std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
 
 /// Copy the process hub's board into `visit` for the duration of the call.
 /// There is one hub. A missing hub visits with a null row pointer and a

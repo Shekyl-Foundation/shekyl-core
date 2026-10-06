@@ -1569,19 +1569,23 @@ recount. `apply_inbound_ceiling` (`net_node.inl:2964`) charges
 `shekyl_seam_inbound_held()` (`net_node.inl:2973`). The once-per-second
 peers-monitor thread is deleted. *Records-was: `node_server::run`
 (`:1163`) slept one second and wrote `m_current_number_of_in_peers`
-and `m_current_number_of_out_peers`.* The dial cap recounts through `get_outgoing_connections_count`
-(`try_to_connect_and_handshake_with_new_peer`, `net_node.inl:1576`). *Records-was: the cap
+and `m_current_number_of_out_peers`.* The dial cap reads `get_outgoing_connections_count(connector)`
+(`try_to_connect_and_handshake_with_new_peer`). The connector is the
+one `require_address_connector` already returned. *Records-was: the cap
 read the stored atomic at `:1573`, which the deleted thread used to
 write, and an exclusive list returned before any recount.* Both count
 functions return that recount and neither stores it. *Records-was: the
 out-count store at `:2170` and the in-count store at `:2150`.* The
-recount was a `foreach_connection` at every dial. The board publishes
-`direction_count` (`registry.rs`), which counts rows in one direction
-whether or not the handshake has finished. The dial cap's predicate is
-that count for the zone's connector. `shekyl_seam_board` copies the
-board, and the cap reads the copy. It does not count established rows
-only. *Records-was: the cap still walked `foreach_connection` until
-that count's FFI landed, and this step did not convert the walk.* Slice 3 keeps the fill
+recount was a `foreach_connection` at every dial. `Board::count`
+(`registry.rs`) is the zone predicate: rows of one connector and
+direction, handshake or not. `direction_count` is that count summed
+across `ConnectorId::ALL`. `shekyl_seam_board_count` is the integer the
+cap reads. A dial already past the cap closes the newest outbound row
+of that connector. Lowering the public cap closes that many newest
+rows. Both close by id. `shekyl_seam_board` is the address snapshot.
+*Records-was: the cap read
+`outbound_dial_refused` on a copied board whose row repeated connector
+and direction, and before that the cap walked `foreach_connection`.* Slice 3 keeps the fill
 loops. Deleting the thread removes the one-second `--in-peers`
 measurement input (rule 76;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
@@ -1676,11 +1680,11 @@ connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
 relationship. Those arrive when their owner publishes them, through
 the step-b handle, not as blanks on the board. The `run` thread is
-gone. The dial cap reads `shekyl_seam_board`. A zone's count is the
-rows of that connector and direction, handshake or not.
-`Board::direction_count(Outbound)` is that predicate across connectors.
-*Records-was: the recount was still `foreach_connection`, and this step
-did not convert the walk.* The two walks that need sync state stay.
+gone. The dial cap reads `shekyl_seam_board_count`. A zone's count is
+`Board::count(connector, direction)`, handshake or not.
+`Board::direction_count(Outbound)` is that count across connectors.
+*Records-was: the cap read `outbound_dial_refused` on a copied board,
+and before that the recount was still `foreach_connection`.* The two walks that need sync state stay.
 The rest of this subset reads the board.
 
 | Step c | Step b |
@@ -1693,7 +1697,7 @@ The rest of this subset reads the board.
 | `is_addr_connected` — **UPDATE 2026-10-06: the board.** *Records-was: `:1538`.* | |
 | `make_new_connection_from_peerlist` — **UPDATE 2026-10-06: the subnet set is the board.** *Records-was: `:1771`.* | |
 | `get_incoming_connections_count` — **UPDATE 2026-10-06: the board, one zone and every zone.** *Records-was: `:2142` and `:2179`.* | |
-| The dial cap reads `outbound_dial_refused` on the board copy. Established is not part of the count. *Records-was: `:1576` recounted through `get_outgoing_connections_count` (`:2155`), and this step did not convert the walk.* | |
+| The dial cap reads `shekyl_seam_board_count`. Established is not part of the count. An overshoot closes the newest outbound id of that connector. *Records-was: `outbound_dial_refused` on the board copy, and before that `:1576` recounted through `get_outgoing_connections_count`.* | |
 | `get_outgoing_connections_count` — **UPDATE 2026-10-06: the board.** *Records-was: `:2155`.* | |
 | `print_connections_container` — **UPDATE 2026-10-06: the address, the id, and the direction, from the board.** *Records-was: `:2801`.* | A sync-state line on the connection print. The board print does not carry one. |
 
