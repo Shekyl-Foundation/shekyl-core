@@ -1771,6 +1771,7 @@ fn chain_paying_the_hybrid_wallet(
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
+                tx_hash: Some(tx.tx_hash),
                 leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })
