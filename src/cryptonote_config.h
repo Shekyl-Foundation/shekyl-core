@@ -284,9 +284,9 @@
 // version-1 thresholds. No source file gates on one: SHEKYL_NG is the
 // operand of the hard-fork table's height lookup (CEN-F21's epoch), and
 // EXACT_COINBASE, VIEW_TAGS, and 2021_SCALING are the same value, read only
-// by tests. Do not add a comparison against a fork number; the inventory is
-// docs/design/CXX_VERSION_GATES.md and scripts/ci/check_cxx_version_gates.py
-// holds it.
+// by tests. Do not add a comparison against a fork number. The inventory is
+// docs/ci/cxx-version-gates.tsv; scripts/ci/check_cxx_version_gates.py holds
+// the tree to it. docs/design/CXX_VERSION_GATES.md says what a row means.
 #define HF_VERSION_EXACT_COINBASE               1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1

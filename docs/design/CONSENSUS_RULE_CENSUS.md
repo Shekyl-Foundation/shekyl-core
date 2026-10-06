@@ -555,7 +555,7 @@ Reward emission (per tx; whole-tx shape CEN-H22):
 | CEN-L12 | Deferred-insertion maturity IS the spend-maturity rule: coinbase leaves enter the tree at height+60, all other outputs at height+`CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (10); `tx.unlock_time` plays **no** role in when an output becomes spendable | blockchain_db.cpp:531–575; drain :583 (impl lmdb/db_lmdb.cpp:8589) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 ("Maturity is enforced by universal deferred tree insertion") | the spec's "staked: max(effective_lock_until…)" arm does not exist in code (claim-era, retired) — §7. Third leg of the unlock_time triple-divergence (§6); CHECKED-CONFORMANT with CEN-L11 since 2026-09-04 (CSR §5.4.1) |
 | CEN-L13 | Corruption/desync guards throughout the write and pop paths (serve-credit re-parse, bond-counter overflow, journal-vs-tip belts, trim bounds, pruned-pop refusal, …) abort the operation rather than storing inconsistent consensus state | blockchain_db.cpp / lmdb/db_lmdb.cpp per traversal | C | 3 | — | C2-R8 §7.1: not chain rules — arm B, classed into the register: cell decode `SI-7`, accumulator arithmetic `SI-8`, journal-vs-tip `SI-6`, trim bounds `SI-5`; **pruned-pop refusal is `StoreCannot`** (a capability, misfiled as a guard) | counted as one row: sanity class, not independently ratifiable chain behavior. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** — [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) owns them |
 | CEN-L14 | DB-absent uniqueness (deliberately verify-side only): serve-credit pass bits, bond records (JoinMarket p_id), budget accrual rows, witness rows, curve-root heights are flag-0 overwrites | lmdb/db_lmdb.cpp:5168–5181, 5591–5615, 4916–4928, 9663–9672, 9618 | C | 4 | examined-disposition | C2-R8 §7.3 ruled the **mechanism** (every keyed write is a declared `insert` or `upsert`; silent overwrite unrepresentable) and found each of the five semantics **unnamed by any document — arm C**, routed as R8b-3…R8b-7 (§10) | recorded absences; the PC-D4 comment at blockchain_db.cpp:775–786 records the bug class this tolerance once masked. **UPDATE 2026-09-14 (C2-R8, §7 #20): stays 4, class `none` → `examined-disposition`.** R8 examined; R8b names — one word per site once ruled |
-| CEN-L15 | `if (blk.major_version >= 4)` cumulative-RCT accumulation in `block_info` never runs (live major is 1); `bi_cum_rct` therefore holds this block's RCT count only — a dead Monero-v4 (RCT-era) dispatch arm on the write path | lmdb/db_lmdb.cpp:988–998 | C | 3 | — | rule 60: `RCTType*` named in the deleted-from-construction list; "delete the dead branch" for Monero-era version dispatch | [m] RC-180 ⇒ minted at RC's bucket. §10 R5 executes |
+| CEN-L15 | `bi_cum_rct` holds this block's RCT count only. The cumulative arm (`blk.major_version >= 4`) was deleted 2026-10-05; the field stays, written and unread | lmdb/db_lmdb.cpp:1019 | C | 3 | — | rule 60: `RCTType*` named in the deleted-from-construction list; "delete the dead branch" for Monero-era version dispatch | [m] RC-180 ⇒ minted at RC's bucket. **UPDATE 2026-10-06:** §10 R5 executed 2026-10-05 — the arm is gone. The field remains a per-block write with no reader. Bucket stays 3 until the schema bump or the store replacement deletes the field |
 | CEN-L16 | **A consensus predicate evaluated inside the store layer (R8-class placement, minted 2026-09-23 by S-ARCH's pre-flight):** the as-of-height holdings fold — *did `P` hold shard `s` at height `h`* — the operand of CEN-J8 (serve-credit acceptance at `H_fire`) and of the slash writer's eligibility check (CEN-L9), is computed by `BlockchainLMDB::archival_bond_holds_shard_of`: held at tip ⇒ held from the shard's add-epoch + 1 (P2B-7 Pin 5) or back to join for a complete tree; not held at tip ⇒ held at `h` iff a logged slash strictly above `h` removed it, by a **range scan over `archival_slash_log`** (`archival_slash_removed_holding_after`) — the pop-reversal journal read forward as consensus history; a `held_shard_ids` / `shard_add_epochs` desync is FATAL. **C2-R8 did not census it:** R8's eight L-rows were drawn from `add_block` / `pop_block` (the write paths); this is a *read*, and the sweep did not cover reads (`DRS_E1_SARCH.md` SAR-2, SAR-7; the census-lane question in `FOLLOWUPS.md`, third ground) | lmdb/db_lmdb.cpp:4889–4950 (the fold), :4804–4870 (the slash-log scan), :4943 (the FATAL); consumers blockchain.cpp:4874 (serve-credit verifier, `PDM-Q3`), lmdb/db_lmdb.cpp:5381 (slash eligibility) | C | 1 | spec | [`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) §6 SAR-2 / SAR-7, `SAR-Q7` (RULED: the *port* travels with E4's journal ruling — the fold to `shekyl-archival-retention` as `holds_shard_at(&BondRecord, ShardId, BlockHeight, &[SlashLogEntry])`, the reads as A1 + A2; the *row* lands now). **UPDATE 2026-10-02 — the port landed (DRS-E4 commit 2, PR #914; plan closed as record, [`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md)):** `holds_shard_at(schedule, &BondRecord, ShardId, BlockHeight, &[SlashLogEntry]) -> bool` in `shekyl-archival-retention/src/held_at_height.rs`, called from the rules crate's `ChainView` (`shekyl-chain-rules/src/archival/slash.rs`) over A1 `bond_record` + A2 `slash_log_after` plus the block's own in-flight slashes — the predicate evaluated in the rules crate, where the R8 discriminator said it belonged, not in the store. The C++ fold and its slash-log scan are now the C++ walker's only readers of that history; their deletion is `DEL-008`'s, the cutover's (`DAEMON_REDB_STORE.md` §12 / §12.1); twin **CEN-J8** (the rule); [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q3` (the C++ verifier dies at E4) | Store-bound (`DAEMON_REDB_STORE.md` §7.5 table 2: **E4 S-ARCH**) — **Rust (DRS-E4 commit 2, 2026-09-29, merged in PR #914)**. Not a new rule — J8 is the rule; this row is where the tree evaluates it, and the R8 discriminator (*would this survive a rule change?*) says the store is the wrong home. UNREVIEWED by construction in the reconciliation register. |
 
 ### 4.M Mempool admission (the `kept_by_block` axis)
@@ -615,11 +615,14 @@ walking the live function will meet them. Rule-60 material throughout.
    `should_ask_for_pruned_data` refused pruned spans because
    `HF_VERSION_SMALLER_BP+1` overflowed. That function is already gone.
    The unreferenced macros and the unreachable transaction-version and
-   weight-limit arms are deleted. What remains are version-1 thresholds
-   still used as height-lookup keys and as
-   `major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` guards, plus the
-   miner-vote window, kept 2026-09-23 (rule 75). `HardFork::add`'s ignored
-   reject is the open residue.
+   weight-limit arms are deleted. **UPDATE 2026-10-06:** the
+   `major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` guards were removed
+   2026-10-05, and the curve-tree block runs on every connect. What remains
+   are version-1 thresholds still used as height-lookup keys
+   (`HF_VERSION_SHEKYL_NG`, and `HF_VERSION_EXACT_COINBASE`,
+   `HF_VERSION_VIEW_TAGS`, `HF_VERSION_2021_SCALING`, read only by tests),
+   plus the miner-vote window, kept 2026-09-23 (rule 75). `HardFork::add`'s
+   ignored reject is the open residue.
 6. **`txin_to_script` / `txin_to_scripthash`** exist only to be rejected
    (CEN-H5) — variant fossils. **Unused ring-era locals** in
    `check_tx_inputs` (`sig_index` :3444, `pubkeys` :3532) ride along.
@@ -977,8 +980,9 @@ input, not fixes.
     (`src/blockchain_db/blockchain_db.cpp:519-521`, `:533-535` as found); `0x06` had the identical
     gap. No admission-side check existed anywhere. **Pre-flight, verified:**
     every producer emits both fields at one per transaction and the full
-    length — both C++ builders (the general one gated on
-    `HF_VERSION_FCMP_PLUS_PLUS_PQC = 1`, so always), the genesis tool and all
+    length — both C++ builders (the general one was gated on
+    `HF_VERSION_FCMP_PLUS_PLUS_PQC = 1`, so always; the macro was removed
+    2026-10-05 and that encapsulation runs unconditionally), the genesis tool and all
     four engine output paths (through `Extra::for_hybrid_transfer`); all three
     `GENESIS_TX` constants decode to five outputs with `0x07` = 160 B and
     `0x06` = 5600 B; serve-credit transactions have no outputs and an empty
@@ -1137,7 +1141,12 @@ input, not fixes.
     from key 1, only key 0 is unwritten, and the zero-root read there is
     consequence-free; the verdict stands** (S-CHAIN-W pre-flight SCW-19,
     2026-09-15, C++ read at `dev` (all at `0aeb67619`) — the pin governs this
-    item's cites; item 23 below carries its own). **What was walked.** The
+    item's cites; item 23 below carries its own). **UPDATE 2026-10-06:** the
+    `HF_VERSION_FCMP_PLUS_PLUS_PQC` gate named below was removed. The write
+    is unconditional at `blockchain_db.cpp:612`, outside
+    `if (new_output_count > 0)` (closes at `:598`). The reader is
+    `db_lmdb.cpp:8943`–`:8958`. The line numbers in the walk are the pin's.
+    **What was walked.** The
     2026-09-05 CHECKED-CONFORMANT (#16's re-review) rested on "record key
     `ref_height` holds the state after blocks `0..ref_height − 1`
     connected" and did not say what happens when the key is absent. (a) The
@@ -1425,7 +1434,7 @@ rest resolve per §1's bucket-3 posture.
 | U-4 tx pool relay decisions | validity/policy half merged-into the CEN-M family (§10 R7); the pool-vs-Dandelion++ relay-*timing* question is relay-privacy material for the [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) lane, recorded in R7's stake statement |
 | U-5 `rpc_credits_per_hash` in the handshake | rejected-as-nonrule (p2p wire field; no acceptance-path check) — routed to the P2P protocol redesign lane with the L-items; Survey A's free-deletion-pre-genesis observation carried there |
 | U-6 `NOTIFY_NEW_BLOCK` alongside fluffy | rejected-as-nonrule (block propagation above the acceptance entry points) — routed to the P2P protocol redesign lane, **which discharged it: PWD-B6 deleted 2001** |
-| U-7 output histogram / distribution RPC | rejected-as-nonrule (RPC read surface; no acceptance-path check) — rule-60 deletion candidate; its dead `HF_VERSION_DYNAMIC_FEE` height lookup is covered by §5.5 |
+| U-7 output histogram / distribution RPC | rejected-as-nonrule (RPC read surface; no acceptance-path check) — deleted 2026-10-05 with its reader (`get_output_distribution`); the `HF_VERSION_DYNAMIC_FEE` lookup went with it |
 | U-8 timestamp validation | merged-into CEN-C1/C2/C3; the algorithm-vs-spec question U-8 asked is answered and sharpened by the C2 adjudication. §10 R3 |
 | U-9 `miner.cpp` audit | rejected-as-nonrule for this census (block *production*, not validation). The open audit question — the miner-chosen coinbase-revealed challenge origin, and whether an in-daemon miner should exist on a node holding staking keys — is recorded here as adjacent-surface input; it has no owner yet and any future round touching `miner.cpp` starts from Survey A §5 U-9 |
 | L-1…L-6 (Levin wire) | out of the consensus census: requirements input to the **P2P protocol redesign lane** (ruled 2026-08-31); `CONSENSUS_RULE_CENSUS_1.md`'s banner carries the forward pointer |

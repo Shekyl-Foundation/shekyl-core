@@ -38,9 +38,9 @@ same thing.
 | --- | --- | --- |
 | Block major version | 1 | Every network's hard-fork table holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::check` requires a block's major version to **equal** the table's, so an accepted block's is 1; the template takes its own from the table |
 | Block minor version (the vote) | 0 or more | Inert: a vote is counted against a table with one entry |
-| Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
-| A hard-fork table lookup | 1, or the height the table gives | The same single-entry table |
-| Other things named `version` | their own | The LMDB schema version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument, a peer-list format. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
+| Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly, including where the bound is a local (`min_tx_version`, `max_tx_version`) rather than the literal 3. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
+| A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (a block must equal the current fork, a vote is clamped to the newest entry, the index walks) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |
+| Other things named `version` | their own | The LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument, a peer-list format. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
 
 The transaction row is the one that needs care. A comparison such as
 `tx.version >= 2` is always true for a transaction the daemon has admitted.
@@ -51,28 +51,29 @@ with such a blob, so they wait for the parser to refuse it first (§4).
 
 ## 3. The dispositions
 
-One per row, and no row is left as it is because it is harmless.
+One token per row. The gate rejects any other word, so a sentence in the cell cannot pretend to be a classification. The per-site nuance lives in `evaluates`.
 
-| Disposition | Meaning |
+| Token | Meaning |
 | --- | --- |
-| Move to Rust | A dead arm that is the design. The owner moves to Rust and the C++ and its gate are deleted with it |
-| Delete | A dead arm that is not the design: pre-fork Monero behaviour nobody wants |
-| Collapse | A live arm. The gate is noise; it collapses to the one arm |
-| With the mechanism | Not a gate on a number. Part of the hard-fork machinery itself, correct for any table, and decided with it (§5) |
-| None | A row for another operand |
+| `move-to-rust` | A dead arm that is the design. The owner moves to Rust and the C++ and its gate are deleted with it |
+| `delete` | A dead arm that is not the design: pre-fork Monero behaviour nobody wants, deleted once its blocker is gone |
+| `collapse` | A live arm. The gate is noise; it collapses to the one arm |
+| `with-the-mechanism` | Not a gate on a number. Part of the hard-fork machinery itself, correct for any table, and decided with it (§5) |
+| `none` | A row for another operand |
 
 ## 4. Where each row lands
 
-| Landing | Rows, 2026-10-05 | What it is |
-| --- | --- | --- |
-| **This PR** | none left; see below | The block-version gates that could be executed alone |
-| **The template fill's move to Rust** | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
-| **The transaction-version PR** | 26 | The parser refuses every version but 3. Then 17 comparisons collapse to their one arm and 8 are deleted as dead, the version-1 serialisation arms among them. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
-| **CEN-F21's epoch** | 4 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. Live and consensus: it resolves the height the staker emission share decays from. It collapses to the Rust owner's `EMISSION_SPLIT_EPOCH`, with the `core_tests` fork tables that still disagree with the daemon about it (`docs/FOLLOWUPS.md`) |
-| **The hard-fork mechanism's decision** | 27 | §5 |
-| **None** | 7 | Other operands |
+`landing` is a token too: `template-fill`, `tx-version`, `cen-f21`, `hardfork`, `none`. Counted 2026-10-06, when the extractor was widened to a comparison on any version name (a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion`, the bootstrap file version) and to `.cc`. The 2026-10-05 sweep had 66 rows; it required one side to be an integer or an uppercase `VERSION` token, and these were the rows that requirement hid.
 
-**Executed in this PR.** These comparisons are gone, so they have no row:
+| Token | Rows, 2026-10-06 | What it is |
+| --- | --- | --- |
+| `template-fill` | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
+| `tx-version` | 29 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 10 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
+| `cen-f21` | 4 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. Live and consensus: it resolves the height the staker emission share decays from. It collapses to the Rust owner's `EMISSION_SPLIT_EPOCH`, with the `core_tests` fork tables that still disagree with the daemon about it (`docs/FOLLOWUPS.md`) |
+| `hardfork` | 41 | §5 |
+| `none` | 15 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument, a peer-list format |
+
+**Executed in the 2026-10-05 sweep.** These comparisons are gone, so they have no row:
 
 - `db_lmdb.cpp` `blk.major_version >= 4` — dead, not the design. With it
   goes everything that read the field it guarded (§6).
@@ -93,11 +94,15 @@ One per row, and no row is left as it is because it is harmless.
 ## 5. The hard-fork mechanism is one decision
 
 These rows are the machinery, not gates on a number: `HardFork`
-itself, the wrappers that expose it, the version it hands the template, the
-`hf_version` read from it and threaded as a parameter that no callee
-compares any more, and the start-up loop that pops blocks made under an
-older fork (`ideal_hf_version <= 1`, which is correct for any table and
-simply has nothing to do with one entry).
+itself, the comparisons inside it, the wrappers that expose it, the version
+it hands the template, the `hf_version` read from it and compared where the
+pool is revalidated (on connect and on pop) and where non-input consensus is
+skipped because the transaction already passed at that fork, and the
+start-up loop that pops blocks made under an older fork
+(`ideal_hf_version <= 1`, which is correct for any table and simply has
+nothing to do with one entry). The handshake's `top_version` is written and
+read by nobody; the field is deleted with the handshake port, which is that
+one row and not a sentence repeated through the table.
 
 Collapsing them one at a time would be deciding, row by row, that Shekyl has
 no fork mechanism. That is one decision, and it is Rick's: keep a fork table
@@ -132,21 +137,26 @@ It is written and never read (`docs/FOLLOWUPS.md`).
 - **An existing gate could not see what it named.** `grep-gates.yml` has
   carried "C++ residue: no v1/v2 tx version branches", a grep for
   `tx.version == 1`. It passes, and five version-1 arms exist, spelled
-  `version == 1`, `t.version == 1` and `x.version == 1`. The new extractor
-  reads the operand's name, not one spelling of it; the transaction-version
-  PR deletes the arms and the old grep with them.
-- **`hf_version` is threaded and unread.** `get_current_version()` is read
-  into a local in four places and passed down as a parameter; after the
-  earlier rule-60 deletions no callee compares it. The parameter goes with
-  the mechanism's decision (§5).
+  `version == 1`, `t.version == 1` and `x.version == 1`. The extractor reads
+  the operand's name, not one spelling of it; the transaction-version PR
+  deletes the arms and the old grep with them.
+- **The first form of this extractor had the same blind spot.** It classified
+  a comparison only when one side was an integer or an uppercase `VERSION`
+  token, so `tx.version < min_tx_version`, `HardFork`'s
+  `heights[i].version` comparisons and `p[0] != kVersion` were not rows.
+  Widened 2026-10-06: a version operand is an identifier that ends in
+  lowercase `version`, or the persisted-row spelling `kVersion`, and `.cc`
+  is scanned with the other translation units. `hf_version` is compared.
+  Those comparisons are rows, and they land with the mechanism (§5), which
+  is the decision they were already part of.
 
 ## 8. Changing the inventory
 
 Run `python3 scripts/ci/check_cxx_version_gates.py --dump` for the tree's
-hits. A new comparison needs a row with its operand, what it evaluates to at
-Shekyl's value, one of §3's dispositions, and a landing. A row whose site is
-deleted is deleted. The better change is not to add the comparison: nothing
-in this tree should branch on a fork number.
+hits. A new comparison needs a row: its operand, what it evaluates to at
+Shekyl's value, one §3 token, and one §4 token. Anything else is not a row.
+A row whose site is deleted is deleted. The better change is not to add the
+comparison: nothing in this tree should branch on a fork number.
 
 The gate compares sets, not counts, so adding one gate while removing
 another fails. It refuses an empty source tree and an empty inventory, so it

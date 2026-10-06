@@ -5,9 +5,12 @@
 #
 # Self-test for check_cxx_version_gates.py. The gate compares two sets, so it
 # is bitten in both directions and on the case a count would miss: one gate
-# added and another removed. The extractor is pinned on the shape that
-# motivated it (a bare `version >= 5`, which the first draft of the regex did
-# not match) and on what it must leave alone.
+# added and another removed. The extractor is pinned on the shapes that have
+# already slipped it once: a bare `version >= 5`, a named bound
+# (`version < min_tx_version`), a hard-fork table comparison, a persisted-row
+# `kVersion`, and a `.cc` translation unit. It is also pinned on what it must
+# leave alone, including a comment the line-splice and digit-separator cases
+# used to keep as code.
 
 import subprocess
 import sys
@@ -32,10 +35,48 @@ FILL = """bool fill(uint8_t version)
 """
 
 FILL_ROWS = (
-    "src/pool.cpp\t1\tblock major version\talways false\tmove to Rust\tthe fill PR\t"
+    "src/pool.cpp\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
     "size_t bound = version >= 5 ? wide : narrow;\n"
-    "src/pool.cpp\t1\tblock major version\talways false\tmove to Rust\tthe fill PR\t"
+    "src/pool.cpp\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
     "if (version >= 5)\n"
+)
+
+# Not comparisons: another spelling of the word, a shift, a template, a
+# placeholder, an index, a height, and two comments the stripper must drop
+# (a backslash-newline splice, and a digit separator the old lexer mis-paired).
+QUIET = (
+    "#if BOOST_VERSION >= 107400\n"
+    "if (osvi.dwMajorVersion == 10) { }\n"
+    'MDEBUG("v" << version << db_version);\n'
+    'const arg_descriptor<bool> arg_version = {"version", "help"};\n'
+    "MDB_val_copy<uint8_t> val_value(version);\n"
+    ', "hard_fork_info <version>"\n'
+    '"stage it under /opt/shekyl/<version>-<target>/, or set "\n'
+    "assert(last_versions[old_version] >= 1);\n"
+    "if (height <= original_version_till_height) { }\n"
+    "// disabled \\\n"
+    "if (version >= 5)\n"
+    "int x = 1'000; // version >= 5\n"
+)
+
+NAMED = "bool admit(uint8_t version, uint8_t min_tx_version)\n{\n  return version < min_tx_version;\n}\n"
+NAMED_ROW = (
+    "src/admit.cpp\t1\ttransaction version\tlive admission bound\tcollapse\ttx-version\t"
+    "return version < min_tx_version;\n"
+)
+FORK = "return block_version == heights[i].version;\n"
+FORK_ROW = (
+    "src/fork.cpp\t1\thard-fork table\tthe mechanism's own bookkeeping\t"
+    "with-the-mechanism\thardfork\treturn block_version == heights[i].version;\n"
+)
+ROWVER = "if (p[0] != kVersion)\n  return false;\n"
+ROWVER_ROW = (
+    "src/row.h\t1\tpersisted row version\tlive decode\tnone\tnone\tif (p[0] != kVersion)\n"
+)
+CC = "bool note(uint8_t version) { if (version >= 5) return true; return false; }\n"
+CC_ROW = (
+    "src/note.cc\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
+    "bool note(uint8_t version) { if (version >= 5) return true; return false; }\n"
 )
 
 failures = []
@@ -68,8 +109,14 @@ def expect(name, sources, inventory, code, needle=None):
         failures.append(f"{name}: rc={rc} (want {code}), needle={needle!r}\n{output}")
 
 
-# The control: the tree and its inventory agree, comments are not extracted.
-expect("clean tree passes", {"src/pool.cpp": FILL}, HEADER + FILL_ROWS, 0)
+# The control: the tree and its inventory agree, comments are not extracted,
+# and the shapes that are not comparisons stay out.
+expect(
+    "clean tree passes",
+    {"src/pool.cpp": FILL, "src/quiet.cpp": QUIET},
+    HEADER + FILL_ROWS,
+    0,
+)
 
 # A gate with no row.
 expect(
@@ -100,7 +147,9 @@ expect(
 
 # The same line twice needs a count of two, not a second row.
 TWICE = "void a() { }\nif (tx.version > 1)\nint x;\nif (tx.version > 1)\n"
-TWICE_ROW = "src/db.cpp\t{n}\ttransaction version\talways true\tcollapse\ttx PR\tif (tx.version > 1)\n"
+TWICE_ROW = (
+    "src/db.cpp\t{n}\ttransaction version\talways true\tcollapse\ttx-version\tif (tx.version > 1)\n"
+)
 expect("a repeated line at its count passes", {"src/db.cpp": TWICE}, HEADER + TWICE_ROW.format(n=2), 0)
 expect(
     "a repeated line under-counted fails",
@@ -126,32 +175,78 @@ expect(
     "a table call is a row, a definition is not",
     {"src/chain.cpp": LOOKUP},
     HEADER
-    + "src/chain.cpp\t1\thard-fork table\talways 1\twith the mechanism\tits decision\t"
+    + "src/chain.cpp\t1\thard-fork table\talways 1\twith-the-mechanism\thardfork\t"
     "return m_hardfork->get_ideal_version(height);\n",
     0,
 )
 
-# What the extractor leaves alone: other spellings of "version", and one
-# variable compared with another.
-QUIET = (
-    "#if BOOST_VERSION >= 107400\n"
-    "if (osvi.dwMajorVersion == 10) { }\n"
-    "if (tx.version < min_tx_version || new_hf_version != hf_version) { }\n"
+# A named bound, a table comparison, a persisted-row byte and a `.cc` file are
+# sites. Each fails until it has a row. The fill rows keep the inventory
+# non-empty, so the failure is the unlisted line.
+expect(
+    "a named bound with no row fails",
+    {"src/pool.cpp": FILL, "src/admit.cpp": NAMED},
+    HEADER + FILL_ROWS,
+    1,
+    "return version < min_tx_version;",
 )
 expect(
-    "non-operands are not extracted",
-    {"src/pool.cpp": FILL, "src/quiet.cpp": QUIET},
+    "a hard-fork comparison with no row fails",
+    {"src/pool.cpp": FILL, "src/fork.cpp": FORK},
     HEADER + FILL_ROWS,
+    1,
+    "return block_version == heights[i].version;",
+)
+expect(
+    "a persisted-row version with no row fails",
+    {"src/pool.cpp": FILL, "src/row.h": ROWVER},
+    HEADER + FILL_ROWS,
+    1,
+    "if (p[0] != kVersion)",
+)
+expect(
+    "a .cc comparison with no row fails",
+    {"src/pool.cpp": FILL, "src/note.cc": CC},
+    HEADER + FILL_ROWS,
+    1,
+    "src/note.cc",
+)
+
+# The same shapes, classified, agree. `.cc` is a translation unit, not a skip.
+expect(
+    "named bounds, the table, kVersion and .cc pass when rowed",
+    {
+        "src/admit.cpp": NAMED,
+        "src/fork.cpp": FORK,
+        "src/row.h": ROWVER,
+        "src/note.cc": CC,
+        "src/quiet.cpp": QUIET,
+    },
+    HEADER + NAMED_ROW + FORK_ROW + ROWVER_ROW + CC_ROW,
     0,
 )
 
-# A row every classification column of which is filled, or it is not a row.
+# Disposition and landing are tokens. Empty and prose both fail.
 expect(
-    "an unclassified row fails",
+    "an empty disposition fails",
     {"src/pool.cpp": FILL},
-    HEADER + FILL_ROWS.replace("\tmove to Rust\t", "\t\t", 1),
+    HEADER + FILL_ROWS.replace("\tmove-to-rust\t", "\t\t", 1),
     1,
-    "`disposition` is empty",
+    "is not one of",
+)
+expect(
+    "an unknown disposition fails",
+    {"src/pool.cpp": FILL},
+    HEADER + FILL_ROWS.replace("\tmove-to-rust\t", "\tlater\t", 1),
+    1,
+    "later",
+)
+expect(
+    "an unknown landing fails",
+    {"src/pool.cpp": FILL},
+    HEADER + FILL_ROWS.replace("\ttemplate-fill\t", "\tsoon\t", 1),
+    1,
+    "soon",
 )
 
 # The subject must exist (47-gate-subject-assertion).
