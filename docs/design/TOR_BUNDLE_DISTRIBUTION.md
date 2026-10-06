@@ -1,8 +1,11 @@
 # Tor bundle distribution — Tor by default, declined only explicitly, and shipped in every artifact
 
-**Status: OPEN — PROPOSED 2026-10-06, awaiting ruling.** Nothing here is ruled
-except where a row says who ruled it and when. No code follows from an unsigned
-row. Identifier family `TB-1…TB-n` (index row registered at birth per rule 94
+**Status: RULED 2026-10-06 — ratified as a whole by Rick; nothing is
+implemented yet.** He ratified the rows as they stood at `4ad467800`, with two
+amendments that are folded in below: TB-7's third part became the
+exact-contents rule, and the system-supplied libraries are recorded (§5a). The
+code still behaves as PWD-E7 and DQ-T0.5 describe until the changes in §5 land.
+Identifier family `TB-1…TB-n` (index row registered at birth per rule 94
 §1). Decision authority: Rick. Rule 26 is cited: this changes a security
 boundary (what the Tor pin proves) and a startup contract.
 
@@ -74,27 +77,37 @@ the Foundation's hosts showed what that costs once Tor is not optional.
     does not help: a library of one of those names placed beside `tor.exe` is
     found first unless Windows treats it as a known system library, and the
     portable zip unpacks into a directory the user can write. This is search
-    order, not an environment variable.
+    order, not an environment variable. Windows also treats `VERSION.DLL` and
+    `version.dll` as one name, so any rule that matches on a file's name has to
+    do the same.
+12. **glibc searches subdirectories of a library-path entry before the entry
+    itself.** With `libz.so.1` placed only in
+    `<tor dir>/glibc-hwcaps/x86-64-v2/` and the loader pointed at the tor
+    directory under a cleared environment, that copy was loaded (glibc 2.41).
+    A listing of the tor directory's top level shows a `glibc-hwcaps` entry
+    and no library. A rule that looks for library files at the top level
+    passes this.
 
-## 3. Proposed rulings
+## 3. The rulings
 
-Each row is PROPOSED unless its last column says otherwise.
+Every row was ratified by Rick on 2026-10-06. The last column records anything
+said about a row on its own.
 
 | Row | Proposal | Ruled |
 | --- | --- | --- |
-| **TB-1** | **A node has Tor unless its operator explicitly declines it.** The default ephemeral posture is not an optional overlay that is quietly absent: it is present, or it was declined on the command line. Clearnet-only is a **supported, explicit operator choice**, made with `--no-ephemeral-tor`, and a node running that way says so at warning level on every boot. Who it is for: an operator who wants to take part and is not relying on network-level privacy for the node (an exchange, the Foundation's own infrastructure); a node whose Tor is failing; a place where Tor is watched or blocked. What it costs, stated: that node's address is visible to its peers, as on any clearnet node, and its own transactions get Dandelion++ over clearnet and no onion route. The clearnet link is encrypted only where the Noise layer is on, which is an option today (`--clearnet-transport-encrypt`, off by default) and the default once the flip lands; until then a declined Tor means a plaintext link. It is a choice about one node's transport; no wallet guarantee and no consensus rule depends on it. This replaces PWD-E7's seam row "tor control unavailable" with TB-2 and TB-3; the rest of PWD-E7 (two postures, no verifier, no persisted key, the forbidden direction) stands unchanged | **Rick, 2026-10-06** (reading (a) of two put to him: clearnet-only is supported and explicit; given as a lean, to be confirmed when the round is signed) |
-| **TB-2** | **A startup configuration defect refuses the start.** On a `Pinned` target, no usable tor at startup (not found, a digest mismatch on any pinned file, an unpinned library in the directory under TB-7, not a file, not executable, unreadable) stops the daemon before any socket opens, with the remedies named. It is deterministic and the operator can fix it. `--no-ephemeral-tor` alone is the way past it: the flag is TB-1's explicit decline, and needs no operator-provisioned Tor beside it | — |
-| **TB-3** | **A runtime failure degrades, as PWD-E7 ruled.** A verified tor whose bootstrap then fails leaves the node outbound-only on that zone and logs at error. One mechanism, one job: TB-2 is about what is installed, TB-3 about what the network did | — |
-| **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". TB-2 applies to `Pinned` targets only. An `Unavailable` target starts, warns that managed Tor does not exist on this platform, and names the remedy | — |
-| **TB-5** | **FreeBSD is `Unavailable`: the operator installs tor and attaches it.** `pkg install tor`, then `--tx-proxy` for outbound and an operator-provisioned onion service with `--anonymous-inbound` for inbound (PWD-E7's second posture, with its durable-address warning). Shekyl ships a user guide for it. Carrying a tor in the FreeBSD artifact is a later look, not this round | **Rick, 2026-10-06, tentatively**: "users there will have to install their own"; a guide at least, incorporation into our package to be looked at |
-| **TB-6** | **Every artifact that carries `shekyld` carries the pinned bundle, and the bundle's tarball is checked before it is opened.** The property: the Expert Bundle tarball enters the build as a pinned input, its digest is compared with TB-9's file before anything is extracted from it, and a difference fails the build, whatever does the fetching. It is not a download in the packaging step, so the archives, the zip and the installer carry it as well as the `.deb` and `.rpm`, and the build is offline and reproducible from that point. The mechanism is the implementing change's to choose: a gitian `files:` entry records an input's hash and does not refuse a wrong one, whereas the depends system both fetches and checks (`$(package)_sha256_hash`). Placement: a directory of its own beside the executable in archives (TB-7 is why it cannot share one), under `/opt/shekyl/<bundle_version>-<bundle_target>/` in system packages, never in `/usr/local/bin`, where it would shadow a distribution's tor. Only `tor` and the libraries it loads are shipped — the pluggable transports are 30 MiB Shekyl does not use | — |
-| **TB-7** | **The pin covers every file the loader can take from tor's directory, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and sets at most one variable, the library path on Linux, to the verified binary's own directory. (3) **The gate refuses a tor directory that holds any loadable library it did not pin** (`.so*`, `.dll`, `.dylib`). Part 3 is what closes the search-order cases, which no environment clearing reaches — see §2 findings 10 and 11. It is also why the bundle needs a directory of its own: a directory the loader is pointed at cannot be shared with files nobody pinned | — |
-| **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | — |
-| **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | — |
-| **TB-10** | **Re-pin to tor 0.4.9.13** with the digests in §4, in the change that first ships the bundle. `linux-aarch64` stays on the alpha line under DQ-T0.5's existing ruling and reopen criterion | — |
-| **TB-11** | **Windows and macOS become `Pinned` only with a launch test each.** Their digests are verified (§4); what is missing is evidence that the pinned binary starts under Shekyl's launcher on those platforms. The Windows test also asserts that `tor.exe`'s import table names only operating-system libraries, so that a future bundle which starts shipping its own DLL is noticed. The macOS test establishes what the signature on the pinned binary is and whether it carries the hardened runtime; inside a macOS `.app` the tor binary falls under Shekyl's code signing and notarization | — |
-| **TB-12** | **TB-2 lands last, and "every published target" includes the GUI wallet's installers.** The refusal is merged only after every published target is `Pinned` with its bundle shipped, or `Unavailable`. That set is `shekyl-core`'s own artifacts **and** `shekyl-gui-wallet`'s (`.deb`, AppImage, Windows setup, macOS `.dmg`), which carry `shekyld` as a sidecar built from the core tag and therefore inherit its pin and need the bundle beside it. That work is in another repository and is tracked there; without it the refusal stops the GUI's daemon on every platform, and nothing in this repository would show it | — |
-| **TB-13** | **Licences travel with the binary.** Every artifact that carries tor carries the bundle's licence texts and the location and signature of the `tor-0.4.9.13` source. Whether a pointer to the signed upstream source meets the GPL's source obligation is to be confirmed before beta, not assumed | — |
+| **TB-1** | **A node has Tor unless its operator explicitly declines it.** The default ephemeral posture is not an optional overlay that is quietly absent: it is present, or it was declined on the command line. Clearnet-only is a **supported, explicit operator choice**, made with `--no-ephemeral-tor`, and a node running that way says so at warning level on every boot. Who it is for: an operator who wants to take part and is not relying on network-level privacy for the node (an exchange, the Foundation's own infrastructure); a node whose Tor is failing; a place where Tor is watched or blocked. What it costs, stated: that node's address is visible to its peers, as on any clearnet node, and its own transactions get Dandelion++ over clearnet and no onion route. The clearnet link is encrypted only where the Noise layer is on, which is an option today (`--clearnet-transport-encrypt`, off by default) and the default once the flip lands; until then a declined Tor means a plaintext link. It is a choice about one node's transport; no wallet guarantee and no consensus rule depends on it. This replaces PWD-E7's seam row "tor control unavailable" with TB-2 and TB-3; the rest of PWD-E7 (two postures, no verifier, no persisted key, the forbidden direction) stands unchanged | **Rick, 2026-10-06**: reading (a) of two put to him — clearnet-only is supported and explicit. On the plaintext cost: "the cost it describes ends at the Noise flip, which will occur shortly now that we have alpha.9 in testnet" |
+| **TB-2** | **A startup configuration defect refuses the start.** On a `Pinned` target, no usable tor at startup (not found, a digest mismatch on any pinned file, anything in tor's directory that is not pinned (TB-7), not a file, not executable, unreadable) stops the daemon before any socket opens, with the remedies named. It is deterministic and the operator can fix it. `--no-ephemeral-tor` alone is the way past it: the flag is TB-1's explicit decline, and needs no operator-provisioned Tor beside it | Rick, 2026-10-06 |
+| **TB-3** | **A runtime failure degrades, as PWD-E7 ruled.** A verified tor whose bootstrap then fails leaves the node outbound-only on that zone and logs at error. One mechanism, one job: TB-2 is about what is installed, TB-3 about what the network did | Rick, 2026-10-06 |
+| **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". TB-2 applies to `Pinned` targets only. An `Unavailable` target starts, warns that managed Tor does not exist on this platform, and names the remedy | Rick, 2026-10-06 |
+| **TB-5** | **FreeBSD is `Unavailable`: the operator installs tor and attaches it.** `pkg install tor`, then `--tx-proxy` for outbound and an operator-provisioned onion service with `--anonymous-inbound` for inbound (PWD-E7's second posture, with its durable-address warning). Shekyl ships a user guide for it. Carrying a tor in the FreeBSD artifact is a later look, not this round | **Rick, 2026-10-06**: "users there will have to install their own"; a guide at least, incorporation into our package to be looked at |
+| **TB-6** | **Every artifact that carries `shekyld` carries the pinned bundle, and the bundle's tarball is checked before it is opened.** The property: the Expert Bundle tarball enters the build as a pinned input, its digest is compared with TB-9's file before anything is extracted from it, and a difference fails the build, whatever does the fetching. It is not a download in the packaging step, so the archives, the zip and the installer carry it as well as the `.deb` and `.rpm`, and the build is offline and reproducible from that point. The mechanism is the implementing change's to choose: a gitian `files:` entry records an input's hash and does not refuse a wrong one, whereas the depends system both fetches and checks (`$(package)_sha256_hash`). Placement: a directory of its own beside the executable in archives (TB-7 is why it cannot share one), under `/opt/shekyl/<bundle_version>-<bundle_target>/` in system packages, never in `/usr/local/bin`, where it would shadow a distribution's tor. Only `tor` and the libraries it loads are shipped — the pluggable transports are 30 MiB Shekyl does not use | Rick, 2026-10-06 |
+| **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and sets at most one variable, the library path on Linux, to the verified binary's own directory. (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification) |
+| **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | Rick, 2026-10-06 |
+| **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | Rick, 2026-10-06 |
+| **TB-10** | **Re-pin to tor 0.4.9.13** with the digests in §4, in the change that first ships the bundle. `linux-aarch64` stays on the alpha line under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06 |
+| **TB-11** | **Windows and macOS become `Pinned` only with a launch test each.** Their digests are verified (§4); what is missing is evidence that the pinned binary starts under Shekyl's launcher on those platforms. The Windows test also asserts that `tor.exe`'s import table names only operating-system libraries, so that a future bundle which starts shipping its own DLL is noticed. The macOS test establishes what the signature on the pinned binary is and whether it carries the hardened runtime; inside a macOS `.app` the tor binary falls under Shekyl's code signing and notarization | Rick, 2026-10-06 |
+| **TB-12** | **TB-2 lands last, and "every published target" includes the GUI wallet's installers.** The refusal is merged only after every published target is `Pinned` with its bundle shipped, or `Unavailable`. That set is `shekyl-core`'s own artifacts **and** `shekyl-gui-wallet`'s (`.deb`, AppImage, Windows setup, macOS `.dmg`), which carry `shekyld` as a sidecar built from the core tag and therefore inherit its pin and need the bundle beside it. That work is in another repository and is tracked there; without it the refusal stops the GUI's daemon on every platform, and nothing in this repository would show it | Rick, 2026-10-06 |
+| **TB-13** | **Licences travel with the binary.** Every artifact that carries tor carries the bundle's licence texts and the location and signature of the `tor-0.4.9.13` source. Whether a pointer to the signed upstream source meets the GPL's source obligation is to be confirmed before beta, not assumed | Rick, 2026-10-06 |
 
 ### Refused in this round
 
@@ -105,7 +118,7 @@ Each row is PROPOSED unless its last column says otherwise.
 | Depending on a distribution's `tor` | **REJECTED** | A distribution build cannot match the pin; "our tor, their OpenSSL" is the same objection one layer down (finding 5) |
 | Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD and a stable `linux-aarch64`. A round of its own |
 
-## 4. The pins proposed by TB-10 and TB-11
+## 4. The pins TB-10 and TB-11 adopt
 
 Downloaded 2026-10-06 from the Tor Project's archive. Each tarball carries a
 Good signature from the Tor Browser Developers key
@@ -140,11 +153,11 @@ Extracted files, by target:
 | `macos-x86_64` | `tor` | `936be37bed7175f1c011543f318e996a9bfe624b8d0ac9968c4304e2751cb2f3` |
 | | `libevent-2.1.7.dylib` | `38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b` |
 
-These are a proposal's evidence, not the pin of record. The pin of record is
+These are the ruling's evidence, not yet the pin of record. The pin of record is
 whatever `binary.rs` compiles, recorded through `RELEASE_CHECKLIST.md`'s
 "Bundled Tor pin current" procedure when TB-10 lands.
 
-## 5. Order of work, if the rows are ruled
+## 5. Order of work
 
 1. **Linux, both architectures, every artifact type:** TB-6 to TB-10 and TB-13,
    with TB-4's type and TB-1's every-boot warning for a declined Tor. Validated by the crate's tests, the `tor-pin-verify`
@@ -157,14 +170,39 @@ whatever `binary.rs` compiles, recorded through `RELEASE_CHECKLIST.md`'s
 The Foundation's own hosts are reconfigured one at a time after step 1, to the
 canonical location, watching the network recover from each dropped node.
 
+## 5a. What stays system-supplied, on purpose
+
+The pin cannot cover a file Shekyl has no source for. With the loader pointed
+at the bundle, the Linux `tor` still takes these from the system (observed on
+`linux-x86_64`; the `linux-aarch64` binaries name the same set):
+
+- the glibc family — the dynamic loader, `libc`, `libm`, `libdl`,
+  `libpthread` — and `libgcc_s`;
+- **`libz.so.1`.**
+
+zlib decompresses data that arrives from the network, so this is "our tor,
+their zlib": the objection finding 5 raises about OpenSSL, at a smaller size.
+It is accepted because the Expert Bundle ships no zlib and Shekyl does not build
+tor; a planted copy is refused by TB-7 part 3, but the system's own copy is
+whatever the distribution maintains. **Reopen** with the round that builds tor
+from the signed source, which is the only place a pinned zlib can come from.
+
+A missing system library fails a launch the same way the missing `libevent`
+would have (finding 5). The floor device's image carries `libz.so.1` (probed
+2026-10-06); the launch run on it confirms the whole set rather than taking
+that probe as the answer.
+
 ### Outside the threat model, stated once
 
 - **`/etc/ld.so.preload` on Linux.** It is root's file. An attacker who can
   write it can replace `shekyld`; the pin was never a defence against root.
 - **macOS `DYLD_*` variables.** TB-7 part 2 clears them from the child's
   environment, and the library is named by `@executable_path`, which no search
-  path overrides. Whether the pinned binary's signature also carries the
-  hardened runtime was not established from Linux; TB-11's test establishes it.
+  path overrides. No reliance is placed on a hardened-runtime signature: a
+  scan of both macOS binaries from Linux found no code signature in them, the
+  Tor Project signs the tarball and not necessarily the binary inside, and if
+  the hardened runtime ever protects this process it will be through Shekyl's
+  own signature once tor sits inside the `.app` (TB-11).
 - **A local attacker who can write tor's directory between the check and the
   exec.** DQ-T0.5 already names this window and its reopen criterion (verify
   and exec the same descriptor). TB-7 widens what is checked, not the window.

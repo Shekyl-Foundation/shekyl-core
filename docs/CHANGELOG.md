@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) opens a round, proposed and not ruled: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every library tor can load from its directory, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
+- Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) records a round ruled 2026-10-06 and not yet implemented: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every file in tor's directory and the directory holds nothing else, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
 
 ## [3.1.0-alpha.9] - 2026-10-05
 
