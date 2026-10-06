@@ -34,7 +34,11 @@
 //! either the daemon that built it and this validator disagree (E2's
 //! subject — grade it), or a rule landed that the chain's real spend now
 //! trips (the cascade slice 5 §5.1 named — the fixture was right; the
-//! rule is what moved).
+//! rule is what moved). The second kind is recorded, not patched: the
+//! corpus pins what was true at capture and is not the witness for a rule
+//! that landed after it, so the chain replays as far as the rule admits,
+//! compares every connected height, and [`PREDATES`] says exactly where it
+//! stops and why — until the chain is regenerated against the rule.
 
 // A whole-file test module, gated at `lib.rs` by
 // `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
@@ -49,7 +53,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{FakechainSchedule, ReleaseAnchors, SettlementEpochBlocks, Substrate};
+use shekyl_chain_rules::{
+    CenRow, FakechainSchedule, InvalidBlock, Locus, ReleaseAnchors, SettlementEpochBlocks,
+    Substrate, TxSlot,
+};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
@@ -345,26 +352,120 @@ pub(crate) fn mock_with_the_real_clock() -> Arc<MockSubstrate> {
     })
 }
 
+/// A captured chain that **predates a rule**: a row landed after the
+/// capture and refuses one of its blocks, so the chain replays short and
+/// says why. The corpus pins what was true at capture — the daemon's
+/// roots, weights, accumulator and digest — and is not the witness for a
+/// rule that landed later; the rule's witness is the driven scenario
+/// (`scenario_archival_tests.rs`) or its unit test. A short replay still
+/// compares every connected height against the trace, so the pin holds
+/// over the blocks the rule admits.
+///
+/// Enumerated, not discovered: the refusal is pinned exactly — height,
+/// row, locus — and `hold` asserts it, so a chain refused anywhere else is
+/// still the finding the module doc names, and a regenerated chain that
+/// replays whole fails here with "the record is stale" rather than quietly
+/// outgrowing it. Each record is deleted the day its chain is regenerated.
+#[derive(Debug)]
+pub(crate) struct Predates {
+    pub(crate) shape: &'static str,
+    /// The refusal, exactly.
+    pub(crate) refused: (BlockHeight, InvalidBlock),
+    /// What the chain does that the rule refuses, and what a capture that
+    /// replays whole does instead.
+    pub(crate) why: &'static str,
+}
+
+/// The chains that predate a rule, as of E6 slice 8 row 6 (2026-10-06).
+pub(crate) const PREDATES: [Predates; 1] = [Predates {
+    shape: "emission-claim",
+    refused: (
+        BlockHeight::from_raw(98),
+        InvalidBlock::new(
+            CenRow::J15,
+            Locus::Input {
+                slot: TxSlot::Listed(0),
+                input: 1,
+            },
+        ),
+    ),
+    why: "the market bond at 98 joins shard `SHARD_ID` compact, and CEN-J15 (slice 8 row 6) \
+          admits a compact join only onto a shard that is closed, final and priced at the \
+          parent; this chain fills no shard (`regtest_e2e.rs`, `market_holdings`). The C++ \
+          daemon that built it marshals a presence bit and no closure, so it accepted the \
+          join — permissive, not divergent (DAEMON_REDB_STORE.md §12). A regeneration that \
+          replays whole fills the shard, lets it close, and prices it before the join.",
+}];
+
+/// The record for a captured chain, if it predates a rule.
+pub(crate) fn predates(shape: &str) -> Option<&'static Predates> {
+    PREDATES.iter().find(|p| p.shape == shape)
+}
+
+/// Every `PREDATES` record names a captured chain. The other direction —
+/// a chain refused without a record — is `hold`'s first assertion.
+#[test]
+fn every_predates_record_names_a_captured_chain() {
+    let shapes: Vec<String> = captured_chains()
+        .into_iter()
+        .map(|(_, m)| m.shape)
+        .collect();
+    for record in &PREDATES {
+        assert!(
+            shapes.iter().any(|s| s == record.shape),
+            "PREDATES names `{}`, which is not captured — the chain was deleted or renamed; \
+             delete the record",
+            record.shape
+        );
+    }
+}
+
 /// What every replay must show, whichever substrate judged the hashes.
 fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
-    assert!(
-        report.refused.is_none(),
-        "{} ({}): the daemon accepted every block of this chain and the validator refused one — \
-         {:?}. A finding: either E2's subject (the two disagree; grade it) or a rule landed \
-         that the chain's real spend trips (slice 5 §5.1's cascade — the rule moved, not the \
-         fixture)",
-        manifest.shape,
-        manifest.generator,
-        report.refused
-    );
+    // How far the chain replays: whole, or exactly as far as the rule it
+    // predates admits.
+    let expected_connected = match predates(&manifest.shape) {
+        None => {
+            assert!(
+                report.refused.is_none(),
+                "{} ({}): the daemon accepted every block of this chain and the validator \
+                 refused one — {:?}. A finding: either E2's subject (the two disagree; grade \
+                 it) or a rule landed that the chain's real spend trips (slice 5 §5.1's \
+                 cascade — the rule moved, not the fixture). If it is the latter and the \
+                 refusal is the rule's, record it in `PREDATES` with its why",
+                manifest.shape,
+                manifest.generator,
+                report.refused
+            );
+            manifest.block_count
+        }
+        Some(record) => {
+            assert_eq!(
+                report.refused,
+                Some(record.refused),
+                "{} ({}): PREDATES says this chain is refused at {:?} by {:?}, and the replay \
+                 says {:?}. A different refusal is a finding (grade it); none is a chain that \
+                 no longer predates the rule — the record is stale, delete it. Why the record \
+                 exists: {}",
+                manifest.shape,
+                manifest.generator,
+                record.refused.0,
+                record.refused.1,
+                report.refused,
+                record.why
+            );
+            record.refused.0.to_raw()
+        }
+    };
     assert_eq!(
         report.connected.len() as u64,
-        manifest.block_count,
-        "{}: connected {} of {} blocks (tip {}) — {}",
+        expected_connected,
+        "{}: connected {} of {} blocks (tip {}; expected to connect {}) — {}",
         manifest.shape,
         report.connected.len(),
         manifest.block_count,
         manifest.tip_height,
+        expected_connected,
         dir.display()
     );
     // CTW-5 (DRS-E3): the derived root is held to the trace's recorded
@@ -373,11 +474,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // a comparison.
     assert_eq!(
         report.roots.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had a recorded root to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had a recorded root to compare against",
         manifest.shape,
         report.roots.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.roots.diverged().collect();
     assert!(
@@ -399,11 +500,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // finding about the derivation, never a fixture to patch.
     assert_eq!(
         report.weights.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had recorded weights to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had recorded weights to compare against",
         manifest.shape,
         report.weights.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.weights.diverged().collect();
     assert!(
@@ -431,11 +532,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // Rust derives it owed.
     assert_eq!(
         report.emission.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had a recorded accumulator and burn to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had a recorded accumulator and burn to compare against",
         manifest.shape,
         report.emission.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.emission.diverged().collect();
     assert!(
@@ -456,6 +557,67 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         "{}: the corpus's block 0 is not the genesis the manifest names",
         manifest.shape
     );
+    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
+    // manifest names, each at the height the daemon attributed it to — the
+    // report's half of the out-of-band contract (the corpus's half is
+    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
+    // A chain that predates a rule applies exactly those attributed below
+    // the refusal — none, on the one such chain today — and the rest wait
+    // on the regeneration with the tip.
+    let named: Vec<Injection> = manifest
+        .out_of_band_writes
+        .iter()
+        .map(|r| r.receipt)
+        .filter(|r| r.at.to_raw() < expected_connected)
+        .collect();
+    assert_eq!(
+        report.injected, named,
+        "{}: the replay's committed injections are not the manifest's receipts below height {}",
+        manifest.shape, expected_connected
+    );
+    if let Some(txid) = &manifest.spend_txid {
+        assert_eq!(
+            txid.len(),
+            64,
+            "{}: spend_txid is a 32-byte hex hash",
+            manifest.shape
+        );
+    }
+    // The view-bound 4.I rows a real spend exercises, recorded on this
+    // chain. The **witness** for each is the admission above — every
+    // connected block passed with the row live, so the wallet-built spends
+    // it carries passed it (for CEN-I18: a signature made with a real
+    // HKDF-derived key over I17's derivation verified, which no harness
+    // fixture can show, its keys being derived from the image rather than
+    // the image from the key). This assertion is the weaker half: the row
+    // was *run* here. It cannot say the row judged rather than recorded
+    // vacuous (slice 5 Q2 — one bit per row, by design), which is why it is
+    // paired with the refusal check rather than standing for it.
+    for row in [
+        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I17", "CEN-I18",
+    ] {
+        assert!(
+            report.exercised.contains(row),
+            "{}: {row} was not recorded on a chain carrying a real spend",
+            manifest.shape
+        );
+    }
+    // The tip-anchored comparisons: the daemon's digest and `0x04` record
+    // are recorded at the chain's tip, so a chain that predates a rule has
+    // nothing to compare them against — the run ended below the covered
+    // height, and the report says so with `None` for both (**not
+    // compared**, never identical). The pin over this chain's tip resumes
+    // when the chain is regenerated.
+    if let Some(record) = predates(&manifest.shape) {
+        assert!(
+            report.checkpoint.is_none() && report.archival.is_none(),
+            "{}: refused at {:?} and yet compared at the tip — the trace's covered height is \
+             below the refusal, or the report compared a tip it did not reach",
+            manifest.shape,
+            record.refused.0
+        );
+        return;
+    }
     let checkpoint = report.checkpoint.as_ref().unwrap_or_else(|| {
         panic!(
             "{}: the trace carries the daemon's digest at the tip",
@@ -470,20 +632,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         checkpoint.at,
         checkpoint.ours,
         checkpoint.theirs
-    );
-    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
-    // manifest names, each at the height the daemon attributed it to — the
-    // report's half of the out-of-band contract (the corpus's half is
-    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
-    let named: Vec<Injection> = manifest
-        .out_of_band_writes
-        .iter()
-        .map(|r| r.receipt)
-        .collect();
-    assert_eq!(
-        report.injected, named,
-        "{}: the replay's committed injections are not the manifest's receipts",
-        manifest.shape
     );
     // The archival snapshot (§3.8.1) was COMPARED at the tip — the run
     // reached the covered height with a `0x04` record there — and it is
@@ -519,33 +667,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
             })
             .collect::<String>()
     );
-    if let Some(txid) = &manifest.spend_txid {
-        assert_eq!(
-            txid.len(),
-            64,
-            "{}: spend_txid is a 32-byte hex hash",
-            manifest.shape
-        );
-    }
-    // The view-bound 4.I rows a real spend exercises, recorded on this
-    // chain. The **witness** for each is the admission above — `refused` is
-    // `None` with the row live, so the wallet-built spend passed it (for
-    // CEN-I18: a signature made with a real HKDF-derived key over I17's
-    // derivation verified, which no harness fixture can show, its keys
-    // being derived from the image rather than the image from the key).
-    // This assertion is the weaker half: the row was *run* here. It cannot
-    // say the row judged rather than recorded vacuous (slice 5 Q2 — one bit
-    // per row, by design), which is why it is paired with the refusal
-    // check rather than standing for it.
-    for row in [
-        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I17", "CEN-I18",
-    ] {
-        assert!(
-            report.exercised.contains(row),
-            "{}: {row} was not recorded on a chain carrying a real spend",
-            manifest.shape
-        );
-    }
 }
 
 /// **The consensus pin, made visible.** These blobs are valid against one
@@ -595,21 +716,29 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
-        let archival = report.archival.as_ref().expect("held above");
+        let tip = match (&report.archival, predates(&manifest.shape)) {
+            (Some(archival), _) => format!(
+                "digest MATCH at {}, archival snapshot MATCH at {} ({} rows equal)",
+                manifest.tip_height,
+                archival.at,
+                archival.diff.rows_equal()
+            ),
+            (None, Some(record)) => format!(
+                "PREDATES {:?}: refused at {:?} as recorded, tip {} not compared",
+                record.refused.1.rule, record.refused.0, manifest.tip_height
+            ),
+            (None, None) => unreachable!("held above"),
+        };
         eprintln!(
-            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, {} \
-             injection(s) applied, archival snapshot MATCH at {} ({} rows equal), rows \
-             exercised: {}",
+            "{}: {} blocks connected, {tip}, roots MATCH at all {} heights, weights MATCH at \
+             all {} heights, accumulator and burn MATCH at all {} heights, {} injection(s) \
+             applied, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
-            manifest.tip_height,
             report.roots.compared(),
             report.weights.compared(),
             report.emission.compared(),
             report.injected.len(),
-            archival.at,
-            archival.diff.rows_equal(),
             report.exercised.len()
         );
     }
