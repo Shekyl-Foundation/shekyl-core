@@ -268,6 +268,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
+            tx_hash: None,
             leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];

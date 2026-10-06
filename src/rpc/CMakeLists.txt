@@ -27,8 +27,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(rpc_base_sources
-  rpc_args.cpp
-  rpc_handler.cpp)
+  rpc_args.cpp)
 
 set(rpc_sources
   archival_claim_source.cpp
@@ -42,11 +41,9 @@ set(rpc_sources
 
 
 set(rpc_base_headers
-  rpc_args.h
-  rpc_handler.h)
+  rpc_args.h)
 
-set(rpc_headers
-  rpc_handler.h)
+set(rpc_headers)
 
 set(rpc_private_headers
   archival_claim_source.h
