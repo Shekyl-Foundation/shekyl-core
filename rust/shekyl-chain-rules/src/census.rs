@@ -502,12 +502,12 @@ census_rows! {
         // (a) 2026-10-04). The census keeps the id marked REJECTED; this
         // registry does not. CEN-F12 is the precedent.
         J18 implemented(crate::rules::tx_bond::J18),
-        J19 pending,
-        J20 pending,
+        J19 implemented(crate::rules::tx_emission::J19),
+        J20 implemented(crate::rules::tx_emission::J20),
         J21 pending,
-        J22 pending,
+        J22 implemented(crate::rules::tx_emission::J22),
         J23 pending,
-        J24 pending,
+        J24 implemented(crate::rules::tx_emission::J24),
         J25 pending,
         J26 pending,
         // 4.K Reorg / alternative chains

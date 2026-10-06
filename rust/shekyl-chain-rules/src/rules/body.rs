@@ -116,12 +116,13 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     bond_post_block_unique, emission_block_claims_unique, p_canonical_id_from_hybrid_pubkey,
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse,
+    ArchivalServeCreditResponse,
 };
 use shekyl_types::TxHash;
 use shekyl_wire::{Input, Transaction};
 
 use crate::census::CenRow;
+use crate::rules::tx_emission::J19;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -191,9 +192,9 @@ impl BlockRule for G1 {
 /// The key one archival input contributes to its block-level uniqueness
 /// pass — what G7, G9 and G10 collide on. `None` for a non-archival input
 /// and for an archival vin that does not parse (the parse is CEN-J1's and
-/// the emission rows' refusal; a vin without a key cannot collide, module
-/// docs). Public so the E2 mutation family can build a duplicate against
-/// the same parse the rules use, rather than a second one.
+/// CEN-J19's refusal; a vin without a key cannot collide, module docs).
+/// Public so the E2 mutation family can build a duplicate against the same
+/// parse the rules use, rather than a second one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArchivalKey {
     /// A serve-credit vin's `(P, shard, E)` — CEN-G7.
@@ -236,12 +237,8 @@ impl ArchivalKey {
                 })
             }
             Input::ArchivalRewardEmission { canonical_bytes } => {
-                // Length-exact, as the FFI extractor parses it.
-                let mut cursor = canonical_bytes.as_slice();
-                let vin = ArchivalRewardEmissionVin::read(&mut cursor).ok()?;
-                if !cursor.is_empty() {
-                    return None;
-                }
+                // CEN-J19's parse — length-exact, as the FFI extractor's.
+                let vin = J19::parse(canonical_bytes)?;
                 Some(Self::Claims {
                     p: *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
                     epochs: vin.settlement_epochs,

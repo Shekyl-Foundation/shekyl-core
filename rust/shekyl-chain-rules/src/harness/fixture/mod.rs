@@ -30,6 +30,7 @@ use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
 use crate::archival::BondArm;
+use crate::rules::tx_emission::J19;
 
 mod archival;
 pub use archival::{
@@ -657,7 +658,11 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 /// kind and then signs is signed as the kind it became. A post whose key
 /// no persona owns — hand-built, a key filled by hand — signs by position
 /// as before; J13 refuses it, and a test that signs such a post is asking
-/// for that; a constant per position for the other archival arms.
+/// for that. An **emission** claim signs with the identity seed of the
+/// persona whose key its vin names as `p_pubkey` (CEN-J20: the slot's key
+/// derives the vin's `P_canonical_id`), found the same way; a vin that does
+/// not parse (CEN-J19's refusal) or names no persona signs by position. A
+/// constant per position for the serve credit, which carries no auth.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
@@ -671,6 +676,14 @@ fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
                     Some(BondArm::Release { .. }) => seeds.bond_spend,
                     _ => seeds.identity,
                 };
+            }
+            seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
+        }
+        Input::ArchivalRewardEmission { canonical_bytes } => {
+            if let Some(seeds) =
+                J19::parse(canonical_bytes).and_then(|vin| archival::slot_seeds_for(&vin.p_pubkey))
+            {
+                return seeds.identity;
             }
             seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
         }
@@ -816,18 +829,26 @@ pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
 
 /// A **balanced emission** (CEN-H22's shape) with one fee spend of
 /// `key_image` and the emission vin `canonical_bytes` (the type's minimum
-/// for the shape rows, which read the variant; a parseable vin for the
-/// block-level G9, which reads the claims): the loud vouts sum to `reward`
-/// (the first carries it, the second is a loud zero — I1 wants two); the
-/// mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ masks +
-/// fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H` and
-/// `3·G`, zero fee. Unanchored and with filler auths, as above.
+/// for the shape rows, which read the variant; a parseable vin —
+/// [`emission_vin`] — for CEN-J19 and for everything that reads the
+/// claims): the loud vouts sum to `reward` (the first carries it, the
+/// second is a loud zero — I1 wants two); the mint rides the debit slot,
+/// so `Σ pseudoOuts + reward·H = Σ masks + fee·H` — a pseudo-out of `5·G`
+/// against masks of `2·G + reward·H` and `3·G`, zero fee. Unanchored and
+/// with filler auths, as above — except that the emission slot's key is
+/// the vin's `p_pubkey` when the vin parses, so the body passes CEN-J20
+/// through `tx_form` alone; [`signed`] replaces it with the same key,
+/// derived from the persona's identity seed.
 pub fn balanced_emission(
     key_image: [u8; 32],
     canonical_bytes: Vec<u8>,
     reward: u64,
 ) -> Transaction {
     let mut tx = listed(key_image);
+    let mut slot = pqc_auth_filler();
+    if let Some(vin) = J19::parse(&canonical_bytes) {
+        slot.hybrid_public_key = vin.p_pubkey;
+    }
     tx.prefix
         .inputs
         .push(Input::ArchivalRewardEmission { canonical_bytes });
@@ -839,7 +860,7 @@ pub fn balanced_emission(
         ..
     } = &mut tx.ct
     {
-        pqc_auths.push(pqc_auth_filler());
+        pqc_auths.push(slot);
         base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
         p.pseudo_outs = vec![multiple_of_g(5)];
     }

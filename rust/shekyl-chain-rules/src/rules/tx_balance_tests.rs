@@ -11,8 +11,8 @@ use super::{emission, refused_listed, refused_lone, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    anchored_on, balanced_emission, candidate_on, coinbase, join_market, listed, mask_committing,
-    multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
+    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
+    mask_committing, multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
 };
 use crate::harness::{assert_refused, formed_on, judged};
 use crate::rule_set::RuleSet;
@@ -36,10 +36,15 @@ fn bond_post_tx() -> Transaction {
 }
 
 /// A **balanced emission** paying `reward` — the harness's
-/// [`balanced_emission`] with the fee spend at point 13 and the vin the
-/// type's minimum.
+/// [`balanced_emission`] with the fee spend at point 13 and a parseable
+/// vin claiming epoch 1 as the persona tagged `0x13` (slice 8 row 8: the
+/// emission statics J19 and J20 read the vin and the slot's key, so the
+/// positive control carries a vin they admit).
 fn emission_tx(reward: u64) -> Transaction {
-    balanced_emission(point(13), Vec::new(), reward)
+    let Input::ArchivalRewardEmission { canonical_bytes } = emission_vin(0x13, &[1]) else {
+        unreachable!("emission_vin builds an emission input");
+    };
+    balanced_emission(point(13), canonical_bytes, reward)
 }
 
 /// The balanced archival fixtures pass every landed row at both sites —

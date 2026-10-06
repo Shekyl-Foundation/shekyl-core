@@ -62,6 +62,7 @@ use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
+use crate::rules::tx_emission::{J19, J20, J22, J24};
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
 use crate::rules::{self, BlockContext, FormContext};
@@ -585,14 +586,17 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    serve credit's pass records against its vins, after H20 has
     //    required the region), J11 and J12 (the bond post's key, hint and
     //    JoinMarket coupling, after H21 has required the shape — the first
-    //    two arms of the C++ `check_archival_bond_post_input`). The cap does
-    //    not have to precede the shape rules to bound proof work: I15 and
-    //    the H19 batch verify run after `tx_form` returns, so I4 has already
-    //    refused.
+    //    two arms of the C++ `check_archival_bond_post_input`), and the
+    //    emission statics J19, J20, J22, J24 (the vin's parse, the slot's
+    //    key, the signable hash and the reward commit set, after H22 has
+    //    required the shape — the C++ emission arm's byte-only checks, in
+    //    its order; `rules::tx_emission`). The cap does not have to precede
+    //    the shape rules to bound proof work: I15 and the H19 batch verify
+    //    run after `tx_form` returns, so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12);
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12, J19, J20, J22, J24);
     Ok(coverage)
 }
 

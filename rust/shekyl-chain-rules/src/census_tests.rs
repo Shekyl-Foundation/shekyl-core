@@ -206,6 +206,12 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J15,
             CenRow::J16,
             CenRow::J18,
+            // Slice 8 row 8: the emission statics — the vin's parse, the
+            // slot's key, the signable hash and the reward commit set.
+            CenRow::J19,
+            CenRow::J20,
+            CenRow::J22,
+            CenRow::J24,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
