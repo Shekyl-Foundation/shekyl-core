@@ -4394,6 +4394,37 @@ void shekyl_seam_close(std::uint64_t id);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 
+/// One row of the published seam board. `endpoint` is the address, the
+/// connector, and the direction observed at admission. `established` is 1
+/// after the Levin handshake and is not an input to
+/// `shekyl_seam_board_count`: a dial occupies its slot before the handshake
+/// finishes.
+struct shekyl_seam_board_row {
+  std::uint64_t id;
+  std::uint8_t established;
+  std::uint8_t _pad[7];
+  shekyl_seam_observed endpoint;
+};
+static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
+static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
+static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
+static_assert(sizeof(shekyl_seam_board_row) == 88, "seam board row");
+
+/// Rows of `connector` and `direction` on the process hub, handshake or
+/// not. A missing hub, or an index that is not a connector or a direction,
+/// is 0.
+std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t direction);
+/// Rows in `direction` on every connector, handshake or not. A missing hub,
+/// or a direction index that is not one, is 0.
+std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
+
+/// Copy the process hub's board through `visit`, one fixed-size row per
+/// call. There is one hub. A missing hub, or a board with no rows, visits
+/// once with a null row. The pointer is valid only for that call. Returns
+/// 0, or -1 when `visit` is null.
+using shekyl_seam_board_visit = void (*)(void* ctx, const shekyl_seam_board_row* row);
+int shekyl_seam_board(void* ctx, shekyl_seam_board_visit visit);
+
 /// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.
 /// `permanent` 1 means there is no deadline. `text` is NUL-terminated.
 /// `remaining_ns` is time left on the monotonic deadline, and is 0

@@ -58,6 +58,7 @@
 #include "net/levin_base.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "p2p/seam_board.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
@@ -153,6 +154,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
   {
+    // Step-b holdout. The protocol handler reads support flags, the pull
+    // state, and the byte counters. The board does not carry those, and
+    // posting this callback onto each strand to wait for it is the deadlock
+    // the seam's floor exists to keep off this path. One of the two
+    // `foreach_connection` sites that remain.
     for(auto& zone : m_network_zones)
     {
       zone.second.m_net_server.get_config_object().foreach_connection([&](p2p_connection_context& cntx){
@@ -1242,13 +1248,14 @@ namespace nodetool
         zone.second.m_net_server.send_stop_signal();
     MDEBUG("[node] Stop signal sent");
 
+    const auto board = shekyl::seam_board_snapshot();
     for (auto& zone : m_network_zones)
     {
+      const auto connector = static_cast<std::uint8_t>(zone.first);
       std::list<boost::uuids::uuid> connection_ids;
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt) {
-        connection_ids.push_back(cntxt.m_connection_id);
-        return true;
-      });
+      for (const auto& row : board)
+        if (row.endpoint.connector == connector)
+          connection_ids.push_back(shekyl::seam_connection_id(row.id));
       for (const auto &connection_id: connection_ids)
         zone.second.m_net_server.get_config_object().close(connection_id);
     }
@@ -1481,7 +1488,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr)
+  bool node_server<t_payload_net_handler>::has_outbound_connection_to_host(epee::net_utils::connector_id connector, const epee::net_utils::network_address& adr)
   {
     // Same-host outbound cap (the PWD-I1 amendment's condition for removing
     // the peerlist id): white already holds at most one entry per host, but
@@ -1489,42 +1496,27 @@ namespace nodetool
     // adversary IP gossiped at N ports could occupy several outbound slots
     // through gray draws. Broader outbound diversity is PWD-B9's row.
     bool found = false;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+    const auto connector_byte = static_cast<std::uint8_t>(connector);
+    const auto board = shekyl::seam_board_snapshot();
+    for (const auto& row : board)
     {
-      if (outbound_connection_takes_host(cntxt.m_is_income, cntxt.m_remote_address, adr))
+      if (row.endpoint.connector != connector_byte)
+        continue;
+      const auto connected = shekyl::seam_network_address(row.endpoint);
+      const bool income = row.endpoint.direction == SHEKYL_DIRECTION_INBOUND;
+      if (outbound_connection_takes_host(income, connected, adr))
       {
         found = true;
-        return false; // stop enumerating
+        break;
       }
-      return true;
-    });
+    }
     return found;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_peer_used(const peerlist_entry& peer)
   {
-    const auto zone = epee::net_utils::require_address_connector(peer.adr);
-    const auto server = m_network_zones.find(zone);
-    if (server == m_network_zones.end())
-      return false;
-
-    bool used = false;
-    server->second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      // Exact-address outbound duplicate. Same-host (cross-port) duplicates
-      // are bounded by the outbound same-host cap at candidate selection --
-      // the id arm this replaces never bounded an adversary (a self-declared
-      // id plus exact-IP equality only ever caught the honest multi-homed
-      // corner); broader outbound diversity is PWD-B9's row.
-      if(!cntxt.m_is_income && peer.adr == cntxt.m_remote_address)
-      {
-        used = true;
-        return false;//stop enumerating
-      }
-      return true;
-    });
-    return used;
+    return is_addr_connected(peer.adr);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1535,15 +1527,23 @@ namespace nodetool
       return false;
 
     bool connected = false;
-    zone->second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+    const auto connector = static_cast<std::uint8_t>(zone->first);
+    const auto board = shekyl::seam_board_snapshot();
+    for (const auto& row : board)
     {
-      if(!cntxt.m_is_income && peer == cntxt.m_remote_address)
+      // Exact-address outbound duplicate. Same-host (cross-port) duplicates
+      // are bounded by the outbound same-host cap at candidate selection --
+      // the id arm this replaces never bounded an adversary (a self-declared
+      // id plus exact-IP equality only ever caught the honest multi-homed
+      // corner); broader outbound diversity is PWD-B9's row.
+      if (row.endpoint.connector == connector
+          && row.endpoint.direction == SHEKYL_DIRECTION_OUTBOUND
+          && peer == shekyl::seam_network_address(row.endpoint))
       {
         connected = true;
-        return false;//stop enumerating
+        break;
       }
-      return true;
-    });
+    }
 
     return connected;
   }
@@ -1560,7 +1560,8 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist, uint64_t last_seen_stamp, PeerType peer_type)
   {
-    network_zone& zone = m_network_zones.at(epee::net_utils::require_address_connector(na));
+    const auto connector = epee::net_utils::require_address_connector(na);
+    network_zone& zone = m_network_zones.at(connector);
     if (zone.m_connect == nullptr) // outgoing connections in zone not possible
       return false;
 
@@ -1570,15 +1571,15 @@ namespace nodetool
       return false;
     }
 
-    // Recount. The one-second thread is gone, and an exclusive list
-    // returns before connections_maker's own recount, so a stored
-    // count would skip this cap. The count is not cached.
-    const size_t out_peers = get_outgoing_connections_count(zone);
+    // The zone's outbound rows, handshake or not. A stored count would
+    // skip this cap: an exclusive list returns before connections_maker's
+    // own recount. Established is not the predicate.
+    const size_t out_peers = get_outgoing_connections_count(connector);
     const uint32_t max_out = zone.m_config.m_net_config.max_out_connection_count;
     if (out_peers >= max_out)
     {
       if (out_peers > max_out)
-        zone.m_net_server.get_config_object().del_out_connections(1);
+        release_outbound(connector, 1);
       return false;
     }
 
@@ -1708,7 +1709,7 @@ namespace nodetool
   //-----------------------------------------------------------------------------------
   // Find a single candidate from the given peer list in the given zone and connect to it if possible
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::make_new_connection_from_peerlist(network_zone& zone, bool use_white_list)
+  bool node_server<t_payload_net_handler>::make_new_connection_from_peerlist(epee::net_utils::connector_id connector, network_zone& zone, bool use_white_list)
   {
 
     // Local helper method to get the host string, i.e. the pure IP address without port
@@ -1768,17 +1769,20 @@ namespace nodetool
       const bool is_public_zone = &zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet);
       if (is_public_zone)
       {
-        zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
+        const auto board = shekyl::seam_board_snapshot();
+        const auto connector_byte = static_cast<std::uint8_t>(connector);
+        for (const auto& row : board)
         {
-          if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+          if (row.endpoint.connector != connector_byte)
+            continue;
+          const epee::net_utils::network_address na = shekyl::seam_network_address(row.endpoint);
+          if (na.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
           {
-            const epee::net_utils::network_address na = cntxt.m_remote_address;
             const uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
             connected_subnets.insert(actual_ip & subnet_mask);
           }
-          else if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
+          else if (na.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
           {
-            const epee::net_utils::network_address na = cntxt.m_remote_address;
             const boost::asio::ip::address_v6 &actual_ip = na.as<const epee::net_utils::ipv6_network_address>().ip();
             if (actual_ip.is_v4_mapped())
             {
@@ -1788,8 +1792,7 @@ namespace nodetool
               connected_subnets.insert(actual_ipv4 & subnet_mask);
             }
           }
-          return true;
-        });
+        }
       }
 
       std::vector<peerlist_entry> subnet_peers;
@@ -1912,7 +1915,7 @@ namespace nodetool
         // It's ourselves, obviously don't take that
         continue;
 
-      if (has_outbound_connection_to_host(zone, candidate.adr))
+      if (has_outbound_connection_to_host(connector, candidate.adr))
         // Same-host outbound cap: at most one outbound connection per host
         continue;
 
@@ -2040,7 +2043,8 @@ namespace nodetool
     bool one_succeeded = false;
     for(auto& zone : m_network_zones)
     {
-      size_t start_conn_count = get_outgoing_connections_count(zone.second);
+      const auto connector = zone.first;
+      size_t start_conn_count = get_outgoing_connections_count(connector);
       // Seeds are for a node that knows NOBODY -- see `has_no_known_peers`,
       // which carries why this is keyed on both lists rather than on white.
       if(zone.second.m_peerlist.has_no_known_peers() && !connect_to_seed(zone.first))
@@ -2054,30 +2058,30 @@ namespace nodetool
 
       // carefully avoid `continue` in nested loop
       
-      size_t conn_count = get_outgoing_connections_count(zone.second);
+      size_t conn_count = get_outgoing_connections_count(connector);
       while(conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
       {
         const size_t expected_white_connections = base_expected_white_connections;
         if(conn_count < expected_white_connections)
         {
           //start with the white list
-          while (get_outgoing_connections_count(zone.second) < expected_white_connections
-            && make_expected_connections_count(zone.second, white, expected_white_connections));
+          while (get_outgoing_connections_count(connector) < expected_white_connections
+            && make_expected_connections_count(connector, zone.second, white, expected_white_connections));
           //then do grey list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
+          while (get_outgoing_connections_count(connector) < zone.second.m_config.m_net_config.max_out_connection_count
+            && make_expected_connections_count(connector, zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
         }else
         {
           //start from grey list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
+          while (get_outgoing_connections_count(connector) < zone.second.m_config.m_net_config.max_out_connection_count
+            && make_expected_connections_count(connector, zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
           //and then do white list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, white, zone.second.m_config.m_net_config.max_out_connection_count));
+          while (get_outgoing_connections_count(connector) < zone.second.m_config.m_net_config.max_out_connection_count
+            && make_expected_connections_count(connector, zone.second, white, zone.second.m_config.m_net_config.max_out_connection_count));
         }
         if(zone.second.m_net_server.is_stop_signal_sent())
           return false;
-        size_t new_conn_count = get_outgoing_connections_count(zone.second);
+        size_t new_conn_count = get_outgoing_connections_count(connector);
         if (new_conn_count <= conn_count)
         {
           // we did not make any connection, sleep a bit to avoid a busy loop in case we don't have
@@ -2088,7 +2092,7 @@ namespace nodetool
         conn_count = new_conn_count;
       }
 
-      if (start_conn_count == get_outgoing_connections_count(zone.second) && start_conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
+      if (start_conn_count == get_outgoing_connections_count(connector) && start_conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
       {
         MINFO("Failed to connect to any, trying seeds");
         if (!connect_to_seed(zone.first))
@@ -2101,12 +2105,12 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::make_expected_connections_count(network_zone& zone, PeerType peer_type, size_t expected_connections)
+  bool node_server<t_payload_net_handler>::make_expected_connections_count(epee::net_utils::connector_id connector, network_zone& zone, PeerType peer_type, size_t expected_connections)
   {
     if (m_offline)
       return false;
 
-    size_t conn_count = get_outgoing_connections_count(zone);
+    size_t conn_count = get_outgoing_connections_count(connector);
     //add new connections from white peers
     if(conn_count < expected_connections)
     {
@@ -2115,11 +2119,11 @@ namespace nodetool
 
       MDEBUG("Making expected connection, type " << peer_type << ", " << conn_count << "/" << expected_connections << " connections");
 
-      if (peer_type == white && !make_new_connection_from_peerlist(zone, true)) {
+      if (peer_type == white && !make_new_connection_from_peerlist(connector, zone, true)) {
         return false;
       }
 
-      if (peer_type == gray && !make_new_connection_from_peerlist(zone, false)) {
+      if (peer_type == gray && !make_new_connection_from_peerlist(connector, zone, false)) {
         return false;
       }
     }
@@ -2132,58 +2136,55 @@ namespace nodetool
     auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone == m_network_zones.end())
       return 0;
-    return get_outgoing_connections_count(public_zone->second);
+    return get_outgoing_connections_count(public_zone->first);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_incoming_connections_count(network_zone& zone)
+  size_t node_server<t_payload_net_handler>::get_incoming_connections_count(epee::net_utils::connector_id connector)
   {
-    size_t count = 0;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if(cntxt.m_is_income)
-        ++count;
-      return true;
-    });
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_count(
+        static_cast<std::uint32_t>(connector), SHEKYL_DIRECTION_INBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_outgoing_connections_count(network_zone& zone)
+  size_t node_server<t_payload_net_handler>::get_outgoing_connections_count(epee::net_utils::connector_id connector)
   {
-    size_t count = 0;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if(!cntxt.m_is_income)
-        ++count;
-      return true;
-    });
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_count(
+        static_cast<std::uint32_t>(connector), SHEKYL_DIRECTION_OUTBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_outgoing_connections_count()
   {
-    size_t count = 0;
-    for(auto& zone : m_network_zones)
-      count += get_outgoing_connections_count(zone.second);
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_OUTBOUND));
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  void node_server<t_payload_net_handler>::release_outbound(epee::net_utils::connector_id connector, size_t how_many)
+  {
+    if (how_many == 0)
+      return;
+    const auto board = shekyl::seam_board_snapshot();
+    const auto connector_byte = static_cast<std::uint8_t>(connector);
+    std::vector<std::uint64_t> outbound_ids;
+    for (const auto& row : board)
+      if (row.endpoint.connector == connector_byte
+          && row.endpoint.direction == SHEKYL_DIRECTION_OUTBOUND)
+        outbound_ids.push_back(row.id);
+    const auto zone = m_network_zones.find(connector);
+    size_t released = 0;
+    for (auto id = outbound_ids.rbegin(); id != outbound_ids.rend() && released < how_many; ++id, ++released)
+    {
+      if (zone != m_network_zones.end())
+        zone->second.m_net_server.get_config_object().close(shekyl::seam_connection_id(*id));
+      shekyl_seam_close(*id);
+    }
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_incoming_connections_count()
   {
-    size_t count = 0;
-    for (auto& zone : m_network_zones)
-    {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if(cntxt.m_is_income)
-          ++count;
-        return true;
-      });
-    }
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_INBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2278,7 +2279,7 @@ namespace nodetool
     //
     // This does NOT stop advertising, classify, or infer anything about a
     // remote peer -- all three are the deferred action half.
-    const size_t inbound_now = get_incoming_connections_count(public_zone->second);
+    const size_t inbound_now = get_incoming_connections_count(public_zone->first);
     const uint32_t announced = get_announced_port(epee::net_utils::connector_id::clearnet);
     const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
         std::chrono::steady_clock::now() - m_started_at).count();
@@ -2315,6 +2316,9 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::peer_sync_idle_maker()
   {
     MDEBUG("STARTED PEERLIST IDLE HANDSHAKE");
+    // Step-b holdout. This writes `m_in_timedsync`. The board has no sync
+    // state, and the write stays on the context until the handle exists.
+    // The other remaining `foreach_connection` is `for_each_connection`.
     std::list<epee::net_utils::connection_context_base> cncts;
     for(auto& zone : m_network_zones)
     {
@@ -2796,15 +2800,13 @@ namespace nodetool
   {
 
     std::stringstream ss;
-    for (auto& zone : m_network_zones)
+    const auto board = shekyl::seam_board_snapshot();
+    for (const auto& row : board)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        ss << cntxt.m_remote_address.str()
-          << " \t\tconn_id " << cntxt.m_connection_id << (cntxt.m_is_income ? " INC":" OUT")
-          << std::endl;
-        return true;
-      });
+      ss << shekyl::seam_network_address(row.endpoint).str()
+        << " \t\tconn_id " << shekyl::seam_connection_id(row.id)
+        << (row.endpoint.direction == SHEKYL_DIRECTION_INBOUND ? " INC":" OUT")
+        << std::endl;
     }
     std::string s = ss.str();
     return s;
@@ -3089,11 +3091,11 @@ namespace nodetool
     auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
     if (public_zone != m_network_zones.end())
     {
-      const auto current = public_zone->second.m_net_server.get_config_object().get_out_connections_count();
+      const auto current = get_outgoing_connections_count(public_zone->first);
       const size_t previous = public_zone->second.m_config.m_net_config.max_out_connection_count;
       public_zone->second.m_config.m_net_config.max_out_connection_count = count;
-      if(current > count)
-        public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
+      if (current > count)
+        release_outbound(public_zone->first, current - count);
       m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
       // The outbound cap is a term in the inbound ceiling's reservation, so
       // changing it at runtime invalidates a ceiling derived against the old

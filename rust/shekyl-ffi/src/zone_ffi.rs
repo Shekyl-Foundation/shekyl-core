@@ -849,6 +849,9 @@ mod tests {
     /// path arms nothing and never saw it.
     #[test]
     fn the_engine_outlives_ensure() {
+        let _bind = crate::seam_ffi::seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut executor = 0u8;
         let ceiling = ShekylInboundCeiling {
             kind: SHEKYL_INBOUND_CEILING_UNLIMITED,

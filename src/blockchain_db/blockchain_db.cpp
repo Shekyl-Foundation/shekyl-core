@@ -431,7 +431,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block add.
   // Any partial commit here is a consensus split.
-  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
     using shekyl::db::MaturityHeight;
     using shekyl::db::OutputIndex;
@@ -808,7 +807,6 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block pop.
   // Any partial commit here is a consensus split.
-  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
     using shekyl::db::MaturityHeight;
     using shekyl::db::OutputIndex;

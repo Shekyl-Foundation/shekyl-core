@@ -1140,20 +1140,6 @@ public:
   virtual uint64_t get_block_timestamp(const uint64_t& height) const = 0;
 
   /**
-   * @brief fetch a block's cumulative number of rct outputs
-   *
-   * The subclass should return the numer of rct outputs in the blockchain
-   * up to the block with the given height (inclusive).
-   *
-   * If the block does not exist, the subclass should throw BLOCK_DNE
-   *
-   * @param height the height requested
-   *
-   * @return the cumulative number of rct outputs
-   */
-  virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const = 0;
-
-  /**
    * @brief fetch the top block's timestamp
    *
    * The subclass should return the timestamp of the most recent block.
@@ -1953,8 +1939,6 @@ public:
    * @brief delete hard fork info from database
    */
   virtual void drop_hard_fork_info() = 0;
-
-  virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const = 0;
 
   /**
    * @brief is BlockchainDB in read-only mode?
