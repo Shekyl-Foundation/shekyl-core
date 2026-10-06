@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) opens a round, proposed and not ruled: Tor is mandatory, every artifact ships the pinned Expert Bundle, the pin covers the libraries tor loads, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).

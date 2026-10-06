@@ -193,6 +193,13 @@ gate. Closes the keystone the SP-T1 crate doc points forward to.
 
 ### DQ-T0.5 — packaging (reuse-not-own, §15)
 
+> **Amendment proposed 2026-10-06, not ruled:**
+> [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-4` and
+> `TB-6`…`TB-13` propose shipping the bundle in every artifact, a pin that
+> covers the libraries tor loads, a launcher that clears its environment, and
+> a re-pin to tor `0.4.9.13`. Until those rows are signed, this section is the
+> ruling in force.
+
 Do **not** own a Tor build. Inherit reproducible packaging where it exists (Guix `tor`); **hash-pin**
 the Tor Project's official released binary — the **Tor Expert Bundle**
 (<https://www.torproject.org/download/tor/>), the standalone `tor` artifact for embedders — on targets
