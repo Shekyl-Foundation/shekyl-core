@@ -247,12 +247,20 @@ stack, or to any RPC a wallet reads.
 | the operator's shard fetch (`request_archival_shard`; `rust/shekyl-archival-fetch-sched/src/lib.rs:42-49`) | a typed miss that reads no id. No production caller hands `shekyl-p-fetch` a target: its only callers are its own tests and the measurement rig |
 | the serve set (`rust/shekyl-p-host/src/serve_set/`) | compares the wallet's held ids against the wallet store's frozen segments. Both sides are the segment meaning |
 | the snapshot digest (`rust/shekyl-ffi/src/e2_trace_ffi.rs:37`) | C++ state is marshalled into the Rust store's snapshot type to be hashed. Ids are compared as integers and interpreted by neither side |
-| **the captured-chain replay** (`shekyl-chain-ingest`; `rust/shekyl-chain-ingest/src/archival_corpus_tests.rs`) | **the one place an integer is read under both meanings.** A chain the C++ daemon produced, whose bond holdings and injected credit name segment ids (the corpus carries shard `0`), is judged by `shekyl-chain-rules` on the byte-cut partition. This is CEN-L10's ruled divergence (row 3 = (b); `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1, whose pass condition is that the two name different shards). It is a conformance path: nothing it computes is served or returned to a wallet |
+| **the captured-chain replay** (`shekyl-chain-ingest`; `rust/shekyl-chain-ingest/src/archival_corpus_tests.rs`) | **the one place an integer is read under both meanings.** A chain the C++ daemon produced, whose bond holdings and injected credit name segment ids (the corpus carries shard `0`), is judged by `shekyl-chain-rules` on the byte-cut partition. This is CEN-L10's ruled divergence (row 3 = (b); `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1, whose pass condition is that the two name different shards). It is a conformance path: nothing it computes is served or returned to a wallet. **Not a halt.** **Forward consequence (design owner, 2026-10-06):** today the two sides differ only in how they *read* an id, because the Rust validator has no bond-admission predicate. Once family 1 builds it, a captured C++ chain whose bond holdings name segment ids diverges on **validity**: the Rust rules can refuse a block the C++ accepted. **Family 1's cutover therefore regenerates the captured corpora** on the byte-cut partition. The alternative, extending CEN-L10's expected-outcome rule to admission, is not taken: the C++-produced chains die with the engine swap anyway, and a rule that expects refusals would outlive its only subject |
 
-**What would make it cross:** a Rust-store reader behind any wallet-facing RPC, or
-the serving stack given a list from `shekyl-chain-rules`, before family 1's
-cutover. Falsify by `rg -l 'shekyl[-_]chain[-_]store' rust/*/Cargo.toml` naming a
-serving or wallet crate.
+**What would make it cross, and the falsifier's two arms.** Either arm, before
+family 1's cutover, is a crossing:
+
+- **(a)** a serving or wallet crate naming `shekyl-chain-store` in its manifest:
+  `rg -l 'shekyl[-_]chain[-_]store' rust/*/Cargo.toml` listing one;
+- **(b)** a wallet-read RPC served from `shekyl-chain-store` state:
+  `get_archival_emission_claim_source`, the archival shard coverage list, or any
+  successor that returns shard ids.
+
+**Arm (b) is the likelier crossing.** It is the engine swap's own route: the swap
+moves the daemon's RPCs onto the Rust store one at a time, and the first of these
+to move hands a wallet on leaf segments a list cut by bytes.
 
 **Class A at this pin** is one small item: the rig's two literal copies of the
 segment leaf count (`fixture.rs:70`, `extract_shard.rs:56-58`, both `25_992`) are a
@@ -390,7 +398,7 @@ ceremony raises the asymptote, which is exactly the kind of defect that ships
 unnoticed and detonates later. `escalation_knee_n`'s re-expression rides the same
 change so the ceremony is never handed a number in the wrong unit.
 
-**Family 1 — five components, as one, at or before the engine swap** (boundary
+**Family 1 — these components, as one, at or before the engine swap** (boundary
 restated 2026-10-05; it read "daemon + wallet"). What moves together:
 
 - **the bond-admission predicate** (closed-and-final shard; ruled, unbuilt);
@@ -398,12 +406,14 @@ restated 2026-10-05; it read "daemon + wallet"). What moves together:
   call site;
 - **the archiver serving-store rebuild** (`WSS-`, the wallet lane);
 - **fetch Sub-PR 2**;
-- **the wallet's holdings and serve-set source**.
+- **the wallet's holdings and serve-set source**;
+- **the regenerated captured corpora**: once the admission predicate exists, the
+  C++-produced chains diverge on validity, not only on reading (§B family 2).
 
 Bond admission checks domain membership, and the wallet posts the holdings it will
 be judged on, pins what it holds and serves what it pinned. A validator on the
 byte-cut partition and a serving stack on leaf segments name different shards with
-the same integer (§B family 2, *`shard_id` has two meanings*), so no one of the five
+the same integer (§B family 2, *`shard_id` has two meanings*), so none of them
 moves alone.
 
 **Amended 2026-09-29 (`SHT-Q2`): family 1 now also carries the txid change, and that
