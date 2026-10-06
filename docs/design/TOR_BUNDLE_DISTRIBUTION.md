@@ -44,7 +44,7 @@ the Foundation's hosts showed what that costs once Tor is not optional.
 4. **The launcher passes its whole environment to tor.** The spawn builds a
    command from the verified path and sets no environment
    (`rust/shekyl-tor-control-client/src/control/actor.rs:890`); no file in the
-   three Tor crates clears or sets one. `LD_PRELOAD`, `LD_LIBRARY_PATH` or
+   three Tor crates clears the environment or sets a variable in it. `LD_PRELOAD`, `LD_LIBRARY_PATH` or
    `DYLD_INSERT_LIBRARIES` from a shell, a unit file or a profile therefore
    loads code into the process whose file was hash-verified.
 5. **The Linux `tor` in the Expert Bundle does not use the libraries shipped
@@ -52,10 +52,12 @@ the Foundation's hosts showed what that costs once Tor is not optional.
    `libcrypto.so.3` and carries no `RPATH` or `RUNPATH`. Run with the three
    bundled copies beside it and no `LD_LIBRARY_PATH`, the loader took all three
    from the system directory; with `LD_LIBRARY_PATH` set to the bundle's `tor/`
-   directory it took the bundle's. On an Ubuntu 24.04 host that means the
-   distribution's OpenSSL 3.0.13 in place of the bundle's 3.5.8; on the floor
-   device (Ubuntu 26.04) `libevent-2.1.so.7` is absent and tor would not start.
-   The pin covers the `tor` file only.
+   directory it took the bundle's. What that meant on the hosts probed on
+   2026-10-06, as they were that day and not as a property of any
+   distribution: the internal Ubuntu 24.04 hosts would have run tor on their
+   own OpenSSL (3.0.13 there) in place of the bundle's (3.5.8), and the floor
+   device's image (Ubuntu 26.04) had no `libevent-2.1.so.7`, so tor would not
+   have started on it. The pin covers the `tor` file only.
 6. **The macOS `tor` names its one library by `@executable_path`**
    (`libevent-2.1.7.dylib`, read from the binary's strings; not run). The
    Windows bundle ships `tor.exe` with no library beside it.
