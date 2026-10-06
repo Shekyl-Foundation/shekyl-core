@@ -143,9 +143,11 @@ enum Source {
     Segment(FrozenSegmentBody),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
-    /// An in-memory payload that counts its chunk reads into a counter the
-    /// test holds. How a test sees that a requester who stopped taking
-    /// bytes stopped the serve loop reading them.
+    /// An in-memory payload that counts the chunks it yields into a counter
+    /// the test holds. How a test sees that a requester who stopped taking
+    /// bytes stopped the serve loop reading them. A read at the end of the
+    /// body yields nothing and is not counted: the count is of shard bytes
+    /// handed over, in chunks, which is the work the invariant is about.
     #[cfg(test)]
     Counted {
         bytes: Arc<[u8]>,
@@ -187,7 +189,7 @@ impl ShardBody {
         })
     }
 
-    /// [`Self::flat`], counting every chunk read into `reads`.
+    /// [`Self::flat`], counting every chunk it yields into `reads`.
     #[cfg(test)]
     pub(crate) fn counted(
         bytes: Arc<[u8]>,
@@ -261,8 +263,11 @@ impl ShardBody {
             Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
             #[cfg(test)]
             Source::Counted { bytes, read, reads } => {
-                reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(slice_chunk(bytes, read, max_bytes))
+                let chunk = slice_chunk(bytes, read, max_bytes);
+                if chunk.is_some() {
+                    reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                Ok(chunk)
             }
         }
     }

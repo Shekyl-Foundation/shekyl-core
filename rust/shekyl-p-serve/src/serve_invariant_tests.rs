@@ -52,14 +52,14 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use super::{
-    good_get_shard_0, head_of, leaves, render_ok, resolve, write_response, PServeEndpoint,
+    fetch, good_get_shard_0, head_of, leaves, render_ok, resolve, write_response, PServeEndpoint,
     Resolved, OWN_HEIGHT, SIGNATURE_ENVELOPE_LEN, WRITE_CHUNK_BYTES,
 };
 use crate::countersign::{PassKey, PassSigner, SignRefused, TestKeySigner};
 use crate::provider::{ProviderError, ShardBody, ShardProvider};
 
 /// Shard 0, in memory, counting how often it is opened and how many
-/// chunks of it are then read.
+/// chunks of it are then yielded.
 struct CountingProvider {
     bytes: Arc<[u8]>,
     opens: AtomicUsize,
@@ -81,6 +81,13 @@ impl CountingProvider {
 
     fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
+    }
+
+    /// Bodies handed out and not yet dropped. Each body holds a clone of
+    /// the read counter, so the counter's reference count is the provider
+    /// plus one per live body.
+    fn bodies_open(&self) -> usize {
+        Arc::strong_count(&self.reads) - 1
     }
 }
 
@@ -313,6 +320,37 @@ async fn a_requester_that_stops_mid_chunk_stops_p_within_that_chunk() {
 }
 
 #[tokio::test]
+async fn a_requester_that_takes_everything_costs_every_chunk_and_one_signature() {
+    // The control for the tests above: the same counters on a response
+    // that completes. Every chunk is yielded once, the read that finds the
+    // end is not counted as one, and the key is asked exactly once, after
+    // them. Without this, a counter that never moved would pass every
+    // "no more than" above.
+    let chunks_in_body = 8;
+    let leaves_in_body = chunks_in_body * WRITE_CHUNK_BYTES / LEAF_BYTES;
+    let provider = CountingProvider::new(leaves(leaves_in_body, 0x55));
+    let signer = CountingSigner::new();
+    let ep = PServeEndpoint::bind(
+        Arc::clone(&provider) as Arc<dyn ShardProvider>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
+    )
+    .await
+    .expect("bind");
+
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(provider.opens(), 1);
+    assert_eq!(provider.reads(), chunks_in_body, "every chunk, once");
+    assert_eq!(signer.asked_to_sign(), 1, "one signature, after the body");
+    assert_eq!(ep.served_count(), 1);
+    assert_eq!(
+        provider.bodies_open(),
+        0,
+        "the body is dropped with the response"
+    );
+}
+
+#[tokio::test]
 async fn a_requester_that_closes_after_the_head_is_never_signed_for() {
     // The same clause through the endpoint and a real socket, with the
     // largest body a shard can be. The requester reads the head and
@@ -345,20 +383,22 @@ async fn a_requester_that_closes_after_the_head_is_never_signed_for() {
     assert!(head_of(&seen).starts_with("HTTP/1.1 200 OK"));
     drop(s);
 
-    // Wait, bounded, for the chunk reads to stop moving.
-    let settled = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut last = provider.reads();
-        loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let now = provider.reads();
-            if now == last && now > 0 {
-                return now;
-            }
-            last = now;
+    // The response is over when the serve loop drops the body it was
+    // streaming: a definite event, not a guess that the reads have gone
+    // quiet. Bounded well under the endpoint's own stall timeout, so a
+    // serve that hangs fails here and says so.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while provider.bodies_open() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("the chunk reads settle");
+    .expect("the serve loop ends the response once the requester has closed");
+    let settled = provider.reads();
+    assert!(
+        settled > 0,
+        "the head was received, so the loop read at least the chunk it then failed to write"
+    );
     assert!(
         settled < total_chunks,
         "{settled} of {total_chunks} chunks read: the close must stop the body short"
