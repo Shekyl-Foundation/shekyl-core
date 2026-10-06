@@ -118,6 +118,8 @@ pub use countersign::{
     SIGNATURE_ENVELOPE_LEN,
 };
 pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
+#[cfg(any(test, feature = "bench-internals"))]
+pub use serve::{serve_one_in_memory, InMemoryServe};
 pub use serve::{
     PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, REQUEST_HEADER_NAME,
     RESPONSE_HEADER_NAMES, ROUTE_PREFIX,

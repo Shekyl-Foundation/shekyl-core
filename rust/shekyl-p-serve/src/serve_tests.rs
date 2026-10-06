@@ -521,6 +521,56 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     assert_eq!(body, payload);
 }
 
+/// The in-memory composition the `BA-T3` gate times is the endpoint's own
+/// steps in the endpoint's order. This is the test that makes that a fact
+/// rather than a comment: both serve the same request against the same
+/// fixture, and the bytes ahead of the envelope are identical. The
+/// envelopes are each verified rather than compared, because the hybrid
+/// signature is randomised and two honest signatures differ.
+#[tokio::test]
+async fn the_in_memory_serve_and_the_endpoint_produce_the_same_bytes() {
+    let provider = FixtureProvider::new([(0, leaves(1_000, 0x11))]);
+    let (ep, signer) = bind(Arc::clone(&provider) as Arc<dyn ShardProvider>).await;
+    let head = good_get_shard_0();
+    let over_the_wire = request_raw(ep.addr(), &head).await;
+    let mut in_memory = Vec::new();
+    let outcome = serve_one_in_memory(&*provider, &*signer, head.as_bytes(), &mut in_memory);
+    assert_eq!(outcome, InMemoryServe::Served);
+    assert_eq!(over_the_wire.len(), in_memory.len(), "same response length");
+    let cut = over_the_wire.len() - SIGNATURE_ENVELOPE_LEN;
+    assert_eq!(
+        over_the_wire[..cut],
+        in_memory[..cut],
+        "head, frame and body are byte-identical between the two"
+    );
+    for response in [&over_the_wire, &in_memory] {
+        let served = parse_served(response);
+        let digest = pass_delivery_digest(&NONCE, &served.framed);
+        verify_pass_transcript(
+            signer.public_key(),
+            &NONCE,
+            BlockHeight::from_raw(IN_GATE_ANCHOR),
+            &ANCHOR_HASH,
+            0,
+            &digest,
+            &served.signature,
+        )
+        .expect("each envelope verifies under the persona key");
+    }
+    // The 404 is the same bytes too.
+    let miss_head = format!(
+        "GET /shard/9 HTTP/1.1\r\nhost: x\r\n{}\r\n",
+        header_line(&good_header())
+    );
+    let wire_miss = request_raw(ep.addr(), &miss_head).await;
+    let mut memory_miss = Vec::new();
+    assert_eq!(
+        serve_one_in_memory(&*provider, &*signer, miss_head.as_bytes(), &mut memory_miss),
+        InMemoryServe::NotFound
+    );
+    assert_eq!(wire_miss, memory_miss, "the shared 404 is identical");
+}
+
 #[tokio::test]
 async fn the_served_body_is_the_frame_then_the_countersignature() {
     // RF-D4 then SF-D8 on the wire. The frame tells the witness where the

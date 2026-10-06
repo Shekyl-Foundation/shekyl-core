@@ -38,6 +38,11 @@ shekyl-types = { path = "../shekyl-types" }
 # shipped graph). The name announces intent: a non-derived key never
 # reaches a wallet or a bonded persona.
 test-signer = ["shekyl-crypto-pq/test-utils"]
+# Exposes `serve_one_in_memory`: the endpoint's own steps composed on the
+# calling thread, for the `BA-T3` instruction-count gate. Not a serve path
+# and not on the shipped graph; the loopback endpoint is the production
+# surface.
+bench-internals = []
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
@@ -48,3 +53,4 @@ shekyl-p-serve = { path = ".", features = ["test-signer"] }
 
 [lints]
 workspace = true
+

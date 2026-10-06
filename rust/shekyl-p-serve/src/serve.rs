@@ -77,8 +77,11 @@ use tokio::task::JoinHandle;
 
 use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
 use crate::provider::{ShardBody, ShardProvider};
-use shekyl_archival_retention::{PassRequestHeader, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
+use shekyl_archival_retention::{
+    PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
+};
 use shekyl_curve_tree::served_frame::ServedFrameHeader;
+use shekyl_types::BlockHeight;
 
 // Sibling of this file, not `serve/delivery.rs`: the endpoint stays one
 // module, and the digest type is private to it.
@@ -537,6 +540,72 @@ fn digest_body(mut body: ShardBody, nonce: &[u8; PASS_NONCE_LEN]) -> Option<Dige
     })
 }
 
+/// The gate, the lookup and the digest read, as one blocking-pool hop.
+///
+/// `own_height` may be a bounded store read (the host's choice), and the
+/// shard read is one regardless. The gate still runs first, so an
+/// out-of-window anchor never touches the shard store.
+///
+/// A named function and not a closure, like the other three hops below,
+/// because the serve path's cost is measured per thread
+/// (`benches/serve_response_iai.rs`): Callgrind counts a blocking-pool
+/// thread's work only inside a function it was told to watch, and a closure
+/// has no stable name to watch.
+fn gate_and_digest(
+    signer: &dyn PassSigner,
+    provider: &dyn ShardProvider,
+    shard_id: u64,
+    anchor_height: BlockHeight,
+    nonce: &[u8; PASS_NONCE_LEN],
+) -> Lookup {
+    let Some(own_height) = signer.own_height() else {
+        return Lookup::StoreFault;
+    };
+    if !anchor_within_gate(own_height, anchor_height) {
+        return Lookup::Miss;
+    }
+    match provider.shard_bytes(shard_id) {
+        Ok(Some(body)) => digest_body(body, nonce).map_or(Lookup::StoreFault, Lookup::Held),
+        Ok(None) => Lookup::Miss,
+        Err(_) => Lookup::StoreFault,
+    }
+}
+
+/// The countersignature over one transcript, as canonical envelope bytes.
+/// `None` when the signer refuses or returns an envelope of another length.
+fn sign_transcript(
+    signer: &dyn PassSigner,
+    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+) -> Option<[u8; SIGNATURE_ENVELOPE_LEN]> {
+    let bytes = signer.sign_pass(message).ok()?.to_canonical_bytes().ok()?;
+    bytes.try_into().ok()
+}
+
+/// The shard opened again for sending. The frame must be the one that was
+/// digested and signed; a shard that vanished or changed is `None`.
+fn reopen_body(
+    provider: &dyn ShardProvider,
+    shard_id: u64,
+    frame: &ServedFrameHeader,
+) -> Option<ShardBody> {
+    match provider.shard_bytes(shard_id) {
+        Ok(Some(body)) if body.header() == *frame => Some(body),
+        _ => None,
+    }
+}
+
+/// One chunk of the body for the send loop. The body travels with the
+/// result because the read is a blocking-pool hop that owns it meanwhile.
+fn read_chunk(
+    mut body: ShardBody,
+) -> (
+    ShardBody,
+    Result<Option<Vec<u8>>, crate::provider::ProviderError>,
+) {
+    let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
+    (body, chunk)
+}
+
 /// Complete-head resolution: parse, gate, digest, sign, reopen — or the
 /// shared miss. Store I/O, the digest and the hybrid sign run on the
 /// blocking pool; join, store, and signer errors increment their counter
@@ -561,24 +630,17 @@ async fn resolve_body(
     let Request::Shard { shard_id, header } = parse_request(head)?;
     let fields = PassRequestHeader::from_bytes(&header);
     let nonce = *fields.nonce();
-    // Gate, look up and digest on one blocking-pool hop: `own_height` may
-    // be a bounded store read (the host's choice), and the shard read is
-    // one regardless. The gate still runs first, so an out-of-window anchor
-    // never touches the shard store.
+    let anchor_height = fields.anchor_height();
     let gate_signer = Arc::clone(&signer);
     let digest_provider = Arc::clone(&provider);
     let looked_up = tokio::task::spawn_blocking(move || {
-        let Some(own_height) = gate_signer.own_height() else {
-            return Lookup::StoreFault;
-        };
-        if !anchor_within_gate(own_height, fields.anchor_height()) {
-            return Lookup::Miss;
-        }
-        match digest_provider.shard_bytes(shard_id) {
-            Ok(Some(body)) => digest_body(body, &nonce).map_or(Lookup::StoreFault, Lookup::Held),
-            Ok(None) => Lookup::Miss,
-            Err(_) => Lookup::StoreFault,
-        }
+        gate_and_digest(
+            &*gate_signer,
+            &*digest_provider,
+            shard_id,
+            anchor_height,
+            &nonce,
+        )
     })
     .await;
     let DigestedBody { frame, digest } = match looked_up {
@@ -590,32 +652,18 @@ async fn resolve_body(
         }
     };
     let message = fields.transcript(shard_id, &digest);
-    let signed = tokio::task::spawn_blocking(move || {
-        signer
-            .sign_pass(&message)
-            .ok()
-            .and_then(|sig| sig.to_canonical_bytes().ok())
-    })
-    .await;
-    let signature = match signed {
-        Ok(Some(bytes)) => match bytes.try_into() {
-            Ok(signature) => signature,
-            Err(_wrong_len) => {
-                sign_failures.fetch_add(1, Ordering::Relaxed);
-                return None;
-            }
-        },
-        _ => {
-            sign_failures.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
+    let signed = tokio::task::spawn_blocking(move || sign_transcript(&*signer, &message)).await;
+    let Ok(Some(signature)) = signed else {
+        sign_failures.fetch_add(1, Ordering::Relaxed);
+        return None;
     };
     // The body to send. A shard that vanished, or whose frame changed,
     // between the two reads is a store fault: nothing has been written, so
     // it is still the shared 404.
-    let reopened = tokio::task::spawn_blocking(move || provider.shard_bytes(shard_id)).await;
+    let reopened =
+        tokio::task::spawn_blocking(move || reopen_body(&*provider, shard_id, &frame)).await;
     match reopened {
-        Ok(Ok(Some(body))) if body.header() == frame => Some(Resolved {
+        Ok(Some(body)) => Some(Resolved {
             body,
             nonce,
             digest,
@@ -673,25 +721,15 @@ async fn write_response(
     // the headers and the frame are decided together, before the store is
     // touched, leaving no seam between them for a later edit to slip
     // something into.
-    let frame = body.header();
-    let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
-        .ok()
-        .and_then(|sig| sig.checked_add(frame.framed_len()))
-        .ok_or_else(|| io::Error::other("content-length overflow"))?;
-    let mut running =
-        FramedDigest::start(&frame, &nonce).ok_or_else(|| io::Error::other("frame digest"))?;
-    let mut head = render_ok(content_length).into_bytes();
-    head.extend_from_slice(running.frame_bytes());
+    let (mut running, head) =
+        response_head(&body.header(), &nonce).ok_or_else(|| io::Error::other("frame digest"))?;
     write_bounded(stream, &head).await?;
     loop {
         // The store read is synchronous redb, so each chunk crosses to the
         // blocking pool and the body comes back with it.
-        let (returned, chunk) = tokio::task::spawn_blocking(move || {
-            let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
-            (body, chunk)
-        })
-        .await
-        .map_err(|_| io::Error::other("shard body task"))?;
+        let (returned, chunk) = tokio::task::spawn_blocking(move || read_chunk(body))
+            .await
+            .map_err(|_| io::Error::other("shard body task"))?;
         body = returned;
         match chunk {
             Ok(Some(bytes)) => {
@@ -723,6 +761,104 @@ async fn write_response(
     write_bounded(stream, &signature).await?;
     served.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// The committed head of a 200: status line, headers and the `RF-D4` frame
+/// header, as one byte string, with the [`FramedDigest`] that has absorbed
+/// that frame. `content-length` is the frame's declared length plus the
+/// envelope, both exact before a leaf is read. `None` if the length cannot
+/// be stated or the frame cannot be digested.
+fn response_head(
+    frame: &ServedFrameHeader,
+    nonce: &[u8; PASS_NONCE_LEN],
+) -> Option<(FramedDigest, Vec<u8>)> {
+    let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
+        .ok()?
+        .checked_add(frame.framed_len())?;
+    let running = FramedDigest::start(frame, nonce)?;
+    let mut head = render_ok(content_length).into_bytes();
+    head.extend_from_slice(running.frame_bytes());
+    Some((running, head))
+}
+
+/// What one in-memory serve produced. Mirrors the wire: a 200 that carried
+/// its envelope, the shared 404, or a 200 cut short of its envelope.
+#[cfg(any(test, feature = "bench-internals"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InMemoryServe {
+    Served,
+    NotFound,
+    Truncated,
+}
+
+/// One served response, composed from the same steps the endpoint runs,
+/// on the calling thread, into `out` instead of a socket.
+///
+/// For the `BA-T3` drift gate (`benches/serve_response_iai.rs`): Callgrind
+/// keeps one collection state per thread, and the endpoint's hops run on
+/// tokio's blocking pool, whose idle work made the per-thread counts drift
+/// between runs. This runs [`gate_and_digest`], [`sign_transcript`],
+/// [`reopen_body`], [`response_head`] and [`read_chunk`] in the order
+/// [`resolve_body`] and [`write_response`] run them, with the same digest
+/// comparison before the envelope. It is not a second serve path: the steps
+/// are the endpoint's own functions, and `serve_tests.rs` asserts that this
+/// composition and the live endpoint produce the same bytes for the same
+/// request, so the glue here cannot drift from the glue there without a
+/// test saying so.
+///
+/// Not part of the shipped surface: `bench-internals` and tests only.
+#[cfg(any(test, feature = "bench-internals"))]
+#[doc(hidden)]
+pub fn serve_one_in_memory(
+    provider: &dyn ShardProvider,
+    signer: &dyn PassSigner,
+    head: &[u8],
+    out: &mut Vec<u8>,
+) -> InMemoryServe {
+    let not_found = |out: &mut Vec<u8>| {
+        out.extend_from_slice(render_not_found().as_bytes());
+        InMemoryServe::NotFound
+    };
+    let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
+        return not_found(out);
+    };
+    let fields = PassRequestHeader::from_bytes(&header);
+    let nonce = *fields.nonce();
+    let Lookup::Held(DigestedBody { frame, digest }) =
+        gate_and_digest(signer, provider, shard_id, fields.anchor_height(), &nonce)
+    else {
+        return not_found(out);
+    };
+    let message = fields.transcript(shard_id, &digest);
+    let Some(signature) = sign_transcript(signer, &message) else {
+        return not_found(out);
+    };
+    let Some(mut body) = reopen_body(provider, shard_id, &frame) else {
+        return not_found(out);
+    };
+    let Some((mut running, response_head)) = response_head(&frame, &nonce) else {
+        return not_found(out);
+    };
+    out.extend_from_slice(&response_head);
+    loop {
+        let (returned, chunk) = read_chunk(body);
+        body = returned;
+        match chunk {
+            Ok(Some(bytes)) => {
+                if running.absorb(&bytes).is_none() {
+                    return InMemoryServe::Truncated;
+                }
+                out.extend_from_slice(&bytes);
+            }
+            Ok(None) => break,
+            Err(_) => return InMemoryServe::Truncated,
+        }
+    }
+    if running.finish() != Some(digest) {
+        return InMemoryServe::Truncated;
+    }
+    out.extend_from_slice(&signature);
+    InMemoryServe::Served
 }
 
 /// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
