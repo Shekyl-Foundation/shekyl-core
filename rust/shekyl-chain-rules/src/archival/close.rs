@@ -14,12 +14,12 @@ use shekyl_archival_retention::{
 use shekyl_economics::ClosedShardCount;
 use shekyl_types::archival::{RMarket, SigmaWorkMilli};
 use shekyl_types::{
-    shard_start, ArchivalLength, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
+    shard_start, ArchivalLength, BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::fault::{Corrupt, ViewRead};
-use crate::rules::miner::closed_shards_before;
+use crate::rules::miner::{closed_shards_before, closed_shards_through};
 use crate::rules::recorded;
 use crate::view::ChainView;
 
@@ -102,6 +102,35 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// field to be written into. Genesis (`connecting == 0`) is its own arm —
 /// [`closed_shards_before`] returns [`ClosedShardCount::ZERO`] there and
 /// there is no parent to search.
+///
+/// # Closed alone, and why that is enough here
+///
+/// Two bounds exist on this file's reads, one shard-count apart in the
+/// common case and `reorg_cap` blocks apart at the frontier: *closed*
+/// (this universe) and *closed and final* ([`closed_and_final`]). Which
+/// one a read takes is decided by what the read's result becomes, not by
+/// which function is nearer (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`
+/// §7.4): **a recomputed operand may be bounded by closed; a persisted
+/// commitment must be bounded by closed and final.**
+///
+/// `g(age)`'s operand is recomputed. [`shard_close`] is re-derived from
+/// the fold on every judgement, and nothing it returns is written down
+/// as a fact about the shard. If a reorg within `reorg_cap` moves the
+/// block that reached a shard's end, the next judgement reads the moved
+/// fold and derives the moved close — the operand follows the chain
+/// rather than having been committed against it, so a close that is not
+/// yet final costs nothing to have read. Bounding it by final would only
+/// delay a shard's age by `reorg_cap` blocks on every judgement, for a
+/// reorg that recomputation already absorbs.
+///
+/// A bond's held set is the other kind: the admitting block writes the
+/// shard into a record that later blocks read back as settled. That is a
+/// commitment, and CEN-J15 bounds it by [`closed_and_final`]. The two
+/// bounds are not interchangeable at either site. The reason is written
+/// here, beside the bound, because DRS-E4's one-apart defects
+/// (`HEIGHT_SEMANTICS.md`, the close height and the slash-log key) were
+/// each a reader who found two nearby quantities and no reason, and
+/// picked by proximity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClosedUniverse<'id> {
     state: UniverseState,
@@ -196,6 +225,50 @@ pub fn shard_close<'id, V: ChainView<'id>>(
             }
         }
     }
+}
+
+/// Whether `shard` is **closed and final** as of `at` — the bound a
+/// persisted commitment to a shard takes (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`
+/// §8.0 input 4; §7.4's discriminator is on [`ClosedUniverse`]).
+///
+/// `at` is the last height whose state is read. CEN-J15 passes the
+/// admitting block's parent; Slice C's `h_open(E)` will pass its own.
+/// Both operands read the cumulative archival fold and nothing else:
+///
+/// - *closed*: `shard < closed_shards_through(at)` — the fold through
+///   `at` has reached the shard's end;
+/// - *final*: `shard_close_height(shard) + reorg_cap ≤ at` — the block
+///   that reached it is at least `reorg_cap` deep below `at`.
+///
+/// `reorg_cap` is the in-force [`RuleSet::reorg_cap`](crate::RuleSet::reorg_cap),
+/// the reorg-cap job — never the pass-anchor setting it inherits its
+/// value from today (`docs/FOLLOWUPS.md`, the count-versus-height row's
+/// pass-anchor item). A shard closing at `c` is therefore `false` for
+/// every `at < c + reorg_cap` — `at = c` included, the close itself being
+/// the newest block — and `true` from `c + reorg_cap` on; monotone in
+/// `at`. No slash state is read, so a same-block slash has no side here,
+/// and nothing at `at + 1` can change the answer. An open shard is
+/// `false` at every height. A close height that `reorg_cap` carries past
+/// `u64::MAX` is not final at any representable `at`.
+///
+/// # Errors
+///
+/// The view's fault from either operand's read, or
+/// [`Corrupt::ShardCloseUnplaced`] if a shard the count says is closed
+/// has no height that closed it — a fold SI-13 refuses.
+pub fn closed_and_final<'id, V: ChainView<'id>>(
+    view: &V,
+    shard: ShardId,
+    at: BlockHeight,
+    reorg_cap: BlockCount,
+) -> Result<bool, ViewRead<V::Fault>> {
+    if shard.to_raw() >= closed_shards_through(view, at)?.get() {
+        return Ok(false);
+    }
+    let closed_at = shard_close_height(view, shard, at)?;
+    Ok(closed_at
+        .checked_add(reorg_cap)
+        .is_some_and(|final_from| final_from <= at))
 }
 
 /// The open epoch's accruing budget after adding this block's inflow
