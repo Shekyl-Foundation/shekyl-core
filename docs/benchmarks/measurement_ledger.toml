@@ -265,6 +265,7 @@ stale_through = [
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
   { through = "da4f35c025", note = "PR #980: the four blocking-pool hops become named functions and the 200 head is rendered by one function; a bench-only composition of the same steps is added behind a feature. No read, hash or sign is added or removed on the shipped path; a parity test holds the order. The gate this PR adds (BA-T3) is what will put a number on it." },
   { through = "23be6c9980", note = "BA-Q3 option S: the serve path reads each shard once, folds the bytes it writes, and signs last; PassKey::ready is asked before the head. BA-T3 (crypto_bench_serve_response, x86 dev, deterministic across two runs): one leaf 12,384,369 -> 12,357,954 instructions (-0.2 %), an eighth of a segment 46,363,994 -> 26,972,414 (-41.8 %), a full segment 346,328,758 -> 191,344,769 (-44.7 %). The per-byte part halves, as one read and one digest pass in place of two; the fixed part is the hybrid sign and does not move. Wall clock and CPU on the floor are BA-T5's; the three estimated rows stand until it runs." },
+  { through = "e680d8579c", note = "Same PR, review follow-ups: a module doc comment in serve.rs reworded for the rustdoc gate. No code path changed; no cost moved." },
 ]
 
 [[constant]]
