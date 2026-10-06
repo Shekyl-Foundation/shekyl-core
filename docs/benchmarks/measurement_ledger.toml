@@ -274,6 +274,7 @@ stale_through = [
   { through = "096c742626", note = "Doc comments only, in shekyl-p-fetch error.rs and shekyl-p-host host.rs. No executable serve or fetch code changed." },
   { through = "2bc0b9fd61", note = "Three commits on the single-pass serve. The pre-flight is PassKey::ready(shard_id, anchor_height) with no default, in place of can_sign: still one call before the body. A signing failure after the body increments its own counter in place of the pooled one. The response writer takes any AsyncWrite so a test can stand a sink in for the socket; TcpStream is the only production caller. No read, hash or sign is added, removed or moved. Not measured." },
   { through = "f7740a762b", note = "Review follow-up in provider.rs: the test-only counting body counts chunks yielded rather than calls. Compiled only under cfg(test); no shipped code path changed and no cost moved." },
+  { through = "bb9ce3a8c8", note = "BA-T3 seam: three blocking-pool closures in serve.rs become named functions and the 200 head is rendered by one; three bench-only compositions are added behind a feature that is not on the shipped graph. No read, hash or sign is added, removed or reordered, and a seam test holds the composition to the endpoint on bytes and on counts of opens, chunk reads and signatures. This is the commit that adds the gate; its first counts are in the manifest, section 12." },
 ]
 
 [[constant]]
@@ -698,3 +699,39 @@ measured_by = ["BA-T13"]
 status = "unmeasured"
 carrier = "BA-T13 (BA-G6). The ratio is pre-registered; only the LMDB arm has run, and the redb arm waits on a build target (FOLLOWUPS, DRS-BENCH redb arm)."
 path_set = "chain-store-ibd"
+
+# --- BA-Q3: the single-pass serve. Two figures predicted and not yet
+# measured, and one prediction that was measured and did not hold.
+
+[[constant]]
+name = "serve_prehead_work_floor"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Work before the first byte | under 1 ms | not measured on the floor | open |"
+measured_by = ["BA-T3", "BA-T5"]
+status = "estimated"
+estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,334,461 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
+carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "serve_throughput_8_inflight_floor"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 37.0, high = 60.0, unit = "responses per second" }
+basis = "Run 3's two eight-in-flight blocks on the single-pass tree read 59.6 and 39.7 responses per second. The floor of the band is the two-read arm's 37, taken as a lower bound because the single pass does strictly less work per response; the ceiling is the better block. Two blocks do not say which is typical."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
+carrier = "BA-T5: a floor run with enough eight-in-flight blocks per arm to say which figure is typical."
+path_set = "archival-serve-fetch"
+
+[[retired_estimate]]
+name = "serve_median_per_response_single_pass_floor"
+estimate = { low = 40.0, high = 60.0, unit = "ms" }
+measured = 67.2
+capture = "docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"
+capture_rev = "7c9140f297"
+verdict = "falsified"
+note = "Predicted 2026-10-06 as the pre-#954 arm, 24.8 ms, plus one digest pass at its standalone cost, 23.9 ms. Inside the stream the digest costs 43 ms. BA-T3 shows the chunked read-and-fold is 2.2 % above the one-shot digest in instructions, so the other 19 ms is not instruction work in the loop; the on-disk read path, the per-chunk blocking-pool hand-off and cache behaviour are what BA-T5 has to separate."
