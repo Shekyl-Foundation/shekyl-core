@@ -539,24 +539,19 @@ fn board_row(row: &Row) -> ShekylSeamBoardRow {
 
 /// Visit the process hub's board.
 ///
-/// `hub` null is that hub. Any other pointer is not a hub this function
-/// can read. The row pointer is valid only for the visit. A missing hub
-/// visits with a null pointer and a count of zero.
+/// There is one hub. The row pointer is valid only for the visit. A
+/// missing hub visits with a null pointer and a count of zero.
 ///
 /// # Safety
 /// `visit` receives `ctx` and a pointer into this call's row buffer.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_seam_board(
-    hub_ptr: *const c_void,
     ctx: *mut c_void,
     visit: Option<unsafe extern "C" fn(*mut c_void, *const ShekylSeamBoardRow, usize)>,
 ) -> i32 {
     let Some(visit) = visit else {
         return -1;
     };
-    if !hub_ptr.is_null() {
-        return -1;
-    }
     let Some(hub) = hub() else {
         unsafe { visit(ctx, std::ptr::null(), 0) };
         return 0;
@@ -1007,21 +1002,11 @@ mod board_ffi_tests {
     }
 
     #[test]
-    fn the_board_call_refuses_a_null_visit_and_a_pointer_that_is_not_the_process_hub() {
-        let marker = 1u8;
+    fn the_board_call_refuses_a_null_visit() {
+        assert_eq!(unsafe { shekyl_seam_board(std::ptr::null_mut(), None) }, -1);
         assert_eq!(
-            unsafe { shekyl_seam_board(std::ptr::null(), std::ptr::null_mut(), None) },
-            -1
-        );
-        assert_eq!(
-            unsafe {
-                shekyl_seam_board(
-                    (&raw const marker).cast(),
-                    std::ptr::null_mut(),
-                    Some(ignore),
-                )
-            },
-            -1
+            unsafe { shekyl_seam_board(std::ptr::null_mut(), Some(ignore)) },
+            0
         );
     }
 }

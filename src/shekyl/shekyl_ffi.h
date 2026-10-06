@@ -4411,12 +4411,11 @@ static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
 static_assert(sizeof(shekyl_seam_board_row) == 88, "seam board row");
 
 /// Copy the process hub's board into `visit` for the duration of the call.
-/// `hub` is null: the bound process hub. A non-null pointer is not a hub
-/// this build can read, and the call returns -1. A missing hub visits with
-/// a null row pointer and a count of 0. The row pointer is valid only
-/// inside `visit`. Returns 0, or -1 when `visit` is null or `hub` is not.
+/// There is one hub. A missing hub visits with a null row pointer and a
+/// count of 0. The row pointer is valid only inside `visit`. Returns 0,
+/// or -1 when `visit` is null.
 using shekyl_seam_board_visit = void (*)(void* ctx, const shekyl_seam_board_row* rows, std::size_t count);
-int shekyl_seam_board(const void* hub, void* ctx, shekyl_seam_board_visit visit);
+int shekyl_seam_board(void* ctx, shekyl_seam_board_visit visit);
 
 /// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.
 /// `permanent` 1 means there is no deadline. `text` is NUL-terminated.

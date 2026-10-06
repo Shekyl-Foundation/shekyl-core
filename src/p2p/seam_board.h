@@ -33,7 +33,7 @@ namespace shekyl
   inline std::vector<shekyl_seam_board_row> seam_board_snapshot()
   {
     std::vector<shekyl_seam_board_row> rows;
-    if (shekyl_seam_board(nullptr, &rows, seam_board_assign) != 0)
+    if (shekyl_seam_board(&rows, seam_board_assign) != 0)
       rows.clear();
     return rows;
   }
