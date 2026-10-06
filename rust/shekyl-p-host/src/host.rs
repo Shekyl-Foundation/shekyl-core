@@ -72,8 +72,8 @@ impl fmt::Debug for PersonaServing {
 
 /// The serving endpoint's aggregate counters, read through the host.
 ///
-/// Every non-servable outcome renders one identical 404 on the wire; these
-/// are the only place the outcomes are distinguishable, and only in
+/// A store fault renders the same 404 as a shard that is not held; these
+/// are the only place the two are distinguishable, and only in
 /// aggregate. In particular `sign_failures` is how an operator tells "this
 /// persona could not read what it needed" (`lookup_failures`) from "it read
 /// everything and the attestation key refused" — a persona started with

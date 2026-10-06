@@ -5,20 +5,22 @@
 
 //! Which bytes a pass countersignature digests.
 //!
-//! The store is read twice per response, and both reads digest through this
-//! type. The decision of 2026-10-04
-//! (`docs/V3_WALLET_DECISION_LOG.md`) is why there are two: `P` must know
-//! the digest before it signs, it signs before the first response byte so a
-//! refusal is the shared 404, and it does not retain the shard between those
-//! moments — one resident shard per in-flight connection would make the
-//! serve ceiling a whole-shard memory budget. The second read is the one
-//! that is written. Its digest is this same fold, and the signature is
-//! released only when the two digests are equal.
+//! The store is read once per response. Each chunk is folded through this
+//! type as it is written, and the signature is made over the finished
+//! digest and appended. So the signed bytes are the sent bytes by
+//! construction, and no more than one chunk of a shard is resident: the
+//! serve ceiling stays a count of connections, not a whole-shard memory
+//! budget.
 //!
-//! One fold, rather than a hasher opened by hand at each call site, so the
-//! signed bytes and the sent bytes are defined once: the `RF-D4` frame
-//! header, then every payload chunk, and nothing else. A body that is not
-//! exactly the length its frame declares has no digest.
+//! Signing therefore comes after the body. A signer that fails cannot turn
+//! the response into a 404 — the 200 is already out — so it shows as a body
+//! with no signature behind it. The 404 means "not held" and does not cover
+//! a held shard whose signer failed.
+//!
+//! One fold, rather than a hasher opened by hand at the call site, so the
+//! signed bytes are defined once: the `RF-D4` frame header, then every
+//! payload chunk, and nothing else. A body that is not exactly the length
+//! its frame declares has no digest.
 
 use shekyl_archival_retention::{PassDeliveryHasher, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
 use shekyl_curve_tree::served_frame::ServedFrameHeader;

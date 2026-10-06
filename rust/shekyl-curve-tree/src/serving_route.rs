@@ -72,7 +72,7 @@ pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
 /// decoder. `P` signs the **decoded** bytes, never this text, so a lenient
 /// server and a strict client could never sign different transcripts for
 /// one request. Missing, duplicate, malformed, or wrong-length values are
-/// the identical complete-head 404 (`RF-R1`); all other request headers
+/// the bare complete-head 400 (`RF-R1`); all other request headers
 /// remain ignored. Not `x-`-prefixed for the reason `RF-R1` gave the path.
 pub const REQUEST_HEADER_NAME: &str = "shekyl-pass-request";
 

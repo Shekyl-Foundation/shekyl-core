@@ -24,7 +24,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::{
-    max_body_bytes, ContentRefused, ContentVerify, FetchError, FetchTarget, Malformed,
+    max_body_bytes, ContentRefused, ContentVerify, FetchError, FetchTarget, Malformed, NextMove,
     PFetchClient, RequestHeader, Stall, Timeouts, VerifiedShard, MAX_INFLIGHT,
     SIGNATURE_ENVELOPE_LEN,
 };
@@ -409,6 +409,106 @@ async fn a_404_is_a_miss_and_is_not_retried_on_the_same_p() {
         hole.shown().is_empty(),
         "the hole is not consulted on a miss"
     );
+}
+
+#[tokio::test]
+async fn a_400_is_rejected_and_earns_one_retry_with_a_fresh_anchor() {
+    // `P` judged the request invalid. From this client that means the
+    // anchor missed `P`'s gate, which skew on either side can cause — so
+    // the first one is neither a miss nor `P`'s failure: the scheduler
+    // names the same `P` once more with a freshly derived anchor.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 400 Bad Request",
+            "content-type: application/octet-stream\r\ncontent-length: 0",
+        )),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    let err = out.expect_err("rejected");
+    assert!(matches!(err, FetchError::Rejected), "{err}");
+    assert_eq!(err.next_move(false), NextMove::RetryFreshAnchor);
+    assert!(
+        !err.retries_same_p(),
+        "the same header would be refused again"
+    );
+    assert!(hole.shown().is_empty());
+}
+
+#[test]
+fn a_second_400_is_a_failed_read() {
+    // `P`'s gate sits within ±L of `P`'s own height. A `P` that refuses a
+    // freshly derived anchor too is itself out of step, and that is `P`'s
+    // failure — not a miss, and not a third attempt.
+    assert_eq!(FetchError::Rejected.next_move(true), NextMove::FailedRead);
+    // The flag belongs to the 400 alone.
+    for seen in [false, true] {
+        assert_eq!(FetchError::Miss.next_move(seen), NextMove::NotHeld);
+        assert_eq!(FetchError::Unsigned.next_move(seen), NextMove::FailedRead);
+        assert_eq!(
+            FetchError::BadCountersignature.next_move(seen),
+            NextMove::FailedRead
+        );
+        assert_eq!(
+            FetchError::Stall(Stall::HeadTimeout).next_move(seen),
+            NextMove::RetrySameHeader
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_400_with_a_body_is_not_the_contract() {
+    let keys = keys();
+    let (out, _) = run(
+        Script::Respond(head_only(
+            "HTTP/1.1 400 Bad Request",
+            "content-type: application/octet-stream\r\ncontent-length: 5",
+        )),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::ContentLength);
+}
+
+#[tokio::test]
+async fn a_complete_body_with_no_signature_is_a_failed_read_not_a_stall() {
+    // `P` declared frame + envelope, sent the whole frame, and closed. Its
+    // signer failed after it served. That is a failed read: not retried
+    // like a transfer that died, and not a miss — `P` holds the shard. The
+    // unsigned bytes never reach the hole.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let mut unsigned = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n",
+        shekyl_curve_tree::serving_route::CONTENT_TYPE,
+        CONTENT.len() + SIGNATURE_ENVELOPE_LEN
+    )
+    .into_bytes();
+    unsigned.extend_from_slice(CONTENT);
+    let (out, _) = run(Script::Respond(unsigned.clone()), Arc::clone(&hole), &keys).await;
+    let err = out.expect_err("unsigned");
+    assert!(matches!(err, FetchError::Unsigned), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert!(hole.shown().is_empty());
+
+    // One byte either side of the frame's end is an ordinary short body:
+    // a transfer that died, retried with the same header.
+    let mut one_short = unsigned.clone();
+    one_short.pop();
+    let mut one_past = unsigned.clone();
+    one_past.push(0);
+    for short in [one_short, one_past] {
+        let (out, _) = run(Script::Respond(short), Hole::accepting(), &keys).await;
+        assert!(
+            matches!(stall(out), Stall::Truncated { .. }),
+            "a body that ends anywhere but the frame's end is a stall"
+        );
+    }
 }
 
 #[tokio::test]

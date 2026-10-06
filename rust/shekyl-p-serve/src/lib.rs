@@ -78,17 +78,23 @@
 //!   target (`shekyl_tor_control_wallet`'s `OnionPort::loopback`, on the host side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
-//! - every **complete-head** non-servable outcome — wrong path, wrong
-//!   method, malformed route/id, missing / duplicate / malformed request
-//!   header, out-of-gate anchor, **unknown shard, unfrozen shard, store
-//!   failure, signer refusal** — renders one identical 404, so neither the
-//!   route table nor store health nor key residency is probeable by
-//!   **response bytes**;
+//! - every **complete-head** request that is not valid — wrong path,
+//!   wrong method, malformed route/id, missing / duplicate / malformed
+//!   request header, out-of-gate anchor — renders one bare 400, decided
+//!   before the shard store is consulted, so it does not vary with what is
+//!   held and names no check;
+//! - every valid request for a shard that is not served — **unknown
+//!   shard, unfrozen shard, store failure** — renders one bare 404, so
+//!   store health is not probeable by **response bytes**;
+//! - a held shard whose signer refuses is sent whole, with no signature
+//!   behind it. The signature covers the bytes sent, so key residency
+//!   cannot be decided before them;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
-//! - which response a complete head gets is settled **before any byte is
-//!   written**, so no miss can leak as a truncated `200`; the one residual
+//! - which of 400, 404 and 200 a complete head gets is settled **before
+//!   any byte is written**, so no miss can leak as a truncated `200`; the
+//!   residual
 //!   ([`serve`], "the residual") is a body cut short by a stalled peer or a
 //!   store fault, and is named rather than assumed away;
 //! - no request logging at any level: the only observables are five

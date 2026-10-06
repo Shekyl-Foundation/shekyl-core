@@ -73,8 +73,8 @@ pub trait PassKey: Send + Sync {
     ///
     /// Returns [`SignRefused`] when the host cannot sign — key not
     /// resident, signer offline, or a host-side policy refusal. The serve
-    /// loop turns this into the identical 404 and counts it in
-    /// `sign_failure_count`, separately from `lookup_failure_count`
+    /// loop asks only after the body is out, so it ends the response there,
+    /// with no signature, and counts it in `sign_failure_count`, separately from `lookup_failure_count`
     /// (store-read faults), so an operator can tell "key not available"
     /// from "store not readable". An ordinary miss — a shard the persona
     /// does not hold — is counted by neither.
@@ -99,7 +99,7 @@ pub trait PassSigner: PassKey {
     ///
     /// `None` means the height could not be read — the serving store is
     /// unreadable, or whatever the host reads it from is gone. The serve
-    /// loop renders the identical 404 and counts a **lookup failure**
+    /// loop renders the 404 and counts a **lookup failure**
     /// (the same bucket as a store read that fails on the shard itself),
     /// so a host that has lost its store is visible in the aggregate
     /// rather than refusing every anchor silently. A fresh store at

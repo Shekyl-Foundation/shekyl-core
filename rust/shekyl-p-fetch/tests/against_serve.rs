@@ -16,14 +16,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
 use shekyl_p_fetch::{
-    ContentRefused, ContentVerify, FetchTarget, PFetchClient, RequestHeader, ServingEndpoint,
-    Timeouts,
+    ContentRefused, ContentVerify, FetchError, FetchTarget, NextMove, PFetchClient, RequestHeader,
+    ServingEndpoint, Timeouts,
 };
 use shekyl_p_serve::{
-    PServeEndpoint, PassSigner, ProviderError, ShardBody, ShardProvider, TestKeySigner,
+    PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused,
+    TestKeySigner, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -109,21 +110,20 @@ async fn socks_forward(target: SocketAddr) -> SocketAddr {
     proxy
 }
 
-#[tokio::test]
-async fn fetch_client_accepts_a_real_served_body() {
-    let payload: Vec<u8> = (0..LEAF_BYTES)
+fn payload() -> Vec<u8> {
+    (0..LEAF_BYTES)
         .map(|i| u8::try_from(i % 251).expect("modulus"))
-        .collect();
-    let provider = Arc::new(Fixture {
-        shards: HashMap::from([(SHARD, Arc::from(payload.clone().into_boxed_slice()))]),
-    });
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let public: HybridPublicKey = signer.public_key().clone();
-    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
-        .await
-        .expect("bind");
-    let proxy = socks_forward(ep.addr()).await;
+        .collect()
+}
 
+/// A real endpoint holding [`SHARD`] behind `signer`, and a client aimed at
+/// it through the shim.
+async fn stacks(signer: Arc<dyn PassSigner>) -> (PServeEndpoint, PFetchClient) {
+    let provider = Arc::new(Fixture {
+        shards: HashMap::from([(SHARD, Arc::from(payload().into_boxed_slice()))]),
+    });
+    let ep = PServeEndpoint::bind(provider, signer).await.expect("bind");
+    let proxy = socks_forward(ep.addr()).await;
     let client = PFetchClient::with_timeouts(
         proxy,
         Timeouts {
@@ -133,14 +133,32 @@ async fn fetch_client_accepts_a_real_served_body() {
             body_total: Duration::from_millis(2_000),
         },
     );
-    let target = FetchTarget {
+    (ep, client)
+}
+
+fn target(verifying_key: HybridPublicKey, shard_id: u64) -> FetchTarget {
+    FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
-        verifying_key: public,
-        shard_id: SHARD,
-    };
-    let header = RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(ANCHOR), [0x5a; 32]);
+        verifying_key,
+        shard_id,
+    }
+}
+
+fn header_at(anchor: u64) -> RequestHeader {
+    RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(anchor), [0x5a; 32])
+}
+
+#[tokio::test]
+async fn fetch_client_accepts_a_real_served_body() {
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+    let public: HybridPublicKey = signer.public_key().clone();
+    let (_ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
     let shard = client
-        .fetch(&target, &header, Arc::new(Accepting))
+        .fetch(
+            &target(public, SHARD),
+            &header_at(ANCHOR),
+            Arc::new(Accepting),
+        )
         .await
         .expect("the two stacks speak the same contract");
     assert_eq!(shard.shard_id(), SHARD);
@@ -148,7 +166,97 @@ async fn fetch_client_accepts_a_real_served_body() {
     // segment. The transport crate does not parse the frame — this test
     // does, so a swapped envelope/frame order fails here.
     let mut rest = shard.body();
-    let frame = ServedFrameHeader::read(&mut rest).expect("RF-D4 frame after the envelope");
+    let frame = ServedFrameHeader::read(&mut rest).expect("RF-D4 frame ahead of the envelope");
     assert_eq!(frame.leaf_count(), 1);
-    assert_eq!(rest, payload.as_slice());
+    assert_eq!(rest, payload().as_slice());
+}
+
+#[tokio::test]
+async fn the_four_answers_reach_the_client_as_four_outcomes() {
+    // The serve side's answers and the client's taxonomy, end to end: an
+    // out-of-gate anchor is the 400 whether or not the shard is held, a
+    // valid request for an unheld shard is the 404, and a held shard is
+    // the read.
+    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+    let public: HybridPublicKey = signer.public_key().clone();
+    let (ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
+
+    for shard in [SHARD, SHARD + 1] {
+        let err = client
+            .fetch(
+                &target(public.clone(), shard),
+                &header_at(OWN_HEIGHT),
+                Arc::new(Accepting),
+            )
+            .await
+            .expect_err("an anchor at the tip is outside the gate");
+        assert!(matches!(err, FetchError::Rejected), "shard {shard}: {err}");
+        assert_eq!(err.next_move(false), NextMove::RetryFreshAnchor);
+        assert_eq!(err.next_move(true), NextMove::FailedRead);
+    }
+
+    let err = client
+        .fetch(
+            &target(public.clone(), SHARD + 1),
+            &header_at(ANCHOR),
+            Arc::new(Accepting),
+        )
+        .await
+        .expect_err("not held");
+    assert!(matches!(err, FetchError::Miss), "{err}");
+    assert_eq!(err.next_move(false), NextMove::NotHeld);
+
+    // The retry the 400 earns: same `P`, a fresh in-gate anchor.
+    client
+        .fetch(
+            &target(public, SHARD),
+            &header_at(ANCHOR),
+            Arc::new(Accepting),
+        )
+        .await
+        .expect("a fresh anchor inside the gate is served");
+    assert_eq!(ep.served_count(), 1);
+    assert_eq!(ep.lookup_failure_count(), 0);
+}
+
+/// A signer with a height and no key.
+struct Keyless;
+
+impl PassKey for Keyless {
+    fn sign_pass(
+        &self,
+        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Err(SignRefused::new("no key"))
+    }
+}
+
+impl PassSigner for Keyless {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
+}
+
+#[tokio::test]
+async fn a_served_body_whose_signer_failed_is_a_failed_read() {
+    // `P` holds the shard and sends all of it; its signer then refuses.
+    // The client reads a whole frame with no signature behind it: a failed
+    // read, not a miss and not a stall to retry.
+    let (ep, client) = stacks(Arc::new(Keyless)).await;
+    let verifying_key = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+        .public_key()
+        .clone();
+    let err = client
+        .fetch(
+            &target(verifying_key, SHARD),
+            &header_at(ANCHOR),
+            Arc::new(Accepting),
+        )
+        .await
+        .expect_err("no signature");
+    assert!(matches!(err, FetchError::Unsigned), "{err}");
+    assert_eq!(err.next_move(false), NextMove::FailedRead);
+    assert!(!err.retries_same_p());
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.served_count(), 0);
 }

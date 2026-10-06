@@ -236,7 +236,7 @@ impl ShardBody {
 /// `Ok(None)` is the *unservable* case — unknown id, or a segment that has
 /// not frozen yet (no committed `R_k`, so nothing content-verifiable to
 /// serve). `Err` is infrastructure failure. The endpoint renders both as
-/// the single shared 404; only the local counters tell them apart.
+/// the same bare 404; only the local counters tell them apart.
 pub trait ShardProvider: Send + Sync + 'static {
     /// Open the body for `shard_id` — the frozen segment's leaf bytes in
     /// tree order, exactly what the witness hashes against `R_k`.

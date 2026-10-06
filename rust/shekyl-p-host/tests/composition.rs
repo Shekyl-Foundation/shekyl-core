@@ -322,9 +322,10 @@ fn served_segment_len(response: &[u8]) -> u64 {
     frame.segment_bytes()
 }
 
-/// Whether a response is the endpoint's identical refusal. Every non-servable
-/// outcome renders the same 404, so this is all a requester can tell — which
-/// is the point of asserting through it rather than through a counter.
+/// Whether a response is the endpoint's bare 404. A shard that is not held
+/// and a store or tip the persona could not read render the same one, so
+/// this is all a requester can tell — which is the point of asserting
+/// through it rather than through a counter.
 fn is_refused(response: &[u8]) -> bool {
     let head_end = response
         .windows(4)
