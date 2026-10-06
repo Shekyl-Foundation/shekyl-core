@@ -64,8 +64,8 @@
 //! bytes, and the one hybrid sign comes after the last of them. A
 //! requester that stops reading stalls this persona within one chunk; one
 //! that disconnects stops it after about one socket buffer; neither is
-//! signed for. The order is [`admit`] then [`write_response`], and
-//! `serve_seal_tests.rs` holds each clause.
+//! signed for. The order is `admit` then `write_response` (private to
+//! this module), and `serve_seal_tests.rs` holds each clause.
 //!
 //! # No request logging, at any level
 //!
