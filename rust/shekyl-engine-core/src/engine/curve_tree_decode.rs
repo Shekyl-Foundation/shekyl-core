@@ -83,6 +83,19 @@ pub(crate) enum DecodeError {
         /// The offending output count.
         count: usize,
     },
+    /// The block lists a different number of transaction hashes than it
+    /// carries bodies. The hashes pair positionally with the bodies, so a
+    /// mismatch would either drop transactions from the tree feed or label
+    /// them with another transaction's hash — refused whole, as the scanner
+    /// refuses the same block (`ScanError::InvalidScannableBlock`). The
+    /// backfill path decodes without a scanner pass, which is why the
+    /// decoder checks it itself.
+    TransactionHashCountMismatch {
+        /// Transaction bodies the block carries.
+        bodies: usize,
+        /// Transaction hashes the block lists.
+        hashes: usize,
+    },
 }
 
 /// Decode a parsed block into its full per-block leaf set, in consensus drain
@@ -94,9 +107,14 @@ pub(crate) enum DecodeError {
 pub(crate) fn decode_block_leaves(
     scannable: &ScannableBlock,
 ) -> Result<Vec<OwnedTxLeaves>, DecodeError> {
-    let mut txs = Vec::with_capacity(1 + scannable.transactions.len());
+    let bodies = scannable.transactions.len();
+    let hashes = scannable.block.transaction_hashes.len();
+    if bodies != hashes {
+        return Err(DecodeError::TransactionHashCountMismatch { bodies, hashes });
+    }
+    let mut txs = Vec::with_capacity(1 + bodies);
     // The coinbase carries no listed hash; the bodies pair positionally
-    // with the block's list (the scanner enforces the lengths agree).
+    // with the block's list, checked above.
     let miner = &scannable.block.miner_transaction;
     txs.push(decode_tx(miner, miner.hash(), true)?);
     for (tx, tx_hash) in scannable
@@ -404,12 +422,12 @@ mod tests {
             ),
         };
         let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);
+        let non_miner = null_tx(vec![tagged_output([8u8; 32])], vec![[3u8; 32]], None);
         let block = Block {
             header,
             miner_transaction: miner_tx,
-            transaction_hashes: vec![],
+            transaction_hashes: vec![non_miner.hash()],
         };
-        let non_miner = null_tx(vec![tagged_output([8u8; 32])], vec![[3u8; 32]], None);
         let scannable = ScannableBlock {
             block,
             transactions: vec![non_miner],
@@ -420,6 +438,30 @@ mod tests {
         assert_eq!(decoded.len(), 2, "coinbase + one non-miner tx");
         assert!(decoded[0].is_miner, "coinbase first");
         assert!(!decoded[1].is_miner, "non-miner second");
+        assert_eq!(
+            decoded[0].tx_hash,
+            scannable.block.miner_transaction.hash(),
+            "the coinbase's hash is computed"
+        );
+        assert_eq!(
+            decoded[1].tx_hash, scannable.block.transaction_hashes[0],
+            "a body carries the block's listed hash"
+        );
+
+        // A block whose list and bodies disagree is refused whole, not
+        // decoded short: the zip would otherwise drop the body silently.
+        let mut short = scannable.clone();
+        short.block.transaction_hashes.clear();
+        assert!(
+            matches!(
+                decode_block_leaves(&short),
+                Err(DecodeError::TransactionHashCountMismatch {
+                    bodies: 1,
+                    hashes: 0
+                })
+            ),
+            "one body, no hash"
+        );
         assert_eq!(
             decoded[0].outputs[0].output_key,
             shekyl_curve_tree::OneTimePubkey::from_bytes([7u8; 32])
