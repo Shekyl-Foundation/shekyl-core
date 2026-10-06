@@ -227,7 +227,7 @@ The sim's response-size figure follows the record layout Slice C's Round 0 write
 | Where | Shard `k` is | Sites |
 |---|---|---|
 | the Rust store and `shekyl-chain-rules` | the `k`-th byte-cut range of transactions (`SHT-Q2`) | `closed_shards_before` (`rust/shekyl-chain-rules/src/rules/miner.rs:564`); the close and the slash universe (`rust/shekyl-chain-rules/src/archival/close.rs:136`, `rust/shekyl-chain-rules/src/archival/slash.rs:127`); the retention prune (`rust/shekyl-chain-store/src/store/prune.rs`); the bond-admission predicate when it is built |
-| the serving stack and the live C++ verifier | leaf segment `k` | *"Shard ids are segment indices"* (`rust/shekyl-p-serve/src/provider.rs:261`); the wallet pins segment `k` for each held shard id (`rust/shekyl-engine-core/src/engine/curve_tree_actor.rs:378`, `rust/shekyl-engine-core/src/engine/stake_engine/serve_set_source.rs:218`); the serve-credit arm challenges leaf chunks of segment `k` (`src/cryptonote_core/blockchain.cpp:4909-4925`); the coverage list (`src/rpc/archival_shard_coverage.cpp:34`) |
+| the serving stack and the live C++ verifier | leaf segment `k` | *"Shard ids are segment indices"* (`rust/shekyl-p-serve/src/provider.rs:261`); the wallet pins segment `k` for each held shard id (`rust/shekyl-engine-core/src/engine/curve_tree_actor.rs:379`, `rust/shekyl-engine-core/src/engine/stake_engine/serve_set_source.rs:218`); the serve-credit arm challenges leaf chunks of segment `k` (`src/cryptonote_core/blockchain.cpp:4867-4883`); the coverage list (`src/rpc/archival_shard_coverage.cpp:34`) |
 
 This is the E3 handoff's falsifier, *"two shard geometries"* (§C, `SCC-3`), live
 and known: not in one constants file, but in one identifier. **It is safe only
