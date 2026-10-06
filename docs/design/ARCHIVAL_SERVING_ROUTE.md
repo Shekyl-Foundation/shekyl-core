@@ -1,9 +1,11 @@
 # Archival serving route — request contract
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
-2026-10-05 (an invalid request is a bare 400 decided ahead of the shard
-lookup, and the 404 means not held; `P` reads a shard once and signs
-after sending it, so a signer fault is a body with no signature; the
+2026-10-06 (five answers: a bare 400 for an invalid request, decided
+ahead of the shard lookup; a bare 404 that means not held and nothing
+else; a bare 503 for a fault of `P`'s own; a good read; and a refusal
+trailer when the signer fails after the body. `P` reads a shard once and
+signs after sending it; the
 countersignature envelope **closes** the body and signs a nonce-salted
 digest of it — `SF-D8`; request
 header the 2026-09-13 (a)+(b) landing; client
@@ -99,59 +101,73 @@ it as an alias.
 
 Transcribed from `shekyl-p-serve`, pinned by
 `two_personas_are_header_identical`,
-`every_invalid_request_is_the_one_bare_400_held_or_not` and
-`a_valid_request_for_an_unserved_shard_is_the_one_bare_404`. Do not
-redesign; the tests are the spec.
+`every_invalid_request_is_the_one_bare_400_held_or_not`,
+`only_a_valid_request_for_an_unheld_shard_is_the_404` and
+`a_persona_with_no_key_answers_503_and_sends_no_shard`. Do not redesign;
+the tests are the spec.
 
-A complete head gets one of four answers:
+A complete head gets one of five answers, and a failure shows as a
+failure: a held shard never answers 404, and `P` failing is never
+inferred from a response that stopped.
 
 | Response | Meaning |
 | --- | --- |
 | `400`, empty | The request is invalid. Decided from the head and `P`'s own height, with no shard lookup and no branch on holdings. |
-| `404`, empty | Not held. Only a valid request reaches this. |
+| `404`, empty | Not held. Only a valid request reaches this, and nothing else does. |
+| `503`, empty | `P` cannot serve right now and the fault is its own: an unreadable tip, a store failure, or no resident key. |
 | `200`, body, signature | A good read. |
-| `200`, body, no signature | `P` failed after serving: its signer refused. |
+| `200`, body, refusal trailer | `P`'s signer failed after the body went out. |
 
-Holdings are chain-public, so the 400/404 split hides nothing. It lets
-one code mean one thing, and the store is not consulted for a request
-that will be refused anyway.
+Holdings are chain-public, so none of the three bare codes reveals
+anything a requester could not already learn. A 404 for a bonded shard
+would say "not held" of a shard the chain says is held.
 
 - Success: `HTTP/1.1 200 OK`, headers exactly
   `RESPONSE_HEADER_NAMES` = `content-type`, `content-length`, nothing
   else. No `date`, no `server`, no `etag`, no `accept-ranges`.
 - `content-type` is `application/octet-stream`.
-- Every **complete-head** request that is not valid — wrong path, wrong
-  method, malformed route/id, missing / duplicate / malformed /
-  wrong-length request header, `anchor_height` outside `P`'s gate —
-  renders one identical 400 with the same two headers and
-  `content-length: 0`. Nothing in it names the check that refused, and
-  it is the same whether or not `P` holds the shard.
-- Every valid request for a shard `P` does not serve — unknown shard,
-  unfrozen shard, or a store or tip `P` could not read — renders one
-  identical 404 with the same two headers and `content-length: 0`. A
-  store fault gets no response of its own: that would be a health
-  oracle.
-- On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`;
-  the body is the `RF-D4` frame, then the countersignature as its last
-  bytes. `P` reads the shard once, hashes each chunk as it sends it,
-  then finishes the digest, signs, and appends the signature. A body
-  that fails mid-stream ends there. A body that completes and whose
-  signer then refuses ends after its last byte, short of
-  `content-length` by exactly the envelope: a held shard whose signer
-  fails is servable and failed, and is not a 404.
+- The three bare answers carry the same two headers and
+  `content-length: 0`, and each is one fixed byte string. Nothing in the
+  400 names the check that refused; nothing in the 503 names the fault.
+- **400.** Every **complete-head** request that is not valid — wrong
+  path, wrong method, malformed route/id, missing / duplicate /
+  malformed / wrong-length request header, `anchor_height` outside
+  `P`'s gate. The same whether or not `P` holds the shard.
+- **404.** A valid request for a shard `P` does not hold: unknown or
+  unfrozen.
+- **503.** A valid request `P` cannot serve through its own fault: the
+  tip the gate needs could not be read, the store failed to open the
+  shard, or no key is resident. The keyless case is decided before the
+  body, so no shard is sent only to go uncountersigned.
+- On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`,
+  and a 200 that completes is exactly that long. The body is the
+  `RF-D4` frame, then an envelope of the signature's width. `P` reads
+  the shard once, hashes each chunk as it sends it, then finishes the
+  digest, signs, and writes the signature as the envelope.
+- **The refusal trailer.** If the signer fails after the body, the
+  envelope is `REFUSAL_TRAILER_BYTE` (`0xFF`) repeated across its width
+  (`serving_route::is_refusal_trailer`). It cannot parse as a canonical
+  `HybridSignature`. `P` says in its own bytes that it served and did not
+  sign.
+- **A 200 that stops short is transport, at every offset.** A relay can
+  cut a stream where it likes, the frame's end included, and guard
+  pinning puts the same relay on every retry; it cannot write into an
+  onion-service stream. So only the trailer means `P` refused, and a
+  cut is a stall the requester retries.
 - **One response, then close.** `P` shuts its write half as soon as
   the last body byte is written (`close_gracefully`), so the client's
   EOF is behind the body, not behind a keep-alive. The client reads
   exactly `content-length` bytes and then **requires** that EOF: bytes
   instead are `SF-D6` overlength (malformed), silence instead is a
-  stall (`Stall::NoClose`). A 400 and a 404 are held to the same
+  stall (`Stall::NoClose`). A 400, a 404 and a 503 are held to the same
   standard — a "no" with bytes behind it is not the bare answer.
 - Incomplete heads (oversized, mid-head EOF, read timeout) and
   over-capacity arrivals are **closed with no HTTP bytes**.
-- Whether a complete head gets the 400, the 404 or a 200 is settled
-  before any byte is written. The request is judged **before** the shard
-  lookup, and the signature is computed **after** the body is sent, so an
-  invalid request costs no store read and a 404 costs no signature.
+- Whether a complete head gets the 400, the 404, the 503 or a 200 is
+  settled before any byte is written. The request is judged **before**
+  the shard lookup, and the signature is computed **after** the body is
+  sent, so an invalid request costs no store read and a 404 costs no
+  signature.
 - No request logging at any level. Observables are five aggregate
   monotone counters (served, refused, lookup failures, sign failures,
   accept failures).
@@ -263,14 +279,16 @@ the header and the envelope —
 `request_header_parsing_is_http_lenient_and_value_strict` and
 `the_served_body_is_the_frame_then_the_countersignature` and
 `the_countersignature_is_released_only_after_the_whole_frame` and
-`a_signer_that_refuses_leaves_a_whole_body_with_no_signature`
+`a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`
 (`shekyl-p-serve`) green beside
 `garbage_with_a_valid_signature_appended_is_refused`,
 `a_signature_sent_ahead_of_the_body_is_refused`,
-`a_complete_body_with_no_signature_is_a_failed_read_not_a_stall` and
+`a_body_closed_with_the_refusal_trailer_is_a_failed_read`,
+`a_good_response_cut_exactly_at_the_frames_end_is_a_stall`,
+`a_503_is_a_failed_read_with_no_retry` and
 `a_400_is_rejected_and_earns_one_retry_with_a_fresh_anchor`
 (`shekyl-p-fetch`), the cross-stack
-`the_four_answers_reach_the_client_as_four_outcomes`
+`the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes`
 (`shekyl-p-fetch/tests/against_serve.rs`), and
 `a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name`
 (`shekyl-p-fetch`), which pins the client's request bytes verbatim.

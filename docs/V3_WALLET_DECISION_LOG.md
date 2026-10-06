@@ -5895,10 +5895,11 @@ shard byte arrived.
    once: it hashes each chunk as it sends it, then finishes `D`, signs,
    and appends the signature. No more than one chunk is resident, so the
    serving ceiling's memory bound is unchanged. Signing comes after the
-   body, so a signer fault is a body with no signature behind it, not a
-   404. A transfer that fails mid-body yields no signature either.
-   *(Rewritten 2026-10-05 by the entry of that date; as first landed,
-   `P` read the shard twice and signed between the reads.)*
+   body, so a signer fault there is a refusal trailer in the signature's
+   place, not a 404. A transfer that fails mid-body yields no signature
+   either.
+   *(Rewritten by the entry of 2026-10-06; as first landed, `P` read the
+   shard twice and signed between the reads.)*
 5. **The scheme domain** rotates `shekyl/archival-attestation-scheme-v2` →
    `…-v3`. One label never names two messages (`30-cryptography.mdc`); a v2
    signature can never verify as v3. No retired-label constant is kept;
@@ -5942,87 +5943,119 @@ signature at all are Slice C's Round 0
 
 ---
 
-## 2026-10-05 — Archival serving: one store read, a 400 for an invalid request, and an unsigned body for a signer fault
+## 2026-10-06 — Archival serving: one store read, and five answers that each mean one thing
 
-**Decision.** Three changes to the serving route (`RF-R1`), ruled together
-because they touch one serve path and one client outcome table. The signed
-message, the scheme domain and the pass record are unchanged.
+**Decision.** Changes to the serving route (`RF-R1`), ruled 2026-10-05 and
+2026-10-06 and landed together because they touch one serve path and one
+client outcome table. The signed message, the scheme domain and the pass
+record are unchanged.
+
+The rule the answers follow: **a failure shows as a failure.** A held
+shard never answers 404, and `P` failing is never inferred from a response
+that stopped.
+
+| Response | Meaning |
+| --- | --- |
+| 400, empty | The request is invalid. Decided from the head and `P`'s own height, with no store lookup and no branch on holdings. |
+| 404, empty | Not held. Only a valid request reaches this, and nothing else does. |
+| 503, empty | `P` cannot serve right now and the fault is its own: an unreadable tip, a store failure, or no resident key. |
+| 200, body, signature | A good read. |
+| 200, body, refusal trailer | `P`'s signer failed after the body went out. |
 
 1. **One read.** `P` reads the store once, hashes each chunk as it sends
    it, then finishes `D`, signs, and appends the signature. The second
    read, the comparison between two digests and the "body changed between
-   reads" path are deleted. Measured on the floor device, the two-read path
-   cost 78 ms of CPU per served shard over the path before the digest
-   (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`).
-2. **A signer fault is a failed read.** Signing follows the body, so a
-   signer that fails cannot be answered with a 404. `P` ends the response
-   after the last body byte, with no signature. The client types a body
-   that ends cleanly at exactly the frame's length apart from truncation
-   (`FetchError::Unsigned`) and classifies it as a failed read: not a miss,
-   because `P` holds the shard, and not a stall to retry, because `P`
-   finished the send. The identical-404 rule no longer covers signing
-   faults. A held shard whose signer fails is servable and failed.
-3. **An invalid request is a 400, decided before the lookup.** `P`
+   reads" path are deleted. On the floor device the two-read path took
+   102.7 ms per served shard and this one takes 67.2 ms, against 24.6 ms
+   before the digest
+   (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`, run 3).
+2. **An invalid request is a 400, decided before the lookup.** `P`
    validates the request before it looks up the shard, so every malformed
    or out-of-gate request gets the same bare 400 whether or not `P` holds
-   that shard. The 404 then means one thing: a valid request for a shard
-   `P` does not serve. Holdings are public, so nothing is hidden by keeping
-   them one code; the store is simply not consulted for a request that is
-   going to be refused. Like the 404, the 400 has the same two headers, an
-   empty body, and nothing that names which check failed.
+   that shard. Holdings are public, so nothing is hidden by keeping them
+   one code; the store is simply not consulted for a request that is going
+   to be refused. As built, "invalid" is everything decidable without the
+   shard store: a wrong method or route, a malformed shard id, a request
+   header that is missing, duplicated or does not decode, and an anchor
+   outside the gate.
+3. **A fault of `P`'s own is a 503.** A store that fails to open the
+   shard, a tip `P` cannot read, and a persona with no resident key all
+   answer one bare 503. The earlier text answered the first two with the
+   404 on the ground that a distinct status "would be a live health
+   oracle". That ground fails: holdings are chain-public, so a 404 for a
+   bonded shard already tells anyone watching that `P` is failing, and
+   tells it as "not held". The 503 does not say which fault; the counters
+   do, to the operator.
+4. **A persona with no key says so before the body.** `P` knows it has no
+   resident key before the first byte (`PassKey::can_sign`), so it
+   answers the 503 and does not send a shard it cannot countersign.
+5. **A signer that fails after the body writes a refusal trailer.** The
+   body is out and the status cannot change. `P` closes the response with
+   a fixed trailer where the signature goes, so the response is its full
+   declared length and says, in bytes `P` wrote, that `P` served and did
+   not sign.
 
-| Response | Meaning |
-| --- | --- |
-| 400 | The request is invalid. Decided from the head and `P`'s own height, with no store lookup and no branch on holdings. |
-| 404 | Not held. Only a valid request reaches this. |
-| 200, body, signature | A good read. |
-| 200, body, no signature | `P` failed after serving. |
+**Why a trailer and not an inference from a short body.** Signing after
+sending first landed as "the response ends at the frame, with no
+signature", and the client read a body cut cleanly at that offset as `P`
+declining to sign. A relay on the circuit can count bytes, and the frame
+length is public, so it can cut a good response exactly there. Allowing a
+retry does not help: Tor pins guards, so the witness's entry guard is on
+every circuit it builds and the service's guards are on every circuit it
+builds, and a relay in guard position on either side sees every retry.
+Such a relay could make an honest `P` fail every challenge.
 
-**The client's default for a 400.** A 400 is neither a miss nor `P`'s
-failure on first sight, because the anchor gate can trip on clock or chain
-skew on either side. The witness retries once with a freshly derived
-anchor. A second 400 is a failed read: `P`'s gate sits within ±`L` of `P`'s
-own height, so a `P` that is persistently out of step is `P`'s problem.
-The fetch client does not retry — the anchor is the caller's, from chain
-state — so the count is the scheduler's and `FetchError::next_move` is the
-rule it reads.
+What a relay cannot do is write. Relay cells on an onion-service circuit
+are end-to-end encrypted and integrity-checked between the client and the
+service, so a relay can drop cells or destroy the circuit and cannot
+inject bytes. That leaves three cases, and the cut is never the first:
 
-**As built, where the ruling left a choice.**
+| Client sees | Meaning | Next move |
+| --- | --- | --- |
+| Body, then the refusal trailer | `P` failed. Authored by `P`. | Failed read, no retry |
+| Body, then nothing | Transport cut, at whatever offset | Stall, retried as before |
+| Body, then a valid signature | A good read | Pass |
 
-- *What "invalid" covers.* Everything that can be decided without the
-  shard store: a wrong method or route, a malformed shard id, a request
-  header that is missing, duplicated or does not decode, and an anchor
-  outside the gate. A wrong route was the shared 404 before; under "only a
-  valid request reaches the 404" it is the 400.
-- *What stays a 404.* A store that fails to open the shard, and a tip `P`
-  cannot read (so the gate cannot run). Both are `P`'s faults and neither
-  is the request's, so the requester is told to move on, and a store fault
-  still has no response of its own.
-- *A persona with no resident key.* Before, it answered every request with
-  the 404. Now it sends the whole shard for every valid request for a held
-  shard and then no signature: a shard of egress per request for a read
-  that cannot pass. That is the price of signing after sending, and it
-  falls on a persona that publishes an endpoint before its key is resident.
+What remains is the general residual: a network adversary can deny any
+read at any point. That is not specific to the frame boundary, and
+nothing at this layer fixes it.
 
-**A residual, named.** Before this entry, any short body was a stall and
-was retried against the same `P` over a fresh circuit. Now a body cut
-cleanly at exactly the frame's end is `P`'s failure on the first
-occurrence. A relay on the circuit can count bytes, and the frame length
-is public, so a single relay on a single circuit can cut a good response
-at that offset and have it read as `P` failing to sign. It could already
-force a stall; what changes is that one cut is no longer absorbed by the
-retry budget. The ruling classifies the outcome as a failed read and this
-entry implements that; whether an unsigned body should earn one retry over
-a fresh circuit before it counts is open to the design owner.
+**The trailer's encoding.** The envelope's own width (3,385 bytes) of
+`0xFF`, in place of the signature
+(`serving_route::REFUSAL_TRAILER_BYTE`, `is_refusal_trailer`). Chosen over
+a status byte ahead of the envelope for three reasons. A good read's
+bytes and every `content-length` stay exactly what they were, so nothing
+pinned on the good path moves. Every 200 is then its full declared
+length, which is what lets "short" mean "transport" with no exception.
+And it cannot be read as a signature: a canonical `HybridSignature`
+opens with a four-byte header and a little-endian length, and
+`0xFFFF_FFFF` is not a length an envelope can hold
+(`a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`
+asserts the parse fails; `a_real_signature_is_never_the_refusal_trailer`
+asserts the other direction). The cost is 3,385 bytes on a response that
+has already failed.
+
+**The client's rows.** A 400 is neither a miss nor `P`'s failure on first
+sight, because the anchor gate can trip on clock or chain skew on either
+side. The witness retries once with a freshly derived anchor. A second
+400 is a failed read: `P`'s gate sits within ±`L` of `P`'s own height, so
+a `P` that is persistently out of step is `P`'s problem. A 503 is a
+failed read with no retry of that `P`. A refusal trailer is a failed read
+with no retry. A body that stops short, anywhere, is a stall. The fetch
+client does not retry — the anchor is the caller's, from chain state — so
+the counting is the scheduler's and `FetchError::next_move` is the rule
+it reads.
 
 **Reverses.** Item 4 of the 2026-10-04 entry (two reads; rewritten in
-place). `RF-R1`'s "one identical 404 for every non-servable outcome" as it
-applied to invalid requests and to signer refusal; it stands for every
-valid request whose shard is not served.
+place). `RF-R1`'s "one identical 404 for every non-servable outcome": the
+404 now means "not held" and nothing else.
 
-**Where.** `rust/shekyl-p-serve/src/serve.rs`, `delivery.rs`;
+**Where.** `rust/shekyl-p-serve/src/serve.rs`, `delivery.rs`,
+`countersign.rs` (`PassKey::can_sign`);
+`rust/shekyl-curve-tree/src/serving_route.rs` (the trailer);
 `rust/shekyl-p-fetch/src/error.rs`, `client.rs`;
-`ARCHIVAL_SERVING_ROUTE.md`; `ARCHIVAL_SHARD_FETCH.md` `SF-D6` (the outcome
-table's two new rows) and `SF-D8` (the carrier).
+`rust/shekyl-p-host/src/signer.rs`; `ARCHIVAL_SERVING_ROUTE.md`;
+`ARCHIVAL_SHARD_FETCH.md` `SF-D6` (the outcome table's rows) and `SF-D8`
+(the carrier).
 
 ---

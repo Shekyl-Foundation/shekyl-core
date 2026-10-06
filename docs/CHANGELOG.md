@@ -2,26 +2,31 @@
 
 ## [Unreleased]
 
-### Archival serving — one store read, a 400 for an invalid request, an unsigned body for a signer fault
+### Archival serving — one store read, and five answers that each mean one thing
 
 - `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends
-  it, then signs the finished digest and appends the signature. The second
-  read and the comparison between two digests are gone.
-- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). A
-  request that is not valid — wrong route or method, a request header that
-  is missing or malformed, an anchor outside the gate — gets a bare `400`,
-  decided before the shard is looked up. The `404` now means only "not
-  held". A held shard whose signer fails is sent whole with no signature
-  behind it; it was a `404` before. The signed message and the pass record
-  are unchanged.
-- `shekyl-p-fetch` types both: `FetchError::Rejected` for the 400 and
-  `FetchError::Unsigned` for a whole frame with no signature.
-  `FetchError::next_move` gives the scheduler's rule: a first 400 earns one
-  retry of the same `P` with a freshly derived anchor, a second is a failed
-  read, and an unsigned body is a failed read at once.
-- A persona bound without a resident key (`NoResidentKey`) now sends the
-  shard and no signature for every valid request, where it used to answer
-  404.
+  it, then signs the finished digest and appends the signature. On a Pi 4
+  a served shard takes 67 ms, against 103 ms on the two-read path.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). The
+  signed message and the pass record are unchanged.
+  - `400`: the request is not valid (wrong route or method, a request
+    header that is missing or malformed, an anchor outside the gate).
+    Decided before the shard is looked up.
+  - `404`: the shard is not held. Nothing else answers 404 any more.
+  - `503`: the persona cannot serve through its own fault: its store or
+    its tip could not be read, or it has no resident key. These answered
+    404 before.
+  - A signer that fails after the body has gone out ends the response
+    with a refusal trailer in the signature's place. A response that
+    stops short is always treated as a transport failure and retried.
+- `shekyl-p-fetch` types each: `FetchError::Rejected` (400),
+  `FetchError::Unavailable` (503) and `FetchError::Unsigned` (the refusal
+  trailer). `FetchError::next_move` gives the scheduler's rule: a first
+  400 earns one retry of the same `P` with a freshly derived anchor and a
+  second is a failed read; a 503 and a refusal trailer are failed reads
+  with no retry.
+- A persona bound without a resident key (`NoResidentKey`) answers 503
+  and sends no shard.
 
 ## [3.1.0-alpha.9] - 2026-10-05
 
