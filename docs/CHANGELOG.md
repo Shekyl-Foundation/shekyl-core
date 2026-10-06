@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **C++ version gates swept.** Every version comparison in `src/` is classified in `docs/ci/cxx-version-gates.tsv` and held there by a CI gate (`CXX_VERSION_GATES.md`). Deleted with it: the unreachable `get_output_distribution` surface (`RpcHandler`, its message struct, the function through core, blockchain and LMDB) behind `major_version >= 4`, the peer top-version check behind `version >= 6`, and two always-true `HF_VERSION_FCMP_PLUS_PLUS_PQC` gates. `HF_VERSION_DYNAMIC_FEE` and `HF_VERSION_FCMP_PLUS_PLUS_PQC` are gone. Widened 2026-10-06: the gate reads a comparison on any version name, including a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion` and the bootstrap file version, and it scans `.cc`. 99 sites in 89 rows, counted on code alone: a comparison quoted in a string literal is not a row. Disposition and landing are closed tokens. The hard-fork mechanism is ruled deleted (Rick, 2026-10-06): its rows are `delete`, and it goes in its own PR. No behaviour changes.
+
 ### Archival serving — one store read, and five answers that each mean one thing
 
 - `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends

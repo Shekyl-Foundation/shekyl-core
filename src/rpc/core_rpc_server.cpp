@@ -55,7 +55,6 @@ using namespace epee;
 #include "rpc/archival_shard_coverage.h"
 #include "rpc/archival_shard_fetch.h"
 #include "rpc/rpc_args.h"
-#include "rpc/rpc_handler.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
 #include "version.h"
