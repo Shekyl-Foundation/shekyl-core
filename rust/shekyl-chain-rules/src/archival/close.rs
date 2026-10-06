@@ -12,7 +12,7 @@ use shekyl_archival_retention::{
     epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
 };
 use shekyl_economics::ClosedShardCount;
-use shekyl_types::archival::{RMarket, SigmaWorkMilli};
+use shekyl_types::archival::{BondRecord, RMarket, SigmaWorkMilli};
 use shekyl_types::{
     shard_start, ArchivalLength, BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -271,6 +271,135 @@ pub fn closed_and_final<'id, V: ChainView<'id>>(
         .is_some_and(|final_from| final_from <= at))
 }
 
+/// The as-of-`E` snapshot: the operands [`epoch_close_compute`] folds
+/// `Σwork(E)` and every `R_market(E, shard)` from, assembled by
+/// [`gather_epoch_snapshot`].
+///
+/// One assembly for two readers. The close (`Transition::close`) freezes
+/// what it computes over this; the claim verify (CEN-J23's per-epoch
+/// gather, CEN-J25's `EmissionEpochSource`) recomputes `Σwork(E)` over the
+/// same shape and compares it to the frozen row. The C++ reaches the same
+/// end by having the close and the verify call one LMDB gather (WS-1 §5.5);
+/// here the one function is this type's constructor, so the two readers
+/// cannot fold different index orders or different `Open`/`ClosedAt`
+/// operands and only find out at the compare.
+pub(crate) struct EpochSnapshot<'r> {
+    /// Every record with a credit at `E`, in the order `records` gave them
+    /// (persona-key order from A11 or from the transition's merge).
+    pub(crate) bonds: Vec<EpochCloseBond<'r>>,
+    /// Every closed shard first, `0..count`, then each open shard some
+    /// bond holds a credit on, in first-encounter order.
+    pub(crate) shards: Vec<EpochCloseShard>,
+    /// One pair per `(bond, credited shard)`, bonds outer, shards ascending.
+    pub(crate) pairs: Vec<CreditPair>,
+}
+
+/// Assemble the [`EpochSnapshot`] for the epoch whose close read
+/// `universe`.
+///
+/// `records` are the bond records the reader holds — the close passes its
+/// merged post-images, the verify passes A11's rows — and `credited`
+/// names the shards each persona has a credit on at the epoch, ascending
+/// and distinct ([`recorded_credits`], with the block's own credits added
+/// by the close). A persona whose credited set is empty is not in the
+/// snapshot: it earned nothing at `E`, and a bond with no pair would be a
+/// zero term `epoch_close_compute` never asked for.
+///
+/// The shards are every closed shard (`ARW-Q4`: zeros included, the close
+/// writes an `RMarket` for each) at the close height the universe places,
+/// then every open shard a credit names — it counts toward scarcity and
+/// has no age (`SHT-Q2`).
+///
+/// # Errors
+///
+/// The view's, from `credited` or from [`shard_close`].
+pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
+    view: &V,
+    universe: &ClosedUniverse<'id>,
+    records: &'r [(PCanonicalId, BondRecord)],
+    mut credited: impl FnMut(&PCanonicalId) -> Result<Vec<u64>, ViewRead<V::Fault>>,
+) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
+    let mut shards = Vec::new();
+    for k in 0..universe.count().get() {
+        // Every id in the prefix is below the count, so this arm is
+        // `ClosedAt`. The assert is that fact, checked.
+        let close = shard_close(view, ShardId::from_raw(k), universe)?;
+        debug_assert!(matches!(close, ShardClose::ClosedAt(_)));
+        shards.push(EpochCloseShard { shard_id: k, close });
+    }
+
+    let mut bonds = Vec::new();
+    let mut pairs = Vec::new();
+    for (persona, record) in records {
+        let shards_credited = credited(persona)?;
+        if shards_credited.is_empty() {
+            continue;
+        }
+        let bond_idx = bonds.len();
+        bonds.push(EpochCloseBond {
+            join_settlement_epoch: record.join_settlement_epoch.to_raw(),
+            is_foundation_complete_tree: record.is_complete_tree(),
+            bad_intervals: &record.bad_intervals,
+        });
+        for shard in shards_credited {
+            let shard_idx = match shards.iter().position(|s| s.shard_id == shard) {
+                Some(idx) => idx,
+                None => {
+                    // Absent from the prefix, so the id is at or beyond
+                    // the count and this arm is `Open`.
+                    debug_assert!(shard >= universe.count().get());
+                    let close = shard_close(view, ShardId::from_raw(shard), universe)?;
+                    debug_assert!(matches!(close, ShardClose::Open));
+                    shards.push(EpochCloseShard {
+                        shard_id: shard,
+                        close,
+                    });
+                    shards.len() - 1
+                }
+            };
+            pairs.push(CreditPair {
+                bond_idx,
+                shard_idx,
+            });
+        }
+    }
+    Ok(EpochSnapshot {
+        bonds,
+        shards,
+        pairs,
+    })
+}
+
+/// The shards `persona` has a **recorded** credit on at `epoch`, ascending
+/// and distinct: A4 narrows the candidates to shards served through
+/// `epoch`, A5 confirms a pass at `epoch` on each. The verify's whole
+/// answer (a closed epoch's credits are all recorded); the close adds the
+/// closing block's own on top.
+///
+/// # Errors
+///
+/// The view's.
+pub(crate) fn recorded_credits<'id, V: ChainView<'id>>(
+    view: &V,
+    persona: PCanonicalId,
+    epoch: SettlementEpoch,
+) -> Result<Vec<u64>, ViewRead<V::Fault>> {
+    let mut out = Vec::new();
+    for served in view.served_shards(&persona).map_err(ViewRead::View)? {
+        if served.last_served >= epoch
+            && view
+                .pass_count(&persona, served.shard, epoch)
+                .map_err(ViewRead::View)?
+                .any()
+        {
+            out.push(served.shard.to_raw());
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
 /// The open epoch's accruing budget after adding this block's inflow
 /// (§3.5). CEN-L8's overflow clause: a total that does not fit is a fold
 /// that ran ahead of the chain, [`Corrupt::AccrualOverflow`].
@@ -327,59 +456,21 @@ impl super::Transition {
         // epoch's accrual is the closing epoch's budget.
         debug_assert_eq!(accrual.epoch, epoch, "the close's epoch is the open epoch");
 
-        // The snapshot's shards: every closed shard (ARW-Q4), with the
-        // close height its age is measured from. The universe is one read:
-        // the count and the parent it was read through.
+        // The snapshot: every closed shard (ARW-Q4) at the close height its
+        // age is measured from — the universe is one read, the count and
+        // the parent it was read through — and every record with a credit
+        // at `epoch`, in persona-key order, after this block's slashes. The
+        // verify re-gathers this same shape from the same universe when a
+        // claim cites `epoch` (CEN-J23).
         let universe = ClosedUniverse::before(view, self.connecting)?;
-        let mut shards = Vec::new();
-        for k in 0..universe.count().get() {
-            // Every id in the prefix is below the count, so this arm is
-            // `ClosedAt`. The assert is that fact, checked.
-            let close = shard_close(view, ShardId::from_raw(k), &universe)?;
-            debug_assert!(matches!(close, ShardClose::ClosedAt(_)));
-            shards.push(EpochCloseShard { shard_id: k, close });
-        }
-
-        // The snapshot's bonds: every record with a credit at `epoch`, in
-        // persona-key order, after this block's slashes; a credit on a
-        // shard beyond the closed count names a shard still open (it
-        // counts toward scarcity, it has no age).
-        let snapshot = self.merged(view)?;
-        let mut bonds = Vec::new();
-        let mut pairs = Vec::new();
-        for (persona, record) in &snapshot {
-            let credited = self.credited_shards(view, *persona, epoch)?;
-            if credited.is_empty() {
-                continue;
-            }
-            let bond_idx = bonds.len();
-            bonds.push(EpochCloseBond {
-                join_settlement_epoch: record.join_settlement_epoch.to_raw(),
-                is_foundation_complete_tree: record.is_complete_tree(),
-                bad_intervals: &record.bad_intervals,
-            });
-            for shard in credited {
-                let shard_idx = match shards.iter().position(|s| s.shard_id == shard) {
-                    Some(idx) => idx,
-                    None => {
-                        // Absent from the prefix, so the id is at or beyond
-                        // the count and this arm is `Open`.
-                        debug_assert!(shard >= universe.count().get());
-                        let close = shard_close(view, ShardId::from_raw(shard), &universe)?;
-                        debug_assert!(matches!(close, ShardClose::Open));
-                        shards.push(EpochCloseShard {
-                            shard_id: shard,
-                            close,
-                        });
-                        shards.len() - 1
-                    }
-                };
-                pairs.push(CreditPair {
-                    bond_idx,
-                    shard_idx,
-                });
-            }
-        }
+        let records = self.merged(view)?;
+        let EpochSnapshot {
+            bonds,
+            shards,
+            pairs,
+        } = gather_epoch_snapshot(view, &universe, &records, |persona| {
+            self.credited_shards(view, *persona, epoch)
+        })?;
 
         let inputs = EpochCloseInputs::under_schedule(
             self.schedule,
@@ -405,25 +496,14 @@ impl super::Transition {
     }
 
     /// The shards `persona` has a credit on at `epoch`, ascending and
-    /// distinct: recorded (A4 narrows the candidates, A5 confirms) and
-    /// this block's.
+    /// distinct: [`recorded_credits`] and this block's.
     fn credited_shards<'id, V: ChainView<'id>>(
         &self,
         view: &V,
         persona: PCanonicalId,
         epoch: SettlementEpoch,
     ) -> Result<Vec<u64>, ViewRead<V::Fault>> {
-        let mut out = Vec::new();
-        for served in view.served_shards(&persona).map_err(ViewRead::View)? {
-            if served.last_served >= epoch
-                && view
-                    .pass_count(&persona, served.shard, epoch)
-                    .map_err(ViewRead::View)?
-                    .any()
-            {
-                out.push(served.shard.to_raw());
-            }
-        }
+        let mut out = recorded_credits(view, persona, epoch)?;
         out.extend(
             self.serve_credits
                 .iter()
