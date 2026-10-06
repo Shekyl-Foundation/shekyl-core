@@ -149,11 +149,11 @@ mod tests {
         let seen = unsafe { &mut *ctx.cast::<Seen>() };
         seen.pointer_was_null = rows.is_null();
         seen.rows.clear();
-        if rows.is_null() || count == 0 {
+        // The typed seam owns the null, empty, and byte-bound checks.
+        let Some(rows) = (unsafe { crate::legacy_util::slice_from_typed_ptr(rows, count) }) else {
             return;
-        }
-        seen.rows
-            .extend_from_slice(unsafe { std::slice::from_raw_parts(rows, count) });
+        };
+        seen.rows.extend_from_slice(rows);
     }
 
     /// Stores the admission id. The post runs under the hub lock, so this
