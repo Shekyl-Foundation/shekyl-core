@@ -186,6 +186,7 @@ fn client_reanchor_class(err: &ClientError) -> ClientReanchorClass {
         | ClientError::ResumeFromCorruptStore { .. }
         | ClientError::Poisoned
         | ClientError::LeafEntries { .. }
+        | ClientError::TxHashMissing { .. }
         | ClientError::LeafPoint { .. }
         | ClientError::Frontier { .. }
         | ClientError::SnapshotLeafCountMismatch { .. } => ClientReanchorClass::Reselect,

@@ -32,7 +32,6 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
 #include "fcmp/ct_semantics.h"
-#include "rpc/rpc_handler.h"
 
 #include <unordered_map>
 #include <vector>
@@ -198,13 +197,6 @@ namespace rpc
     uint64_t block_weight_median;
     uint64_t start_time;
     std::string version;
-  };
-
-  struct output_distribution
-  {
-    output_distribution_data data;
-    uint64_t amount;
-    bool cumulative;
   };
 }  // namespace rpc
 

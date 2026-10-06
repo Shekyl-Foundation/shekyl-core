@@ -1450,6 +1450,7 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 // (coinbase-only regtest fixture). `is_miner` drives the +60
                 // maturity offset in the client's drain order.
                 leaves: vec![crate::scan::OwnedTxLeaves {
+                    tx_hash: shekyl_types::TxHash::from_bytes([0xc2; 32]),
                     is_miner: true,
                     leaf_entry_blob: Some(blob),
                     outputs,
@@ -1770,6 +1771,7 @@ fn chain_paying_the_hybrid_wallet(
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
+                tx_hash: Some(tx.tx_hash),
                 leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })

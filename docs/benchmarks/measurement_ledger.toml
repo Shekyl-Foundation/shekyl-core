@@ -257,6 +257,9 @@ stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "bfbd0d915c", note = "The serve path reads each shard once and digests it once, where #954 read and digested twice; the signature is made after the send. An invalid request is refused before the store is consulted. Measured on the floor device at 7c9140f297: 67.2 ms per response against 102.7 ms on the two-read tree and 24.6 ms before the digest (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md, run 3). The constants stay stale: the run prices the serve path over loopback and does not re-run the readings they rest on." },
+  { through = "c5e45d4a54", note = "A bare 503 for a store, tip or key fault; one can_sign call before the body; a refusal trailer written when the signer fails after it; the client compares the envelope to the trailer and types the 503. A good read gains the can_sign call and one envelope comparison and nothing else. Not measured; the run-3 arm predates it." },
+  { through = "096c742626", note = "Doc comments only, in shekyl-p-fetch error.rs and shekyl-p-host host.rs. No executable serve or fetch code changed." },
 ]
 
 [[constant]]
@@ -568,8 +571,14 @@ spec = [
   "rust/shekyl-fcmp/src",
 ]
 stale_through = [
+  { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
+  { through = "2e3576d34c", note = "The ingest's expectation match returns its result instead of mutating, and the ingest applies it after the store commit. Same lookups, same count; no cost moved. Not measured." },
+  { through = "480a9ba42a", note = "Test-only: four casts in the expectation tests (ct6_oracle/expected.rs) rewritten for clippy. No production code changed, no cost moved." },
+  { through = "34c7daa686", note = "Registration at construction (CT6_PROVING_STATE.md §11.13): ingest_block now looks each transaction up in a map of expected outputs — one BTreeMap lookup per transaction, skipped entirely while the map is empty — and TxLeafInputs carries a transaction hash. Nothing on the spend path changed; not measured." },
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
+  { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
 ]
 

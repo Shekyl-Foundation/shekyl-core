@@ -105,7 +105,7 @@ matches, and none is a miss:
 | Family | Where | Disposition |
 |--------|-------|-------------|
 | `num_rct_outs`, `bi_cum_rct`, `pre_rct_outkey` | `src/blockchain_db/lmdb` | **Persisted-schema identifiers** — a different validation surface from a C++ rename ([`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)); renaming them belongs with the LMDB/blockchain-db port, not here |
-| `get_block_cumulative_rct_outputs` | `src/blockchain_db` | Reads the above; moves with them |
+| `get_block_cumulative_rct_outputs` | `src/blockchain_db` | Read the above. Deleted 2026-10-05 with its one caller chain ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6) |
 | `arg_rct_only` / `opt_rct_only` | `src/blockchain_utilities` | A CLI flag on the export tool — user-visible surface, renamed when that tool is touched |
 | `od_rct` | `src/rpc` | Local variable holding an `ct::key`; rule 93 rename-on-touch |
 | `_rct_data`, `construct_tx_rct` | `src/cryptonote_core` | Construction path; rename-on-touch, and partly dies with the step-1 deletions |
