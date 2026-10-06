@@ -151,6 +151,18 @@ pub(crate) struct BlockCaptures {
     pub(crate) pending_owned: Vec<(u64, Gindex)>,
 }
 
+/// What one block's transactions resolved of the wallet's expectations
+/// ([`CurveTreeClient::match_expected_outputs`]), for the ingest to apply
+/// once the block has committed.
+#[derive(Default)]
+pub(super) struct ExpectedMatches {
+    /// Confirmed outputs that became leaves, with the gindex just assigned.
+    pub(super) registered: Vec<(Gindex, OneTimePubkey)>,
+    /// Expected outputs whose transaction carried another key, or no such
+    /// `vout`.
+    pub(super) mismatches: u64,
+}
+
 impl CurveTreeClient {
     /// Capture this output's membership-path material as the fold closes the
     /// chunks over it.
@@ -236,26 +248,6 @@ impl CurveTreeClient {
         }
     }
 
-    /// Register a batch of owned outputs and reconcile **once** if any of
-    /// them is owed captures.
-    ///
-    /// This is the call the wallet makes on every refresh with everything it
-    /// holds, and the one the curve-tree actor makes with a spend's inputs
-    /// before assembling them — so the capture path is total: an input
-    /// reaches [`Self::assemble_paths`] registered, or not at all. Idempotent
-    /// and cheap when nothing changed: a re-offer of a held, served pair is
-    /// [`OwnedRegistration::AlreadyHeld`] and triggers nothing.
-    ///
-    /// A pair the client cannot accept — it holds a *different* output at
-    /// that gindex — is collected in [`OwnershipSync::stale`] rather than
-    /// failing the batch. That is the normal outcome of a scan lagging the
-    /// tree across a reorg, and the remedy is the caller's own rescan, which
-    /// re-offers the right key. Nothing is poisoned by it.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Poisoned`]; and whatever
-    /// [`Self::reconcile_captures`] refuses with, if a reconciliation ran.
     /// Replace the outputs the wallet expects the chain to carry
     /// ([`ExpectedOutput`]), for [`Self::ingest_block`] to register as it
     /// sees their transactions.
@@ -312,16 +304,21 @@ impl CurveTreeClient {
     /// registration and nothing else. A `vout` the transaction does not
     /// have is treated the same way.
     ///
+    /// Takes `&self` and returns what it found: the block is not committed
+    /// yet, and a block that is then refused — by the fold, or by the store
+    /// — must leave no trace, including in the mismatch count. The ingest
+    /// applies [`ExpectedMatches`] with the rest of the block's effect.
+    ///
     /// # Errors
     ///
     /// [`ClientError::TxHashMissing`] when expectations are live and a
     /// transaction arrives without its hash.
     pub(super) fn match_expected_outputs(
-        &mut self,
+        &self,
         block: &BlockLeaves<'_>,
         new_leaves: &[LeafEntry],
-    ) -> Result<Vec<(Gindex, OneTimePubkey)>, ClientError> {
-        let mut matched = Vec::new();
+    ) -> Result<ExpectedMatches, ClientError> {
+        let mut matched = ExpectedMatches::default();
         if self.expected_outputs.is_empty() {
             return Ok(matched);
         }
@@ -344,20 +341,40 @@ impl CurveTreeClient {
                     .and_then(|i| tx.outputs.get(i))
                     .is_some_and(|raw| raw.output_key == *output_key);
                 if !confirmed {
-                    self.expected_output_mismatches += 1;
+                    matched.mismatches += 1;
                     continue;
                 }
                 let gindex = Gindex::from_raw(first_gindex + vout);
                 // Only a leaf can be captured; an output that consumed an
                 // index without becoming one has no path to prepare.
                 if new_leaves.iter().any(|leaf| leaf.gindex == gindex) {
-                    matched.push((gindex, *output_key));
+                    matched.registered.push((gindex, *output_key));
                 }
             }
         }
         Ok(matched)
     }
 
+    /// Register a batch of owned outputs and reconcile **once** if any of
+    /// them is owed captures.
+    ///
+    /// This is the call the wallet makes on every refresh with everything it
+    /// holds, and the one the curve-tree actor makes with a spend's inputs
+    /// before assembling them — so the capture path is total: an input
+    /// reaches [`Self::assemble_paths`] registered, or not at all. Idempotent
+    /// and cheap when nothing changed: a re-offer of a held, served pair is
+    /// [`OwnedRegistration::AlreadyHeld`] and triggers nothing.
+    ///
+    /// A pair the client cannot accept — it holds a *different* output at
+    /// that gindex — is collected in [`OwnershipSync::stale`] rather than
+    /// failing the batch. That is the normal outcome of a scan lagging the
+    /// tree across a reorg, and the remedy is the caller's own rescan, which
+    /// re-offers the right key. Nothing is poisoned by it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`]; and whatever
+    /// [`Self::reconcile_captures`] refuses with, if a reconciliation ran.
     pub fn sync_owned(
         &mut self,
         outputs: &[(Gindex, OneTimePubkey)],

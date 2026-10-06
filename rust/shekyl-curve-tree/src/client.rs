@@ -1448,7 +1448,8 @@ impl CurveTreeClient {
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
         self.owned_positions.extend(captured.pending_owned);
-        self.owned_outputs.extend(matched);
+        self.owned_outputs.extend(matched.registered);
+        self.expected_output_mismatches += matched.mismatches;
         self.record_drained_count(through, canonical);
         Ok(())
     }

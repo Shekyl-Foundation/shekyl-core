@@ -350,3 +350,100 @@ fn a_new_set_of_expectations_replaces_the_old() {
     );
     assert_eq!(client.owned_outputs.get(&other_at), Some(&other.output_key));
 }
+
+/// A block the ingest refuses leaves no trace of its matching — not a
+/// registration, and not a mismatch count either. The match runs before the
+/// fold and the store transaction, both of which can still refuse the
+/// block, and a refused block is retried: a count bumped on the way to the
+/// refusal would be bumped again on the retry, for one mislabelled
+/// transaction.
+///
+/// The refusal here is capture's own: an owned leaf's chunk is about to
+/// close with one of its committed sibling rows gone
+/// (`a_missing_leaf_row_refuses_rather_than_capturing_short` is that case's
+/// own pass). The refused block carries the expected transaction under a
+/// key the wallet did not name.
+#[test]
+fn a_refused_block_counts_no_mismatch() {
+    use crate::TreePosition;
+
+    /// Outputs of block 1's transaction: short of a chunk, so the chunk
+    /// closes a block later and half of it is already in the store.
+    const FIRST: usize = 20;
+
+    let mut client = CurveTreeClient::new();
+    ingest(&mut client, 0, &[coinbase(1)]).expect("genesis ingests");
+
+    // Block 1: a coinbase and a transaction of `FIRST` outputs, one of them
+    // the wallet's. Block 2: a coinbase and a full transaction. Both
+    // transactions drain after the short lock, a block apart.
+    let owned = (
+        next_second_tx_gindex(&client, 0),
+        OneTimePubkey::from_bytes(point(800)),
+    );
+    client.sync_owned(&[owned]).expect("registered ahead");
+    let (coinbase_outs, coinbase_blob) = (outputs(100), blob(100, PER_TX));
+    let (first_outs, first_blob) = (outputs(800), blob(800, FIRST as u64));
+    client
+        .ingest_block(BlockLeaves {
+            height: BlockHeight::from_raw(1),
+            txs: &[
+                TxLeafInputs {
+                    is_miner: true,
+                    tx_hash: Some(hash(100)),
+                    leaf_entry_blob: Some(&coinbase_blob),
+                    outputs: &coinbase_outs,
+                },
+                TxLeafInputs {
+                    is_miner: false,
+                    tx_hash: Some(hash(0x80)),
+                    leaf_entry_blob: Some(&first_blob),
+                    outputs: &first_outs[..FIRST],
+                },
+            ],
+        })
+        .expect("block 1 ingests");
+    let second = Tx {
+        hash: Some(hash(0x81)),
+        seed_base: 900,
+    };
+    ingest(&mut client, 2, &[coinbase(101), second]).expect("block 2 ingests");
+    ingest_empty(&mut client, 3, 12);
+    assert_eq!(
+        client.frontier.leaf_count(),
+        FIRST as u64,
+        "block 1's transaction has drained and block 2's has not"
+    );
+
+    // The owned leaf's chunk closes when block 2's transaction drains, at
+    // block 13. Take one of its committed sibling rows away first.
+    client
+        .store
+        .drop_leaf_rows_for_test(TreePosition::from_raw(1), TreePosition::from_raw(1))
+        .expect("the row drops");
+
+    // Block 13 carries the expected transaction, under a key the wallet did
+    // not name.
+    client
+        .set_expected_outputs(&[ExpectedOutput {
+            output_key: OneTimePubkey::from_bytes(point(999_999)),
+            ..expectation()
+        }])
+        .expect("expectations set");
+    let err = ingest(&mut client, 13, &[coinbase(102), ours()])
+        .expect_err("a chunk short of a sibling refuses the block");
+    assert!(
+        matches!(err, ClientError::CaptureIdentitiesIncomplete { .. }),
+        "got {err:?}"
+    );
+    assert_eq!(
+        client.ingested_tip_height(),
+        Some(BlockHeight::from_raw(12)),
+        "the block was not applied"
+    );
+    assert_eq!(
+        client.expected_output_mismatches(),
+        0,
+        "and its mismatch was not counted"
+    );
+}

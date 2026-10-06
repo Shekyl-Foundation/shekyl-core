@@ -1560,8 +1560,14 @@ would also not survive a restart: the registry is not persisted and the scan
 names each output once. So the refresh carries them, from the seal, on every
 pass.
 
-That makes the persona's first registration **structurally late**, and what
-it costs is §11.10's table read at the chunks that closed in the meantime.
+**For an output registered this way the first registration is late by
+construction**, and what it costs is §11.10's table read at the chunks that
+closed in the meantime. Since §11.13 that is the fallback, not the normal
+path: it is what an output pays when the wallet did not build the
+transaction that created it, when it is the stake-in, or when the wallet
+restarted between that transaction's mining and the scan's confirmation —
+§11.13 lists the three. The outputs of the transactions the persona builds
+are registered as their block folds and pay none of it.
 The bound is the trail, not the output's age: registered at the first
 refresh after the scan sealed it, the output is under whatever closed in
 roughly 710 blocks, and every chunk closing afterwards is captured by the
@@ -1781,7 +1787,11 @@ ingest and nothing owed at the spend; the copied key in another transaction
 not registered (fails with the match made on the key alone); a key the
 transaction does not carry counted and skipped; the re-mined transaction
 matched again after a rollback; a hash-less transaction refused under live
-expectations and accepted without; a new set replacing the old. Engine,
+expectations and accepted without; a new set replacing the old; and a block
+the ingest then refuses leaving no mismatch counted — the match is read-only
+and the ingest applies its result with the rest of the block's effect, so a
+refused block retried does not count one mislabelled transaction twice
+(fails with the count applied before the commit). Engine,
 `ownership::tests`: the sealed pending transaction's outputs are the offer,
 registered as its block folds and held with nothing owed at the spend
 (fails with the offer's expectations dropped); a retired record withdraws
