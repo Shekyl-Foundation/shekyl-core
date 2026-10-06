@@ -555,25 +555,34 @@ impl Message<SyncOwned> for CurveTreeActor {
     }
 }
 
-/// Replace the outputs the wallet expects the chain to carry — those of
-/// transactions it built and has not yet seen mined — for the ingest to
-/// register as it assigns their gindexes
-/// ([`CurveTreeClient::set_expected_outputs`]). The refresh sends the set
-/// on every pass, derived from the persona's sealed pending records.
-pub(crate) struct SetExpectedOutputs {
-    /// `(tx_hash, vout, O)` per output.
+/// Replace the outputs the wallet expects and register the pairs it already
+/// holds, in that order, inside one handler invocation.
+///
+/// The refresh offers both between its rollback and its first fold. Two asks
+/// would let an ingest run after the expectations were set and before the
+/// pairs were registered. One invocation is the actor's atomicity, the same
+/// one [`AssembleTx`] uses for a spend's inputs. Expectations are set even
+/// when `outputs` is empty: clearing the set is itself the offer.
+pub(crate) struct OfferOwned {
+    /// `(tx_hash, vout, O)` per output the wallet built and has not yet seen
+    /// mined. Replaces the previous set
+    /// ([`CurveTreeClient::set_expected_outputs`]).
     pub(crate) expected: Vec<shekyl_curve_tree::ExpectedOutput>,
+    /// `(gindex, O)` per output already held. Registered after the
+    /// expectations ([`CurveTreeClient::sync_owned`]).
+    pub(crate) outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
 }
 
-impl Message<SetExpectedOutputs> for CurveTreeActor {
-    type Reply = Result<(), ClientError>;
+impl Message<OfferOwned> for CurveTreeActor {
+    type Reply = Result<shekyl_curve_tree::OwnershipSync, ClientError>;
 
     async fn handle(
         &mut self,
-        msg: SetExpectedOutputs,
+        msg: OfferOwned,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client.set_expected_outputs(&msg.expected)
+        self.client.set_expected_outputs(&msg.expected)?;
+        self.client.sync_owned(&msg.outputs)
     }
 }
 
@@ -1020,20 +1029,32 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Replace the outputs the wallet expects the chain to carry
-    /// ([`SetExpectedOutputs`]).
-    pub(crate) async fn set_expected_outputs(
+    /// Replace the expected outputs and register the held pairs, in that
+    /// order, in one round-trip ([`OfferOwned`]).
+    pub(crate) async fn offer_owned(
         &self,
         expected: Vec<shekyl_curve_tree::ExpectedOutput>,
-    ) -> Result<(), CurveTreeHandleError> {
+        outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,
+    ) -> Result<shekyl_curve_tree::OwnershipSync, CurveTreeHandleError> {
         self.actor_ref()
-            .ask(SetExpectedOutputs { expected })
+            .ask(OfferOwned { expected, outputs })
             .await
             .map_err(collapse_send_error)
     }
 
-    /// Register owned outputs with the tree, reconciling once if any is owed
-    /// ([`SyncOwned`]).
+    /// Register owned outputs with the tree, reconciling once if any is owed,
+    /// without replacing the expectation set ([`SyncOwned`]).
+    ///
+    /// The refresh uses [`Self::offer_owned`]. This is the entry that leaves
+    /// the expectation set in place. Its callers are `cfg(test)`; the lib
+    /// target does not compile them.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "pair registration that must not replace expectations; its callers are cfg(test)"
+        )
+    )]
     pub(crate) async fn sync_owned(
         &self,
         outputs: Vec<(shekyl_curve_tree::Gindex, shekyl_curve_tree::OneTimePubkey)>,

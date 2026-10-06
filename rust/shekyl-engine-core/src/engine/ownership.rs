@@ -194,38 +194,22 @@ pub(crate) fn detected_output(detected: &DetectedTransfer) -> OwnedOutput {
     )
 }
 
-/// Offer the whole set to the curve tree: the expectations first, then the
-/// pairs. This is the ingest's registration step, called between its
-/// rollback and its first fold (`merge::curve_tree_ingest_scan_result`), so
-/// both are in place before any leaf of the result is folded.
+/// Offer the whole set in one actor round-trip ([`CurveTreeHandle::offer_owned`]),
+/// between the ingest's rollback and its first fold.
 pub(crate) async fn curve_tree_offer(
     curve_tree: &CurveTreeHandle,
     set: &OwnedSet,
 ) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
-    curve_tree
-        .set_expected_outputs(set.expected.clone())
+    let sync = curve_tree
+        .offer_owned(set.expected.clone(), set.outputs.clone())
         .await
         .map_err(|e| map_curve_tree_handle_error(&e))?;
-    curve_tree_sync_owned(curve_tree, &set.outputs).await
+    note_ownership_sync(&sync);
+    Ok(sync)
 }
 
-/// Register `outputs` with the curve tree, reconciling once if any is owed.
-///
-/// A stale pair — the tree holds a different output at that gindex — means
-/// the caller's view is behind the chain the tree is on; it is logged, not
-/// an error, and the rescan re-offers the right key. Actor faults map as the
-/// ingest's do, so an unavailable actor is respawn-recoverable.
-pub(crate) async fn curve_tree_sync_owned(
-    curve_tree: &CurveTreeHandle,
-    outputs: &[OwnedOutput],
-) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
-    if outputs.is_empty() {
-        return Ok(shekyl_curve_tree::OwnershipSync::default());
-    }
-    let sync = curve_tree
-        .sync_owned(outputs.to_vec())
-        .await
-        .map_err(|e| map_curve_tree_handle_error(&e))?;
+/// Log a stale registration and a reconciliation, when the sync reports one.
+fn note_ownership_sync(sync: &shekyl_curve_tree::OwnershipSync) {
     if !sync.stale.is_empty() {
         tracing::warn!(
             stale = sync.stale.len(),
@@ -242,6 +226,33 @@ pub(crate) async fn curve_tree_sync_owned(
             "curve tree: late registrations reconciled"
         );
     }
+}
+
+/// Register `outputs` without replacing the expectation set.
+///
+/// The refresh offers both through [`curve_tree_offer`]. A probe and the
+/// transfer suite's registration pass must leave expectations in place. A
+/// stale pair is logged, not an error, and the rescan re-offers the right
+/// key. The lib target does not compile these callers.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "pair registration that must not replace expectations; its callers are cfg(test)"
+    )
+)]
+pub(crate) async fn curve_tree_sync_owned(
+    curve_tree: &CurveTreeHandle,
+    outputs: &[OwnedOutput],
+) -> Result<shekyl_curve_tree::OwnershipSync, RefreshError> {
+    if outputs.is_empty() {
+        return Ok(shekyl_curve_tree::OwnershipSync::default());
+    }
+    let sync = curve_tree
+        .sync_owned(outputs.to_vec())
+        .await
+        .map_err(|e| map_curve_tree_handle_error(&e))?;
+    note_ownership_sync(&sync);
     Ok(sync)
 }
 
@@ -466,16 +477,16 @@ mod tests {
     use crate::engine::SoloSigner;
 
     /// Distinct from every other suite's wallet.
-    const SEED_MULT: u8 = 0x5d;
+    pub(super) const SEED_MULT: u8 = 0x5d;
     /// The fixture's only chain.
-    const CHAIN: u8 = 1;
+    pub(super) const CHAIN: u8 = 1;
     /// Outputs per carrying block: one full leaf chunk.
-    const PER_BLOCK: u64 = SELENE_CHUNK_WIDTH as u64;
+    pub(super) const PER_BLOCK: u64 = SELENE_CHUNK_WIDTH as u64;
     /// The persona's output: block 0, so its gindex is its index.
     const P_GINDEX: u64 = 10;
 
     /// A refresh that scanned nothing: the set is then what is already held.
-    fn nothing_new() -> ScanResult {
+    pub(super) fn nothing_new() -> ScanResult {
         ScanResult::empty_at(BlockHeight::from_raw(1), None)
     }
 
@@ -667,7 +678,7 @@ mod tests {
     // ---- Registration inside the ingest ------------------------------------
 
     /// The fork the reorg fixture replaces [`CHAIN`] with.
-    const OTHER_CHAIN: u8 = 2;
+    pub(super) const OTHER_CHAIN: u8 = 2;
     /// One past the last height the scan-result fixtures cover. Blocks 1 and
     /// 2 carry outputs, and both have drained by the tip.
     const END: u64 = 16;
@@ -698,16 +709,16 @@ mod tests {
         }
     }
 
-    /// A scan result over `1..END` on `fork`, reporting the outputs of block
-    /// 1 at `detected` as the wallet's.
-    ///
-    /// The ingest verifies every height against the header's root, so the
-    /// roots are what a second tree reconstructs from the same leaves.
-    async fn scan_result(fork: u8, detected: &[u64]) -> ScanResult {
-        let leaves = |height: u64| {
-            let n = if height <= 2 { PER_BLOCK } else { 0 };
-            seeded_tx_leaves(fork, height, n)
-        };
+    /// Ingest `1..END` through the tip, then read each header root. A root
+    /// read during the ingest would ask the tree about its own tip, and each
+    /// height's leaves are kept so the header and the body agree.
+    pub(super) async fn scan_result_with<F>(
+        leaves_at: F,
+        detected: Vec<DetectedTransfer>,
+    ) -> ScanResult
+    where
+        F: Fn(u64) -> std::sync::Arc<Vec<crate::scan::OwnedTxLeaves>>,
+    {
         let dir = tempfile::tempdir().expect("tempdir");
         let shadow = CurveTreeHandle::spawn(
             shekyl_curve_tree::CurveTreeClient::open(dir.path().join("shadow.redb"))
@@ -717,17 +728,21 @@ mod tests {
             .ingest(BlockHeight::ZERO, genesis_leaves())
             .await
             .expect("the genesis ingests");
+
+        let mut carried = Vec::new();
         for height in 1..END {
+            let at = BlockHeight::from_raw(height);
+            let leaves = leaves_at(height);
             shadow
-                .ingest(BlockHeight::from_raw(height), leaves(height))
+                .ingest(at, std::sync::Arc::clone(&leaves))
                 .await
                 .expect("a seeded block ingests");
+            carried.push((at, leaves));
         }
 
         let mut result = ScanResult::empty_at(BlockHeight::from_raw(1), None);
         result.processed_height_range = BlockHeight::from_raw(1)..BlockHeight::from_raw(END);
-        for height in 1..END {
-            let at = BlockHeight::from_raw(height);
+        for (at, leaves) in carried {
             let (root, _) = shadow
                 .reference_root_and_depth(at)
                 .await
@@ -735,10 +750,26 @@ mod tests {
             result
                 .block_curve_tree_roots
                 .push((at, shekyl_types::CurveTreeRoot::from_bytes(root)));
-            result.block_leaves.push((at, (*leaves(height)).clone()));
+            result.block_leaves.push((at, (*leaves).clone()));
         }
-        result.new_transfers = detected.iter().map(|&i| detection(fork, i)).collect();
+        result.new_transfers = detected;
         result
+    }
+
+    /// Blocks 1 and 2 each carry one full leaf chunk; the rest are empty.
+    async fn scan_result(fork: u8, detected: &[u64]) -> ScanResult {
+        scan_result_with(
+            |height| {
+                let n = if height <= 2 { PER_BLOCK } else { 0 };
+                seeded_tx_leaves(fork, height, n)
+            },
+            detected
+                .iter()
+                .copied()
+                .map(|index| detection(fork, index))
+                .collect(),
+        )
+        .await
     }
 
     /// The genesis both forks share. Not empty: a store whose only block is
@@ -751,7 +782,7 @@ mod tests {
 
     /// An engine whose tree holds the genesis, so the ingest under test
     /// starts at the scan's own range and asks the daemon for nothing.
-    async fn engine_at_genesis(seed: u8) -> (tempfile::TempDir, Engine<SoloSigner>) {
+    pub(super) async fn engine_at_genesis(seed: u8) -> (tempfile::TempDir, Engine<SoloSigner>) {
         let (tmp, engine) = non_staker_engine(seed);
         engine
             .curve_tree
@@ -762,7 +793,7 @@ mod tests {
     }
 
     /// What the tree says of `pair` now — the sync a spend would make.
-    async fn probe(
+    pub(super) async fn probe(
         engine: &Engine<SoloSigner>,
         pair: OwnedOutput,
     ) -> shekyl_curve_tree::OwnershipSync {
@@ -959,219 +990,9 @@ mod tests {
         assert_eq!(after.already_held, 1);
         assert_eq!(after.reconciliation, None);
     }
-
-    // ---- Expected outputs, from the persona's pending seal ------------------
-
-    /// A transaction the persona built: `n` outputs with seeded keys and a
-    /// conforming extra, so it parses whole, hashes, and yields leaves.
-    fn persona_tx(seed: u64, n: usize) -> shekyl_wire::Transaction {
-        use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-
-        let outputs = (0..n)
-            .map(|i| Output {
-                amount: 0,
-                key: seeded_output_key(OTHER_CHAIN, seed, i as u64),
-                view_tag: 0,
-            })
-            .collect();
-        Transaction {
-            prefix: TxPrefix {
-                unlock_time: 0,
-                inputs: vec![Input::Gen(seed)],
-                outputs,
-                extra: crate::engine::test_support::conforming_pqc_extra(n),
-            },
-            ct: Ct::Null(CtBase {
-                enc_amounts: vec![[0u8; 9]; n],
-                enc_labels: vec![[0u8; 9]; n],
-                commitments: (0..n)
-                    .map(|i| seeded_commitment(OTHER_CHAIN, seed, i as u64))
-                    .collect(),
-            }),
-        }
-    }
-
-    const PERSONA: shekyl_types::PCanonicalId = shekyl_types::PCanonicalId::from_bytes([0xaa; 32]);
-
-    /// The engine behind the lock the pending seal's one write path takes.
-    type SharedEngine = std::sync::Arc<tokio::sync::RwLock<Engine<SoloSigner>>>;
-
-    /// Run `f` over the pending seal through its one write path (WI-3
-    /// gate 11), under the engine's own pending-post gate.
-    async fn mutate_pending<R>(
-        engine: &SharedEngine,
-        f: impl FnOnce(&mut shekyl_engine_state::pending_post_block::PendingPostBlock) -> (bool, R),
-    ) -> R {
-        let gate = engine.read().await.pending_gate.clone();
-        crate::engine::pscan::start::pending_post_store_for_engine(
-            std::sync::Arc::clone(engine),
-            gate,
-        )
-        .mutate(f)
-        .await
-        .expect("the pending seal writes")
-    }
-
-    /// Seal `tx` as the persona's one pending drain, through the seal's
-    /// one write path, as the dispatch seam does before the first send.
-    async fn seal_pending_drain(engine: &SharedEngine, tx: &shekyl_wire::Transaction) {
-        use shekyl_engine_state::pending_post_block::{
-            PendingDrain, PendingPostState, SealAdmission,
-        };
-
-        let tx_bytes = crate::engine::test_support::whole_tx_wire_bytes(tx);
-        mutate_pending(engine, |block| {
-            let admission = block.seal_drain(
-                PendingDrain {
-                    persona: PERSONA,
-                    tx_bytes,
-                    funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],
-                    state: PendingPostState::Pending,
-                },
-                shekyl_types::ChainCount::from_raw(1),
-                block.generation(),
-            );
-            assert!(matches!(admission, SealAdmission::Admit), "{admission:?}");
-            (true, ())
-        })
-        .await;
-    }
-
-    /// The block at height 1 carrying `tx`, as the scan would hand it to
-    /// the ingest: leaves decoded from the transaction itself, with its hash.
-    fn block_one_carrying(tx: &shekyl_wire::Transaction) -> Vec<crate::scan::OwnedTxLeaves> {
-        let mut scannable = crate::engine::test_support::make_synthetic_block(
-            1,
-            shekyl_types::BlockHash::from_bytes([0x01; 32]),
-        );
-        scannable.block.transaction_hashes.push(tx.hash());
-        scannable.transactions.push(tx.clone());
-        crate::engine::curve_tree_decode::decode_block_leaves(&scannable)
-            .expect("the block decodes")
-    }
-
-    /// A scan result over `1..END` whose block 1 carries `tx` and whose
-    /// other blocks are empty, header roots from a shadow tree.
-    async fn result_carrying(tx: &shekyl_wire::Transaction) -> ScanResult {
-        let block_one = std::sync::Arc::new(block_one_carrying(tx));
-        let dir = tempfile::tempdir().expect("tempdir");
-        let shadow = CurveTreeHandle::spawn(
-            shekyl_curve_tree::CurveTreeClient::open(dir.path().join("shadow.redb"))
-                .expect("open the shadow tree"),
-        );
-        shadow
-            .ingest(BlockHeight::ZERO, genesis_leaves())
-            .await
-            .expect("the genesis ingests");
-        let mut result = ScanResult::empty_at(BlockHeight::from_raw(1), None);
-        result.processed_height_range = BlockHeight::from_raw(1)..BlockHeight::from_raw(END);
-        for height in 1..END {
-            let at = BlockHeight::from_raw(height);
-            let leaves = if height == 1 {
-                std::sync::Arc::clone(&block_one)
-            } else {
-                seeded_tx_leaves(CHAIN, height, 0)
-            };
-            shadow
-                .ingest(at, std::sync::Arc::clone(&leaves))
-                .await
-                .expect("the shadow ingests");
-            let (root, _) = shadow
-                .reference_root_and_depth(at)
-                .await
-                .expect("the shadow answers");
-            result
-                .block_curve_tree_roots
-                .push((at, shekyl_types::CurveTreeRoot::from_bytes(root)));
-            result.block_leaves.push((at, (*leaves).clone()));
-        }
-        result
-    }
-
-    /// The outputs of a transaction the persona built are registered as
-    /// the block carrying it folds — named ahead by `(tx_hash, vout)` from
-    /// the sealed pending record, confirmed by key at ingest — so by the
-    /// time the leaf drains it is held and nothing is owed.
-    ///
-    /// The probe right after the ingest is the discriminator: registered at
-    /// ingest, the pair is `AlreadyHeld`; registered by nobody, the probe
-    /// is its first registration and reads `after_drain == 1`.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_pending_transactions_outputs_are_registered_as_its_block_folds() {
-        let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(7)).await;
-        let tx = persona_tx(900, 3);
-        let shared: SharedEngine = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
-        seal_pending_drain(&shared, &tx).await;
-        let engine = shared.read().await;
-
-        let mut result = result_carrying(&tx).await;
-        let set = engine.owned_outputs(&result);
-        assert_eq!(
-            set.expected,
-            expected_outputs_of(&crate::engine::test_support::whole_tx_wire_bytes(&tx)),
-            "every output of the sealed transaction, by hash and position"
-        );
-        assert_eq!(set.expected.len(), 3);
-        assert!(!set.persona_seal_unreadable);
-
-        engine
-            .ingest_scan_result_into_curve_tree(&mut result)
-            .await
-            .expect("the scan result ingests");
-
-        // The miner transaction of block 1 has no outputs, so the persona's
-        // transaction takes the gindexes after the genesis chunk.
-        for (vout, expected) in set.expected.iter().enumerate() {
-            let pair = (
-                shekyl_curve_tree::Gindex::from_raw(PER_BLOCK + vout as u64),
-                expected.output_key,
-            );
-            let at_spend = probe(&engine, pair).await;
-            assert_eq!(
-                at_spend.already_held, 1,
-                "vout {vout}: held since its block folded"
-            );
-            assert_eq!(at_spend.reconciliation, None, "vout {vout}: nothing owed");
-        }
-    }
-
-    /// The expectation lives as long as its record: retired, it is gone
-    /// from the next offer, and the output is the scan seal's to name.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_retired_pending_record_withdraws_its_expectations() {
-        let (_tmp, engine) = non_staker_engine(SEED_MULT.wrapping_add(8));
-        let tx = persona_tx(901, 2);
-        let shared: SharedEngine = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
-        seal_pending_drain(&shared, &tx).await;
-        assert_eq!(
-            shared
-                .read()
-                .await
-                .owned_outputs(&nothing_new())
-                .expected
-                .len(),
-            2
-        );
-
-        mutate_pending(&shared, |block| {
-            (block.remove_drain(&PERSONA).is_some(), ())
-        })
-        .await;
-
-        let engine = shared.read().await;
-        let set = engine.owned_outputs(&nothing_new());
-        assert!(set.expected.is_empty());
-        assert!(!set.persona_seal_unreadable);
-    }
-
-    /// A pending record whose bytes do not parse costs its expectations
-    /// and nothing else: the bytes were this wallet's own assembly, so that
-    /// is a defect to log, and the seal itself is readable.
-    #[test]
-    fn unparseable_pending_bytes_expect_nothing() {
-        assert!(expected_outputs_of(&[0xff; 7]).is_empty());
-        let mut trailing = crate::engine::test_support::whole_tx_wire_bytes(&persona_tx(902, 1));
-        trailing.push(0);
-        assert!(expected_outputs_of(&trailing).is_empty());
-    }
 }
+
+// Sibling of `tests`: the path sits beside this file, and the harness is `tests::`.
+#[cfg(test)]
+#[path = "ownership_expected.rs"]
+mod expected_outputs;
