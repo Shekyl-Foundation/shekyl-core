@@ -830,6 +830,7 @@ impl AssembleRig {
 
             let txs = [TxLeafInputs {
                 is_miner: false,
+                tx_hash: None,
                 leaf_entry_blob: Some(&blob),
                 outputs: &raws,
             }];
@@ -858,6 +859,7 @@ impl AssembleRig {
                     height: BlockHeight::from_raw(height_raw),
                     txs: &[TxLeafInputs {
                         is_miner: false,
+                        tx_hash: None,
                         leaf_entry_blob: None,
                         outputs: &[],
                     }],

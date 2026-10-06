@@ -19,6 +19,10 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
+- **Name the stake-in's output to the curve tree before it drains, as `CT-6` §11.13 does for the transactions the persona builds** (the principal builds it and keeps no record of its output key — the send journal holds recipients and inputs — so it alone of the wallet's own transfers to the persona is still registered from the scan seal, about 710 blocks late: `CT6_PROVING_STATE.md` §11.13). Falsify by the stake-in's output being `AlreadyHeld` at the sync its spend makes, with no reconciliation, in a test that never offers it by pair.
+  - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
+  - Target: pre-genesis
+
 - **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail, the owned positions `drained_sorted` still supplies, and the leaf rows the persona's always-late registration rebuilds from: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
@@ -90,7 +94,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](design/P2P_3_SLICE_1_PEERLIST_BRIEF.md) together with [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **Fix misbehaviour scoring (`add_host_fail`, `net_node.inl:413`).** Scores never decay except the reset to half the threshold after a ban, `m_host_fails_score` keeps every host ever scored, and the threshold (10), the 24-hour ban, and the per-event scores (1 and 5) are inherited. The fix is scores that decay when read, so no timer is needed; an entry dropped once it decays to zero; and each value derived from what it is for. The RPC server's score map (`core_rpc_server.cpp:180`) has the same shape and gets the same fix. This row holds the work until the cryptonote-handler slice exists. Reopen if any score is kept with no decay, or the map grows with the number of hosts ever seen.
+- **Fix misbehaviour scoring (`add_host_fail`, `net_node.inl:413`).** Scores never decay except the reset to half the threshold after a ban, `m_host_fails_score` keeps every host ever scored, and the threshold (10), the 24-hour ban, and the per-event scores (1 and 5) are inherited. The fix is scores that decay when read, so no timer is needed; an entry dropped once it decays to zero; and each value derived from what it is for. The RPC server's score map (`core_rpc_server.cpp:180`) has the same shape and gets the same fix. Observed on the alpha.9 fleet install (2026-10-06): a node still on the previous network dials an upgraded one, fails the handshake until its score passes the threshold (the eleventh failure, at one point each) and is banned for the 24 hours, and the ban outlives the banned host's own upgrade, so a rolling upgrade across a regenesis partitions the fleet until every upgraded node is restarted after the last one; the operator-facing half is rule 82's. This row holds the work until the cryptonote-handler slice exists. Reopen if any score is kept with no decay, or the map grows with the number of hosts ever seen.
   - Owner: [`P2P_3_IMPLEMENTATION_ROUND.md`](design/P2P_3_IMPLEMENTATION_ROUND.md) §4.2 cryptonote-handler row
   - Target: pre-genesis
 
