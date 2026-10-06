@@ -272,9 +272,7 @@ const POST_ROWS: [CenRow; 4] = [J13::ROW, J14::ROW, J16::ROW, J18::ROW];
 /// The order is the row a post failing two of them refuses on, and the
 /// C++'s is the one a conformance trip reproduces. Every other class
 /// records the four rows vacuous. A refusal names the post's vin
-/// ([`Locus::Input`]). The slot H21 pairs with the vin is read by
-/// position; a transaction whose `pqc_auths` is shorter is H21's and is not
-/// judged here.
+/// ([`Locus::Input`]).
 ///
 /// One record read per post, shared by the rows that need it, as the C++
 /// reads `get_archival_bond_value` once per arm.
