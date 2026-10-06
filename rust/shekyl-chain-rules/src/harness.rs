@@ -417,6 +417,9 @@ pub enum WithheldRead {
     /// projection answers `AboveTip` for a height the tip says is
     /// recorded (slice 7, CEN-G6's read).
     WeightsBelow(BlockHeight),
+    /// [`ChainView::leaf_count_at`] at this height — the tree's size,
+    /// and so [`ChainView::depth_at`] (slice 8, CEN-J21's I13 read).
+    LeafCountAt(BlockHeight),
 }
 
 /// A [`MockView`] with one per-height read withheld.
@@ -502,6 +505,11 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     }
 
     fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        if let WithheldRead::LeafCountAt(at) = self.withheld {
+            if height == at {
+                return Ok(AtHeight::AboveTip);
+            }
+        }
         self.inner.leaf_count_at(height)
     }
 

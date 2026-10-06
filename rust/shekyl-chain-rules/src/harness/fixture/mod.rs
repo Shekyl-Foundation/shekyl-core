@@ -485,9 +485,9 @@ pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeigh
 
 /// Whether a row reads `tx`'s `referenceBlock` as a chain fact.
 ///
-/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21,
-/// in flight, reads it on an emission even when that emission has no fee
-/// input: the reference is the membership anchor of the emission vin.
+/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21
+/// reads it on an emission even when that emission has no fee input: the
+/// reference is the membership anchor of the emission vin.
 /// A serve-credit's [`Ct::Fcmp`] carries the field and no row reads it, so
 /// the decision is not "any `Fcmp`" — that would put the spend window on a
 /// shape that may be listed at any height. A coinbase is [`Ct::Null`] and

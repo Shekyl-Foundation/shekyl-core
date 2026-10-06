@@ -645,16 +645,18 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
     // walks the inputs (I7), then the reference sequence (I10 yields the
-    // height, I11 measures it, I12 reads the anchor). I13 and I15 join
-    // that sequence in `judge_reference`, not here.
+    // height, I11 measures it, I12 reads the anchor; on an emission the
+    // whole context is J21's and is yielded for the emission's proof
+    // rows). I13 and I15 join the spend's sequence in `judge_reference`,
+    // not here.
     match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    match judge_reference(&cx, view, &mut coverage)? {
-        Ok(()) => {}
+    let _reference = match judge_reference(&cx, view, &mut coverage)? {
+        Ok(reference) => reference,
         Err(refused) => return Ok(Err(refused)),
-    }
+    };
     // The serve-credit arm of `check_tx_inputs`: the bond record read off
     // the view before the block (J4), its join epoch against the credited
     // one (J5), `good_through` (J6) — one read per vin, in that order. J7's

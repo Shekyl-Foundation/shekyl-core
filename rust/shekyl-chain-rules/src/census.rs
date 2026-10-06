@@ -471,6 +471,11 @@ census_rows! {
         I10 implemented(crate::rules::tx_against::I10),
         I11 implemented(crate::rules::tx_against::I11),
         I12 implemented(crate::rules::tx_against::I12),
+        // I13's predicate and depth read exist (`tx_against::I13`) and run
+        // on the emission under J21 (slice 8 row 9); the row stays pending
+        // until it runs on the spend class, which is held with I15 on the
+        // filler-spend fixture migration (FOLLOWUPS, *The view-bound rows
+        // of slices 2–4 …*).
         I13 pending,
         I14 implemented(crate::rules::tx_inputs::I14),
         I15 pending,
@@ -504,7 +509,9 @@ census_rows! {
         J18 implemented(crate::rules::tx_bond::J18),
         J19 implemented(crate::rules::tx_emission::J19),
         J20 implemented(crate::rules::tx_emission::J20),
-        J21 pending,
+        // J21 (slice 8 row 9): the emission's reference context, judged
+        // as one row over I10–I13's reads in `judge_reference`.
+        J21 implemented(crate::rules::tx_against::J21),
         J22 implemented(crate::rules::tx_emission::J22),
         J23 pending,
         J24 implemented(crate::rules::tx_emission::J24),

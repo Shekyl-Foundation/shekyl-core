@@ -210,6 +210,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // slot's key, the signable hash and the reward commit set.
             CenRow::J19,
             CenRow::J20,
+            // Slice 8 row 9: the emission's reference context (I10–I13's
+            // reads, judged as one row in `judge_reference`).
+            CenRow::J21,
             CenRow::J22,
             CenRow::J24,
             CenRow::L1,

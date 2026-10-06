@@ -638,6 +638,13 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
             .is_some(),
         "the record is persisted before the claim is judged"
     );
+    // Through the genesis coinbase's maturity, so the tree the claim
+    // references has a leaf and a depth (CEN-J21 below): a coinbase's
+    // outputs enter the tree at `height + mined_money_unlock_window`, and
+    // the reference sits `REFERENCE_BLOCK_MIN_AGE` below the claim's block.
+    for _ in 0..=RuleSet::GENESIS.mined_money_unlock_window().to_raw() {
+        connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+    }
 
     let height = u64::try_from(hashes.len()).expect("fits");
     let open = RuleSet::GENESIS
@@ -648,7 +655,18 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
     else {
         unreachable!("emission_vin builds an emission input");
     };
-    let claim = fixture::balanced_emission(fixture::point(15), canonical_bytes, 1_000_000);
+    let mut claim = fixture::balanced_emission(fixture::point(15), canonical_bytes, 1_000_000);
+    // CEN-J21 (E6 slice 8 row 9) judges the declared depth against the
+    // tree's at the reference before L7 sees the vin. The harness's shape
+    // declares `0`, the mock's empty tree; here the tree holds the genesis
+    // coinbase's leaf at the reference, so its depth there is at least `1`
+    // — the smallest depth J21 admits.
+    if let shekyl_wire::Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut claim.ct
+    {
+        p.tree_depth = 1;
+    }
     let claim = anchor(&hashes, height, claim);
     let previous = *hashes.last().expect("a chain");
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
