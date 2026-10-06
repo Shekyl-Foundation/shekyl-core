@@ -252,8 +252,6 @@ public:
 
   virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const;
 
-  virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const;
-
   virtual uint64_t get_block_timestamp(const uint64_t& height) const;
 
   virtual uint64_t get_top_block_timestamp() const;
@@ -384,8 +382,6 @@ public:
    * `prune_archival_epochs_before`, same txn as the deletions it receipts.
    */
   void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
-
-  bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const;
 
   // helper functions
   static int compare_uint64(const MDB_val *a, const MDB_val *b);

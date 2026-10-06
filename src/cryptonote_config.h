@@ -281,16 +281,16 @@
 
 // Rebooted chain: all features active from genesis (HF 1).
 // Unreferenced Monero-era names are deleted. The names that remain are
-// version-1 thresholds. Height lookups use DYNAMIC_FEE and SHEKYL_NG.
-// `major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` still selects the curve-tree
-// and miner-tx guards. EXACT_COINBASE, VIEW_TAGS, and 2021_SCALING are the
-// same value, used by tests.
-#define HF_VERSION_DYNAMIC_FEE                  1
+// version-1 thresholds. No source file gates on one: SHEKYL_NG is the
+// operand of the hard-fork table's height lookup (CEN-F21's epoch), and
+// EXACT_COINBASE, VIEW_TAGS, and 2021_SCALING are the same value, read only
+// by tests. Do not add a comparison against a fork number; the inventory is
+// docs/design/CXX_VERSION_GATES.md and scripts/ci/check_cxx_version_gates.py
+// holds it.
 #define HF_VERSION_EXACT_COINBASE               1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
-#define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
 
 // FCMP++ consensus parameters
 //
