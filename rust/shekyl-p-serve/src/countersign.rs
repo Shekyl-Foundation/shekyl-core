@@ -58,26 +58,59 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
 /// Where the persona's attestation signing key lives.
 ///
-/// One method, synchronous, called from the serve loop's blocking pool
-/// once per shard the persona is about to serve. Implementors sign with
-/// [`sign_pass_transcript`] so the domain cannot drift from what the
+/// Two methods, both synchronous and called from the serve loop's blocking
+/// pool, once each per shard the persona serves: [`Self::ready`] before
+/// the 200 head, [`Self::sign_pass`] after the body. Implementors sign
+/// with [`sign_pass_transcript`] so the domain cannot drift from what the
 /// daemon's `verify_pass_transcript` checks.
 ///
 /// The host supplies this; the serve loop never sees the secret. Height
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
+///
+/// # Why there is a pre-flight
+///
+/// The serve loop signs last, over a digest of the bytes it has already
+/// written (`SF-D8`, amended 2026-10-06), so the key is asked to sign only
+/// once the whole body is on the wire. Anything the key would refuse on
+/// *policy* — not resident, offline, not bonded for this shard — must
+/// therefore be refused before the head, where the refusal is still the
+/// identical 404; after the head it could only be a truncated 200. That
+/// is what [`Self::ready`] is for, and why it has no default: a key that
+/// could not say whether it will sign would make every refusal late.
 pub trait PassKey: Send + Sync {
-    /// Sign the 112-byte SF-D8 transcript under the attestation domain.
+    /// Will this key sign a pass for `shard_id` at `anchor_height`?
+    ///
+    /// Asked once per servable request, after the store has opened the
+    /// shard and before a response byte is written. The two arguments are
+    /// everything the transcript will name besides the digest, so a key
+    /// that refuses by policy — not resident, offline, not bonded for this
+    /// shard — can refuse here. **Contract:** once `ready` has returned
+    /// `Ok(())`, [`Self::sign_pass`] on the transcript for the same shard
+    /// and anchor fails only on a cryptographic fault.
     ///
     /// # Errors
     ///
-    /// Returns [`SignRefused`] when the host cannot sign — key not
-    /// resident, signer offline, or a host-side policy refusal. The serve
-    /// loop turns this into the identical 404 and counts it in
-    /// `sign_failure_count`, separately from `lookup_failure_count`
-    /// (store-read faults), so an operator can tell "key not available"
-    /// from "store not readable". An ordinary miss — a shard the persona
-    /// does not hold — is counted by neither.
+    /// Returns [`SignRefused`] when the key will not sign. The serve loop
+    /// renders the identical 404 and counts it in `sign_failure_count`,
+    /// separately from `lookup_failure_count` (store-read faults), so an
+    /// operator can tell "key not available" from "store not readable".
+    /// An ordinary miss — a shard the persona does not hold — is counted
+    /// by neither, and is answered before the key is asked.
+    fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
+
+    /// Sign the 112-byte SF-D8 transcript under the attestation domain.
+    ///
+    /// Called after the body has been written and the delivery digest is
+    /// known. [`Self::ready`] has already said yes for this shard and
+    /// anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignRefused`] on a cryptographic fault — the only failure
+    /// the contract leaves to this method. The response head is already
+    /// out, so the serve loop ends the response without an envelope (a
+    /// truncated 200) and counts it in `late_sign_failure_count`.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -214,6 +247,11 @@ impl TestKeySigner {
 
 #[cfg(any(test, feature = "test-signer"))]
 impl PassKey for TestKeySigner {
+    /// The ephemeral key is always resident and signs for any shard.
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],

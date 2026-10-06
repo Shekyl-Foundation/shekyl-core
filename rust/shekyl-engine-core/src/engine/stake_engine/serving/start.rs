@@ -240,9 +240,10 @@ where
                 // Model D and crosses into the serving role only as a signing
                 // capability — the SH-2 remainder
                 // (`ARCHIVAL_SHARD_FETCH.md` §"out of scope"). Until that
-                // capability is wired the host refuses to sign: every fetch
-                // is the identical 404, counted under `sign_failures`, and
-                // no unsigned shard is ever served.
+                // capability is wired the host refuses at the pre-flight
+                // (`PassKey::ready`): every fetch is the identical 404
+                // before a body byte is read, counted under
+                // `sign_failures`, and no unsigned shard is ever served.
                 key: std::sync::Arc::new(NoResidentKey),
                 // The anchor gate reads the daemon's tip, not the principal's
                 // scan (`WSS-24`). The refresher spawned above keeps it

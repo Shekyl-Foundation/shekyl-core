@@ -65,12 +65,13 @@ use crate::daemon_tip::DaemonTipCache;
 /// This is the SH-2 placeholder made a type: there is no unsigned code path
 /// to fall back to, only a key that says no.
 ///
-/// The refusal comes late, and that is expected: the transcript covers a
-/// digest of the body, so the serving loop reads and hashes the whole shard
-/// before it asks for a signature. A keyless persona therefore does that
-/// work for every servable request and then answers 404. A rising
+/// The refusal is the pre-flight's ([`PassKey::ready`]), so it comes
+/// before the 200 head: a keyless persona opens the shard, is refused, and
+/// answers 404 at the cost of an unknown-shard lookup — no body byte is
+/// read or hashed for it (`SF-D8`, amended 2026-10-06). A rising
 /// `sign_failure_count` with no `lookup_failure_count` is this state, not a
-/// store fault.
+/// store fault. `sign_pass` refuses too, for the same reason, but under the
+/// `ready` contract it is never reached.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoResidentKey;
 
@@ -80,6 +81,10 @@ impl NoResidentKey {
 }
 
 impl PassKey for NoResidentKey {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new(Self::REASON))
+    }
+
     fn sign_pass(
         &self,
         _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -108,6 +113,10 @@ impl HostSigner {
 }
 
 impl PassKey for HostSigner {
+    fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        self.key.ready(shard_id, anchor_height)
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -150,6 +159,27 @@ mod tests {
             .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
             .unwrap_err();
         assert_eq!(err.detail, NoResidentKey::REASON);
+    }
+
+    /// The refusal is the pre-flight's, so a keyless persona is a 404
+    /// before the head rather than a truncated 200 after the body; the
+    /// host signer passes the question through to its key.
+    #[test]
+    fn no_resident_key_refuses_at_the_pre_flight_and_the_host_passes_it_through() {
+        let err = NoResidentKey
+            .ready(7, BlockHeight::from_raw(9_280))
+            .unwrap_err();
+        assert_eq!(err.detail, NoResidentKey::REASON);
+        let (tip, signer) = signer();
+        tip.stamp_synced(BlockHeight::from_raw(10_000));
+        assert_eq!(
+            signer
+                .ready(7, BlockHeight::from_raw(9_280))
+                .unwrap_err()
+                .detail,
+            NoResidentKey::REASON,
+            "the host signer's pre-flight is its key's"
+        );
     }
 
     /// WSS-24: the gate's height is the daemon's tip, not the principal's

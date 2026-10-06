@@ -114,6 +114,10 @@ impl SeededSigner {
 }
 
 impl PassKey for SeededSigner {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
