@@ -8,7 +8,9 @@
 use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
-use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use crate::engine::{Network, ShekylAddress};
@@ -174,6 +176,55 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
                 requested: msg.p_slot,
             })?;
         Ok(OnionIdentity::from_hs_id_seed(&held.keys().hs_id_seed))
+    }
+}
+
+/// Countersign one SF-D8 pass transcript with the held persona's bond
+/// identity key — the SH-2 resident-key handoff into `PersonaServingHost`.
+///
+/// This is the §7.2(iii) ruling applied to a key that is *stronger* than
+/// `hs_id_seed`, and the shape differs accordingly. The onion handoff can
+/// export an expanded credential because the credential authorises exactly
+/// one thing. `hybrid_sign_sk` authorises three: the bond post
+/// (`PQC_AUTH_TX`), the emission claim (`EMISSION_CLAIM`) and the attestation
+/// pass (`ATTESTATION`), separated only by the domain byte the signer chooses.
+/// A copy of it in the serving role would be restricted at the API, not by the
+/// key — one edit from a serving task that signs a claim. So **the secret does
+/// not cross the actor boundary at all**: the serving role sends the
+/// 112-byte transcript in and receives the signature out, per served shard
+/// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
+///
+/// The domain is fixed by [`sign_pass_transcript`] itself, which is the only
+/// signing call the serving stack has; this handler cannot sign anything
+/// else with the key even if asked.
+///
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
+/// other slot boundary. The handler does **not** also gate on the
+/// [`HeldPersona::Bonded`] tag: that tag is a reconcilable persistence hint,
+/// not a statement of chain truth, and the host already cannot start without
+/// a connected bond record — a second gate on a hint would add false refusals
+/// and no security.
+pub(crate) struct SignPassTranscript {
+    pub p_slot: PSlot,
+    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+}
+
+impl Message<SignPassTranscript> for StakeEngine {
+    type Reply = Result<HybridSignature, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignPassTranscript,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
+            .map_err(StakeEngineError::PassCountersign)
     }
 }
 

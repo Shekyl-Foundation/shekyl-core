@@ -63,6 +63,7 @@
 
 pub(crate) mod daemon_tip;
 pub(crate) mod disk;
+pub(crate) mod pass_key;
 pub(crate) mod start;
 pub(crate) mod task;
 pub(crate) mod tor_config;
