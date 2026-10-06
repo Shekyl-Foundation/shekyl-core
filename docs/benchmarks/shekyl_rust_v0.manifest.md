@@ -1006,3 +1006,15 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   the function name routes into the existing `crypto_bench_*` class.
   Sections previously numbered §§12–14 (Known gaps, Cross-references,
   Change log) renumbered to §§13–15.
+- `BA-Q3` option S (`SF-D8` amended 2026-10-06): the serve path reads
+  each shard once, folds the bytes it writes, and signs last. §12's
+  "what it measures" and step list follow the new order
+  (`gate_and_open`, `response_head`, `read_chunk`, `sign_transcript`).
+  `crypto_bench_serve_response` on x86 dev, deterministic across two
+  runs: one leaf 12,384,369 → 12,357,954 instructions (−0.2 %), an
+  eighth of a segment 46,363,994 → 26,972,414 (−41.8 %), a full segment
+  346,328,758 → 191,344,769 (−44.7 %). The per-byte part halves — one
+  read and one digest pass in place of two — and the fixed part, the
+  hybrid sign, does not move. This is the intentional bidirectional
+  delta the `crypto_bench_*` class exists to see; the rolling baseline
+  absorbs it on merge. Schema version unchanged.

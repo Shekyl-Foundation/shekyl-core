@@ -616,7 +616,10 @@ serve path reads a shard once and signs last`). `shekyl-p-serve` serves
 in that order, `PassKey::ready` is the pre-flight, `late_sign_failure_count`
 is the separate counter, and the tests `SF-D8` names enforce the
 invariant. The BA-T3 before-and-after is in the measurement ledger's
-`archival-serve-fetch` entry for the change. The three `estimated` rows
+`archival-serve-fetch` entry for the change: a full segment went from
+346,328,758 to 191,344,769 instructions (−44.7 %), one leaf did not move
+(the fixed part is the hybrid sign), so the per-byte part halved as one
+read and one digest pass in place of two. The three `estimated` rows
 above stay estimates until BA-T5 runs on the floor with S as an arm.
 
 *Carried beyond this lane.* The invariant is general: no unpaid work
