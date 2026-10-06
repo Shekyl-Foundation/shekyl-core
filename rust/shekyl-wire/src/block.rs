@@ -53,12 +53,21 @@ use crate::READ_LEN_CAP;
 /// [`Transaction::from_bytes`]). It is a DoS bound, **not** a consensus bound.
 pub const MAX_BLOCK_BLOB_SIZE: usize = MAX_TX_SIZE + READ_LEN_CAP * 32 + 128;
 
+/// The value every valid header's `minor_version` carries (CEN-B2).
+///
+/// The byte was Monero's hard-fork vote. Shekyl has no vote and no fork
+/// table, so the byte means nothing, and a byte that means nothing and may
+/// hold anything is a channel the block's producer controls. It is reserved
+/// at zero, which is what genesis carries. The parser reads any value; the
+/// consensus validator refuses every one but this.
+pub const HEADER_MINOR_VERSION: u8 = 0;
+
 /// A Shekyl block header.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BlockHeader {
-    /// Hard-fork (major) version; genesis `1`.
+    /// Block version; `1` (CEN-B1).
     pub major_version: u8,
-    /// Hard-fork signal (minor) version; genesis `0`.
+    /// Reserved; [`HEADER_MINOR_VERSION`] on every valid block (CEN-B2).
     pub minor_version: u8,
     /// Seconds since the epoch.
     pub timestamp: u64,

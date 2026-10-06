@@ -264,8 +264,8 @@ pub enum DifficultyRule {
 
 impl RuleSet {
     /// The genesis rule set: every consensus row of the census; admits
-    /// header version `1` (`hardforks.cpp:35–50`, the one-entry table);
-    /// LWMA-1 difficulty.
+    /// header version `1` (the C++ `CURRENT_BLOCK_MAJOR_VERSION`;
+    /// `rule_set_tests` pins the two equal); LWMA-1 difficulty.
     pub const GENESIS: Self = Self {
         id: RuleSetId::GENESIS,
         enforced: CenRow::ALL,
@@ -382,8 +382,8 @@ impl RuleSet {
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
-    /// fixtures only: `ISSUED` holds one set today, and B1/B2's refusal
-    /// arms under a later set have no other way to be exercised. Never
+    /// fixtures only: `ISSUED` holds one set today, and B1 under a later set
+    /// has no other way to be exercised. Never
     /// issued, never named by a schedule, not constructible outside tests.
     #[cfg(test)]
     pub(crate) const fn admitting_for_tests(header_major_version: u8) -> Self {
@@ -420,13 +420,14 @@ impl RuleSet {
         self.tx_spendable_age
     }
 
-    /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
-    /// the floor a header's version vote must reach (CEN-B2).
+    /// The `BlockHeader.major_version` this rule set admits (CEN-B1).
     ///
     /// A **parameter**, not the identity: it equals
-    /// `RuleSetId::GENESIS.to_raw()` today because the shipped hardfork table
-    /// has one entry, and nothing here reads one as the other
-    /// (`CHAIN_RULES_CRATE.md` §4.2, ruling Q5).
+    /// `RuleSetId::GENESIS.to_raw()` today because one rule set is issued,
+    /// and nothing here reads one as the other (`CHAIN_RULES_CRATE.md` §4.2,
+    /// ruling Q5). The header's other version byte is not a parameter: it
+    /// is `shekyl_wire::block::HEADER_MINOR_VERSION` under every rule set
+    /// (CEN-B2).
     #[must_use]
     pub const fn header_major_version(&self) -> u8 {
         self.header_major_version

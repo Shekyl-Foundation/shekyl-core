@@ -1925,7 +1925,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
                 *cxx_block.header.attestation_root.as_bytes(),
             ),
             major_version: cxx_block.header.major_version,
-            minor_version: cxx_block.header.minor_version,
             // The C++'s template timestamp is already `max(now, MTP + 1)`;
             // claiming it with no median reproduces it exactly.
             now: Timestamp::from_raw(cxx_block.header.timestamp),

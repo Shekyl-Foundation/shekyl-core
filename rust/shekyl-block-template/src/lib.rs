@@ -108,7 +108,7 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::block::{Block, BlockHeader};
+use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
 use zeroize::Zeroizing;
@@ -167,10 +167,11 @@ pub struct TemplateContext<'a> {
     pub curve_tree_root: CurveTreeRoot,
     /// The archival attestation root the header carries.
     pub attestation_root: AttestationRoot,
-    /// Header version pair — CEN-B1 reads the major.
+    /// The header's `major_version` — the version the rule set in force
+    /// admits (CEN-B1). The other version byte is not the producer's to
+    /// choose: every template carries
+    /// [`shekyl_wire::block::HEADER_MINOR_VERSION`] (CEN-B2).
     pub major_version: u8,
-    /// Header minor version.
-    pub minor_version: u8,
     /// The producer's clock; the header's timestamp is no earlier.
     pub now: Timestamp,
     /// The median timestamp CEN-C2 will compare against:
@@ -209,7 +210,6 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("curve_tree_root", &self.curve_tree_root)
             .field("attestation_root", &self.attestation_root)
             .field("major_version", &self.major_version)
-            .field("minor_version", &self.minor_version)
             .field("now", &self.now)
             .field("median_timestamp", &self.median_timestamp)
             .field("unlock_window", &self.unlock_window)
@@ -398,7 +398,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
     let block = Block {
         header: BlockHeader {
             major_version: cx.major_version,
-            minor_version: cx.minor_version,
+            minor_version: HEADER_MINOR_VERSION,
             timestamp: template_timestamp(cx.now, cx.median_timestamp)?,
             previous: cx.previous,
             nonce: 0,

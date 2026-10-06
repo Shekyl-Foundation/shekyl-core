@@ -311,83 +311,6 @@ TEST(reorganize, Same)
   }
 }
 
-TEST(reorganize, Changed)
-{
-  TestDB db;
-  HardFork hf(db, 1, 0, 1, 1, 4, 100);
-
-  //                 v  h  t
-  ASSERT_TRUE(hf.add_fork(1, 0, 0));
-  ASSERT_TRUE(hf.add_fork(4, 2, 1));
-  ASSERT_TRUE(hf.add_fork(7, 4, 2));
-  ASSERT_TRUE(hf.add_fork(9, 6, 3));
-  hf.init();
-
-  //                                    fork         4     7     9
-  //                                    index  0  1  2  3  4  5  6  7  8  9
-  static const uint8_t block_versions[] =    { 1, 1, 4, 4, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9 };
-  static const uint8_t expected_versions[] = { 1, 1, 1, 1, 1, 1, 4, 4, 7, 7, 9, 9, 9, 9, 9, 9 };
-  for (uint64_t h = 0; h < 16; ++h) {
-    db.add_block(mkblock(hf, h, block_versions[h]), 0, 0, 0, 0, 0, crypto::hash());
-    ASSERT_TRUE (hf.add(db.get_block_from_height(h), h));
-  }
-
-  for (uint64_t rh = 0; rh < 16; ++rh) {
-    hf.reorganize_from_block_height(rh);
-    for (int hh = 0; hh < 16; ++hh) {
-      ASSERT_EQ(hf.get(hh), expected_versions[hh]);
-    }
-  }
-
-  // delay a bit for 9, and go back to 1 to check it stays at 9
-  static const uint8_t block_versions_new[] =    { 1, 1, 4, 4, 7, 7, 4, 7, 7, 7, 9, 9, 9, 9, 9, 1 };
-  static const uint8_t expected_versions_new[] = { 1, 1, 1, 1, 1, 1, 4, 4, 4, 4, 4, 7, 7, 7, 9, 9 };
-  for (uint64_t h = 3; h < 16; ++h) {
-    db.remove_block();
-  }
-  ASSERT_EQ(db.height(), 3);
-  hf.reorganize_from_block_height(2);
-  for (uint64_t h = 3; h < 16; ++h) {
-    db.add_block(mkblock(hf, h, block_versions_new[h]), 0, 0, 0, 0, 0, crypto::hash());
-    bool ret = hf.add(db.get_block_from_height(h), h);
-    ASSERT_EQ (ret, h < 15);
-  }
-  db.remove_block(); // last block added to the blockchain, but not hf
-  ASSERT_EQ(db.height(), 15);
-  for (int hh = 0; hh < 15; ++hh) {
-    ASSERT_EQ(hf.get(hh), expected_versions_new[hh]);
-  }
-}
-
-TEST(voting, threshold)
-{
-  for (int threshold = 87; threshold <= 88; ++threshold) {
-    TestDB db;
-    HardFork hf(db, 1, 0, 1, 1, 8, threshold);
-
-    //                 v  h  t
-    ASSERT_TRUE(hf.add_fork(1, 0, 0));
-    ASSERT_TRUE(hf.add_fork(2, 2, 1));
-    hf.init();
-
-    for (uint64_t h = 0; h <= 8; ++h) {
-      uint8_t v = 1 + !!(h % 8);
-      db.add_block(mkblock(hf, h, v), 0, 0, 0, 0, 0, crypto::hash());
-      bool ret = hf.add(db.get_block_from_height(h), h);
-      if (h >= 8 && threshold == 87) {
-        // for threshold 87, we reach the treshold at height 7, so from height 8, hard fork to version 2, but 8 tries to add 1
-        ASSERT_FALSE(ret);
-      }
-      else {
-        // for threshold 88, we never reach the threshold
-        ASSERT_TRUE(ret);
-        uint8_t expected = threshold == 88 ? 1 : h < 8 ? 1 : 2;
-        ASSERT_EQ(hf.get(h), expected);
-      }
-    }
-  }
-}
-
 TEST(voting, different_thresholds)
 {
   for (int threshold = 87; threshold <= 88; ++threshold) {
@@ -462,49 +385,6 @@ TEST(voting, info)
     db.add_block(mkblock(hf, h, block_versions[h]), 0, 0, 0, 0, 0, crypto::hash());
     ASSERT_TRUE(hf.add(db.get_block_from_height(h), h));
   }
-}
-
-TEST(new_blocks, denied)
-{
-    TestDB db;
-    HardFork hf(db, 1, 0, 1, 1, 4, 50);
-
-    //                 v  h  t
-    ASSERT_TRUE(hf.add_fork(1, 0, 0));
-    ASSERT_TRUE(hf.add_fork(2, 2, 1));
-    hf.init();
-
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 0));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 1));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 2));
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 3));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 4));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 5));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 6));
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 7));
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 8)); // we reach 50% of the last 4
-    ASSERT_FALSE(hf.add(mkblock(2, 1), 9)); // so this one can't get added
-    ASSERT_TRUE(hf.add(mkblock(2, 2), 9));
-}
-
-TEST(new_version, early)
-{
-    TestDB db;
-    HardFork hf(db, 1, 0, 1, 1, 4, 50);
-
-    //                 v  h  t
-    ASSERT_TRUE(hf.add_fork(1, 0, 0));
-    ASSERT_TRUE(hf.add_fork(2, 4, 1));
-    hf.init();
-
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 0));
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 1)); // we have enough votes already
-    ASSERT_TRUE(hf.add(mkblock(1, 2), 2));
-    ASSERT_TRUE(hf.add(mkblock(1, 1), 3)); // we accept a previous version because we did not switch, even with all the votes
-    ASSERT_TRUE(hf.add(mkblock(2, 2), 4)); // but have to wait for the declared height anyway
-    ASSERT_TRUE(hf.add(mkblock(2, 2), 5));
-    ASSERT_FALSE(hf.add(mkblock(2, 1), 6)); // we don't accept 1 anymore
-    ASSERT_TRUE(hf.add(mkblock(2, 2), 7)); // but we do accept 2
 }
 
 TEST(reorganize, changed)

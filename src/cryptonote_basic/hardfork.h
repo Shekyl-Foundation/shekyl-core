@@ -239,8 +239,8 @@ namespace cryptonote
   private:
 
     uint8_t get_block_version(uint64_t height) const;
-    bool do_check(uint8_t block_version, uint8_t voting_version) const;
-    bool do_check_for_height(uint8_t block_version, uint8_t voting_version, uint64_t height) const;
+    bool do_check(uint8_t block_version) const;
+    bool do_check_for_height(uint8_t block_version, uint64_t height) const;
     int get_voted_fork_index(uint64_t height) const;
     uint8_t get_effective_version(uint8_t voting_version) const;
     bool add(uint8_t block_version, uint8_t voting_version, uint64_t height);

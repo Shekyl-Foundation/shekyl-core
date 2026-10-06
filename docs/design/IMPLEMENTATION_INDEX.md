@@ -45,7 +45,12 @@ at that tree from a fresh clone: `cargo test -p shekyl-chain-rules` **334**
 crates); every `scripts/ci/check_*` gate (41; `check_chain_rules_coverage`
 `implemented 106 / validator-enforced 151`, `check_conformance_coverage`
 125 / 2 / 5 over 132, `check_store_invariant_register` 22 ↔ 22 built,
-`check_inland_height_u64` 167 grandfathered and none new). *Superseded
+`check_inland_height_u64` 167 grandfathered and none new). **Outside this
+stamp, by declaration:** CEN-B2 is promoted to bucket 2 on the
+header-version-rule branch (2026-10-06, `minor_version` reserved at 0),
+which moves `check_conformance_coverage` to 126 / 2 / 5 over 133 and
+`cargo test -p shekyl-chain-rules` to 336; the stamp moves with that merge.
+*Superseded
 stamp:* `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
 2026-09-27 — moved by DRS-E3, whose rows changed status (`CTW-`, `CTW-Q`,
 `DRS_E3_CURVE_WRITER.md`, `DRS_E1_SCURVE.md`, SI-17 / SI-18 in the

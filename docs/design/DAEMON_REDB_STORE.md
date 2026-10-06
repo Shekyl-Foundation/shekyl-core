@@ -1737,7 +1737,7 @@ snapshot with a gate, not a second authority.
 | flag | surface | b1 | b2 | b3 | b4 | total |
 | --- | --- | --- | --- | --- | --- | --- |
 | C | bound | 10 | 2 | 7 | 2 | 21 |
-| C | free | 77 | 38 | 6 | 24 | 145 |
+| C | free | 77 | 39 | 6 | 23 | 145 |
 | P | bound | 0 | 0 | 0 | 0 | 0 |
 | P | free | 1 | 4 | 0 | 4 | 9 |
 
@@ -1777,7 +1777,7 @@ and each slice's pre-flight confirms it.
 | subsystem | b1 | b2 | b4 | total | proposed slice / dependency note |
 | --- | --- | --- | --- | --- | --- |
 | 4.A Acceptance topology | 1 | 3 | 3 | 7 | slice 1 with 4.B — the roots: parent, height, genesis |
-| 4.B Block header | 2 | 1 | 3 | 6 | slice 1 — identity (CEN-B6) is what every other row is stated against |
+| 4.B Block header | 2 | 2 | 2 | 6 | slice 1 — identity (CEN-B6) is what every other row is stated against |
 | 4.C Timestamps | 1 | 2 | 0 | 3 | slice 2 — MTP / FTL; body in `shekyl-difficulty` (adopt) |
 | 4.D PoW and difficulty | 4 | 2 | 2 | 8 | slice 2 — LWMA-1 body in `shekyl-difficulty`, PoW in `shekyl-pow-randomx` (adopt) |
 | 4.E Checkpoints | 0 | 3 | 0 | 3 | slice 3 — after 4.A/4.B |

@@ -1713,7 +1713,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // silently building on the tip. Reopen: see docs/FOLLOWUPS.md.
     height = m_db->height();
     b.major_version = m_hardfork->get_current_version();
-    b.minor_version = m_hardfork->get_ideal_version();
+    b.minor_version = CURRENT_BLOCK_MINOR_VERSION;
     b.prev_id = get_tail_id();
     median_weight = m_current_block_cumul_weight_limit / 2;
     diffic = get_difficulty_for_next_block();
@@ -2107,9 +2107,12 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
 
   // this is a cheap test
   const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
-  if (!m_hardfork->check_for_height(b, block_height))
+  // CEN-B1: the major version is the table's at this height. CEN-B2: the
+  // minor version is reserved at one value.
+  if (!m_hardfork->check_for_height(b, block_height) || b.minor_version != CURRENT_BLOCK_MINOR_VERSION)
   {
-    LOG_PRINT_L1("Block with id: " << id << std::endl << "has old version for height " << block_height);
+    LOG_PRINT_L1("Block with id: " << id << std::endl << "has version " << (unsigned)b.major_version << "." << (unsigned)b.minor_version
+        << " at height " << block_height << ", which is not the version in force with minor version " << CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     return false;
   }
@@ -5239,9 +5242,12 @@ leave:
 
   // this is a cheap test
   const uint8_t hf_version = get_current_hard_fork_version();
-  if (!m_hardfork->check(bl))
+  // CEN-B1: the major version is the table's current one. CEN-B2: the minor
+  // version is reserved at one value.
+  if (!m_hardfork->check(bl) || bl.minor_version != CURRENT_BLOCK_MINOR_VERSION)
   {
-    MERROR_VER("Block with id: " << id << std::endl << "has old version: " << (unsigned)bl.major_version << std::endl << "current: " << (unsigned)hf_version);
+    MERROR_VER("Block with id: " << id << std::endl << "has version " << (unsigned)bl.major_version << "." << (unsigned)bl.minor_version
+        << ", expected " << (unsigned)hf_version << "." << CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     goto leave;
   }

@@ -106,36 +106,37 @@ uint8_t HardFork::get_effective_version(uint8_t voting_version) const
   return voting_version;
 }
 
-bool HardFork::do_check(uint8_t block_version, uint8_t voting_version) const
+// CEN-B1 only. The minor version is not a vote the table constrains: it is
+// reserved at CURRENT_BLOCK_MINOR_VERSION, and the block validators hold it
+// there (CEN-B2).
+bool HardFork::do_check(uint8_t block_version) const
 {
-  return block_version == heights[current_fork_index].version
-      && voting_version >= heights[current_fork_index].version;
+  return block_version == heights[current_fork_index].version;
 }
 
 bool HardFork::check(const cryptonote::block &block) const
 {
   CRITICAL_REGION_LOCAL(lock);
-  return do_check(::get_block_version(block), ::get_block_vote(block));
+  return do_check(::get_block_version(block));
 }
 
-bool HardFork::do_check_for_height(uint8_t block_version, uint8_t voting_version, uint64_t height) const
+bool HardFork::do_check_for_height(uint8_t block_version, uint64_t height) const
 {
   int fork_index = get_voted_fork_index(height);
-  return block_version == heights[fork_index].version
-      && voting_version >= heights[fork_index].version;
+  return block_version == heights[fork_index].version;
 }
 
 bool HardFork::check_for_height(const cryptonote::block &block, uint64_t height) const
 {
   CRITICAL_REGION_LOCAL(lock);
-  return do_check_for_height(::get_block_version(block), ::get_block_vote(block), height);
+  return do_check_for_height(::get_block_version(block), height);
 }
 
 bool HardFork::add(uint8_t block_version, uint8_t voting_version, uint64_t height)
 {
   CRITICAL_REGION_LOCAL(lock);
 
-  if (!do_check(block_version, voting_version))
+  if (!do_check(block_version))
     return false;
 
   db.set_hard_fork_version(height, heights[current_fork_index].version);

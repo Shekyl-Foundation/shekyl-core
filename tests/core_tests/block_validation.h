@@ -140,7 +140,7 @@ struct gen_block_big_major_version : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_big_minor_version : public gen_block_accepted_base<2>
+struct gen_block_big_minor_version : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };

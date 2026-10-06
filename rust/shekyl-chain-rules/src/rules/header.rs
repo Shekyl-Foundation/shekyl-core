@@ -8,41 +8,31 @@
 //! identity (B6). B3 is surface-bound and the store's; B4 is deferred (E4
 //! S-ARCH) and A3 is subsumed into it.
 //!
-//! # What the C++ does, read at `dev` `3560b80c2`
+//! # The version pair
 //!
-//! `handle_block_to_main_chain` (`blockchain.cpp:5431–5450`) first warns
-//! once if `major_version > get_ideal_version()` — the **latest scheduled**
-//! version, `heights.back().version` (`hardfork.cpp:366–370`), not the one
-//! in force — and does **not** reject (CEN-B7), then calls `HardFork::check` → `do_check`
-//! (`hardfork.cpp:109–113`): `block_version == heights[current].version &&
-//! voting_version >= heights[current].version`, where `voting_version` is
-//! `minor_version` with `0` read as `1` (`hardfork.cpp:41–50`). The first
-//! conjunct is CEN-B1; the second is CEN-B2, unfailable at the shipped table
-//! (`current.version == 1`, and the normalised vote is `>= 1` for every
-//! `u8`) — which is why the census records B2's *effect* as "unconstrained".
+//! A header carries two version bytes, and each has exactly one valid
+//! value. `major_version` is the version the rule set admits
+//! ([`RuleSet::header_major_version`], `1`): CEN-B1. `minor_version` is
+//! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities. There is no
+//! vote, no schedule of future versions and no "at least": the C++ had
+//! those, as Monero's `HardFork::check`, where `minor_version` was a vote
+//! that `0` cast for `1` and any value satisfied, so the byte was free. The
+//! C++ now compares both bytes to its `CURRENT_BLOCK_MAJOR_VERSION` and
+//! `CURRENT_BLOCK_MINOR_VERSION`, which `rule_set_tests` holds equal to the
+//! values here.
 //!
-//! # What lands here
+//! B7 was the C++'s one-time warning for a `major_version` above the latest
+//! scheduled one, and it never refused. Its operand is a schedule a rule
+//! cannot read — a `RuleSet` is the set in force, and the schedule is the
+//! caller's (rule 71) — so the rule evaluates (records its row) and refuses
+//! nothing, and the header that would have tripped the warning is refused by
+//! **B1**. The fixture pins both halves: B7 passes such a header when called
+//! directly, and the pipeline refuses it under B1, never B7.
 //!
-//! B1 and B2 port the **predicates**, not the effects: `major_version ==`
-//! and `normalised(minor_version) >=` the header version the rule set
-//! admits ([`RuleSet::header_major_version`]). Under `RuleSet::GENESIS`
-//! (admits `1`) B2 cannot refuse — exactly as the C++ cannot — but the
-//! comparison is the C++'s comparison, so a rule set that admits `2`
-//! refuses a stale vote here as the C++ would have. B7 is the no-reject
-//! branch, ported as what it is: a row whose only effect is a one-time
-//! `MCLOG_RED` warning, and the crate has no logging (G12). Its operand is
-//! the latest *scheduled* version, which a rule cannot read — a `RuleSet` is
-//! the set in force, and the schedule is the caller's (rule 71) — so the
-//! condition is **not** re-computed here against the wrong operand; the rule
-//! evaluates (records its row) and refuses nothing, and the header that
-//! would have tripped the warning is refused by **B1**. The fixture pins both
-//! halves: B7 passes such a header when called directly, and the pipeline
-//! refuses it under B1, never B7.
-//!
-//! The alt-admission arm (`check_for_height`, ideal version *at* the block's
-//! height) collapses into the same predicates: the caller hands `validate`
-//! the rule set `RuleSchedule::rules_at(height)` names, so "the version at
-//! this height" is a property of the input, not a second code path.
+//! "The version at this height" is a property of the input, not a second
+//! code path: the caller hands `validate` the rule set
+//! `RuleSchedule::rules_at(height)` names, on the main chain and on an
+//! alternative one alike.
 //!
 //! B1, B2 and B7 read the header and the rule set and nothing else, so they
 //! are [`FormRule`]s — the stateless stage's, run in `form` outside the
@@ -51,6 +41,7 @@
 //! [`BlockRule`].
 
 use shekyl_types::BlockHash;
+use shekyl_wire::block::HEADER_MINOR_VERSION;
 use shekyl_wire::Block;
 
 use crate::census::CenRow;
@@ -76,21 +67,10 @@ impl FormRule for B1 {
     }
 }
 
-/// CEN-B2: the version vote (`minor_version`, `0` read as `1`) must be at
-/// least the admitted version. Unfailable under `GENESIS`; ported as the
-/// predicate so it stays the C++'s comparison under a later rule set.
+/// CEN-B2: `minor_version` must be [`HEADER_MINOR_VERSION`]. The byte is
+/// reserved, and a reserved byte that validates at any value is the
+/// producer's to write.
 pub(crate) struct B2;
-
-impl B2 {
-    /// `hardfork.cpp:41–50`: a `minor_version` of `0` votes for `1`.
-    const fn normalised_vote(minor_version: u8) -> u8 {
-        if minor_version == 0 {
-            1
-        } else {
-            minor_version
-        }
-    }
-}
 
 impl Rule for B2 {
     const ROW: CenRow = CenRow::B2;
@@ -98,8 +78,7 @@ impl Rule for B2 {
 
 impl FormRule for B2 {
     fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        let vote = Self::normalised_vote(cx.candidate.block.header.minor_version);
-        if vote >= cx.rule_set.header_major_version() {
+        if cx.candidate.block.header.minor_version == HEADER_MINOR_VERSION {
             Ok(())
         } else {
             Err(InvalidBlock::new(Self::ROW, Locus::Block))
