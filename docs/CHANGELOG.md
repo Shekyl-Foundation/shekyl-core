@@ -5,6 +5,32 @@
 - **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours after ten failed handshakes, and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
 - Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
 
+### Archival serving — one store read, and five answers that each mean one thing
+
+- `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends
+  it, then signs the finished digest and appends the signature. On a Pi 4
+  a served shard takes 67 ms, against 103 ms on the two-read path.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). The
+  signed message and the pass record are unchanged.
+  - `400`: the request is not valid (wrong route or method, a request
+    header that is missing or malformed, an anchor outside the gate).
+    Decided before the shard is looked up.
+  - `404`: the shard is not held. Nothing else answers 404 any more.
+  - `503`: the persona cannot serve through its own fault: its store or
+    its tip could not be read, or it has no resident key. These answered
+    404 before.
+  - A signer that fails after the body has gone out ends the response
+    with a refusal trailer in the signature's place. A response that
+    stops short is always treated as a transport failure and retried.
+- `shekyl-p-fetch` types each: `FetchError::Rejected` (400),
+  `FetchError::Unavailable` (503) and `FetchError::Unsigned` (the refusal
+  trailer). `FetchError::next_move` gives the scheduler's rule: a first
+  400 earns one retry of the same `P` with a freshly derived anchor and a
+  second is a failed read; a 503 and a refusal trailer are failed reads
+  with no retry.
+- A persona bound without a resident key (`NoResidentKey`) answers 503
+  and sends no shard.
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).

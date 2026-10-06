@@ -39,7 +39,7 @@ use crate::legacy_util::slice_from_ptr;
 const HARNESS_SEND_CAP: usize = 64 * 1024;
 
 /// `established`. Matches the C header.
-const POST_ESTABLISHED: u32 = 1;
+pub(crate) const POST_ESTABLISHED: u32 = 1;
 /// `deliver`.
 const POST_DELIVER: u32 = 2;
 /// `closed`.
@@ -55,9 +55,9 @@ pub const SHEKYL_DIRECTION_INBOUND: u32 = 0;
 pub const SHEKYL_DIRECTION_OUTBOUND: u32 = 1;
 
 /// `epee::net_utils::address_type`. The encoding uses these tags.
-const ADDR_IPV4: u8 = 1;
-const ADDR_IPV6: u8 = 2;
-const ADDR_TOR: u8 = 4;
+pub(crate) const ADDR_IPV4: u8 = 1;
+pub(crate) const ADDR_IPV6: u8 = 2;
+pub(crate) const ADDR_TOR: u8 = 4;
 
 const _: () = {
     assert!(ConnectorId::Clearnet as u8 as u32 == SHEKYL_CONNECTOR_CLEARNET);
@@ -139,6 +139,17 @@ static STATE: Mutex<Option<Hub>> = Mutex::new(None);
 
 pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
+}
+
+/// Tests that bind the process hub take this for the whole test.
+///
+/// The hub is one static. Two tests binding it at once would publish over
+/// each other. A poisoned lock is the previous test's panic; the next test
+/// still needs the gate.
+#[cfg(test)]
+pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    &LOCK
 }
 
 /// One admission table for the process. A new binding does not mint ids
@@ -804,7 +815,7 @@ fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> 
     }
 }
 
-fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
+pub(crate) fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
     let mut out = ShekylSeamObserved {
         connector: endpoint.connector() as u8,
         direction: direction_byte(endpoint.direction()),
