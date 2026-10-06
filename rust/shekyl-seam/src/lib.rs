@@ -17,6 +17,7 @@
 
 #![deny(unsafe_code)]
 
+mod connection;
 mod dial;
 mod drive;
 mod endpoint;

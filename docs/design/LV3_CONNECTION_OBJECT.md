@@ -1750,7 +1750,7 @@ the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
 on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
 `p2p_connection_context_t`. The test for each is who asserted it.
-This is the sort. It is not a struct.
+**UPDATE 2026-10-06:** this sort is the design of `Connection` in `shekyl-seam` (`connection.rs`). *Records-was: it is not a struct.*
 
 | Bin | Members | Rule |
 | --- | --- | --- |
@@ -1760,10 +1760,14 @@ This is the sort. It is not a struct.
 
 `m_state` is this node's pull relationship with the session. `m_ssl`
 is not in a bin: p2p SSL was deleted in #909, the field is false by
-construction, and it leaves the base struct. `m_score` is listed under
-local state and is not kept by that listing. A score that accumulates
-from claimed inputs is the self-selection trap §2.7.2 names, and that
-look happens before the struct. Constraint 2 covers the object:
+construction, and it leaves the base struct. **UPDATE 2026-10-06:**
+`m_score` is not a field of `Connection`. A score a peer can improve by
+what it asserts is the self-selection trap §2.7.2 names. The C++ field
+stays; removing it would change who gets dropped, and this step changes
+no behavior. A later round may add a counter whose inputs are
+measurements this node made, not the peer's claims. *Records-was:
+listed under local state and not kept by that listing, the look still
+ahead of the struct.* Constraint 2 covers the object:
 nothing in it is stable across reconnects except the observed
 endpoint, which is already public.
 
