@@ -290,6 +290,13 @@ impl PassRequestHeader {
 /// answers no other. It leads the preimage and has a fixed width, so the
 /// split between salt and body is unambiguous without a length field.
 ///
+/// **The whole framed body.** Every byte of `framed` enters the preimage.
+/// `SF-D8` (`ARCHIVAL_SHARD_FETCH.md`) relies on that flat hash: a later
+/// holder of the shard recomputes a recorded pass, and a hash of a
+/// precomputable summary can be signed after the bytes are gone and still
+/// match. Whether a padding scheme still allows that recomputation is
+/// `ServedFrameHeader::padding_len`'s constraint, stated in `SF-D8`.
+///
 /// **What this does not claim.** It does not show that `P` stores the bytes:
 /// a `P` that fetches them from a co-holder on demand produces the same
 /// digest (`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §9.4 (ii)); the route's

@@ -189,6 +189,20 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // `SHT-9`'s conformance correction (2026-10-03): the serve
             // credit's pass records against its vins.
             CenRow::J2,
+            // Slice 8 row 3: the bond-state rows on a serve-credit vin.
+            CenRow::J4,
+            CenRow::J5,
+            CenRow::J6,
+            // Slice 8 row 4: the bond post's key and hint, its JoinMarket
+            // coupling, and the key its kind selects.
+            CenRow::J11,
+            CenRow::J12,
+            CenRow::J13,
+            // Slice 8 row 5: the post against its record — a join's floor and
+            // claim slot, a Release's exit, a Reinstate's open interval.
+            CenRow::J14,
+            CenRow::J16,
+            CenRow::J18,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
@@ -274,8 +288,10 @@ fn registries_are_the_expected_size_at_this_increment() {
     // predicate, an R8-class placement row minted by S-ARCH's pre-flight,
     // DRS_E1_SARCH.md SAR-2 / SAR-7) — pending here until E4 moves the fold
     // to shekyl-archival-retention and slice 8 judges through it.
-    // 154 → 153 on 2026-10-05: CEN-J17 (HoldingsUpdate) moved to bucket 3.
-    // The census keeps the id marked REJECTED; the registry does not.
+    // 154 → 153 on 2026-10-04: CEN-J17 (the `HoldingsUpdate` add / drop
+    // arms, a post kind REJECTED 2026-09-20 and deleted by E4's ARW-14) went
+    // to bucket 3 (E6 slice 8 Q1 (a)) — a row whose subject is gone does
+    // not inflate the denominator.
     assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }

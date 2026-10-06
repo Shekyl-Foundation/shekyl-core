@@ -7,17 +7,19 @@
 //! sites — the pool's `Lone` slot through `tx_form`, and a `Listed` slot
 //! through `validate`.
 
-use super::{I14, I5, J2};
+use super::{I14, I5, J12, J2};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{coinbase, listed, point, serve_credit_only, G, TWO_G};
+use crate::harness::fixture::{
+    coinbase, join_market, listed, persona, point, serve_credit_only, G, TWO_G,
+};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{emission, refused_listed, refused_lone, spend, with_inputs};
 use crate::rules::TxContext;
 use crate::rules::TxRule;
 use crate::validate::tx_form;
 use crate::verdict::TxSlot;
-use shekyl_wire::{Ct, Input, Transaction};
+use shekyl_wire::{BondPost, BondPostKind, Ct, Input, Transaction};
 
 /// The fixture spend's key image, the same point `tx_tests` pins.
 const KI: [u8; 32] = point(9);
@@ -394,4 +396,122 @@ fn j2_one_bounded_record_per_serve_credit_vin() {
     assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("a spend")
         .contains(CenRow::J2));
+}
+
+// ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------
+
+/// The persona every bond-post fixture here posts for.
+const P: [u8; 32] = [0x4b; 32];
+
+/// The fixture JoinMarket with its post edited: [`join_market`] is
+/// balanced for the shape rows, so the row that fires is the one the edit
+/// is for.
+fn join_with(edit: impl FnOnce(&mut BondPost)) -> Transaction {
+    let mut tx = join_market(KI, P);
+    let post = tx
+        .prefix
+        .inputs
+        .iter_mut()
+        .find_map(|item| match item {
+            Input::BondPost(post) => Some(post),
+            _ => None,
+        })
+        .expect("the fixture join carries one post");
+    edit(post);
+    tx
+}
+
+/// CEN-J11: a post whose `p_canonical_id` is not the recompute over its
+/// `hybrid_public_key` is refused, alone and listed — the hint naming
+/// another persona (slice 8 row 2's pin, now the rule's), and the hint
+/// one bit off. A short key and a long one are refused on the same row:
+/// the length arm is the C++'s first, and a key of another length has no
+/// recompute to match. The fixture join — the persona's key, its
+/// recompute — passes; the row is vacuous on a spend and a coinbase.
+#[test]
+fn j11_the_hint_is_the_recompute_over_a_canonical_key() {
+    let stranger = persona([0x4c; 32]);
+    let one_bit_off = {
+        let mut bytes = *persona(P).id.as_bytes();
+        bytes[0] ^= 0x01;
+        shekyl_types::PCanonicalId::from_bytes(bytes)
+    };
+    for refused in [
+        join_with(|post| post.p_canonical_id = stranger.id),
+        join_with(|post| post.p_canonical_id = one_bit_off),
+        join_with(|post| post.hybrid_public_key.truncate(5)),
+        join_with(|post| post.hybrid_public_key.push(0x00)),
+        join_with(|post| post.hybrid_public_key.clear()),
+    ] {
+        refused_lone(&refused, CenRow::J11);
+        refused_listed(&refused, CenRow::J11);
+    }
+    assert!(
+        tx_form(&join_market(KI, P), TxSlot::Lone, &RuleSet::GENESIS)
+            .expect("the fixture join recomputes")
+            .contains(CenRow::J11)
+    );
+    for (name, tx, slot) in [
+        ("spend", listed(KI), TxSlot::Lone),
+        ("coinbase", coinbase(0), TxSlot::Miner),
+    ] {
+        assert!(
+            tx_form(&tx, slot, &RuleSet::GENESIS)
+                .unwrap_or_else(|r| panic!("{name}: {r}"))
+                .contains(CenRow::J11),
+            "{name}: J11 recorded vacuous"
+        );
+    }
+}
+
+/// CEN-J12: a JoinMarket whose `bond_spend_pk` is not canonical-length is
+/// refused, alone and listed — short, long, empty. The fixture join
+/// commits the persona's bond-spend key and passes; a Release carries no
+/// key by the wire type and passes the row (the C++'s
+/// `join_market_coupled_fields_absent`, unrepresentable here); the row is
+/// vacuous on a spend. A short key with a bad hint is J11's: the C++
+/// judges the key and hint first.
+#[test]
+fn j12_a_join_market_commits_a_canonical_bond_spend_pk() {
+    let with_bond_spend_pk = |edit: fn(&mut Vec<u8>)| {
+        join_with(|post| {
+            if let BondPostKind::JoinMarket { bond_spend_pk, .. } = &mut post.kind {
+                edit(bond_spend_pk);
+            }
+        })
+    };
+    for refused in [
+        with_bond_spend_pk(|pk| pk.truncate(5)),
+        with_bond_spend_pk(|pk| pk.push(0x00)),
+        with_bond_spend_pk(Vec::clear),
+    ] {
+        refused_lone(&refused, CenRow::J12);
+        refused_listed(&refused, CenRow::J12);
+    }
+    let release = join_with(|post| {
+        post.kind = BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8);
+        post.bond_credit = 0;
+    });
+    for (name, tx) in [("join", join_market(KI, P)), ("release", release)] {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .unwrap_or_else(|r| panic!("{name} classifies: {r}"));
+        J12::check(&cx).unwrap_or_else(|r| panic!("{name} passes J12: {r}"));
+    }
+    assert!(
+        tx_form(&join_market(KI, P), TxSlot::Lone, &RuleSet::GENESIS)
+            .expect("the fixture join commits its key")
+            .contains(CenRow::J12)
+    );
+    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a spend")
+        .contains(CenRow::J12));
+
+    let both = join_with(|post| {
+        post.hybrid_public_key.truncate(5);
+        if let BondPostKind::JoinMarket { bond_spend_pk, .. } = &mut post.kind {
+            bond_spend_pk.truncate(5);
+        }
+    });
+    refused_lone(&both, CenRow::J11);
 }

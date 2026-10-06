@@ -17,7 +17,7 @@ The stale bytes are committed, and the tree that was tested is not the
 tree that ships. What gets committed is the text the verification existed
 to remove.
 
-## Two constraints
+## Three constraints
 
 1. **Stage explicit paths.** Never `git add -A`, `git add .`, `git add -u`,
    or `git commit -a` in a worktree left open between edits. Every commit
@@ -53,6 +53,16 @@ to remove.
    writing one log, or a `grep` over an interleaved file, produce a figure
    that is green and wrong. One run, one log. When a gate's figure is
    quoted, name the gate and the commit that landed it the first time.
+
+3. **Read back anything you publish.** A PR body, a review comment, an
+   issue, a gist — any write whose destination is outside the repository
+   is verified by reading the destination back and finding the lines the
+   edit added, never by the sending command's exit status. An untracked
+   body file drifts like a tracked one and has no `HEAD` to differ from;
+   constraints 1 and 2 cannot see this class — there is no diff to read
+   and no SHA to clone — so the check has to be at the destination
+   (`gh pr view --json body` after `gh pr edit`, and `grep` the read-back
+   for the lines the edit added).
 
 ## The edit form that notices
 

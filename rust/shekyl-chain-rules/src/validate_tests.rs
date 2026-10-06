@@ -142,6 +142,20 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I19,
                 CenRow::I20,
                 CenRow::J2,
+                // Slice 8 row 3: the bond-state rows on a serve-credit vin,
+                // vacuous on the coinbase (no credit vin to read for).
+                CenRow::J4,
+                CenRow::J5,
+                CenRow::J6,
+                // Slice 8 row 4: the bond post's statics and key selection,
+                // vacuous on the coinbase (no post).
+                CenRow::J11,
+                CenRow::J12,
+                CenRow::J13,
+                // Slice 8 row 5: the post against its record, vacuous likewise.
+                CenRow::J14,
+                CenRow::J16,
+                CenRow::J18,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.
@@ -270,15 +284,19 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I16,
             CenRow::I19,
             CenRow::I20,
-            CenRow::J2
+            CenRow::J2,
+            CenRow::J11,
+            CenRow::J12
         ]
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
     // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
     // regular-spend reference rows), I17 and I18 (the signing preimage and
-    // the signatures over it, of which a coinbase has none) — are recorded
-    // vacuous on a coinbase.
+    // the signatures over it, of which a coinbase has none), J4–J6 (the
+    // bond state behind a serve-credit vin, of which a coinbase has none),
+    // J13, J14, J16 and J18 (the bond post against its record, of which a
+    // coinbase has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -292,7 +310,14 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I11,
                 CenRow::I12,
                 CenRow::I17,
-                CenRow::I18
+                CenRow::I18,
+                CenRow::J4,
+                CenRow::J5,
+                CenRow::J6,
+                CenRow::J13,
+                CenRow::J14,
+                CenRow::J16,
+                CenRow::J18
             ]
         );
     });

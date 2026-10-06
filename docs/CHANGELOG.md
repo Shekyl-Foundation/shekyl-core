@@ -117,6 +117,54 @@
   `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
   owner's participation-floor input.
 
+### Chain rules — a bond post is judged against its record before the block (CEN-J14, J16, J18)
+
+- The Rust validator now runs the retention crate's three kind verifies
+  on every bond post, over the record as the chain stood before the
+  block: a JoinMarket must bond exactly the floor for its holdings over
+  no existing record; a Release must empty a record that exists, past
+  the cooldown from its last served epoch and with slashes settled through
+  it; a Reinstate must close the one open interval of the record it names
+  without changing its holdings. Until this change those predicates ran
+  only in the C++ and the daemon's submit pool, and the Rust side refused
+  a subset of them one pass later, from the fold's belts
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5). A join and a release for one
+  persona in one block is refused on the release's missing record, not on
+  the block's one-post-per-persona rule — the order both implementations
+  already had.
+- An unnamed bond-post kind is refused under CEN-L7 inside that same
+  sequence, at the post's input — the row and the locus the fold already
+  used. The fold's arm stays, for a transition that did not run the
+  sequence. A bond post with no auth slot at its input is refused under
+  CEN-J13 at the point that kind reads the slot, after the kind's other
+  check, so neither case is recorded as a covered pass
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5).
+
+### Chain rules — a bond post is keyed by its key, and a Release by the record's (CEN-J11, J12, J13)
+
+- The Rust validator now refuses a bond post whose `p_canonical_id` is not
+  the recompute over its hybrid public key, or whose key (or a JoinMarket's
+  `bond_spend_pk`) is not canonical length — and a post whose slot carries
+  the wrong key: the identity key on a JoinMarket or Reinstate, the
+  record's committed `bond_spend_pk` on a Release, judged before the
+  slot's signature is verified. Until this change the Rust side trusted
+  the hint and verified the slot against whatever key it carried, so a
+  Release of another persona's bonded record, signed by the poster's own
+  key, connected and paid that record's collateral to the poster; the C++
+  refused both (`CHAIN_RULES_SLICE_8.md` §2, §5 row 4). No corpus block
+  carries either.
+
+### Chain rules — the serve credit's bond state is judged before the block (CEN-J4, J5, J6)
+
+- The Rust validator now refuses a serve-credit input whose persona has no
+  bond record, whose epoch is not past the join epoch, or whose persona is
+  not `good_through` the epoch — read off the chain view **before** the
+  block, as live consensus reads its database. Until this change the fold
+  that applied the credit saw the block's own joins, so a join and a credit
+  for the same persona in one block, or a credit for the join's own epoch,
+  connected on the Rust side and would not have on the C++; no corpus block
+  carries either (`CHAIN_RULES_SLICE_8.md` §5 row 3).
+
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 
 - The Rust validator admitted a serve-credit transaction with no prunable

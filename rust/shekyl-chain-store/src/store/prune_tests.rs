@@ -1583,19 +1583,26 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
-    // Shard 0 is the credited pair at height 5, then thirty 100,000-byte
-    // spends at 6–35: past `W` with the pair's bytes added, so the shard
-    // closes inside that run and the epoch-2 boundary discards it.
+    // Shard 0 is the join at height 5 and its credit at 6 (one block
+    // behind the record it names, as CEN-J4 reads it), then thirty
+    // 100,000-byte spends at 7–36: past `W` with the pair's bytes added, so
+    // the shard closes inside that run and the epoch-2 boundary discards it.
     let spec = |h: u64| match h {
-        6..=35 => vec![100_000],
+        7..=36 => vec![100_000],
         _ => Vec::new(),
     };
     b.connect_sized(&store, 0, 4, 0, spec);
-    let pair = credited(14, [0x7c; 32]);
-    b.connect(&store, 5, 5, |_| pair.to_vec());
-    b.connect_sized(&store, 6, 199, 0, spec);
+    let [join, credit] = credited(14, [0x7c; 32]);
+    b.connect(&store, 5, 6, |h| {
+        if h == 5 {
+            vec![join.clone()]
+        } else {
+            vec![credit.clone()]
+        }
+    });
+    b.connect_sized(&store, 7, 199, 0, spec);
 
-    let credit_hash = b.listed[5][1].hash();
+    let credit_hash = b.listed[6][0].hash();
     let id_of = |hash: &shekyl_types::TxHash| {
         store
             .begin_read()
@@ -1610,7 +1617,7 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
     let credit = id_of(&credit_hash);
     assert!(
         matches!(
-            b.listed[5][1].ct,
+            b.listed[6][0].ct,
             Ct::Fcmp {
                 prunable: Some(_),
                 ..

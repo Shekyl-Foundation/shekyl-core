@@ -23,7 +23,7 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, connect_chain_anchored, credited, judge, spend, spend_at,
+    at, candidate, connect_chain, connect_chain_anchored, credited, judge, spend, spend_at,
     spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
@@ -340,26 +340,30 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     // the record the 3-part body needs; the 3-part non-coinbase transaction
     // is the serve-credit-only shape, whose `pqc_auths` are empty by rule
     // (CEN-H20) — its countersignature is over the pass record (CEN-J10) —
-    // and which connects only behind its join (CEN-L7, DRS-E4 commit 4).
+    // and which connects only behind its join (CEN-L7 / CEN-J4), one block
+    // above it.
     let [four_part, three_part] = credited(9, [0x5f; 32]);
     assert!(four_part.txid_parts().pqc_auth_hash.is_some());
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // The first spend block lists the 4-part join then the 3-part credit:
-    // tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block through
-    // that one), then four_part, then three_part. The expectation is read
-    // off the join **as connected**: anchoring signs every auth slot, and
-    // the third component is over the auths.
-    let (_, connected) =
-        connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]));
+    // The first spend block lists the 4-part join; the block above it the
+    // 3-part credit: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one
+    // per block through the join's), then four_part, then the credit
+    // block's coinbase, then three_part. The expectation is read off the
+    // join **as connected**: anchoring signs every auth slot, and the third
+    // component is over the auths.
+    let (_, connected) = connect_chain_anchored(
+        &store,
+        &spendable_prefix(&[vec![four_part], vec![three_part]]),
+    );
     let expected = connected
-        .last()
+        .get(at(FIRST_SPEND_HEIGHT))
         .and_then(|block| block.first())
-        .expect("the spend block lists the join first")
+        .expect("the first spend block lists the join")
         .txid_parts()
         .pqc_auth_hash
         .expect("a pqc_auth per input makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
-    let three_part_id = four_part_id + 1;
+    let three_part_id = four_part_id + 2;
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(TXS_PQC_AUTH_HASH).expect("sealed");
     assert_eq!(table.len().expect("len"), 1, "one 4-part txid, one row");
@@ -373,7 +377,8 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     );
     for (tx_id, why) in [
         (0, "genesis coinbase"),
-        (FIRST_SPEND_HEIGHT, "the spend block's coinbase"),
+        (FIRST_SPEND_HEIGHT, "the join block's coinbase"),
+        (four_part_id + 1, "the credit block's coinbase"),
         (three_part_id, "3-part serve credit"),
     ] {
         assert!(
@@ -384,9 +389,12 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     drop(table);
     drop(snap);
 
-    // The row is journaled: a pop of block 1 removes it with the block.
-    let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    popped.expect("pop");
+    // The row is journaled: popping the credit's block and then the join's
+    // removes it with the join's block.
+    for _ in 0..2 {
+        let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+        popped.expect("pop");
+    }
     let snap = store.begin_read().expect("read");
     assert!(snap
         .open_table(TXS_PQC_AUTH_HASH)
