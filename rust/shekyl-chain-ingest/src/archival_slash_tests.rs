@@ -6,8 +6,9 @@
 //! One levered chain, judged in phases (`CHAIN_RULES_SLICE_8.md` §5 rows 2,
 //! 3 and 5).
 //!
-//! A 20-block epoch with a 10-block reorg cap puts the first slash deadline
-//! eleven settled misses can reach inside what a test mines. One persona
+//! The levered schedule (`scenario_shard`: a 20-block epoch, a 10-block
+//! reorg cap) puts the first slash deadline eleven settled misses can
+//! reach inside what a test mines. One persona
 //! joins two shards, serves one of them, and is slashed on the shard it
 //! never served. The phases then run on that record, in order, without
 //! re-mining the chain:
@@ -37,10 +38,7 @@ use shekyl_archival_retention::{
     good_through, serve_credit_epoch_ok, verify_reinstate_bond_post, HoldingsKind,
     ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
-use shekyl_chain_rules::{
-    CenRow, FakechainSchedule, Locus, RecordWriteKind, SettlementEpochBlocks, SettlementSchedule,
-    TxSlot,
-};
+use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, SettlementSchedule, TxSlot};
 use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -51,17 +49,12 @@ use crate::archival_driver::{
 use crate::connector::{Inject, Injected};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
-use crate::scenario_shard::{close_shards, first_admissible_compact_join, mine_to, Filled};
+use crate::scenario_shard::{
+    close_shards, first_admissible_compact_join, levered_rules, levered_schedule, mine_to, Filled,
+};
 use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
-
-/// Epoch length, in blocks. With [`REORG_CAP_BLOCKS`], eleven epochs of
-/// misses and the grace epoch are a few hundred blocks.
-const EPOCH_BLOCKS: u64 = 20;
-
-/// Reorg cap, in blocks. It sits inside [`EPOCH_BLOCKS`].
-const REORG_CAP_BLOCKS: u64 = 10;
 
 /// `FAILURE_WINDOW_M`: the misses a slash waits for, counted from the epoch
 /// after the join.
@@ -69,21 +62,6 @@ const FAILURE_WINDOW: u64 = 11;
 
 /// The first coinbase the fill spends. Coinbases below it ride the posts.
 const FILL_FROM_COINBASE: u64 = 10;
-
-fn levered_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
-            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the epoch"),
-    }
-}
-
-fn levered_schedule() -> SettlementSchedule {
-    SettlementSchedule::new(SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"))
-}
 
 /// The join this chain is about: two shards, one of them never served.
 struct Joined {

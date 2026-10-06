@@ -33,14 +33,43 @@
 //! ahead first — empty blocks are cheap, proofs are not — sized from the
 //! first spend's own archival length rather than a number written down.
 
+use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::archival::SHARD_LENGTH;
-use shekyl_types::{BlockHeight, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, ShardId};
 use shekyl_wire::Transaction;
 
 use crate::archival_driver::{first_spending_height, FEE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
+
+/// The levered settlement epoch, in blocks. The production epoch (10,000
+/// blocks) never prices a shard inside what a test mines; under this one
+/// a shard closed at `h` is priced by the close at the end of the epoch
+/// after `h`'s, and eleven epochs of misses and the grace epoch — a slash
+/// — are a few hundred blocks.
+pub const EPOCH_BLOCKS: u64 = 20;
+
+/// The levered reorg cap, in blocks. It sits inside [`EPOCH_BLOCKS`].
+pub const REORG_CAP_BLOCKS: u64 = 10;
+
+/// Regtest rules under the levered schedule: the pair every scenario that
+/// closes a shard mines under.
+pub fn levered_rules() -> ChainRules {
+    ChainRules::Regtest {
+        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
+        schedule: FakechainSchedule::new(
+            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
+            BlockCount::from_raw(REORG_CAP_BLOCKS),
+        )
+        .expect("the cap sits inside the epoch"),
+    }
+}
+
+/// The settlement schedule [`levered_rules`] runs.
+pub fn levered_schedule() -> SettlementSchedule {
+    SettlementSchedule::new(SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"))
+}
 
 /// Spends listed per fill block. One driven coinbase spend measures about
 /// 13.2 KB of archival good and a little more on the wire; sixteen sit
