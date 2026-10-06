@@ -263,6 +263,41 @@ impl PServeEndpoint {
         signer: Arc<dyn PassSigner>,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+        Self::serve(listener, provider, signer)
+    }
+
+    /// [`Self::bind`], with the send buffer of every accepted connection
+    /// pinned at `send_buffer_bytes`.
+    ///
+    /// Tests only. The abuse invariant bounds what this persona reads by
+    /// what the requester's side has accepted, and over a real socket
+    /// "accepted" includes this end's send buffer, which Linux otherwise
+    /// autotunes up to `net.ipv4.tcp_wmem`'s maximum — by default larger
+    /// than a whole shard. Setting `SO_SNDBUF` on the listening socket
+    /// turns autotuning off, and accepted sockets inherit it, so a test can
+    /// state the bound in bytes instead of hoping the kernel stays small.
+    /// Production does not pin it: the autotuned buffer is the right one
+    /// for a persona serving over tor, and the bound it implies is the
+    /// kernel's to give.
+    #[cfg(test)]
+    pub(crate) fn bind_with_send_buffer(
+        provider: Arc<dyn ShardProvider>,
+        signer: Arc<dyn PassSigner>,
+        send_buffer_bytes: u32,
+    ) -> io::Result<Self> {
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.set_send_buffer_size(send_buffer_bytes)?;
+        socket.bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
+        Self::serve(socket.listen(1024)?, provider, signer)
+    }
+
+    /// Start answering on `listener`. The one accept loop, whichever way
+    /// the listener was made.
+    fn serve(
+        listener: TcpListener,
+        provider: Arc<dyn ShardProvider>,
+        signer: Arc<dyn PassSigner>,
+    ) -> io::Result<Self> {
         let addr = listener.local_addr()?;
         let served = Arc::new(AtomicU64::new(0));
         let refused = Arc::new(AtomicU64::new(0));

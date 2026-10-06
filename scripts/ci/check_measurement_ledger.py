@@ -1123,6 +1123,9 @@ def _estimate_transitions(
     the row has hardened a prediction into a number. The same test applies
     to an estimate that leaves the constants for `retired_estimate`: it is
     retired by a measurement that landed, with its verdict, or not at all.
+    A retired estimate also keeps the band the parent stated, to the unit:
+    otherwise 40 to 60 becomes 40 to 70 on the day 67.2 arrives and the
+    row reads "held".
     """
     fails: list[str] = []
     retired_by_name = {item.name: item for item in retired}
@@ -1140,12 +1143,29 @@ def _estimate_transitions(
                     "unmeasured with its reason, measured by a capture, or retired "
                     "beside its measurement; it does not vanish"
                 )
-            elif git(root, "cat-file", "-e", f"HEAD^1:{settled.capture}").code == 0:
-                fails.append(
-                    f"{name}: was estimated and is now retired on {settled.capture}, "
-                    "which the parent tree already held. Only a capture that lands "
-                    "settles an estimate"
-                )
+            else:
+                if git(root, "cat-file", "-e", f"HEAD^1:{settled.capture}").code == 0:
+                    fails.append(
+                        f"{name}: was estimated and is now retired on {settled.capture}, "
+                        "which the parent tree already held. Only a capture that lands "
+                        "settles an estimate"
+                    )
+                # The band that is judged is the band that was predicted. A
+                # retirement that redraws it has changed the question after
+                # seeing the answer.
+                predicted, _ = parse_band(old.get("estimate"), name)
+                if predicted is None:
+                    fails.append(
+                        f"{name}: was estimated with a band the parent ledger does not "
+                        "state as low, high and unit, so its retirement cannot be "
+                        "checked against what was predicted"
+                    )
+                elif predicted != settled.estimate:
+                    fails.append(
+                        f"{name}: was estimated at {predicted.shown()} and is retired "
+                        f"at {settled.estimate.shown()}. A retired estimate keeps the "
+                        "band it was given; the verdict is against the prediction"
+                    )
             continue
         now = by_name.get(name)
         if now is None or now.status in (Status.ESTIMATED, Status.UNMEASURED):

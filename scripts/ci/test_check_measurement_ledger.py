@@ -930,6 +930,21 @@ def scenario_estimated(results: Results) -> None:
             "a capture the parent tree did not hold retires the estimate beside its number",
             "retired estimate: guess — predicted 40 to 60 ms, measured 67.2 ms: falsified",
         )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1, capture="docs/benchmarks/new_cap.txt",
+                estimate='{ low = 40, high = 70, unit = "ms" }', verdict="held",
+            )), 1,
+            "THE BAND IS THE ONE PREDICTED: 40 to 60 may not retire as 40 to 70 and held",
+            "keeps the band it was given",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1, capture="docs/benchmarks/new_cap.txt",
+                estimate='{ low = 40, high = 60, unit = "s" }',
+            )), 1,
+            "nor under another unit", "keeps the band it was given",
+        )
 
 
 def scenario_retired(results: Results) -> None:

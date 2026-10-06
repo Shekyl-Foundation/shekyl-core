@@ -1000,7 +1000,8 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §12 (FCMP++ membership proof, hot-spend ledger
+  gaps documented in §13, Known gaps (§12 when this entry was written;
+  renumbered since, as the entries below record) (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 and
