@@ -95,6 +95,8 @@ where *admission's* seam was under the cap, not that this slice comes first. **I
 comes last** (§4.1 there). *Still falsifiable in its own terms — if a later
 measurement shows shipped C++ growing while the noun is missing, the seam moved.*
 
+**UPDATE 2026-10-06:** step a's noun is `Connection` in `shekyl-seam`. The `foreach_connection` holdouts are the sync walks, and they wait on steps b and c. *Records-was: there is no connection object in Rust to walk.*
+
 *(The converging-rows argument in §1 reached the same **first-slice** conclusion
 from six consumers, and is withdrawn with it — see §1. Two derivations agreeing
 on a wrong ordering is worth recording: both were about which decisions need the
@@ -129,10 +131,12 @@ this round has failed to justify — delete it or find its ruling.
 
 ## 1. ~~Why this slice is first~~ — WITHDRAWN 2026-09-21; why the consumers still converge
 
-**Nothing in Rust owns a connection.** `shekyl-levin` owns bytes;
+**UPDATE 2026-10-06:** step a owns the session record (`Connection` in `shekyl-seam`). Steps b and c, the handle and the remaining sync walks, are open. *Records-was: nothing in Rust owns a connection.* `shekyl-levin` owns bytes;
 `shekyl-peer-policy` owns stateless verdicts that C++ calls with values C++
-walked itself. The connection lives in `net_node.inl`'s `foreach_connection`
-lambda and epee's context.
+walked itself. *Records-was: the connection lives in `net_node.inl`'s
+`foreach_connection` lambda and epee's context.* The session record is
+`Connection`. The sync walks that still read the handler's context are
+steps b and c.
 
 **That absence is why the per-host cap became an address comparison inside a
 loop — there was no object to hang a category on.** The missing noun has
@@ -1774,20 +1778,24 @@ the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
 on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
 `p2p_connection_context_t`. The test for each is who asserted it.
-This is the sort. It is not a struct.
+**UPDATE 2026-10-06:** this sort is the design of `Connection` in `shekyl-seam` (`connection.rs`). *Records-was: it is not a struct.*
 
 | Bin | Members | Rule |
 | --- | --- | --- |
 | Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_recv_cnt`, `m_send_cnt`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). `m_recv_cnt` and `m_send_cnt` are byte counters this node kept from the socket. |
-| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
-| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. `m_remote_height_source` names which message last wrote the claimed height (`connection_context.h:122`). `note_remote_height` (`:173`) stores that enum. The peer asserted the height, not the label. Until then they are plain fields the C++ handler reads through the handle. |
+| Claimed, the peer told us | `m_remote_blockchain_height` when a message asserted it, `m_last_known_hash`, `support_flags`, the handshake's advertised address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. A clearnet advertisement keeps the port: the wire zeros the host and the receiver does not store it. Port 0 is not a port. An overlay advertisement keeps the v3 service key and its port. A re-dial is admitted only when the observation is that advertisement. Clearnet uses the host already observed on the origin socket and the claimed port. An overlay dial is that key and port. The claim stays on the origin. The new row's endpoint is the observation. **UPDATE 2026-10-06:** a claimed height (`HeightClaim`, named by `HeightMessage`) and the chain length of a block this node accepted (`ChainLength`) are different fields. A later claim does not erase the measurement, and a delivered block does not lower it. *Records-was: one `RemoteHeight` slot, and a later claim replaced an accepted block.* |
+| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. **UPDATE 2026-10-06:** the message that carried a claimed height is `HeightMessage` on `HeightClaim`. *Records-was: `m_remote_height_source` (`connection_context.h:122`) was the label, `note_remote_height` (`:173`) stored it on the same word as the height, and `accepted_block` (`raise_remote_height`, `:192`) shared that word.* The sync lists stay off this type until the sync driver moves. |
 
 `m_state` is this node's pull relationship with the session. `m_ssl`
 is not in a bin: p2p SSL was deleted in #909, the field is false by
-construction, and it leaves the base struct. `m_score` is listed under
-local state and is not kept by that listing. A score that accumulates
-from claimed inputs is the self-selection trap §2.7.2 names, and that
-look happens before the struct. Constraint 2 covers the object:
+construction, and it leaves the base struct. **UPDATE 2026-10-06:**
+`m_score` is not a field of `Connection`. A score a peer can improve by
+what it asserts is the self-selection trap §2.7.2 names. The C++ field
+stays; removing it would change who gets dropped, and this step changes
+no behavior. A later round may add a counter whose inputs are
+measurements this node made, not the peer's claims. *Records-was:
+listed under local state and not kept by that listing, the look still
+ahead of the struct.* Constraint 2 covers the object:
 nothing in it is stable across reconnects except the observed
 endpoint, which is already public.
 

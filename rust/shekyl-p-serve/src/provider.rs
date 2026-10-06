@@ -143,6 +143,29 @@ enum Source {
     Segment(FrozenSegmentBody),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
+    /// An in-memory payload that counts the chunks it yields into a counter
+    /// the test holds. How a test sees that a requester who stopped taking
+    /// bytes stopped the serve loop reading them. A read at the end of the
+    /// body yields nothing and is not counted: the count is of shard bytes
+    /// handed over, in chunks, which is the work the invariant is about.
+    #[cfg(test)]
+    Counted {
+        bytes: Arc<[u8]>,
+        read: usize,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    },
+}
+
+/// The next chunk of at most `max_bytes` out of `bytes` from `*read`,
+/// advancing the cursor; `None` at the end.
+fn slice_chunk(bytes: &[u8], read: &mut usize, max_bytes: usize) -> Option<Vec<u8>> {
+    if *read >= bytes.len() {
+        return None;
+    }
+    let stop = bytes.len().min(*read + max_bytes.max(1));
+    let chunk = bytes[*read..stop].to_vec();
+    *read = stop;
+    Some(chunk)
 }
 
 impl ShardBody {
@@ -162,6 +185,23 @@ impl ShardBody {
         let header = flat_header(bytes.len())?;
         Some(Self {
             source: Source::Flat { bytes, read: 0 },
+            header,
+        })
+    }
+
+    /// [`Self::flat`], counting every chunk it yields into `reads`.
+    #[cfg(test)]
+    pub(crate) fn counted(
+        bytes: Arc<[u8]>,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Option<Self> {
+        let header = flat_header(bytes.len())?;
+        Some(Self {
+            source: Source::Counted {
+                bytes,
+                read: 0,
+                reads,
+            },
             header,
         })
     }
@@ -203,6 +243,8 @@ impl ShardBody {
         match &self.source {
             Source::Segment(body) => body.remaining_bytes(),
             Source::Flat { bytes, read } => bytes.len() - read,
+            #[cfg(test)]
+            Source::Counted { bytes, read, .. } => bytes.len() - read,
         }
     }
 
@@ -218,14 +260,14 @@ impl ShardBody {
             Source::Segment(body) => body
                 .next_chunk(max_bytes)
                 .map_err(ProviderError::from_store),
-            Source::Flat { bytes, read } => {
-                if *read >= bytes.len() {
-                    return Ok(None);
+            Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
+            #[cfg(test)]
+            Source::Counted { bytes, read, reads } => {
+                let chunk = slice_chunk(bytes, read, max_bytes);
+                if chunk.is_some() {
+                    reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                let stop = bytes.len().min(*read + max_bytes.max(1));
-                let chunk = bytes[*read..stop].to_vec();
-                *read = stop;
-                Ok(Some(chunk))
+                Ok(chunk)
             }
         }
     }

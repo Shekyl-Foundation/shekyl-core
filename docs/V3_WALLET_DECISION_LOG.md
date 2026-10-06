@@ -5987,7 +5987,7 @@ that stopped.
    tells it as "not held". The 503 does not say which fault; the counters
    do, to the operator.
 4. **A persona with no key says so before the body.** `P` knows it has no
-   resident key before the first byte (`PassKey::can_sign`), so it
+   resident key before the first byte (`PassKey::ready`), so it
    answers the 503 and does not send a shard it cannot countersign.
 5. **A signer that fails after the body writes a refusal trailer.** The
    body is out and the status cannot change. `P` closes the response with
@@ -6051,7 +6051,7 @@ place). `RF-R1`'s "one identical 404 for every non-servable outcome": the
 404 now means "not held" and nothing else.
 
 **Where.** `rust/shekyl-p-serve/src/serve.rs`, `delivery.rs`,
-`countersign.rs` (`PassKey::can_sign`);
+`countersign.rs` (`PassKey::ready`);
 `rust/shekyl-curve-tree/src/serving_route.rs` (the trailer);
 `rust/shekyl-p-fetch/src/error.rs`, `client.rs`;
 `rust/shekyl-p-host/src/signer.rs`; `ARCHIVAL_SERVING_ROUTE.md`;

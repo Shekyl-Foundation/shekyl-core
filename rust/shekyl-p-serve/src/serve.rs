@@ -80,10 +80,11 @@
 //! # No request logging, at any level
 //!
 //! Not the path, not the peer, not the timing. The only observables are
-//! five aggregate monotone counters with no per-request structure:
+//! six aggregate monotone counters with no per-request structure:
 //! [`PServeEndpoint::served_count`], [`PServeEndpoint::refused_count`],
 //! [`PServeEndpoint::lookup_failure_count`],
 //! [`PServeEndpoint::sign_failure_count`],
+//! [`PServeEndpoint::late_sign_failure_count`],
 //! [`PServeEndpoint::accept_error_count`].
 
 use std::io;
@@ -92,7 +93,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -226,6 +227,7 @@ pub struct PServeEndpoint {
     refused: Arc<AtomicU64>,
     lookup_failures: Arc<AtomicU64>,
     sign_failures: Arc<AtomicU64>,
+    late_sign_failures: Arc<AtomicU64>,
     accept_errors: Arc<AtomicU64>,
 }
 
@@ -262,11 +264,13 @@ impl PServeEndpoint {
         let refused = Arc::new(AtomicU64::new(0));
         let lookup_failures = Arc::new(AtomicU64::new(0));
         let sign_failures = Arc::new(AtomicU64::new(0));
+        let late_sign_failures = Arc::new(AtomicU64::new(0));
         let accept_errors = Arc::new(AtomicU64::new(0));
         let served_ctr = Arc::clone(&served);
         let refused_ctr = Arc::clone(&refused);
         let failures_ctr = Arc::clone(&lookup_failures);
         let sign_failures_ctr = Arc::clone(&sign_failures);
+        let late_sign_failures_ctr = Arc::clone(&late_sign_failures);
         let accept_errors_ctr = Arc::clone(&accept_errors);
         // Bounds concurrency without queueing: an arrival past the cap is
         // closed immediately rather than parked, so the refusal costs one
@@ -302,14 +306,23 @@ impl PServeEndpoint {
                 let served = Arc::clone(&served_ctr);
                 let failures = Arc::clone(&failures_ctr);
                 let sign_failures = Arc::clone(&sign_failures_ctr);
+                let late_sign_failures = Arc::clone(&late_sign_failures_ctr);
                 tokio::spawn(async move {
                     // Errors are swallowed by design: a failed connection
                     // must produce no log line and no differing response,
                     // or the failure itself becomes an observable. `.ok()`
                     // rather than `let _ =` so the discard is explicit.
-                    handle_connection(stream, provider, signer, &served, &failures, &sign_failures)
-                        .await
-                        .ok();
+                    handle_connection(
+                        stream,
+                        provider,
+                        signer,
+                        &served,
+                        &failures,
+                        &sign_failures,
+                        &late_sign_failures,
+                    )
+                    .await
+                    .ok();
                     // Held for the whole connection, so the slot reopens
                     // only once the shard has finished sending. What bounds
                     // that hold against a hostile peer is
@@ -327,6 +340,7 @@ impl PServeEndpoint {
             refused,
             lookup_failures,
             sign_failures,
+            late_sign_failures,
             accept_errors,
         })
     }
@@ -373,28 +387,41 @@ impl PServeEndpoint {
     ///
     /// An invalid request (the 400) and an ordinary not-held answer (unknown
     /// id, unfrozen segment: the 404) are deliberate and **not** counted.
-    /// A signer that refuses is [`Self::sign_failure_count`].
+    /// A key that refuses its pre-flight is [`Self::sign_failure_count`];
+    /// a signer that fails after the body is
+    /// [`Self::late_sign_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
         self.lookup_failures.load(Ordering::Relaxed)
     }
 
-    /// Valid requests for a held shard that got no countersignature. Two
-    /// wire outcomes share it. No key resident
-    /// ([`PassKey::can_sign`](crate::countersign::PassKey::can_sign) said
-    /// no): the 503, before any shard byte. A signer that said it could
-    /// and then refused, or returned an envelope of the wrong length: a 200
-    /// whose envelope is the refusal trailer. An invalid request and an
-    /// unheld shard never reach this counter.
+    /// Valid requests for a held shard that the key refused at its
+    /// pre-flight ([`PassKey::ready`](crate::countersign::PassKey::ready)):
+    /// the 503, before any shard byte. This is the bucket a persona with no
+    /// resident key accrues, and it costs the persona one shard open per
+    /// request. An invalid request and an unheld shard never reach this
+    /// counter.
     #[must_use]
     pub fn sign_failure_count(&self) -> u64 {
         self.sign_failures.load(Ordering::Relaxed)
     }
 
+    /// Responses whose whole body went out and whose signer then refused,
+    /// or returned an envelope of the wrong length: a 200 whose envelope is
+    /// the refusal trailer. Counted apart from [`Self::sign_failure_count`]
+    /// because it is a different event at a different price: the pre-flight
+    /// said yes, and a whole shard was read, hashed and sent for a response
+    /// nobody can use. A persona that sees this move has a key whose
+    /// pre-flight says yes to what its signer then refuses.
+    #[must_use]
+    pub fn late_sign_failure_count(&self) -> u64 {
+        self.late_sign_failures.load(Ordering::Relaxed)
+    }
+
     /// `accept` failures. The loop backs off and retries rather than
     /// exiting, so without this a listener that has become permanently
     /// unusable — sustained FD exhaustion, a descriptor that will never
-    /// accept again — looks exactly like a quiet epoch: the other three
+    /// accept again — looks exactly like a quiet epoch: the other
     /// counters simply stop moving. Aggregate and monotone like the rest;
     /// it names no peer and no time.
     #[must_use]
@@ -458,7 +485,8 @@ impl std::fmt::Debug for PServeEndpoint {
 ///   ([`PServeEndpoint::lookup_failure_count`]). Either way the requester
 ///   reads a stall;
 /// * it completes with the refusal trailer where the signature goes — the
-///   signer refused after the body ([`PServeEndpoint::sign_failure_count`]).
+///   signer refused after the body
+///   ([`PServeEndpoint::late_sign_failure_count`]).
 ///
 /// Named here so a future change that lets an *ordinary* not-held answer
 /// truncate — for instance a body that resolves its own servability lazily
@@ -470,6 +498,7 @@ async fn handle_connection(
     served: &AtomicU64,
     lookup_failures: &AtomicU64,
     sign_failures: &AtomicU64,
+    late_sign_failures: &AtomicU64,
 ) -> io::Result<()> {
     let head = tokio::time::timeout(READ_TIMEOUT, read_head(&mut stream))
         .await
@@ -492,7 +521,7 @@ async fn handle_connection(
             signer,
             served,
             lookup_failures,
-            sign_failures,
+            late_sign_failures,
         ),
     )
     .await
@@ -589,11 +618,11 @@ enum Lookup {
 ///
 /// Nothing is signed here. The signature covers the bytes that are sent,
 /// so it is made after them ([`write_response`]). What *is* settled here is
-/// whether a key is resident at all ([`PassKey::can_sign`]), because that
+/// whether the key will sign at all ([`PassKey::ready`]), because that
 /// is known before the first byte and a shard that cannot be countersigned
 /// is not worth sending.
 ///
-/// [`PassKey::can_sign`]: crate::countersign::PassKey::can_sign
+/// [`PassKey::ready`]: crate::countersign::PassKey::ready
 async fn resolve(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
@@ -616,8 +645,10 @@ async fn resolve(
         match provider.shard_bytes(shard_id) {
             Err(_) => Lookup::StoreFault,
             Ok(None) => Lookup::NotHeld,
-            Ok(Some(_)) if !signer.can_sign() => Lookup::NoKey,
-            Ok(Some(body)) => Lookup::Held(body),
+            Ok(Some(body)) => match signer.ready(shard_id, anchor_height) {
+                Ok(()) => Lookup::Held(body),
+                Err(_) => Lookup::NoKey,
+            },
         }
     })
     .await;
@@ -662,7 +693,7 @@ async fn resolve(
 ///   ([`REFUSAL_TRAILER_BYTE`] at the envelope's width), so the response
 ///   is its full declared length and says in the persona's own bytes that
 ///   it served and did not sign. Counted in
-///   [`PServeEndpoint::sign_failure_count`].
+///   [`PServeEndpoint::late_sign_failure_count`].
 ///
 /// The trailer is why a failure is never inferred from a response that
 /// stopped. A relay on the circuit can cut a response at any byte it likes,
@@ -674,15 +705,19 @@ async fn resolve(
 /// body was opened. The bytes written are [`FramedDigest::frame_bytes`]: the
 /// header that was hashed, not a second encoding of it.
 ///
+/// Generic over the writer so the invariant tests can stand a sink in for
+/// the socket and say exactly how many bytes a requester took before it
+/// stopped (`serve_invariant_tests.rs`).
+///
 /// [`RF-D4`]: shekyl_curve_tree::served_frame
 /// [`ServedFrameHeader::framed_len`]: shekyl_curve_tree::served_frame::ServedFrameHeader::framed_len
-async fn write_response(
-    stream: &mut TcpStream,
+async fn write_response<W: AsyncWrite + Unpin>(
+    stream: &mut W,
     resolved: Resolved,
     signer: Arc<dyn PassSigner>,
     served: &AtomicU64,
     lookup_failures: &AtomicU64,
-    sign_failures: &AtomicU64,
+    late_sign_failures: &AtomicU64,
 ) -> io::Result<()> {
     let Held {
         mut body,
@@ -767,7 +802,7 @@ async fn write_response(
         _ => {
             // The body is out and cannot be taken back. Say so, in bytes
             // only this end can write.
-            sign_failures.fetch_add(1, Ordering::Relaxed);
+            late_sign_failures.fetch_add(1, Ordering::Relaxed);
             write_bounded(stream, &[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]).await?;
             return Ok(());
         }
@@ -779,7 +814,7 @@ async fn write_response(
 
 /// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
 /// why the per-write bound, not the total, is what a stalled peer costs.
-async fn write_bounded(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> io::Result<()> {
     tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write_all(bytes))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))?

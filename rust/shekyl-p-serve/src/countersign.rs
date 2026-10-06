@@ -67,17 +67,30 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
 pub trait PassKey: Send + Sync {
-    /// Whether this key can sign at all right now.
+    /// Whether this key will sign a pass for `shard_id` at `anchor_height`.
     ///
-    /// Asked once per request, before the first response byte, so it must
-    /// be cheap and must not sign. `false` means the answer is already
-    /// known — no key is resident — and the serve loop answers the bare 503
-    /// without sending a shard it could not countersign. `true` is not a
-    /// promise: a signer can still fail at [`Self::sign_pass`], after the
-    /// body, and that is the refusal trailer.
-    fn can_sign(&self) -> bool {
-        true
-    }
+    /// Asked once per request, after the shard is opened and before the
+    /// first response byte, so it must be cheap and must not sign. An
+    /// `Err` means the answer is already known — no key is resident, or
+    /// the host will not sign for this shard — and the serve loop answers
+    /// the bare 503 without sending a shard it could not countersign.
+    /// `Ok` is not a promise: a signer can still fail at
+    /// [`Self::sign_pass`], after the body, and that is the refusal
+    /// trailer. The two arguments are what the key may decide on; the
+    /// request's nonce and anchor hash are not offered, because nothing a
+    /// key refuses by policy depends on them.
+    ///
+    /// **No default, on purpose.** A default of "yes" would let a new
+    /// implementor that forgets this method stream whole shards it cannot
+    /// sign — honest bandwidth spent on responses that all end in the
+    /// refusal trailer — with nothing in the type system to say so. Every
+    /// key states its answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignRefused`] when the key will not sign. Counted in
+    /// `sign_failure_count`.
+    fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
 
     /// Sign the 112-byte SF-D8 transcript under the attestation domain.
     ///
@@ -227,6 +240,11 @@ impl TestKeySigner {
 
 #[cfg(any(test, feature = "test-signer"))]
 impl PassKey for TestKeySigner {
+    /// The ephemeral key is always resident and signs for any shard.
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
