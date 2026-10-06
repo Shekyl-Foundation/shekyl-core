@@ -226,9 +226,11 @@ where
     /// A scenario under `rules` rather than [`RULES`] — a levered regtest
     /// schedule, with the store opened under that schedule's pair the way
     /// the daemon opens it (`test_support::open_store_under`, `ARW-15`).
-    /// The one caller is the ARW-Q15 fixture replica
-    /// (`archival_fixture_replica_tests`), which needs the slash deadline
-    /// of epoch eleven inside a chain a test can mine.
+    /// The callers are the chains that need a slash deadline inside what a
+    /// test can mine: the ARW-Q15 fixture replica
+    /// (`archival_fixture_replica_tests`, epoch eleven's) and slice 8's
+    /// reinstate measurement (`archival_slash_tests`, the open interval
+    /// only a slash writes).
     pub fn open_under(name: &str, pow: P, rules: ChainRules) -> Self {
         Self::open_under_with(name, pow, rules, |path| {
             open_store_under(

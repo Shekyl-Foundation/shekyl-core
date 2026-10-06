@@ -18,7 +18,7 @@ use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{
-    anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
+    self, anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
 };
 use crate::harness::{assert_refused, formed_on, infallible, judged, Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
@@ -26,7 +26,7 @@ use crate::trust::Trust;
 use crate::validate::{form, validate};
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-use shekyl_types::{BlockHash, KeyImage, PCanonicalId};
+use shekyl_types::{BlockHash, KeyImage};
 use shekyl_wire::{BondPost, BondPostKind, Holdings};
 
 /// Three distinct listed bodies, the header declaring exactly them.
@@ -315,11 +315,14 @@ fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
     }
 }
 
-/// A bond post for `P`, of `kind`.
+/// A bond post for the persona tagged `p`, of `kind` — the persona's key
+/// and its recompute (CEN-J11's pair), so what G10 counts is a post the
+/// form rows admit.
 fn bond_post_vin(p: [u8; 32], kind: BondPostKind) -> Input {
+    let who = fixture::persona(p);
     Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0xb1; SINGLE_KEY_CANONICAL_LEN],
-        p_canonical_id: PCanonicalId::from_bytes(p),
+        hybrid_public_key: who.identity,
+        p_canonical_id: who.id,
         kind,
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,

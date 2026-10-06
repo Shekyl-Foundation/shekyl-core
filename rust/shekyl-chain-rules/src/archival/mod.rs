@@ -99,11 +99,13 @@
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
 
+mod arm;
 mod close;
 mod delta;
 mod inputs;
 mod slash;
 
+pub(crate) use arm::BondArm;
 pub(crate) use close::accrue;
 pub use close::{shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
@@ -132,6 +134,10 @@ use crate::view::ChainView;
 /// the C++ hooks refused with a `throw` — a bond post, serve credit or
 /// claim the folds cannot apply to the recorded state — this rule refuses
 /// as a block, at the input's locus.
+///
+/// An unnamed bond-post kind is this row in `judge_bond_post` as well, at
+/// the post's vin, so `tx_against` alone refuses it. The fold's arm stays
+/// the belt for a transition caller that did not run that sequence.
 pub(crate) struct L7;
 
 impl Rule for L7 {
