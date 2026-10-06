@@ -470,8 +470,10 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let mut empty = persona.join_post(shard_set(vec![7]), ENDPOINT);
     empty.holdings = WireHoldings::ShardSetCompact(Vec::new());
     let empty = riding(persona.post_by_hand(empty));
-    // The positive control.
-    let honest = riding(persona.join(shard_set(vec![7]), ENDPOINT));
+    // The positive control: a complete tree. A compact join names a shard
+    // that must be closed, final and priced (CEN-J15); this scenario closes
+    // none, and the shard shape is not its subject.
+    let honest = riding(persona.join(complete_tree(), ENDPOINT));
 
     // A serve credit for a persona with no record: J4 at the credit's own
     // input, before the fold's L7 is reached.
@@ -538,7 +540,10 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
         slot: TxSlot::Listed(1),
         input: 1,
     };
-    let join = persona.join(shard_set(vec![7]), ENDPOINT);
+    // Complete trees throughout: the subject is the order of the rows over
+    // two posts, not the holding — a compact join would need a closed,
+    // final, priced shard (CEN-J15), and this scenario closes none.
+    let join = persona.join(complete_tree(), ENDPOINT);
     let release = persona.release(ARCHIVAL_BOND_FLOOR_ATOMIC);
     let listed: Vec<Transaction> = vec![
         spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
@@ -547,7 +552,7 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
     refused_at(scenario.mine_listing(listed).await, CenRow::J16, second);
     // The refused block wrote nothing, so both joins read no record and
     // J14 passes each; G10 counts the second.
-    let again = persona.join(shard_set(vec![7]), ENDPOINT);
+    let again = persona.join(complete_tree(), ENDPOINT);
     let joins: Vec<Transaction> = vec![
         spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
         spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&again)),
@@ -557,14 +562,17 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
 }
 
 /// A chain with one bonded persona and a few blocks past the join, as the
-/// injector finds it: the blocks (for a replay) and the persona.
+/// injector finds it: the blocks (for a replay) and the persona. The
+/// persona holds a complete tree — shard 7 with every other; a compact
+/// join would need a closed, final, priced shard (CEN-J15), this chain
+/// closes none, and the injected credit is the subject, not the holding.
 async fn bonded_chain(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Persona) {
     let connecting = first_spending_height().to_raw();
     let mut scenario = Scenario::open(name);
     let mut mined = scenario.mine(connecting).await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(1);
-    let join = persona.join(shard_set(vec![7]), ENDPOINT);
+    let join = persona.join(complete_tree(), ENDPOINT);
     let joined = scenario
         .mine_listing(vec![spender.spend_coinbase_posting(
             scenario.wallet(),
