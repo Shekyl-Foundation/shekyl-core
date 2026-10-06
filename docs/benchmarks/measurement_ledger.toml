@@ -263,6 +263,7 @@ stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "da4f35c025", note = "PR #980: the four blocking-pool hops become named functions and the 200 head is rendered by one function; a bench-only composition of the same steps is added behind a feature. No read, hash or sign is added or removed on the shipped path; a parity test holds the order. The gate this PR adds (BA-T3) is what will put a number on it." },
 ]
 
 [[constant]]
