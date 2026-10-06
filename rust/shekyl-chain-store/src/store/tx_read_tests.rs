@@ -32,17 +32,19 @@ fn hash_of(tx: &Transaction) -> TxHash {
 }
 
 /// The spendable prefix, then the first admissible spend block listing
-/// three bodies: the join that opens a record, the 3-part serve credit on
-/// it (a serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20;
-/// since DRS-E4 commit 4 it connects only behind its record, CEN-L7, so
-/// it sits in the spend block rather than at height 1), and a spend, which
-/// carries per-input `pqc_auths` and is 4-part. Coinbases at every height,
-/// so the dense id space is `0..TX_COUNT`: the coinbases through the spend
-/// block, then the join, the serve credit, the spend.
+/// the join that opens a record, then the spend block listing two bodies:
+/// the 3-part serve credit on that record (a serve-credit-only transaction
+/// — no `pqc_auths` by rule, CEN-H20; it connects only behind its record,
+/// CEN-L7 / CEN-J4, read off the view before the block, so it sits one
+/// block above the join rather than beside it or at height 1), and a
+/// spend, which carries per-input `pqc_auths` and is 4-part. Coinbases at
+/// every height, so the dense id space is `0..TX_COUNT`: the coinbases and
+/// the join through the spend block's coinbase, then the serve credit, the
+/// spend.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
     let [join, plain] = credited(10, [0x5e; 32]);
-    let listing = spendable_prefix(&[vec![join, plain.clone(), spend(15, 2)]]);
+    let listing = spendable_prefix(&[vec![join], vec![plain.clone(), spend(15, 2)]]);
     // The spend as connected — anchored on the chain — is the one the reads
     // are asked about by hash.
     let (hashes, mut anchored) = connect_chain_anchored(&store, &listing);
@@ -53,8 +55,8 @@ fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction,
     (store, hashes, plain, with_pqc)
 }
 
-/// The height [`tx_chain`]'s spend block sits at.
-const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT;
+/// The height [`tx_chain`]'s spend block sits at: one above the join's.
+const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT + 1;
 /// [`tx_chain`]'s dense id count: one coinbase per height through the
 /// spend block, the join, the serve credit, the spend.
 const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 3;

@@ -53,12 +53,21 @@ pub(super) fn spend(key_image: usize, outputs: usize) -> Transaction {
 /// that opens persona `p`'s `archival_bond` row (a spend of `key_image`
 /// funding the bond — 4-part, like every spend), then the credit for `p`
 /// (the one legal listed shape with no key image and no `pqc_auths`,
-/// CEN-H20 — 3-part). Since DRS-E4 commit 4 the validator refuses a credit
-/// for a persona with no record (CEN-L7, SI-15's first check), so a credit
-/// connects only behind its join — the rules harness's
-/// `TxShape::precedents`, restated for the store. The join spends, so the
-/// pair sits no lower than [`FIRST_SPEND_HEIGHT`], and it is listed in
-/// this order.
+/// CEN-H20 — 3-part). A credit for a persona with no record is refused
+/// (CEN-L7 since DRS-E4 commit 4; CEN-J4 is the row), so a credit connects
+/// only behind its join. The join spends, so it sits no lower than
+/// [`FIRST_SPEND_HEIGHT`], and the credit lists in the block **after** it:
+/// CEN-J4 reads the record off the view the block is judged against, which
+/// a join in the same block has not yet written — the C++ reads it so
+/// (`check_tx_inputs` runs before `add_block`), and a same-block pair is
+/// refused there. *Records-was:* until E6 slice 8 row 3 the pair was
+/// listed in one block, which the fold's in-block sequencing admitted
+/// (`archival/inputs.rs`, `apply_input`) and the C++ never did.
+///
+/// The credit is for settlement epoch 1, the first a persona joining in
+/// epoch 0 may serve (CEN-J5, `E ≥ join + 1`); which epoch a fixture chain
+/// is *in* when it lists the credit is CEN-J7's (E6 slice C), not yet a
+/// Rust rule.
 ///
 /// The credit is the harness's, in the **`RF-D1`** shape CEN-H20 requires:
 /// a prunable region holding one pruned pass record per serve-credit vin.

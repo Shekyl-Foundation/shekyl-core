@@ -746,15 +746,16 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     // no key image is a serve-credit-only transaction: the same hash twice,
     // nothing for SI-1 to see. (A coinbase-shaped body served here until
     // E6 slice 5 landed CEN-H5, which refuses `gen` outside the miner slot
-    // — the fixture was the input the row exists to refuse.) Since DRS-E4
-    // commit 4 the credit connects only behind the join that opens its
-    // record (CEN-L7), and the join spends — so the block sits at the
-    // first spend height, as the SI-1 belt's does.
-    let s = FIRST_SPEND_HEIGHT;
-    let hashes = connect_chain(&store, &spendable_prefix(&[]));
+    // — the fixture was the input the row exists to refuse.) The credit
+    // connects only behind the join that opens its record (CEN-L7 /
+    // CEN-J4, read off the view before the block), and the join spends —
+    // so the join sits at the first spend height, as the SI-1 belt's
+    // block does, and the credit one above it.
+    let s = FIRST_SPEND_HEIGHT + 1;
     let [join, dup] = credited(9, [0x77; 32]);
+    let hashes = connect_chain(&store, &spendable_prefix(&[vec![join]]));
     let dup_hash = dup.hash();
-    let b1 = candidate(s, hashes[at(s - 1)], vec![anchor(&hashes, s, join), dup]);
+    let b1 = candidate(s, hashes[at(s - 1)], vec![dup]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, b1)?;

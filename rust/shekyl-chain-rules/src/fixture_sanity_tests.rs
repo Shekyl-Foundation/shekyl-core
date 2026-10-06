@@ -14,7 +14,10 @@
 //! a new shape without a gate arm does not compile. Negative fixtures are
 //! not this module's — they live with their rows and are labelled by the
 //! row. Block-level composition (`candidate`, `candidate_on`) is judged
-//! below as the shapes are listed into blocks.
+//! below as the shapes are listed into blocks. A shape whose view-bound
+//! stage reads bond state is judged here through `tx_form` only
+//! ([`TxShape::reads_bond_state`]): the mock has no record to offer it, and
+//! the stage's witness is the ingest driver's.
 
 use super::fixture::{
     anchored_on, candidate, candidate_on, coinbase, listed_on, repriced, spendable_chain, TxShape,
@@ -30,16 +33,24 @@ use shekyl_wire::Transaction;
 /// A five-block chain to build candidates on, so the fixtures are exercised
 /// above genesis as well as at it.
 /// Judge one shape at one slot the way production would reach it: `tx_form`
-/// at that slot directly, and — for a listed slot — through `validate` with
-/// the shape listed behind its [`TxShape::precedents`] (the block's only
-/// bodies; the slot names where the shape lands); for the miner slot,
-/// through `validate` on a candidate whose coinbase it is. The chain is the
-/// youngest that can list a spend ([`spendable_chain`]), and a listed body
-/// is anchored on it: a fixture's reference is chain-relative, so it is
-/// written where the chain is known, not baked into the shape.
+/// at that slot directly, and through `validate` with the shape as the
+/// block's only listed body; for the miner slot, through `validate` on a
+/// candidate whose coinbase it is. The chain is the youngest that can list
+/// a spend ([`spendable_chain`]), and a listed body is anchored on it: a
+/// fixture's reference is chain-relative, so it is written where the chain
+/// is known, not baked into the shape.
+///
+/// A shape that [`reads_bond_state`](TxShape::reads_bond_state) stops at
+/// `tx_form`: the mock holds no record for it to be judged against, so
+/// `validate` would refuse it on CEN-J4 — which is the rule being right
+/// about the fixture's chain, not about the fixture. Its `validate`
+/// witness is the ingest driver's, on a chain that posted the bond.
 fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
     tx_form(tx, slot, &RuleSet::GENESIS)
         .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "tx_form", &refused)));
+    if shape.reads_bond_state() {
+        return;
+    }
     let chain = spendable_chain();
     chain.with_view(|view| {
         let mut candidate = candidate_on(&chain, Vec::new());
@@ -48,23 +59,12 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
                 candidate.block.miner_transaction = tx.clone();
                 candidate = repriced(&chain, candidate);
             }
-            TxSlot::Listed(_) | TxSlot::Lone => {
-                let mut bodies = shape.precedents();
-                if let TxSlot::Listed(n) = slot {
-                    assert_eq!(
-                        bodies.len(),
-                        n,
-                        "{shape:?} lists at Listed({n}), which is behind its precedents"
-                    );
-                }
-                bodies.push(tx.clone());
-                candidate = candidate_on(
-                    &chain,
-                    bodies
-                        .into_iter()
-                        .map(|body| anchored_on(&chain, body))
-                        .collect(),
-                );
+            TxSlot::Listed(n) => {
+                assert_eq!(n, 0, "{shape:?} lists first; it is the block's only body");
+                candidate = candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]);
+            }
+            TxSlot::Lone => {
+                candidate = candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]);
             }
         }
         let formed = formed_on(&chain, candidate);
