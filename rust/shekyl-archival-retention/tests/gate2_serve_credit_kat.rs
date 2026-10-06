@@ -446,7 +446,7 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
 }
 
 fn ct2_opening_at(
-    client: &CurveTreeClient,
+    client: &mut CurveTreeClient,
     reference: &ReferenceBlock,
     gindex: u64,
     raw: RawOutput,
@@ -456,6 +456,12 @@ fn ct2_opening_at(
         output_key: raw.output_key,
         commitment: raw.commitment.expect("coinbase output has a commitment"),
     };
+    // Registered first, as the wallet's curve-tree actor does before every
+    // assembly: the client assembles from what it captured for a registered
+    // output and has no route for an unregistered one.
+    client
+        .sync_owned(&[(input.gindex, input.output_key)])
+        .expect("register the opened output");
     let path = client.assemble_path(&input, reference).expect("assemble");
     let cl = path
         .leaf_chunk
@@ -484,7 +490,7 @@ fn ct2_opening_at(
 }
 
 fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
-    let (client, blocks, reference) = ct2_ingested();
+    let (mut client, blocks, reference) = ct2_ingested();
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let drained = blocks
         .iter()
@@ -499,7 +505,7 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
         .filter(|b| b.height < last_drained)
         .map(|b| b.outputs.len() as u64)
         .sum();
-    ct2_opening_at(&client, &reference, founder_gindex, raw)
+    ct2_opening_at(&mut client, &reference, founder_gindex, raw)
 }
 
 /// Opening for gindex 0 — the tree's first leaf chunk, which is full
@@ -508,9 +514,9 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
 /// the consensus challenge path reads exactly one full chunk from the
 /// curve-tree leaf table (pipeline doc §6.2).
 fn ct2_full_chunk_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
-    let (client, blocks, reference) = ct2_ingested();
+    let (mut client, blocks, reference) = ct2_ingested();
     let first = blocks.first().expect("non-empty");
-    ct2_opening_at(&client, &reference, 0, first.outputs[0])
+    ct2_opening_at(&mut client, &reference, 0, first.outputs[0])
 }
 
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {

@@ -249,6 +249,21 @@ pub enum ClientError {
         /// Siblings the leaf rows yielded.
         got: usize,
     },
+    /// The requested output has no resolved owned position, so there is no
+    /// captured path to read.
+    ///
+    /// Assembly reads captures and never rebuilds; an input reaches it
+    /// registered or not at all. The curve-tree actor registers a batch's
+    /// inputs ([`CurveTreeClient::sync_owned`]) before assembling, so this
+    /// fires for a direct caller that skipped that, or for an input the sync
+    /// reported stale — the client holds a different output at that gindex,
+    /// and the caller's view of the chain is behind.
+    OutputNotRegistered {
+        /// The input's global output index.
+        gindex: Gindex,
+        /// The output key the caller supplied.
+        output_key: OneTimePubkey,
+    },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
@@ -468,6 +483,7 @@ impl ClientError {
             | ClientError::CaptureMissing { .. }
             | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
+            | ClientError::OutputNotRegistered { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
             | ClientError::TooManyInputs { .. }
@@ -558,7 +574,7 @@ pub struct CurveTreeClient {
     /// The wallet re-registers what it holds; what that leaves owed is the
     /// captures for chunks that closed before the registration, which
     /// reconciliation discharges.
-    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
+    pub(crate) owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
     /// Drain positions of owned leaves, as the fold assigned them.
     ///
     /// Not derived from [`Self::owned_outputs`] on demand: a position is
@@ -598,6 +614,43 @@ pub enum OwnedRegistration {
     /// the registry does not persist
     /// ([`CurveTreeClient::register_owned`]).
     AfterDrain,
+    /// The same pair was already held, and nothing is owed: either the leaf
+    /// has not drained, or its position is already resolved so every chunk
+    /// over it is captured by the fold as it closes.
+    ///
+    /// This is what makes a re-offer cheap. The wallet re-registers
+    /// everything it holds on every refresh ([`CurveTreeClient::sync_owned`]),
+    /// and a verdict of `AfterDrain` for a pair that is already fully served
+    /// would trigger a reconciliation per refresh that reads the table and
+    /// writes nothing. A held pair whose leaf *has* drained but whose position
+    /// is **not** resolved is still `AfterDrain` — that is the one case where
+    /// "held" and "served" diverge, and it is owed.
+    AlreadyHeld,
+}
+
+/// What one [`CurveTreeClient::sync_owned`] call did with its batch.
+///
+/// Per-output verdicts are counted rather than returned one by one, because
+/// the caller's decisions are batch-level: whether anything was owed (and so
+/// reconciled), and which outputs the client could not accept. The stale
+/// list is the one per-output fact that matters, because each entry names a
+/// caller whose view of the chain is behind the client's.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct OwnershipSync {
+    /// Registered ahead of their drain; the fold will capture them.
+    pub before_drain: usize,
+    /// Registered after their drain; their closed chunks were owed and
+    /// `reconciliation` wrote them.
+    pub after_drain: usize,
+    /// Already held and fully served; nothing done.
+    pub already_held: usize,
+    /// Refused: the client holds a *different* output at that gindex. Not an
+    /// error for the batch — the rest were registered — because this is the
+    /// normal outcome of a scan that lags the tree across a reorg: the caller
+    /// re-offers the right key once its rescan reaches the new chain.
+    pub stale: Vec<Gindex>,
+    /// The reconciliation run iff anything was `after_drain`.
+    pub reconciliation: Option<CaptureReconciliation>,
 }
 
 /// What one [`CurveTreeClient::reconcile_captures`] call did.

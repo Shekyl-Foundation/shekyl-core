@@ -886,7 +886,7 @@ impl AssembleRig {
             arm.population.leaf_count, arm.population.depth
         );
 
-        let inputs = owned_material
+        let inputs: Vec<AssembleInput> = owned_material
             .iter()
             .map(|(pos, m)| AssembleInput {
                 gindex: Gindex::from_raw(*pos),
@@ -894,6 +894,34 @@ impl AssembleRig {
                 commitment: m.commitment,
             })
             .collect();
+
+        // Register the owned outputs, as the curve-tree actor does before it
+        // assembles a batch. Outside the timed call on purpose: in production
+        // a spend's inputs were registered by the wallet's refresh long
+        // before, so the actor's own sync finds them `AlreadyHeld`, and the
+        // timed call is the one the wallet pays per spend — the capture path
+        // alone. Here the registration is late (the leaves drained before it),
+        // so this reconciles once and writes every chunk the inputs are owed;
+        // that one-off is the cost of building the fixture, not the subject.
+        let pairs: Vec<_> = inputs.iter().map(|i| (i.gindex, i.output_key)).collect();
+        let sync = client
+            .sync_owned(&pairs)
+            .expect("registration of the rig's owned outputs");
+        assert!(
+            sync.stale.is_empty(),
+            "the rig's inputs are its own outputs"
+        );
+        assert_eq!(
+            sync.after_drain,
+            inputs.len(),
+            "every owned output drained before registration, so each is owed"
+        );
+        let report = sync.reconciliation.expect("late registrations reconcile");
+        assert_eq!(
+            report.positions_resolved,
+            inputs.len(),
+            "rule 47: the rig's subject is the inputs it registered"
+        );
 
         Self {
             _dir: dir,
@@ -913,6 +941,17 @@ impl AssembleRig {
     /// Timed whole, gate included. The integrity gate is store-backed and adds
     /// no term in `n`, but carving it out would make the rig report a cost the
     /// wallet never pays.
+    ///
+    /// **What this times changed when capture landed.** Through PR #931 the
+    /// call rebuilt the layer stack from every drained leaf, and the figure
+    /// was linear in `n` (`CT6_PROVING_STATE.md` §11.2). Assembly now reads
+    /// each input's captured chunks and the frontier snapshot and never
+    /// rebuilds, so the quantity under this timer is the one §11.4's
+    /// criterion was pre-registered for: flat within a depth rung, one
+    /// layer's step at a rung boundary. The `n` arms are kept because that
+    /// is the claim — the cost no longer tracks the population — and the
+    /// before-figure is the record §11.2 holds, not a number this rig can
+    /// still produce.
     ///
     /// # Panics
     ///

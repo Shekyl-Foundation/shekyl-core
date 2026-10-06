@@ -611,6 +611,80 @@ async fn funded_pending_tx_one() -> (TestPendingTx, Arc<LocalLedger>, TempDir) {
     (pending, ledger, dir)
 }
 
+/// The refresh's registration pass over a real ledger and a consistent tree:
+/// the first offer is a mass late registration that reconciles once, the
+/// second finds everything held, and a spend's assembly then takes the
+/// capture path through the actor.
+///
+/// This is the engine side of resume. The registry does not persist, so a
+/// wallet re-offers what it holds on every refresh; what that must cost is
+/// one reconciliation the first time and a map lookup per output after.
+#[tokio::test]
+async fn refresh_registration_reconciles_once_then_is_held_and_spends_from_captures() {
+    use crate::engine::ownership::{curve_tree_sync_owned, owned_output};
+    use crate::engine::traits::LedgerEngine as _;
+
+    let (ledger, _dir, tree) = funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pairs: Vec<_> = {
+        let g = ledger.read();
+        g.ledger
+            .ledger
+            .transfers()
+            .iter()
+            .map(owned_output)
+            .collect()
+    };
+    assert_eq!(pairs.len(), 2, "the fixture funds two outputs");
+
+    let first = curve_tree_sync_owned(&tree, &pairs)
+        .await
+        .expect("the registration pass runs");
+    assert_eq!(
+        first.after_drain, 2,
+        "both drained before the wallet registered them"
+    );
+    assert!(
+        first.stale.is_empty(),
+        "the ledger and the tree agree on every key"
+    );
+    let report = first.reconciliation.expect("late registrations reconcile");
+    assert_eq!(report.positions_resolved, 2);
+
+    let second = curve_tree_sync_owned(&tree, &pairs)
+        .await
+        .expect("the registration pass runs");
+    assert_eq!(second.already_held, 2, "a re-offer is held and served");
+    assert_eq!(second.reconciliation, None, "and reconciles nothing");
+
+    // The spend path: assembly through the actor over exactly these inputs.
+    // The handler syncs them first and finds them held, then assembles from
+    // their captures — there is no rebuild for it to fall back to.
+    let height = ledger.synced_height() - shekyl_curve_tree::REF_ANCHOR_AGE;
+    let (root, _) = tree
+        .reference_root_and_depth(height)
+        .await
+        .expect("the tree answers at the anchor");
+    let reference = shekyl_curve_tree::ReferenceBlock {
+        height,
+        curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes(root),
+        block_hash: shekyl_types::BlockHash::NULL,
+    };
+    let inputs: Vec<_> = {
+        let g = ledger.read();
+        g.ledger
+            .ledger
+            .transfers()
+            .iter()
+            .map(super::support::assemble_input)
+            .collect()
+    };
+    let paths = tree
+        .assemble_tx(reference, inputs)
+        .await
+        .expect("a registered batch assembles from its captures");
+    assert_eq!(paths.len(), 2, "one path per input");
+}
+
 /// `TreeSpendGate::covers` boundary: the inert (no-tree) gate covers
 /// everything; a fresh tree covers nothing; a cursor at `H` covers
 /// eligibility `<= H` and excludes `H + 1`.

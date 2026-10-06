@@ -137,6 +137,20 @@ impl Spender {
                 outputs: raw[i].as_slice(),
             })
             .collect();
+        // The miner's wallet names its coinbase before the block is folded
+        // in, as a wallet's refresh does with what its scan found: the tree
+        // captures path material only for outputs it has been told about,
+        // and told now, this one is captured as its chunks close. The store
+        // keys outputs dense in connect order, so the coinbase's index is
+        // the running count.
+        self.client
+            .sync_owned(&[(
+                Gindex::from_raw(self.next),
+                shekyl_curve_tree::OneTimePubkey::from_bytes(
+                    block.miner_transaction.prefix.outputs[0].key,
+                ),
+            )])
+            .expect("the wallet-side tree registers the coinbase");
         self.client
             .ingest_block(BlockLeaves {
                 height: shekyl_curve_tree::BlockHeight::from_raw(height),

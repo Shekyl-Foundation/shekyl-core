@@ -14,9 +14,11 @@
 //! `CAPTURED_IDENTITY_*_AT` offsets. [`crate::assemble`] decodes that layout
 //! in its own function, so the two sides can disagree and a test can see it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration};
+use super::{
+    CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration, OwnershipSync,
+};
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::drained_sorted;
 use crate::segment::outputs_per_node;
@@ -161,13 +163,13 @@ impl CurveTreeClient {
     /// from a block this client has not ingested, and the registry is matched
     /// against each leaf at its own drain.
     ///
-    /// # The engine registrant is not built yet
+    /// # Who calls this
     ///
-    /// Nothing in the engine calls this. That caller is the refresh driver,
-    /// a separate validation surface. Until it lands, no production batch is
-    /// registered and assembly takes the unregistered route. The state-3
-    /// oracle is
-    /// `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`.
+    /// The batch form [`Self::sync_owned`], from the refresh (everything the
+    /// wallet holds, every pass) and from the curve-tree actor (a spend's
+    /// inputs, before it assembles them). An input reaches
+    /// [`Self::assemble_paths`] registered or not at all; there is no
+    /// unregistered route.
     ///
     /// # Errors
     ///
@@ -193,23 +195,89 @@ impl CurveTreeClient {
                 });
             }
         }
+        let resolved: BTreeSet<Gindex> = self.owned_positions.values().copied().collect();
+        Ok(self.register_checked(gindex, output_key, &resolved))
+    }
+
+    /// [`Self::register_owned`] after its checks, against a precomputed set
+    /// of resolved gindexes so a batch does not rescan `owned_positions` per
+    /// output.
+    fn register_checked(
+        &mut self,
+        gindex: Gindex,
+        output_key: OneTimePubkey,
+        resolved: &BTreeSet<Gindex>,
+    ) -> OwnedRegistration {
+        let held = self.owned_outputs.get(&gindex) == Some(&output_key);
         // An insert replaces, which is how a rescan rebinds a gindex after a
         // reorg without a separate retraction.
         self.owned_outputs.insert(gindex, output_key);
         let Some(tip) = self.ingested_tip_height else {
-            return Ok(OwnedRegistration::BeforeDrain);
+            return if held {
+                OwnedRegistration::AlreadyHeld
+            } else {
+                OwnedRegistration::BeforeDrain
+            };
         };
         let cutoff = Self::drained_through(tip);
         // `entries` is strictly increasing in `gindex`.
         let drained = self
             .entries
-            .binary_search_by(|held| held.gindex.cmp(&gindex))
+            .binary_search_by(|h| h.gindex.cmp(&gindex))
             .is_ok_and(|i| self.entries[i].maturity <= cutoff);
-        Ok(if drained {
+        if held && (!drained || resolved.contains(&gindex)) {
+            OwnedRegistration::AlreadyHeld
+        } else if drained {
             OwnedRegistration::AfterDrain
         } else {
             OwnedRegistration::BeforeDrain
-        })
+        }
+    }
+
+    /// Register a batch of owned outputs and reconcile **once** if any of
+    /// them is owed captures.
+    ///
+    /// This is the call the wallet makes on every refresh with everything it
+    /// holds, and the one the curve-tree actor makes with a spend's inputs
+    /// before assembling them — so the capture path is total: an input
+    /// reaches [`Self::assemble_paths`] registered, or not at all. Idempotent
+    /// and cheap when nothing changed: a re-offer of a held, served pair is
+    /// [`OwnedRegistration::AlreadyHeld`] and triggers nothing.
+    ///
+    /// A pair the client cannot accept — it holds a *different* output at
+    /// that gindex — is collected in [`OwnershipSync::stale`] rather than
+    /// failing the batch. That is the normal outcome of a scan lagging the
+    /// tree across a reorg, and the remedy is the caller's own rescan, which
+    /// re-offers the right key. Nothing is poisoned by it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`]; and whatever
+    /// [`Self::reconcile_captures`] refuses with, if a reconciliation ran.
+    pub fn sync_owned(
+        &mut self,
+        outputs: &[(Gindex, OneTimePubkey)],
+    ) -> Result<OwnershipSync, ClientError> {
+        self.ensure_live()?;
+        let resolved: BTreeSet<Gindex> = self.owned_positions.values().copied().collect();
+        let mut sync = OwnershipSync::default();
+        for (gindex, output_key) in outputs {
+            if let Some(held) = Self::held_output(&self.entries, *gindex) {
+                if held != *output_key {
+                    sync.stale.push(*gindex);
+                    continue;
+                }
+            }
+            match self.register_checked(*gindex, *output_key, &resolved) {
+                OwnedRegistration::BeforeDrain => sync.before_drain += 1,
+                OwnedRegistration::AfterDrain => sync.after_drain += 1,
+                OwnedRegistration::AlreadyHeld => sync.already_held += 1,
+            }
+        }
+        if sync.after_drain > 0 {
+            sync.reconciliation = Some(self.reconcile_captures()?);
+        }
+        Ok(sync)
     }
 
     /// Write every capture an owned output is due and the store lacks.
