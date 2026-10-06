@@ -790,12 +790,15 @@ device's measurement (`BENCHMARK_ALIGNMENT.md` `BA-T5`).
 **Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
 
 **What it measures.** The serve loop's work for one `GET /shard/{id}`:
-parse, the anchor gate, every read of the body, every digest pass over
-it, the countersignature, and the bytes written. Pinned to the endpoint rather than to the
-digest or the signer, so that a change in how many times the body is
-read or hashed moves the count. That is the change `BA-Q3` makes: the
-`SF-D8` v3 path reads and digests each shard twice; option S reads and
-digests once and signs last.
+parse, the anchor gate, the open and the key's pre-flight, every read
+of the body, every digest pass over it, the countersignature, and the
+bytes written. Pinned to the endpoint rather than to the digest or the
+signer, so that a change in how many times the body is read or hashed
+moves the count. That is the change `BA-Q3` made: the `SF-D8` v3 path
+of 2026-10-04 read and digested each shard twice; option S (amended
+2026-10-06) reads and digests once and signs last, and this gate
+carried the before-and-after (§15, and the measurement ledger's
+`archival-serve-fetch` entry).
 
 **Fixture shape.** Three cells by shard size: one leaf, one eighth of a
 segment, and a full segment, which is the size a bonded shard is served
@@ -825,10 +828,10 @@ threads would count; the pool's own idle work then drifted the
 per-thread totals by up to 14 % between runs of the same input, which no
 ±5 % threshold survives. So the measured function is
 `serve_one_in_memory` (`bench-internals` feature): the endpoint's own
-steps — `gate_and_digest`, `sign_transcript`, `reopen_body`,
-`response_head`, `read_chunk`, the same digest comparison before the
-envelope — composed in the endpoint's order on the calling thread, into
-a pre-sized buffer, with no runtime and no socket. It is not a second
+steps — `gate_and_open`, `response_head`, `read_chunk` (which folds
+the chunk it read), `sign_transcript`, the same frame-length check
+before the sign — composed in the endpoint's order on the calling
+thread, into a pre-sized buffer, with no runtime and no socket. It is not a second
 serve path: `serve_tests.rs` asserts that the composition and the live
 endpoint produce the same bytes ahead of the envelope for the same
 request, and the same 404, so the glue cannot drift from the endpoint

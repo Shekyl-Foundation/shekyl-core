@@ -5,20 +5,23 @@
 
 //! Which bytes a pass countersignature digests.
 //!
-//! The store is read twice per response, and both reads digest through this
-//! type. The decision of 2026-10-04
-//! (`docs/V3_WALLET_DECISION_LOG.md`) is why there are two: `P` must know
-//! the digest before it signs, it signs before the first response byte so a
-//! refusal is the shared 404, and it does not retain the shard between those
-//! moments — one resident shard per in-flight connection would make the
-//! serve ceiling a whole-shard memory budget. The second read is the one
-//! that is written. Its digest is this same fold, and the signature is
-//! released only when the two digests are equal.
+//! The store is read once per response, and the bytes written are the
+//! bytes folded here: the serve loop reads a chunk, absorbs it, writes it,
+//! and signs the finished digest after the last one (`SF-D8`, amended
+//! 2026-10-06 — `docs/V3_WALLET_DECISION_LOG.md`). `P` therefore knows the
+//! digest only once the body is out, which is the point: nothing that
+//! scales with the shard happens before the requester has the bytes, and
+//! the key's policy refusals are asked for before the head
+//! (`PassKey::ready`) so that signing last costs no 404. No chunk is
+//! retained — one resident shard per in-flight connection would make the
+//! serve ceiling a whole-shard memory budget.
 //!
-//! One fold, rather than a hasher opened by hand at each call site, so the
+//! One fold, rather than a hasher opened by hand at the call site, so the
 //! signed bytes and the sent bytes are defined once: the `RF-D4` frame
 //! header, then every payload chunk, and nothing else. A body that is not
-//! exactly the length its frame declares has no digest.
+//! exactly the length its frame declares has no digest, so it is never
+//! signed: the fold refuses a byte past the frame before absorbing it, and
+//! [`FramedDigest::finish`] refuses a total short of it.
 
 use shekyl_archival_retention::{PassDeliveryHasher, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
 use shekyl_curve_tree::served_frame::ServedFrameHeader;

@@ -7,13 +7,14 @@
 //! instruction counts — the per-PR drift gate on the archival serve path.
 //!
 //! The quantity is the work the serve loop does for one `GET /shard/{id}`:
-//! parse, the anchor gate, every read of the body, every digest pass over
-//! it, the countersignature, and the bytes written. It is pinned to the
-//! serve's own steps rather than to the digest or the signer so that a
-//! change in how many times the body is read or hashed moves this count;
-//! that is the change this gate exists to see (the `SF-D8` v3 path reads
-//! and digests each shard twice; `BA-Q3` rules a single pass that signs
-//! last).
+//! parse, the anchor gate, the open and the key's pre-flight, every read
+//! of the body, every digest pass over it, the countersignature, and the
+//! bytes written. It is pinned to the serve's own steps rather than to the
+//! digest or the signer so that a change in how many times the body is
+//! read or hashed moves this count; that is the change this gate exists to
+//! see (the `SF-D8` v3 path of 2026-10-04 read and digested each shard
+//! twice; `BA-Q3` ruled the single pass that signs last, and this gate
+//! carried the before-and-after).
 //!
 //! Three shard sizes, because the cost has a fixed part (parse, gate, sign)
 //! and a part linear in the body (read, digest, write), and a change to

@@ -5,8 +5,8 @@
 
 //! Endpoint tests for [`crate::serve`]. Lives beside the production loop so
 //! the file that answers the wire stays under a thousand lines; private
-//! items remain visible via `#[path]` from `serve.rs`. The two-read seal
-//! cases live in [`seal`], for the same reason.
+//! items remain visible via `#[path]` from `serve.rs`. The seal and the
+//! `SF-D8` invariant's cases live in [`seal`], for the same reason.
 
 use super::*;
 use crate::countersign::{PassKey, SignRefused, TestKeySigner};

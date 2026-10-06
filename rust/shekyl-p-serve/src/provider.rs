@@ -143,6 +143,38 @@ enum Source {
     Segment(FrozenSegmentBody),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
+    /// A body whose header was given rather than derived, with a read
+    /// counter and an optional read that fails (tests only).
+    #[cfg(test)]
+    Scripted(ScriptedBody),
+}
+
+/// The faults a conforming store cannot produce, built by wrapper so the
+/// serve loop's handling of them can be asserted at the wire (rule 50): a
+/// body short of or past the frame its header declares, and a read that
+/// fails part-way. Also counts how many chunks the loop asked for, which is
+/// how a test sees that a requester who stopped taking bytes stopped `P`.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct ScriptedBody {
+    bytes: Arc<[u8]>,
+    read: usize,
+    /// Chunk reads so far, shared with the test that built the body.
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// The read, counting from one, that fails with a store error.
+    fail_at_read: Option<usize>,
+}
+
+/// The next chunk of at most `max_bytes` out of `bytes` from `*read`,
+/// advancing the cursor; `None` at the end.
+fn slice_chunk(bytes: &[u8], read: &mut usize, max_bytes: usize) -> Option<Vec<u8>> {
+    if *read >= bytes.len() {
+        return None;
+    }
+    let stop = bytes.len().min(*read + max_bytes.max(1));
+    let chunk = bytes[*read..stop].to_vec();
+    *read = stop;
+    Some(chunk)
 }
 
 impl ShardBody {
@@ -164,6 +196,27 @@ impl ShardBody {
             source: Source::Flat { bytes, read: 0 },
             header,
         })
+    }
+
+    /// A body that declares `header` whatever `bytes` it holds, counts its
+    /// chunk reads into `reads`, and fails the `fail_at_read`-th read if
+    /// one is given. See [`ScriptedBody`].
+    #[cfg(test)]
+    pub(crate) fn scripted(
+        header: ServedFrameHeader,
+        bytes: Arc<[u8]>,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+        fail_at_read: Option<usize>,
+    ) -> Self {
+        Self {
+            source: Source::Scripted(ScriptedBody {
+                bytes,
+                read: 0,
+                reads,
+                fail_at_read,
+            }),
+            header,
+        }
     }
 
     /// A store-backed frozen-segment body.
@@ -203,6 +256,8 @@ impl ShardBody {
         match &self.source {
             Source::Segment(body) => body.remaining_bytes(),
             Source::Flat { bytes, read } => bytes.len() - read,
+            #[cfg(test)]
+            Source::Scripted(s) => s.bytes.len().saturating_sub(s.read),
         }
     }
 
@@ -218,14 +273,14 @@ impl ShardBody {
             Source::Segment(body) => body
                 .next_chunk(max_bytes)
                 .map_err(ProviderError::from_store),
-            Source::Flat { bytes, read } => {
-                if *read >= bytes.len() {
-                    return Ok(None);
+            Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
+            #[cfg(test)]
+            Source::Scripted(s) => {
+                let read_number = s.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if s.fail_at_read == Some(read_number) {
+                    return Err(ProviderError::other("scripted store fault"));
                 }
-                let stop = bytes.len().min(*read + max_bytes.max(1));
-                let chunk = bytes[*read..stop].to_vec();
-                *read = stop;
-                Ok(Some(chunk))
+                Ok(slice_chunk(&s.bytes, &mut s.read, max_bytes))
             }
         }
     }
