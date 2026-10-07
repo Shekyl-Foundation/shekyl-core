@@ -615,23 +615,13 @@ namespace cryptonote
       MERROR("Failed to parse block rate notify spec: " << e.what());
     }
 
-    // Regtest carries the issued networks' table: version 1 at height 1,
-    // exactly `mainnet_hard_forks` (`hardforks.cpp`). Nettype selects data,
-    // never behaviour, on the consensus surface (rule 71), and this table
-    // IS consensus data: `get_earliest_ideal_height_for_version(
-    // HF_VERSION_SHEKYL_NG)` is CEN-F21's epoch — the height the staker
-    // share's decay is measured from — read by validate_miner_transaction,
-    // the template, the relay floor and the fee RPC. The inherited shape
-    // `{(1, 0), (latest, 1)}` put version 1 at height 0 here alone; with
-    // mainnet's latest version also 1, `HardFork::add_fork` rejected the
-    // second row (version <= back) and the table was `[(1, 0)]`, so regtest
-    // decayed the split from height 0 while every issued network decays it
-    // from height 1 — a 1-unit share difference at ~5.7 % of heights, found
-    // by the Rust producer's block at the consensus bound being refused for
-    // its coinbase (`regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_
-    // is_judged_by_the_cxx`, the falsifier). `shekyl_e2_trace_export.cpp`
-    // carries the same table for the same reason.
-    const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {std::make_pair(mainnet_hard_forks[num_mainnet_hard_forks-1].version, 1), std::make_pair(0, 0)};
+    // Regtest installs `regtest_hard_fork_row()`: the schedule's newest
+    // version at its first height. That height is CEN-F21's epoch. The
+    // inherited shape `{(1, 0), (latest, 1)}` collapsed to `[(1, 0)]`
+    // (`add_fork` rejects a version that does not advance), so regtest
+    // decayed the staker split from height 0 while every issued network
+    // decayed it from height 1. The export tool installs the same row.
+    const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {regtest_hard_fork_row(), std::make_pair(0, 0)};
     const cryptonote::test_options regtest_test_options = {
       regtest_hard_forks,
       0

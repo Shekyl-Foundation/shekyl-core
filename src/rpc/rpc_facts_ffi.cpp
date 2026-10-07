@@ -99,9 +99,8 @@ int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
 }
 
 // Body of `shekyl_rpc_hard_fork_info`. A projection: it copies what
-// `get_hard_fork_voting_info` reports and resolves which version was asked
-// about. It re-expresses no voting semantics — see the header for why that is
-// a ruling (CEN-B2/B3 are bucket 4, R4 owns the subsystem).
+// `get_hard_fork_voting_info` reports (the three counters are 0; there is
+// no vote) and resolves which version was asked about. See the header.
 //
 // The version resolution is here rather than in the adapter because it is the
 // one decision on this path and it needs a chain read: "0 means the next

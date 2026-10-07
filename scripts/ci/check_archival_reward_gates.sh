@@ -170,8 +170,11 @@ fi
 #     leg, re-mintable through emission claims once accrued into
 #     budget(E): an inflation surface);
 #   - read NO tip-relative get_current_version() and NO table-only
-#     get_ideal_version(h), which respectively resurrect F-B1b's boundary
-#     off-by-one under API-convention drift and ignore the vote threshold.
+#     get_ideal_version(h). The first resurrects F-B1b's boundary
+#     off-by-one: after add_block it names the next block. The second now
+#     agrees with the check (the vote threshold it used to ignore is gone)
+#     and is still not an operand of this block. Both stay banned as a
+#     reintroduction guard.
 #
 # F-B1b's operand discipline is RETIRED, and this comment previously said the
 # opposite. It read: "the version still feeds compute_emission_split /
@@ -230,8 +233,8 @@ else
   hits=$(printf '%s' "$ACCRUAL_CODE" | scan -n 'get_current_version|get_ideal_version\(')
   if [[ -n "$hits" ]]; then
     echo "FAIL: tip-relative or table-only version read inside the accrual block" >&2
-    echo "  (the version operand is bl.major_version — the block's own consensus-checked" >&2
-    echo "   version; see F-B1b in gating round §9.9)" >&2
+    echo "  (reintroduction guard: this block has no version operand; if one" >&2
+    echo "   returns, it is bl.major_version — see F-B1b in gating round §9.9)" >&2
     printf '%s\n' "$hits" >&2
     FAIL=1
   fi

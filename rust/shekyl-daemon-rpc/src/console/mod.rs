@@ -756,8 +756,8 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         }
         "status" => show_status(&source, unix_now()),
         // The C++ parser accepts no argument or 1..=255 and forwards 0 for
-        // the first; `None` asks about the fork the daemon would vote in
-        // next, which is what a zero meant.
+        // the first; `None` asks about the next scheduled version, which is
+        // what a zero meant.
         "hard_fork_info" => {
             let Some(version) = args.get(1).and_then(|a| a.parse::<u8>().ok()) else {
                 return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;

@@ -989,3 +989,6 @@ mod seal;
 
 #[path = "serve_invariant_tests.rs"]
 mod invariant;
+
+#[path = "serve_bench_seam_tests.rs"]
+mod bench_seam;

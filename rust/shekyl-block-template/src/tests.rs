@@ -134,7 +134,6 @@ fn context<'a>(
         curve_tree_root,
         attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         major_version: RuleSet::GENESIS.header_major_version(),
-        minor_version: 0,
         now: NOW,
         median_timestamp: median_of(chain),
         unlock_window: RuleSet::GENESIS.mined_money_unlock_window(),

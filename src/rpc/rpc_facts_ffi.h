@@ -452,17 +452,14 @@ void shekyl_rpc_peer_list_free(void* owner);
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 
-// Hard-fork voting info, exactly as the daemon reports it today.
+// Hard-fork info, exactly as the daemon reports it today.
 //
-// **A projection, not a model.** The Rust side re-expresses none of this:
-// no threshold accounting, no window arithmetic, no vote predicate. CEN-B1 is
-// a ratified row, but **CEN-B2 and CEN-B3 are bucket 4**, queued in the §10
-// R4 round that owns collapse-vs-redesign of the hard-fork subsystem with the
-// V4 lattice-only activation question attached — and B3 says outright that
-// deleting the machinery is "a design round's call, not the census's". So the
-// census's rule binds: C++ is a differential oracle only for ratified rows.
-// A reimplementation would be work R4 must undo; a projection survives either
-// ruling.
+// **A projection, not a model.** The daemon writes `window`, `votes` and
+// `threshold` as 0: there is no vote, and this struct does not invent one.
+// CEN-B2 (the reserved minor byte) is ratified and lives in the chain-rules
+// header predicate, not here. CEN-B3 (the height schedule, the discarded
+// `add` verdict, and the class that owns both) stays bucket 4 until
+// `hard_fork_info` is deleted. The projection is that in-flight surface.
 //
 // **Two versions, named apart, because the C++ overloaded one word.** The
 // request's `version` means "the fork I am asking about" (0 → the next one),

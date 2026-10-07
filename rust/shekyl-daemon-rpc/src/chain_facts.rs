@@ -350,11 +350,13 @@ pub trait P2pFacts: Send + Sync {
     fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
 }
 
-/// Hard-fork voting info, carried verbatim.
+/// Hard-fork info, carried verbatim from the daemon.
 ///
-/// Nothing here is re-derived: CEN-B2/B3 are bucket-4 rows reserved for the R4
-/// round that owns the hard-fork subsystem, so a Rust reimplementation of the
-/// threshold accounting would be work that round has to undo.
+/// The daemon writes `window`, `votes` and `threshold` as 0: there is no
+/// vote, and this struct does not invent one. CEN-B2 (the reserved minor
+/// byte) is ratified in `shekyl-chain-rules`. CEN-B3 (the height schedule
+/// and the class that owns it) stays bucket 4 until `hard_fork_info` is
+/// deleted; this is that projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HardForkInfo {
     /// The version the fields below describe — resolved, so the request's
