@@ -19,7 +19,7 @@ use shekyl_wire::{Block, Transaction};
 use crate::metrics::Metrics;
 use crate::mutation::{
     first_nonce, Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Overweight,
-    Pow, Unmutable, UNHELD_ROOT,
+    Pow, Unmutable, UNHELD_ATTESTATION_ROOT, UNHELD_ROOT,
 };
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
@@ -472,6 +472,7 @@ async fn setup_and_judge(mutation: Mutation) -> Outcome {
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
+        | Mutation::WrongAttestationRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward
@@ -693,6 +694,8 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::HeaderVersion, ExpectedPlace::Block),
             (Mutation::Orphan, ExpectedPlace::Block),
             (Mutation::WrongRoot, ExpectedPlace::Block),
+            // Slice 8 row 10: B4 names the block, as the header rows do.
+            (Mutation::WrongAttestationRoot, ExpectedPlace::Block),
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
@@ -793,6 +796,35 @@ fn the_unheld_root_is_not_a_fixture_root() {
     assert_eq!(root.as_bytes(), &UNHELD_ROOT);
     assert_ne!(root, CurveTreeRoot::EMPTY);
     assert_ne!(root, GrownTree::over(&chain).root_going_into(AT));
+}
+
+#[test]
+fn the_unheld_attestation_root_is_not_the_empty_sets() {
+    // The mutation's whole claim: a block supplying nothing commits the
+    // empty set, so a root that is not the empty set's is CEN-B4's
+    // refusal. Pinned against the retention crate's recompute, which the
+    // production module cannot name (`UNHELD_ATTESTATION_ROOT` docs).
+    let chain = crate::test_support::chain(CHAIN_LEN);
+    let mut source = Mutated::new(
+        scripted(&chain),
+        h(AT),
+        Mutation::WrongAttestationRoot,
+        env(),
+    );
+    for _ in 0..AT {
+        source.next().expect("blocks below the mutation");
+    }
+    let ev = source.next().expect("the mutated block").expect("yielded");
+    let IngestEvent::Extend(candidate) = ev.event else {
+        panic!("Extend-only");
+    };
+    assert!(candidate.attestation_witness.is_none(), "nothing supplied");
+    let root = candidate.block.header.attestation_root;
+    assert_eq!(root.as_bytes(), &UNHELD_ATTESTATION_ROOT);
+    assert_ne!(
+        *root.as_bytes(),
+        shekyl_archival_retention::empty_attestation_root()
+    );
 }
 
 #[test]

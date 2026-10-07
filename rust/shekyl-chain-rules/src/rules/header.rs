@@ -5,8 +5,9 @@
 
 //! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
 //! the version fields (B1, B2, B7), the curve-tree root (B5) and the block's
-//! identity (B6). B3 is surface-bound and the store's; B4 is deferred (E4
-//! S-ARCH) and A3 is subsumed into it.
+//! identity (B6). B3 is surface-bound and the store's; B4 (the
+//! attestation set) is `rules::attestation` (slice 8 row 10), and A3 is
+//! its empty-witness arm.
 //!
 //! # What the C++ does, read at `dev` `3560b80c2`
 //!
