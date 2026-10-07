@@ -15,15 +15,11 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
-- **Read off the FCMP++ first-layer gadget whether it consumes anything from a sibling beyond its x-coordinate** (what each answer means for capture's layer-0 shape and the identity tail: `CT6_PROVING_STATE.md` §11.11). Falsify by the gadget's own source naming what it reads from a sibling.
-  - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
-  - Target: pre-genesis
-
 - **Name the stake-in's output to the curve tree before it drains, as `CT-6` §11.13 does for the transactions the persona builds** (the principal builds it and keeps no record of its output key — the send journal holds recipients and inputs — so it alone of the wallet's own transfers to the persona is still registered from the scan seal, about 710 blocks late: `CT6_PROVING_STATE.md` §11.13). Falsify by the stake-in's output being `AlreadyHeld` at the sync its spend makes, with no reconciliation, in a test that never offers it by pair.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
-- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail, the owned positions `drained_sorted` still supplies, and the leaf rows the persona's always-late registration rebuilds from: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
+- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail — kept only until siblings reach the prover as x-coordinates, which the circuit already permits — the owned positions `drained_sorted` still supplies, the leaf rows the persona's late registration rebuilds from, and the `O` the registration pair is checked against: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 

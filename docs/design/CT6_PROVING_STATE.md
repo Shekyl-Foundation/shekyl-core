@@ -1579,7 +1579,7 @@ chunk rather than once per output; and it reaches a layer-4 span
 twenty-four. On a lightly loaded chain the same arithmetic gives
 proportionally less. None of it is in the drain any more, and none of it
 grows with how long the persona held the output. The dependency this creates
-on the store's leaf rows is §11.11's third item.
+on the store's leaf rows is §11.11's fourth item.
 
 An unreadable persona seal is **read as empty and reported** — the opposite
 of every staking read, deliberately. Those reads decide what the wallet tells
@@ -1800,31 +1800,90 @@ its expectations; unparseable bytes expect nothing.
 
 ### 11.11 What capture still does not do
 
-**Two FOLLOWUPS rows keep their rationale here, not in the queue (rule 95).**
+**One FOLLOWUPS row keeps its rationale here, not in the queue (rule 95); the
+other was the sibling-points read, now answered below.**
 
-*The sibling-points question (rule 30).* The tree commits only
-x-coordinates, so the leaf-layer hash needs only scalars — yet the prover's
-API takes sibling compressed points (`ProveInputLeafChunk.leaf_outputs`,
-three per sibling) beside `leaf_cm_x`. If the gadget reads only the
-x-coordinates, the points are an API artefact: capture can take its layer-0
-chunk from the frontier fold like every other layer, one value shape, and no
-identity tail is owed when `entries` retires. If the points are load-bearing,
-the tail is permanent. It must be read off the gadget's source, not inferred
-from the API.
+*The sibling-points question (rule 30) — ANSWERED 2026-10-06, read off the
+source: the gadget consumes a sibling's x-coordinates and nothing else.* The
+prover's API takes sibling compressed points
+(`ProveInputLeafChunk.leaf_outputs`, three per sibling) beside `leaf_cm_x`,
+and the question was whether the circuit needs them. It does not. In the
+vendored circuit crate (`rust/shekyl-oxide/crypto/fcmps`):
 
-*The identity account before `entries` retires (increment 7).* Two things
-still read from it. A path whose owned leaf sits in the **open** leaf chunk at
-the reference height needs that chunk's sibling *points*, which no snapshot
-holds — the frontier keeps scalars and `O.x` is a one-way projection; with
-the anchor fixed at `tip - REF_ANCHOR_AGE` that is a bounded tail of a few
-chunks, not a window of history, and today it is a ranged read of at most
-`SELENE_CHUNK_WIDTH - 1` leaf rows. And the owned positions reconciliation
-recomputes come from `drained_sorted` over `entries` (§11.10); without
-`entries`, those come from the store. Both say one thing: retiring `entries`
-needs a precise account of which identities the wallet must still be able to
-produce, each case supplied or refused.
+- **The gadget.** `Circuit::first_layer` opens the *spent* output's `O`, `I`,
+  `C` and `CM` as full points — on-curve checks and the discrete-log legs
+  against the blinded input tuple — and then makes one statement about the
+  chunk: `tuple_member_of_list` over `{O.x, I.x, C.x, CM.x}` and `branch`.
+  `branch` is a list of vector-commitment tape variables; no sibling
+  y-coordinate is a variable anywhere in it.
+- **What fills the tape.** The prover's `flatten_leaves` writes, for each
+  leaf, `to_xy(leaf.O).0`, `to_xy(leaf.I).0`, `to_xy(leaf.C).0` and its
+  `cm_x` — the first coordinate of each, and the y is dropped at that line.
+  `Fcmp::prove` does the same when the leaves are the root branch.
+- **The other three uses of a sibling point are bookkeeping, not proof.**
+  `Path::opening_matches_chunk` compares each leaf with the *spent* output
+  to find it in the chunk; `Branches::new` compares whole leaf vectors for
+  equality when several inputs share a root-is-leaves tree; and
+  `Output::new` refuses an identity point, which has no x to take. None
+  reads a sibling's y for its value.
+- **Our own readers agree.** The signer (`shekyl-tx-builder`'s
+  `prove_input_from_spend`) finds the spent entry by its own `output_key`
+  and passes the rest through; `verify_path_against_its_branches` hashes
+  the chunk from x-coordinates; `PL-D3` already carries sibling `CM` as
+  `cm_x` alone, for exactly this reason.
 
-A third reader is not of `entries` but belongs in the same account, because
+**So the points are an API artefact, and the identity tail is not owed to
+the proof system.** What that buys, and what it does not:
+
+- Capture's layer-0 chunk can be the fold's own children — four scalars per
+  leaf, the shape every other layer already has and the shape the tree
+  itself commits — instead of `O ‖ C ‖ CM.x` with `I` re-derived at read
+  time. 128 bytes a leaf rather than 96, and no hash-to-point per sibling
+  on the spend path.
+- The **open** leaf chunk stops needing leaf rows at all: the frontier
+  snapshot at the reference height already holds that chunk's scalars. That
+  removes the first reader in the account below outright.
+- It is **not free**. The prover API takes points today, so the wallet
+  cannot simply stop keeping them: `Path::leaves` in the circuit crate,
+  `ProveInputLeafChunk` and `ProveInput` in `shekyl-fcmp`, the signer's
+  `LeafEntry`, and the FFI and multisig carriers all name three points per
+  sibling. Carrying x-coordinates instead is a prover-side change in a
+  vendored proof crate (rule 30: its own round, with a pinned vector
+  showing a proof made from x-only siblings verifies against today's
+  verifier unchanged — the statement is the same tape, so it should, and
+  "should" is what the vector is for). The verifier, the wire and consensus
+  are untouched; nothing is asked of the daemon.
+- It does not touch the *spent* output: its four points stay full points,
+  and the wallet has them.
+
+*The identity account before `entries` retires (increment 7).* Three things
+still read from it. **First**, a path whose owned leaf sits in the **open** leaf chunk at
+the reference height needs that chunk's sibling *points* **as the prover API
+stands** — no snapshot holds them, since the frontier keeps scalars and `O.x`
+is a one-way projection; with the anchor fixed at `tip - REF_ANCHOR_AGE` that
+is a bounded tail of a few chunks, not a window of history, and today it is a
+ranged read of at most `SELENE_CHUNK_WIDTH - 1` leaf rows. The answer above
+makes this reader conditional: once siblings travel as x-coordinates the
+snapshot supplies the open chunk and the read goes away, so the account
+should price it as "kept until the prover API changes", not as permanent.
+
+**Second**, the owned positions reconciliation recomputes come from
+`drained_sorted` over `entries` (§11.10); without `entries`, those come from
+the store.
+
+**Third**, registration is bound to `(gindex, O)`, and the check that a
+registered pair is the output the tree holds reads `O` from the entry's
+identity (`held_output`, a lookup in `entries` by gindex). This is the one
+*point* still read for its own sake rather than for the prover API. The
+tree's own leaf holds `O.x`; whether the binding can be made on `O.x` — the
+wallet can always project its own key — or needs the point kept is the
+account's to settle.
+
+All three say one thing: retiring `entries` needs a precise account of which
+identities the wallet must still be able to produce, each case supplied or
+refused.
+
+A fourth reader is not of `entries` but belongs in the same account, because
 it is the standing consumer of the late path: **the persona's registration is
 late for every output the wallet did not build** (§11.12, narrowed by
 §11.13). Its rebuild reads the store's drained leaf rows over
