@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 - **Linux release artifacts carry Tor, and the daemon checks the whole bundle before it runs it** (`TOR_BUNDLE_DISTRIBUTION.md` `TB-1`, `TB-4`, `TB-6` to `TB-10`, `TB-13`). Until now no artifact shipped tor, so an installed node ran clearnet-only and said so only at info level.
   - **Packaging.** The x86_64 and aarch64 Linux archives hold the pinned Tor Expert Bundle in `tor/` beside the binaries, with its licence texts and a source pointer in `tor-licenses/`. The `.deb` and `.rpm` install it under `/opt/shekyl/<bundle>-<target>/`. Only `tor` and the three libraries it loads are shipped. The riscv64 archive carries no tor: there is no bundle for it.
   - **Pin moved to tor 0.4.9.13**: Expert Bundle 15.0.24 on x86_64, 16.0a13 (alpha line) on aarch64. The pins live in one file, `config/tor_pins.json`, compiled into the binary and read by the packaging tool `scripts/release/tor_bundle.py`.
