@@ -890,20 +890,40 @@ namespace nodetool
     case SHEKYL_DAEMON_TOR_NO_BINARY:
       // Not declined, and not present: the state TB-1 says a node is not
       // quietly in. It is a warning until the refusal (TB-2) lands.
-      MCWARNING("global", "No Tor was found, so this node is clearnet-only for this boot although Tor was not "
-          "declined. Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
-          "/opt/shekyl/<bundle>-<target>/ (release packages carry it), or pass --"
-          << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
+      // `--tx-proxy` already installed a SOCKS dial, and this return leaves
+      // that zone in place, so outbound is that proxy. Calling the node
+      // clearnet-only would be false.
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "No Tor bundle was found, so there is no per-boot onion for inbound. "
+            "Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it) to publish inbound as well");
+      else
+        MCWARNING("global", "No Tor was found, so this node is clearnet-only for this boot although Tor was not "
+            "declined. Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it), or pass --"
+            << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     case SHEKYL_DAEMON_TOR_BAD_BINARY:
-      MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
-          << ". This node is clearnet-only for this boot");
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion for this boot");
+      else
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". This node is clearnet-only for this boot");
       return;
     case SHEKYL_DAEMON_TOR_UNAVAILABLE:
-      MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
-          << "), so this node is clearnet-only unless you attach a Tor of your own: run tor, then pass --"
-          << arg_tx_proxy.name << " for outbound and --" << arg_anonymous_inbound.name
-          << " for inbound. Pass --" << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "). Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion until you pass --" << arg_anonymous_inbound.name
+            << " with an onion of your own");
+      else
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "), so this node is clearnet-only unless you attach a Tor of your own: run tor, then pass --"
+            << arg_tx_proxy.name << " for outbound and --" << arg_anonymous_inbound.name
+            << " for inbound. Pass --" << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     default:
       MERROR("Ephemeral tor start failed (" << error_msg
