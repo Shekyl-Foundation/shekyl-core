@@ -1103,6 +1103,14 @@ the budget. The two are different measures and the run prints both.
 Neither moves with the observation rate, so the secret draw's dropout
 does not enter them.
 
+`0.689` is not the probability that such an archiver is slashed. It is
+`1 − (1 − p)^4096`, which treats the 4,096 pairs as failing independently.
+One persona serves all its shards from one host and one onion service, so
+their read failures are strongly correlated. Correlation changes the
+shape of the risk more than its size: the chance of at least one false
+slash can be lower than the figure, and when false slashes come they come
+many at once.
+
 The window does not clear the per-archiver budget under this rule at this
 read failure. That is not new with the secret draw: the module's own
 report (`--stage2`) already reads the shipped pin as exceeding it, at
@@ -1144,6 +1152,68 @@ in-flight term at the epoch's open (its count rule), so an epoch's counts
 do not depend on the one before. What the run leaves out at the
 boundary is the producer's work: reads owed for the previous epoch's
 draws overlap the first `W₂` blocks of the next.
+
+### 5.15 ESR-11 — the failure window against retry correlation (2026-10-07)
+
+§5.14's window check credits one attempt per read, the feasibility
+module's calibration (`default_sources()`: `p_attempt = 0.30`,
+`attempts = 1`). The module credits one because, on the worst day the W₂
+size ladder measured, misses were mostly circuit failures that cluster
+inside a window, so a retry there is not an independent draw
+(`mn_feasibility.rs`, `MissSources::attempts`).
+
+Under the secret draw the producer spreads its reads across `W₂`, 500
+blocks, about 16.7 hours. A retry can come hours after the failed try, on
+a fresh circuit. Whether tries that far apart fail together is not
+measured. This section does not assume an answer. It prints the window at
+each answer.
+
+**Model.** The witness reads a draw up to three times, hours apart. Each
+is a whole read by the fetch caller's rule; its stall retries inside one
+window are the ones the calibration declines to credit, and they are not
+credited here. A share `ρ` of single-try failures is common to
+every try of that read, and the rest are independent, so the read fails
+with probability `p · (ρ + (1 − ρ) · p²)`. At `ρ = 1` that is `p`, the
+calibration. At `ρ = 0` it is `p³`. The settlement rule and `(m, n)` are
+unchanged. This was added after §5.14 was read and was not pre-registered;
+it has no bar of its own.
+
+| `ρ` | Read failure | Missed observation `q` | False slash, per pair | Per archiver at 4,096 shards | Against `10⁻³` |
+| --- | --- | --- | --- | --- | --- |
+| 1.00 | 0.3000 | 0.21600 | `2.85 × 10⁻⁴` | `6.89 × 10⁻¹` | exceeds |
+| 0.50 | 0.1635 | 0.07146 | `2.01 × 10⁻⁹` | `8.23 × 10⁻⁶` | clears |
+| 0.25 | 0.0953 | 0.02549 | `2.61 × 10⁻¹⁴` | `1.07 × 10⁻¹⁰` | clears |
+| 0.10 | 0.0543 | 0.00853 | `1.58 × 10⁻¹⁹` | `6.47 × 10⁻¹⁶` | clears |
+| 0.05 | 0.0406 | 0.00482 | `3.02 × 10⁻²²` | `1.24 × 10⁻¹⁸` | clears |
+| 0.00 | 0.0270 | 0.00215 | `4.14 × 10⁻²⁶` | `1.70 × 10⁻²²` | clears |
+
+**The production `(11, 13)` clears the per-archiver budget when a draw
+goes unread after all three tries with probability at most `0.2076`.**
+That boundary assumes no model: the window reads only the probability
+that a draw goes unread, and a measurement reports it directly.
+
+`ρ` is a parameter of the mixture, not something a run observes. What a
+run observes besides the read failure `x` is the first-try failure `p`
+and the conditional rate `c = x / p`: of reads whose first try failed,
+the share whose two later tries also failed. In the model
+`c = ρ + (1 − ρ)·p²`, so independent tries still give `c = p²` (0.09 at
+0.30), not zero. At the retained `p = 0.30` the boundary is `c ≤ 0.692`,
+which is `ρ ≤ 0.661`. A measured `c` is compared with 0.692, or converted
+by `ρ = (c − p²) / (1 − p²)` and compared with 0.661; comparing `c` with
+0.661 would refuse cases that clear.
+
+The per-try failure stays at the retained 0.30; the measured single-try
+miss is 0.041 on a typical window and 0.20 on the worst day observed, so
+the table is conservative in `p`. At a lower measured `p` the boundary on
+`x` does not move and the boundary on `c` rises.
+
+**What this does not say.** `ρ` is unmeasured, so the window's verdict is
+unchanged: it exceeds the budget at the calibration. The two-point mixture
+is the simplest model that has the calibration and independence as its
+ends; a failure that persists for some hours and then clears sits between
+them and depends on how the tries are spaced, which the model does not
+represent. A persona that is down for the whole of `W₂` fails all three
+tries at any `ρ`, and that is a miss the window is meant to count.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
