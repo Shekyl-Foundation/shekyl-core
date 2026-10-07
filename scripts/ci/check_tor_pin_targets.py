@@ -38,9 +38,13 @@ moves that failure to the pull request.
   5. **`tor-pin-verify.yml` verifies every pinned host**, so a newly pinned
      target is not left without its launch run. Read from the parsed
      workflow: a job's `strategy.matrix` must carry the host, and that same
-     job must have a step whose script runs `tor_bundle.py stage`. The words
-     appearing in a comment, or in a job that does not stage, satisfy
-     nothing (rule 47).
+     job must have a step whose script has `python3
+     scripts/release/tor_bundle.py stage` at the start of a line. The words
+     in a comment, as an argument to another command, under the matrix's
+     `exclude`, or in a job that does not stage, satisfy nothing (rule 47).
+     What this cannot see is shell control flow: a stage line inside a
+     branch that never runs still counts. The workflow's own run is the
+     check on that.
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
@@ -63,7 +67,9 @@ import sys
 from pathlib import Path
 
 HOSTS_RE = re.compile(r'^\s*HOSTS="([^"]*)"\s*$', re.MULTILINE)
-STAGE_RE = re.compile(r"scripts/release/tor_bundle\.py\s+stage\b")
+# The stage command where a command goes: at the start of a script line. The
+# same words as an argument (`echo ... tor_bundle.py stage`) run nothing.
+STAGE_RE = re.compile(r"^\s*python3\s+scripts/release/tor_bundle\.py\s+stage\b")
 
 
 def load_yaml(path):
@@ -102,6 +108,9 @@ def matrix_hosts(job):
     def walk(node):
         if isinstance(node, dict):
             for key, value in node.items():
+                # An `exclude` entry names a combination that does NOT run.
+                if key == "exclude":
+                    continue
                 if key == "host" and isinstance(value, str):
                     found.add(value)
                 else:

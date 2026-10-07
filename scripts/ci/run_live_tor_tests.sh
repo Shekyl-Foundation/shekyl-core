@@ -36,7 +36,13 @@ set -u -o pipefail
 crate="${1:?usage: run_live_tor_tests.sh <crate> <output-file>}"
 out="${2:?usage: run_live_tor_tests.sh <crate> <output-file>}"
 
-BOOTSTRAP_RE='did not bootstrap|BootstrapTimeout'
+# The three ways the live suites report a tor that did not reach the network:
+# the client test's own assert, the daemon's typed start error, and the
+# wallet suite's wait for its FIRST Ready. The last is matched whole on
+# purpose. That helper also prints "timed out awaiting second Ready" and
+# other waits, which come after a crash or a respawn and are what those tests
+# exist to catch; none of them is a bootstrap and none is retried.
+BOOTSTRAP_RE='did not bootstrap|BootstrapTimeout|^timed out awaiting first Ready$'
 PIN_TEST='bundled_tor_matches_recorded_pin'
 
 attempt() {

@@ -30,6 +30,8 @@ BOOT2="test b::pub ... FAILED\nthread 'b' (1) panicked at x.rs:2:2:\ntor did not
 PIN="test binary::tests::bundled_tor_matches_recorded_pin ... FAILED\nthread 'p' (1) panicked at x.rs:3:3:\nthe staged bundle must match the recorded pin\n"
 MIX="${BOOT}test c::reap ... FAILED\nthread 'c' (1) panicked at x.rs:4:4:\nchild was not reaped\n"
 PIN_AND_BOOT="${PIN}${BOOT}"
+FIRST_READY="test s::crash ... FAILED\nthread 's' (1) panicked at x.rs:5:5:\ntimed out awaiting first Ready\n"
+SECOND_READY="test s::crash ... FAILED\nthread 's' (1) panicked at x.rs:6:6:\ntimed out awaiting second Ready\n"
 OK="test result: ok. 4 passed\n"
 
 failures=0
@@ -52,6 +54,9 @@ case_() {
 case_ "a pass is one attempt"                        "$OK"           0   ""     0   0   1
 case_ "a bootstrap timeout is retried once"          "$BOOT"         101 "$OK"  0   0   2
 case_ "the other bootstrap wording is retried too"   "$BOOT2"        101 "$OK"  0   0   2
+case_ "the wallet's first-Ready wait is a bootstrap"  "$FIRST_READY"  101 "$OK"  0   0   2
+# The same helper, a later wait: that is a respawn that did not recover.
+case_ "a wait for a later Ready is not"              "$SECOND_READY" 101 "$OK"  0   101 1
 case_ "a second timeout fails: one retry, no loop"   "$BOOT2"        101 "$BOOT" 101 101 2
 case_ "a pin mismatch is never retried"              "$PIN"          101 "$OK"  0   101 1
 case_ "a pin mismatch beside a timeout is not either" "$PIN_AND_BOOT" 101 "$OK" 0   101 1
@@ -71,4 +76,4 @@ if [ "$failures" -ne 0 ]; then
   echo "run_live_tor_tests self-test: $failures case(s) FAILED"
   exit 1
 fi
-echo "run_live_tor_tests self-test: all 9 cases pass"
+echo "run_live_tor_tests self-test: all 11 cases pass"

@@ -114,10 +114,13 @@ jobs:
           set -euo pipefail
           TAG="${GITIAN_TAG}"
           VERSION="${TAG#v}"
-          # A dry run is dispatched with a commit, not a tag, and a package
-          # version has to start with a digit.
+          # A dry run is not on a tag. Whatever was typed into the dispatch
+          # (a commit, or a branch name with a slash in it) is not fit to be
+          # a file name or a package version, so a dry run names everything
+          # from the commit the workflow ran at.
           if [ "${GITHUB_REF#refs/tags/}" = "${GITHUB_REF}" ]; then
-            VERSION="0.0.0.dryrun.${TAG:0:9}"
+            TAG="dryrun-${GITHUB_SHA:0:9}"
+            VERSION="0.0.0.dryrun.${GITHUB_SHA:0:9}"
           fi
           RELEASE="release-assets"
           mkdir -p "$RELEASE"
@@ -180,6 +183,18 @@ jobs:
 
           echo "=== Gitian artifacts ==="
           ls -lh "$RELEASE/"
+
+          # Both Linux archives must be here. The blocks below are written
+          # "if the archive exists", so a Linux build that produced nothing
+          # would otherwise package nothing and still succeed, on a tag as
+          # on a dry run.
+          for host in x86_64-linux-gnu aarch64-linux-gnu; do
+            found="$(find gitian-out -name "shekyl-${host}-*.tar.bz2")"
+            if [ -z "$found" ]; then
+              echo "FATAL: no gitian archive for ${host}; its .deb and .rpm cannot be built" >&2
+              exit 1
+            fi
+          done
 
           # --- Linux x86_64: .deb and .rpm ---
           LINUX_X86=$(find gitian-out -name "shekyl-x86_64-linux-gnu-*.tar.bz2" | head -1)

@@ -474,6 +474,24 @@ def _(tmp):
     expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
 
 
+@tcase("targets: a stage command that is only echoed satisfies nothing")
+def _(tmp):
+    steps = "      - run: echo python3 scripts/release/tor_bundle.py stage --host x\n"
+    wf = workflow_yaml(("x86_64-linux-gnu",), steps=steps)
+    expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
+
+
+@tcase("targets: a host only under the matrix's exclude satisfies nothing")
+def _(tmp):
+    wf = (
+        "on:\n  workflow_dispatch:\njobs:\n  verify:\n    runs-on: ubuntu-latest\n"
+        "    strategy:\n      matrix:\n        target:\n          - host: other-host\n"
+        "        exclude:\n          - target:\n              host: x86_64-linux-gnu\n"
+        "    steps:\n" + STAGE_STEP
+    )
+    expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
+
+
 @tcase("targets: a host in one job and the stage step in another satisfies nothing")
 def _(tmp):
     wf = (
