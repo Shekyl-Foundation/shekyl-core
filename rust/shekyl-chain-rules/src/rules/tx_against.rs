@@ -170,21 +170,12 @@ impl BlockRule for L1 {
     }
 }
 
-/// The `Ct::Fcmp` `reference_block` this transaction carries, if its class
-/// has one to look up: a [`TxClass::Spend`] (CEN-I10's subject) or a
-/// [`TxClass::Emission`] (CEN-J21's: the same context, *required even with
-/// zero fee inputs*, because the vin's backing proof verifies against that
-/// root — `blockchain.cpp:3868–3870`). The serve credit has no CT to carry
-/// one, and the bond post is CEN-H21's funding clause's — not run here;
-/// the census H21 cell records that gap and its ruling (2026-10-07: its
-/// own 4.J row, landing with the I13/I15 Spend-class flip in the PR after
-/// #983, behind an explicit class dispatch). A `Null` CT on a spend is CEN-H15's
-/// refusal in `tx_form`, and here it is nothing to look up.
-fn proof_reference(cx: &TxContext<'_>) -> Option<BlockHash> {
-    if !matches!(cx.class, TxClass::Spend { .. } | TxClass::Emission { .. }) {
-        return None;
-    }
-    match &cx.tx.ct {
+/// The `Ct::Fcmp` `reference_block` this transaction carries; `None` for a
+/// `Null` CT, which has none (on a spend that is CEN-H15's refusal in
+/// `tx_form`, and here it is nothing to look up). Which classes have a
+/// reference to judge is [`judge_reference`]'s dispatch, not this read's.
+fn proof_reference(tx: &Transaction) -> Option<BlockHash> {
+    match &tx.ct {
         Ct::Fcmp {
             reference_block, ..
         } => Some(*reference_block),
@@ -214,13 +205,17 @@ pub(crate) struct ReferenceContext {
 /// — a lookup by hash, so the read is [`ChainView::height_of`] and absence
 /// is one thing: not on this chain). The height it answers is the operand
 /// I11 measures and I12 reads the root at, so this row is written the way
-/// D4 is — a rule that **yields** its operand, run once by `tx_against`,
-/// rather than a [`TxAgainstRule`] whose two successors would each repeat
-/// the lookup.
+/// D4 is — a step that **yields** its operand, the first of the one
+/// sequence [`reference_context`] runs, rather than a [`TxAgainstRule`]
+/// whose two successors would each repeat the lookup.
 ///
 /// A spend with no reference to look up — `Null` CT — is refused here too:
 /// "is a main-chain block" is false of no block. `tx_form` names it H15
 /// first, so this arm is reachable only through `tx_against` alone.
+///
+/// On a non-spend the row is vacuous and recorded by [`judge_reference`]'s
+/// class arm, as [`run_tx_against`](crate::rules::run_tx_against) records
+/// an out-of-scope kind. On an emission the same lookup is CEN-J21's step.
 pub(crate) struct I10;
 
 impl Rule for I10 {
@@ -230,40 +225,16 @@ impl Rule for I10 {
 impl I10 {
     /// The lookup alone: the recorded height of the reference `cx` carries,
     /// `None` when there is none to look up or it is on no block of this
-    /// chain. The row's body, shared with CEN-J21, which applies it to the
-    /// emission and names its own row on the refusal.
+    /// chain. The row it refuses under is the class arm's
+    /// ([`ReferenceRows::lookup`]).
     fn lookup<'id, V: ChainView<'id>>(
         cx: &TxContext<'_>,
         view: &V,
     ) -> Result<Option<BlockHeight>, V::Fault> {
-        let Some(reference) = proof_reference(cx) else {
+        let Some(reference) = proof_reference(cx.tx) else {
             return Ok(None);
         };
         view.height_of(&reference)
-    }
-
-    /// The reference's height for `cx`'s spend, recorded as this row on a
-    /// pass; `Ok(Ok(None))` for a transaction that is not a regular spend
-    /// (nothing to look up — the row is vacuous there and recorded, as
-    /// [`run_tx_against`](crate::rules::run_tx_against) records an
-    /// out-of-scope kind). The emission's reference is CEN-J21's, judged
-    /// by [`J21::check`] over the same lookup.
-    pub(crate) fn reference_height<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
-        view: &V,
-        coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<Option<BlockHeight>>, V::Fault> {
-        if !matches!(cx.class, TxClass::Spend { .. }) {
-            coverage.insert(Self::ROW);
-            return Ok(Ok(None));
-        }
-        match Self::lookup(cx, view)? {
-            Some(ref_height) => {
-                coverage.insert(Self::ROW);
-                Ok(Ok(Some(ref_height)))
-            }
-            None => Ok(Err(InvalidBlock::new(Self::ROW, cx.locus()))),
-        }
     }
 }
 
@@ -283,8 +254,10 @@ impl I10 {
 ///   which is the `>` guard's exact meaning) and this one is below it.
 ///
 /// The operand is the height I10 yielded, so a reference not on the chain
-/// never reaches this row: I10 refused it. Non-spends are recorded
-/// vacuous by `tx_against` alongside I12.
+/// never reaches this row: I10 refused it. The step is [`I11::window`] in
+/// [`reference_context`], refusing under the class arm's row
+/// ([`ReferenceRows::window`]); non-spends are recorded vacuous by
+/// [`judge_reference`] alongside I12.
 pub(crate) struct I11;
 
 impl Rule for I11 {
@@ -312,24 +285,6 @@ impl I11 {
         }
         Ok(())
     }
-
-    /// Judge `ref_height` (I10's operand) against the view's connecting
-    /// height, recording this row on a pass.
-    pub(crate) fn check<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
-        ref_height: BlockHeight,
-        view: &V,
-        coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<()>, V::Fault> {
-        let connecting = Tip::connecting_height(view.tip()?.as_ref());
-        match Self::window(connecting, ref_height) {
-            Ok(()) => {
-                coverage.insert(Self::ROW);
-                Ok(Ok(()))
-            }
-            Err(()) => Ok(Err(InvalidBlock::new(Self::ROW, cx.locus()))),
-        }
-    }
 }
 
 /// CEN-I12, a **definition**: the membership anchor a regular spend's
@@ -353,12 +308,13 @@ impl I11 {
 /// The anchor's consumer on a **spend** is CEN-I15's proof verification,
 /// which does not run on the spend class yet: turning it on refuses every
 /// filler-proof spend fixture the store's and ingest's tests still run
-/// `validate` over — the migration the FOLLOWUPS row *The view-bound rows
-/// of slices 2–4 are fixtured against `MockChain` …* owns, not yet
-/// landed. Until it lands the spend's anchor is derived, recorded and
-/// dropped — staged with its consumer named, so the derivation and its
-/// fault classification are reviewed here, where the operand is defined.
-/// On an **emission** the same read is CEN-J21's, and its anchor is
+/// `validate` over — the migration the FOLLOWUPS I13 row owns (RULED
+/// 2026-10-07: the fixtures become scenarios, the flip lands with the last
+/// conversion). Until it lands [`SPEND_REFERENCE`] stages the depth step
+/// off, and the spend's anchor is derived, recorded and dropped — staged
+/// with its consumer named, so the derivation and its fault
+/// classification are reviewed here, where the operand is defined. On an
+/// **emission** the same read is CEN-J21's step, and its anchor is
 /// consumed: [`judge_reference`] yields it in the [`ReferenceContext`]
 /// the emission's proof rows (CEN-J25, CEN-J26) verify against.
 pub(crate) struct I12;
@@ -368,14 +324,13 @@ impl Rule for I12 {
 }
 
 impl I12 {
-    /// The anchor for a spend whose reference I10 placed at `ref_height`,
-    /// recorded as this row.
+    /// The anchor at `ref_height`, a height I10 just placed on the chain.
+    /// Recorded by [`reference_context`] under the class arm's row
+    /// ([`ReferenceRows::anchor`]), where it is derived.
     pub(crate) fn anchor<'id, V: ChainView<'id>>(
         ref_height: BlockHeight,
         view: &V,
-        coverage: &mut RuleCoverage,
     ) -> Result<CurveTreeRoot, ViewRead<V::Fault>> {
-        coverage.insert(Self::ROW);
         match view.root_at(ref_height).map_err(ViewRead::View)? {
             AtHeight::Recorded(root) => Ok(root),
             AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
@@ -401,9 +356,11 @@ impl I12 {
 /// this row implements the code's predicate until that ruling, as every
 /// row does.
 ///
-/// Not yet run on the spend class (the same fixture migration that holds
-/// CEN-I15 — see [`I12`]); run on the emission as part of CEN-J21, which
-/// is the row that refuses there.
+/// The depth step of [`reference_context`], refusing under the class
+/// arm's row ([`ReferenceRows::depth`]). Not yet run on the spend class
+/// (the same fixture migration that holds CEN-I15 — see [`I12`];
+/// [`SPEND_REFERENCE`] stages the step off); run on the emission as part
+/// of CEN-J21, which is the row that refuses there.
 pub(crate) struct I13;
 
 impl Rule for I13 {
@@ -540,110 +497,195 @@ impl I15 {
 /// messages, and the census keys them all to this row. Refuses at the
 /// transaction.
 ///
-/// A storage-pruned body (`prunable: None`) has no declared depth and no
-/// proof to verify against the context; `tx_form` refuses it before this
-/// stage, and here it is refused rather than judged over a missing field.
+/// The row has no body of its own: it is [`reference_context`] with every
+/// step attributed to this row ([`EMISSION_REFERENCE`]) — the same
+/// sequence the spend runs under I10–I13, chosen by [`judge_reference`]'s
+/// class arm. A storage-pruned body (`prunable: None`) has no declared
+/// depth and no proof to verify against the context; `tx_form` refuses it
+/// before this stage, and here it is refused rather than judged over a
+/// missing field.
 pub(crate) struct J21;
 
 impl Rule for J21 {
     const ROW: CenRow = CenRow::J21;
 }
 
-impl J21 {
-    /// The context for `cx`'s emission, recorded as this row on a pass.
-    fn check<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
-        view: &V,
-        coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<ReferenceContext>, ViewRead<V::Fault>> {
-        let refuse = || InvalidBlock::new(Self::ROW, cx.locus());
-        let Some(ref_height) = I10::lookup(cx, view).map_err(ViewRead::View)? else {
-            return Ok(Err(refuse()));
-        };
-        let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
-        if I11::window(connecting, ref_height).is_err() {
-            return Ok(Err(refuse()));
-        }
-        let Ct::Fcmp {
-            prunable: Some(prunable),
-            ..
-        } = &cx.tx.ct
-        else {
-            return Ok(Err(refuse()));
-        };
-        // The per-height reads, after the height is known recorded: the
-        // anchor (I12's read, under this row) and the depth (I13's).
-        let anchor = match view.root_at(ref_height).map_err(ViewRead::View)? {
-            AtHeight::Recorded(root) => root,
-            AtHeight::AboveTip => {
-                return Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
-                    at: ref_height,
-                    record: PerHeightRecord::CurveTreeRoot,
-                }))
-            }
-        };
-        let depth = I13::depth_at_reference(ref_height, view)?;
-        // Admitted into `[1, depth]`, so it fits the verifier's `u8`; a
-        // declared depth the `u8` does not hold is outside the range.
-        let tree_depth = match u8::try_from(prunable.tree_depth) {
-            Ok(declared) if I13::admits(prunable.tree_depth, depth) => declared,
-            _ => return Ok(Err(refuse())),
-        };
-        coverage.insert(Self::ROW);
-        Ok(Ok(ReferenceContext {
-            ref_height,
-            anchor,
-            tree_depth,
-        }))
+/// The row each step of [`reference_context`] is recorded under and
+/// refuses under — the attribution a class arm of [`judge_reference`]
+/// chooses. The sequence is one body; the rows are the class's: on a
+/// spend the steps are four rows (CEN-I10, I11, I12, I13), on an emission
+/// they are one (CEN-J21, *"as CEN-I10–I13"*). Widening which classes
+/// run the sequence is a new constant and a new arm, never a change to
+/// the body — the shape that keeps the emission on J21 whatever the
+/// spend's gate becomes.
+#[derive(Clone, Copy)]
+struct ReferenceRows {
+    /// The reference is a block of this chain ([`I10::lookup`]).
+    lookup: CenRow,
+    /// Its height is inside the window below the connecting height
+    /// ([`I11::window`]).
+    window: CenRow,
+    /// The root at it is the anchor ([`I12::anchor`]) — a definition,
+    /// recorded where derived; its missing record is `Corrupt`.
+    anchor: CenRow,
+    /// The declared depth is admitted against the depth at it
+    /// ([`I13::admits`] over [`I13::depth_at_reference`]). `None` is the
+    /// step staged off for the class: the sequence stops after the anchor
+    /// and yields no context.
+    depth: Option<CenRow>,
+}
+
+impl ReferenceRows {
+    /// The rows of the three steps that can leave an earlier step passed
+    /// behind them, in sequence order; the depth step is last and only
+    /// ever refuses after all three.
+    const fn steps(self) -> [CenRow; 3] {
+        [self.lookup, self.window, self.anchor]
     }
 }
 
-/// The rows that consume the height [`I10`] yields. Recorded vacuous when
-/// that height does not exist — a non-spend, where I10 itself recorded
-/// vacuous. CEN-I13 joins this list when it runs on the spend class; the
-/// list is the whole of what that commit has to remember.
-const REFERENCE_SUCCESSORS: &[CenRow] = &[I11::ROW, I12::ROW];
+/// The regular spend's attribution: I10, I11 and I12, with I13 staged
+/// off — the flip is `Some(I13::ROW)` here and nothing else (see [`I12`]).
+const SPEND_REFERENCE: ReferenceRows = ReferenceRows {
+    lookup: I10::ROW,
+    window: I11::ROW,
+    anchor: I12::ROW,
+    depth: None,
+};
 
-/// The reference sequence: CEN-I10, CEN-I11 and CEN-I12 on a spend;
-/// CEN-J21 on an emission.
+/// The emission's attribution: every step is CEN-J21's.
+const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
+    lookup: J21::ROW,
+    window: J21::ROW,
+    anchor: J21::ROW,
+    depth: Some(J21::ROW),
+};
+
+/// A refusal at the step under `row`, after `passed` steps of `rows` have
+/// passed: those steps' rows are recorded, except where the row is the
+/// refusing one — a refused row is not recorded, whichever of its steps
+/// refused it (on an emission, every step is J21).
+fn refuse_step(
+    cx: &TxContext<'_>,
+    rows: ReferenceRows,
+    passed: usize,
+    row: CenRow,
+    coverage: &mut RuleCoverage,
+) -> InvalidBlock {
+    for step in rows.steps().into_iter().take(passed) {
+        if step != row {
+            coverage.insert(step);
+        }
+    }
+    InvalidBlock::new(row, cx.locus())
+}
+
+/// The one reference sequence, in the C++'s order (`blockchain.cpp:4113`
+/// for the spend, `:3868` for the emission — the same reads): the
+/// reference is looked up (I10's step), its height measured against the
+/// connecting height (I11's), the declared depth read off the body where
+/// the class judges it, the anchor read at the height (I12's), the tree's
+/// depth at the height read and the declared one admitted against it
+/// (I13's). Each step is recorded under and refuses under `rows`' row for
+/// it; the per-height reads classify a missing record as
+/// [`Corrupt::HoleBelowTip`], never a verdict.
 ///
-/// On a spend, I10 yields the reference height; on a pass, I11 measures it
-/// and I12 reads the anchor at it. The anchor is in flight for CEN-I15 on
-/// this class (see [`I12`]): derived here so a missing root is classified
-/// with the operand, and dropped beside that derivation until the proof is
-/// verified against it — the arm yields `None`. On an emission, J21 judges
-/// the whole context and yields it, for CEN-J25's backing proof and
-/// CEN-J26's fee-input proof; I10–I12 are recorded vacuous there, as on
-/// every class that is not a spend. A transaction with no reference to
-/// look up records everything vacuous and yields `None`.
+/// Yields the [`ReferenceContext`] when the depth step ran, `None` when
+/// `rows` stages it off — the anchor then derived, recorded and dropped.
+fn reference_context<'id, V: ChainView<'id>>(
+    cx: &TxContext<'_>,
+    view: &V,
+    rows: ReferenceRows,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<Option<ReferenceContext>>, ViewRead<V::Fault>> {
+    let Some(ref_height) = I10::lookup(cx, view).map_err(ViewRead::View)? else {
+        return Ok(Err(refuse_step(cx, rows, 0, rows.lookup, coverage)));
+    };
+    let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+    if I11::window(connecting, ref_height).is_err() {
+        return Ok(Err(refuse_step(cx, rows, 1, rows.window, coverage)));
+    }
+    // The declared depth, before the per-height reads: a storage-pruned
+    // body is refused under the depth row rather than judged over a
+    // missing field. Not read where the step is staged off.
+    let declared = match rows.depth {
+        None => None,
+        Some(row) => match &cx.tx.ct {
+            Ct::Fcmp {
+                prunable: Some(prunable),
+                ..
+            } => Some((row, prunable.tree_depth)),
+            _ => return Ok(Err(refuse_step(cx, rows, 2, row, coverage))),
+        },
+    };
+    let anchor = I12::anchor(ref_height, view)?;
+    let Some((row, declared)) = declared else {
+        // Staged off: the anchor is in flight for CEN-I15 on this class.
+        // Dropping it here, beside the derivation, is the staging.
+        for step in rows.steps() {
+            coverage.insert(step);
+        }
+        return Ok(Ok(None));
+    };
+    let depth = I13::depth_at_reference(ref_height, view)?;
+    // Admitted into `[1, depth]`, so it fits the verifier's `u8`; a
+    // declared depth the `u8` does not hold is outside the range.
+    let tree_depth = match u8::try_from(declared) {
+        Ok(fits) if I13::admits(declared, depth) => fits,
+        _ => return Ok(Err(refuse_step(cx, rows, 3, row, coverage))),
+    };
+    for step in rows.steps() {
+        coverage.insert(step);
+    }
+    coverage.insert(row);
+    Ok(Ok(Some(ReferenceContext {
+        ref_height,
+        anchor,
+        tree_depth,
+    })))
+}
+
+/// The reference rows, dispatched on the transaction's class: CEN-I10,
+/// CEN-I11 and CEN-I12 on a spend (I13 staged off, see [`I12`]); CEN-J21
+/// on an emission; vacuous on every other class.
+///
+/// The dispatch is explicit so that no gate decides which arm a class
+/// reaches: the emission reaches J21 because it is an emission, and the
+/// spend's arm can widen (to the inputs that are `ToKey`, to the bond
+/// post's funding spends under its own row) without touching the
+/// emission's. Each arm records the other arms' rows vacuous first, as
+/// [`run_tx_against`](crate::rules::run_tx_against) records an
+/// out-of-scope kind, then runs [`reference_context`] under its own
+/// attribution. On a spend the anchor is in flight for CEN-I15 (derived
+/// so a missing root is classified with the operand, dropped beside that
+/// derivation) and the arm yields `None`; on an emission the whole
+/// context is J21's and is yielded, for CEN-J25's backing proof and
+/// CEN-J26's fee-input proof. A class with no reference to look up
+/// records everything vacuous and yields `None`.
 pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<Option<ReferenceContext>>, ViewRead<V::Fault>> {
-    let ref_height = match I10::reference_height(cx, view, coverage).map_err(ViewRead::View)? {
-        Ok(height) => height,
-        Err(refused) => return Ok(Err(refused)),
-    };
-    let Some(ref_height) = ref_height else {
-        for row in REFERENCE_SUCCESSORS {
-            coverage.insert(*row);
+    match cx.class {
+        TxClass::Spend { .. } => {
+            coverage.insert(J21::ROW);
+            reference_context(cx, view, SPEND_REFERENCE, coverage)
         }
-        if matches!(cx.class, TxClass::Emission { .. }) {
-            return J21::check(cx, view, coverage).map(|verdict| verdict.map(Some));
+        TxClass::Emission { .. } => {
+            for row in SPEND_REFERENCE.steps() {
+                coverage.insert(row);
+            }
+            reference_context(cx, view, EMISSION_REFERENCE, coverage)
         }
-        coverage.insert(J21::ROW);
-        return Ok(Ok(None));
-    };
-    coverage.insert(J21::ROW);
-    match I11::check(cx, ref_height, view, coverage).map_err(ViewRead::View)? {
-        Ok(()) => {}
-        Err(refused) => return Ok(Err(refused)),
+        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } | TxClass::BondPost { .. } => {
+            for row in SPEND_REFERENCE.steps() {
+                coverage.insert(row);
+            }
+            coverage.insert(J21::ROW);
+            Ok(Ok(None))
+        }
     }
-    // In flight for CEN-I15 on the spend class. Dropping it here, beside
-    // the derivation, is the staging; `validate` does not name the value.
-    let _anchor = I12::anchor(ref_height, view, coverage)?;
-    Ok(Ok(None))
 }
 
 /// CEN-I17, a **definition**: what each input's hybrid signature is over —

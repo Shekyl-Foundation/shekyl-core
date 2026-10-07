@@ -820,14 +820,19 @@ coverages, and mints the `ChainValid`. The view-bound per-tx rules are
 `TxAgainstRule`s (`check(cx, view) -> Result<Verdict<()>, V::Fault>`, run by
 `run_tx_against`, out-of-scope rows recorded vacuous like `TxRule`'s), plus
 two D4-arranged sequences that yield an operand and consume it —
-`judge_reference` (I10 yields the height, I11 measures it, I12 reads the
-anchor; on the Emission class the same sequence is **J21** — the context
-is required with zero fee inputs because the vin's backing proof verifies
-against it — and the declared depth is judged through `I13::admits`
-against `depth_at(ref_height)`; it runs for `TxClass::Spend` and
-`Emission` and yields a `ReferenceContext` the later judges consume —
-slice 8 row 9, 2026-10-06; **the bond post's funding spends do not pass
-through it**, CEN-H21's open finding) and `judge_signatures` (I17 yields
+`judge_reference` (an explicit `match cx.class`, one arm per class, over
+**one** sequence `reference_context` — I10's lookup yields the height,
+I11's window measures it, I12's read is the anchor, I13's read and
+predicate admit the declared depth — with the row each step records and
+refuses under chosen by the arm's `ReferenceRows`: four rows on a spend
+(`SPEND_REFERENCE`, the depth step staged off until the flip), one on an
+emission (`EMISSION_REFERENCE`, every step **J21** — the context is
+required with zero fee inputs because the vin's backing proof verifies
+against it); it yields a `ReferenceContext` the later judges consume —
+slice 8 row 9, 2026-10-06; the dispatch and the collapse of J21's own copy
+of the sequence are the I13/I15 carrier PR's first commit, 2026-10-07;
+**the bond post's funding spends do not pass through it**, CEN-H21's open
+finding, its own 4.J row in that PR) and `judge_signatures` (I17 yields
 every input's signing hash, I18 verifies over it), with
 `judge_serve_credit_bond` between them (one
 `bond_record` read per serve-credit vin feeding J4, J5, J6 — the C++
@@ -1263,9 +1268,18 @@ something that is not a call is counted, since the gate cannot see its
 type), and a bare outer `Err(` that is neither the inner half of `Ok(Err(`
 nor wraps `InvalidBlock` nor is a match-arm pattern. `map_err(ViewRead::View)`
 is not a site. The set of rules with at least one site must equal
-`CORRUPT_CAPABLE = {B4}`: a second rule with a site is a finding naming the
-site, and a listed rule with no site (or no `impl`) is a stale entry and
-refuses too. Subject refusals exit 2: no rule sources, no `impl BlockRule`,
+`CORRUPT_CAPABLE = {B4}`, whose entry names the read the halt comes from
+(`anchor_window` through `recorded`; `committed_hybrid_key`): a second rule
+with a site is a finding naming the site, and a listed rule with no site (or
+no `impl`) is a stale entry and refuses too. The finding leads with the rule
+the gate enforces — *a block rule may propagate `Corrupt`, never consume it*
+— because the gate sees capability, not intent: a rule that swallows a
+`Corrupt` into a refusal trips it exactly as one that lifts one does, and a
+message opening with "if the halt is intended, add it" invited whitelisting
+the defect. The same sentence is what a reader needs at a match guard on the
+variant (`ViewRead::Corrupt(c) if … =>`), which the walk counts as a site: a
+guard that stops the halt is consumption, not a false positive (reworded
+2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `impl BlockRule`,
 fewer than ten of them, no lifting function, `recorded` not a lifter.
 `--describe` prints every rule's sites; `--selftest` bites each refusal on
 synthetic sources, including `map_err(ViewRead::Corrupt)?` and

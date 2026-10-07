@@ -558,8 +558,10 @@ jobs:
         # the path `ViewRead::Corrupt` (a call or the constructor function,
         # so `map_err(ViewRead::Corrupt)` counts), a use of a `-> ViewRead`
         # converter, a `?` on a lifting function, a bare outer `Err(` — and
-        # holds the set with a site to CORRUPT_CAPABLE exactly; a stale entry
-        # refuses too. A match arm on the path is not a site. Subject asserted: no rule
+        # holds the set with a site to CORRUPT_CAPABLE exactly, each entry
+        # naming the read its halt comes from; a stale entry refuses too. The
+        # finding leads with the rule enforced (a block rule may propagate
+        # `Corrupt`, never consume it). A match arm on the path is not a site. Subject asserted: no rule
         # files, no `impl BlockRule`, too few of them, no lifting function,
         # `recorded` not among them — each exits 2 (47-gate-subject-assertion).
         if: '!cancelled()'
