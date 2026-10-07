@@ -8,14 +8,15 @@
 //! coinbase spend joins a closed shard, serves it for one epoch, and —
 //! once that epoch has closed and its `Σwork` and budget are the store's
 //! rows — claims its reward with a transaction `emission_assembly` built
-//! the way the engine handler builds one. `validate` admits it; the fold
-//! writes the claim onto the record; the store holds what the verdict
-//! derived. That is the one admitted claim the row pins. Beside it, the
-//! block pass's one emission row with a pipeline witness nowhere else:
-//! the same claim listed with a twin is CEN-G9's refusal (slice 8 row 9
-//! retired the mutation family's `DuplicateClaim` here — `Mutation`
-//! docs). The row's other half — the driver's bytes and the engine's
-//! held identical for one shape — lives in `shekyl-engine-core`'s
+//! the way the engine handler builds one. `validate` admits it at
+//! `h_close + 1`; the fold writes the claim onto the record; the store
+//! holds what the verdict derived. That is the one admitted claim the row
+//! pins. Beside it, two refusals with a pipeline witness nowhere else:
+//! the same claim at `h_close` is CEN-J25's (the verify's strict
+//! finalization, slice 8 row 9), and listed with a twin it is CEN-G9's
+//! (slice 8 row 9 retired the mutation family's `DuplicateClaim` here —
+//! `Mutation` docs). The row's other half — the driver's bytes and the
+//! engine's held identical for one shape — lives in `shekyl-engine-core`'s
 //! `stake_engine_tests`, which reaches this crate's assembly through the
 //! `harness` feature.
 //!
@@ -243,14 +244,24 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         reward_amount_plain: vec![share.reward],
     };
 
-    // The claim connects in the epoch after `served` — at its first
-    // block, which is past the persona outputs' maturity and the
-    // reference window (`DEFAULT_LOCK_WINDOW` and the reorg cap both fit
-    // inside an epoch of twenty from a join that was not its last block).
-    let connecting = count_at_close;
+    // The claim is assembled for the epoch after `served`, at its first
+    // block — `h_close(served)`, which is past the persona outputs'
+    // maturity and the reference window (`DEFAULT_LOCK_WINDOW` and the
+    // reorg cap both fit inside an epoch of twenty from a join that was
+    // not its last block). It **connects one block later**: the verify's
+    // finalization is strict (`current_block_height > h_close(E)`; the
+    // F-E1 KAT pins reject-at-`h_close`, accept-at-`h_close + 1`), while
+    // the fold's L7 window admits at `h_close`. Slice 8 row 9 measured
+    // the gap here — this claim listed at `h_close` was CEN-J25's
+    // `EpochNotFinalized` — and the rule is the criterion: the claim at
+    // `h_close` is J25's driven refusal below, and the same bytes connect
+    // at `h_close + 1` (the reference, `h_close − MIN_AGE`, is admissible
+    // at both).
+    let at_close = count_at_close;
+    let connecting = count_at_close + 1;
     let owner = Owner::persona(persona.keys());
-    let backing = spender.owned_input(&owner, backing_key, connecting);
-    let fee_input = spender.owned_input(&owner, fee_key, connecting);
+    let backing = spender.owned_input(&owner, backing_key, at_close);
+    let fee_input = spender.owned_input(&owner, fee_key, at_close);
     let claim = assemble_emission_claim(
         persona.keys(),
         &Zeroizing::new(CLAIM_TX_KEY),
@@ -261,6 +272,22 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &backing.tree,
     );
     assert_eq!(claim.persona, persona.id());
+    let claim_tx =
+        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
+
+    // CEN-J25 on the pipeline: the claim at `h_close(served)` itself,
+    // where the fold's window would admit it, is the verify's refusal at
+    // the transaction (`EpochNotFinalized`) — the one row that reads the
+    // verify, and its one driven negative. The block does not connect.
+    refused_at(
+        scenario.mine_listing(vec![claim_tx.clone()]).await,
+        CenRow::J25,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+    mine_to(&mut scenario, &mut mined, BlockHeight::from_raw(connecting)).await;
+    catch_up(&mut spender, &mined, &mut seen);
 
     // CEN-G9 on the pipeline: a block listing this claim beside a twin —
     // the same persona and terms, its own fee input and transaction key,
@@ -282,8 +309,6 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         FEE,
         &twin_backing.tree,
     );
-    let claim_tx =
-        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
     let twin_tx = Transaction::from_bytes(&twin.bytes).expect("the twin's bytes parse");
     refused_at(
         scenario.mine_listing(vec![claim_tx.clone(), twin_tx]).await,
@@ -335,7 +360,19 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         .await
         .unwrap_or_else(|outcome| panic!("the driver's emission claim connects: {outcome}"));
     assert_eq!(block.height, BlockHeight::from_raw(connecting));
-    for row in [CenRow::H22, CenRow::I18, CenRow::L7] {
+    // The claim's rows in the connect: the shape (H22), the reference
+    // context, the gathered closes and the verify over them (J21, J23,
+    // J25 — slice 8 row 9), the signatures (I18), the fold (L7). This is
+    // the one positive witness for J23 and J25; the mock cannot close an
+    // epoch.
+    for row in [
+        CenRow::H22,
+        CenRow::J21,
+        CenRow::J23,
+        CenRow::J25,
+        CenRow::I18,
+        CenRow::L7,
+    ] {
         assert!(block.judged_by.contains(&row), "{row} judged the claim");
     }
 

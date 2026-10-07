@@ -292,6 +292,13 @@ pub(crate) struct EpochSnapshot<'r> {
     pub(crate) shards: Vec<EpochCloseShard>,
     /// One pair per `(bond, credited shard)`, bonds outer, shards ascending.
     pub(crate) pairs: Vec<CreditPair>,
+    /// The claimant's index into `bonds`, when the gather was asked for
+    /// one and that persona has a credit at `E` — the verify's
+    /// `EmissionEpochSource::claimant_bond_idx` (the C++ gather sets it
+    /// where `p_canonical_id` matches, `db_lmdb.cpp:7648`). `None` for the
+    /// close, which names no claimant, and for a claimant with no credit
+    /// at `E`: it is not in the snapshot, and the verify says so.
+    pub(crate) claimant_bond_idx: Option<usize>,
 }
 
 /// Assemble the [`EpochSnapshot`] for the epoch whose close read
@@ -305,6 +312,10 @@ pub(crate) struct EpochSnapshot<'r> {
 /// snapshot: it earned nothing at `E`, and a bond with no pair would be a
 /// zero term `epoch_close_compute` never asked for.
 ///
+/// `claimant` is the persona the verify is judging a claim for, whose
+/// index among the bonds it needs ([`EpochSnapshot::claimant_bond_idx`]);
+/// the close passes `None`.
+///
 /// The shards are every closed shard (`ARW-Q4`: zeros included, the close
 /// writes an `RMarket` for each) at the close height the universe places,
 /// then every open shard a credit names — it counts toward scarcity and
@@ -317,6 +328,7 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
     view: &V,
     universe: &ClosedUniverse<'id>,
     records: &'r [(PCanonicalId, BondRecord)],
+    claimant: Option<&PCanonicalId>,
     mut credited: impl FnMut(&PCanonicalId) -> Result<Vec<u64>, ViewRead<V::Fault>>,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
     let mut shards = Vec::new();
@@ -330,12 +342,16 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
 
     let mut bonds = Vec::new();
     let mut pairs = Vec::new();
+    let mut claimant_bond_idx = None;
     for (persona, record) in records {
         let shards_credited = credited(persona)?;
         if shards_credited.is_empty() {
             continue;
         }
         let bond_idx = bonds.len();
+        if claimant == Some(persona) {
+            claimant_bond_idx = Some(bond_idx);
+        }
         bonds.push(EpochCloseBond {
             join_settlement_epoch: record.join_settlement_epoch.to_raw(),
             is_foundation_complete_tree: record.is_complete_tree(),
@@ -367,6 +383,7 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
         bonds,
         shards,
         pairs,
+        claimant_bond_idx,
     })
 }
 
@@ -468,7 +485,8 @@ impl super::Transition {
             bonds,
             shards,
             pairs,
-        } = gather_epoch_snapshot(view, &universe, &records, |persona| {
+            claimant_bond_idx: _,
+        } = gather_epoch_snapshot(view, &universe, &records, None, |persona| {
             self.credited_shards(view, *persona, epoch)
         })?;
 

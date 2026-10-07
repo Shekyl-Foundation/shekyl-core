@@ -63,6 +63,7 @@ use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
 use crate::rules::tx_emission::{J19, J20, J22, J24};
+use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
 use crate::rules::{self, BlockContext, FormContext};
@@ -633,11 +634,12 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    // The rule set reaches two rows here: J15's reorg cap and settlement
-    // schedule, J16's current epoch at the connecting height
-    // (`judge_bond_post`). No 4.I row reads it yet; the first that does (a
-    // schedule step varying a reference-window constant, Q5) takes it from
-    // the same argument.
+    // The rule set reaches the archival rows here: J15's reorg cap and
+    // settlement schedule, J16's current epoch at the connecting height
+    // (`judge_bond_post`), J23's close heights and J25's schedule
+    // (`judge_emission_claim`). No 4.I row reads it yet; the first that
+    // does (a schedule step varying a reference-window constant, Q5) takes
+    // it from the same argument.
     let mut coverage = RuleCoverage::EMPTY;
     let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
         Ok(cx) => cx,
@@ -653,7 +655,7 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    let _reference = match judge_reference(&cx, view, &mut coverage)? {
+    let reference = match judge_reference(&cx, view, &mut coverage)? {
         Ok(reference) => reference,
         Err(refused) => return Ok(Err(refused)),
     };
@@ -679,6 +681,16 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // the first 4.J row to read a per-height record, so the sequence's
     // fault is a `ViewRead` from here on.
     match judge_bond_post(&cx, view, rule_set, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The emission arm of `check_tx_inputs`: every claimed epoch's frozen
+    // close gathered (J23), then the verify over the gathers, the
+    // claimant's record before the block, J21's reference context and the
+    // statics' operands (J25). Before the signatures, as the C++ verifies
+    // the claim before `verify_transaction_pqc_auth`; J26's fee-input
+    // proof joins the sequence in `judge_emission_claim`.
+    match judge_emission_claim(&cx, view, rule_set, reference.as_ref(), &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

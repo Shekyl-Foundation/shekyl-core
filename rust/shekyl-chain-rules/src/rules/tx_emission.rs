@@ -23,14 +23,14 @@
 //! alone, each row still refuses what it cannot judge (J20 and J24 on a
 //! body whose bytes they cannot read), the I5/H10 arrangement.
 //!
-//! What they do **not** read: no record (J23's frozen budget rows and the
-//! claimant's bond are row 9's, with the verify), no tree root (J21), no
-//! fee-input proof (J26). The positive witness for every one of them is
-//! row 7's **driven claim** — the engine's `AssembleEmissionClaim` through
-//! the ingest driver — not a constructed body: the harness's
-//! `fixture::emission_vin` is a parseable vin with filler auths and
-//! backing, enough for these rows and for L7, and nothing J25 would
-//! accept.
+//! What they do **not** read: no record (J23's frozen closes and the
+//! claimant's bond are `tx_emission_against`'s, with the verify), no tree
+//! root (J21), no fee-input proof (J26). The positive witness for every
+//! one of them is row 7's **driven claim** — the engine's
+//! `AssembleEmissionClaim` through the ingest driver — not a constructed
+//! body: the harness's `fixture::emission_vin` is a parseable vin with
+//! filler auths and backing, enough for these rows and for L7, and
+//! nothing J25 would accept.
 
 use shekyl_archival_retention::{
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, RewardCommit,
@@ -47,7 +47,7 @@ use crate::verdict::{InvalidBlock, Verdict};
 /// `Emission`. H6 has refused a second archival vin before any rule here
 /// runs, so a class of `Emission` holds exactly one; its index is where the
 /// C++'s `archival_emission_index` points.
-fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8])> {
+pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8])> {
     if !matches!(cx.class, TxClass::Emission { .. }) {
         return None;
     }

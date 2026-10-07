@@ -211,10 +211,14 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J19,
             CenRow::J20,
             // Slice 8 row 9: the emission's reference context (I10–I13's
-            // reads, judged as one row in `judge_reference`).
+            // reads, judged as one row in `judge_reference`), the frozen
+            // closes gathered per claimed epoch and the verify over them
+            // (`judge_emission_claim`).
             CenRow::J21,
             CenRow::J22,
+            CenRow::J23,
             CenRow::J24,
+            CenRow::J25,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

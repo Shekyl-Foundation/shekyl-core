@@ -513,9 +513,12 @@ census_rows! {
         // as one row over I10–I13's reads in `judge_reference`.
         J21 implemented(crate::rules::tx_against::J21),
         J22 implemented(crate::rules::tx_emission::J22),
-        J23 pending,
+        // J23 and J25 (slice 8 row 9): the frozen closes gathered per
+        // claimed epoch, then the retention verify over them, in
+        // `judge_emission_claim`.
+        J23 implemented(crate::rules::tx_emission_against::J23),
         J24 implemented(crate::rules::tx_emission::J24),
-        J25 pending,
+        J25 implemented(crate::rules::tx_emission_against::J25),
         J26 pending,
         // 4.K Reorg / alternative chains
         K1a pending,

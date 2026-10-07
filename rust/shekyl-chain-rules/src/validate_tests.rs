@@ -162,11 +162,13 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 // coinbase (no emission vin).
                 CenRow::J19,
                 CenRow::J20,
-                // Slice 8 row 9: the emission's reference context, vacuous
-                // on the coinbase likewise.
+                // Slice 8 row 9: the emission's reference context, gathers
+                // and verify, vacuous on the coinbase likewise.
                 CenRow::J21,
                 CenRow::J22,
+                CenRow::J23,
                 CenRow::J24,
+                CenRow::J25,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.
@@ -311,9 +313,9 @@ fn tx_entry_points_record_the_landed_rows() {
     // the signatures over it, of which a coinbase has none), J4–J6 (the
     // bond state behind a serve-credit vin, of which a coinbase has none),
     // J13–J16 and J18 (the bond post against its record and the join's
-    // admission, of which a coinbase has none), J21 (the emission's
-    // reference context, of which a coinbase has none) — are recorded
-    // vacuous on a coinbase.
+    // admission, of which a coinbase has none), J21, J23 and J25 (the
+    // emission's reference context, gathers and verify, of which a
+    // coinbase has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -336,7 +338,9 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
-                CenRow::J21
+                CenRow::J21,
+                CenRow::J23,
+                CenRow::J25
             ]
         );
     });

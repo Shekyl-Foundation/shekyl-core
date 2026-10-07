@@ -106,7 +106,7 @@ mod inputs;
 mod slash;
 
 pub(crate) use arm::BondArm;
-pub(crate) use close::accrue;
+pub(crate) use close::{accrue, gather_epoch_snapshot, recorded_credits, EpochSnapshot};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
     Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,

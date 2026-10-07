@@ -605,15 +605,20 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     cleanup(&path);
 }
 
-// ------------------------------------------------- CEN-L7 over a record
+// ------------------------------------------------ CEN-J23 over a record
 
 /// A claim for the open epoch by a persona whose record the store
 /// **holds** — inserted by an earlier block, read back through the batch
-/// view — is `NotSettled`, refused at CEN-L7 on the emission's vin. The
-/// rules crate's driver can reach this arm only over a record the same
-/// block inserted; over a persisted one it is the store's to witness.
+/// view — is refused at CEN-J23 on the transaction: the open epoch has no
+/// frozen close to gather, whatever the record says. Until E6 slice 8
+/// row 9 this claim passed every rule and met the fold's `NotSettled` arm
+/// at CEN-L7 on the emission's vin; that arm is now the backstop beneath
+/// J23's read, reached only if the two disagreed. The rules crate's driver
+/// reaches a persisted record only through a block the same run
+/// connected; over one read back from the store it is the store's to
+/// witness, through the batch view.
 #[test]
-fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
+fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     let path = tmp("aw-claim-open");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut hashes = Vec::new();
@@ -657,10 +662,10 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
     };
     let mut claim = fixture::balanced_emission(fixture::point(15), canonical_bytes, 1_000_000);
     // CEN-J21 (E6 slice 8 row 9) judges the declared depth against the
-    // tree's at the reference before L7 sees the vin. The harness's shape
-    // declares `0`, the mock's empty tree; here the tree holds the genesis
-    // coinbase's leaf at the reference, so its depth there is at least `1`
-    // — the smallest depth J21 admits.
+    // tree's at the reference before J23 reads the claim. The harness's
+    // shape declares `0`, the mock's empty tree; here the tree holds the
+    // genesis coinbase's leaf at the reference, so its depth there is at
+    // least `1` — the smallest depth J21 admits.
     if let shekyl_wire::Ct::Fcmp {
         prunable: Some(p), ..
     } = &mut claim.ct
@@ -677,10 +682,9 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_l7() {
     });
     assert_refused(
         out.expect("judging only reads"),
-        CenRow::L7,
-        Locus::Input {
+        CenRow::J23,
+        Locus::Tx {
             slot: TxSlot::Listed(0),
-            input: 1,
         },
     );
     drop(store);

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::archival::RMarket;
+use shekyl_types::archival::{RMarket, SigmaWorkMilli};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
     LongTermWeight, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
@@ -114,10 +114,15 @@ pub struct MockChain {
     /// planted fold, the way a planted key image is a planted spend.
     total_burned: AtomicUnits,
     /// Planted market prices — CEN-J15's `r_market` read, keyed as the
-    /// view keys it. The one archival read this chain plants
-    /// ([`with_r_market`](Self::with_r_market)); every other archival read
-    /// answers *no bonds*. Empty unless a fixture prices a shard.
+    /// view keys it ([`with_r_market`](Self::with_r_market)). Empty unless
+    /// a fixture prices a shard.
     r_market: BTreeMap<(ShardId, SettlementEpoch), RMarket>,
+    /// Planted frozen closes — CEN-J23's `budget` and CEN-J25's
+    /// `sigma_work` reads, per epoch ([`with_close`](Self::with_close)).
+    /// With the prices, the archival reads this chain plants; every other
+    /// archival read answers *no bonds*. Empty unless a fixture closes an
+    /// epoch.
+    closes: BTreeMap<SettlementEpoch, (SigmaWorkMilli, AtomicUnits)>,
 }
 
 impl Default for MockChain {
@@ -130,6 +135,7 @@ impl Default for MockChain {
             transactions: BTreeSet::new(),
             total_burned: AtomicUnits::ZERO,
             r_market: BTreeMap::new(),
+            closes: BTreeMap::new(),
         }
     }
 }
@@ -184,17 +190,35 @@ impl MockChain {
     }
 
     /// Plant `shard`'s market price at `epoch`'s close — what CEN-J15
-    /// reads at the last settled epoch as of the parent. The one archival
-    /// state this chain plants, and why: J15's accept needs a shard that
-    /// is closed, final **and priced**, the close is the fold's (which the
-    /// chain already synthesizes), and no driven chain in the tree reaches
-    /// a close — a shard is `SHARD_LENGTH` of real proof bytes. A price is
-    /// a value the epoch close wrote, not a record; planting it tests no
-    /// construction (DRS-E4 §5.2's concern). A shard with no planted price
-    /// reads `None`, which is J15's Q4 refusal.
+    /// reads at the last settled epoch as of the parent. Planted archival
+    /// state, and why: J15's accept needs a shard that is closed, final
+    /// **and priced**, the close is the fold's (which the chain already
+    /// synthesizes), and no driven chain in the tree reaches a close — a
+    /// shard is `SHARD_LENGTH` of real proof bytes. A price is a value the
+    /// epoch close wrote, not a record; planting it tests no construction
+    /// (DRS-E4 §5.2's concern). A shard with no planted price reads
+    /// `None`, which is J15's Q4 refusal.
     #[must_use]
     pub fn with_r_market(mut self, shard: ShardId, epoch: SettlementEpoch, price: RMarket) -> Self {
         self.r_market.insert((shard, epoch), price);
+        self
+    }
+
+    /// Plant `epoch`'s frozen close — the `Σwork(E)` and `budget(E)` the
+    /// fold writes in one event, what CEN-J23 reads to admit a claimed
+    /// epoch and CEN-J25 verifies against. The same justification as
+    /// [`with_r_market`](Self::with_r_market): a frozen close is a settled
+    /// value, not a record, and J25's refusal arm needs a claimed epoch
+    /// J23 admits (`rules/tx_emission_against.rs`). An epoch with no
+    /// planted close reads `None` for both, which is J23's refusal.
+    #[must_use]
+    pub fn with_close(
+        mut self,
+        epoch: SettlementEpoch,
+        sigma_work: SigmaWorkMilli,
+        budget: AtomicUnits,
+    ) -> Self {
+        self.closes.insert(epoch, (sigma_work, budget));
         self
     }
 
@@ -335,10 +359,12 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // epochs; a constructed record would test the construction (DRS-E4
     // §5.2, *No `Mock*` archival state*). The witness for a 4.J rule over a
     // held shard is a real chain that posted the bond, through `connect`.
-    // The one planted read is the market price (`MockChain::with_r_market`,
-    // which says why): CEN-J15's accept over a closed shard has no driven
-    // witness, a shard being `SHARD_LENGTH` of real proof bytes.
-    crate::archival_reads!(empty, r_market from chain.r_market);
+    // The planted reads are the market price (`MockChain::with_r_market`,
+    // which says why: CEN-J15's accept over a closed shard has no driven
+    // witness, a shard being `SHARD_LENGTH` of real proof bytes) and the
+    // frozen close (`MockChain::with_close`: CEN-J25's refusal needs an
+    // epoch CEN-J23 admits).
+    crate::archival_reads!(empty, r_market from chain.r_market, close from chain.closes);
 }
 
 /// The fault a [`FaultingView`] raises.

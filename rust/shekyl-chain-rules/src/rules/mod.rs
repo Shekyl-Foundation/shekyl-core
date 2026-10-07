@@ -86,6 +86,7 @@ pub(crate) mod tx;
 pub(crate) mod tx_against;
 pub(crate) mod tx_bond;
 pub(crate) mod tx_emission;
+pub(crate) mod tx_emission_against;
 pub(crate) mod tx_extra;
 pub(crate) mod tx_inputs;
 
