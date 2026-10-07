@@ -190,8 +190,12 @@ ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
   the receipt key authorises exactly one. **Order:** the ruling reaches the
   consolidated serve-credit spec before anything builds against it; the
   re-key then lands with, or directly after, that spec.
-- `BENCHMARK_ALIGNMENT.md` §S's default ("S, with the pre-flight method")
+- ~~`BENCHMARK_ALIGNMENT.md` §S's default ("S, with the pre-flight method")
   stays the maintainer's to rule; this PR supplies the answer §S was waiting
-  on and edits that sentence to say so. `BA-T5` is the only remaining input.
+  on.~~ **RULED on `dev` before this PR merged** (maintainer, 2026-10-05;
+  built by #974/#982, recorded by #987): S as an abuse mitigation, with the
+  key's pre-flight among the constant work before the head. This PR's
+  §3 Q2 answer is consistent with it, and `BA-T5` now owes the cost by
+  phase, not the ruling.
 - ~~§9.7 item 3's `ReportedSet` sealing — a maintainer decision.~~ RULED
   2026-10-07, not built (§4).
