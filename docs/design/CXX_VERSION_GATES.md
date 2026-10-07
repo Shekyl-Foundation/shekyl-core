@@ -36,7 +36,7 @@ same thing.
 
 | Operand | Shekyl's value | What pins it |
 | --- | --- | --- |
-| Block major version | 1 | Every network's hard-fork table holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::accepts_header` requires a block's major version to **equal** the schedule's at its height and its minor version to equal 0, so an accepted block's major is 1; the template takes its own from the table |
+| Block major version | 1 | The hard-fork schedule holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::accepts_header` requires a block's major version to **equal** the schedule's at its height and its minor version to equal 0, so an accepted block's major is 1; the template takes its own from the table |
 | Block minor version | 0 | Reserved (CEN-B2, ruled 2026-10-06). It was Monero's fork vote and any value validated; both validators now refuse every value but 0, and the templates write it |
 | Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly, including where the bound is a local (`min_tx_version`, `max_tx_version`) rather than the literal 3. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
 | A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (the major version must equal the schedule at the block's height, the minor version must equal the reserved constant) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |

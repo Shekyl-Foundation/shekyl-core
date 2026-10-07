@@ -59,11 +59,12 @@ FENCE=(src/cryptonote_core src/checkpoints src/blockchain_db)
 # note that justifies the entry's existence. Dispositions are claims their
 # owners defend. Exact equality, not prefix match: a prefix would let one
 # entry absorb a second, longer branch that happens to share its opening.
+# Empty on purpose. The hard-fork schedule used to be chosen by public-net
+# branches: three identical tables, and before that two constructor
+# spellings. It is one table now (`hard_fork_schedule`), installed by every
+# issued network, so no branch remains to allow. A new public-net `if`
+# still fails the checks below. FAKECHAIN stays outside this gate.
 ALLOWLIST=$(cat <<'EOF'
-src/cryptonote_core/blockchain.cpp	if (m_nettype == FAKECHAIN || m_nettype == STAGENET) m_hardfork = new HardFork(*db, 1, 0);	hard-fork TABLE selection: data-selection written as branches; migration debt toward the parameter table (rule 71 owner: consensus lane)
-src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) m_hardfork = new HardFork(*db, 1, testnet_hard_fork_version_1_till);	hard-fork TABLE selection: data, not control flow; migration debt (consensus lane)
-src/cryptonote_core/blockchain.cpp	else if (m_nettype == TESTNET) {	hard-fork schedule selection loop: data, not control flow; migration debt (consensus lane)
-src/cryptonote_core/blockchain.cpp	else if (m_nettype == STAGENET) {	hard-fork schedule selection loop: data, not control flow; migration debt (consensus lane)
 EOF
 )
 

@@ -341,25 +341,17 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
 
   if (m_hardfork == nullptr)
     m_hardfork = new HardFork(*db, 1);
+  // The harness names its own schedule. Every issued network installs
+  // the one protocol table; there is no per-network table to select.
   if (m_nettype == FAKECHAIN)
   {
     for (size_t n = 0; test_options->hard_forks[n].first; ++n)
       m_hardfork->add_fork(test_options->hard_forks[n].first, test_options->hard_forks[n].second, n + 1);
   }
-  else if (m_nettype == TESTNET)
-  {
-    for (size_t n = 0; n < num_testnet_hard_forks; ++n)
-      m_hardfork->add_fork(testnet_hard_forks[n].version, testnet_hard_forks[n].height, testnet_hard_forks[n].time);
-  }
-  else if (m_nettype == STAGENET)
-  {
-    for (size_t n = 0; n < num_stagenet_hard_forks; ++n)
-      m_hardfork->add_fork(stagenet_hard_forks[n].version, stagenet_hard_forks[n].height, stagenet_hard_forks[n].time);
-  }
   else
   {
-    for (size_t n = 0; n < num_mainnet_hard_forks; ++n)
-      m_hardfork->add_fork(mainnet_hard_forks[n].version, mainnet_hard_forks[n].height, mainnet_hard_forks[n].time);
+    for (size_t n = 0; n < num_hard_fork_schedule; ++n)
+      m_hardfork->add_fork(hard_fork_schedule[n].version, hard_fork_schedule[n].height, hard_fork_schedule[n].time);
   }
   m_hardfork->init();
 

@@ -279,8 +279,8 @@ accrual side.
 
 ### 2.3 Pre-genesis posture note
 
-The mainnet fork table is single-entry, all-features-from-genesis
-(`src/hardforks/hardforks.cpp:35–37`; `HF_VERSION_SHEKYL_NG = 1`), and
+The hard-fork schedule is a single entry, all features from genesis
+(`src/hardforks/hardforks.cpp:38–40`; `HF_VERSION_SHEKYL_NG = 1`), and
 C-1 shipped in the genesis feature set — which is what made §2.1's
 transition machinery dead-on-arrival and drove its deletion. The
 semantics remain per-block, **never** per-epoch: the accrual write and
