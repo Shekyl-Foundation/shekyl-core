@@ -857,10 +857,24 @@ pub extern "C" fn shekyl_recv_mark_ms(recv_ms: u64, started_ms: u64) -> u64 {
 /// Stop the transport runtime. Called from outside one of its tasks.
 ///
 /// D6's order: the engine takes no new deadline, the transport's tasks
-/// are cancelled, then the engine thread is joined. The process write-stall
-/// histogram is read here: nothing else in the daemon reads it.
+/// are cancelled, then the engine thread is joined. Each writer folds its
+/// stall when its task is dropped, including a write still in flight, so
+/// the process total is read after the pool has stopped. Nothing else in
+/// the daemon reads it.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
+    let host = HOST.lock().expect("zone host").take();
+    if let Some(host) = host {
+        let engine = host.engine_service.lock().expect("engine").take();
+        if let Some(engine) = engine.as_ref() {
+            engine.close();
+        }
+        let pool = host.pool.lock().expect("pool").take();
+        if let Some(pool) = pool {
+            pool.shutdown(host.shutdown_timeout);
+        }
+        drop(engine);
+    }
     let stall = process_write_stall();
     tracing::info!(
         closes = stall.closes,
@@ -869,19 +883,6 @@ pub extern "C" fn shekyl_zone_shutdown() {
         in_flight_max_ns = stall.in_flight_at_close_max_ns,
         "process write stall"
     );
-    let host = HOST.lock().expect("zone host").take();
-    let Some(host) = host else {
-        return;
-    };
-    let engine = host.engine_service.lock().expect("engine").take();
-    if let Some(engine) = engine.as_ref() {
-        engine.close();
-    }
-    let pool = host.pool.lock().expect("pool").take();
-    if let Some(pool) = pool {
-        pool.shutdown(host.shutdown_timeout);
-    }
-    drop(engine);
 }
 
 #[cfg(test)]

@@ -688,7 +688,9 @@ mod tests {
         assert!(max_ns > 0);
         assert_eq!(samples, 1);
         let after = process_write_stall();
-        assert_eq!(after.closes, before.closes + 1);
+        // The histogram is process-wide. Another test can fold during the
+        // delay, so the total grows by at least this write, not by exactly one.
+        assert!(after.closes > before.closes);
         assert!(after.max_ns >= max_ns);
     }
 

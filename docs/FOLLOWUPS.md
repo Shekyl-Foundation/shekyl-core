@@ -74,10 +74,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D5
   - Target: pre-genesis
 
-- **A timed-out clearnet dial and a refused one do not share the hour-long forget.** `P2P_FAILED_ADDR_FORGET_SECONDS` (3600, `cryptonote_config.h`) marks an address the same way whether the dial timed out or the peer refused. A timeout on a far link is evidence about the link, not the peer (rule 82); one window for both is how a node on a long honest path forgets every peer it tries. The split is `CloseCause::implicates_address` (`LV3_CONNECTION_OBJECT.md`), and a proxy reply is read with the connector. An onion reply counts only when it names that onion. A clearnet proxy reply never counts. A gap timeout and a local failure leave the address dialable. A direct clearnet connect counts only `ConnectionRefused`; network unreachable stays dialable. There is no second window. **Residual:** an attacker on the responsible directories for a target's key can force reply 4, which buys only the short Tor backoff. Falsify by the dial path leaving the address dialable after a gap timeout and a closed local SOCKS port, and forgetting it after a wrong `network_id`. *Records-was: every `DialFailed` and every `ProxyRefused` counted.*
-  - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
-  - Target: pre-genesis
-
 - **Measure a proxied clearnet dial and replace the borrowed Tor dial clock.** `--proxy` reaches a clearnet peer through SOCKS. `dial_one` arms the Tor dial clock (9.1 s) on that path, the worst measured SOCKS path, because the three clearnet legs had no proxy and a Tor-exit dial is 3–6 s. The owed leg is the floor through a local Tor SOCKS port to a clearnet seed, n=100. A too-long deadline costs only the dialer, so the borrow holds until that leg. Falsify by that distribution recorded and the proxied clock equal to 2× its p99, rounded up. Reopen if that p99 exceeds 4.55 s.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) D9
   - Target: pre-genesis
