@@ -700,6 +700,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Rules-queue: reconcile the priority-ordering statements across [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)**
   - Target: pre-genesis
 
+- **Rules-queue: no unpaid work proportional to the payload before the first byte.** The invariant `BA-Q3`'s ruling created for the archival serve path (`P` does no work that scales with shard size until the requester has received the bytes that work is for) is general. Check daemon RPC, Levin block and transaction requests, and the fetch client's handling of large responses against it, and encode the one that survives as a rule. Falsify by a surface that must do payload-proportional work before its first byte and says why.
+  - Owner: [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) `BA-Q3`
+  - Target: pre-genesis
+
 - **Rules-queue: elevate per-gate reviewer-discipline calibration [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md)**
   - Target: pre-genesis
 

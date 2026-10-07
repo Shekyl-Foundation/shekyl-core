@@ -99,8 +99,12 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
-use crate::provider::{ShardBody, ShardProvider};
-use shekyl_archival_retention::PassRequestHeader;
+use crate::provider::{ProviderError, ShardBody, ShardProvider};
+use shekyl_archival_retention::{
+    PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
+};
+use shekyl_curve_tree::served_frame::ServedFrameHeader;
+use shekyl_types::BlockHeight;
 
 // Sibling of this file, not `serve/delivery.rs`: the endpoint stays one
 // module, and the digest type is private to it.
@@ -258,6 +262,41 @@ impl PServeEndpoint {
         signer: Arc<dyn PassSigner>,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+        Self::serve(listener, provider, signer)
+    }
+
+    /// [`Self::bind`], with the send buffer of every accepted connection
+    /// pinned at `send_buffer_bytes`.
+    ///
+    /// Tests only. The abuse invariant bounds what this persona reads by
+    /// what the requester's side has accepted, and over a real socket
+    /// "accepted" includes this end's send buffer, which Linux otherwise
+    /// autotunes up to `net.ipv4.tcp_wmem`'s maximum — by default larger
+    /// than a whole shard. Setting `SO_SNDBUF` on the listening socket
+    /// turns autotuning off, and accepted sockets inherit it, so a test can
+    /// state the bound in bytes instead of hoping the kernel stays small.
+    /// Production does not pin it: the autotuned buffer is the right one
+    /// for a persona serving over tor, and the bound it implies is the
+    /// kernel's to give.
+    #[cfg(test)]
+    pub(crate) fn bind_with_send_buffer(
+        provider: Arc<dyn ShardProvider>,
+        signer: Arc<dyn PassSigner>,
+        send_buffer_bytes: u32,
+    ) -> io::Result<Self> {
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.set_send_buffer_size(send_buffer_bytes)?;
+        socket.bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
+        Self::serve(socket.listen(1024)?, provider, signer)
+    }
+
+    /// Start answering on `listener`. The one accept loop, whichever way
+    /// the listener was made.
+    fn serve(
+        listener: TcpListener,
+        provider: Arc<dyn ShardProvider>,
+        signer: Arc<dyn PassSigner>,
+    ) -> io::Result<Self> {
         let addr = listener.local_addr()?;
         let served = Arc::new(AtomicU64::new(0));
         let refused = Arc::new(AtomicU64::new(0));
@@ -602,6 +641,106 @@ enum Lookup {
     Held(ShardBody),
 }
 
+/// The gate, the open and the pre-flight: everything this persona does
+/// before its first response byte, as one blocking-pool hop.
+///
+/// A named function and not a closure, like [`read_chunk`] and
+/// [`sign_envelope`], because the serve path's cost is gated per thread
+/// (`benches/serve_response_iai.rs`): Callgrind keeps one collection state
+/// per thread, so the gate measures these steps composed on one thread
+/// ([`serve_one_in_memory`]), and a closure has no name to compose.
+fn gate_and_open(
+    signer: &dyn PassSigner,
+    provider: &dyn ShardProvider,
+    shard_id: u64,
+    anchor_height: BlockHeight,
+) -> Lookup {
+    let Some(own_height) = signer.own_height() else {
+        return Lookup::StoreFault;
+    };
+    if !anchor_within_gate(own_height, anchor_height) {
+        return Lookup::OutOfGate;
+    }
+    match provider.shard_bytes(shard_id) {
+        Err(_) => Lookup::StoreFault,
+        Ok(None) => Lookup::NotHeld,
+        Ok(Some(body)) => match signer.ready(shard_id, anchor_height) {
+            Ok(()) => Lookup::Held(body),
+            Err(_) => Lookup::NoKey,
+        },
+    }
+}
+
+/// One chunk of the body for the send loop. The body travels with the
+/// result because the read is a blocking-pool hop that owns it meanwhile.
+fn read_chunk(mut body: ShardBody) -> (ShardBody, Result<Option<Vec<u8>>, ProviderError>) {
+    let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
+    (body, chunk)
+}
+
+/// What folding one read of the body into the delivery digest produced.
+enum Folded {
+    /// Bytes inside the frame, now part of the digest: write them.
+    Bytes(Vec<u8>),
+    /// The body ended. Whether it ended at the frame's declared length is
+    /// [`FramedDigest::finish`]'s to say.
+    End,
+    /// The store failed part-way.
+    StoreFault,
+    /// The store yielded a byte past the frame's declared length. Not
+    /// folded, and not to be written.
+    PastFrame,
+}
+
+/// Fold one read of the body into the running digest.
+///
+/// The one place a served byte enters the digest. [`write_response`] calls
+/// it between the read and the write, and the `BA-T3` compositions call it
+/// in the same place, so the gate counts the fold the endpoint runs and
+/// not a copy of it: a second digest pass added here moves the gate, and
+/// one added anywhere else in `write_response` is a second call site of a
+/// function that has one.
+fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
+    match chunk {
+        Ok(Some(bytes)) => match running.absorb(&bytes) {
+            Some(()) => Folded::Bytes(bytes),
+            None => Folded::PastFrame,
+        },
+        Ok(None) => Folded::End,
+        Err(_) => Folded::StoreFault,
+    }
+}
+
+/// The countersignature over one transcript, as canonical envelope bytes.
+/// `None` when the signer refuses or returns an envelope of another
+/// length. The length is the type, so a short or long envelope cannot
+/// reach the wire.
+fn sign_envelope(
+    signer: &dyn PassSigner,
+    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+) -> Option<[u8; SIGNATURE_ENVELOPE_LEN]> {
+    let bytes = signer.sign_pass(message).ok()?.to_canonical_bytes().ok()?;
+    bytes.try_into().ok()
+}
+
+/// The committed head of a 200: status line, headers and the `RF-D4` frame
+/// header as one byte string, with the [`FramedDigest`] that has absorbed
+/// that frame. `content-length` is the frame's declared length plus the
+/// envelope, both exact before a leaf is read. `None` if the length cannot
+/// be stated or the frame cannot be digested.
+fn response_head(
+    frame: &ServedFrameHeader,
+    nonce: &[u8; PASS_NONCE_LEN],
+) -> Option<(FramedDigest, Vec<u8>)> {
+    let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
+        .ok()?
+        .checked_add(frame.framed_len())?;
+    let running = FramedDigest::start(frame, nonce)?;
+    let mut head = render_ok(content_length).into_bytes();
+    head.extend_from_slice(running.frame_bytes());
+    Some((running, head))
+}
+
 /// Complete-head resolution: parse, gate, look up, ask the signer whether
 /// it can sign. The last three run on one blocking-pool hop — `own_height`
 /// may be a bounded store read (the host's choice) and opening the shard is
@@ -635,20 +774,7 @@ async fn resolve(
     let fields = PassRequestHeader::from_bytes(&header);
     let anchor_height = fields.anchor_height();
     let looked_up = tokio::task::spawn_blocking(move || {
-        let Some(own_height) = signer.own_height() else {
-            return Lookup::StoreFault;
-        };
-        if !anchor_within_gate(own_height, anchor_height) {
-            return Lookup::OutOfGate;
-        }
-        match provider.shard_bytes(shard_id) {
-            Err(_) => Lookup::StoreFault,
-            Ok(None) => Lookup::NotHeld,
-            Ok(Some(body)) => match signer.ready(shard_id, anchor_height) {
-                Ok(()) => Lookup::Held(body),
-                Err(_) => Lookup::NoKey,
-            },
-        }
+        gate_and_open(&*signer, &*provider, shard_id, anchor_height)
     })
     .await;
     match looked_up {
@@ -738,38 +864,26 @@ async fn write_response<W: AsyncWrite + Unpin>(
     // the headers and the frame are decided together, before the store is
     // read, leaving no seam between them for a later edit to slip
     // something into.
-    let frame = body.header();
-    let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
-        .ok()
-        .and_then(|sig| sig.checked_add(frame.framed_len()))
-        .ok_or_else(|| io::Error::other("content-length overflow"))?;
-    let mut running = FramedDigest::start(&frame, fields.nonce())
-        .ok_or_else(|| io::Error::other("frame digest"))?;
-    let mut head = render_ok(content_length).into_bytes();
-    head.extend_from_slice(running.frame_bytes());
+    let (mut running, head) = response_head(&body.header(), fields.nonce())
+        .ok_or_else(|| io::Error::other("response head"))?;
     write_bounded(stream, &head).await?;
     loop {
         // The store read is synchronous redb, so each chunk crosses to the
         // blocking pool and the body comes back with it.
-        let (returned, chunk) = tokio::task::spawn_blocking(move || {
-            let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
-            (body, chunk)
-        })
-        .await
-        .map_err(|_| io::Error::other("shard body task"))?;
+        let (returned, chunk) = tokio::task::spawn_blocking(move || read_chunk(body))
+            .await
+            .map_err(|_| io::Error::other("shard body task"))?;
         body = returned;
-        match chunk {
-            Ok(Some(bytes)) => {
-                // Past the frame: do not write a byte the frame does not
-                // describe, and sign nothing.
-                if running.absorb(&bytes).is_none() {
-                    lookup_failures.fetch_add(1, Ordering::Relaxed);
-                    return Err(io::Error::other("shard body longer than its frame"));
-                }
-                write_bounded(stream, &bytes).await?;
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(bytes) => write_bounded(stream, &bytes).await?,
+            Folded::End => break,
+            Folded::PastFrame => {
+                // Do not write a byte the frame does not describe, and
+                // sign nothing.
+                lookup_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(io::Error::other("shard body longer than its frame"));
             }
-            Ok(None) => break,
-            Err(_) => {
+            Folded::StoreFault => {
                 // The head is already out; all that is left is to close.
                 // The counter is the only place this is visible.
                 lookup_failures.fetch_add(1, Ordering::Relaxed);
@@ -783,32 +897,180 @@ async fn write_response<W: AsyncWrite + Unpin>(
     };
     // Every body byte is written and hashed. Sign for exactly those bytes.
     let message = fields.transcript(shard_id, &digest);
-    let signed = tokio::task::spawn_blocking(move || {
-        signer
-            .sign_pass(&message)
-            .ok()
-            .and_then(|sig| sig.to_canonical_bytes().ok())
-    })
-    .await;
-    // The length is the type, so a short or long envelope cannot reach the
-    // wire.
-    let signature: [u8; SIGNATURE_ENVELOPE_LEN] = match signed
-        .ok()
-        .flatten()
-        .map(<[u8; SIGNATURE_ENVELOPE_LEN]>::try_from)
-    {
-        Some(Ok(signature)) => signature,
-        _ => {
-            // The body is out and cannot be taken back. Say so, in bytes
-            // only this end can write.
-            late_sign_failures.fetch_add(1, Ordering::Relaxed);
-            write_bounded(stream, &[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]).await?;
-            return Ok(());
-        }
+    let signed = tokio::task::spawn_blocking(move || sign_envelope(&*signer, &message)).await;
+    let Ok(Some(signature)) = signed else {
+        // The body is out and cannot be taken back. Say so, in bytes only
+        // this end can write.
+        late_sign_failures.fetch_add(1, Ordering::Relaxed);
+        write_bounded(stream, &[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]).await?;
+        return Ok(());
     };
     write_bounded(stream, &signature).await?;
     served.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// What one in-memory serve produced. Mirrors the wire, outcome for
+/// outcome.
+#[cfg(any(test, feature = "bench-internals"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InMemoryServe {
+    /// A 200 closed by the countersignature.
+    Served,
+    /// A 200 closed by the refusal trailer.
+    Unsigned,
+    /// A 200 that ended short: the store failed, or the body was not the
+    /// length its frame declares.
+    Truncated,
+    /// The bare 400.
+    BadRequest,
+    /// The bare 404.
+    NotHeld,
+    /// The bare 503.
+    Unavailable,
+}
+
+/// The request fields and the opened body of a valid request for a held
+/// shard, or the refusal a complete head gets instead.
+#[cfg(any(test, feature = "bench-internals"))]
+fn admit_in_memory(
+    provider: &dyn ShardProvider,
+    signer: &dyn PassSigner,
+    head: &[u8],
+) -> Result<(u64, PassRequestHeader, ShardBody), InMemoryServe> {
+    let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
+        return Err(InMemoryServe::BadRequest);
+    };
+    let fields = PassRequestHeader::from_bytes(&header);
+    match gate_and_open(signer, provider, shard_id, fields.anchor_height()) {
+        Lookup::Held(body) => Ok((shard_id, fields, body)),
+        Lookup::OutOfGate => Err(InMemoryServe::BadRequest),
+        Lookup::NotHeld => Err(InMemoryServe::NotHeld),
+        Lookup::StoreFault | Lookup::NoKey => Err(InMemoryServe::Unavailable),
+    }
+}
+
+/// One response, composed from the steps the endpoint runs, on the calling
+/// thread, into `out` instead of a socket.
+///
+/// For the `BA-T3` drift gate (`benches/serve_response_iai.rs`). Callgrind
+/// keeps one collection state per thread and the endpoint's steps run on
+/// tokio's blocking pool, whose idle work made per-thread counts drift by
+/// up to 14 % between runs of one input. So the gate measures the steps
+/// here: [`gate_and_open`], [`response_head`], [`read_chunk`],
+/// [`fold_chunk`], [`sign_envelope`], in the order [`resolve`] and [`write_response`]
+/// run them. It is not a second serve path. The steps are the endpoint's
+/// own functions, and `serve_bench_seam_tests.rs` holds this composition
+/// to the live endpoint for every outcome: the same bytes, and the same
+/// number of shard opens, chunk reads and signatures.
+///
+/// It keeps no counters: the endpoint's are per-endpoint state, and a
+/// free function has none to keep.
+///
+/// Not part of the shipped surface: `bench-internals` and tests only.
+#[cfg(any(test, feature = "bench-internals"))]
+#[doc(hidden)]
+pub fn serve_one_in_memory(
+    provider: &dyn ShardProvider,
+    signer: &dyn PassSigner,
+    head: &[u8],
+    out: &mut Vec<u8>,
+) -> InMemoryServe {
+    let (shard_id, fields, mut body) = match admit_in_memory(provider, signer, head) {
+        Ok(admitted) => admitted,
+        Err(refusal) => {
+            let rendered = match refusal {
+                InMemoryServe::NotHeld => render_not_found(),
+                InMemoryServe::Unavailable => render_unavailable(),
+                _ => render_bad_request(),
+            };
+            out.extend_from_slice(rendered.as_bytes());
+            return refusal;
+        }
+    };
+    let Some((mut running, response_head)) = response_head(&body.header(), fields.nonce()) else {
+        return InMemoryServe::Truncated;
+    };
+    out.extend_from_slice(&response_head);
+    loop {
+        let (returned, chunk) = read_chunk(body);
+        body = returned;
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
+            Folded::End => break,
+            Folded::PastFrame | Folded::StoreFault => return InMemoryServe::Truncated,
+        }
+    }
+    let Some(digest) = running.finish() else {
+        return InMemoryServe::Truncated;
+    };
+    match sign_envelope(signer, &fields.transcript(shard_id, &digest)) {
+        Some(signature) => {
+            out.extend_from_slice(&signature);
+            InMemoryServe::Served
+        }
+        None => {
+            out.extend_from_slice(&[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]);
+            InMemoryServe::Unsigned
+        }
+    }
+}
+
+/// Everything the endpoint does for a valid request before its first
+/// response byte, on the calling thread: parse, gate, open, pre-flight,
+/// and the 200 head rendered into `out`, ready to write. No body byte is
+/// read. This is the abuse arm of `BA-T3`: work a requester has not yet
+/// paid for by receiving anything, which must not grow with the shard.
+///
+/// Not part of the shipped surface: `bench-internals` and tests only.
+#[cfg(any(test, feature = "bench-internals"))]
+#[doc(hidden)]
+pub fn prehead_in_memory(
+    provider: &dyn ShardProvider,
+    signer: &dyn PassSigner,
+    head: &[u8],
+    out: &mut Vec<u8>,
+) -> bool {
+    let Ok((_, fields, body)) = admit_in_memory(provider, signer, head) else {
+        return false;
+    };
+    let Some((_, response_head)) = response_head(&body.header(), fields.nonce()) else {
+        return false;
+    };
+    out.extend_from_slice(&response_head);
+    true
+}
+
+/// The read-and-fold loop on its own, on the calling thread: open the
+/// shard, then read it at [`WRITE_CHUNK_BYTES`] and fold each chunk into
+/// the delivery digest, as [`write_response`] does between writes. No
+/// gate, no head rendered to a buffer, no copy out, no signature. Returns
+/// the digest, or `None` if the shard is not held or is not the length
+/// its frame declares.
+///
+/// `BA-T3` sets this beside the one-shot digest of the same bytes. The
+/// difference is what interleaving the hash with the chunked read costs,
+/// which the floor run of 2026-10-06 found and could not attribute.
+///
+/// Not part of the shipped surface: `bench-internals` and tests only.
+#[cfg(any(test, feature = "bench-internals"))]
+#[doc(hidden)]
+pub fn read_and_fold_in_memory(
+    provider: &dyn ShardProvider,
+    shard_id: u64,
+    nonce: &[u8; PASS_NONCE_LEN],
+) -> Option<[u8; shekyl_archival_retention::PASS_DELIVERY_DIGEST_LEN]> {
+    let mut body = provider.shard_bytes(shard_id).ok()??;
+    let mut running = FramedDigest::start(&body.header(), nonce)?;
+    loop {
+        let (returned, chunk) = read_chunk(body);
+        body = returned;
+        match fold_chunk(&mut running, chunk) {
+            Folded::Bytes(_) => {}
+            Folded::End => return running.finish(),
+            Folded::PastFrame | Folded::StoreFault => return None,
+        }
+    }
 }
 
 /// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
