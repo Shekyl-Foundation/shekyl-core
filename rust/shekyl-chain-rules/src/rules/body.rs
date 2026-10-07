@@ -61,7 +61,7 @@
 //! keys), the refusal falls to `Locus::Block`, never to a panic.
 //!
 //! **A vin that does not parse is not this rule's.** The parse of an
-//! emission vin is CEN-J19's row (slice 8 row 7, `tx_emission`), of a
+//! emission vin is CEN-J19's row (slice 8 row 8, `tx_emission`), of a
 //! serve-credit vin CEN-J1's — a successor row scoped out of slice 8
 //! (§1.2) and still pending; until it lands, an unparseable serve-credit
 //! vin has no key to collide on and passes G7 — the gap is J1's and the

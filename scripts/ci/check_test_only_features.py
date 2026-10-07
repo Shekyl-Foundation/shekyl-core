@@ -215,7 +215,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 
 # Crates whose feature table must be exhaustively categorized (third limb).
 # Adding a crate here is the declaration that no feature of it may exist
-# uncategorized; both listed crates are clean at registration
+# uncategorized; every listed crate is clean at registration
 # (`shekyl-chain-store` declares none; `shekyl-tor-control-client` and
 # `shekyl-chain-rules` declare only their TEST_ONLY row — the latter joined
 # 2026-09-19 when the fourth limb fired on `harness` in CI, the first
@@ -224,8 +224,8 @@ PERMANENT: dict[tuple[str, str], str] = {
 # (TEST_ONLY, one dev enabler); its three production features are the first
 # PERMANENT rows.
 #
-# This set is opt-in — two crates out of a workspace approaching seventy — so
-# exhaustiveness holds *within* governance. The rule for joining: **a crate
+# This set is opt-in — the crates named below, out of a workspace approaching
+# seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
 # joins this set in the commit that first declares a feature another crate
 # enables.** A feature only its own tests or its own `default` turn on does
 # not trigger it; one that crosses a crate boundary does, because that edge
