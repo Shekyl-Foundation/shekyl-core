@@ -122,6 +122,21 @@ the reason) and share the governance FOLLOWUPS row; the third,
 `extern "C"` in the production header, so categorizing the feature changes
 nothing and the fix is the structural gate that row already names.
 
+# The fifth limb — the production-shape lint lane lints every TEST_ONLY owner
+
+A test-only feature is on in CI's workspace clippy (the dev edge that enables
+it is one of the `--all-targets` it builds, and features unify) and off in
+production, so the owner's production shape is never built by that step. An
+import or helper that only the gated item uses is unused in production and
+invisible (#990: `std::time::Duration` in `shekyl-p-host/src/signer.rs`).
+`rust-audit-test.yml` carries a `--lib`-only clippy step over the TEST_ONLY
+owners for exactly this. Its package list is a copy of this table, and a copy
+kept in sync by a comment is a check that cannot fail: the fourth owner to
+join the table would go unlinted until someone read the comment. So the gate
+owns the invariant: **the lane's `-p` set must equal the set of TEST_ONLY
+owners**, the step must exist, and it must build `--lib` with no dev target.
+The edit that makes it fail is adding a row here without touching the lane.
+
 # A limit this file does not close, named
 
 The gate reads the manifest. It can see that a feature is declared, owned and
@@ -142,6 +157,7 @@ platform-specific tables, and would report clean on all three.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -364,6 +380,64 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
 }
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
+WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "rust-audit-test.yml"
+# The step whose `-p` set this gate holds equal to the TEST_ONLY owners.
+PRODUCTION_LINT_STEP = "cargo clippy: test-only features off, as production builds them (lib only)"
+_STEP_NAME_RE = re.compile(r'^\s*-\s+name:\s*"?(?P<name>[^"\n]+?)"?\s*$')
+_PACKAGE_FLAG_RE = re.compile(r"(?:^|\s)-p\s+(?P<pkg>\S+)")
+
+
+def production_lint_lane(workflow_text: str) -> str | None:
+    """The `run:` line of `PRODUCTION_LINT_STEP`, or None if the step or its
+    `run:` is absent. Text-level: the step is one `- name:` block and its
+    `run:` is one line, which is the shape the workflow keeps."""
+    lines = workflow_text.splitlines()
+    for i, line in enumerate(lines):
+        m = _STEP_NAME_RE.match(line)
+        if m is None or m.group("name") != PRODUCTION_LINT_STEP:
+            continue
+        for later in lines[i + 1 :]:
+            if _STEP_NAME_RE.match(later):
+                return None
+            stripped = later.strip()
+            if stripped.startswith("run:"):
+                return stripped[len("run:") :].strip()
+        return None
+    return None
+
+
+def check_production_lint_lane(workflow_text: str, owners: frozenset[str]) -> list[str]:
+    """Fifth limb: the production-shape lint lane exists, builds `--lib` with
+    no dev target, and names exactly the TEST_ONLY owners."""
+    where = f"{WORKFLOW.name} step {PRODUCTION_LINT_STEP!r}"
+    run = production_lint_lane(workflow_text)
+    if run is None:
+        return [
+            f"{where}: not found, or has no `run:` — the TEST_ONLY owners' "
+            f"production shape is linted by that step alone; restore it"
+        ]
+    failures: list[str] = []
+    if "cargo clippy" not in run or "--lib" not in run or "-D warnings" not in run:
+        failures.append(f"{where}: `run:` is not a `cargo clippy ... --lib ... -D warnings` line: {run!r}")
+    if "--all-targets" in run or "--tests" in run or "--examples" in run or "--benches" in run:
+        failures.append(
+            f"{where}: builds a dev target — a dev edge's features then unify onto "
+            f"the lib and the lane lints the same shape the workspace step does"
+        )
+    linted = frozenset(m.group("pkg") for m in _PACKAGE_FLAG_RE.finditer(run))
+    missing = sorted(owners - linted)
+    extra = sorted(linted - owners)
+    if missing:
+        failures.append(
+            f"{where}: TEST_ONLY owner(s) not linted feature-off: {', '.join(missing)} — "
+            f"add `-p <crate>` to the lane in the commit that adds the row"
+        )
+    if extra:
+        failures.append(
+            f"{where}: lints crate(s) with no TEST_ONLY row: {', '.join(extra)} — "
+            f"the lane is the table's mirror, not a second list; drop them or add the row"
+        )
+    return failures
 
 
 def cargo_metadata() -> dict:
@@ -824,6 +898,48 @@ def selftest() -> int:
         for needle in want:
             if not any(needle in f for f in got):
                 bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
+
+    def lane(run: str, name: str = PRODUCTION_LINT_STEP) -> str:
+        return (
+            "      - name: other step\n        run: echo before\n"
+            f'      - name: "{name}"\n        working-directory: rust\n'
+            "        # comment\n"
+            f"        run: {run}\n"
+            "      - name: after\n        run: echo after\n"
+        )
+
+    owners = frozenset({"a", "b"})
+    lane_cases = [
+        ("lane names exactly the owners: green", lane("cargo clippy --locked -p a -p b --lib -- -D warnings"), []),
+        (
+            "row added, lane not touched — the hole one level up",
+            lane("cargo clippy --locked -p a --lib -- -D warnings"),
+            ["not linted feature-off: b"],
+        ),
+        (
+            "lane lints a crate with no row",
+            lane("cargo clippy --locked -p a -p b -p c --lib -- -D warnings"),
+            ["no TEST_ONLY row: c"],
+        ),
+        (
+            "lane builds a dev target",
+            lane("cargo clippy --locked -p a -p b --lib --all-targets -- -D warnings"),
+            ["builds a dev target"],
+        ),
+        ("step renamed away", lane("cargo clippy -p a -p b --lib -- -D warnings", name="something else"), ["not found"]),
+        (
+            "step present, run missing",
+            f'      - name: "{PRODUCTION_LINT_STEP}"\n        working-directory: rust\n      - name: after\n        run: x\n',
+            ["not found, or has no `run:`"],
+        ),
+    ]
+    for label, text, want in lane_cases:
+        got = check_production_lint_lane(text, owners)
+        if not want and got:
+            bad.append(f"{label}: expected green, got {got!r}")
+        for needle in want:
+            if not any(needle in f for f in got):
+                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
     if bad:
         print("consumer-owned feature selftest FAILED:\n", file=sys.stderr)
         for b in bad:
@@ -832,7 +948,8 @@ def selftest() -> int:
     print(
         f"feature-gate selftest: {len(cases)} consumer-owned cases + "
         f"{len(exhaustive_cases) + 1} exhaustiveness cases + "
-        f"{len(trigger_cases)} trigger cases held"
+        f"{len(trigger_cases)} trigger cases + "
+        f"{len(lane_cases)} production-lint-lane cases held"
     )
     return 0
 
@@ -848,6 +965,9 @@ def main() -> int:
     failures: list[str] = check_consumer_owned(meta, CONSUMER_OWNED)
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
     failures += check_trigger(meta, GOVERNED_OWNERS, MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)
+    failures += check_production_lint_lane(
+        WORKFLOW.read_text(encoding="utf-8"), frozenset(owner for owner, _ in TEST_ONLY)
+    )
 
     for (owner, feature), why in sorted(TEST_ONLY.items()):
         # Subject assertion: the feature must exist where it is claimed to.
@@ -918,7 +1038,8 @@ def main() -> int:
         f"consumer-owned: {owned or 'none registered (selftest is the subject)'}; "
         f"governed feature tables exhaustively categorized: {', '.join(sorted(GOVERNED_OWNERS))}; "
         f"trigger met and grandfathered (shrink-only): "
-        f"{len(MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)}"
+        f"{len(MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)}; "
+        f"production-shape lint lane names every TEST_ONLY owner"
     )
     return 0
 
