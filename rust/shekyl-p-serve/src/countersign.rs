@@ -96,14 +96,16 @@ pub trait PassKey: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`SignRefused`] when the host cannot sign — signer offline,
-    /// or a host-side policy refusal. The serve loop asks only after the
-    /// body is out, so it closes the response with the refusal trailer in
-    /// place of the signature and counts it in `sign_failure_count`,
-    /// separately from `lookup_failure_count` (store-read faults), so an
-    /// operator can tell "key not available" from "store not readable". An
-    /// ordinary miss — a shard the persona does not hold — is counted by
-    /// neither.
+    /// Returns [`SignRefused`] when the signer fails after [`Self::ready`]
+    /// said yes — it went offline, or the signature could not be made. The
+    /// serve loop asks only after the body is out, so it closes the
+    /// response with the refusal trailer in place of the signature and
+    /// counts it in `late_sign_failure_count`. That is apart from
+    /// `sign_failure_count` (a pre-flight refusal: the 503, no shard sent)
+    /// and from `lookup_failure_count` (store-read faults), so an operator
+    /// can tell "signer failed with the shard already sent" from "key not
+    /// available" and from "store not readable". An ordinary miss — a
+    /// shard the persona does not hold — is counted by none of them.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
