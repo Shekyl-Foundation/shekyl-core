@@ -185,6 +185,37 @@ fn the_unlock_window_is_the_cxx_define() {
     assert_eq!(value, 60, "the shipped window");
 }
 
+// ---- CEN-B1 / CEN-B2: the header's version pair is the C++ defines ----
+
+/// The two bytes every header's version pair must equal are `#define`s in
+/// `cryptonote_config.h` on the C++ side, where the validator and the
+/// template both read them. Read from the header itself, as the window is,
+/// so an edit to either side fails here.
+#[test]
+fn the_header_version_pair_is_the_cxx_defines() {
+    let config_h = include_str!("../../../src/cryptonote_config.h");
+    let define = |name: &str| -> u8 {
+        config_h
+            .lines()
+            .find_map(|l| {
+                let mut words = l.split_whitespace();
+                (words.next() == Some("#define") && words.next() == Some(name))
+                    .then(|| words.next().expect("the define carries a value"))
+            })
+            .unwrap_or_else(|| panic!("cryptonote_config.h defines {name}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{name}'s value is a u8"))
+    };
+    assert_eq!(
+        define("CURRENT_BLOCK_MAJOR_VERSION"),
+        RuleSet::GENESIS.header_major_version()
+    );
+    assert_eq!(
+        define("CURRENT_BLOCK_MINOR_VERSION"),
+        shekyl_wire::block::HEADER_MINOR_VERSION
+    );
+}
+
 // ---- DRS-E3 CTW-Q5: the spendable age is the window's sibling ----
 
 /// The listed-output maturity is the C++ `#define`, read from

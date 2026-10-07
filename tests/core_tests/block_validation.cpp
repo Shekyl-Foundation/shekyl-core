@@ -72,7 +72,37 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_minor_ver, 0, 255);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  // CEN-B2: the minor version is reserved at CURRENT_BLOCK_MINOR_VERSION.
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_big_minor_version::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  // Forks from blk_1 while the main tip is blk_2, so it takes
+  // handle_alternative_block. Refused at admission, not parked in the alt
+  // store for promotion to find.
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, miner_account, test_generator::bf_minor_ver, 0, 255);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_block_purged");
+  DO_CALLBACK(events, "check_not_stored_as_alt");
+
+  return true;
+}
+
+bool gen_block_alt_big_minor_version::check_not_stored_as_alt(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_alt_big_minor_version::check_not_stored_as_alt");
+
+  CHECK_EQ(0, c.get_alternative_blocks_count());
 
   return true;
 }
@@ -677,8 +707,8 @@ bool gen_block_late_v1_coinbase_tx::generate(std::vector<test_event_entry>& even
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver,
-      1, 1);
+      test_generator::bf_major_ver,
+      1);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
@@ -746,8 +776,8 @@ bool gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags::generate(std::vec
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS+1, HF_VERSION_VIEW_TAGS+1, 0, crypto::hash(), 0, miner_tx);
+      test_generator::bf_major_ver | test_generator::bf_miner_tx,
+      HF_VERSION_VIEW_TAGS+1, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
@@ -785,8 +815,8 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS, HF_VERSION_VIEW_TAGS, 0, crypto::hash(), 0, miner_tx);
+      test_generator::bf_major_ver | test_generator::bf_miner_tx,
+      HF_VERSION_VIEW_TAGS, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_accepted");

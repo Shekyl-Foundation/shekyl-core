@@ -32,19 +32,16 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain.hardforks"
 
 // Rebooted chain: all features active from genesis.
-const hardfork_t mainnet_hard_forks[] = {
-  { 1, 1, 0, 1341378000 },
+// One schedule for every issued network. Fields are version, height, time.
+// The height is the CEN-F21 epoch. The time is the CryptoNote-era stamp
+// RC-162 records; acceptance does not read it.
+const hardfork_t hard_fork_schedule[] = {
+  { 1, 1, 1341378000 },
 };
-const size_t num_mainnet_hard_forks = sizeof(mainnet_hard_forks) / sizeof(mainnet_hard_forks[0]);
-const uint64_t mainnet_hard_fork_version_1_till = 0;
+const size_t num_hard_fork_schedule = sizeof(hard_fork_schedule) / sizeof(hard_fork_schedule[0]);
 
-const hardfork_t testnet_hard_forks[] = {
-  { 1, 1, 0, 1341378000 },
-};
-const size_t num_testnet_hard_forks = sizeof(testnet_hard_forks) / sizeof(testnet_hard_forks[0]);
-const uint64_t testnet_hard_fork_version_1_till = 0;
-
-const hardfork_t stagenet_hard_forks[] = {
-  { 1, 1, 0, 1341378000 },
-};
-const size_t num_stagenet_hard_forks = sizeof(stagenet_hard_forks) / sizeof(stagenet_hard_forks[0]);
+std::pair<uint8_t, uint64_t> regtest_hard_fork_row()
+{
+  const hardfork_t &newest = hard_fork_schedule[num_hard_fork_schedule - 1];
+  return {newest.version, hard_fork_schedule[0].height};
+}

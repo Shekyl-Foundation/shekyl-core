@@ -432,7 +432,6 @@ where
             curve_tree_root: facts.curve_tree_root,
             attestation_root: AttestationRoot::from_bytes([0; 32]),
             major_version: rule_set.header_major_version(),
-            minor_version: 0,
             now,
             median_timestamp: facts.median_timestamp,
             unlock_window: rule_set.mined_money_unlock_window(),

@@ -961,6 +961,8 @@ hole per call.
 
 ### `SF-D13` — countersigning key — RULED 2026-09-13
 
+> **Live, and replaced at the FN-DSA integration (rule 21 reopening, 2026-10-07).** The text below describes the code as it is: the identity key countersigns. The ruled form is a separate receipt key, Ed25519 + FN-DSA-1024, derived from the wallet master seed when the engine is assembled and carried in the bond record beside the identity key ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.2, §6.3). The identity key is unchanged and still defines `p_canonical_id`.
+
 The countersignature uses P's stable **hybrid identity key** from the
 bond record (`shekyl_wire::BondPost.hybrid_public_key`), both Ed25519
 and ML-DSA legs. This ruling does not invent a second key field.
@@ -1068,6 +1070,8 @@ not remove it.
   opportunistic key swap in `shekyl-p-serve`.
 
 ### `SF-D8` — returned signature and verify seam — RULED 2026-09-13
+
+> **Specification:** what `P` signs and the delivery digest are this section's and stand. How a receipt is admitted on chain is [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5, §7.2 and §9.1: the nonce is bound to `(h, j)`, the record carries `j` in place of the nonce, and admission checks no bound on the anchor (`SCS-P7`). The admission window below (`[h − 720 − L, h − 720]` on the including block's predecessor) is live code, and is deleted with the implementation, with its reason, in the specification's §11.1.
 
 The original `R_k`-only lean was incomplete. The fetcher's output is a
 **typed result both callers consume**, produced only after all three

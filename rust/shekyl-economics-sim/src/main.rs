@@ -21,6 +21,7 @@ mod onset;
 mod population;
 mod proxy;
 mod redistribution;
+mod secret_draw;
 mod stranding;
 mod swing;
 mod volume_window;
@@ -108,6 +109,19 @@ fn main() {
         challenge_coverage::render_summary(&mut summary, &runs).expect("String sink is infallible");
         eprint!("{summary}");
         println!("{}", challenge_coverage::evidence_json(&runs));
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--secret-draw") {
+        // ESR-11 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.13): the secret
+        // per-block draw at 0 / 10 / 30 % producer dropout — pairs short of
+        // three issued draws, draws per block, fetch volume, and the
+        // failure window re-checked. JSON to stdout, table to stderr.
+        let cells = secret_draw::evidence_cells();
+        let mut summary = String::new();
+        secret_draw::render_summary(&mut summary, &cells).expect("String sink is infallible");
+        eprint!("{summary}");
+        println!("{}", secret_draw::evidence_json(&cells));
         return;
     }
 

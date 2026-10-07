@@ -104,7 +104,7 @@ DRS-D12 — no store handle by construction).
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
 | Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
-| Hardfork pop | `HardFork::on_block_popped` **reads** `get_hard_fork_version(height)` for heights **above** new tip (`hardfork.cpp:286–302`); interface has **set/get only**, no delete (`blockchain_db.h:1938,1947`) |
+| Hardfork pop | **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
@@ -1255,7 +1255,7 @@ two disagree on 16 rows; a v0 exclusion is not an accumulator exclusion.
 
 | Field | Content |
 | --- | --- |
-| Evidence | **Writers:** `set_hard_fork_version` on connect. **Readers on pop:** `HardFork::on_block_popped` (`hardfork.cpp:286–302`) calls `db.get_hard_fork_version(height)` for `height` in `[new_tip, old_tip)`. **No delete** on `BlockchainDB` API. Stale rows are **load-bearing** for in-memory hardfork reconstruction after reorg — **not** cosmetic residue. Stale audit “Low (cosmetic)” is **false**. **CORRECTED 2026-09-09 (DRS-W15 regrade):** the July reading above is right that the rows are read and wrong about *where it matters* — “after reorg” is precisely the case where it does **not**, because both reorg callers follow the pop with `reorganize_from_chain_height`, which rebuilds the window from **block data** and discards the incremental result. The read-back is load-bearing only for the incremental window, which is retained by just two callers (`pop_blocks`, and `handle_block_to_main_chain`'s unwind) and is wrong on both — one deque entry too long per pop below `window_size` (10080). The function extends to `:309`, not `:302`. See the audit's DRS-W15 subsection. |
+| Evidence | **Writers:** `set_hard_fork_version` on connect. **UPDATE 2026-10-06:** `on_block_popped` and the reorganize/rescan walks are deleted with the vote window. Nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect, and pop still does not delete the row; that residue goes with the class. The July and 2026-09-09 readings below describe the deleted window. **No delete** on `BlockchainDB` API remains true. Stale rows were **load-bearing** for the in-memory window — **not** cosmetic residue while that window existed. Stale audit “Low (cosmetic)” is **false**. **CORRECTED 2026-09-09 (DRS-W15 regrade):** the July reading above is right that the rows are read and wrong about *where it matters* — “after reorg” is precisely the case where it does **not**, because both reorg callers follow the pop with `reorganize_from_chain_height`, which rebuilds the window from **block data** and discards the incremental result. The read-back is load-bearing only for the incremental window, which is retained by just two callers (`pop_blocks`, and `handle_block_to_main_chain`'s unwind) and is wrong on both — one deque entry too long per pop below `window_size` (10080). The function extends to `:309`, not `:302`. See the audit's DRS-W15 subsection. |
 | Class | **RECORD-AND-SPECIFY** — settled 2026-09-08 as **DRS-W15**, **regraded 2026-09-09** (evidence in the audit §9, not restated here). Forbidden: DIVERGE-by-delete, **conditional** on R4 keeping an incremental vote window. Drop that window and the clause retires, leaving `hf_versions` deletable on pop. The A3 narrow exception does not fire (no ratified, conformance-checked row; CEN-B3 is bucket 4) and re-runs if R4 ratifies one. |
 | Forbidden | Classifying **DIVERGE** + “Rust deletes row” + KAT asserts delete is forbidden **while R4 keeps an incremental window** — it would ship a hardfork-state regression on the two callers that retain that window (`pop_blocks`, `handle_block_to_main_chain` unwind). It does **not** ship a reorg regression: both reorg callers rebuild from block data and discard the incremental result. If R4 drops the incremental window, this clause retires. |
 
@@ -1737,7 +1737,7 @@ snapshot with a gate, not a second authority.
 | flag | surface | b1 | b2 | b3 | b4 | total |
 | --- | --- | --- | --- | --- | --- | --- |
 | C | bound | 10 | 2 | 7 | 2 | 21 |
-| C | free | 77 | 38 | 6 | 24 | 145 |
+| C | free | 77 | 39 | 6 | 23 | 145 |
 | P | bound | 0 | 0 | 0 | 0 | 0 |
 | P | free | 1 | 4 | 0 | 4 | 9 |
 
@@ -1777,7 +1777,7 @@ and each slice's pre-flight confirms it.
 | subsystem | b1 | b2 | b4 | total | proposed slice / dependency note |
 | --- | --- | --- | --- | --- | --- |
 | 4.A Acceptance topology | 1 | 3 | 3 | 7 | slice 1 with 4.B — the roots: parent, height, genesis |
-| 4.B Block header | 2 | 1 | 3 | 6 | slice 1 — identity (CEN-B6) is what every other row is stated against |
+| 4.B Block header | 2 | 2 | 2 | 6 | slice 1 — identity (CEN-B6) is what every other row is stated against |
 | 4.C Timestamps | 1 | 2 | 0 | 3 | slice 2 — MTP / FTL; body in `shekyl-difficulty` (adopt) |
 | 4.D PoW and difficulty | 4 | 2 | 2 | 8 | slice 2 — LWMA-1 body in `shekyl-difficulty`, PoW in `shekyl-pow-randomx` (adopt) |
 | 4.E Checkpoints | 0 | 3 | 0 | 3 | slice 3 — after 4.A/4.B |

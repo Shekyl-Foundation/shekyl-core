@@ -278,6 +278,9 @@ stale_through = [
   { through = "ac52a7a35d", note = "Review follow-up: the fold of a chunk into the delivery digest becomes one function, fold_chunk, called by write_response and by the bench compositions. Same reads, same hash, same order, still on the thread it ran on; BA-T3 moved by a few hundred instructions in 191 million." },
   { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
   { through = "01aa01fd31", note = "SH-2 (PR #990): a doc comment on PServeEndpoint::bind in serve.rs, which no longer names the deleted NoResidentKey. No executable serve or fetch code changed in this crate; the key the host binds is shekyl-engine-core's and its cost (one actor round-trip per sign) is on the serving task's path, not this set's." },
+  { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
+  { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
+  { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
 ]
 
 [[constant]]
@@ -598,6 +601,7 @@ stale_through = [
   { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
   { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
+  { through = "7c30a39804", note = "PR #996: the layer-0 comments in frontier.rs, assemble.rs and types.rs, and CT6_PROVING_STATE.md, now say the path API takes points and the circuit tape hashes scalars. No executable code in these paths changed, so no cost moved. Not measured." },
 ]
 
 [[constant]]
@@ -717,7 +721,7 @@ needle = "| Work before the first byte | under 1 ms | not measured on the floor 
 measured_by = ["BA-T3", "BA-T5"]
 status = "estimated"
 estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
-basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,334,665 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
 basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
 carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
 path_set = "archival-serve-fetch"

@@ -1149,8 +1149,8 @@ already has both, in the shipped binary.**
 | no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty — `else if` at [`net_node.inl:737`](../../src/p2p/net_node.inl#L737), the block `:738-740` holding only the comment at `:739`; the four production seeds are inside the `TESTNET` branch |
 | no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
 
-Everything else is the same chain: `stagenet_hard_forks[]` is `{1,1,0,…}`,
-byte-identical to testnet's ([`hardforks.cpp:41-50`](../../src/hardforks/hardforks.cpp#L41)),
+Everything else is the same chain: issued networks share `hard_fork_schedule`
+([`src/hardforks/hardforks.cpp:38–40`](../../src/hardforks/hardforks.cpp#L38)),
 so stagenet is v3-from-genesis with every feature active exactly as testnet is.
 It differs in `NETWORK_ID`, genesis tx, ports (13021/13029) and address prefix —
 and in nothing that peer discovery touches.
