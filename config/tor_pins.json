@@ -7,7 +7,10 @@
     "RELEASE_CHECKLIST.md 'Bundled Tor pin current' procedure: a digest recorded here must",
     "come from a tarball whose signature was verified against signing_key_fingerprint.",
     "Every target the release builds has exactly one row, pinned or unavailable",
-    "(scripts/ci/check_tor_pin_targets.py)."
+    "(scripts/ci/check_tor_pin_targets.py). An unavailable row is a ruling unless it",
+    "carries \"pending\": the identifier of the work that will pin it. A pending row",
+    "compiles as unavailable, which is what the binary does today, and is counted by",
+    "the gate: the startup refusal (TB-2) may not land while one remains (TB-12)."
   ],
   "signing_key_fingerprint": "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",
   "bundle_url": "https://archive.torproject.org/tor-package-archive/torbrowser/{bundle_version}/tor-expert-bundle-{bundle_target}-{bundle_version}.tar.gz",
@@ -48,7 +51,7 @@
         { "name": "libssl.so.3", "sha256": "080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf" },
         { "name": "libcrypto.so.3", "sha256": "f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3" }
       ],
-      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt", "docs/zlib.txt"]
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
     {
       "os": "linux",
@@ -76,21 +79,24 @@
       "arch": "x86_64",
       "gitian_host": "x86_64-w64-mingw32",
       "disposition": "unavailable",
-      "reason": "the Windows pin is not adopted until its launch test has run (TB-11)"
+      "reason": "the Windows pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
     },
     {
       "os": "macos",
       "arch": "x86_64",
       "gitian_host": "x86_64-apple-darwin11",
       "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)"
+      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
     },
     {
       "os": "macos",
       "arch": "aarch64",
       "gitian_host": "aarch64-apple-darwin11",
       "disposition": "unavailable",
-      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)"
+      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
     }
   ]
 }

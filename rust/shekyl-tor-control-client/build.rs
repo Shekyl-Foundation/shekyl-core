@@ -183,10 +183,36 @@ fn main() {
 
     let context = format!("{} [{os}/{arch}]", pins_path.display());
     let disposition = match str_field(row, "disposition", &context) {
-        "pinned" => pinned_expr(row, &os, &context),
+        "pinned" => {
+            assert!(
+                row.get("pending").is_none(),
+                "{context}: a pinned row is not pending"
+            );
+            pinned_expr(row, &os, &context)
+        }
         "unavailable" => {
             let reason = str_field(row, "reason", &context);
             assert!(!reason.trim().is_empty(), "{context}: an empty reason");
+            // A row may carry `pending`: the identifier of the work that will
+            // pin it. It compiles exactly as a ruled-unavailable row does,
+            // because that is what this binary does about Tor today. The
+            // difference is for `scripts/ci/check_tor_pin_targets.py`, which
+            // counts pending rows so the startup refusal cannot land over one.
+            if let Some(pending) = row.get("pending") {
+                let ok = pending
+                    .as_str()
+                    .and_then(|p| p.rsplit_once('-'))
+                    .is_some_and(|(family, number)| {
+                        !family.is_empty()
+                            && family.bytes().all(|b| b.is_ascii_uppercase())
+                            && !number.is_empty()
+                            && number.bytes().all(|b| b.is_ascii_digit())
+                    });
+                assert!(
+                    ok,
+                    "{context}: \"pending\" names a work item such as TB-11, got {pending}"
+                );
+            }
             format!("TorDisposition::Unavailable {{ reason: {reason:?} }}")
         }
         other => panic!("{context}: disposition is \"pinned\" or \"unavailable\", got {other:?}"),

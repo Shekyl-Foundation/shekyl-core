@@ -29,7 +29,9 @@ Subcommands (a target is named by its gitian host triple, `--host`):
   stage        check the tarball's SHA-256 BEFORE opening it, extract only the
                pinned files into `--dest`, check each file's SHA-256, and
                write the licence texts and the source pointer into
-               `--licenses`. Fetches the tarball first if `--sources` lacks it.
+               `--licenses`. Fetches the tarball first if `--sources` lacks it,
+               unless `--no-fetch` is given: then a cache miss refuses. The
+               release build passes `--no-fetch`.
   verify       check that `--dir` holds exactly the pinned files, each a
                regular file with the pinned SHA-256.
 
@@ -98,6 +100,16 @@ def is_label(value):
         and value not in ("", ".", "..")
         and all(c in allowed for c in value)
     )
+
+
+def is_work_item(value):
+    """An identifier from a registered family, e.g. `TB-11`: what a pending
+    row waits on. A sentence here would be a second `reason`; the point of
+    the field is that a gate can read it."""
+    if not isinstance(value, str) or "-" not in value:
+        return False
+    family, _, number = value.rpartition("-")
+    return family.isalpha() and family.isupper() and number.isdigit()
 
 
 def is_plain_name(value):
@@ -187,6 +199,13 @@ def load_pins(path):
                 f"for {compiled[0]}/{compiled[1]}, not {target[0]}/{target[1]}"
             )
 
+        if "pending" in row and (
+            row["disposition"] != "unavailable" or not is_work_item(row["pending"])
+        ):
+            raise Refused(
+                f"{where}: \"pending\" belongs on an unavailable row and names the "
+                "work that will pin it, as an identifier such as TB-11"
+            )
         if row["disposition"] == "unavailable":
             if not isinstance(row.get("reason"), str) or not row["reason"].strip():
                 raise Refused(f"{where}: an unavailable target must state its reason; none is given")
@@ -273,13 +292,23 @@ def check_tarball(path, row):
         )
 
 
-def fetch(doc, row, sources):
-    """Make the pinned tarball present in `sources`, digest-checked."""
-    sources.mkdir(parents=True, exist_ok=True)
+def fetch(doc, row, sources, offline=False):
+    """Make the pinned tarball present in `sources`, digest-checked.
+
+    With `offline`, a tarball that is not already there is a refusal and
+    nothing is downloaded: a release build takes its inputs from the cache
+    it was given, and a cache miss that quietly became a download is how a
+    build stops being reproducible without anyone deciding it should."""
     dest = sources / tarball_name(row)
     if dest.exists():
         check_tarball(dest, row)
         return dest
+    if offline:
+        raise Refused(
+            f"{dest} is not in the sources cache and --no-fetch forbids downloading it. "
+            "Populate the cache first: tor_bundle.py fetch --all --sources <cache>"
+        )
+    sources.mkdir(parents=True, exist_ok=True)
     url = tarball_url(doc, row)
     if not url.startswith("https://"):
         raise Refused(f"refusing to fetch over anything but https: {url}")
@@ -368,8 +397,8 @@ def check_directory(directory, row):
         raise Refused(f"{directory / row['executable']} is not executable")
 
 
-def stage(doc, row, sources, dest, licenses):
-    tarball = fetch(doc, row, sources)
+def stage(doc, row, sources, dest, licenses, offline=False):
+    tarball = fetch(doc, row, sources, offline=offline)
     # `fetch` checked a tarball it found or downloaded; the digest is read
     # again from the file this function is about to open, so the check and
     # the extraction are of one file whatever `fetch` did.
@@ -443,6 +472,11 @@ def main(argv=None):
     cmd.add_argument("--sources", type=Path, required=True)
     cmd.add_argument("--dest", type=Path, required=True, help="tor's directory")
     cmd.add_argument("--licenses", type=Path, required=True)
+    cmd.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="refuse if --sources lacks the tarball instead of downloading it",
+    )
     cmd = with_host("verify")
     cmd.add_argument("--dir", type=Path, required=True, help="tor's directory")
     args = parser.parse_args(argv)
@@ -478,7 +512,7 @@ def main(argv=None):
             if row["disposition"] != "pinned":
                 print(f"{args.host}: unavailable ({row['reason']}); nothing staged")
                 return 0
-            stage(doc, row, args.sources, args.dest, args.licenses)
+            stage(doc, row, args.sources, args.dest, args.licenses, offline=args.no_fetch)
             print(
                 f"{args.host}: staged tor {row['tor_version']} "
                 f"(bundle {row['bundle_version']}) into {args.dest}"

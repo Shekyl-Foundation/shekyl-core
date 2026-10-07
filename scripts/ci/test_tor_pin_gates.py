@@ -187,6 +187,45 @@ def _(b):
     expect(b.stage(), 1, "cannot share tor's directory")
 
 
+@case("stage --no-fetch: a cache miss refuses and downloads nothing")
+def _(b):
+    b.tarball.unlink()
+    proc = b.run(
+        "stage", "--host", HOST, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    # The pin file's URL is https://invalid.example: had a download been
+    # attempted, the message would be the fetch failure, not this one.
+    expect(proc, 1, "--no-fetch forbids downloading it")
+    assert "could not fetch" not in proc.stderr, proc.stderr
+    assert not b.dest.exists()
+    assert list(b.sources.iterdir()) == [], "nothing may be written to the cache"
+
+
+@case("stage --no-fetch: a tarball in the cache stages as usual")
+def _(b):
+    proc = b.run(
+        "stage", "--host", HOST, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 0, "staged tor 0.0.0.1")
+
+
+@case("pin file: pending names a work item, on an unavailable row only")
+def _(b):
+    b.pins["targets"][1]["pending"] = "TB-11"
+    b.write()
+    expect(b.run("disposition", "--host", "riscv64-linux-gnu"), 0, "unavailable")
+    for bad in ("soon", "tb-11", "TB-", "after the launch test", 11):
+        b.pins["targets"][1]["pending"] = bad
+        b.write()
+        expect(b.stage(), 1, "names the")
+    del b.pins["targets"][1]["pending"]
+    b.pins["targets"][0]["pending"] = "TB-11"
+    b.write()
+    expect(b.stage(), 1, "belongs on an unavailable row")
+
+
 @case("stage: an unavailable host stages nothing and is not an error")
 def _(b):
     expect(b.stage(host="riscv64-linux-gnu"), 0, "nothing staged")
@@ -339,7 +378,7 @@ def workflow_yaml(hosts, steps=STAGE_STEP):
 
 def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
                  workflow_hosts=("x86_64-linux-gnu",), workflow_extra="", workflow=None,
-                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)"):
+                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)", gate_args=()):
     root = Path(tmp) / "tree"
     (root / "scripts" / "release").mkdir(parents=True)
     (root / "scripts" / "ci").mkdir(parents=True)
@@ -367,7 +406,8 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
         f"- Current pin: **{checklist}**\n", encoding="utf-8"
     )
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root)],
+        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root),
+         *gate_args],
         capture_output=True,
         text=True,
     )
@@ -461,6 +501,29 @@ def _(tmp):
     )
     expect(proc, 1, "tor-pin-verify.yml: cannot be read")
     assert "Traceback" not in proc.stderr, proc.stderr
+
+
+def pending_pins():
+    pins = base_pins("0" * 64)
+    pins["targets"][1]["pending"] = "TB-11"
+    return pins
+
+
+@tcase("targets: a pending row is reported and passes without --refuse-pending")
+def _(tmp):
+    proc = targets_tree(tmp, pins=pending_pins())
+    expect(proc, 0, "riscv64-linux-gnu is unavailable pending TB-11")
+
+
+@tcase("targets: --refuse-pending fails while a pending row remains")
+def _(tmp):
+    proc = targets_tree(tmp, pins=pending_pins(), gate_args=("--refuse-pending",))
+    expect(proc, 1, "riscv64-linux-gnu is still pending TB-11")
+
+
+@tcase("targets: --refuse-pending passes a ruled-unavailable row")
+def _(tmp):
+    expect(targets_tree(tmp, gate_args=("--refuse-pending",)), 0, "every built host")
 
 
 @tcase("targets: a malformed pin file fails")

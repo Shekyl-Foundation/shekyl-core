@@ -44,6 +44,14 @@ moves that failure to the pull request.
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
+  7. **Pending rows are counted, and can be refused.** An `unavailable` row
+     with `"pending": "<work item>"` is a target not pinned *yet*, as distinct
+     from one ruled out. Both compile the same way, so only this gate can
+     tell them apart. It prints each pending row on every run. With
+     `--refuse-pending` it fails while any remains: the change that makes a
+     missing tor refuse the start (TB-2) turns that flag on in the workflow,
+     so the refusal cannot land with a published target still waiting for
+     its pin (TB-12).
 
 Exit status: 0 = all hold; 1 = a difference (each one printed).
 """
@@ -146,6 +154,21 @@ def gitian_hosts(root, problems):
     return hosts
 
 
+def pending_rows(root):
+    """(host, work item) for each row that is unavailable only for now.
+    Empty when the pin file does not load: `check` reports that."""
+    tor_bundle = load_tor_bundle(root)
+    try:
+        doc = tor_bundle.load_pins(root / "config" / "tor_pins.json")
+    except tor_bundle.Refused:
+        return []
+    return [
+        (row["gitian_host"], row["pending"])
+        for row in doc["targets"]
+        if "pending" in row
+    ]
+
+
 def check(root):
     problems = []
     tor_bundle = load_tor_bundle(root)
@@ -204,8 +227,22 @@ def main():
     parser.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[2]
     )
+    parser.add_argument(
+        "--refuse-pending",
+        action="store_true",
+        help="fail while any target is unavailable only because its pin is pending",
+    )
     args = parser.parse_args()
     problems = check(args.root)
+    pending = pending_rows(args.root)
+    for host, item in pending:
+        print(f"tor pin targets: {host} is unavailable pending {item}")
+    if args.refuse_pending:
+        for host, item in pending:
+            problems.append(
+                f"{host} is still pending {item}: pin it, or rule it unavailable, "
+                "before the startup refusal lands"
+            )
     if problems:
         for problem in problems:
             print(f"tor pin targets: {problem}", file=sys.stderr)

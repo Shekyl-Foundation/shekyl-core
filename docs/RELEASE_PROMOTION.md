@@ -116,10 +116,12 @@ then tag** (avoids the "tag not on the default branch" trap that
          This gate is why `v3.1.0-alpha.6`'s post-tag gitian failure (a rustup
          toolchain race in the descriptors) forced a bump to `alpha.7`; running it
          here would have caught it pre-tag. Only proceed once green.
-         The dry run covers the four platform builds only. The
-         `Package & Publish Release` job runs on a tag ref and is skipped on a
-         dispatch, so packaging (`.deb`, `.rpm`, the Windows installer, the
-         source archive, `SHA256SUMS`) is first exercised by the real tag.
+         Dispatch it with `package_dry_run` checked. The four platform builds
+         then feed the package job, which builds the `.deb`, the `.rpm`, the
+         Windows installer, the source archive and `SHA256SUMS`, checks the
+         Tor bundle inside each unpacked package, and stops before
+         publishing. Without that input the package job is skipped on a
+         dispatch, and packaging is first exercised by the real tag.
 3. **Open the promotion pull request** from `dev` to `main`, titled
    `Release: vX.Y.Z`. The build and test workflows run on pull requests and on
    pushes to `main`, not on pushes to `dev`, so this pull request is the first

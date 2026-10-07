@@ -181,7 +181,10 @@ file meanwhile, with that as the stated reason.
      opening it and stages only the pinned files. The Linux gitian descriptor
      stages into `tor/` beside the binaries, with `tor-licenses/` beside that;
      the package job installs the same files under
-     `/opt/shekyl/<bundle_version>-<bundle_target>/`.
+     `/opt/shekyl/<bundle_version>-<bundle_target>/`. The descriptor stages
+     with `--no-fetch`: the tarball comes from the sources cache that
+     `gitian-build.py` filled before the build, and a cache miss stops the
+     build instead of downloading inside it.
    - TB-7: `binary::verify_candidate` (exact contents, per-file digests, one
      canonical directory carried by the witness) and
      `control::actor::managed_tor_command` (cleared environment, the loader
@@ -202,12 +205,21 @@ file meanwhile, with that as the stated reason.
      not declined, also warns (it was an info line); that state becomes a
      refusal in step 4.
    - Windows, macOS, FreeBSD, riscv64 Linux and Android are `Unavailable`
-     rows with their reasons. For Windows and macOS the reason is that the
-     pin awaits TB-11.
+     rows with their reasons. FreeBSD, riscv64 Linux and Android are rulings.
+     The Windows and macOS rows are not: they also carry `"pending": "TB-11"`,
+     which says the target is unavailable only until its pin is adopted. A
+     pending row compiles as `Unavailable`, which is what the binary does
+     today, so TB-4's two states stand at runtime; the marker is for the gate.
+     `check_tor_pin_targets.py` prints every pending row and fails on any
+     with `--refuse-pending`.
 2. **Windows and macOS:** TB-11, a pin and a launch test for each; and the
    GUI wallet's installers (TB-12), in `shekyl-gui-wallet`.
 3. **FreeBSD:** TB-5's `Unavailable` arm and its user guide.
-4. **The refusal:** TB-2, under TB-12.
+4. **The refusal:** TB-2, under TB-12. Its change turns on
+   `--refuse-pending` where `grep-gates` runs `check_tor_pin_targets.py`, so
+   it cannot merge while a published target is still waiting for its pin.
+   Without that, "every target is `Pinned` or `Unavailable`" is already true
+   of the Windows and macOS rows and TB-12 would guard nothing.
 
 The Foundation's own hosts are reconfigured one at a time after step 1, to the
 canonical location, watching the network recover from each dropped node.
@@ -216,7 +228,11 @@ canonical location, watching the network recover from each dropped node.
 
 The pin cannot cover a file Shekyl has no source for. With the loader pointed
 at the bundle, the Linux `tor` still takes these from the system (observed on
-`linux-x86_64`; the `linux-aarch64` binaries name the same set):
+`linux-x86_64`; the `linux-aarch64` `tor` names the same set — `readelf -d`
+lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically. The
+16.0a13 bundle carries a `docs/zlib.txt` that the 15.0.24 bundle does not;
+that is a licence text for a library the bundle does not ship, and Shekyl
+does not stage it):
 
 - the glibc family — the dynamic loader, `libc`, `libm`, `libdl`,
   `libpthread` — and `libgcc_s`;

@@ -12,6 +12,11 @@ on:
       repo_url:
         description: 'Repository URL override (leave empty for default)'
         required: false
+      package_dry_run:
+        description: 'Also run the package job (deb, rpm, installer, checksums) without publishing'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -80,7 +85,11 @@ jobs:
     name: Package & Publish Release
     needs: [build-gitian]
     runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/')
+    # On a tag this packages and publishes. Dispatched with package_dry_run
+    # it packages and stops: the .deb/.rpm staging, the post-pack checks and
+    # the installer run on a branch, so the first time they run is not the
+    # release. The publish step below stays tag-only.
+    if: startsWith(github.ref, 'refs/tags/') || inputs.package_dry_run
     steps:
       - uses: actions/checkout@v5
         with:
@@ -105,8 +114,21 @@ jobs:
           set -euo pipefail
           TAG="${GITIAN_TAG}"
           VERSION="${TAG#v}"
+          # A dry run is dispatched with a commit, not a tag, and a package
+          # version has to start with a digit.
+          if [ "${GITHUB_REF#refs/tags/}" = "${GITHUB_REF}" ]; then
+            VERSION="0.0.0.dryrun.${TAG:0:9}"
+          fi
           RELEASE="release-assets"
           mkdir -p "$RELEASE"
+
+          # What the Linux packages declare as their licence. Shekyl is
+          # BSD-3-Clause. The packaged tor reports itself as covered by the
+          # GPL, version 3 (`tor --version`), its libevent is BSD-3-Clause and
+          # its OpenSSL is Apache-2.0. The texts travel in
+          # /usr/share/doc/shekyl/tor/ (TB-13); this is the field a
+          # distribution's tooling reads.
+          PKG_LICENSE="BSD-3-Clause AND GPL-3.0-only AND Apache-2.0"
 
           # The pinned Tor bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-9). A
           # gitian archive carries it in tor/ beside the binaries; a system
@@ -185,7 +207,7 @@ jobs:
               --name shekyl --version "$VERSION" \
               --description "Shekyl cryptocurrency daemon and wallet tools" \
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "BSD-3-Clause" --architecture amd64 \
+              --license "$PKG_LICENSE" --architecture amd64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
@@ -205,7 +227,7 @@ jobs:
               --name shekyl --version "$VERSION" \
               --description "Shekyl cryptocurrency daemon and wallet tools" \
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "BSD-3-Clause" --architecture x86_64 \
+              --license "$PKG_LICENSE" --architecture x86_64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
               -C "$STAGE_RPM" .
@@ -234,7 +256,7 @@ jobs:
               --name shekyl --version "$VERSION" \
               --description "Shekyl cryptocurrency daemon and wallet tools" \
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "BSD-3-Clause" --architecture arm64 \
+              --license "$PKG_LICENSE" --architecture arm64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
@@ -254,7 +276,7 @@ jobs:
               --name shekyl --version "$VERSION" \
               --description "Shekyl cryptocurrency daemon and wallet tools" \
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
-              --license "BSD-3-Clause" --architecture aarch64 \
+              --license "$PKG_LICENSE" --architecture aarch64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib \
               -C "$STAGE_RPM" .
@@ -290,6 +312,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
