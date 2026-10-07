@@ -60,14 +60,15 @@
 //! after the body refused (it cannot; both are set-membership over the same
 //! keys), the refusal falls to `Locus::Block`, never to a panic.
 //!
-//! **A vin that does not parse is not this rule's.** The parse of a
-//! serve-credit vin is CEN-J1's row, of an emission vin the emission rows'
-//! (slice 8, pending); until they land, an unparseable archival vin has no
-//! key to collide on and passes G7/G9 — the gap is theirs and the family
-//! pins it there, not here. The C++ reaches these passes only after
+//! **A vin that does not parse is not this rule's.** The parse of an
+//! emission vin is CEN-J19's row (slice 8 row 7, `tx_emission`), of a
+//! serve-credit vin CEN-J1's — a successor row scoped out of slice 8
+//! (§1.2) and still pending; until it lands, an unparseable serve-credit
+//! vin has no key to collide on and passes G7 — the gap is J1's and the
+//! family pins it there, not here. The C++ reaches these passes only after
 //! `check_tx_inputs` has parsed every vin, so it treats a failure here as an
 //! internal inconsistency; the Rust order puts the parse rows in the slot
-//! loop, before this one, and they will refuse first when they exist.
+//! loop, before this one: J19 refuses first, and J1 will when it exists.
 //!
 //! **Deliberately not a rule (ratified 2026-07-12, `blockchain.cpp:5738`):**
 //! a serve-credit response and a Release for the same `P` in one block is

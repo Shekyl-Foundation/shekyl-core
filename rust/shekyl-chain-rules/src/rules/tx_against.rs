@@ -192,8 +192,9 @@ fn proof_reference(cx: &TxContext<'_>) -> Option<BlockHash> {
 
 /// The curve-tree context a proof-bearing transaction's reference names,
 /// yielded by [`judge_reference`] for the rows that verify against it:
-/// CEN-I15 on a spend (not in this crate yet — see [`I12`]), CEN-J25's
-/// backing proof and CEN-J26's fee-input proof on an emission.
+/// CEN-I15 on a spend (its body is [`I15::verify`]; not run on that class
+/// yet — see [`I12`]), CEN-J25's backing proof and CEN-J26's fee-input
+/// proof on an emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReferenceContext {
     /// I10's operand: the reference's recorded height.
