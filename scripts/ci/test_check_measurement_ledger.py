@@ -125,6 +125,40 @@ def constant(
     return text + body + "\n"
 
 
+def estimated(
+    name: str,
+    *,
+    set_id: str = "hot",
+    body: str = "",
+    captures: str = '["docs/benchmarks/cap.txt"]',
+    estimate: str = '{ low = 40, high = 60, unit = "ms" }',
+    basis: str = "24.8 ms before plus one 23.9 ms digest pass",
+) -> str:
+    return (
+        f'[[constant]]\nname = "{name}"\ndefined_in = "src/consts.txt"\n'
+        f'needle = "LIMIT = 4"\nmeasured_by = ["BA-T1"]\nstatus = "estimated"\n'
+        f'path_set = "{set_id}"\nestimate = {estimate}\nbasis = "{basis}"\n'
+        f"basis_captures = {captures}\n{CARRIER}" + body + "\n"
+    )
+
+
+def retired(
+    name: str,
+    rev: str,
+    *,
+    measured: str = "67.2",
+    verdict: str = "falsified",
+    capture: str = "docs/benchmarks/cap.txt",
+    estimate: str = '{ low = 40, high = 60, unit = "ms" }',
+) -> str:
+    return (
+        f'[[retired_estimate]]\nname = "{name}"\nestimate = {estimate}\n'
+        f'measured = {measured}\ncapture = "{capture}"\ncapture_rev = "{rev}"\n'
+        f'verdict = "{verdict}"\n'
+        'note = "The digest costs more inside the stream than alone."\n\n'
+    )
+
+
 def document(
     sets: str, rows: str, toolchain: str = "", toolchain_file: str = "toolchain.toml"
 ) -> str:
@@ -788,8 +822,208 @@ def scenario_toolchain(results: Results) -> None:
         )
 
 
+def scenario_estimated(results: Results) -> None:
+    """A prediction with its arithmetic, and the one way it becomes a measurement."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        control = constant("control", "current", c1)
+        guess = estimated("guess")
+        results.expect(
+            root, document(path_set(), control + guess), 0,
+            "control: an estimate beside a current constant passes",
+            "estimate: guess",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures='["docs/benchmarks/nope.txt"]')), 1,
+            "an estimate whose basis capture is not in the tree is refused",
+            "not a tracked file",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures='["docs/benchmarks"]')), 1,
+            "a basis capture that is a directory, not a file, is refused",
+            "not a tracked file",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures='["docs/benchmarks/*.txt"]')), 1,
+            "a basis capture that is a glob is refused", "not a tracked file",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", estimate='"about 50 ms"')), 1,
+            "an estimate that is a sentence, not a band, is refused",
+            "table of low, high and unit",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated(
+                "guess", estimate='{ low = 60, high = 40, unit = "ms" }'
+            )), 1,
+            "a band whose low is above its high is refused", "is above high",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated(
+                "guess", estimate='{ low = 40, high = 60 }'
+            )), 1,
+            "a band with no unit is refused", "names its unit",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated(
+                "guess", estimate='{ low = "40", high = 60, unit = "ms" }'
+            )), 1,
+            "a band whose bound is a string is refused", "low and high are numbers",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", basis="x")), 1,
+            "an estimate without its arithmetic is refused", "arithmetic",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess", captures="[]")), 1,
+            "an estimate that names no basis capture is refused", "captures its basis",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated(
+                "guess", body='capture = "docs/benchmarks/cap.txt"\n'
+            )), 1,
+            "an estimate may not claim a capture", "not valid for an estimated constant",
+        )
+        # The transition. The parent holds the estimate; the child calls it
+        # current on a capture the parent tree already had.
+        write(root, LEDGER, document(path_set(), control + guess))
+        commit(root, "the ledger as the base branch holds it", ledger=True)
+        commit(root, "the pull request's commit")
+        hardened = document(path_set(), control + constant("guess", "current", c1))
+        results.expect(
+            root, hardened, 1,
+            "AN ESTIMATE MAY NOT HARDEN: current on a capture the parent already held",
+            "parent tree already held",
+        )
+        results.expect(
+            root, document(path_set(), control), 1,
+            "an estimate that vanishes is refused", "is gone",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("guess", c1)), 1,
+            "AN ESTIMATE MAY NOT BE RETIRED on a capture the parent already held",
+            "parent tree already held",
+        )
+        withdrawn = document(path_set(), control + constant(
+            "guess", "unmeasured", body=CARRIER
+        ))
+        results.expect(
+            root, withdrawn, 0, "an estimate withdrawn to unmeasured passes",
+        )
+        write(root, "docs/benchmarks/new_cap.txt", f"# git_rev={c1}\nvalue=51\n")
+        commit(root, "the measurement lands")
+        measured = document(path_set(), control + constant("guess", "current", c1).replace(
+            'capture = "docs/benchmarks/cap.txt"', 'capture = "docs/benchmarks/new_cap.txt"'
+        ))
+        # The capture file is new to the parent tree, which is the shape a PR
+        # that lands a measurement and updates the ledger has.
+        results.expect(
+            root, measured, 0,
+            "a capture file the parent tree did not hold makes the estimate current",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1, capture="docs/benchmarks/new_cap.txt"
+            )), 0,
+            "a capture the parent tree did not hold retires the estimate beside its number",
+            "retired estimate: guess — predicted 40 to 60 ms, measured 67.2 ms: falsified",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1, capture="docs/benchmarks/new_cap.txt",
+                estimate='{ low = 40, high = 70, unit = "ms" }', verdict="held",
+            )), 1,
+            "THE BAND IS THE ONE PREDICTED: 40 to 60 may not retire as 40 to 70 and held",
+            "keeps the band it was given",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1, capture="docs/benchmarks/new_cap.txt",
+                estimate='{ low = 40, high = 60, unit = "s" }',
+            )), 1,
+            "nor under another unit", "keeps the band it was given",
+        )
+
+
+def scenario_retired(results: Results) -> None:
+    """A prediction beside its measurement, with a verdict the gate computes."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        control = constant("control", "current", c1)
+        results.expect(
+            root, document(path_set(), control + retired("old", c1)), 0,
+            "control: a falsified estimate recorded beside its measurement passes",
+            "measured 67.2 ms: falsified",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "old", c1, measured="55", verdict="held"
+            )), 0,
+            "a measurement inside the band is recorded as held", "measured 55 ms: held",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1, verdict="held")), 1,
+            "A VERDICT IS COMPUTED: 67.2 against 40 to 60 may not be called held",
+            "is falsified",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "old", c1, measured="55", verdict="falsified"
+            )), 1,
+            "and 55 against 40 to 60 may not be called falsified", "is held",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1, measured="60", verdict="held")), 0,
+            "the band's edge is inside it",
+        )
+        results.expect(
+            root, document(path_set(), control + retired(
+                "old", c1, capture="docs/benchmarks"
+            )), 1,
+            "a retired estimate's capture is one tracked file", "not a tracked file",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", "0" * 40)), 1,
+            "a retired estimate's capture_rev is a commit here", "not a commit",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1, measured='"67.2"')), 1,
+            "a measured value that is a string is refused", "measured is a number",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1) + retired("old", c1)), 1,
+            "two retired estimates may not share a name", "duplicate name",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("", c1)), 1,
+            "a retired estimate with an empty name is refused", "non-empty string",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("old", c1).replace(
+                'name = "old"', "name = 7"
+            )), 1,
+            "a retired estimate whose name is not a string is refused", "non-empty string",
+        )
+        results.expect(
+            root, document(path_set(), control + estimated("guess") + retired("guess", c1)), 1,
+            "OPEN OR SETTLED, NOT BOTH: one name as an estimate and as a retired estimate",
+            "open or settled, not both",
+        )
+        results.expect(
+            root, document(path_set(), control + retired("control", c1)), 1,
+            "a retired estimate may not take a measured constant's name either",
+            "open or settled, not both",
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_estimated(results)
+    scenario_retired(results)
     scenario_current(results)
     scenario_stale_and_comments(results)
     scenario_listening(results)

@@ -36,13 +36,22 @@
 //! exact, and the two kernel buffers between the ends (the persona's send
 //! buffer and the requester's receive buffer) over a real socket.
 //!
-//! The sink tests assert the bound as an equality. The socket test asserts
-//! only that the reads stopped short of the body and that nothing was
-//! signed: an absolute bound there would have to name the persona's
-//! `SO_SNDBUF`, which Linux autotunes up to `net.ipv4.tcp_wmem`'s maximum
-//! (4 MiB by default, larger than a whole shard), and pinning it would
-//! take a production seam on the listener that this endpoint does not
-//! have.
+//! The sink tests assert the bound as an equality. The socket tests assert
+//! it as an inequality with every term named, which needs the two kernel
+//! buffers to be known: left alone, Linux autotunes the persona's send
+//! buffer up to `net.ipv4.tcp_wmem`'s maximum (4 MiB by default, larger
+//! than a whole shard), and a test that hoped it stayed small would pass
+//! or fail on the kernel's mood. So those tests bind the endpoint with its
+//! send buffer pinned ([`PServeEndpoint::bind_with_send_buffer`]) and
+//! connect with a pinned receive buffer; setting either turns its
+//! autotuning off. What the persona can have written that the requester
+//! has not read is then at most the two buffers, and
+//!
+//! ```text
+//! accepted <= bytes the requester read + its receive buffer + P's send buffer
+//! ```
+//!
+//! holds whatever the timing, since it is accounting and not a race.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -55,7 +64,6 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::{leaves_per_segment, ServedFrameHeader, LEAF_BYTES};
 use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use super::{
     fetch, good_get_shard_0, head_of, leaves, render_ok, resolve, write_response, PServeEndpoint,
@@ -66,14 +74,14 @@ use crate::provider::{ProviderError, ShardBody, ShardProvider};
 
 /// Shard 0, in memory, counting how often it is opened and how many
 /// chunks of it are then yielded.
-struct CountingProvider {
+pub(super) struct CountingProvider {
     bytes: Arc<[u8]>,
     opens: AtomicUsize,
     reads: Arc<AtomicUsize>,
 }
 
 impl CountingProvider {
-    fn new(bytes: Vec<u8>) -> Arc<Self> {
+    pub(super) fn new(bytes: Vec<u8>) -> Arc<Self> {
         Arc::new(Self {
             bytes: Arc::from(bytes.into_boxed_slice()),
             opens: AtomicUsize::new(0),
@@ -81,11 +89,11 @@ impl CountingProvider {
         })
     }
 
-    fn opens(&self) -> usize {
+    pub(super) fn opens(&self) -> usize {
         self.opens.load(Ordering::SeqCst)
     }
 
-    fn reads(&self) -> usize {
+    pub(super) fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
     }
 
@@ -110,27 +118,54 @@ impl ShardProvider for CountingProvider {
     }
 }
 
+/// How a [`CountingSigner`] answers: each is one of the signer-side
+/// outcomes the endpoint has a response for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Signs {
+    /// Ready, and signs.
+    Always,
+    /// Refuses its pre-flight: the 503 before any shard byte.
+    NotReady,
+    /// Ready, then fails to sign after the body: the refusal trailer.
+    FailsLate,
+    /// Cannot read its own height: the 503, a lookup failure.
+    NoHeight,
+}
+
 /// The test key, counting the signatures it is asked for.
-struct CountingSigner {
+pub(super) struct CountingSigner {
     key: TestKeySigner,
+    signs: Signs,
     asked_to_sign: AtomicUsize,
 }
 
 impl CountingSigner {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
+        Self::that(Signs::Always)
+    }
+
+    pub(super) fn that(signs: Signs) -> Arc<Self> {
         Arc::new(Self {
             key: TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)),
+            signs,
             asked_to_sign: AtomicUsize::new(0),
         })
     }
 
-    fn asked_to_sign(&self) -> usize {
+    pub(super) fn asked_to_sign(&self) -> usize {
         self.asked_to_sign.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn key(&self) -> &TestKeySigner {
+        &self.key
     }
 }
 
 impl PassKey for CountingSigner {
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        if self.signs == Signs::NotReady {
+            return Err(SignRefused::new("counting signer: not ready"));
+        }
         self.key.ready(shard_id, anchor_height)
     }
 
@@ -139,12 +174,18 @@ impl PassKey for CountingSigner {
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<HybridSignature, SignRefused> {
         self.asked_to_sign.fetch_add(1, Ordering::SeqCst);
+        if self.signs == Signs::FailsLate {
+            return Err(SignRefused::new("counting signer: fails late"));
+        }
         self.key.sign_pass(message)
     }
 }
 
 impl PassSigner for CountingSigner {
     fn own_height(&self) -> Option<BlockHeight> {
+        if self.signs == Signs::NoHeight {
+            return None;
+        }
         self.key.own_height()
     }
 }
@@ -356,43 +397,74 @@ async fn a_requester_that_takes_everything_costs_every_chunk_and_one_signature()
     );
 }
 
-#[tokio::test]
-async fn a_requester_that_closes_after_the_head_is_never_signed_for() {
-    // The same clause through the endpoint and a real socket, with the
-    // largest body a shard can be. The requester reads the head and
-    // closes. The persona's writes fail once the close reaches it, long
-    // before a whole segment is out, and the key is never asked. How many
-    // chunks went into the kernel's buffers first is the kernel's (see the
-    // module docs); the sink tests pin the mechanism to the byte.
+/// `SO_SNDBUF` asked of the persona's accepted sockets, and `SO_RCVBUF`
+/// asked of the requester's. Small, so that both together are a small
+/// fraction of a segment.
+const PINNED_BUFFER_BYTES: u32 = 32 * 1024;
+
+/// Linux doubles a requested socket buffer to leave room for bookkeeping
+/// (`socket(7)`, `SO_SNDBUF`), so the persona's send buffer holds at most
+/// this. The requester's side is read back from its own socket instead.
+const SEND_BUFFER_CEILING_BYTES: usize = 2 * PINNED_BUFFER_BYTES as usize;
+
+/// A receive queue may run past its limit by the segment that crossed it,
+/// and on loopback one segment can be as large as one chunk. One chunk of
+/// slack covers it.
+const RECEIVE_OVERSHOOT_CHUNKS: usize = 1;
+
+/// Serve a whole segment over a real socket, with both kernel buffers
+/// pinned, to a requester that reads the head and `body_bytes_wanted`
+/// more, then closes. Returns the chunk reads once the response has
+/// ended, the bound on them, the chunks in the body, and the endpoint
+/// and signer for the caller's assertions.
+async fn serve_a_segment_to_a_requester_that_reads(
+    body_bytes_wanted: usize,
+) -> (usize, usize, usize, PServeEndpoint, Arc<CountingSigner>) {
     let leaves_in_body = leaves_per_segment();
     let total_chunks = (leaves_in_body * LEAF_BYTES).div_ceil(WRITE_CHUNK_BYTES);
     let provider = CountingProvider::new(leaves(leaves_in_body, 0x44));
     let signer = CountingSigner::new();
-    let ep = PServeEndpoint::bind(
+    let ep = PServeEndpoint::bind_with_send_buffer(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
         Arc::clone(&signer) as Arc<dyn PassSigner>,
+        PINNED_BUFFER_BYTES,
     )
-    .await
     .expect("bind");
 
-    let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
+    let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+    socket
+        .set_recv_buffer_size(PINNED_BUFFER_BYTES)
+        .expect("pin the receive buffer");
+    let receive_buffer = socket.recv_buffer_size().expect("read it back") as usize;
+    let mut s = socket.connect(ep.addr()).await.expect("connect");
     s.write_all(good_get_shard_0().as_bytes())
         .await
         .expect("write request");
+
+    // Read the head, then exactly as much more as this requester wants.
     let mut seen = Vec::new();
     let mut buf = [0u8; 1024];
-    while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+    let head_len = loop {
+        if let Some(at) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
         let n = s.read(&mut buf).await.expect("read head");
         assert!(n > 0, "the server closed before the head");
         seen.extend_from_slice(&buf[..n]);
-    }
+    };
     assert!(head_of(&seen).starts_with("HTTP/1.1 200 OK"));
+    while seen.len() < head_len + body_bytes_wanted {
+        let want = (head_len + body_bytes_wanted - seen.len()).min(buf.len());
+        let n = s.read(&mut buf[..want]).await.expect("read body");
+        assert!(n > 0, "the server closed before the requester did");
+        seen.extend_from_slice(&buf[..n]);
+    }
+    let read_by_requester = seen.len();
     drop(s);
 
     // The response is over when the serve loop drops the body it was
-    // streaming: a definite event, not a guess that the reads have gone
-    // quiet. Bounded well under the endpoint's own stall timeout, so a
-    // serve that hangs fails here and says so.
+    // streaming: a definite event. Bounded well under the endpoint's own
+    // stall timeout, so a serve that hangs fails here and says so.
     tokio::time::timeout(Duration::from_secs(10), async {
         while provider.bodies_open() > 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -400,16 +472,61 @@ async fn a_requester_that_closes_after_the_head_is_never_signed_for() {
     })
     .await
     .expect("the serve loop ends the response once the requester has closed");
-    let settled = provider.reads();
+
+    // Everything the persona wrote went somewhere: the requester read it,
+    // or it sat in the requester's receive buffer, or in the persona's
+    // send buffer. The head is counted as body here, which only loosens
+    // the bound.
+    let accepted = read_by_requester + receive_buffer + SEND_BUFFER_CEILING_BYTES;
+    let bound = accepted / WRITE_CHUNK_BYTES + 1 + RECEIVE_OVERSHOOT_CHUNKS;
     assert!(
-        settled > 0,
-        "the head was received, so the loop read at least the chunk it then failed to write"
+        bound < total_chunks,
+        "the fixture must leave the bound below the body ({bound} of {total_chunks}), \
+         or the test below it asserts nothing"
+    );
+    (provider.reads(), bound, total_chunks, ep, signer)
+}
+
+#[tokio::test]
+async fn a_requester_that_closes_after_the_head_costs_a_bounded_read_and_no_signature() {
+    // Through the endpoint and a real socket, with the largest body a
+    // shard can be. The requester reads the head and closes. The persona
+    // has read no more than the two pinned buffers could take, plus the
+    // one chunk it is always ahead by, and the key is never asked.
+    let (reads, bound, total_chunks, ep, signer) =
+        serve_a_segment_to_a_requester_that_reads(0).await;
+    assert!(
+        reads > 0,
+        "the head was received, so the loop read at least one chunk"
     );
     assert!(
-        settled < total_chunks,
-        "{settled} of {total_chunks} chunks read: the close must stop the body short"
+        reads <= bound,
+        "{reads} chunks read of {total_chunks}; the buffers allow at most {bound}"
     );
     assert_eq!(signer.asked_to_sign(), 0, "never signed for");
+    assert_eq!(ep.served_count(), 0);
+    assert_eq!(ep.late_sign_failure_count(), 0);
+}
+
+#[tokio::test]
+async fn a_requester_that_reads_half_and_closes_costs_about_half_and_no_signature() {
+    // The requester takes half of a whole segment and closes. Left to
+    // autotune, the kernel could hold the other half and the persona would
+    // finish and sign for a requester that had gone; with both buffers
+    // pinned it cannot. The reads stop within the buffers of the half that
+    // was read, and the key is never asked.
+    let half = leaves_per_segment() * LEAF_BYTES / 2;
+    let (reads, bound, total_chunks, ep, signer) =
+        serve_a_segment_to_a_requester_that_reads(half).await;
+    assert!(
+        reads >= half / WRITE_CHUNK_BYTES,
+        "the requester read half, so the persona read at least that"
+    );
+    assert!(
+        reads <= bound,
+        "{reads} chunks read of {total_chunks}; half plus the buffers allows at most {bound}"
+    );
+    assert_eq!(signer.asked_to_sign(), 0, "half a body is not signed for");
     assert_eq!(ep.served_count(), 0);
     assert_eq!(ep.late_sign_failure_count(), 0);
 }

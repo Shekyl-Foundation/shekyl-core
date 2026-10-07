@@ -199,7 +199,13 @@ checks are re-run, not from a docs branch. The archival work-precision /
 escalation row (§4) is likewise advanced on a PR branch
 (`feat/sim-a1-onset`, #930, stacked on #929): its `UPDATE 2026-10-01`
 cells carry their own as-of SHA and the `git grep` / `cargo test` they
-re-verify against once merged.
+re-verify against once merged. The `BA-T` row (§2) is advanced the same
+way on PR #987 (`feat/ba-t3-serve-gate`, stacked on #982): its
+`UPDATE 2026-10-06` cell carries its as-of SHA, and re-verifies once
+merged with `git grep -c "^fn crypto_bench_serve_"
+rust/shekyl-p-serve/benches/serve_response_iai.rs` (4) and the
+`shekyl-p-serve::serve_response_iai:bench-internals` row in
+`scripts/bench/capture_rust_baseline.sh`.
 The unified stamp names a `dev` tree and
 does not move for a branch; it moves with the merge that lands the code
 (the lane's docs commit re-runs the checks then — including
@@ -644,8 +650,8 @@ should say "request path" or "GF-7 seam" explicitly.
 | **BA-I1…BA-IN** (benchmark inventory rows) | One row per benchmark, gate script, CI job, baseline file and dated capture in `shekyl-core` and `shekyl-gui-wallet`, each with one proposed disposition. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §2 | Registered 2026-10-05 at birth (rule 94 §1). Proposals only: the document deletes and re-gates nothing. | **OPEN 2026-10-05 — round 0, unruled.** Decision-anchored: closes on the commit that records the `BA-Q` rulings. |
 | **BA-D1…BA-DN** (benchmark defects) | Places where a document or a comment says one thing about a benchmark or its gate and the code does another. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §1.1 | Registered 2026-10-05 at birth. Reported, not fixed; each is routed to a `BA-Q` ruling. | **OPEN 2026-10-05 — round 0, unruled.** Decision-anchored: closes on the commit that records the `BA-Q` rulings. |
 | **BA-G1…BA-GN** (benchmark gaps) | Measurements a ruled constant, a capacity figure or a floor-device budget rests on, with no tracked benchmark behind them. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §3 | Registered 2026-10-05 at birth. | **OPEN 2026-10-05 — round 0, unruled.** Decision-anchored: closes on the commit that records the `BA-Q` rulings. |
-| **BA-T1…BA-TN** (proposed tracked benchmarks) | The benchmarks that would exist after alignment, each with a tier, a device, a protocol and an owner lane. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §5 | Registered 2026-10-05 at birth. None is built. | **OPEN 2026-10-05 — round 0, unruled.** Decision-anchored: closes on the commit that records the `BA-Q` rulings. |
-| **BA-Q1…BA-QN** (benchmark-alignment rulings) | The numbered questions the maintainer rules on, each with a default. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §6 | Registered 2026-10-05 at birth. | **PARTLY RULED 2026-10-05 — `BA-Q1`, `BA-Q8`, `BA-Q21`, `BA-Q23` ruled on review of PR #964; `BA-Q2` done by PR #968; the other eighteen open.** Decision-anchored: each ruling is recorded in its own heading in §6. |
+| **BA-T1…BA-TN** (proposed tracked benchmarks) | The benchmarks that would exist after alignment, each with a tier, a device, a protocol and an owner lane. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §5 | Registered 2026-10-05 at birth. **UPDATE 2026-10-06 (as of `bb9ce3a8c8`, PR #987, not on `dev`; outside the unified stamp, by the declaration under it):** `BA-T3` is built (`shekyl-p-serve` `benches/serve_response_iai.rs`); the others are not. | **OPEN 2026-10-05 — round 0; `BA-T3` authorized by `BA-Q1` and built, the rest unruled.** Decision-anchored: closes on the commit that records the `BA-Q` rulings. |
+| **BA-Q1…BA-QN** (benchmark-alignment rulings) | The numbered questions the maintainer rules on, each with a default. | [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) §6 | Registered 2026-10-05 at birth. | **PARTLY RULED 2026-10-05 — `BA-Q1`, `BA-Q8`, `BA-Q21`, `BA-Q23` ruled on review of PR #964; `BA-Q2` done by PR #968. UPDATE 2026-10-06: `BA-Q3` ruled 2026-10-05 (one pass, signed last) and built by PR #974; the other seventeen open.** Decision-anchored: each ruling is recorded in its own heading in §6. |
 
 ---
 
