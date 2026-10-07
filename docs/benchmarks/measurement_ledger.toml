@@ -279,6 +279,7 @@ stale_through = [
   { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
   { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
   { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
+  { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
 ]
 
 [[constant]]
