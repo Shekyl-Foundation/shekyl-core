@@ -1048,6 +1048,82 @@ reward depends on the emission scenario, and this arm reads none.
 production owner yet; the sim leads the code here (the second ruling in
 §0). §4 carries the row.
 
+### 5.14 ESR-11 — what the run said (2026-10-07, at `6681692ed9`)
+
+`cargo run --release -p shekyl-economics-sim -- --secret-draw`, twelve
+cells at eight seeds each. Maturity, `D = 324,000`:
+
+| Reading of in-flight | Dropout | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch |
+| --- | --- | --- | --- | --- | --- | --- |
+| A, unrevealed only | 0 % | 0.46 % (0.45 – 0.48) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 |
+| A, unrevealed only | 10 % | 1.10 % (1.03 – 1.18) | 0 | 3.92 / 3.53 | 127.1 / 208 | 0 |
+| A, unrevealed only | 30 % | 3.83 % (3.65 – 3.95) | 8 | 4.81 / 3.36 | 155.9 / 292 | 242 |
+| B, all recent | 0 % | 1.40 % (1.35 – 1.44) | 0 | 3.48 / 3.48 | 112.8 / 172 | 0 |
+| B, all recent | 10 % | 2.63 % (2.57 – 2.67) | 0 | 3.80 / 3.41 | 123.1 / 182 | 0 |
+| B, all recent | 30 % | 6.21 % (6.01 – 6.46) | 8 | 4.67 / 3.27 | 151.3 / 292 | 22 |
+
+The genesis set (`D = 4,096`) reads the same shares to within sampling:
+0.49 / 1.18 / 3.75 % under A and 1.41 / 2.58 / 6.30 % under B.
+
+**The bar holds under both readings.** At 10 % dropout the largest short
+share over eight seeds is 1.18 % under A and 2.67 % under B, against 3 %.
+No seed is over the bar in either.
+
+**Against the predictions.**
+
+- *Reading B is the brief's model.* It reproduces the brief's scaled
+  figures to the second digit: 1.40 / 2.63 / 6.21 % short against
+  1.5 / 2.5 / 6.1 %, and 3.48 / 3.80 / 4.67 draws per pair against
+  3.49 / 3.77 / 4.67.
+- *I predicted reading A within a factor of 1.5 of the brief's shares.
+  That was wrong.* A leaves 0.46 % and 1.10 % short at 0 % and 10 %
+  dropout, a third to a half of the brief's figures, for about 4 % more
+  draws. The prediction assumed the brief's model was reading A.
+- *Reading B issues fewer draws and leaves more pairs short:* held.
+- *The cap does not bind at 0 % or 10 %:* held. At 30 % it binds, in 242
+  blocks an epoch under A and 22 under B.
+
+**Reading A is the better rule, and the reason is visible.** B subtracts
+every draw of the last `W₂` blocks from a shortfall that has already been
+reduced by the ones that revealed, so it under-asks for as long as
+reveals are landing. A subtracts only what is still unknown. A is what
+the spec states; B is kept in the module so the comparison stays
+reproducible.
+
+**`(m, n)`.** With the 3 counted draws settled at 2 of 3, an honest pair
+at the feasibility module's per-read failure of 0.30 misses an observed
+epoch with probability `q = 0.216`. At the production `(11, 13)` the
+false-slash bound over the bond's life is `2.85 × 10⁻⁴`, inside the
+module's provisional `10⁻³` target, and it does not move with the
+observation rate. The observation rate under A is 0.995 / 0.989 / 0.962
+at 0 / 10 / 30 % dropout, so a pair that never serves reaches 11 misses
+in 11.05 / 11.12 / 11.44 epochs against 11. The window is not what the
+secret draw strains.
+
+**Fetch volume per won block.** At the mean count and `SHARD_LENGTH`
+(3,000,000 B): 351 / 381 / 468 MB under A. A producer that wins a block
+owes about 117 to 156 whole-shard reads inside `W₂`. A producer with a
+tenth of the hashrate wins about 50 blocks per `W₂` window, which is
+about 17.6 GB of reads per window, or roughly 290 KB/s sustained, at 0 %
+dropout. That figure is the one this run adds to the design: it is the
+witness's cost, it scales with hashrate share, and nothing in the tree
+has measured a producer's reader at that rate.
+
+**Unpaid service.** The share of pair-epochs that settle NonObservation
+is the short share above: 0.46 % / 1.10 % / 3.83 % under A. Those pairs
+answered 0.008 / 0.020 / 0.065 issued reads per pair on average, and
+served the epoch's organic reads besides. Separately, an observed epoch
+settles Missed for an honest pair at `q = 0.216` under the 0.30 read
+failure, which is a much larger unpaid share than NonObservation and is
+the 2-of-3 rule's, not the draw's. Neither is converted to currency
+(§5.13).
+
+**What this run does not say.** The reads are not modelled, so nothing
+here measures whether a producer can complete 117 reads per won block.
+Dropout is independent per block; a producer that is offline for a
+stretch, or one that withholds selectively, is not in the model. The
+previous epoch's last `W₂` blocks are not carried in.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
