@@ -91,10 +91,13 @@ impl Observed {
         match self.circuits_by_username.get(username).map(Vec::as_slice) {
             Some([one]) => *one,
             Some(several) => panic!("one read rode {} circuits: {several:?}", several.len()),
-            None => panic!(
-                "tor reported no attached stream for this read; usernames seen: {}",
-                self.circuits_by_username.len()
-            ),
+            // Which of the two it was says where to look: a tor that reports
+            // no credentials on any stream, or a read that never attached.
+            // Nothing about the streams themselves goes into the message.
+            None if self.circuits_by_username.is_empty() => {
+                panic!("tor reported no attached stream for this read, or for any other")
+            }
+            None => panic!("tor reported no attached stream for this read, only for others"),
         }
     }
 }
