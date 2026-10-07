@@ -176,6 +176,11 @@ fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
         .into_bytes()
 }
 
+/// One whole fetch. Returns the bytes received, having checked that the
+/// response is a 200 and exactly as long as it says it is: the head, then
+/// `content-length` bytes, no fewer and no more. A response cut short
+/// anywhere, the head and frame included, is a failed block and is not
+/// timed as a served one.
 async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(&request_head(shard_id, nonce))
@@ -183,6 +188,29 @@ async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
         .expect("write request");
     let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
     s.read_to_end(&mut out).await.expect("read response");
+    let head_end = out
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("a response head")
+        + 4;
+    let head = std::str::from_utf8(&out[..head_end]).expect("an ASCII head");
+    assert!(head.starts_with("HTTP/1.1 200 "), "not a 200: {head:?}");
+    let declared: usize = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length: "))
+        .expect("a content-length")
+        .trim()
+        .parse()
+        .expect("a length");
+    assert_eq!(
+        out.len() - head_end,
+        declared,
+        "the body is not the length the head declares"
+    );
+    assert!(
+        declared > size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
+        "the declared length does not cover the shard, its frame and the envelope"
+    );
     out.len()
 }
 
@@ -261,7 +289,14 @@ impl Served {
         // this process is in the store's own in-process cache whatever the
         // kernel has dropped, so only a fresh process over an existing
         // file reads from the disk.
-        let reuse = env("BAT5_REUSE").is_some() && std::path::Path::new(&store_file).exists();
+        let reuse = env("BAT5_REUSE").is_some();
+        // Asked to reuse a store that is not there is a broken run, not a
+        // reason to build one: a store built here is warm in this process,
+        // and a block labelled cold would have measured that.
+        assert!(
+            !reuse || std::path::Path::new(&store_file).exists(),
+            "BAT5_REUSE is set and {store_file} does not exist"
+        );
         if !reuse {
             // The store an earlier block left may or may not be there.
             std::fs::remove_dir_all(&dir).ok();
@@ -387,12 +422,10 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
         warm_up,
     } = block;
     let addr = served.addr();
-    let (size, payload) = size_of(shard_id);
-    let whole = payload + SIGNATURE_ENVELOPE_LEN;
+    let (size, _) = size_of(shard_id);
     clients.block_on(async {
         for i in 0..warm_up {
-            let got = fetch(addr, shard_id, nonce(0x11, i)).await;
-            assert!(got > whole, "short response: {got}");
+            fetch(addr, shard_id, nonce(0x11, i)).await;
         }
     });
     let served_before = served.endpoint.served_count();
@@ -414,7 +447,6 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
             }
             for j in joins {
                 let (us, got) = j.await.expect("join");
-                assert!(got > whole, "short response: {got}");
                 println!("OBS\t{label}\t{mode}\t{size}\t{in_flight}\t{us}\t{got}");
             }
             k += batch;
@@ -519,10 +551,8 @@ fn ba_t5_floor_probe() {
         // `BAT5_REUSE` over a store whose pages the caller has just dropped
         // from the page cache, it is a read from the disk.
         "cold" => {
-            let whole = size_of(0).1 + SIGNATURE_ENVELOPE_LEN;
             let t = Instant::now();
             let got = clients.block_on(fetch(addr, 0, nonce(0x44, 0)));
-            assert!(got > whole, "short response: {got}");
             println!(
                 "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
                 t.elapsed().as_micros()
@@ -567,7 +597,6 @@ fn ba_t5_floor_probe() {
         "sustain" => {
             let seconds = env_usize("BAT5_SECONDS", 3600);
             let period = Duration::from_millis(as_u64(env_usize("BAT5_PERIOD_MS", 2000)));
-            let whole = size_of(0).1 + SIGNATURE_ENVELOPE_LEN;
             let start = Instant::now();
             let cpu0 = cpu_micros();
             let mut i = 0usize;
@@ -580,7 +609,6 @@ fn ba_t5_floor_probe() {
                 }
                 let t = Instant::now();
                 let got = clients.block_on(fetch(addr, 0, nonce(0x77, i)));
-                assert!(got > whole, "short response: {got}");
                 println!(
                     "OBS\t{label}\tsustain\tfull-store\t1\t{}\t{got}",
                     t.elapsed().as_micros()

@@ -263,6 +263,9 @@ spec = [
   "rust/shekyl-p-serve/src",
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
 ]
+cleared = [
+  { through = "155e85a130", reason = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
+]
 
 [[path_set]]
 id = "archival-serve-fetch"

@@ -461,9 +461,16 @@ phase is re-run alone when the FN-DSA-1024 receipt key lands.
   by default, one source for both arms. **As run** it is the file at
   commit `625488e5ed` (sha256
   `0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a`).
-  It has since been changed on review to keep its store in a child
-  directory of its own and to say which of its bodies are production's;
-  neither change touches what is timed.
+  It has since been changed on review: it keeps its store in a child
+  directory of its own, says which of its bodies are production's, checks
+  every response against its declared `content-length`, and refuses to
+  run when asked to reuse a store that is not there. None of these
+  touches what is timed. Two of them close holes the run could have
+  fallen into and did not: every whole fetch in the capture is the same
+  length for its size (3,330,449 bytes for a full segment, 5,594 of
+  them), so none was cut short; and every cold fetch read 714 to 716 ms
+  at the median against 78 to 88 ms without the drop, which a store
+  rebuilt in the process could not have shown.
 - The reading: `python3 scripts/bench/ba_t5_reading.py <obs> <env>` prints
   every figure above, refuses a capture that is not the complete
   registered run, and applies the four lines, line (a) both as registered
