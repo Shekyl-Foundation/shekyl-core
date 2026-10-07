@@ -46,6 +46,7 @@ Three consequences follow immediately:
   `--out-peers` does not change the address-hiding target. A live own-edge is not
   re-pointed; a dead one is replaced from the peers still up. No cover
   on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
+  Tor's cover class is `Volume`. That ruling is unmeasured, pending TRC-1.
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.

@@ -6,10 +6,14 @@
 
 """Production shekyl-relay does not name Clearnet or Tor.
 
-`ConnectorId::Clearnet` and `ConnectorId::Tor` under
-`rust/shekyl-relay/src` may appear only in the test modules. A hit
-anywhere else is a branch on connector identity. Zero hits in the
-test modules means this gate's subject is gone.
+This catches direct naming: `ConnectorId::Clearnet`, `ConnectorId::Tor`,
+`NetworkColumn::Clearnet`, `NetworkColumn::Tor`, a position comparison
+`.index() ==`, and `ALL[<literal>]`. It does not cover a renamed import
+(`use ConnectorId::Tor as Hidden`).
+
+Those spellings under `rust/shekyl-relay/src` may appear only in the
+test modules. A hit anywhere else is a branch on connector identity.
+Zero hits in the test modules means this gate's subject is gone.
 """
 
 from __future__ import annotations
@@ -21,7 +25,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "rust" / "shekyl-relay" / "src"
-PAT = re.compile(r"ConnectorId::(Clearnet|Tor)")
+PAT = re.compile(
+    r"ConnectorId::(Clearnet|Tor)"
+    r"|NetworkColumn::(Clearnet|Tor)"
+    r"|\.index\(\)\s*=="
+    r"|ALL\[\d+\]"
+)
 DECL = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[.*\]\s*)*mod\s+([A-Za-z0-9_]+)\s*;", re.M)
 
 
@@ -108,15 +117,25 @@ def selftest() -> int:
         root = Path(tmp)
         graph = root / "graph"
         graph.mkdir()
-        (graph / "mod.rs").write_text(
-            "fn prod() { let _ = ConnectorId::Tor; }\n#[cfg(test)]\nmod tests;\n",
+        (graph / "tests.rs").write_text(
+            "fn t() { let _ = ConnectorId::Clearnet; }\n",
             encoding="utf-8",
         )
-        (graph / "tests.rs").write_text("fn t() { let _ = ConnectorId::Clearnet; }\n", encoding="utf-8")
-        production, tests = scan(root)
-        if judge(production, tests) == 0:
-            print("selftest: a production hit was accepted", file=sys.stderr)
-            return 1
+        samples = (
+            "let _ = ConnectorId::Tor;\n",
+            "let _ = NetworkColumn::Clearnet;\n",
+            "let _ = id.index() == 0;\n",
+            "let _ = ALL[1];\n",
+        )
+        for sample in samples:
+            (graph / "mod.rs").write_text(
+                sample + "#[cfg(test)]\nmod tests;\n",
+                encoding="utf-8",
+            )
+            production, tests = scan(root)
+            if judge(production, tests) == 0:
+                print(f"selftest: a production hit was accepted: {sample!r}", file=sys.stderr)
+                return 1
         (graph / "mod.rs").write_text("fn prod() {}\n#[cfg(test)]\nmod tests;\n", encoding="utf-8")
         production, tests = scan(root)
         if judge(production, tests) != 0:

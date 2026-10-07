@@ -13,6 +13,26 @@
 //! that plan does not match on the connector.
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_relay_privacy::verify_cost::{
+    ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+};
+
+/// A transit assumption that is a whole number of milliseconds.
+///
+/// The declaration stores `u32`. The assumption is `f64` because the
+/// embargo math is. The assert is the cast being exact.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::float_cmp
+)]
+const fn whole_ms(ms: f64) -> u32 {
+    let whole = ms as u32;
+    assert!(ms == whole as f64);
+    whole
+}
 
 /// A column of the declaration table, including the column that has no
 /// connector yet.
@@ -259,10 +279,12 @@ pub enum Rendezvous {
     Enabled,
 }
 
-/// What hides a stem on this connector.
+/// The relay's cover ruling for this connector, recorded on the column.
 ///
-/// Not derived from encryption or from address hiding. Those cells can
-/// agree with this one, and a later connector may set only one of them.
+/// Owned by `TOR_COVER_POSTURE.md`. Not a property of the wire, and not
+/// a value the transport layer edits. Not derived from encryption or from
+/// address hiding. Those cells can agree with this one, and a later
+/// connector may set only one of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoverClass {
     /// An envelope is the only cover a wire observer cannot already see
@@ -373,7 +395,11 @@ impl Declaration {
     pub const fn measured_transit_ms(self) -> Assessment<u32> {
         self.measured_transit_ms
     }
-    /// Cover for a stem on this connector.
+    /// The relay's cover ruling recorded on this column.
+    ///
+    /// Owned by `TOR_COVER_POSTURE.md`. Not a property of the wire, and
+    /// not a value the transport layer edits. [`Assessment::NotAssessed`]
+    /// is no envelope: the relay does not treat it as an open link.
     #[must_use]
     pub const fn cover_class(self) -> Assessment<CoverClass> {
         self.cover_class
@@ -429,9 +455,9 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tcp),
             inbound_identity: Assessment::Assessed(InboundIdentity::SocketAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
-            // `ADOPTED_TRANSIT_ASSUMPTION_MS` in `shekyl-relay-privacy`.
+            // The numbers are `verify_cost`'s. This column does not keep a second copy.
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
-            measured_transit_ms: Assessment::Assessed(50),
+            measured_transit_ms: Assessment::Assessed(whole_ms(ADOPTED_TRANSIT_ASSUMPTION_MS)),
             cover_class: Assessment::Assessed(CoverClass::OpenLink),
         },
         NetworkColumn::Tor => Declaration {
@@ -448,9 +474,9 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tor),
             inbound_identity: Assessment::Assessed(InboundIdentity::ZoneNoAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
-            // `ANON_ZONE_TRANSIT_ASSUMPTION_MS` in `shekyl-relay-privacy`.
+            // The numbers are `verify_cost`'s. This column does not keep a second copy.
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
-            measured_transit_ms: Assessment::Assessed(1_625),
+            measured_transit_ms: Assessment::Assessed(whole_ms(ANON_ZONE_TRANSIT_ASSUMPTION_MS)),
             cover_class: Assessment::Assessed(CoverClass::Volume),
         },
     }
@@ -548,11 +574,7 @@ mod tests {
                 Rendezvous::NotApplicable => "not applicable",
                 Rendezvous::Enabled => "enabled",
             }),
-            cell(column.measured_transit_ms(), |ms| match ms {
-                50 => "50 ms",
-                1_625 => "1625 ms",
-                _ => "measured",
-            }),
+            cell(column.measured_transit_ms(), |_| "assessed milliseconds"),
             cell(column.cover_class(), |value| match value {
                 CoverClass::OpenLink => "substitution envelope",
                 CoverClass::Volume => "volume cover",
