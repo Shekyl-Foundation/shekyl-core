@@ -10,9 +10,20 @@
 The lines and how each is read are fixed in the run's record
 (`docs/benchmarks/ba_t5_serve_floor_device_*.md`, "Registered before the
 run"). This script applies them and adds nothing: it prints every figure
-the record quotes, per arm, and a pass or fail per line per arm. It exits
-0 whatever the verdict; a verdict is a result, not an error. It exits 2 if
-the files do not hold a complete run.
+the record quotes, per arm, and a result per line per arm. It exits 0
+whatever the verdict; a verdict is a result, not an error. It exits 2,
+before printing any line, if the files do not hold the complete registered
+run: a block that exited non-zero, or a registered cell that is missing.
+
+Line (a) is read twice and both are printed. As registered, against the
+one-leaf frame. And against the frames the production store serves, which
+are full segments only: the one-leaf body is a size production cannot
+serve, a projection. While (a) as registered stands failed, lines (b) to
+(d) are labelled ungraded, which is the registered rule.
+
+Line (d) has a clause this capture cannot evaluate: swap use not growing.
+The environment rows carry no swap counter. The script says so on the
+line instead of passing it silently.
 """
 
 from __future__ import annotations
@@ -29,6 +40,45 @@ LATENESS_P99_LINE_US = 100_000
 THROTTLE_TEMP_MILLI_C = 80_000
 MEM_AVAILABLE_FLOOR_KB = 512 * 1024
 ARMS = ("A", "B")
+
+# The registered run, as (mode, label suffix, blocks per arm).
+REGISTERED_BLOCKS = {
+    "idle": 1,
+    "phase": 4,
+    "load": 7,  # six graded blocks and the one that leaves the cold store behind
+    "cold": 20,  # ten with the store's pages dropped, ten without
+    "abandon": 2,
+    "sustain": 1,
+}
+ABANDON_CELLS = ("not-held", "one-leaf", "full-memory", "full-store")
+PHASE_SIZES = ("full-store", "eighth", "one-leaf")
+
+
+def incomplete(exits: list[list[str]], obs_path: Path) -> list[str]:
+    """Why these files are not the complete registered run, if they are not."""
+    found: list[str] = []
+    for label, mode, code in exits:
+        if code != "0":
+            found.append(f"block {label} ({mode}) exited {code}")
+    for arm in ARMS:
+        for mode, want in REGISTERED_BLOCKS.items():
+            have = sum(1 for label, m, _ in exits if m == mode and arm_of(label) == arm)
+            if have != want:
+                found.append(f"arm {arm}: {have} {mode} block(s), registered {want}")
+        abandon = rows(obs_path, "ABANDON")
+        for cell in ABANDON_CELLS:
+            have = sum(1 for a in abandon if arm_of(a[0]) == arm and a[1] == cell)
+            if have != REGISTERED_BLOCKS["abandon"]:
+                found.append(f"arm {arm}: {have} abandon row(s) for {cell}, registered 2")
+        obs = rows(obs_path, "OBS")
+        for size in PHASE_SIZES:
+            have = sum(1 for r in obs if arm_of(r[0]) == arm and r[1] == "phase" and r[2] == size)
+            if have != 200:
+                found.append(f"arm {arm}: {have} phase observations at {size}, registered 200")
+        minutes = sum(1 for r in rows(obs_path, "LATE") if arm_of(r[0]) == arm and r[1] == "sustain")
+        if minutes < 59:
+            found.append(f"arm {arm}: {minutes} minutes of the sustained hour")
+    return found
 
 
 def rows(path: Path, kind: str) -> list[list[str]]:
@@ -65,10 +115,13 @@ def main() -> int:
         return 2
     obs_path, env_path = Path(sys.argv[1]), Path(sys.argv[2])
     exits = rows(obs_path, "EXIT")
-    bad = [e for e in exits if e[2] != "0"]
-    print(f"blocks: {len(exits)}; non-zero exits: {len(bad)}")
-    for e in bad:
-        print(f"  NON-ZERO: {e}")
+    problems = incomplete(exits, obs_path)
+    if problems:
+        print("NOT A COMPLETE REGISTERED RUN; nothing is read from it:")
+        for problem in problems:
+            print("  " + problem)
+        return 2
+    print(f"blocks: {len(exits)}, all exited 0; every registered cell is present")
 
     obs = rows(obs_path, "OBS")  # label mode size in_flight micros bytes
     print("\n== per-response time, one in flight (median / mean / p95, n) ==")
@@ -172,36 +225,40 @@ def main() -> int:
 
     print("\n== the four lines ==")
     for arm in ARMS:
-        smallest = cell.get((arm, "one-leaf"))
-        full = cell.get((arm, "full-store"))
-        if smallest and full:
-            s_cpu = statistics.fmean(x[0] for x in smallest)
-            f_cpu = statistics.fmean(x[0] for x in full)
-            ratio = f_cpu / s_cpu
-            ok_a = ratio <= ABANDON_RATIO_LINE and s_cpu < ABANDON_CPU_LINE_US and f_cpu < ABANDON_CPU_LINE_US
-            print(
-                f"  {arm} (a) abandoned CPU: one leaf {s_cpu:.0f} us, full segment {f_cpu:.0f} us, "
-                f"ratio {ratio:.2f} (line <= {ABANDON_RATIO_LINE}, each < {ABANDON_CPU_LINE_US} us): "
-                f"{'PASS' if ok_a else 'FAIL'}"
-            )
-        if rate[arm]:
-            ok_b = min(rate[arm]) >= THROUGHPUT_LINE_PER_S
-            print(f"  {arm} (b) lowest block {min(rate[arm]):.1f}/s (line >= {THROUGHPUT_LINE_PER_S}): {'PASS' if ok_b else 'FAIL'}")
-        if worst_p99[arm]:
-            ok_c = worst_p99[arm] <= LATENESS_P99_LINE_US
-            print(
-                f"  {arm} (c) worst p99 wake lateness {worst_p99[arm] / 1000:.1f} ms "
-                f"(line <= {LATENESS_P99_LINE_US / 1000:.0f} ms): {'PASS' if ok_c else 'FAIL'}"
-            )
+        s_cpu = statistics.fmean(x[0] for x in cell[(arm, "one-leaf")])
+        f_cpu = statistics.fmean(x[0] for x in cell[(arm, "full-store")])
+        ratio = f_cpu / s_cpu
+        ok_a = ratio <= ABANDON_RATIO_LINE and s_cpu < ABANDON_CPU_LINE_US and f_cpu < ABANDON_CPU_LINE_US
+        print(
+            f"  {arm} (a) as registered: one leaf {s_cpu:.0f} us, full segment {f_cpu:.0f} us, "
+            f"ratio {ratio:.2f} (line <= {ABANDON_RATIO_LINE}, each < {ABANDON_CPU_LINE_US} us): "
+            f"{'PASS' if ok_a else 'FAIL'}"
+        )
+        # The store serves full segments only, so on production's frames the
+        # smallest frame is the full segment and the ratio is 1 by identity.
+        ok_production = f_cpu < ABANDON_CPU_LINE_US
+        print(
+            f"  {arm} (a) on the frames the store serves (full segments only): {f_cpu:.0f} us, "
+            f"ratio 1.00: {'HOLDS' if ok_production else 'FAILS'}; the one-leaf figure is a projection"
+        )
+        word = "PASS" if ok_a else "WOULD PASS (UNGRADED: line (a) as registered failed)"
+        fail = "FAIL" if ok_a else "WOULD FAIL (UNGRADED: line (a) as registered failed)"
+        ok_b = min(rate[arm]) >= THROUGHPUT_LINE_PER_S
+        print(f"  {arm} (b) lowest block {min(rate[arm]):.1f}/s (line >= {THROUGHPUT_LINE_PER_S}): {word if ok_b else fail}")
+        ok_c = worst_p99[arm] <= LATENESS_P99_LINE_US
+        print(
+            f"  {arm} (c) worst p99 wake lateness {worst_p99[arm] / 1000:.1f} ms "
+            f"(line <= {LATENESS_P99_LINE_US / 1000:.0f} ms): {word if ok_c else fail}"
+        )
         hour = [e for e in env if e[1] in (f"tick.{arm}.sustain", f"start.{arm}.sustain", f"end.{arm}.sustain")]
-        if hour:
-            hot = max(int(e[2]) for e in hour)
-            low = min(int(e[11]) for e in hour)
-            ok_d = hot < THROTTLE_TEMP_MILLI_C and low >= MEM_AVAILABLE_FLOOR_KB
-            print(
-                f"  {arm} (d) sustained hour: hottest {hot / 1000:.1f} C (line < 80), lowest MemAvailable "
-                f"{low / 1024:.0f} MB (line >= 512): {'PASS' if ok_d else 'FAIL'}"
-            )
+        hot = max(int(e[2]) for e in hour)
+        low = min(int(e[11]) for e in hour)
+        ok_d = hot < THROTTLE_TEMP_MILLI_C and low >= MEM_AVAILABLE_FLOOR_KB
+        print(
+            f"  {arm} (d) sustained hour: hottest {hot / 1000:.1f} C (line < 80), lowest MemAvailable "
+            f"{low / 1024:.0f} MB (line >= 512): {word if ok_d else fail}; "
+            "swap clause NOT EVALUATED (no swap counter in the capture)"
+        )
     return 0
 
 

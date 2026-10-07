@@ -1,11 +1,24 @@
 # `BA-T5`: can the floor device serve archival shards? Floor run of 2026-10-07
 
-**State of this record: RUN COMPLETE, 2026-10-07 05:03Z to 07:25Z. Verdict
-withheld under its own rule: line (a) failed as registered.** Lines (b),
-(c) and (d) are reported and would each pass, on both arms, but the
-registered rule is that nothing else is graded while (a) stands failed.
-What failed, and the one decision it needs, is the first thing under
-"Reading".
+**State of this record: RUN COMPLETE, 2026-10-07 05:03Z to 07:25Z.**
+
+**The floor device can serve every shard production serves today.** A
+servable shard is a frozen segment, and a frozen segment is always a full
+one. On that frame all four lines hold, with the margins under "Reading".
+
+**One line failed as it was registered, and the registration was wrong
+about what it named.** Line (a) was registered to be read against a
+one-leaf frame as "the smallest frame". Production cannot serve a frame
+that small. Read that way the line fails (8.4 ms against 5), and under
+the registered rule the other lines then go ungraded; the registered
+text and that outcome are left exactly as they were. The one-leaf figure
+is kept as a **projection** for any future design that serves short
+frames, labelled as one
+([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
+discipline 5). Reading line (a) on production's frame instead of the
+registered one is a change made after the run. It rests on a fact about
+the code and not on the numbers, it is stated here first for that
+reason, and it is the maintainer's to accept or refuse.
 
 Everything under "Registered before the run" was committed and pushed
 before the first timed block (`f1b551b4cb`, amended once at `625488e5ed`,
@@ -187,61 +200,62 @@ synchronized, not mining, and its height went from 895 to 974. Graded arm:
 **A**, because #995 had not merged when this landed; B is reported beside
 it in every table.
 
-### Line (a) failed, at the smallest frame, on its 5 ms half
+### Line (a): holds on the frame production serves; failed as registered, on a frame it cannot
 
 CPU per abandoned request, n = 400 per cell:
 
-| Abandoned request for | Arm A | Arm B | Bytes on loopback per request |
-| --- | ---: | ---: | ---: |
-| a shard that is not held (serves nothing) | 1.70 ms | 1.70 ms | 770 |
-| one leaf, from memory: the smallest frame | **8.43 ms** | **8.28 ms** | 929 / 924 |
-| a full segment, from memory | 3.16 ms | 3.09 ms | 721 |
-| a full segment, from the store | 3.91 ms | 3.82 ms | 721 |
+| Abandoned request for | Arm A | Arm B | Bytes on loopback per request | |
+| --- | ---: | ---: | ---: | --- |
+| a full segment, from the store | 3.91 ms | 3.82 ms | 721 | **production's frame** |
+| a full segment, from memory | 3.16 ms | 3.09 ms | 721 | the same size without the store's read path |
+| one leaf, from memory | 8.43 ms | 8.28 ms | 929 / 924 | *projection: a size production cannot serve* |
+| a shard that is not held (serves nothing) | 1.70 ms | 1.70 ms | 770 | the cost of a request that serves nothing |
 
-- **The ratio half holds.** Full segment over smallest frame is 0.46 on
-  both arms, against a line of 1.5. CPU per abandoned request does not
-  grow with the shard. It falls.
-- **The 5 ms half fails at the smallest frame**, 8.4 ms against 5. It is
-  the outcome registered as expected, for the reason registered: a
-  128-byte body fits in the socket buffer whether or not the requester
-  reads it, so every write succeeds and `P` does the whole response,
-  signature included, for a requester that has gone. A one-leaf response
-  served back to back costs 4.8 ms of CPU here; abandoned, with a 30 ms
-  gap before the next, it costs 8.4 ms. What the extra 3.6 ms is has not
-  been established. The signature alone is 2.5 ms at the median.
-- **A full segment abandoned costs 3.9 ms**, under the line. About 720
-  bytes reach loopback per abandoned request, which is the head and
-  nothing of the body: the first chunk's write is refused. So `P` reads
-  and hashes one chunk it cannot send, and stops. That is the one-chunk
-  lookahead `serve_invariant_tests.rs` asserts.
-- **The invariant as `BA-Q3` words it is not broken by this.** No work
-  scaled with the shard before the requester had the bytes; the bytes of
-  the smallest frame were handed over, to the kernel. What the 5 ms half
-  caught is a fixed cost: `P` signs for any response small enough to be
-  buffered whole.
+**What production can serve.** `StoreShardProvider` answers with a frozen
+segment or with nothing, and the store opens a frozen segment as exactly
+`leaves_per_segment()` leaves (`LeafStore::open_frozen_segment_body`). An
+unfrozen, partial segment is the 404. So the smallest frame production
+serves is the full segment, and it is the only one.
 
-**The decision this needs.** Whether a frame that small is ever served
-decides whether this is a defect. In this run the on-disk store served
-full segments only; the one-leaf shard came from the probe's in-memory
-provider, because the store freezes a segment when it is full. If no
-servable shard is smaller than a segment, the smallest frame production
-can serve is the full segment at 3.9 ms and line (a) holds on both
-halves. If a short final segment can be served, the cost is real and the
-remedy is not to sign until the requester has taken the body, which a
-buffered write cannot tell. That was not established here and is the
-maintainer's to rule. **Until it is ruled, the verdict is withheld.**
+- **On that frame line (a) holds.** An abandoned full segment costs
+  3.9 ms of CPU, under the 5 ms line, and with one servable size there is
+  nothing for it to grow from: the ratio is 1. About 720 bytes reach
+  loopback per abandoned request, the head and nothing of the body: the
+  first chunk's write is refused, so `P` reads and hashes one chunk it
+  cannot send and stops. That is the one-chunk lookahead
+  `serve_invariant_tests.rs` asserts.
+- **As registered, against the one-leaf frame, it fails**: 8.4 ms against
+  5. The ratio half holds even there (full over one-leaf is 0.46: CPU
+  falls as the shard grows).
+- **Why the projected frame is expensive.** A 128-byte body fits in the
+  socket buffer whether or not the requester reads it, so every write
+  succeeds and `P` does the whole response, signature included, for a
+  requester that has gone. A one-leaf response served back to back costs
+  4.8 ms of CPU; abandoned, with a 30 ms gap before the next, 8.4 ms.
+  What the extra 3.6 ms is has not been established.
+- **What the projection is for.** If a later design serves frames small
+  enough to be buffered whole, it must not sign until the requester has
+  taken the body, which a successful write cannot tell it. Nothing needs
+  that today.
 
-### Lines (b), (c) and (d), reported and not graded
+### Lines (b), (c) and (d)
 
-| Line | Arm A | Arm B | Line | Would be |
+Ungraded under the registered rule while (a) as registered stands
+failed; each holds.
+
+| Line | Arm A | Arm B | Line | |
 | --- | --- | --- | --- | --- |
-| (b) responses per second at eight in flight, lowest of six blocks | 40.8 | 51.9 | ≥ 0.5 | pass, by 80 to 100 times |
-| (c) wake lateness p99, worst of the eight-in-flight blocks and of every minute of the hour | 57.5 ms | 5.6 ms | ≤ 100 ms | pass |
-| (d) hottest in the sustained hour | 50.6 °C | 55.0 °C | < 80 °C | pass |
-| (d) lowest memory available in the hour | 6,580 MB | 6,569 MB | ≥ 512 MB | pass |
+| (b) responses per second at eight in flight, lowest of six blocks | 40.8 | 51.9 | ≥ 0.5 | holds, by 80 to 100 times |
+| (c) wake lateness p99, worst of the eight-in-flight blocks and of every minute of the hour | 57.5 ms | 5.6 ms | ≤ 100 ms | holds |
+| (d) hottest in the sustained hour | 50.6 °C | 55.0 °C | < 80 °C | holds |
+| (d) lowest memory available in the hour | 6,580 MB | 6,569 MB | ≥ 512 MB | holds |
 
 Line (d), further: the probe's resident size was 65 to 86 MB and the
-daemon's 377 to 387 MB on a 7.6 GB board with no swap. Each hour served
+daemon's 377 to 387 MB on a 7.6 GB board. **Its swap clause was not
+captured**: the environment rows carry no swap counter. The device has no
+swap configured (`SwapTotal` 0 kB, read before the run and again an hour
+after it), so there was nothing to grow, but that is an observation
+outside the capture and is reported as one. Each hour served
 1,801 full segments, one every two seconds, every one whole.
 
 ### What moving the hash off the executor did (#995)
@@ -313,18 +327,20 @@ and 78 ms. So the first read of a shard that is not in memory costs about
 | Quantity | Predicted | Measured (arm A / arm B) | |
 | --- | --- | --- | --- |
 | Responses per second, eight in flight | 37 to 60 | median of six blocks 49.7 / 52.4 | held |
-| Work before the first byte | under 1 ms per request | an abandoned full segment costs 2.2 / 2.1 ms more than a request for a shard that is not held | falsified, with a caveat below |
+| Work before the first byte | under 1 ms per request | not isolated; bounded from above at 2.2 / 2.1 ms by a whole abandoned request | **still open** |
 | Median per response, one in flight | 40 to 60 ms (falsified by run 3 at 67.2 ms) | 57.7 / 52.1 ms | see below |
-| Abandoned smallest frame costs a signature | expected | 8.4 ms, more than a served one | as expected |
+| An abandoned one-leaf frame costs a signature | expected | 8.4 ms, more than a served one | as expected |
 | Arm B lowers p99 lateness | expected | 57.5 to 5.6 ms | as expected |
 
-- **Work before the first byte.** The probe cannot stop the clock at the
-  head. What it measures is a whole abandoned request, which also holds
-  one chunk read, one chunk hashed and a refused write. That is 2.2 ms
-  over a request that serves nothing, so the prediction "under 1 ms" does
-  not survive the nearest thing the floor can measure. The pre-head work
-  alone is smaller than 2.2 ms by that chunk, and `BA-T3` counts it at
-  13.6 thousand instructions.
+- **Work before the first byte is not settled by this run.** The probe
+  cannot stop the clock at the head. What it measures is a whole
+  abandoned request, which also holds one chunk read, one chunk hashed
+  and a refused write: 2.2 ms over a request that serves nothing. That is
+  an upper bound on the pre-head work, and an upper bound above 1 ms says
+  nothing about whether the thing itself is under 1 ms. The estimate
+  stays open in the ledger, with this bound in its basis; what settles it
+  is a floor block that times the pre-head step alone. `BA-T3` counts
+  that step at 13.6 thousand instructions.
 - **The 40 to 60 ms prediction.** Run 3 measured 67.2 ms and the ledger
   records the prediction as falsified against that capture. This run
   reads 57.7 ms on the same serve order, inside the band. The two runs
@@ -354,6 +370,9 @@ and 78 ms. So the first read of a shard that is not in memory costs about
 - Throttling was read from temperature, the cold cache was the store
   file's pages, and chunks read per abandoned request came from loopback
   bytes, all as registered.
+- **The registration named a frame production cannot serve** as the
+  smallest, in how line (a) is read. Whether a one-leaf frame is servable
+  was checkable in the code before the run and was not checked.
 - Loopback only. A requester over Tor takes the bytes far more slowly,
   which is `BA-T7`.
 
@@ -367,8 +386,14 @@ and 78 ms. So the first read of a shard that is not in memory costs about
   (sha256 `5642decb27e7b9a2d903df86f11fea815f5d39b4bde874c6dddbefffd1c1ff12`):
   one `ENV` row at each block boundary and every 30 s of the sustained
   hours; its first line names the columns.
-- The probe: `rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs`
-  (sha256 `0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a`
-  as built on the device), ignored by default, one source for both arms.
+- The probe: `rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs`, ignored
+  by default, one source for both arms. **As run** it is the file at
+  commit `625488e5ed` (sha256
+  `0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a`).
+  It has since been changed on review to keep its store in a child
+  directory of its own and to say which of its bodies are production's;
+  neither change touches what is timed.
 - The reading: `python3 scripts/bench/ba_t5_reading.py <obs> <env>` prints
-  every figure above and applies the four lines.
+  every figure above, refuses a capture that is not the complete
+  registered run, and applies the four lines, line (a) both as registered
+  and on production's frame.

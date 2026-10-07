@@ -8,7 +8,9 @@
 //!
 //! Ignored by default. It is a measurement instrument, not a test: it
 //! asserts only that responses are whole, and prints tab-separated rows.
-//! Run one mode at a time, in release, with a scratch directory:
+//! Run one mode at a time, in release. `BAT5_STORE` names a directory the
+//! probe may create things under; it writes, and deletes, only its own
+//! child `ba-t5-store` there:
 //!
 //! ```text
 //! BAT5_STORE=/scratch BAT5_MODE=phase BAT5_LABEL=A.1 \
@@ -16,11 +18,22 @@
 //!   --test ba_t5_floor_probe -- --ignored --nocapture
 //! ```
 //!
-//! It drives the production serving path and nothing else: an on-disk
-//! `LeafStore` with one frozen, pinned segment behind `StoreShardProvider`,
-//! and `PServeEndpoint` with the test signer, over loopback. It uses only
-//! public API that is the same before and after the delivery-digest fold
-//! moved to the blocking pool, so one source builds against both arms.
+//! The endpoint is the production one, `PServeEndpoint` with the test
+//! signer, over loopback. What it serves is of two kinds, and only one is
+//! production's:
+//!
+//! * **`full-store`** is the production path end to end: an on-disk
+//!   `LeafStore` with one frozen, pinned segment behind
+//!   `StoreShardProvider`. A frozen segment is always a full one, so this
+//!   is also the smallest frame production can serve.
+//! * **`one-leaf`, `eighth` and `full-memory`** are synthetic bodies from
+//!   memory. The first two are sizes production cannot serve today; they
+//!   are projections, there to show how cost moves with size. The third
+//!   is a full segment without the store's read path.
+//!
+//! The probe uses only public API that is the same before and after the
+//! delivery-digest fold moved to the blocking pool, so one source builds
+//! against both arms.
 //!
 //! The endpoint and a wake-lateness task run on one runtime with four
 //! workers; the requesters run on another. A lateness sample is how late a
@@ -238,7 +251,10 @@ struct Served {
 
 impl Served {
     fn start() -> Self {
-        let dir = env("BAT5_STORE").expect("BAT5_STORE = a scratch directory for the store");
+        let parent = env("BAT5_STORE").expect("BAT5_STORE = a directory to keep the store under");
+        // The probe's own child, so that deleting it between blocks can
+        // never take anything else in the directory with it.
+        let dir = format!("{parent}/ba-t5-store");
         let store_file = format!("{dir}/leaves.redb");
         // `BAT5_REUSE`: open the store a previous invocation left, without
         // writing it again. A cold block needs this: a store written by
@@ -247,7 +263,7 @@ impl Served {
         // file reads from the disk.
         let reuse = env("BAT5_REUSE").is_some() && std::path::Path::new(&store_file).exists();
         if !reuse {
-            // A scratch directory from an earlier block may or may not be there.
+            // The store an earlier block left may or may not be there.
             std::fs::remove_dir_all(&dir).ok();
             std::fs::create_dir_all(&dir).expect("mkdir");
         }
