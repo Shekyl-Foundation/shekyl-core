@@ -1,10 +1,15 @@
 # `BA-T5`: can the floor device serve archival shards? Floor run of 2026-10-07
 
-**State of this record: PRE-REGISTERED. No observation has been taken.**
-Everything below the heading "Registered before the run" was committed and
-pushed before the first timed block. The results are added under "Reading"
-by a later commit; the registered text is not edited after the run except
-to mark a void condition that fired.
+**State of this record: RUN COMPLETE, 2026-10-07 05:03Z to 07:25Z. Verdict
+withheld under its own rule: line (a) failed as registered.** Lines (b),
+(c) and (d) are reported and would each pass, on both arms, but the
+registered rule is that nothing else is graded while (a) stands failed.
+What failed, and the one decision it needs, is the first thing under
+"Reading".
+
+Everything under "Registered before the run" was committed and pushed
+before the first timed block (`f1b551b4cb`, amended once at `625488e5ed`,
+also before the run) and has not been edited since.
 
 ## The question
 
@@ -176,10 +181,194 @@ above.
 
 ## Reading
 
-*Not yet taken.*
+70 blocks, every one exited 0, the probe's error stream empty. Board
+45.3 to 60.4 °C. The daemon stayed up on one process throughout,
+synchronized, not mining, and its height went from 895 to 974. Graded arm:
+**A**, because #995 had not merged when this landed; B is reported beside
+it in every table.
+
+### Line (a) failed, at the smallest frame, on its 5 ms half
+
+CPU per abandoned request, n = 400 per cell:
+
+| Abandoned request for | Arm A | Arm B | Bytes on loopback per request |
+| --- | ---: | ---: | ---: |
+| a shard that is not held (serves nothing) | 1.70 ms | 1.70 ms | 770 |
+| one leaf, from memory: the smallest frame | **8.43 ms** | **8.28 ms** | 929 / 924 |
+| a full segment, from memory | 3.16 ms | 3.09 ms | 721 |
+| a full segment, from the store | 3.91 ms | 3.82 ms | 721 |
+
+- **The ratio half holds.** Full segment over smallest frame is 0.46 on
+  both arms, against a line of 1.5. CPU per abandoned request does not
+  grow with the shard. It falls.
+- **The 5 ms half fails at the smallest frame**, 8.4 ms against 5. It is
+  the outcome registered as expected, for the reason registered: a
+  128-byte body fits in the socket buffer whether or not the requester
+  reads it, so every write succeeds and `P` does the whole response,
+  signature included, for a requester that has gone. A one-leaf response
+  served back to back costs 4.8 ms of CPU here; abandoned, with a 30 ms
+  gap before the next, it costs 8.4 ms. What the extra 3.6 ms is has not
+  been established. The signature alone is 2.5 ms at the median.
+- **A full segment abandoned costs 3.9 ms**, under the line. About 720
+  bytes reach loopback per abandoned request, which is the head and
+  nothing of the body: the first chunk's write is refused. So `P` reads
+  and hashes one chunk it cannot send, and stops. That is the one-chunk
+  lookahead `serve_invariant_tests.rs` asserts.
+- **The invariant as `BA-Q3` words it is not broken by this.** No work
+  scaled with the shard before the requester had the bytes; the bytes of
+  the smallest frame were handed over, to the kernel. What the 5 ms half
+  caught is a fixed cost: `P` signs for any response small enough to be
+  buffered whole.
+
+**The decision this needs.** Whether a frame that small is ever served
+decides whether this is a defect. In this run the on-disk store served
+full segments only; the one-leaf shard came from the probe's in-memory
+provider, because the store freezes a segment when it is full. If no
+servable shard is smaller than a segment, the smallest frame production
+can serve is the full segment at 3.9 ms and line (a) holds on both
+halves. If a short final segment can be served, the cost is real and the
+remedy is not to sign until the requester has taken the body, which a
+buffered write cannot tell. That was not established here and is the
+maintainer's to rule. **Until it is ruled, the verdict is withheld.**
+
+### Lines (b), (c) and (d), reported and not graded
+
+| Line | Arm A | Arm B | Line | Would be |
+| --- | --- | --- | --- | --- |
+| (b) responses per second at eight in flight, lowest of six blocks | 40.8 | 51.9 | ≥ 0.5 | pass, by 80 to 100 times |
+| (c) wake lateness p99, worst of the eight-in-flight blocks and of every minute of the hour | 57.5 ms | 5.6 ms | ≤ 100 ms | pass |
+| (d) hottest in the sustained hour | 50.6 °C | 55.0 °C | < 80 °C | pass |
+| (d) lowest memory available in the hour | 6,580 MB | 6,569 MB | ≥ 512 MB | pass |
+
+Line (d), further: the probe's resident size was 65 to 86 MB and the
+daemon's 377 to 387 MB on a 7.6 GB board with no swap. Each hour served
+1,801 full segments, one every two seconds, every one whole.
+
+### What moving the hash off the executor did (#995)
+
+| | Arm A: hash on the executor | Arm B: hash in the blocking-pool hop |
+| --- | --- | --- |
+| Full segment, one in flight, median / mean / p95 (n = 200) | 57.7 / 58.5 / 67.3 ms | 52.1 / 53.1 / 61.4 ms |
+| Responses per second, eight in flight, six blocks | 40.8, 43.9, 56.3, 56.4, 41.6, 55.6 | 52.4, 52.9, 51.9, 52.4, 52.6, 52.4 |
+| Wake lateness p99, eight in flight, six blocks | 50.3, 57.5, 37.1, 28.1, 50.6, 33.4 ms | 5.0, 5.5, 5.3, 5.5, 5.6, 5.4 ms |
+| Wake lateness maximum, eight in flight | 93.6 ms | 8.6 ms |
+| Wake lateness p99, idle endpoint | 1.19 ms | 1.18 ms |
+| Wake lateness p99, sustained hour, worst minute | 1.31 ms | 1.29 ms |
+| CPU per response, eight in flight | 65 to 71 ms | 68 to 69 ms |
+
+- **The hypothesis behind #995 holds.** With the hash on the executor, a
+  1 ms sleep on the endpoint's runtime wakes up to 57 ms late at the 99th
+  percentile under eight in flight, and 94 ms late at worst. With the hash
+  in the hop it is 5.6 ms and 8.6 ms. The idle reading is 1.2 ms, the
+  timer's own grain, so the figures are that much above nothing.
+- **A full response is 5.6 ms faster** at one in flight.
+- **Run 3's two blocks that disagreed are explained.** Arm A is bimodal:
+  three blocks near 41 responses per second and three near 56. Arm B
+  reads 52 in all six. The work per response is the same (CPU per
+  response is within a few milliseconds); what varies in A is how the
+  executor's workers happen to be held.
+- At one fetch every two seconds, lateness is at the timer's grain on
+  both arms. The starvation is a property of load, not of serving at the
+  honest rate.
+
+### Where a full segment's time goes
+
+Each phase timed alone on one thread, n = 100; the remainder is by
+subtraction.
+
+| Phase | Arm A | Arm B |
+| --- | ---: | ---: |
+| Read from the store, at the serve loop's chunk size | 11.8 ms | 11.7 ms |
+| Delivery digest | 23.9 ms | 23.9 ms |
+| Signature (Ed25519 + ML-DSA-65) | 2.1 ms | 2.5 ms |
+| Write, hand-offs and everything else | 19.9 ms | 14.0 ms |
+| **Whole response, one in flight** | **57.7 ms** | **52.1 ms** |
+
+- **The digest alone is 23.9 ms**, the figure run 1 measured. Run 3's
+  "43 ms for the digest" was the single-pass tree less the tree before
+  #954, which is everything that tree gained and not the hash alone.
+  Here the hash is 23.9 ms of a 57.7 ms response and 19.9 ms is left
+  over after read, hash and sign are taken out. So the 19 ms run 3 could
+  not attribute is not the hash costing more inside the stream; it is in
+  that remainder. Moving the hash off the executor recovers 6 ms of it.
+  What the other 14 ms is, this run does not say: it holds the socket
+  writes, 51 blocking-pool hand-offs, and the requester's reads.
+- **The signature is cheap on this core**: median 2.5 ms, mean 3.0 ms,
+  maximum 11.8 ms over 200. The FN-DSA-1024 receipt key is expected to be
+  cheaper still, so figures here that include a signature are
+  conservative.
+- Smaller shards, whole response at one in flight: an eighth of a segment
+  8.2 / 8.7 ms, one leaf 3.6 / 3.9 ms (A / B).
+
+### Cold
+
+A full segment read by a fresh process with the store's pages dropped
+(checked: zero bytes resident before every one): **716 ms (A), 714 ms
+(B)**, median of 10. The same fresh process with the file cached: 88 ms
+and 78 ms. So the first read of a shard that is not in memory costs about
+630 ms more, once, from this SSD over USB 3.
+
+### Against what was predicted
+
+| Quantity | Predicted | Measured (arm A / arm B) | |
+| --- | --- | --- | --- |
+| Responses per second, eight in flight | 37 to 60 | median of six blocks 49.7 / 52.4 | held |
+| Work before the first byte | under 1 ms per request | an abandoned full segment costs 2.2 / 2.1 ms more than a request for a shard that is not held | falsified, with a caveat below |
+| Median per response, one in flight | 40 to 60 ms (falsified by run 3 at 67.2 ms) | 57.7 / 52.1 ms | see below |
+| Abandoned smallest frame costs a signature | expected | 8.4 ms, more than a served one | as expected |
+| Arm B lowers p99 lateness | expected | 57.5 to 5.6 ms | as expected |
+
+- **Work before the first byte.** The probe cannot stop the clock at the
+  head. What it measures is a whole abandoned request, which also holds
+  one chunk read, one chunk hashed and a refused write. That is 2.2 ms
+  over a request that serves nothing, so the prediction "under 1 ms" does
+  not survive the nearest thing the floor can measure. The pre-head work
+  alone is smaller than 2.2 ms by that chunk, and `BA-T3` counts it at
+  13.6 thousand instructions.
+- **The 40 to 60 ms prediction.** Run 3 measured 67.2 ms and the ledger
+  records the prediction as falsified against that capture. This run
+  reads 57.7 ms on the same serve order, inside the band. The two runs
+  differ in the instrument: run 3's requesters shared the endpoint's
+  runtime, and here they have their own. The ledger row stays as it is,
+  a prediction judged against the capture that judged it; this is the
+  note that the instrument moved the number by about 10 ms.
+
+### Limits of this run
+
+- **No arm without the daemon**, as registered. Its share of one core
+  was 0.2 % at the median block and 1.3 to 2.0 % across the sustained
+  hours, so it was a light neighbour: this run does not show serving
+  beside a daemon that is busy syncing.
+- **The void condition on other load could not be tested as written.**
+  Total CPU on the board less the probe's and the daemon's leaves 4 to 6 %
+  of one core in the sustained hours. That remainder holds this run's own
+  sampler and the probe's store build, which the probe does not count as
+  its own; it was not separated from a foreign process. The device was
+  held under a quiet claim.
+- **One environment sample of 380 lacks the daemon's state**: its RPC did
+  not answer within five seconds at the end of arm A's second
+  eight-in-flight block. The daemon's process and height were unchanged.
+- **The run began 67 seconds after the second build ended**, with the
+  board at 56 °C; run 3 waited five minutes. The first blocks ran warmer
+  than the last (60 against 46 °C).
+- Throttling was read from temperature, the cold cache was the store
+  file's pages, and chunks read per abandoned request came from loopback
+  bytes, all as registered.
+- Loopback only. A requester over Tor takes the bytes far more slowly,
+  which is `BA-T7`.
 
 ## Files
 
-*Added with the reading.* The probe is committed with this record:
-`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs`, ignored by default, the
-same source for both arms.
+- `ba_t5_serve_floor_device_20261007_obs.tsv`
+  (sha256 `d427e84c57f9c6d0d9bbc338588b59d79a3e663ebb67456614720a26a7da9502`):
+  the probe's rows, and one `EXIT` row per block. Row kinds and columns
+  are in the probe's header.
+- `ba_t5_serve_floor_device_20261007_env.tsv`
+  (sha256 `5642decb27e7b9a2d903df86f11fea815f5d39b4bde874c6dddbefffd1c1ff12`):
+  one `ENV` row at each block boundary and every 30 s of the sustained
+  hours; its first line names the columns.
+- The probe: `rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs`
+  (sha256 `0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a`
+  as built on the device), ignored by default, one source for both arms.
+- The reading: `python3 scripts/bench/ba_t5_reading.py <obs> <env>` prints
+  every figure above and applies the four lines.
