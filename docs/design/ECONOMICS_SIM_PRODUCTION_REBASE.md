@@ -399,6 +399,7 @@ defect.
 | The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
 | The fee-ladder instrument's nearest-pow2 rule (R26) | An alternative the instrument measures against the owner's ceiling snap; it has no owner because it was not chosen | `fee_ladder.rs`; the ceiling arm calls `quantize_pow2_ceil` |
 | The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
+| The secret draw: weighting, count per block, reveal lag and dropout (ESR-11) | The mechanism is being designed (Slice C Round 0); no production function exists to call. `SETTLEMENT_EPOCH_BLOCKS`, `CHALLENGE_RESPONSE_BLOCKS`, `SHARD_LENGTH` and the failure-window `(m, n)` are production's | `secret_draw.rs`; §5.13 fixes the model before the run |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
@@ -955,6 +956,97 @@ moves in the fourth decimal (1.466 → 1.464): it was already a single body,
 and the correction is the miner's leg of a small penalty. The
 whole-transaction floor still appears where the flat fee makes the penalty
 the cheaper packing.
+
+### 5.13 ESR-11, the secret draw, designed and predicted before it is built (2026-10-07)
+
+**The question (maintainer's Slice C Round 0 brief, 2026-10-07, §7).** The
+serve-credit design replaces the public urn with a secret per-block draw:
+the producer of block `h` commits to a seed, draws pairs with replacement
+from the epoch's drawable set, and reveals the seed with that block's pass
+records within `W₂`. A draw is issued only when its seed is revealed. Before
+any constant is pinned, the sim reports, at 0 %, 10 % and 30 % producer
+dropout (blocks whose seed is never revealed):
+
+1. the share of pairs short of 3 issued draws at `h_close(E) + W₂`;
+2. the draws per block the count rule produces;
+3. `(m, n)` re-checked at the resulting observation rate;
+4. the witness's fetch volume per won block;
+5. what a NonObservation epoch costs an honest archiver in unpaid service.
+
+**The model, fixed here.** One settlement epoch, `SETTLEMENT_EPOCH_BLOCKS`
+blocks, `D` pairs, `W₂ = CHALLENGE_RESPONSE_BLOCKS`, all three read from
+the production crate.
+
+- **Dropout.** Each block is independently unrevealed with probability
+  `d ∈ {0, 0.10, 0.30}`. An unrevealed block issues nothing.
+- **Reveal lag.** A revealed block's seed lands `ℓ` blocks after it, `ℓ`
+  uniform on `0..=W₂`. Its draws are visible to every later block.
+- **Weighting.** A draw picks a pair with replacement: weight 1 if the pair
+  is visibly short of 3 issued draws, 1/16 otherwise. Visibility is from
+  revealed seeds only.
+- **Count per block.** `base + top_up`, capped at `3 ×` nominal, where
+  nominal is `3·D / SEB` draws per block:
+  - `base = D / SEB` (one draw per pair per epoch);
+  - `top_up = max(0, visible_shortfall − in_flight) / horizon`;
+  - `visible_shortfall = Σ_pairs max(0, 3 − visibly issued)`;
+  - `horizon` is the blocks left until 70 % of the epoch, and after 70 % the
+    blocks left until `SEB − W₂`, never less than 200.
+  - Fractional counts carry: the count is the integer part of a running
+    total.
+- **`in_flight`, read two ways, both run.** The brief says "draws issued in
+  the last `W₂` blocks". Reading A: the draws of blocks in the last `W₂`
+  whose seed is not yet revealed (a revealed block's draws are already in
+  the visible counts). Reading B, literal: every draw of the last `W₂`
+  blocks, revealed or not. A is the reading the spec will state unless B
+  is better; the table prints both.
+- **Not modelled.** The read itself (every revealed draw is issued whether
+  or not it passed), carry-over of the previous epoch's last `W₂` blocks,
+  producers that reveal selectively, and any correlation between dropout
+  and time.
+
+**Scale and seeds.** `D = 324,000` (maturity, row D13's larger figure) and
+`D = 4,096` (the genesis set `--challenge-coverage` already uses). Eight
+seeds per cell. Every figure is printed as mean, minimum and maximum over
+seeds.
+
+**The bar, fixed here.** The brief's ruling 6 (PROVISIONAL): at most 3 % of
+pairs short of 3 issued at 10 % dropout. Graded at `D = 324,000` on the
+**maximum** over seeds, with the number of seeds over 3 % printed beside
+it. The other cells have no bar.
+
+**Predictions.** The brief reports a scaled model of this rule (32,400
+pairs): 1.5 % / 2.5 % / 6.1 % short at 0 / 10 / 30 % dropout, using
+3.49 / 3.77 / 4.67 draws per pair, which is about 113 / 122 / 151 draws per
+block at 324,000 pairs. I expect reading A at 324,000 pairs to land within
+a factor of 1.5 of each of those shares and within 10 % of each draw
+count, because nothing in the rule depends on `D` except through ratios. I
+expect reading B to issue fewer draws and leave more pairs short, since it
+subtracts draws the shortfall has already counted. I expect the cap
+(`3 ×` nominal, 291.6 draws per block at 324,000 pairs) not to bind at 0 %
+or 10 %, and do not predict whether it binds at 30 %.
+
+**`(m, n)`, how it is re-checked.** The settlement rule selects 3 of a
+pair's issued draws and settles Served at 2 or 3 passes, so a missed
+observation is "fewer than 2 of 3 independent reads passed":
+`q = 3x²(1−x) + x³` with `x` the per-read failure probability the
+feasibility module already uses (`default_sources()`, `p_attempt = 0.30`,
+one attempt). The check prints `q`, the false-slash bound at the
+production `(m, n)` over the bond's life (`false_slash_bound`, unchanged),
+and the observation rate `o = 1 − short`. `o` does not enter the
+false-slash bound, which is priced at a ceiling of one observation per
+epoch. It stretches the time a non-serving pair takes to reach `m` misses,
+by `1/o`, and that stretch is printed.
+
+**Fetch volume and unpaid service.** Fetch volume per won block is the
+block's draw count times `SHARD_LENGTH`, the partition's shard length; a
+closed shard is at most one transaction longer. Unpaid service is printed
+as the share of pair-epochs that settle NonObservation, and as the issued
+reads those pairs answered. It is not converted to currency: the per-pair
+reward depends on the emission scenario, and this arm reads none.
+
+**Divergence.** The draw, the weighting and the count rule have no
+production owner yet; the sim leads the code here (the second ruling in
+§0). §4 carries the row.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
