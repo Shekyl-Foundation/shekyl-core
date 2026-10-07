@@ -6200,10 +6200,14 @@ and replaced by pointers; what each still owns is the specification's
    and the unread share at hour-scale spacing is measured (`BA-T31`)
    and fed to the feasibility module. `(m, n)` stays open until then.
 2. **`SO-D8d`'s integrity layers, in their form under the stored index**
-   (closes `SCS-F11`; specification §9.5). The first layer is "the stored
-   issued-draw index equals a fresh derivation from the kept seeds",
-   checked locally at settlement; a pair mismatch cannot occur, because
-   the pair is derived from `j`. The second, the persisted digest of `D`
+   (closes `SCS-F11`; specification §9.5). The first layer is a digest:
+   at admission each issued `(pair, h, j)` is folded into a per-epoch
+   running digest kept as revertible consensus state, and at settlement
+   the stored index is hashed during the walk that selects the counted
+   draws and compared. Full re-derivation from the kept seeds at
+   settlement, the form first ruled the same day, is **rejected**: it
+   repeated in one block the hashing admission spread over an epoch. A
+   pair mismatch cannot occur, because the pair is derived from `j`. The second, the persisted digest of `D`
    against a re-walk, and the third, `passes ≤ issued` as a typed halt,
    carry over.
 3. **Ratified:** the in-flight count stops at `h_open(E)`; the settlement
@@ -6212,8 +6216,24 @@ and replaced by pointers; what each still owns is the specification's
    `SF-D13` window while that code runs, with the pointer to the
    specification's §11.1.
 
-**Open from this review.** `SCS-P13`: a re-read repeats its draw's nonce
-an hour or more later with a new anchor, which a `P` that remembers nonces can tell
-from an organic read. The remedy on record, not applied, is an attempt
-index in the nonce and one prunable byte per record.
+5. **One request machinery for every shard fetch.** Challenge and
+   organic reads go through one client code path: one entry point that
+   takes a caller-built header and returns one outcome type, with no
+   challenge-only path in the request layer. Only the nonce's source and
+   the challenger's bookkeeping sit outside it (specification §5.1).
+6. **`SCS-P13`: a fresh nonce for every read, for every caller.** A
+   challenge's nonce takes the read's `attempt`. The record carries
+   `attempt` as one prunable byte; admission recomputes the nonce with
+   one hash and refuses `attempt ≥ K`. `K = 3` is a consensus constant.
+   *Replaces* a nonce bound to `(h, j)` alone, which would have returned
+   to `P` on a re-read.
+7. **Fresh circuit by spacing; `SF-D3` is not reopened.** Tor attaches no
+   new stream to a circuit past `MaxCircuitDirtiness`, ten minutes by
+   default, and re-reads are at least 30 blocks apart. The managed Tor
+   never sets that option above the spacing; a test holds its launch
+   surface closed. Recorded with it, from Tor's manual: for an onion
+   service the age is counted from a circuit's last use, so the re-read
+   is on a new circuit when the daemon sent that persona nothing in the
+   ten minutes before. And a new circuit shares the entry guard, which is
+   the dependence `BA-T31` measures.
 ---

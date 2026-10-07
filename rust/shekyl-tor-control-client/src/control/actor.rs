@@ -53,6 +53,7 @@
 //! [`ActorRef::attach_stream`]: kameo::actor::ActorRef::attach_stream
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -856,6 +857,77 @@ async fn handshake(
     Ok((reader, writer, framer))
 }
 
+/// The managed tor's whole command line after the binary. **This is the spawn
+/// surface**: every option tor is launched with is named here and nowhere
+/// else, so what the launch can and cannot configure is one list a test reads
+/// (`the_managed_launch_surface_is_the_typed_options`).
+fn managed_tor_args(
+    data_dir: &Path,
+    port_file: &Path,
+    socks_port: SocksPort,
+    disable_network: bool,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "--DataDirectory".into(),
+        data_dir.into(),
+        "--ControlPort".into(),
+        "auto".into(),
+        "--ControlPortWriteToFile".into(),
+        port_file.into(),
+        "--CookieAuthentication".into(),
+        "1".into(),
+        "--SocksPort".into(),
+        socks_port.as_arg().into(),
+        // A file log in the (0700, caller-owned) DataDirectory so a `Spawn` failure is
+        // diagnosable — the actor's own errors stay content-free (no paths), but tor's
+        // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
+        // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
+        // targets / SOCKS usernames are info/debug only), so it's safe to persist.
+        //
+        // The path is passed **unquoted on purpose** — do not "fix" this by quoting it. Tor's
+        // `Log <severity> file <FILENAME>` grammar takes the *entire remainder* of the option
+        // value as the filename, so an embedded space (a wallet DataDirectory under a spaced
+        // user profile — `C:\Users\My Name\…`, `/Users/My Name/…`) is preserved verbatim.
+        // Wrapping the path in quotes makes tor treat the literal `"` as part of the filename
+        // and write the log to the wrong place. Verified against the bundled tor: unquoted
+        // writes to the exact spaced path, quoted does not.
+        "--Log".into(),
+        format!("notice file {}", data_dir.join("tor.log").display()).into(),
+    ];
+    // ---------------------------------------------------------------------------------
+    // NON-ANONYMOUS SERVING IS HELD SHUT HERE, and this is one half of a two-half rule.
+    //
+    // tor can be put into single-hop / non-anonymous onion mode by *two* independent
+    // routes, and they are foreclosed by *different* mechanisms in *different* files:
+    //
+    //   1. `ADD_ONION`'s `NonAnonymous` flag — foreclosed **by type**: it is not a member
+    //      of `control::onion::OnionFlags`, and `onion_line_is_never_non_anonymous`
+    //      asserts over every representable flag/PoW combination that it can never reach
+    //      the wire.
+    //   2. **torrc / config** — `HiddenServiceNonAnonymousMode` (which additionally
+    //      requires `SocksPort 0`) — foreclosed **by construction, right here**: the spawn
+    //      surface is the six typed options above and nothing else. There is no
+    //      `extra_args`, no `-f <torrc>`, no `+Option` append, no `--defaults-torrc`.
+    //
+    // The two halves cannot see each other, which is the hazard worth naming. The
+    // `OnionFlags` test does not fire when someone adds a knob here, and the rationale
+    // below is written about *safety invariants* generally, not about this mode
+    // specifically. So: **when the anticipated future typed knobs arrive (bridges, an
+    // upstream proxy), non-anonymous mode is on the list of things this discipline is
+    // holding shut** — a knob that reaches `HiddenServiceNonAnonymousMode` or zeroes the
+    // `SocksPort` re-opens route 2 while route 1's test stays green and silent.
+    // ---------------------------------------------------------------------------------
+    //
+    // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
+    // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
+    // caller intent reaches the command line — a typed bool, not a flag passthrough.
+    if disable_network {
+        args.push("--DisableNetwork".into());
+        args.push("1".into());
+    }
+    args
+}
+
 /// Spawn a **managed** `tor` (DQ-T0.1): the caller's `DataDirectory`, `ControlPort
 /// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
 /// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
@@ -888,67 +960,15 @@ async fn spawn_managed_tor(
     // The witness type guarantees this path passed the hash-pin gate and is canonical
     // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
     let mut cmd = tokio::process::Command::new(managed.tor_binary.as_path());
-    cmd.arg("--DataDirectory")
-        .arg(&managed.data_dir)
-        .arg("--ControlPort")
-        .arg("auto")
-        .arg("--ControlPortWriteToFile")
-        .arg(&port_file)
-        .arg("--CookieAuthentication")
-        .arg("1")
-        .arg("--SocksPort")
-        .arg(managed.socks_port.as_arg())
-        // A file log in the (0700, caller-owned) DataDirectory so a `Spawn` failure is
-        // diagnosable — the actor's own errors stay content-free (no paths), but tor's
-        // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
-        // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
-        // targets / SOCKS usernames are info/debug only), so it's safe to persist.
-        //
-        // The path is passed **unquoted on purpose** — do not "fix" this by quoting it. Tor's
-        // `Log <severity> file <FILENAME>` grammar takes the *entire remainder* of the option
-        // value as the filename, so an embedded space (a wallet DataDirectory under a spaced
-        // user profile — `C:\Users\My Name\…`, `/Users/My Name/…`) is preserved verbatim.
-        // Wrapping the path in quotes makes tor treat the literal `"` as part of the filename
-        // and write the log to the wrong place. Verified against the bundled tor: unquoted
-        // writes to the exact spaced path, quoted does not.
-        .arg("--Log")
-        .arg(format!(
-            "notice file {}",
-            managed.data_dir.join("tor.log").display()
-        ))
-        .kill_on_drop(true)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // ---------------------------------------------------------------------------------
-    // NON-ANONYMOUS SERVING IS HELD SHUT HERE, and this is one half of a two-half rule.
-    //
-    // tor can be put into single-hop / non-anonymous onion mode by *two* independent
-    // routes, and they are foreclosed by *different* mechanisms in *different* files:
-    //
-    //   1. `ADD_ONION`'s `NonAnonymous` flag — foreclosed **by type**: it is not a member
-    //      of `control::onion::OnionFlags`, and `onion_line_is_never_non_anonymous`
-    //      asserts over every representable flag/PoW combination that it can never reach
-    //      the wire.
-    //   2. **torrc / config** — `HiddenServiceNonAnonymousMode` (which additionally
-    //      requires `SocksPort 0`) — foreclosed **by construction, right here**: the spawn
-    //      surface is the six typed options above and nothing else. There is no
-    //      `extra_args`, no `-f <torrc>`, no `+Option` append, no `--defaults-torrc`.
-    //
-    // The two halves cannot see each other, which is the hazard worth naming. The
-    // `OnionFlags` test does not fire when someone adds a knob here, and the rationale
-    // below is written about *safety invariants* generally, not about this mode
-    // specifically. So: **when the anticipated future typed knobs arrive (bridges, an
-    // upstream proxy), non-anonymous mode is on the list of things this discipline is
-    // holding shut** — a knob that reaches `HiddenServiceNonAnonymousMode` or zeroes the
-    // `SocksPort` re-opens route 2 while route 1's test stays green and silent.
-    // ---------------------------------------------------------------------------------
-    //
-    // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
-    // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
-    // caller intent reaches the command line — a typed bool, not a flag passthrough.
-    if managed.disable_network {
-        cmd.arg("--DisableNetwork").arg("1");
-    }
+    cmd.args(managed_tor_args(
+        &managed.data_dir,
+        &port_file,
+        managed.socks_port,
+        managed.disable_network,
+    ))
+    .kill_on_drop(true)
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
 
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
@@ -1396,6 +1416,71 @@ mod tests {
     // The actor's I/O paths (handshake, command correlation, event drain) are
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
+
+    /// Tor's own default for `MaxCircuitDirtiness`, in seconds (tor manual).
+    const TOR_DEFAULT_MAX_CIRCUIT_DIRTINESS_SECS: u64 = 600;
+    /// The archival challenger's spacing between two reads of one draw:
+    /// 30 blocks at the 120 s block target
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3). A re-read is on a fresh
+    /// circuit only while tor stops reusing a circuit sooner than this.
+    const REREAD_SPACING_SECS: u64 = 30 * 120;
+
+    fn launch_options(disable_network: bool) -> Vec<String> {
+        managed_tor_args(
+            Path::new("/data"),
+            Path::new("/data/control_port"),
+            SocksPort::Auto,
+            disable_network,
+        )
+        .into_iter()
+        .map(|a| a.into_string().expect("the fixture's arguments are UTF-8"))
+        .filter(|a| a.starts_with("--"))
+        .collect()
+    }
+
+    /// The launch surface is a closed list. A new option fails here first, so
+    /// whoever adds one meets the invariants the list holds shut: non-anonymous
+    /// serving (see `managed_tor_args`) and circuit reuse (below).
+    #[test]
+    fn the_managed_launch_surface_is_the_typed_options() {
+        let base = [
+            "--DataDirectory",
+            "--ControlPort",
+            "--ControlPortWriteToFile",
+            "--CookieAuthentication",
+            "--SocksPort",
+            "--Log",
+        ];
+        assert_eq!(launch_options(false), base);
+        let mut offline = base.to_vec();
+        offline.push("--DisableNetwork");
+        assert_eq!(launch_options(true), offline);
+    }
+
+    /// The managed tor is never told to keep reusing a circuit for longer
+    /// than the challenger waits between two reads of a draw. Today it is not
+    /// told anything: the option is absent, so tor's default holds, and the
+    /// default is inside the spacing. An option that sets it has to come
+    /// through `managed_tor_args` and meet this bound.
+    #[test]
+    fn the_managed_launch_never_lengthens_circuit_reuse() {
+        for disable_network in [false, true] {
+            let options = launch_options(disable_network);
+            assert!(
+                !options.is_empty(),
+                "the launch has options, so their absence means something"
+            );
+            assert!(
+                !options
+                    .iter()
+                    .any(|o| o.eq_ignore_ascii_case("--MaxCircuitDirtiness")),
+                "the managed launch sets MaxCircuitDirtiness; bound it by the re-read spacing"
+            );
+        }
+        const {
+            assert!(TOR_DEFAULT_MAX_CIRCUIT_DIRTINESS_SECS <= REREAD_SPACING_SECS);
+        }
+    }
 
     #[test]
     fn getinfo_renders_space_separated_keys() {

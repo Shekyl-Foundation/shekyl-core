@@ -668,6 +668,39 @@ mod tests {
         assert_eq!(segment, 3_326_976);
     }
 
+    /// The one-machinery rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.1): the
+    /// request is a function of the shard and the caller's header and of
+    /// nothing else, so a challenge and an organic read of one shard differ
+    /// on the wire only where their nonces do. There is no caller kind to
+    /// pass, which is the rule's other half and is held by the signature.
+    #[test]
+    fn a_request_differs_from_another_only_in_its_nonce() {
+        let anchor = BlockHeight::from_raw(1_000);
+        let organic = RequestHeader::with_nonce([0xa5; 32], anchor, [3; 32]);
+        let challenge = RequestHeader::with_nonce([0x5a; 32], anchor, [3; 32]);
+        let a = request_bytes(7, &organic);
+        let b = request_bytes(7, &challenge);
+        assert_eq!(a.len(), b.len());
+
+        // The nonce leads the header, as 64 lowercase hex characters.
+        let nonce_hex: String = organic.nonce().iter().map(|x| format!("{x:02x}")).collect();
+        let text = String::from_utf8(a.clone()).unwrap();
+        let start = text.find(&nonce_hex).expect("the nonce is on the wire");
+        let nonce_span = start..start + nonce_hex.len();
+
+        let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+        assert!(!differing.is_empty(), "two nonces, one request");
+        assert!(
+            differing.iter().all(|i| nonce_span.contains(i)),
+            "a byte outside the nonce differs: {differing:?} against {nonce_span:?}"
+        );
+        // Every nonce byte differs here, so the whole span is accounted for.
+        assert_eq!(differing.len(), nonce_span.len());
+
+        // The same header is the same request: nothing ambient enters.
+        assert_eq!(a, request_bytes(7, &organic));
+    }
+
     #[test]
     fn the_request_is_the_route_and_the_one_header() {
         let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(2), [3; 32]);

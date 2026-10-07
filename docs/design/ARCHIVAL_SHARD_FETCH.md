@@ -742,8 +742,16 @@ an implementation.
   challenge column is the outcome of one read. Under the secret draw the
   witness reads a draw again, later, when a read ends stall-class, up to
   three reads in all; a completed exchange stays final
-  ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5).
-  The two-retry budget below a read is unchanged.
+  ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5.3).
+  The two-retry budget below a read is unchanged, and so is its header:
+  stall retries inside a read repeat it. Every new read carries a fresh
+  nonce, for every caller (specification §5.2).
+- **One request machinery (ruled 2026-10-07; specification §5.1).** The
+  rule `SF-D7` states for this client — one admission path, no caller
+  differentiation — holds for the whole request layer: header format,
+  envelope handling, stall retries, timeouts and outcome classification
+  are the same for a challenge and an organic read, and the entry point
+  takes a caller-built header and no caller kind.
 - **Amendment 2026-09-13:** the last three rows split parse failure,
   `R_k` mismatch, and bad countersignature into distinct verdicts.
   Their scheduler consequence is intentionally the same; their typed

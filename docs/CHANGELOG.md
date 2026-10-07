@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The managed Tor's command line is built by one function, and two tests hold it: the launch surface is a closed list of typed options, and it never sets `MaxCircuitDirtiness` (the archival challenger's re-reads rely on Tor's default circuit reuse window). The fetch client gains a test that two requests for one shard differ only in their nonce.
+- Docs: the serve-credit specification states one request machinery for every shard fetch, a fresh nonce for every read (the record carries the read's `attempt`, bounded by a consensus constant of three), and a digest in place of re-derivation for the settlement writer's first integrity check.
 - Docs: the serve-credit specification gains the witness's re-read policy and the settlement writer's three integrity checks; the failure window is left open rather than re-pinned on a one-read figure, with two measurements registered (`BA-T31`, `BA-T32`).
 - Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
