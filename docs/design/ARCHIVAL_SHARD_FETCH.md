@@ -738,6 +738,12 @@ an implementation.
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id ‖ D` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 
+- **Above this table, for a challenge (2026-10-07):** "miss" in the
+  challenge column is the outcome of one read. Under the secret draw the
+  witness reads a draw again, later, when a read ends stall-class, up to
+  three reads in all; a completed exchange stays final
+  ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5).
+  The two-retry budget below a read is unchanged.
 - **Amendment 2026-09-13:** the last three rows split parse failure,
   `R_k` mismatch, and bad countersignature into distinct verdicts.
   Their scheduler consequence is intentionally the same; their typed

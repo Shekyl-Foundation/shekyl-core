@@ -784,8 +784,9 @@ at the site (`SettleError`, this section, the writer caller).
 ### 6.1 Which direction costs a bond, and which layer sees it
 
 The fold counts passes among three selected draws; `issued` gates
-`NonObservation` (`issued < 3`). So a wrong `issued` matters in two
-cases, and `passes > issued` sees neither:
+`NonObservation` (`issued < 3`), and the list of issued draws is what
+the three are selected from. So a wrong index matters in three cases,
+and `passes > issued` sees none of them:
 
 - **Over-derived** — `issued_true < 3 ≤ issued_stored`, and the selected
   draws do not carry two passes. A pair that should settle
@@ -794,9 +795,17 @@ cases, and `passes > issued` sees neither:
 - **Under-derived** — `issued_stored < 3 ≤ issued_true`. A pair that
   should settle **Missed** settles `NonObservation`: the free-exit
   direction `SO-D1` exists to close.
+- **A different list at or above three.** Both counts are at least 3 and
+  the lists differ, so the selection lands on different draws. In the
+  specification's §9.3 vectors, four draws with passes at positions 2 and
+  3 select `(0, 3, 2)` and settle Served; lose the last draw and the
+  remaining three select `(2, 0, 1)`, one pass, **Missed**. Neither count
+  crossed the threshold. This is why layer 1 compares each pair's list of
+  draws and not only how many there are.
 
-**Layer 3 is strictly dominated** — it fires only when records outnumber
-issued draws — and is retained as a cheap backstop, never as the guard.
+**Layer 3 is strictly dominated** — `passes` is a count over three selected draws, so it can exceed
+`issued` only if the writer counts passes some other way — and is
+retained as a cheap backstop, never as the guard.
 
 Layer 1 recomputes the counts, so it sees both directions for every draw
 whose seed was revealed. It recomputes them against the `D` the writer
@@ -889,8 +898,8 @@ arrive as a quiet `continue`.
 Each is a different real defect; name them so a later sweep does not
 read an unreachable check as dead:
 
-- **revert the per-draw dedup** (back to pair-epoch-wide
-  `pass_count > 0`) — layer 3;
+- **count passes from the pass table by pair and epoch**, not over the
+  selected draws, against an index that lost a draw — layer 3;
 - **perturb the stored index** so a block's count or a pair's list
   differs from what the seeds derive — layer 1;
 - **perturb the drawable-set reconstruction** so admission and
@@ -903,6 +912,12 @@ read an unreachable check as dead:
 - **a count rule that differs between admission and the re-derivation**
   (a different horizon, cap or carry) — layer 1. The two must be one
   function, called from both.
+
+**Not one of these, and named so it is not filed here:** reverting dedup
+to pair-epoch-wide (`pass_count > 0`). It admits at most one pass for a
+pair, so it lowers `passes`; the index and `D` stay correct and no layer
+fires. Its fixture is admission's: valid records for two distinct draws
+of one pair both admit (§8, evidence plan).
 
 ### 6.6 REJECTED: an on-chain digest of `D` at `h_open(E)`
 
@@ -941,7 +956,8 @@ miss; what issues nothing is an absent reveal.
 **Fixture.** Not a unit test of `settle_epoch` — that returns the error
 trivially and proves nothing. Two cases, each shown refusing through the
 Fault path: an index perturbed after admission (one block's count, and
-separately one pair's list), and a `D` **re-walked from divergent
+separately one pair's list with its length left at three or more, so
+that only the selection moves), and a `D` **re-walked from divergent
 journals**. The second is also the only end-to-end test that Q3's
 reconstruction and the admission path are looking at the same object.
 Both must run the re-derivation, not a value kept resident, or they test
@@ -1804,7 +1820,7 @@ gates until `shekyl-chain-rules` is the live validator.
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
 | **Settlement integrity (`SO-D8d` RULED; form ruled 2026-10-07)** | §6 and specification §9.5: three local layers at the Rust slash-pass writer, none on chain — the stored index against a fresh derivation, the digest of `D` against a re-walk, `passes ≤ issued`. A desync is a store-invariant Fault with a new `SI-` row, never a verdict. |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 17, 18 (`SO-D8d`):** the two integrity fixtures of §6.7 — a perturbed index and a `D` re-walked from divergent journals, each halting the writer. **Vectors** for the draw, the cap and the set commitment, and the `0x0C` commitment fixture: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.5, §7.3. Items 7, 8, 10 and 11 read "drawn at `h`" as the specification's derivation of draw `j` from `h`'s revealed seed. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 21 (dedup is per draw):** valid records for two distinct draws of one pair both admit, in one carrier and in two; red edit: pair-epoch-wide dedup, which refuses the second and which no integrity layer sees (§6.5). **New 17, 18 (`SO-D8d`):** the two integrity fixtures of §6.7 — a perturbed index and a `D` re-walked from divergent journals, each halting the writer. **Vectors** for the draw, the cap and the set commitment, and the `0x0C` commitment fixture: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.5, §7.3. Items 7, 8, 10 and 11 read "drawn at `h`" as the specification's derivation of draw `j` from `h`'s revealed seed. |
 | **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
 
 **Sequencing against DRS — SUPERSEDED 2026-09-16 (Q15), amended same

@@ -3,7 +3,7 @@
 **Status:** OPEN — Round 0 of SO-D8 Slice C, **RULED 2026-10-07**. The
 design is the maintainer's brief of that date (the secret per-block draw)
 and the rulings on the twelve questions this document first posed (§13).
-One question is open: `SCS-P13`, the nonce of a retried read (§13.4).
+One question is open: `SCS-P13`, the nonce of a re-read (§13.4).
 Nothing in this document is built.
 
 **Authority.** This is the single specification of the serve-credit
@@ -301,18 +301,32 @@ code path, whether organic or a challenge.
   at its tip minus 720, for every caller.
 - **Timing.** The producer spreads its reads at random over many block
   intervals inside `W₂`. This is client policy, not consensus.
-- **Retries.** A read that fails is tried again, up to three attempts in
-  all: the first and the fetch client's two retries
-  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D6`). Each
-  retry is made on a fresh circuit, at a random time in what remains of
-  `W₂`, and carries a fresh anchor, because `P` refuses an anchor more
-  than `L` blocks from its own. The record is filed for the first attempt
-  that succeeds. A draw whose third attempt fails, or that runs out of
-  window, is abandoned. This is client policy, not consensus: admission
-  sees one receipt and cannot tell which attempt produced it.
+- **Re-reads.** A read, in `SF-D6`'s sense
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)), ends in a
+  verified body or in one typed outcome. The two stall retries `SF-D6`
+  rules belong to that one read: same header, seconds apart, inside one
+  fetch span. Above it the witness has a rule of its own:
 
-  A retry repeats the draw's nonce, because the nonce is a function of
-  `(seed, h, j)`. What follows from that is `SCS-P13` (§13.4).
+  - A challenge read that ends **stall-class** — a circuit timeout, a
+    failed connect, a silent close, a truncated body: no exchange
+    completed — is read again later. Up to three reads of a draw in all,
+    consecutive reads at least 30 blocks apart, at random times in what
+    remains of `W₂` (both figures PROVISIONAL, §13.2).
+  - A read that ended in a completed exchange is final, as `SF-D6` rules
+    it: a 404, a 503, the refusal trailer, a malformed or overlong reply,
+    a bad countersignature, refused content, or a second 400. `P` answered.
+  - A re-read derives a fresh anchor, because `P` refuses an anchor more
+    than `L` blocks from its own. Its nonce is the draw's (`SCS-P13`,
+    §13.4).
+  - The record is filed for the first read that succeeds. A draw whose
+    third read fails, or that runs out of window, is abandoned.
+
+  Circuit assignment is Tor's. `SF-D3` rules that the fetch path presents
+  no SOCKS credentials and sets no isolation flags, so a re-read is not
+  promised a different circuit from the read before it; the spacing is
+  what this policy controls. The rule lives in the challenge caller.
+  `shekyl-p-fetch` does not retry. It is not consensus: admission sees one
+  receipt and cannot tell which read produced it.
 - **Ordering.** The client builds no carrier for `h` until every read of
   `h` has completed or been abandoned. A carrier reveals the seed, and
   the seed exposes that block's remaining reads.
@@ -790,25 +804,41 @@ block independently unrevealed with the stated probability.
   feasibility module's provisional `10⁻³` per archiver. Neither figure
   depends on the observation rate, so dropout does not move them.
 
-  That figure credits **one attempt per read**. The module credits one
-  because failures inside a single window cluster, so a retry there is not
-  an independent try. Under this design a retry comes hours later, on a
-  fresh circuit (§5), and whether tries that far apart fail together is
-  not measured. With three tries, of which a share `ρ` of failures is
-  common to all three:
+  `0.689` is `1 − (1 − p)^4096`, which treats an archiver's pairs as
+  failing independently. One persona serves every shard from one host and
+  one onion service, so they do not: the chance of at least one false
+  slash can be lower than the figure, and false slashes would come many
+  at once. It is an exposure on the module's axis, not a probability.
 
-  | `ρ` | Read failure | Missed observation | Per archiver at 4,096 shards |
+  That figure credits **one read per draw**. The module credits one try
+  because failures inside a single window cluster, so a retry there is
+  not an independent try. Under this design the witness reads a draw
+  again hours later (§5), and whether reads that far apart fail together
+  is not measured. The window depends only on `x`, the probability that a
+  draw goes unread after all three reads:
+
+  **`(11, 13)` clears the per-archiver budget when `x ≤ 0.2076`**
+  (`ESR-11`, sim plan §5.15). That boundary assumes no model of how the
+  reads correlate. To show the range, a mixture in which a share `ρ` of
+  first-read failures is common to all three reads and the rest are
+  independent, at the retained per-read failure `p = 0.30`:
+
+  | `ρ` | `x` | Missed observation | Per archiver at 4,096 shards |
   | --- | --- | --- | --- |
   | 1.00 (the calibration) | 0.300 | 0.216 | `6.89 × 10⁻¹`, exceeds |
   | 0.50 | 0.164 | 0.071 | `8.23 × 10⁻⁶`, clears |
   | 0.25 | 0.095 | 0.025 | `1.07 × 10⁻¹⁰`, clears |
   | 0.00 (independent) | 0.027 | 0.002 | `1.70 × 10⁻²²`, clears |
 
-  `(11, 13)` clears the budget when `ρ ≤ 0.661` (`ESR-11`, sim plan
-  §5.15). **`(m, n)` stays open and is not re-pinned on the one-attempt
-  figure** (ruled 2026-10-07): loosening the window there would weaken
-  the detection of pairs that do not serve, to solve a problem the
-  retries may already solve. `ρ` at hour-scale spacing is measured first
+  `ρ` is not what a run observes. A run observes `p`, `x`, and
+  `c = x / p`: of draws whose first read failed, the share whose two
+  later reads also failed. In the mixture `c = ρ + (1 − ρ)·p²`, so the
+  boundary is `c ≤ 0.692` at `p = 0.30`, which is `ρ ≤ 0.661`.
+
+  **`(m, n)` stays open and is not re-pinned on the one-read figure**
+  (ruled 2026-10-07): loosening the window there would weaken the
+  detection of pairs that do not serve, to solve a problem the re-reads
+  may already solve. `x` at hour-scale spacing is measured first
   ([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T31`). The
   observation rate is 0.995 / 0.989 / 0.962, so a pair that never serves
   reaches 11 misses in 11.05 / 11.12 / 11.44 epochs.
@@ -848,7 +878,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R9 | The in-flight count stops at `h_open(E)` (§4.3). Ratified on review |
 | R10 | The settlement selection as §9.3 states it: candidate bytes, rejection zone, swap, the cap, and the vectors. Ratified on review |
 | R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. Closes `SCS-F11` |
-| R12 | The witness retries a failed read, as client policy (§5). `(m, n)` is not re-pinned on the one-attempt figure; the correlation of retries at hour-scale spacing is measured first (§12) |
+| R12 | The witness reads a draw again when a read ends stall-class, as its own policy above `SF-D6` (§5). `(m, n)` is not re-pinned on the one-read figure; the unread share at hour-scale spacing is measured first (§12) |
 
 ### 13.2 Provisional (rule 21; reopen on the sim or on testnet measurement)
 
@@ -857,6 +887,8 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | V1 | Full-pair weight 1/16 | A better setting is measured |
 | V2 | Count rule of §4.3: base 1 per pair per epoch, catch-up by 70 %, minimum horizon 200, cap 3 × nominal | Same |
 | V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.18 % |
+| V4 | The witness reads a draw at most three times | `BA-T31` reads `x` above 0.2076 at three reads, or the producer's load (`BA-T30`) cannot carry the re-reads |
+| V5 | Consecutive reads of a draw are at least 30 blocks apart | `BA-T31` shows the unread share still falling, or already flat, at a different spacing |
 
 ### 13.3 The twelve questions this round posed — RULED 2026-10-07
 
@@ -881,7 +913,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 
 | # | Question |
 | --- | --- |
-| `SCS-P13` | **The nonce of a retried read.** The nonce is `cSHAKE256(seed ‖ block_hash(h) ‖ j)`, so every attempt at one draw carries the same nonce, and a retry hours later must carry a different anchor (§5). The fetch client already repeats a header when it retries a stall, for every caller, but within seconds and with the same anchor. A `P` that remembers nonces therefore sees a nonce return hours later with a new anchor, which only a challenge does: §5's "indistinguishable from random" holds for a first attempt and not for a retry `P` received before. A `P` could use that to refuse first attempts and serve only returning nonces. Most failures are circuit failures that never reach `P`, and those leak nothing. **The remedy, if one is wanted,** is an attempt index in the nonce: `cSHAKE256(seed ‖ block_hash(h) ‖ j ‖ attempt)`, with `attempt` (one byte, below the retry bound) carried in the record's prunable part so admission can recompute the nonce. That makes the retry bound a consensus constant and adds one prunable byte per record (1,402 → 1,403). Not applied: it changes the record |
+| `SCS-P13` | **The nonce of a re-read.** The nonce is `cSHAKE256(seed ‖ block_hash(h) ‖ j)`, so every read of one draw carries the same nonce, and a re-read 30 or more blocks later must carry a different anchor (§5). Inside one read `SF-D6`'s stall retries also repeat the header, for every caller, but seconds apart and with the same anchor. A re-read happens only after a stall-class end, and some of those reach `P` before they fail: a truncated body, a stall after the request was received. A `P` that remembers nonces then sees one return an hour or more later with a new anchor, which only a challenge does: §5's "indistinguishable from random" holds for a first read and not for a re-read `P` saw the first of. A `P` could use that to stall every first request and serve only a returning nonce. A failure that never reached `P` leaks nothing. **The remedy, if one is wanted,** is a read index in the nonce: `cSHAKE256(seed ‖ block_hash(h) ‖ j ‖ read)`, with `read` (one byte, below the bound on reads) carried in the record's prunable part so admission can recompute the nonce. That makes the bound on reads a consensus constant and adds one prunable byte per record (1,402 → 1,403). Not applied: it changes the record |
 
 ---
 
@@ -963,8 +995,8 @@ The seed and the witness key have no label: they are fresh randomness.
 | Knock a producer offline | Suppresses observations only; cannot target a `P` |
 | One receipt for two draws | Impossible: the nonce is bound to `(h, j)` |
 | Fingerprint challenge requests | Prevented only by one client code path and identical formats |
-| Remember nonces, refuse first attempts, serve only a nonce that returns | Open: `SCS-P13`. Reaches only reads whose first attempt arrived at `P` |
-| An honest pair misses reads on a bad day and walks toward a slash | Three tries spread across `W₂`; how far that goes depends on how correlated the tries are, which is unmeasured (§12) |
+| Remember nonces, stall every first request, serve only a nonce that returns | Open: `SCS-P13`. Reaches only draws whose first read arrived at `P` |
+| An honest pair misses reads on a bad day and walks toward a slash | Up to three reads of a draw, spread across `W₂`; how far that goes depends on how often all three fail, which is unmeasured (§12) |
 | Learn mid-epoch that the epoch is settled, then stop serving | Prevented: the three counted draws are selected at close |
 | Read the public draw count to see that challenges have stopped | Prevented: the base rate keeps draws flowing to the end of every epoch |
 | Derive the witness key from a revealed seed and author carriers, or `P` signs its own receipt | Prevented: the seed and the witness key are independent random values (§4.2) |
