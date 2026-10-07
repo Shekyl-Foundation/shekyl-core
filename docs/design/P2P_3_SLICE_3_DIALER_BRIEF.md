@@ -114,9 +114,13 @@ Two callers become that disposition.
 - The seed pass. Slice 1 reports both lists empty
   (`has_no_known_peers`, `net_peerlist.h:147`), or a fill pass added
   no session while the connector is still under its outbound target.
-  The dialer walks the compiled seed list (`get_seed_nodes`, filled
-  at `net_node.inl:1965`). Clearnet, once, after every seed has
-  failed, adds `get_ip_seed_nodes` and walks those too. An exclusive
+  The dialer tries the compiled seed list (`get_seed_nodes`, filled
+  at `net_node.inl:1965`) one address at a time and stops at the first
+  confirmed handshake, the `break` after `connect_to_seed`'s dial at
+  `:1995`. Clearnet, once, after every seed has failed, adds
+  `get_ip_seed_nodes` (`:2007`) and tries those the same way. The
+  session closes, and the fill that follows dials the fleet address
+  slice 1 wrote to white. An exclusive
   list skips the pass. Offline skips it.
 - The gray re-test. `gray_peerlist_housekeeping` (`net_node.inl:3258`)
   dials one random gray peer through
