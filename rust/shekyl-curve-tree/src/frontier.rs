@@ -109,10 +109,10 @@ pub struct Frontier {
 /// path types take the siblings as compressed *points* (`O`, `I`, `C`) beside
 /// `CM.x`, and `O.x` is a one-way projection of `O`, so the points cannot be
 /// recovered from these scalars. The circuit tape hashes the scalars; the
-/// prover API does not take them yet. Layer 0 is still reported, because the
-/// *event* is what a capturing caller needs: it says which leaf chunk closed
-/// and at which index, and the caller assembles the identities from the leaf
-/// entries it already holds.
+/// prover API does not take these scalars yet. Layer 0 is still reported,
+/// because the *event* is what a capturing caller needs: it says which leaf
+/// chunk closed and at which index, and the caller assembles the identities
+/// from the leaf entries it already holds.
 #[derive(Clone, Copy, Debug)]
 pub struct FoldedChunk<'a> {
     /// Absolute tree layer of the node whose children these are.

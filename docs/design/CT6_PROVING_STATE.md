@@ -1837,9 +1837,10 @@ That round is its own change in the vendored proof crate (rule 30). The
 pinned vector is built through `Branches::new`, including a leaves-only
 root — the only arm that compares sibling points — and the proof it produces
 verifies against today's verifier. The statement is the same tape, so it
-should, and "should" is what the vector is for. Two x-only siblings that
-decompress to opposite signs never become a proof: `Branches::new` returns
-`None` first. The carriers that still name three points per sibling are
+should, and "should" is what the vector is for. Today's `Branches::new`
+compares whole points. If that round reconstructs them from x-coordinates
+and two inputs decompress to opposite signs, it returns `None` before a
+proof exists. The carriers that still name three points per sibling are
 `Path::leaves`, `ProveInputLeafChunk`, `ProveInput`, the signer's
 `LeafEntry`, and the FFI and multisig carriers. The verifier, the wire and
 consensus are untouched. The spent output's four points stay full points;
