@@ -24,8 +24,8 @@
 //! body whose bytes they cannot read), the I5/H10 arrangement.
 //!
 //! What they do **not** read: no record (J23's frozen closes and the
-//! claimant's bond are `tx_emission_against`'s, with the verify), no tree
-//! root (J21), no fee-input proof (J26). The positive witness for every
+//! claimant's bond are `tx_emission_against`'s, with the verify and the
+//! fee-input proof, J26), no tree root (J21). The positive witness for every
 //! one of them is row 7's **driven claim** — the engine's
 //! `AssembleEmissionClaim` through the ingest driver — not a constructed
 //! body: the harness's `fixture::emission_vin` is a parseable vin with

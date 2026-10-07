@@ -687,9 +687,9 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // The emission arm of `check_tx_inputs`: every claimed epoch's frozen
     // close gathered (J23), then the verify over the gathers, the
     // claimant's record before the block, J21's reference context and the
-    // statics' operands (J25). Before the signatures, as the C++ verifies
-    // the claim before `verify_transaction_pqc_auth`; J26's fee-input
-    // proof joins the sequence in `judge_emission_claim`.
+    // statics' operands (J25), then the fee inputs' FCMP++ proof as I15's
+    // over the `ToKey` subset (J26). Before the signatures, as the C++
+    // verifies the claim before `verify_transaction_pqc_auth`.
     match judge_emission_claim(&cx, view, rule_set, reference.as_ref(), &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),

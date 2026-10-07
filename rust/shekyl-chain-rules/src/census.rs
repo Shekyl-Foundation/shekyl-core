@@ -478,6 +478,9 @@ census_rows! {
         // of slices 2–4 …*).
         I13 pending,
         I14 implemented(crate::rules::tx_inputs::I14),
+        // I15's body exists (`tx_against::I15::verify`) and runs on the
+        // emission's fee inputs as J26 (slice 8 row 9); pending on the
+        // same hold as I13.
         I15 pending,
         I16 implemented(crate::rules::tx_inputs::I16),
         // I17 (slice 6 commit 7): the signing preimage, adopted from the wire's
@@ -513,13 +516,13 @@ census_rows! {
         // as one row over I10–I13's reads in `judge_reference`.
         J21 implemented(crate::rules::tx_against::J21),
         J22 implemented(crate::rules::tx_emission::J22),
-        // J23 and J25 (slice 8 row 9): the frozen closes gathered per
-        // claimed epoch, then the retention verify over them, in
-        // `judge_emission_claim`.
+        // J23, J25 and J26 (slice 8 row 9): the frozen closes gathered per
+        // claimed epoch, the retention verify over them, then I15's body
+        // over the fee inputs, in `judge_emission_claim`.
         J23 implemented(crate::rules::tx_emission_against::J23),
         J24 implemented(crate::rules::tx_emission::J24),
         J25 implemented(crate::rules::tx_emission_against::J25),
-        J26 pending,
+        J26 implemented(crate::rules::tx_emission_against::J26),
         // 4.K Reorg / alternative chains
         K1a pending,
         K1b pending,

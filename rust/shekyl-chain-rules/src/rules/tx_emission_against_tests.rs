@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Fixtures for the emission's view-bound rows (CEN-J23, CEN-J25) through
-//! [`judge_emission_claim`] on the mock: the refusals, and the vacuous
-//! recording off the class. The positive witness is the driver's claim
+//! Fixtures for the emission's view-bound rows (CEN-J23, CEN-J25, CEN-J26)
+//! through [`judge_emission_claim`] on the mock: the refusals, and the
+//! vacuous recording off the class. The positive witness is the driver's claim
 //! (`shekyl-chain-ingest`, `scenario_emission_tests`), which this chain
 //! cannot host — nothing here closes an epoch by folding.
 
@@ -16,14 +16,14 @@ use crate::harness::fixture::{
 };
 use crate::harness::{assert_refused, defined};
 use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
-use crate::rules::tx_against::ReferenceContext;
+use crate::rules::tx_against::{ReferenceContext, I15};
 use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::TxContext;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_types::archival::SigmaWorkMilli;
 use shekyl_types::{BlockCount, BlockHeight, CurveTreeRoot, SettlementEpoch};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Input, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 const KI: [u8; 32] = point(9);
 const CLAIMED: u64 = 0;
@@ -58,10 +58,10 @@ fn short_epochs() -> RuleSet {
     )
 }
 
-/// Off the `Emission` class the sequence judges nothing and records both
-/// rows vacuous — the row-was-evaluated recording `run_tx` makes.
+/// Off the `Emission` class the sequence judges nothing and records all
+/// three rows vacuous — the row-was-evaluated recording `run_tx` makes.
 #[test]
-fn off_the_emission_class_both_rows_are_recorded_vacuous() {
+fn off_the_emission_class_the_rows_are_recorded_vacuous() {
     let chain = spendable_chain();
     let spend = listed_on(&chain, KI);
     chain.with_view(|view| {
@@ -78,7 +78,42 @@ fn off_the_emission_class_both_rows_are_recorded_vacuous() {
         .expect("a spend is not judged here");
         assert!(coverage.contains(CenRow::J23));
         assert!(coverage.contains(CenRow::J25));
+        assert!(coverage.contains(CenRow::J26));
     });
+}
+
+/// J26's body, I15's verify over the fee subset, asked directly — the
+/// sequence cannot reach the row on the mock (J25 refuses every claim a
+/// chain that closes nothing can carry). The harness's filler proof over
+/// one fee spend is refused; a subset of no spends is admitted exactly
+/// when the proof is absent; a slot that names no `ToKey` is refused.
+#[test]
+fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
+    let tx = emission();
+    assert!(I15::verify(&tx, &[0], &REFERENCE).is_err(), "filler proof");
+    assert!(
+        I15::verify(&tx, &[], &REFERENCE).is_err(),
+        "a proof over no spends"
+    );
+    assert!(
+        I15::verify(&tx, &[1], &REFERENCE).is_err(),
+        "the emission slot is not a spend"
+    );
+    let mut absent = tx;
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut absent.ct
+    {
+        p.fcmp_proof.clear();
+    }
+    assert!(
+        I15::verify(&absent, &[], &REFERENCE).is_ok(),
+        "nothing to prove"
+    );
+    assert!(
+        I15::verify(&absent, &[0], &REFERENCE).is_err(),
+        "a spend with no proof"
+    );
 }
 
 /// J23: a claimed epoch with no frozen close — the mock closes none — is

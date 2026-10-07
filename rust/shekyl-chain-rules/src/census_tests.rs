@@ -219,6 +219,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J23,
             CenRow::J24,
             CenRow::J25,
+            CenRow::J26,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

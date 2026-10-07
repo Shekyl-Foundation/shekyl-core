@@ -11,11 +11,13 @@
 //! the way the engine handler builds one. `validate` admits it at
 //! `h_close + 1`; the fold writes the claim onto the record; the store
 //! holds what the verdict derived. That is the one admitted claim the row
-//! pins. Beside it, two refusals with a pipeline witness nowhere else:
+//! pins. Beside it, three refusals with a pipeline witness nowhere else:
 //! the same claim at `h_close` is CEN-J25's (the verify's strict
-//! finalization, slice 8 row 9), and listed with a twin it is CEN-G9's
+//! finalization, slice 8 row 9), listed with a twin it is CEN-G9's
 //! (slice 8 row 9 retired the mutation family's `DuplicateClaim` here —
-//! `Mutation` docs). The row's other half — the driver's bytes and the
+//! `Mutation` docs), and with its fee proof corrupted it is CEN-J26's
+//! (the one emission row the backing proof does not cover). The row's
+//! other half — the driver's bytes and the
 //! engine's held identical for one shape — lives in `shekyl-engine-core`'s
 //! `stake_engine_tests`, which reaches this crate's assembly through the
 //! `harness` feature.
@@ -59,7 +61,7 @@ use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::archival::FirstPayingHeight;
 use shekyl_types::{BlockHeight, SettlementEpoch};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 use zeroize::Zeroizing;
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
@@ -319,6 +321,28 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         },
     );
 
+    // CEN-J26 on the pipeline: the claim with one byte of its fee-input
+    // FCMP++ proof flipped. The prunable region is outside the prefix, so
+    // J22's signable hash and the vin's backing proof are untouched and
+    // J21, J23 and J25 admit the body as before; the fee proof is the
+    // first row that reads what changed, and it refuses at the
+    // transaction before the signatures (I18, whose preimage also covers
+    // the prunable) are asked. The block does not connect.
+    let mut corrupt_fee_proof = claim_tx.clone();
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut corrupt_fee_proof.ct
+    {
+        p.fcmp_proof[0] ^= 0x01;
+    }
+    refused_at(
+        scenario.mine_listing(vec![corrupt_fee_proof]).await,
+        CenRow::J26,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+
     // Self-check every proving leg against the wallet-side root before any
     // rule judges it: the membership-only backing proof and the dual auth
     // through the retention crate's verifiers (the consensus operations
@@ -361,15 +385,16 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         .unwrap_or_else(|outcome| panic!("the driver's emission claim connects: {outcome}"));
     assert_eq!(block.height, BlockHeight::from_raw(connecting));
     // The claim's rows in the connect: the shape (H22), the reference
-    // context, the gathered closes and the verify over them (J21, J23,
-    // J25 — slice 8 row 9), the signatures (I18), the fold (L7). This is
-    // the one positive witness for J23 and J25; the mock cannot close an
-    // epoch.
+    // context, the gathered closes, the verify over them and the fee
+    // proof (J21, J23, J25, J26 — slice 8 row 9), the signatures (I18),
+    // the fold (L7). This is the one positive witness for J23, J25 and
+    // J26; the mock cannot close an epoch.
     for row in [
         CenRow::H22,
         CenRow::J21,
         CenRow::J23,
         CenRow::J25,
+        CenRow::J26,
         CenRow::I18,
         CenRow::L7,
     ] {

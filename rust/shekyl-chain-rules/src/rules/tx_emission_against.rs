@@ -5,13 +5,15 @@
 
 //! Census 4.J, the emission's **view-bound** rows (`CHAIN_RULES_SLICE_8.md`
 //! §5 row 9): every claimed epoch has a frozen close and its as-of-`E`
-//! snapshot is gathered (CEN-J23), and the retention crate's verify
-//! decides the claim over those snapshots, the claimant's record, the
-//! reference's root and the statics' operands (CEN-J25) —
+//! snapshot is gathered (CEN-J23), the retention crate's verify decides
+//! the claim over those snapshots, the claimant's record, the reference's
+//! root and the statics' operands (CEN-J25), and the fee inputs' FCMP++
+//! proof verifies as CEN-I15's over the `ToKey` subset (CEN-J26) —
 //! [`judge_emission_claim`] below, run in `tx_against` after the bond-post
 //! arms and before the signatures, where the C++ emission arm sits in
 //! `check_tx_inputs` (`blockchain.cpp`, the `is_archival_emission_tx`
-//! branch; the verify at `:4015`, the budget check at `:3935`).
+//! branch; the verify at `:4015`, the budget check at `:3935`, the
+//! fee-input proof at `:4046–4105`).
 //!
 //! **One gather for two readers.** The snapshot a claim is verified over is
 //! assembled by [`gather_epoch_snapshot`] — the same function the epoch
@@ -46,18 +48,20 @@
 //! here by the verify's equality with the claimed rewards
 //! (`VoutSumMismatch`).
 //!
-//! **Loci.** Both rows refuse at the transaction ([`TxContext::locus`]), as
-//! the statics do (J19–J24) and as J21 does: the emission is one per body
-//! (H6), and the C++ rejects the transaction. The fold's L7 claim arm,
-//! which sees only what these rows admitted, keeps its input locus and
-//! stays as the backstop beneath them — the J4-over-L7 arrangement
-//! (`rules/tx_bond.rs`).
+//! **Loci.** All three rows refuse at the transaction
+//! ([`TxContext::locus`]), as the statics do (J19–J24) and as J21 does:
+//! the emission is one per body (H6), and the C++ rejects the
+//! transaction. The fold's L7 claim arm, which sees only what these rows
+//! admitted, keeps its input locus and stays as the backstop beneath them
+//! — the J4-over-L7 arrangement (`rules/tx_bond.rs`).
 //!
 //! The positive witness is the driver's claim
 //! (`shekyl-chain-ingest`, `scenario_emission_tests`), whose `judged_by`
-//! names both rows; the harness's `fixture::emission_vin` is a parseable
-//! vin with filler backing and auths that J23 refuses on the mock's
-//! closeless chain and J25 would refuse on any chain.
+//! names all three rows; the harness's `fixture::emission_vin` is a
+//! parseable vin with filler backing and auths that J23 refuses on the
+//! mock's closeless chain and J25 would refuse on any chain, so J26's
+//! refusals are fixtured on [`I15::verify`] directly and driven on the
+//! claim with its fee proof corrupted.
 
 use shekyl_archival_retention::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
@@ -71,11 +75,12 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
-use crate::rules::tx_against::ReferenceContext;
+use crate::rules::tx_against::{ReferenceContext, I15};
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
 use crate::view::{ChainView, Tip};
+use shekyl_wire::Input;
 
 /// CEN-J23: every claimed epoch has a **frozen budget row** — it closed
 /// and was not pruned (`has_budget_row`, `blockchain.cpp:3935`) — and its
@@ -272,14 +277,51 @@ impl J25 {
     }
 }
 
-/// The rows this sequence records, in order.
-const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
+/// CEN-J26: the fee-input FCMP++ proof — absent iff the emission has no
+/// fee inputs; present, it verifies over the `txin_to_key` subset
+/// **exactly as CEN-I15** (`blockchain.cpp:4046–4105`, "§7.1 step 7 …
+/// identical to bond-post funding inputs"). The body is [`I15::verify`]
+/// over the `ToKey` slots, against J21's context; the absent⇔ clause is
+/// H22's shape, required in `tx_form` and refused again by I15's body
+/// rather than assumed. Refuses at the transaction, as the C++ does
+/// (`reject_form`).
+///
+/// The one row of the emission's sequence the backing proof does not
+/// cover: J25's membership-only proof is over the vin's backing output
+/// and J22's signable hash, this one over the fee spends and the full
+/// prefix hash. A claim whose fee proof is corrupt passes J21, J23 and
+/// J25 and is refused here — the driver's second refusal for the row.
+pub(crate) struct J26;
 
-/// The emission's view-bound sequence: J23's gathers, then J25's verify.
-/// Off the `Emission` class both rows are recorded **vacuous**. On it,
-/// `reference` is J21's context from `judge_reference`; an emission the
-/// caller reached here without one is a sequence wired wrong, and the
-/// claim is refused under J25 rather than verified against nothing.
+impl Rule for J26 {
+    const ROW: CenRow = CenRow::J26;
+}
+
+impl J26 {
+    /// The fee-input proof against `reference`.
+    fn check(cx: &TxContext<'_>, reference: &ReferenceContext) -> Verdict<()> {
+        let fee_slots: Vec<usize> = cx
+            .tx
+            .prefix
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, input)| matches!(input, Input::ToKey { .. }).then_some(slot))
+            .collect();
+        I15::verify(cx.tx, &fee_slots, reference)
+            .map_err(|()| InvalidBlock::new(Self::ROW, cx.locus()))
+    }
+}
+
+/// The rows this sequence records, in order.
+const CLAIM_ROWS: [CenRow; 3] = [CenRow::J23, CenRow::J25, CenRow::J26];
+
+/// The emission's view-bound sequence: J23's gathers, J25's verify, then
+/// J26's fee-input proof. Off the `Emission` class all three rows are
+/// recorded **vacuous**. On it, `reference` is J21's context from
+/// `judge_reference`; an emission the caller reached here without one is
+/// a sequence wired wrong, and the claim is refused under J25 rather than
+/// verified against nothing.
 ///
 /// A vin this sequence cannot read — J19 has refused it in `tx_form`;
 /// asked alone, the parse fails here — is refused under J23, the first row
@@ -316,6 +358,10 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             Err(refused) => return Ok(Err(refused)),
         }
         coverage.insert(J25::ROW);
+        if let Err(refused) = J26::check(cx, reference) {
+            return Ok(Err(refused));
+        }
+        coverage.insert(J26::ROW);
         return Ok(Ok(()));
     }
     for row in CLAIM_ROWS {

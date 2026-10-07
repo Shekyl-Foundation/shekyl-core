@@ -37,10 +37,12 @@ use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxSc
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
 use shekyl_crypto_pq::signature::verify_pqc_auth;
+use shekyl_fcmp::leaf::PqcKeyScalar;
+use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SigningPayloadHash,
 };
-use shekyl_wire::{Ct, Input};
+use shekyl_wire::{Ct, Input, Transaction};
 
 // CEN-I11's window, from `config/consensus_constants.json` at build time
 // (`build.rs`). The same file drives the C++ header and
@@ -427,6 +429,99 @@ impl I13 {
                 at: ref_height,
                 record: PerHeightRecord::LeafCount,
             })),
+        }
+    }
+}
+
+/// CEN-I15: the FCMP++ membership-and-spend-authorisation proof verifies
+/// over the transaction's spends — the proof bytes, every spend's key
+/// image, every pseudo-out, each spend's PQC key scalar
+/// `k = H_ℓ(hybrid_public_key)` (`shekyl_fcmp_pqc_key_scalar`), the root
+/// at the reference, `layers = depth + 1`, and the prefix hash
+/// (`shekyl_fcmp_verify`, `blockchain.cpp:4224`; `FCMP_PLUS_PLUS.md` §7
+/// step 4). The body is [`shekyl_fcmp::proof::verify`], **the function the
+/// daemon's FFI and daemon-rpc's K12 call** — one verifier, reached from
+/// three sites. The operands are assembled here, beside I12's anchor and
+/// I13's depth, where they are defined.
+///
+/// The row is a function over a **spend subset**, because its two callers
+/// name different subsets of the same vector: every input on a spend;
+/// the `ToKey` fee inputs on an emission (CEN-J26, *"exactly as
+/// CEN-I15"*), where the pseudo-outs are indexed by spend ordinal and the
+/// auths by input slot (`blockchain.cpp:4071–4078`, `spend_indices`). A
+/// subset of zero spends has nothing to prove and the proof must be
+/// absent — the C++ `num_spend == 0` arm; on both classes the shape row
+/// (H21, H22) has already required that, and this row refuses it again
+/// rather than verify an empty subset against a proof.
+///
+/// Not yet run on the spend class (the fixture migration that holds I13
+/// — see [`I12`]); run on the emission's fee inputs as CEN-J26.
+pub(crate) struct I15;
+
+impl Rule for I15 {
+    const ROW: CenRow = CenRow::I15;
+}
+
+impl I15 {
+    /// The verify over `tx`'s inputs at `spend_slots` (in input order),
+    /// against `reference`. `Err` is the row's refusal, whichever leg: a
+    /// body with no prunable region, a proof present over no spends or
+    /// absent over some, an input at a named slot that is not a `ToKey`
+    /// or has no auth, a count the verifier cannot size, or the proof
+    /// failing. The verifier's own refusals (`VerifyError`) are not
+    /// distinguished: an `InvalidBlock` carries the row.
+    pub(crate) fn verify(
+        tx: &Transaction,
+        spend_slots: &[usize],
+        reference: &ReferenceContext,
+    ) -> Result<(), ()> {
+        let Ct::Fcmp {
+            pqc_auths,
+            prunable: Some(prunable),
+            ..
+        } = &tx.ct
+        else {
+            return Err(());
+        };
+        if spend_slots.is_empty() {
+            return if prunable.fcmp_proof.is_empty() {
+                Ok(())
+            } else {
+                Err(())
+            };
+        }
+        if prunable.fcmp_proof.is_empty() {
+            return Err(());
+        }
+        let mut key_images = Vec::with_capacity(spend_slots.len());
+        let mut pqc_keys = Vec::with_capacity(spend_slots.len());
+        for &slot in spend_slots {
+            let (Some(Input::ToKey { key_image, .. }), Some(auth)) =
+                (tx.prefix.inputs.get(slot), pqc_auths.get(slot))
+            else {
+                return Err(());
+            };
+            key_images.push(KeyImage::from_canonical_bytes(*key_image));
+            pqc_keys.push(PqcKeyScalar::from_pqc_public_key(&auth.hybrid_public_key));
+        }
+        let num_inputs = u32::try_from(spend_slots.len()).map_err(|_| ())?;
+        let layers = reference.tree_depth.checked_add(1).ok_or(())?;
+        let fcmp_proof = ShekylFcmpProof {
+            data: prunable.fcmp_proof.clone(),
+            num_inputs,
+            tree_depth: layers,
+        };
+        match proof::verify(
+            &fcmp_proof,
+            &key_images,
+            &prunable.pseudo_outs,
+            &pqc_keys,
+            reference.anchor.as_bytes(),
+            layers,
+            tx.prefix_hash().to_bytes(),
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(_) => Err(()),
         }
     }
 }
