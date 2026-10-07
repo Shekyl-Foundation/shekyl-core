@@ -3783,6 +3783,7 @@ name = "shekyl-block-template"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
  "shekyl-difficulty",

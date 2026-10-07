@@ -6,11 +6,18 @@
 //! One levered chain, judged in phases (`CHAIN_RULES_SLICE_8.md` §5 rows 2,
 //! 3 and 5).
 //!
-//! A 20-block epoch with a 10-block reorg cap puts the first slash deadline
-//! eleven settled misses can reach at height 319. One persona joins two
-//! shards, serves one of them, and is slashed on the shard it never served.
-//! The phases then run on that record, in order, without re-mining the chain:
+//! The levered schedule (`scenario_shard`: a 20-block epoch, a 10-block
+//! reorg cap) puts the first slash deadline eleven settled misses can
+//! reach inside what a test mines. One persona
+//! joins two shards, serves one of them, and is slashed on the shard it
+//! never served. The phases then run on that record, in order, without
+//! re-mining the chain:
 //!
+//! - The chain fills shards 0 and 1 with real spends and lets them close
+//!   (`scenario_shard`, §5 row 6): a compact join names only shards that
+//!   are closed, final and priced at its parent (CEN-J15). One block before
+//!   both operands lift, the join is refused on J15; at the first
+//!   admissible height it connects.
 //! - J5 refuses a credit at the join epoch; the credit for `E_join + 1`
 //!   connects, and is the first pass the slash counts.
 //! - J6 refuses a credit inside the open interval, for the kept shard and
@@ -22,15 +29,16 @@
 //! - J18 refuses a second Reinstate and one whose holdings changed. J16
 //!   refuses a Release inside the cooldown, then accepts one at the
 //!   cooldown's boundary over the served anchor.
+//!
+//! Live lane: the fill is some five hundred real proofs
+//! (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
+//! the_levered_slash_chain`).
 
 use shekyl_archival_retention::{
     good_through, serve_credit_epoch_ok, verify_reinstate_bond_post, HoldingsKind,
     ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
-use shekyl_chain_rules::{
-    CenRow, FakechainSchedule, Locus, RecordWriteKind, SettlementEpochBlocks, SettlementSchedule,
-    TxSlot,
-};
+use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, SettlementSchedule, TxSlot};
 use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -41,35 +49,19 @@ use crate::archival_driver::{
 use crate::connector::{Inject, Injected};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_shard::{
+    close_shards, first_admissible_compact_join, levered_rules, levered_schedule, mine_to, Filled,
+};
 use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
-
-/// Epoch length, in blocks. With [`REORG_CAP_BLOCKS`], the slash deadline at height 319
-/// is inside what a test mines in seconds.
-const EPOCH_BLOCKS: u64 = 20;
-
-/// Reorg cap, in blocks. It sits inside [`EPOCH_BLOCKS`].
-const REORG_CAP_BLOCKS: u64 = 10;
 
 /// `FAILURE_WINDOW_M`: the misses a slash waits for, counted from the epoch
 /// after the join.
 const FAILURE_WINDOW: u64 = 11;
 
-fn levered_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
-            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the epoch"),
-    }
-}
-
-fn levered_schedule() -> SettlementSchedule {
-    SettlementSchedule::new(SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"))
-}
+/// The first coinbase the fill spends. Coinbases below it ride the posts.
+const FILL_FROM_COINBASE: u64 = 10;
 
 /// The join this chain is about: two shards, one of them never served.
 struct Joined {
@@ -93,9 +85,12 @@ struct Reinstated {
 
 /// The chain the phases share. Each phase mines forward; none rebuilds it.
 struct LeveredChain {
+    rules: ChainRules,
     schedule: SettlementSchedule,
     scenario: Scenario<FreeHash>,
     chain: Vec<Mined>,
+    /// The two shards the fill closed, ascending.
+    filled: Filled,
 }
 
 impl LeveredChain {
@@ -107,41 +102,98 @@ impl LeveredChain {
         )
     }
 
+    /// Mine to the first spend, then fill shards 0 and 1 and let them close.
     async fn open() -> Self {
+        let rules = levered_rules();
         let schedule = levered_schedule();
-        let mut scenario = Scenario::open_under("slice-8-reinstate", FreeHash, levered_rules());
-        let chain = scenario
+        let mut scenario = Scenario::open_under("slice-8-reinstate", FreeHash, rules);
+        let mut chain = scenario
             .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
             .await;
+        let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 2).await;
+        assert_eq!(
+            filled
+                .closed
+                .iter()
+                .map(|c| c.shard.to_raw())
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
         Self {
+            rules,
             schedule,
             scenario,
             chain,
+            filled,
         }
     }
 
+    /// The join onto shards 0 and 1 — one block early, refused on J15; at
+    /// the first admissible height, connected (§5 row 6).
     async fn join_two_shards(&mut self) -> Joined {
         let persona = Persona::at(11);
-        let served = 42u64;
-        let unserved = 7u64;
-        let join_height = self.height();
-        let join_epoch = self.schedule.epoch_at_height(join_height.to_raw());
-        assert_eq!(join_epoch, 3, "71 / 20");
-        let joining = {
-            let spender = Spender::over(&self.chain);
-            spender.spend_coinbase_posting(
-                self.scenario.wallet(),
-                0,
-                join_height.to_raw(),
+        let served = 1u64;
+        let unserved = 0u64;
+        let admissible = self
+            .filled
+            .closed
+            .iter()
+            .map(|&close| first_admissible_compact_join(&self.rules, close))
+            .max()
+            .expect("two shards closed");
+        let early = admissible - BlockCount::ONE;
+        mine_to(&mut self.scenario, &mut self.chain, early).await;
+        assert_eq!(self.height(), early);
+        let riding = |chain: &[Mined], scenario: &Scenario<FreeHash>, height: BlockHeight| {
+            Spender::over(chain).spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::ZERO,
+                height,
                 FEE,
                 Some(&persona.join(shard_set(vec![unserved, served]), ENDPOINT)),
             )
         };
+        let one_early = riding(&self.chain, &self.scenario, early);
+        refused_at(
+            self.scenario.mine_listing(vec![one_early]).await,
+            CenRow::J15,
+            at_post(0),
+        );
+        mine_to(&mut self.scenario, &mut self.chain, admissible).await;
+        // The price the join reads: the close that priced the later shard
+        // carries an `r_market` row for both.
+        let last_close = self
+            .filled
+            .closed
+            .last()
+            .expect("two")
+            .close_height
+            .to_raw();
+        let priced_epoch = self.schedule.epoch_at_height(last_close + 1);
+        let pricing =
+            &self.chain[usize::try_from(self.schedule.last_block(priced_epoch)).expect("small")];
+        let close = pricing
+            .archival
+            .close()
+            .expect("the epoch closes at its last block");
+        for shard in [unserved, served] {
+            assert!(
+                close.r_market().iter().any(|(id, _)| id.to_raw() == shard),
+                "epoch {priced_epoch}'s close priced shard {shard}"
+            );
+        }
+        let join_height = self.height();
+        let join_epoch = self.schedule.epoch_at_height(join_height.to_raw());
+        let joining = riding(&self.chain, &self.scenario, join_height);
         let block = self
             .scenario
             .mine_listing(vec![joining])
             .await
-            .expect("the join connects");
+            .unwrap_or_else(|outcome| panic!("the join connects at {join_height}: {outcome}"));
+        assert!(
+            block.judged_by.contains(&CenRow::J15),
+            "J15 judged the join"
+        );
         assert_eq!(block.archival.records()[0].kind(), RecordWriteKind::Insert);
         self.chain.push(block);
         Joined {
@@ -201,15 +253,12 @@ impl LeveredChain {
         }
         let slash_epoch = join.join_epoch + FAILURE_WINDOW;
         let deadline = self.schedule.slash_deadline_height(slash_epoch);
-        assert_eq!(deadline, 319);
-        while self.height().to_raw() <= deadline {
-            let block = self
-                .scenario
-                .mine_listing(Vec::new())
-                .await
-                .expect("empty blocks land");
-            self.chain.push(block);
-        }
+        mine_to(
+            &mut self.scenario,
+            &mut self.chain,
+            BlockHeight::from_raw(deadline + 1),
+        )
+        .await;
         let slashed_at: Vec<u64> = self
             .chain
             .iter()
@@ -298,8 +347,8 @@ impl LeveredChain {
             let spender = Spender::over(&self.chain);
             spender.spend_coinbase_posting(
                 self.scenario.wallet(),
-                1,
-                reinstate_height.to_raw(),
+                BlockHeight::from_raw(1),
+                reinstate_height,
                 FEE,
                 Some(&join.persona.reinstate(&slashed.record)),
             )
@@ -381,8 +430,8 @@ impl LeveredChain {
             let riding = |bond| {
                 spender.spend_coinbase_posting(
                     self.scenario.wallet(),
-                    2,
-                    height.to_raw(),
+                    BlockHeight::from_raw(2),
+                    height,
                     FEE,
                     Some(&bond),
                 )
@@ -467,8 +516,8 @@ impl LeveredChain {
             .release(reinstated.stored.bonded_total.to_raw());
         let at_deadline = Spender::over(&self.chain).spend_coinbase_posting(
             self.scenario.wallet(),
-            2,
-            boundary,
+            BlockHeight::from_raw(2),
+            BlockHeight::from_raw(boundary),
             FEE,
             Some(&full_release),
         );
@@ -490,8 +539,8 @@ impl LeveredChain {
         self.chain.push(settling);
         let past_boundary = Spender::over(&self.chain).spend_coinbase_posting(
             self.scenario.wallet(),
-            2,
-            boundary + 1,
+            BlockHeight::from_raw(2),
+            BlockHeight::from_raw(boundary + 1),
             FEE,
             Some(&full_release),
         );
@@ -530,6 +579,7 @@ impl LeveredChain {
 /// The levered chain, one phase at a time. A refusal names the phase in the
 /// stack: the chain is not re-mined as separate tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored the_levered_slash_chain"]
 async fn the_levered_slash_chain_judges_each_row_on_one_record() {
     let mut chain = LeveredChain::open().await;
     let join = chain.join_two_shards().await;

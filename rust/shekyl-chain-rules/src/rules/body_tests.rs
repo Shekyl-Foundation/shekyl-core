@@ -20,7 +20,7 @@ use crate::fault::FormAttempt;
 use crate::harness::fixture::{
     self, anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
 };
-use crate::harness::{assert_refused, formed_on, infallible, judged, Faulted, MockSubstrate};
+use crate::harness::{assert_refused, defined, formed_on, judged, Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
@@ -149,7 +149,7 @@ fn check_alone_on<R: BlockRule>(
 ) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))

@@ -430,7 +430,13 @@ where
             height: facts.connecting,
             previous: facts.previous,
             curve_tree_root: facts.curve_tree_root,
-            attestation_root: AttestationRoot::from_bytes([0; 32]),
+            // The driver mints no attestation records (CEN-I20 admits no
+            // 0x0B field on the coinbase), so every template commits the
+            // empty set's root — the arm CEN-B4 judges a witness-less block
+            // against (slice 8 row 10).
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
             major_version: rule_set.header_major_version(),
             now,
             median_timestamp: facts.median_timestamp,

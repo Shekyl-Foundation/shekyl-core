@@ -264,6 +264,21 @@ pub enum Corrupt {
         /// Which invariant the fold found broken.
         which: RecordInvariant,
     },
+    /// A recorded bond's `hybrid_pubkey` is not a canonical hybrid public
+    /// key. The at-rest record keeps the key as bytes (`BondRecord` lives
+    /// in `shekyl-types`, below the crypto crate that owns the grammar),
+    /// and a bond is admitted only with bytes that grammar accepts. Bytes
+    /// that no longer parse are store contents admission cannot have
+    /// written — the same class as [`Self::LeafNotConstructible`], a halt
+    /// on `archival_bond`, not a fold [`RecordInvariant`].
+    ///
+    /// Absence of a record is CEN-B4's refusal of the block. The FFI
+    /// distinguishes a malformed key from an absent bond because there the
+    /// bytes are the caller's input. Here they are the view's.
+    BondHybridKeyMalformed {
+        /// The persona whose record holds the key.
+        persona: PCanonicalId,
+    },
     /// The open epoch's accruing budget plus this block's accrual does not
     /// fit the type (CEN-L8's third clause; SI-8 on
     /// `archival_budget_accruing`). The accrual is bounded by the emission
@@ -349,6 +364,19 @@ impl<VF> From<ViewRead<VF>> for Fault<VF> {
             ViewRead::View(fault) => Self::View(fault),
             ViewRead::Corrupt(corrupt) => Self::Corrupt(corrupt),
         }
+    }
+}
+
+impl<VF> From<VF> for ViewRead<VF> {
+    /// A view method's error, lifted into the parent-side read position.
+    ///
+    /// A block rule returns [`ViewRead`], so `?` on a view method (whose
+    /// error is `V::Fault`) becomes [`ViewRead::View`]. This does not lift
+    /// a view fault into [`Fault`]: that remains [`Fault::View`] or the
+    /// [`From<ViewRead>`] above, and a definition that still returns
+    /// `V::Fault` cannot become a halt by `?`.
+    fn from(fault: VF) -> Self {
+        Self::View(fault)
     }
 }
 
@@ -485,6 +513,10 @@ impl fmt::Display for Corrupt {
             Self::BondRecordInvariant { persona, which } => {
                 write!(f, "bond record of {persona} is inconsistent: {which} (SI-7)")
             }
+            Self::BondHybridKeyMalformed { persona } => write!(
+                f,
+                "bond record of {persona} holds a hybrid key that is not canonical (SI-7)"
+            ),
             Self::AccrualOverflow { epoch } => {
                 write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
             }

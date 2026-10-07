@@ -112,7 +112,11 @@ pub(super) fn candidate_over(
             previous,
             nonce: 7,
             curve_tree_root: root,
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            // The empty set's root: a candidate carrying no witness is judged
+            // against it (CEN-B4, slice 8 row 10).
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),

@@ -24,8 +24,9 @@
 //! implement the traits without this crate naming them. Each returns a
 //! fault in the outer position and a verdict in the inner one; `validate`'s
 //! outer position is a [`Fault<V::Fault>`] — the view's, or one of the two
-//! kinds this crate defines (`fault.rs`). Inside a view-reading rule, `?`
-//! propagates a fault and only a fault; a refusal is always written out as
+//! kinds this crate defines (`fault.rs`). Inside a block rule, `?`
+//! propagates a [`ViewRead`] — the view's fault, or a corrupt observation —
+//! and `validate` maps that into [`Fault`]. A refusal is always written out as
 //! [`refused`](crate::refused) at the site that judged, so the row is named
 //! where the decision is made.
 //!
@@ -50,6 +51,7 @@ use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
+use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::D4;
@@ -62,6 +64,8 @@ use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
+use crate::rules::tx_emission::{J19, J20, J22, J24};
+use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
 use crate::rules::{self, BlockContext, FormContext};
@@ -87,12 +91,14 @@ macro_rules! judge_form {
 }
 
 /// Run the listed view-bound rules in order; the first refusal is the
-/// verdict. A view fault is wrapped into its arm of [`Fault`].
+/// verdict. A [`ViewRead`] becomes [`Fault`] through [`From`]: the view's
+/// own fault stays [`Fault::View`], and a corrupt observation stays
+/// [`Fault::Corrupt`].
 macro_rules! judge_block {
     ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
         $(
             if let Err(refused) =
-                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::View)?
+                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::from)?
             {
                 return Ok(Err(refused));
             }
@@ -394,13 +400,19 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(&mut coverage);
 
-    // View-bound block-level predicates (4.A–4.G), in census order. G1
-    // (no listed transaction already on the chain, or twice in this block)
-    // is here, **before** the slot loop — the C++'s order, and the only one
-    // under which it has a witness on a spend: after the loop I7 and L1
-    // refuse the same shapes first (slice 7 Q8; `body_tests` pins it).
+    // View-bound block-level predicates (4.A–4.G), in census order, with
+    // one placement the C++'s order fixes: B4 (the attestation set) runs
+    // after D1 and before the slot loop, where `verify_block_attestation`
+    // runs — before the coinbase is judged — so a coinbase extra that does
+    // not parse is B4's refusal, not I20's (slice 8 §4). B4 is always
+    // evaluated: no sidecar is the empty witness against the mined root.
+    // G1 (no listed transaction already on the chain, or twice in this
+    // block) is here, **before** the slot loop — the C++'s order, and the
+    // only one under which it has a witness on a spend: after the loop I7
+    // and L1 refuse the same shapes first (slice 7 Q8; `body_tests` pins
+    // it).
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6, G1);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, B4, E1, F4, F5, F6, G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).
@@ -585,14 +597,17 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    serve credit's pass records against its vins, after H20 has
     //    required the region), J11 and J12 (the bond post's key, hint and
     //    JoinMarket coupling, after H21 has required the shape — the first
-    //    two arms of the C++ `check_archival_bond_post_input`). The cap does
-    //    not have to precede the shape rules to bound proof work: I15 and
-    //    the H19 batch verify run after `tx_form` returns, so I4 has already
-    //    refused.
+    //    two arms of the C++ `check_archival_bond_post_input`), and the
+    //    emission statics J19, J20, J22, J24 (the vin's parse, the slot's
+    //    key, the signable hash and the reward commit set, after H22 has
+    //    required the shape — the C++ emission arm's byte-only checks, in
+    //    its order; `rules::tx_emission`). The cap does not have to precede
+    //    the shape rules to bound proof work: I15 and the H19 batch verify
+    //    run after `tx_form` returns, so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12);
+    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12, J19, J20, J22, J24);
     Ok(coverage)
 }
 
@@ -629,10 +644,12 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    // The rule set reaches one row here: J16's current epoch is the
-    // schedule's at the connecting height (`judge_bond_post`). No 4.I row
-    // reads it yet; the first that does (a schedule step varying a
-    // reference-window constant, Q5) takes it from the same argument.
+    // The rule set reaches the archival rows here: J15's reorg cap and
+    // settlement schedule, J16's current epoch at the connecting height
+    // (`judge_bond_post`), J23's close heights and J25's schedule
+    // (`judge_emission_claim`). No 4.I row reads it yet; the first that
+    // does (a schedule step varying a reference-window constant, Q5) takes
+    // it from the same argument.
     let mut coverage = RuleCoverage::EMPTY;
     let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
         Ok(cx) => cx,
@@ -640,16 +657,18 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
     // walks the inputs (I7), then the reference sequence (I10 yields the
-    // height, I11 measures it, I12 reads the anchor). I13 and I15 join
-    // that sequence in `judge_reference`, not here.
+    // height, I11 measures it, I12 reads the anchor; on an emission the
+    // whole context is J21's and is yielded for the emission's proof
+    // rows). I13 and I15 join the spend's sequence in `judge_reference`,
+    // not here.
     match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    match judge_reference(&cx, view, &mut coverage)? {
-        Ok(()) => {}
+    let reference = match judge_reference(&cx, view, &mut coverage)? {
+        Ok(reference) => reference,
         Err(refused) => return Ok(Err(refused)),
-    }
+    };
     // The serve-credit arm of `check_tx_inputs`: the bond record read off
     // the view before the block (J4), its join epoch against the credited
     // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
@@ -666,8 +685,22 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // Reinstate's open interval and unchanged holdings (J18) then its
     // identity key (J13). Before the signatures, as the C++ pins the key
     // before `verify_transaction_pqc_auth` verifies it — I18 asks whether
-    // the slot's key signed; J13 asks whether it is the right key.
-    match judge_bond_post(&cx, view, rule_set, &mut coverage).map_err(ViewRead::View)? {
+    // the slot's key signed; J13 asks whether it is the right key. A
+    // JoinMarket's held shards are admissible at the parent (J15) between
+    // its statics and its key, as the C++ gathers between the two. J15 is
+    // the first 4.J row to read a per-height record, so the sequence's
+    // fault is a `ViewRead` from here on.
+    match judge_bond_post(&cx, view, rule_set, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The emission arm of `check_tx_inputs`: every claimed epoch's frozen
+    // close gathered (J23), then the verify over the gathers, the
+    // claimant's record before the block, J21's reference context and the
+    // statics' operands (J25), then the fee inputs' FCMP++ proof as I15's
+    // over the `ToKey` subset (J26). Before the signatures, as the C++
+    // verifies the claim before `verify_transaction_pqc_auth`.
+    match judge_emission_claim(&cx, view, rule_set, reference.as_ref(), &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

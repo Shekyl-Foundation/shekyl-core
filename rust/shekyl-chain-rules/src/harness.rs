@@ -16,13 +16,17 @@
 use core::convert::Infallible;
 use core::fmt::Debug;
 use core::marker::PhantomData;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
+use shekyl_types::archival::{
+    BondRecord, Holdings, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
-    LongTermWeight, PowHash, Timestamp, TxHash,
+    LongTermWeight, PCanonicalId, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -65,10 +69,13 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// 2. **Faults the real substrate cannot be made to exhibit on demand** —
 ///    "a store fault propagates as a `Fault`, never a verdict" needs a view
 ///    that fails at height 7 ([`FaultingView`]); a real store will not.
-/// 3. **States a conforming store refuses to hold** — a tip that says one
-///    height and a row missing below it. The instrument is
-///    [`WithholdingView`]: one read ([`WithheldRead`]) answers `AboveTip`,
-///    and the assertion is the fault class, never a verdict.
+/// 3. **States a conforming store refuses to hold.** The assertion is the
+///    fault class, never a verdict. Two instruments: [`WithholdingView`]
+///    answers `AboveTip` for one per-height read ([`WithheldRead`]) while
+///    the tip still says the chain is dense; [`NonCanonicalBondView`]
+///    serves one persona a bond record whose hybrid key is not canonical
+///    bytes. A valid bond, a derived root, or a spent set is neither
+///    instrument — those are the real chain's to witness.
 ///
 /// The line between the three and everything else is whether the chain is
 /// the subject. "This block exists", "this root is what the tree grew",
@@ -112,6 +119,16 @@ pub struct MockChain {
     /// the mock's recorded blocks burn nothing, so a value here is a
     /// planted fold, the way a planted key image is a planted spend.
     total_burned: AtomicUnits,
+    /// Planted market prices — CEN-J15's `r_market` read, keyed as the
+    /// view keys it ([`with_r_market`](Self::with_r_market)). Empty unless
+    /// a fixture prices a shard.
+    r_market: BTreeMap<(ShardId, SettlementEpoch), RMarket>,
+    /// Planted frozen closes — CEN-J23's `budget` and CEN-J25's
+    /// `sigma_work` reads, per epoch ([`with_close`](Self::with_close)).
+    /// With the prices, the archival reads this chain plants; every other
+    /// archival read answers *no bonds*. Empty unless a fixture closes an
+    /// epoch.
+    closes: BTreeMap<SettlementEpoch, (SigmaWorkMilli, AtomicUnits)>,
 }
 
 impl Default for MockChain {
@@ -123,6 +140,8 @@ impl Default for MockChain {
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
             total_burned: AtomicUnits::ZERO,
+            r_market: BTreeMap::new(),
+            closes: BTreeMap::new(),
         }
     }
 }
@@ -173,6 +192,39 @@ impl MockChain {
     /// Record a transaction identity as on the chain (CEN-G1's read).
     pub fn with_transaction(mut self, hash: TxHash) -> Self {
         self.transactions.insert(hash);
+        self
+    }
+
+    /// Plant `shard`'s market price at `epoch`'s close — what CEN-J15
+    /// reads at the last settled epoch as of the parent. Planted archival
+    /// state, and why: J15's accept needs a shard that is closed, final
+    /// **and priced**, the close is the fold's (which the chain already
+    /// synthesizes), and no driven chain in the tree reaches a close — a
+    /// shard is `SHARD_LENGTH` of real proof bytes. A price is a value the
+    /// epoch close wrote, not a record; planting it tests no construction
+    /// (DRS-E4 §5.2's concern). A shard with no planted price reads
+    /// `None`, which is J15's Q4 refusal.
+    #[must_use]
+    pub fn with_r_market(mut self, shard: ShardId, epoch: SettlementEpoch, price: RMarket) -> Self {
+        self.r_market.insert((shard, epoch), price);
+        self
+    }
+
+    /// Plant `epoch`'s frozen close — the `Σwork(E)` and `budget(E)` the
+    /// fold writes in one event, what CEN-J23 reads to admit a claimed
+    /// epoch and CEN-J25 verifies against. The same justification as
+    /// [`with_r_market`](Self::with_r_market): a frozen close is a settled
+    /// value, not a record, and J25's refusal arm needs a claimed epoch
+    /// J23 admits (`rules/tx_emission_against.rs`). An epoch with no
+    /// planted close reads `None` for both, which is J23's refusal.
+    #[must_use]
+    pub fn with_close(
+        mut self,
+        epoch: SettlementEpoch,
+        sigma_work: SigmaWorkMilli,
+        budget: AtomicUnits,
+    ) -> Self {
+        self.closes.insert(epoch, (sigma_work, budget));
         self
     }
 
@@ -313,7 +365,12 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // epochs; a constructed record would test the construction (DRS-E4
     // §5.2, *No `Mock*` archival state*). The witness for a 4.J rule over a
     // held shard is a real chain that posted the bond, through `connect`.
-    crate::archival_reads!(empty);
+    // The planted reads are the market price (`MockChain::with_r_market`,
+    // which says why: CEN-J15's accept over a closed shard has no driven
+    // witness, a shard being `SHARD_LENGTH` of real proof bytes) and the
+    // frozen close (`MockChain::with_close`: CEN-J25's refusal needs an
+    // epoch CEN-J23 admits).
+    crate::archival_reads!(empty, r_market from chain.r_market, close from chain.closes);
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -392,6 +449,9 @@ pub enum WithheldRead {
     /// projection answers `AboveTip` for a height the tip says is
     /// recorded (slice 7, CEN-G6's read).
     WeightsBelow(BlockHeight),
+    /// [`ChainView::leaf_count_at`] at this height — the tree's size,
+    /// and so [`ChainView::depth_at`] (slice 8, CEN-J21's I13 read).
+    LeafCountAt(BlockHeight),
 }
 
 /// A [`MockView`] with one per-height read withheld.
@@ -477,6 +537,11 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     }
 
     fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        if let WithheldRead::LeafCountAt(at) = self.withheld {
+            if height == at {
+                return Ok(AtHeight::AboveTip);
+            }
+        }
         self.inner.leaf_count_at(height)
     }
 
@@ -485,6 +550,204 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     }
 
     crate::archival_reads!(delegate inner);
+}
+
+/// Hybrid-key bytes [`HybridPublicKey::from_canonical_bytes`] rejects.
+///
+/// The constructor is that rejection, so a [`NonCanonicalBondView`] cannot
+/// serve a key the admission grammar accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NonCanonicalHybridKey(Vec<u8>);
+
+impl NonCanonicalHybridKey {
+    /// `Some` when `bytes` are not a canonical hybrid public key.
+    #[must_use]
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Option<Self> {
+        let bytes = bytes.into();
+        if HybridPublicKey::from_canonical_bytes(&bytes).is_ok() {
+            None
+        } else {
+            Some(Self(bytes))
+        }
+    }
+}
+
+/// A [`MockView`] that serves one persona a bond record whose hybrid key
+/// is not canonical.
+///
+/// Job 3 of the mock's charter, beside [`WithholdingView`]. `bond_records`
+/// is the inner list with this persona's record planted, so the two bond
+/// reads agree and every other persona stays the inner mock's. A chain
+/// that posts a real bond is the writer's to witness, not this view's:
+/// the constructor will not accept a canonical key.
+pub struct NonCanonicalBondView<'a, 'id> {
+    inner: MockView<'a, 'id>,
+    persona: PCanonicalId,
+    record: BondRecord,
+}
+
+impl<'a, 'id> MockView<'a, 'id> {
+    /// Serve `persona` the record whose hybrid key is `key`. The record's
+    /// other fields are empty: this instrument exists so a rule can observe
+    /// the key, and it folds nothing.
+    #[must_use]
+    pub fn with_non_canonical_bond(
+        self,
+        persona: PCanonicalId,
+        key: NonCanonicalHybridKey,
+    ) -> NonCanonicalBondView<'a, 'id> {
+        NonCanonicalBondView {
+            inner: self,
+            persona,
+            record: BondRecord {
+                hybrid_pubkey: key.0,
+                bond_spend_pk: Vec::new(),
+                endpoint: [0; 32],
+                join_settlement_epoch: SettlementEpoch::ZERO,
+                bonded_total: AtomicUnits::ZERO,
+                holdings: Holdings::shard_set(Vec::new())
+                    .expect("an empty shard set is a holdings value"),
+                bad_intervals: Vec::new(),
+                claimed_settlement_epochs: Vec::new(),
+                first_paying_emission_height: None,
+            },
+        }
+    }
+}
+
+impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
+    type Fault = Infallible;
+
+    fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
+        self.inner.has_key_image(key_image)
+    }
+
+    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+        self.inner.total_burned()
+    }
+
+    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+        self.inner.block_at(height)
+    }
+
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+        self.inner.height_of(hash)
+    }
+
+    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+        self.inner.root_at(height)
+    }
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        self.inner.tip()
+    }
+
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        self.inner.weights_window(end, at_most)
+    }
+
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+        self.inner.has_transaction(hash)
+    }
+
+    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+        self.inner.tree_frontier()
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        self.inner.leaf_count_at(height)
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+        self.inner.outputs_at(height)
+    }
+
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
+        if persona == &self.persona {
+            Ok(Some(self.record.clone()))
+        } else {
+            self.inner.bond_record(persona)
+        }
+    }
+
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Infallible> {
+        self.inner.slash_log_after(persona, height)
+    }
+
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_served_epoch(persona, shard)
+    }
+
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
+        self.inner.served_shards(persona)
+    }
+
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, Infallible> {
+        self.inner.pass_count(persona, shard, epoch)
+    }
+
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, Infallible> {
+        self.inner.r_market(shard, epoch)
+    }
+
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        self.inner.sigma_work(epoch)
+    }
+
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget(epoch)
+    }
+
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_settled_slash_epoch()
+    }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        let mut records = self.inner.bond_records()?;
+        if let Some((_, record)) = records
+            .iter_mut()
+            .find(|(persona, _)| *persona == self.persona)
+        {
+            *record = self.record.clone();
+        } else {
+            records.push((self.persona, self.record.clone()));
+        }
+        Ok(records)
+    }
+
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        self.inner.slash_applied(persona, shard, epoch)
+    }
+
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget_accruing(epoch)
+    }
 }
 
 /// The environment a fixture is judged in: a fixed clock and a longhash

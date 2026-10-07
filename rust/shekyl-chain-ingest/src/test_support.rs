@@ -510,7 +510,7 @@ pub fn spend(key_image: [u8; 32]) -> Transaction {
 }
 
 #[cfg(feature = "pipeline")]
-pub use crate::mutation_bodies::{emission_claim_body, join_body, serve_credit_body};
+pub use crate::mutation_bodies::{join_body, serve_credit_body};
 
 /// The first height at which a block may list a spend (CEN-I11: the
 /// reference is at least `REFERENCE_BLOCK_MIN_AGE` below the connecting
@@ -555,7 +555,11 @@ pub fn block_with_nonce(
             previous,
             nonce,
             curve_tree_root: root,
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            // The empty set's root: a block carrying no witness is judged
+            // against it (CEN-B4, slice 8 row 10).
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         },
         miner_transaction,
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),

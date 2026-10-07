@@ -273,7 +273,12 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # it writes, and the replay's report — so the height cannot be spelled
 # differently at any of them. No default features: the type lives in the
 # unconditional `source` module; the pipeline and CLI are not compiled.
-shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
+# `harness` (E6 slice 8 row 7, Q3's pin): the scenario driver's
+# emission-claim assembly, so `stake_engine_tests::emission_claim_assembly`
+# can hold it and this crate's handler to identical bytes for one shape. A
+# TEST_ONLY feature (check_test_only_features.py) — this dev edge is its
+# one enabler; never from [dependencies].
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["harness"] }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

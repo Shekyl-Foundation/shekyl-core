@@ -191,7 +191,7 @@ impl BlockRule for C1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
@@ -217,7 +217,7 @@ impl BlockRule for C2 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }

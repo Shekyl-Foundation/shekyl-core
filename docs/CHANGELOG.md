@@ -67,6 +67,71 @@
 - A persona bound without a resident key (`NoResidentKey`) answers 503
   and sends no shard.
 
+### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
+
+- The Rust validator now refuses a JoinMarket whose shard set names a
+  shard the chain has not closed, one closed fewer than the reorg cap
+  of blocks before the admitting block's parent, or one the last settled
+  epoch did not price — and then judges the priced, aged shards for
+  viability through the retention crate's admission check, as the C++
+  does. A complete-tree join gathers nothing and is unaffected. Until this
+  change the Rust side admitted a compact join onto any shard id, and the
+  C++ still does for an unclosed one (it has no closure step and scores a
+  missing price as zero), so the Rust refuses a strict superset of what
+  the C++ refuses; the difference is recorded for cutover day beside
+  `DEL-008` (`DAEMON_REDB_STORE.md` §12), not patched into the C++
+  (`CHAIN_RULES_SLICE_8.md` §5 row 6). An unclosed shard is not available
+  to bond; there is an epoch to claim one once it is.
+- The captured `emission-claim` chain predates this rule: its market bond
+  at height 98 joins a shard no block had closed. The replay connects it
+  through 97, refuses 98 on CEN-J15 as recorded, and compares nothing at
+  its tip (`shekyl-chain-ingest` `vectors_tests::PREDATES`); the chain is
+  a witness for what was true at capture, not for this rule, until it is
+  regenerated over a filled, closed and priced shard.
+
+### Chain rules — the emission claim's statics (CEN-J19, J20, J22, J24)
+
+- The Rust validator now judges the byte-only rows of an emission claim
+  as the C++ does: the emission vin must parse exactly (CEN-J19); the
+  hybrid key in the claim's emission slot must derive the vin's
+  `P_canonical_id`, so the claim is signed by the persona it pays
+  (CEN-J20); the signable hash is the prefix hash with the emission vin
+  removed (CEN-J22; `shekyl-wire` gains `TxPrefix::hash`, the derivation
+  `Transaction::prefix_hash` already was, now callable on an edited
+  prefix); and the reward commit set is the loud outputs in order with a
+  checked sum, refusing a missing commitment or an overflow (CEN-J24).
+  The verify crossing that consumes the hash and the set (CEN-J25) is
+  the entry below (`CHAIN_RULES_SLICE_8.md` §5 rows 8–9).
+
+### Chain rules — the emission claim is verified (CEN-J21, J23, J25, J26)
+
+- The Rust validator now refuses an emission claim the C++ refuses: the
+  claim's reference block must exist, be inside the window and carry the
+  tree root its backing proof was made against, even with no fee inputs
+  (CEN-J21); every claimed epoch must have a frozen close (CEN-J23); the
+  claim window, work share, budget arithmetic, membership-only backing
+  proof and hybrid authorization are verified through the same retention
+  bodies the C++ calls, under the settlement schedule in force rather
+  than a process-wide latch (CEN-J25); and a claim that spends fee
+  inputs must carry an FCMP++ proof that verifies over them (CEN-J26).
+  Until this change the Rust side admitted a claim whose proof failed or
+  whose epoch had not closed, and let the block fold refuse it. The
+  FCMP++ verification body is now in the rules crate; its run over
+  ordinary spends and over a bond post's funding spends is held for a
+  ruling (`CHAIN_RULES_SLICE_8.md` §5 row 9).
+
+### Chain rules — the block's attestation set is judged (CEN-B4)
+
+- The Rust validator now refuses a block whose `attestation_root` is not
+  the root of the attestation set it carries: with no witness the header
+  must commit to the empty set, and with one every record must pair with
+  the coinbase's record field and carry a countersignature that verifies
+  under the holder's bond key. Until this change the Rust side admitted
+  any root. The admission body moved out of the C++-facing FFI into the
+  retention crate, so the daemon's existing check and the Rust validator
+  are one function; the daemon's verdicts are unchanged
+  (`CHAIN_RULES_SLICE_8.md` §5 row 10).
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).

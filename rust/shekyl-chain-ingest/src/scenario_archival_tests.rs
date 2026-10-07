@@ -20,7 +20,8 @@
 //! release, a reinstate, a second join, a credit for a persona who joined
 //! earlier. Commit 4 witnessed the first kind and pinned the second as
 //! unreachable (nothing wrote a record); commit 5's writer turned that
-//! pin, and [`a_join_is_written_and_the_blocks_after_it_read_the_record`]
+//! pin, and `scenario_join_tests`'s
+//! `a_join_is_written_and_the_blocks_after_it_read_the_record`
 //! is the same test with the two assertions inverted: the record is `Some`
 //! after the join, and the next block's credit for it connects. (*Was*,
 //! until E6 slice 8 row 3: "a serve credit for a persona whose join is in
@@ -55,9 +56,23 @@
 //! implementations. G10's witness is two posts that each pass the slot
 //! loop alone: two **joins** for one `P`, pinned below.
 //!
+//! # The shards
+//!
+//! The compact persona joins shards 0 and 1, and the chain fills them
+//! first (`scenario_shard`, E6 slice 8 §5 row 6): CEN-J15 admits a compact
+//! join only onto shards closed, final and priced at its parent, so the
+//! join scenario (`scenario_join_tests`) mines under the levered schedule,
+//! closes the two shards with real spends, and joins at the first height
+//! both operands lift. That is minutes of proofs, and it runs in the live
+//! lane (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
+//! a_join_is_written`). The tests in this file post no compact holding and
+//! stay on the production schedule in the default lane. (*Was:* shards 7
+//! and 42 on a chain that had closed none — green because the C++ admitted
+//! any shard id, and never a holding of anything.)
+//!
 //! # What the store says
 //!
-//! The accrual assertion is derived, not computed here: the verdict's
+//! The accrual assertion is derived, not recomputed by the scenario: the verdict's
 //! `Accrual` is the epoch's row as the store held it before the block plus
 //! the block's own archival leg (`PaidEmission::accrual`), and the row the
 //! store holds after the block is that sum. Both reads go through the
@@ -77,14 +92,12 @@ use std::sync::Arc;
 
 use kameo::error::SendError;
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_chain_rules::{Accrual, Candidate, CenRow, Locus, RecordWriteKind, RuleSet, TxSlot};
+use shekyl_chain_rules::{Candidate, CenRow, Locus, RuleSet, TxSlot};
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::store::{StoreCannot, StoreError};
-use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
-use shekyl_units::AtomicUnits;
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
-use shekyl_wire::{Input, Transaction};
+use shekyl_wire::Transaction;
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
@@ -98,323 +111,8 @@ use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Script
 
 /// The settlement epoch open at `height` under the genesis rule set — the
 /// epoch a join at `height` records and a credit at `height` is keyed by.
-fn epoch_at(height: u64) -> SettlementEpoch {
-    SettlementEpoch::from_raw(
-        RuleSet::GENESIS
-            .settlement_schedule()
-            .epoch_at_height(height),
-    )
-}
-
-/// A JoinMarket through `build_join_market_vin`, signed by the persona,
-/// riding a real spend: the verdict's transition is that persona's
-/// `Insert`, field for field from the post and the open epoch; the accrual
-/// is the open epoch's row plus the block's leg. Then the store: the
-/// record is there, the accrual row is the post-image, and the blocks
-/// after read them — a credit for the persona, for the first epoch it may
-/// serve (`E_join + 1`, CEN-J5), connects, a release whose debit is not
-/// the persisted total is CEN-J16's before any connect, a release of that
-/// total empties the record and its post-image is what the store holds, a
-/// second join is CEN-J14's refusal and a reinstate over a clean close is
-/// CEN-J18's, at their input (all three *were* L7's until slice 8 row 5).
-/// The compact persona's two-shard join is the corpus's one two-floor
-/// positive for J14, and the same post with one floor behind it is the
-/// negative the fixtures cannot shape.
-///
-/// *Records-was:* until E6 slice 8 row 3 this block also listed a credit
-/// **beside** the join, for the join's own epoch, and it connected: the
-/// fold sequenced the post before the credit within the block. CEN-J4
-/// reads the record off the view before the block and CEN-J5 refuses the
-/// join epoch, as the C++'s `check_tx_inputs` does; the credit now lists
-/// in the block after, for the epoch after.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
-    let connecting = first_spending_height().to_raw();
-    let mut scenario = Scenario::open("scenario-archival-join");
-    let mined = scenario.mine(connecting).await;
-    let mut spender = Spender::over(&mined);
-
-    let compact = Persona::at(1);
-    let whole = Persona::at(2);
-    let join_compact = compact.join(shard_set(vec![7, 42]), ENDPOINT);
-    let join_whole = whole.join(complete_tree(), ENDPOINT);
-    let listed = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join_compact)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&join_whole)),
-    ];
-    let epoch = epoch_at(connecting);
-    // The first epoch a persona joining in `epoch` may serve (CEN-J5).
-    let serving = SettlementEpoch::from_raw(epoch.to_raw() + 1);
-    // The epoch's row before this block: what the blocks before it accrued.
-    let accrued_before = scenario
-        .budget_accruing(epoch)
-        .await
-        .expect("read")
-        .unwrap_or(AtomicUnits::ZERO);
-    let block = scenario
-        .mine_listing(listed)
-        .await
-        .unwrap_or_else(|outcome| panic!("two joins connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(connecting));
-    for row in [
-        CenRow::H21,
-        CenRow::I18,
-        CenRow::G10,
-        CenRow::J4,
-        CenRow::J13,
-        CenRow::J14,
-        CenRow::L7,
-    ] {
-        assert!(block.judged_by.contains(&row), "{row} judged the block");
-    }
-
-    // The transition: two inserts, in post order.
-    let records = block.archival.records();
-    assert_eq!(records.len(), 2, "one write per join");
-    let Input::BondPost(posted) = &join_compact.input else {
-        unreachable!()
-    };
-    assert_eq!(records[0].persona(), &compact.id());
-    assert_eq!(records[0].kind(), RecordWriteKind::Insert);
-    let record = records[0].record();
-    assert_eq!(record.hybrid_pubkey, compact.identity());
-    assert_eq!(record.bond_spend_pk, compact.bond_spend());
-    assert_eq!(record.endpoint, ENDPOINT);
-    assert_eq!(record.join_settlement_epoch, epoch);
-    assert_eq!(
-        record.bonded_total.to_raw(),
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        "the constructor priced two shards at the floor"
-    );
-    assert_eq!(record.bonded_total.to_raw(), posted.bonded_total_atomic);
-    let Holdings::ShardSet(held) = &record.holdings else {
-        panic!("a compact join holds a shard set");
-    };
-    let held: Vec<(u64, SettlementEpoch)> = held
-        .as_slice()
-        .iter()
-        .map(|h| (h.shard.to_raw(), h.add_epoch))
-        .collect();
-    assert_eq!(held, vec![(7, epoch), (42, epoch)]);
-    assert!(record.bad_intervals.is_empty());
-    assert!(record.claimed_settlement_epochs.is_empty());
-    assert_eq!(record.first_paying_emission_height, None);
-
-    assert_eq!(records[1].persona(), &whole.id());
-    assert_eq!(records[1].kind(), RecordWriteKind::Insert);
-    assert_eq!(records[1].record().holdings, Holdings::CompleteTree);
-    assert_eq!(
-        records[1].record().bonded_total.to_raw(),
-        ARCHIVAL_BOND_FLOOR_ATOMIC,
-        "a complete tree is one holding at the floor"
-    );
-
-    assert!(
-        block.archival.serve_credits().is_empty(),
-        "no credit can list beside the join it needs (J4 reads the view before the block)"
-    );
-
-    // The accrual is the open epoch's post-image: the row the store held
-    // before this block plus the block's archival emission leg (the
-    // verdict's own `PaidEmission::accrual`, not a number this test
-    // computed). This block, well inside the first epoch, slashes and
-    // closes nothing.
-    let accrued = accrued_before
-        .checked_add(block.emission.accrual)
-        .expect("a fixture chain's accrual fits");
-    assert_eq!(
-        block.archival.accrual(),
-        Accrual {
-            epoch,
-            total: accrued,
-        }
-    );
-    assert!(block.archival.slashes().is_empty());
-    assert!(block.archival.close().is_none());
-    assert_eq!(block.archival.slash_watermark(), None);
-
-    // The store holds what the verdict derived: both records, field for
-    // field, and the accrual post-image (SI-19, SI-23).
-    assert_eq!(
-        scenario.bond_record(compact.id()).await.expect("read"),
-        Some(record.clone()),
-        "the join's insert is the store's row"
-    );
-    assert_eq!(
-        scenario.bond_record(whole.id()).await.expect("read"),
-        Some(records[1].record().clone()),
-    );
-    assert_eq!(
-        scenario.budget_accruing(epoch).await.expect("read"),
-        Some(accrued),
-        "the epoch's accruing row is the verdict's post-image"
-    );
-    let whole_record = records[1].record().clone();
-    spender.push(&block);
-
-    // The next block reads the records: the credit for a persona who
-    // joined earlier — for the first epoch it may serve — connects through
-    // J4, J5 and J6 over the persisted record (SI-15's row keyed to it),
-    // and a release of the other persisted record is its `Update` — bonded
-    // to zero, holding nothing, one clean interval close at the open epoch.
-    let next = connecting + 1;
-    // A debit that is not the persisted total is CEN-J16's
-    // (`DebitNotFullBalance`) at the post input — J13 passes it first,
-    // the slot being `bond_spend_pk`'s; the fold's `DebitNotRecordTotal`
-    // is the belt beneath. The block does not connect, so the valid
-    // release below still lands at `next` on the same coinbase.
-    let wrong_debit = whole.release(whole_record.bonded_total.to_raw() + 1);
-    refused_at(
-        scenario
-            .mine_listing(vec![spender.spend_coinbase_posting(
-                scenario.wallet(),
-                2,
-                next,
-                FEE,
-                Some(&wrong_debit),
-            )])
-            .await,
-        CenRow::J16,
-        Locus::Input {
-            slot: TxSlot::Listed(0),
-            input: 1,
-        },
-    );
-    let release_whole = whole.release(whole_record.bonded_total.to_raw());
-    let block = scenario
-        .mine_listing(vec![
-            compact.serve_credit(7, serving.to_raw()),
-            spender.spend_coinbase_posting(scenario.wallet(), 2, next, FEE, Some(&release_whole)),
-        ])
-        .await
-        .unwrap_or_else(|outcome| panic!("a credit and a release connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(next));
-    for row in [CenRow::H20, CenRow::J4, CenRow::J5, CenRow::J6] {
-        assert!(block.judged_by.contains(&row), "{row} judged the credit");
-    }
-    // The release passed J13 (the bond-spend slot) and J16 over the
-    // persisted record: `whole` never served, so the cooldown and the
-    // slash watermark have nothing to wait on.
-    for row in [CenRow::J13, CenRow::J16] {
-        assert!(block.judged_by.contains(&row), "{row} judged the release");
-    }
-    let credits = block.archival.serve_credits();
-    assert_eq!(credits.len(), 1);
-    assert_eq!(credits[0].persona, compact.id());
-    assert_eq!(credits[0].shard, ShardId::from_raw(7));
-    assert_eq!(credits[0].epoch, serving);
-    let records = block.archival.records();
-    assert_eq!(records.len(), 1, "the release is the block's one write");
-    assert_eq!(records[0].persona(), &whole.id());
-    assert_eq!(records[0].kind(), RecordWriteKind::Update);
-    let released = records[0].record();
-    assert_eq!(released.bonded_total, AtomicUnits::ZERO);
-    assert_eq!(
-        released.holdings,
-        Holdings::shard_set(Vec::new()).expect("empty"),
-        "a release empties the holdings"
-    );
-    assert_eq!(
-        released.bad_intervals,
-        vec![BadInterval {
-            start_epoch: epoch.to_raw(),
-            end_exclusive: epoch.to_raw(),
-        }],
-        "one clean interval close at the release epoch"
-    );
-    assert_eq!(released.hybrid_pubkey, whole_record.hybrid_pubkey);
-    assert_eq!(
-        released.join_settlement_epoch,
-        whole_record.join_settlement_epoch
-    );
-    assert_eq!(
-        block.archival.accrual().total,
-        accrued.checked_add(block.emission.accrual).expect("fits"),
-        "the accrual keeps folding over the written row"
-    );
-    assert_eq!(
-        scenario.bond_record(whole.id()).await.expect("read"),
-        Some(released.clone()),
-        "the release's post-image is the store's row (the replace journals the pre-image)"
-    );
-    assert_eq!(
-        scenario.bond_record(compact.id()).await.expect("read"),
-        Some(record.clone()),
-        "a credit does not touch the record"
-    );
-    spender.push(&block);
-
-    // Refusals that read a persisted record: a second join for a bonded
-    // persona (CEN-J14's `RecordExists`; SI-19's insert-once is the fold's
-    // belt beneath it), and a reinstate of the released record — it holds
-    // nothing and its only interval is a clean close, so CEN-J18 has
-    // nothing to reinstate. Each is refused at the post's own input; the
-    // chain stays where it was.
-    let after = next + 1;
-    let at_post = Locus::Input {
-        slot: TxSlot::Listed(0),
-        input: 1,
-    };
-    let rejoin = compact.join(shard_set(vec![9]), ENDPOINT);
-    refused_at(
-        scenario
-            .mine_listing(vec![spender.spend_coinbase_posting(
-                scenario.wallet(),
-                3,
-                after,
-                FEE,
-                Some(&rejoin),
-            )])
-            .await,
-        CenRow::J14,
-        at_post,
-    );
-    let mut reinstate = whole.join_post(complete_tree(), ENDPOINT);
-    reinstate.kind = BondPostKind::Other(shekyl_archival_retention::BondPostKind::Reinstate as u8);
-    let reinstate = whole.post_by_hand(reinstate);
-    refused_at(
-        scenario
-            .mine_listing(vec![spender.spend_coinbase_posting(
-                scenario.wallet(),
-                3,
-                after,
-                FEE,
-                Some(&reinstate),
-            )])
-            .await,
-        CenRow::J18,
-        at_post,
-    );
-    // CEN-J14's floor arm, which the fixtures cannot shape (every
-    // fixture's holdings cost one floor): the compact persona's two-shard
-    // join with one floor behind it. The post names a persona already
-    // bonded, so the arm under test is reached only because the verify
-    // reads the money before the record — `FloorMismatch` ahead of
-    // `RecordExists`, the retention crate's order.
-    let mut under_bonded = compact.join_post(shard_set(vec![7, 42]), ENDPOINT);
-    under_bonded.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
-    under_bonded.bond_credit = ARCHIVAL_BOND_FLOOR_ATOMIC;
-    let under_bonded = compact.post_by_hand(under_bonded);
-    refused_at(
-        scenario
-            .mine_listing(vec![spender.spend_coinbase_posting(
-                scenario.wallet(),
-                3,
-                after,
-                FEE,
-                Some(&under_bonded),
-            )])
-            .await,
-        CenRow::J14,
-        at_post,
-    );
-    assert_eq!(
-        scenario.bond_record(whole.id()).await.expect("read"),
-        Some(released.clone()),
-        "a refused block writes nothing"
-    );
-
-    scenario.close().await;
+fn epoch_at(height: BlockHeight) -> SettlementEpoch {
+    RuleSet::GENESIS.settlement_schedule().epoch_at(height)
 }
 
 /// The refusals a view with no bonds produces, each through the production
@@ -432,9 +130,11 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
 /// row 2 held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-refusals");
-    let mined = scenario.mine(connecting).await;
+    let mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(3);
     let epoch = epoch_at(connecting);
@@ -444,8 +144,15 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     };
     // Every post spends block 0's coinbase at the same height — a refused
     // block leaves the chain where it was, so one funding serves them all.
-    let riding =
-        |bond| spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&bond));
+    let riding = |bond| {
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&bond),
+        )
+    };
 
     // A release (through `build_release_vin`, `bond_spend_sk` signing the
     // slot, the debit a source the outputs grow by) with no record to
@@ -470,8 +177,10 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let mut empty = persona.join_post(shard_set(vec![7]), ENDPOINT);
     empty.holdings = WireHoldings::ShardSetCompact(Vec::new());
     let empty = riding(persona.post_by_hand(empty));
-    // The positive control.
-    let honest = riding(persona.join(shard_set(vec![7]), ENDPOINT));
+    // The positive control: a complete tree. A compact join names a shard
+    // that must be closed, final and priced (CEN-J15); this scenario closes
+    // none, and the shard shape is not its subject.
+    let honest = riding(persona.join(complete_tree(), ENDPOINT));
 
     // A serve credit for a persona with no record: J4 at the credit's own
     // input, before the fold's L7 is reached.
@@ -529,46 +238,80 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
 /// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-g10");
-    let mined = scenario.mine(connecting).await;
+    let mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(4);
     let second = Locus::Input {
         slot: TxSlot::Listed(1),
         input: 1,
     };
-    let join = persona.join(shard_set(vec![7]), ENDPOINT);
+    // Complete trees throughout: the subject is the order of the rows over
+    // two posts, not the holding — a compact join would need a closed,
+    // final, priced shard (CEN-J15), and this scenario closes none.
+    let join = persona.join(complete_tree(), ENDPOINT);
     let release = persona.release(ARCHIVAL_BOND_FLOOR_ATOMIC);
     let listed: Vec<Transaction> = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&release)),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        ),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(1),
+            connecting,
+            FEE,
+            Some(&release),
+        ),
     ];
     refused_at(scenario.mine_listing(listed).await, CenRow::J16, second);
     // The refused block wrote nothing, so both joins read no record and
     // J14 passes each; G10 counts the second.
-    let again = persona.join(shard_set(vec![7]), ENDPOINT);
+    let again = persona.join(complete_tree(), ENDPOINT);
     let joins: Vec<Transaction> = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&again)),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        ),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(1),
+            connecting,
+            FEE,
+            Some(&again),
+        ),
     ];
     refused_at(scenario.mine_listing(joins).await, CenRow::G10, second);
     scenario.close().await;
 }
 
 /// A chain with one bonded persona and a few blocks past the join, as the
-/// injector finds it: the blocks (for a replay) and the persona.
+/// injector finds it: the blocks (for a replay) and the persona. The
+/// persona holds a complete tree — shard 7 with every other; a compact
+/// join would need a closed, final, priced shard (CEN-J15), this chain
+/// closes none, and the injected credit is the subject, not the holding.
 async fn bonded_chain(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Persona) {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open(name);
-    let mut mined = scenario.mine(connecting).await;
+    let mut mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(1);
-    let join = persona.join(shard_set(vec![7]), ENDPOINT);
+    let join = persona.join(complete_tree(), ENDPOINT);
     let joined = scenario
         .mine_listing(vec![spender.spend_coinbase_posting(
             scenario.wallet(),
-            0,
+            BlockHeight::ZERO,
             connecting,
             FEE,
             Some(&join),
@@ -601,7 +344,7 @@ async fn an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row() {
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(tip.to_raw()),
+        epoch: epoch_at(tip),
     };
     let Injected { at } = connector
         .ask(Inject(credit))
@@ -691,7 +434,7 @@ async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_r
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(injected_at.to_raw()),
+        epoch: epoch_at(injected_at),
     };
     // The driver's clock, advanced past every block the scenario mined.
     let clock = || {
@@ -800,7 +543,7 @@ async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared(
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(tip.to_raw()),
+        epoch: epoch_at(tip),
     };
     let connector = scenario.connector();
     let Injected { at } = connector
