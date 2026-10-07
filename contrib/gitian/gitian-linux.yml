@@ -166,6 +166,18 @@ script: |
     chmod 755 bin/*
     cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
+    # The pinned Tor Expert Bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6). It gets
+    # a directory of its own, bin/tor/, because the daemon refuses a tor
+    # directory that holds anything but the pinned files; the licence texts
+    # and the source pointer sit beside it for the same reason. The tarball's
+    # SHA-256 is checked against config/tor_pins.json before it is opened,
+    # and each staged file against its own pin. A host with no bundle
+    # (riscv64) stages nothing and its archive carries no tor.
+    TOR_SOURCES=${SOURCES_PATH:-${BUILD_DIR}/tor-sources}
+    python3 ../scripts/release/tor_bundle.py stage --host "${i}" --sources "${TOR_SOURCES}" --dest bin/tor --licenses bin/tor-licenses
+    if [ "$(python3 ../scripts/release/tor_bundle.py disposition --host "${i}")" = "pinned" ]; then
+      python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor
+    fi
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
     find ${DISTNAME}/ | sort | tar --no-recursion --owner=0 --group=0 -c -T - | bzip2 -9 > ${OUTDIR}/${DISTNAME}.tar.bz2

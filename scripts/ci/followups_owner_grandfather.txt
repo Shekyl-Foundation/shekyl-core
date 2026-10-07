@@ -229,7 +229,6 @@ Extend PWD-B1's bucket to *every* dispatch — invoke and notify — and derive 
 Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
-Package the pinned Tor Expert Bundle beside `shekyld` in release artifacts, so the PWD-E7 default posture engages out of the box.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
 Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)

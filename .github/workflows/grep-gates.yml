@@ -213,6 +213,18 @@ jobs:
             python3 scripts/ci/check_cxx_version_gates.py
           run_one "C++ version-gate inventory self-test" \
             python3 scripts/ci/test_check_cxx_version_gates.py
+          # TB-4/TB-9: every host a gitian descriptor builds has one Tor
+          # disposition in config/tor_pins.json, and the records that restate
+          # the pin (the tor-pin-verify default, the release checklist) agree
+          # with it. build.rs refuses a target with no row, but only on a
+          # target somebody compiles; this moves that to the pull request.
+          run_one "Tor pin: every built host has one disposition" \
+            python3 scripts/ci/check_tor_pin_targets.py
+          # The packaging job's own refusals, each bitten red: an edited
+          # tarball digest, an edited file digest, a planted file, a planted
+          # glibc-hwcaps directory, a full extracted bundle.
+          run_one "Tor pin gates self-test" \
+            python3 scripts/ci/test_tor_pin_gates.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'

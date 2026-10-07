@@ -96,7 +96,7 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev rubygems rpm nsis
+          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis
           sudo gem install --no-document fpm
           python3 -m pip install git-archive-all
 
@@ -107,6 +107,46 @@ jobs:
           VERSION="${TAG#v}"
           RELEASE="release-assets"
           mkdir -p "$RELEASE"
+
+          # The pinned Tor bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-9). A
+          # gitian archive carries it in tor/ beside the binaries; a system
+          # package installs it under /opt/shekyl/<bundle>-<target>/, the
+          # directory the daemon composes from the pin compiled into it, and
+          # never in /usr/local/bin where it would shadow a distribution's
+          # tor. Both paths come from config/tor_pins.json through
+          # scripts/release/tor_bundle.py; nothing here restates a version
+          # or a digest.
+          #
+          # stage_tor <gitian-host> <archive-bin-dir> <package-root>
+          stage_tor() {
+            local host="$1" bin="$2" root="$3" install_dir
+            install_dir="$(python3 scripts/release/tor_bundle.py install-dir --host "$host")"
+            mkdir -p "$root$install_dir" "$root/usr/share/doc/shekyl/tor"
+            cp "$bin"/tor/* "$root$install_dir/"
+            cp "$bin"/tor-licenses/* "$root/usr/share/doc/shekyl/tor/"
+            # The files about to be packed, against the pin file: exactly
+            # the pinned files, each with its digest.
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$root$install_dir"
+          }
+          # And again on what the package tool actually produced, unpacked:
+          # a packager that strips or rewrites a binary ships a tor the
+          # daemon refuses at first launch.
+          #
+          # check_packed_tor <gitian-host> <package-file (absolute)>
+          check_packed_tor() {
+            local host="$1" pkg="$2" install_dir unpacked
+            install_dir="$(python3 scripts/release/tor_bundle.py install-dir --host "$host")"
+            unpacked="$(mktemp -d)"
+            case "$pkg" in
+              *.deb) dpkg-deb -x "$pkg" "$unpacked" ;;
+              *.rpm) rpm2cpio "$pkg" > "$unpacked.cpio"
+                     (cd "$unpacked" && cpio -idm --quiet < "$unpacked.cpio")
+                     rm -f "$unpacked.cpio" ;;
+              *) echo "check_packed_tor: unknown package type: $pkg" >&2; return 1 ;;
+            esac
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir"
+            rm -rf "$unpacked"
+          }
 
           # Copy all Gitian tarballs/zips into the release directory
           find gitian-out -type f \( -name '*.tar.bz2' -o -name '*.zip' \) -exec cp {} "$RELEASE/" \;
@@ -134,6 +174,7 @@ jobs:
             cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
+            stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
               --name shekyl --version "$VERSION" \
@@ -144,6 +185,7 @@ jobs:
               --deb-systemd contrib/packaging/linux/shekyld.service \
               --deb-no-default-config-files \
               -C "$STAGE" .
+            check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_amd64.deb"
 
             STAGE_RPM="$(pwd)/stage-rpm-x86_64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
@@ -151,6 +193,7 @@ jobs:
             cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_X86"/shekyl-mdb-copy "$STAGE_RPM/usr/local/bin/"
+            stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -159,6 +202,7 @@ jobs:
               --license "BSD-3-Clause" --architecture x86_64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               -C "$STAGE_RPM" .
+            check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.x86_64.rpm"
 
             rm -rf "$TMPDIR_X86"
           fi
@@ -177,6 +221,7 @@ jobs:
             cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
+            stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
               --name shekyl --version "$VERSION" \
@@ -187,6 +232,7 @@ jobs:
               --deb-systemd contrib/packaging/linux/shekyld.service \
               --deb-no-default-config-files \
               -C "$STAGE" .
+            check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_arm64.deb"
 
             STAGE_RPM="$(pwd)/stage-rpm-aarch64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
@@ -194,6 +240,7 @@ jobs:
             cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-mdb-copy "$STAGE_RPM/usr/local/bin/"
+            stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
               --name shekyl --version "$VERSION" \
@@ -202,6 +249,7 @@ jobs:
               --license "BSD-3-Clause" --architecture aarch64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               -C "$STAGE_RPM" .
+            check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.aarch64.rpm"
 
             rm -rf "$TMPDIR_ARM"
           fi

@@ -125,6 +125,10 @@ def build():
     os.makedirs('inputs', exist_ok=True)
 
     subprocess.check_call(['make', '-C', 'inputs/shekyl/contrib/depends', 'download', 'SOURCES_PATH=' + os.getcwd() + '/cache/common'])
+    # The pinned Tor Expert Bundles are build inputs like the depends sources:
+    # fetched here into the same cache and digest-checked against
+    # config/tor_pins.json, so the build itself takes them from the cache.
+    subprocess.check_call([sys.executable, 'inputs/shekyl/scripts/release/tor_bundle.py', 'fetch', '--all', '--sources', os.getcwd() + '/cache/common'])
 
     rebuild()
 
