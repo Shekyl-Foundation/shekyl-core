@@ -137,6 +137,10 @@ mod scenario_archival_tests;
 /// the driver assembles, `validate` admits, pinned. Live lane.
 #[cfg(all(test, feature = "pipeline"))]
 mod scenario_emission_tests;
+/// The compact-join scenario that `scenario_archival_tests` describes.
+/// Its own module so that file stays the single-block arms.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_join_tests;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 6): the `close_shard()`
 /// step — real spends until a shard closes, then the wait for CEN-J15's
 /// finality and price. Live lane.
