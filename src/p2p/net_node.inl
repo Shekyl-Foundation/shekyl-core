@@ -1716,7 +1716,11 @@ namespace nodetool
   void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause, std::uint16_t reply)
   {
     const auto connector = static_cast<std::uint8_t>(epee::net_utils::require_address_connector(addr));
-    if (shekyl_close_implicates_address(cause, reply, connector) != 1)
+    const int recorded = shekyl_close_implicates_address(cause, reply, connector);
+    MDEBUG("addr " << addr.host_str() << " close cause " << static_cast<unsigned>(cause)
+        << " (" << shekyl::seam_close_name(cause) << ") reply " << reply
+        << (recorded == 1 ? " recorded" : " not recorded"));
+    if (recorded != 1)
       return;
     m_conn_fails_cache.record_failure(addr, time(NULL));
   }
