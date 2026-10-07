@@ -171,6 +171,8 @@ not as a property of a regime.
 
 ## 3. `SO-D1` — RULED: the writer enumerates the issued set and writes one row per issued pair
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.2–§9.3 and §10. "Issued" means revealed; the writer reads the stored issued-draw index and selects each pair's three counted draws by beacon. "The writer enumerates; it is not record-driven" is this ruling's and stands.
+
 **The forcing case is a drawable pair that passes nothing.** All three of its
 challenges expire; expiry ⇒ miss (fork §7.3); the epoch settles **Missed**. And
 there are **zero on-chain artifacts** — no pass record, no vin, nothing — to
@@ -183,7 +185,7 @@ So the writer cannot be record-driven. It must enumerate.
 
 **Ruled:** when the closing epoch is settled — **inside the slash scheduler's
 per-epoch pass**, per `SO-D7` below, not at a separate epoch-close event — the
-writer runs the assignment derivation over that epoch and writes **one row per
+writer reads that epoch's issued draws and writes **one row per
 `(P, s)` with `issued ≥ 1`**, carrying its observed pass count. Pairs with
 `issued = 0` are not written.
 
@@ -210,29 +212,30 @@ fallback for a §7.1 variant that did not win. Three reasons, in priority order:
    (absent ⇒ non-observation ⇒ the denominator shrinks) is unchanged.
 
 **Keyed on issued, not drawable** — §4.4's re-keying, preserved. A drawable pair
-the urn never reached is not a pair that failed, and writing it as anything
+the draw never reached is not a pair that failed, and writing it as anything
 would be recording an observation that did not occur. The `issued ≥ 1`
 condition is where that distinction lives.
 
 **Under-issuance is specified, not assumed away** (§4.4's own instruction):
-`issued = 1` settles **NonObservation** by absolute-2, and it gets a **row**
-rather than an absence. Absence and NonObservation are then no longer
+fewer than 3 issued settles **NonObservation** (specification §9.3), and it
+gets a **row** rather than an absence. Absence and NonObservation are then no longer
 synonymous — absence means *no live obligation in E* (never issued, or
 issued-then-exited; Q3 2026-09-16), a written NonObservation means *issued
 but unreachable*. **This is deliberate and it is the auditability argument
-winning over absence-consistency:** the capped regime is the one where the
-mechanism's teeth degrade (§7.1: 72 % unobservable at `k_cap = 30`,
-`D = 324 k`), and a regime that degrades silently is one nobody measures. The
-row is how the degradation becomes visible on-chain.
+winning over absence-consistency:** a regime that degrades silently is one
+nobody measures. The row is how the share of pairs the draw did not reach
+becomes visible on-chain.
 
-**No derivation state is stored** — the writer *runs* the urn, it does not read
-a persisted urn. §7.1's derive-don't-store ruling and the
-`ArchivalSealHashCache` precedent are preserved: the enumeration is a pure
-function of (epoch-open snapshot, `block_hash(h_open..h_close−1)`).
+**The writer reads stored state.** The issued-draw index is consensus state,
+written at admission and reverted with its blocks (specification §10). A
+count that depends on which seeds were revealed is not a function of block
+hashes, so derive-don't-store does not reach `issued`.
 
 ---
 
 ## 4. `SO-D2` — RULED: key and value
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3 item 4. The row's key and three-byte value stand; `passes` counts the selected draws that passed (0 to 3), and `issued` saturates at 255 (`SCS-P8`).
 
 **Key — 48 B, byte-identical in shape to `m_archival_serve_credit`:**
 
@@ -276,47 +279,31 @@ today.** Deriving `outcome` from the other two at read time was considered and
 rejected: the threshold is a consensus rule, and re-deriving a consensus verdict
 at every read is how two readers come to disagree.
 
-`u8` is sufficient and checked: `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, and the
-band variant that would have produced 4 was **rejected** (§7.1, 2026-08-10).
-A writer producing `issued > 255` is a mechanism change, and it should fail
-loudly at the write rather than silently truncate — stated here so the
-implementation asserts rather than casts.
+`issued` saturates at 255 (`SCS-P8`): the byte needs only to say "at least
+3", and the list of issued draws is the selection's operand, not the byte.
 
 **The duplicate is deliberate, so it gets an uncrossable boundary.** `outcome`
 is derivable from `(passes, issued)` — storing all three duplicates the fold.
 Keeping it is ruled above (a consensus verdict must not be re-derived per
 read); what makes the duplicate safe is that **the writer asserts
-`outcome == settle_epoch(passes, issued)` on the write path**, in the same
-place as the `issued > 255` assert. One assert, two invariants, and the
+`outcome` equals the fold of `(passes, issued)` on the write path**, and the
 enforcing site is the only site that can produce a row.
 
 ---
 
 ## 5. `SO-D3` — RULED: the writer runs once per epoch, as one derivation
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3.
+
 The alternative — accumulate incrementally as records arrive and finalise at
 close — was considered and **rejected**: it needs the close-time enumeration
 anyway (that is `SO-D1`'s forcing case), so it buys nothing and adds a second
 write path that can disagree with the first.
 
-**Cost, priced rather than waved past.** At maturity the close-block derivation
-is ~972,000 assignments (`3 × 324,000`) in one block, once per 10,000 blocks.
-That is a real latency spike and it is named here so it is not discovered as a
-bug. Two properties keep it acceptable: it is a **pure function of already-final
-chain state**, so it is memoisable and parallelisable on the same
-`ArchivalSealHashCache` pattern; and it is off the transaction-admission path
-entirely — no incoming transaction waits on it.
-
-**Reopening criterion** (rule 21): if a rig run shows the derivation exceeding
-the block-propagation budget at any `D` the network actually reaches, the fix
-is to amortise it across the blocks preceding the fold — not to move it
-off-chain and not to persist urn state.
-
-*(The spike lands on the fold block, not the close block: `SO-D7`'s correction
-moved the writer into the slash scheduler's pass. The `~972,000` figure and the
-argument for why it is tolerable are unchanged — both turn on the derivation
-being a pure function of final chain state and off the admission path, neither
-of which depended on which scheduled block it runs in.)*
+**Cost.** The writer makes one pass over the epoch's issued draws and one
+selection per pair with at least three (specification §9.3). It runs once
+per 10,000 blocks, in the slash scheduler's pass (`SO-D7`), off the
+transaction-admission path. It is not measured.
 
 *Where* it runs was the open half, and the obvious answer was the wrong one —
 `SO-D7`.
@@ -325,8 +312,8 @@ of which depended on which scheduled block it runs in.)*
 
 Interim issuance is **one** beacon challenge per pair-epoch. Under absolute-2,
 `settle_epoch(passes, issued = 1)` settles **NonObservation for every pair,
-always** — correctly, by `SO-D1`'s own rule that a pair the urn could not reach
-twice is not a pair that failed.
+always** — correctly, by `SO-D1`'s own rule that a pair the draw did not
+reach often enough is not a pair that failed.
 
 So until the cutover wires per-challenge admission, the writer would emit rows
 that are uniformly `NonObservation` and carry no information. **The rows must
@@ -354,7 +341,7 @@ reads. So wiring it would be additive and safe. It is still wrong to do:
 2. **They would cost real storage** — one row per `(P, shard)` per epoch until
    the prune horizon, to record a constant.
 3. **Both inputs change source at the cutover** (`passes` from a bit to a count
-   of admitted records, `issued` from the beacon to the urn derivation), so
+   of admitted records, `issued` from the beacon to the issued-draw index), so
    what a beacon-era wiring would prove is not the thing that will run.
 
 **Named blocker, per rule 22:** the writer's call site lands with `SO-D8`'s

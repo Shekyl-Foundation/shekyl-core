@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
+
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
 
 ### Consensus — the header's minor version is reserved at 0
