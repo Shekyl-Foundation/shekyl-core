@@ -397,6 +397,7 @@ stale_through = [
   { through = "23189972dc", note = "The connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The clock and the clearnet tests moved to their own modules. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "8fa5ba8bbb", note = "The clearnet writer is joined once, on the select arm that already took it. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "eba86c7ff9", note = "The refused-dial test holds a bound socket that is not listening, so a parallel test cannot accept the port. Only that test changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
