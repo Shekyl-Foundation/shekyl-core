@@ -48,8 +48,10 @@
 //! `shekyl-engine-core`'s resident pass key, which answers each call with a
 //! round-trip into the stake actor that holds the secret. A key that answers
 //! "no" keeps the endpoint up and counted: a valid request for a held shard
-//! is the bare 503, before any shard byte is sent. [`RefusingKey`] is that
-//! key for tests, on the same dev-only edge as `TestKeySigner`.
+//! is the bare 503, before any shard byte is sent. `RefusingKey` is that
+//! key for tests, on the same dev-only edge as `TestKeySigner` (both are
+//! `cfg(any(test, feature = "test-signer"))`, so neither is a link target
+//! in the production docs).
 
 use std::sync::Arc;
 
