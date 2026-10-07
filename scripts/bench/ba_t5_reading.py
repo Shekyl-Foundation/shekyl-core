@@ -54,30 +54,75 @@ ABANDON_CELLS = ("not-held", "one-leaf", "full-memory", "full-store")
 PHASE_SIZES = ("full-store", "eighth", "one-leaf")
 
 
-def incomplete(exits: list[list[str]], obs_path: Path) -> list[str]:
-    """Why these files are not the complete registered run, if they are not."""
+def incomplete(exits: list[list[str]], obs_path: Path, env_path: Path) -> list[str]:
+    """Why these files are not the complete registered run, if they are not.
+
+    Every row class the report reads is counted here, before anything is
+    printed: a figure computed from a capture with a hole in it is worse
+    than no figure.
+    """
     found: list[str] = []
     for label, mode, code in exits:
         if code != "0":
             found.append(f"block {label} ({mode}) exited {code}")
+    obs = rows(obs_path, "OBS")
+    phase = rows(obs_path, "PHASE")
+    blocks = rows(obs_path, "BLOCK")
+    late = rows(obs_path, "LATE")
+    abandon = rows(obs_path, "ABANDON")
+    env = rows(env_path, "ENV")
+
+    def want(arm: str, what: str, have: int, registered: int, at_least: bool = False) -> None:
+        if have < registered or (have != registered and not at_least):
+            bound = "at least " if at_least else ""
+            found.append(f"arm {arm}: {have} {what}, registered {bound}{registered}")
+
     for arm in ARMS:
-        for mode, want in REGISTERED_BLOCKS.items():
-            have = sum(1 for label, m, _ in exits if m == mode and arm_of(label) == arm)
-            if have != want:
-                found.append(f"arm {arm}: {have} {mode} block(s), registered {want}")
-        abandon = rows(obs_path, "ABANDON")
+        def mine(row: list[str], arm: str = arm) -> bool:
+            return arm_of(row[0]) == arm
+
+        def graded_load(row: list[str]) -> bool:
+            return mine(row) and row[1] == "load" and ".load." in row[0]
+
+        for mode, registered in REGISTERED_BLOCKS.items():
+            want(arm, f"{mode} block exit(s)", sum(1 for e in exits if e[1] == mode and mine(e)), registered)
         for cell in ABANDON_CELLS:
-            have = sum(1 for a in abandon if arm_of(a[0]) == arm and a[1] == cell)
-            if have != REGISTERED_BLOCKS["abandon"]:
-                found.append(f"arm {arm}: {have} abandon row(s) for {cell}, registered 2")
-        obs = rows(obs_path, "OBS")
+            want(arm, f"abandon row(s) for {cell}", sum(1 for a in abandon if mine(a) and a[1] == cell), 2)
         for size in PHASE_SIZES:
-            have = sum(1 for r in obs if arm_of(r[0]) == arm and r[1] == "phase" and r[2] == size)
-            if have != 200:
-                found.append(f"arm {arm}: {have} phase observations at {size}, registered 200")
-        minutes = sum(1 for r in rows(obs_path, "LATE") if arm_of(r[0]) == arm and r[1] == "sustain")
-        if minutes < 59:
-            found.append(f"arm {arm}: {minutes} minutes of the sustained hour")
+            want(
+                arm, f"phase observations at {size}",
+                sum(1 for r in obs if mine(r) and r[1] == "phase" and r[2] == size), 200,
+            )
+            for name in ("read", "hash"):
+                want(
+                    arm, f"{name} timings at {size}",
+                    sum(1 for r in phase if mine(r) and r[1] == size and r[2] == name), 100,
+                )
+        want(arm, "sign timings", sum(1 for r in phase if mine(r) and r[2] == "sign"), 100)
+        for kind in ("cold", "fresh"):
+            want(
+                arm, f"{kind} fetch(es)",
+                sum(1 for r in obs if r[1] == "cold" and r[0].startswith(f"{arm}.{kind}.")), 10,
+            )
+        want(arm, "eight-in-flight BLOCK row(s)", sum(1 for b in blocks if graded_load(b)), 6)
+        want(arm, "eight-in-flight LATE row(s)", sum(1 for r in late if graded_load(r)), 6)
+        want(arm, "idle LATE row(s)", sum(1 for r in late if mine(r) and r[1] == "idle"), 1)
+        want(arm, "sustained BLOCK row(s)", sum(1 for b in blocks if mine(b) and b[1] == "sustain"), 1)
+        want(
+            arm, "minute(s) of sustained LATE rows",
+            sum(1 for r in late if mine(r) and r[1] == "sustain"), 59, at_least=True,
+        )
+        hour = [e for e in env if e[1] in (f"tick.{arm}.sustain", f"start.{arm}.sustain", f"end.{arm}.sustain")]
+        # One sample at each end and one every 30 s of an hour.
+        want(arm, "environment sample(s) of the sustained hour", len(hour), 110, at_least=True)
+        for edge in ("start", "end"):
+            want(arm, f"{edge} sample of the sustained hour", sum(1 for e in hour if e[1].startswith(edge)), 1)
+    if not env:
+        found.append("no environment rows")
+    for e in env:
+        if len(e) < 13 or not e[2].isdigit() or not e[11].isdigit() or not e[8].isdigit():
+            found.append(f"environment row {e[:2]} lacks a temperature, a memory reading or the daemon's size")
+            break
     return found
 
 
@@ -115,7 +160,7 @@ def main() -> int:
         return 2
     obs_path, env_path = Path(sys.argv[1]), Path(sys.argv[2])
     exits = rows(obs_path, "EXIT")
-    problems = incomplete(exits, obs_path)
+    problems = incomplete(exits, obs_path, env_path)
     if problems:
         print("NOT A COMPLETE REGISTERED RUN; nothing is read from it:")
         for problem in problems:
