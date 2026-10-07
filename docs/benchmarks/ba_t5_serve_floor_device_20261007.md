@@ -17,8 +17,10 @@ frames, labelled as one
 ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc),
 discipline 5). Reading line (a) on production's frame instead of the
 registered one is a change made after the run. It rests on a fact about
-the code and not on the numbers, it is stated here first for that
-reason, and it is the maintainer's to accept or refuse.
+the code and not on the numbers, and it is stated here first for that
+reason. **The maintainer accepted it on 2026-10-07**, having checked the
+same code. What the verdict does not cover is under "How far this
+verdict reaches".
 
 Everything under "Registered before the run" was committed and pushed
 before the first timed block (`f1b551b4cb`, amended once at `625488e5ed`,
