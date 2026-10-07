@@ -631,8 +631,10 @@ eliminates the bind-conflict class and forces consumers onto the posture channel
   a ~60s cap), the attempt counter resetting after a sustained `Ready` period. This is the
   path a staker's liveness rides.
 - **Trust failure** — the SP-T0c gate refuses (**any** `Binary(TorBinaryError)`:
-  `HashMismatch` — the binary changed under us — `Unpinned`, `NotFound`, `NotAFile`,
-  `NotExecutable`, or an `Io` reading the candidate) → **no fast retry into an
+  the directory is not the pinned bundle (`UnexpectedEntry`, `MissingFile`,
+  `HashMismatch`), the candidate cannot be launched (`NotFound`, `NotAFile`,
+  `NotExecutable`, `NotTheExecutable`, `UnsafeLoaderPath`, `Io`), or this
+  platform has no managed tor (`Unavailable`)) → **no fast retry into an
   untrusted binary**: immediate `Degraded` + a slow re-discovery cadence (minutes), which
   is safe to retry forever because discovery never launches what it cannot verify — an
   operator who reinstalls the pinned bundle gets auto-recovery without a restart.

@@ -82,10 +82,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **`tor-pin-verify` has no `linux-aarch64` leg.** The workflow downloads, GPG-verifies, extracts, and re-verifies one target, `linux-x86_64`, and runs the live lifecycle tests on it. The aarch64 pin (16.0a12, ruled 2026-09-29) was verified by hand on the floor device. The download-verify-hash chain does not need an aarch64 runner; the lifecycle tests do. Blocked on a decision between a hash-only aarch64 job and an aarch64 runner. Falsify by a dispatch of the workflow that checks the aarch64 digest against `CURRENT_PIN`'s `aarch64` arm.
-  - Owner: [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md)
-  - Target: pre-genesis
-
 - **Coordinate the ban list with the peerlist.** They are separate today, and discovery's pre-dial check (`net_node.inl:1902`) is the only link, so a banned host stays in the gray and white lists, is drawn, and is rejected only at dial time. Under slice 1's uniform draw a list full of banned hosts lowers the dial success rate, and peer exchange can hand those addresses on. The slice decides, per connector (only clearnet addresses can be banned, D7): whether a ban removes or marks entries, whether banned addresses are refused at admit and excluded from disclosure, and what an expiry does. Falsify by: the slice 1 brief states that rule, and a test shows a banned host is never drawn and never disclosed. Reopen if a banned host's address is drawn or disclosed.
   - Owner: [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](design/P2P_3_SLICE_1_PEERLIST_BRIEF.md) together with [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
