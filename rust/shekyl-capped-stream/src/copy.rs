@@ -11,9 +11,6 @@
 //! not keep the buffer.
 
 use std::borrow::Cow;
-use std::fmt;
-use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 use shekyl_transport_layer::{CloseCause, CloseKind, LinkDirection, MessageClass};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -21,6 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::gate::LinkGate;
 use crate::queue::{ByteQueue, Overfull};
 use crate::session::InboundEnd;
+use crate::stall::WriteStall;
 
 /// Write every byte of `bytes`.
 ///
@@ -67,185 +65,6 @@ pub fn refund_unsent(
 /// drift between them.
 pub const READ_CHUNK_BYTES: usize = 8 * 1024;
 
-/// Power-of-two nanosecond buckets for one session's socket writes.
-///
-/// Bucket `i` counts writes whose elapsed time is in `[2^i, 2^(i+1))`
-/// nanoseconds. Zero nanoseconds is bucket 0. The longest sample is
-/// `max_ns`. A write cancelled before it returned is
-/// `in_flight_at_close_ns`, not a bucket: it did not finish.
-///
-/// The writer task owns this. Nothing on the write path takes a
-/// process-wide lock. [`WriteStall::fold`] adds the buckets to the
-/// process histogram once, when the session's writer finishes.
-pub struct WriteStall {
-    conn: u64,
-    buckets: [u64; 64],
-    max_ns: u64,
-    in_flight_at_close_ns: Option<u64>,
-    started: Option<Instant>,
-    folded: bool,
-}
-
-impl WriteStall {
-    #[must_use]
-    pub fn new(conn: u64) -> Self {
-        Self {
-            conn,
-            buckets: [0; 64],
-            max_ns: 0,
-            in_flight_at_close_ns: None,
-            started: None,
-            folded: false,
-        }
-    }
-
-    #[must_use]
-    pub fn conn(&self) -> u64 {
-        self.conn
-    }
-
-    #[must_use]
-    pub fn max_ns(&self) -> u64 {
-        self.max_ns
-    }
-
-    #[must_use]
-    pub fn buckets(&self) -> &[u64; 64] {
-        &self.buckets
-    }
-
-    #[must_use]
-    pub fn in_flight_at_close_ns(&self) -> Option<u64> {
-        self.in_flight_at_close_ns
-    }
-
-    fn begin(&mut self) {
-        self.started = Some(Instant::now());
-    }
-
-    fn complete(&mut self) {
-        if let Some(started) = self.started.take() {
-            self.record_ns(ns_of(started.elapsed()));
-        }
-    }
-
-    fn cancel(&mut self) {
-        if let Some(started) = self.started.take() {
-            self.in_flight_at_close_ns = Some(ns_of(started.elapsed()));
-        }
-    }
-
-    fn record_ns(&mut self, ns: u64) {
-        self.buckets[bucket_of(ns)] = self.buckets[bucket_of(ns)].saturating_add(1);
-        if ns > self.max_ns {
-            self.max_ns = ns;
-        }
-    }
-
-    /// Add this session's buckets to the process histogram. A second call
-    /// does not add them again.
-    pub fn fold(&mut self) {
-        if self.folded {
-            return;
-        }
-        self.cancel();
-        self.folded = true;
-        process_stalls()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .add(self);
-    }
-}
-
-impl Drop for WriteStall {
-    fn drop(&mut self) {
-        self.fold();
-    }
-}
-
-impl fmt::Display for WriteStall {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "max_ns={} in_flight_ns={}",
-            self.max_ns,
-            self.in_flight_at_close_ns.unwrap_or(0)
-        )?;
-        for (index, count) in self.buckets.iter().copied().enumerate() {
-            if count != 0 {
-                write!(f, " {index}:{count}")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// The process-wide fold of every session histogram. This is the D9
-/// record: the distribution, not a threshold.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProcessWriteStall {
-    pub buckets: [u64; 64],
-    pub max_ns: u64,
-    pub closes: u64,
-    pub in_flight_at_close: u64,
-    pub in_flight_at_close_max_ns: u64,
-}
-
-impl ProcessWriteStall {
-    fn add(&mut self, stall: &WriteStall) {
-        for (into, from) in self.buckets.iter_mut().zip(stall.buckets) {
-            *into = into.saturating_add(from);
-        }
-        if stall.max_ns > self.max_ns {
-            self.max_ns = stall.max_ns;
-        }
-        self.closes = self.closes.saturating_add(1);
-        if let Some(ns) = stall.in_flight_at_close_ns {
-            self.in_flight_at_close = self.in_flight_at_close.saturating_add(1);
-            if ns > self.in_flight_at_close_max_ns {
-                self.in_flight_at_close_max_ns = ns;
-            }
-        }
-    }
-}
-
-fn process_stalls() -> &'static Mutex<ProcessWriteStall> {
-    static STALLS: OnceLock<Mutex<ProcessWriteStall>> = OnceLock::new();
-    STALLS.get_or_init(|| {
-        Mutex::new(ProcessWriteStall {
-            buckets: [0; 64],
-            max_ns: 0,
-            closes: 0,
-            in_flight_at_close: 0,
-            in_flight_at_close_max_ns: 0,
-        })
-    })
-}
-
-/// The histograms folded so far. A reader takes this after a session's
-/// writer has finished; the per-session record is still on that
-/// [`WriteStall`].
-#[must_use]
-pub fn process_write_stall() -> ProcessWriteStall {
-    process_stalls()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-fn ns_of(elapsed: std::time::Duration) -> u64 {
-    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
-}
-
-/// Bucket `i` is `[2^i, 2^(i+1))` nanoseconds. Zero is bucket 0.
-fn bucket_of(ns: u64) -> usize {
-    if ns == 0 {
-        0
-    } else {
-        (63 - ns.leading_zeros()) as usize
-    }
-}
-
 /// Write queued bytes until the queue closes or the cap trips.
 ///
 /// `encode` turns one queued buffer into the socket bytes. An empty
@@ -264,8 +83,8 @@ where
     F: for<'a> FnMut(&'a [u8]) -> Result<Cow<'a, [u8]>, CloseKind>,
 {
     let conn = stall.conn();
+    let _lease = gate.lease(LinkDirection::Up, conn);
     let cause = write_queued(write, outbound, overfull, gate, stall, &mut encode).await;
-    gate.leave(LinkDirection::Up, conn);
     stall.fold();
     cause
 }
@@ -381,9 +200,9 @@ where
     R: AsyncRead + Unpin,
     F: FnMut(&[u8]) -> Result<Vec<Vec<u8>>, CloseKind>,
 {
+    let _lease = gate.lease(LinkDirection::Down, conn);
     let cause = read_queued(read, &inbound, overfull, gate, conn, &mut decode).await;
     inbound.close(cause);
-    gate.leave(LinkDirection::Down, conn);
     cause
 }
 
@@ -474,9 +293,10 @@ mod tests {
     use shekyl_transport_layer::CloseKind;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{process_write_stall, read_capped, write_capped, WriteStall};
+    use super::{read_capped, write_capped};
     use crate::gate::LinkGate;
     use crate::queue::{ByteQueue, Overfull, PushError};
+    use crate::stall::{process_write_stall, WriteStall};
 
     struct StuckWrite {
         entered: Arc<AtomicBool>,
@@ -694,21 +514,6 @@ mod tests {
         assert!(after.max_ns >= max_ns);
     }
 
-    #[test]
-    fn buckets_are_powers_of_two() {
-        let mut stall = WriteStall::new(0);
-        stall.record_ns(0);
-        stall.record_ns(1);
-        stall.record_ns(2);
-        stall.record_ns(1 << 10);
-        assert_eq!(stall.buckets()[0], 2);
-        assert_eq!(stall.buckets()[1], 1);
-        assert_eq!(stall.buckets()[10], 1);
-        assert_eq!(stall.max_ns(), 1 << 10);
-        // Not folded: this stall is the table, not a session close.
-        stall.folded = true;
-    }
-
     #[tokio::test]
     async fn a_full_queue_cancels_a_blocked_read() {
         let entered = Arc::new(AtomicBool::new(false));
@@ -731,5 +536,56 @@ mod tests {
             .expect("reader finished")
             .expect("joined");
         assert_eq!(cause.kind(), CloseKind::SendQueueFull);
+    }
+
+    #[tokio::test]
+    async fn aborting_a_stuck_write_releases_the_stamp() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&entered);
+        let gate = LinkGate::new();
+        let gate_task = gate.clone();
+        let queue = ByteQueue::new(8);
+        queue.try_push(b"abcd".to_vec()).expect("queue");
+        let overfull = queue.overfull();
+        let task = tokio::spawn(async move {
+            let mut write = StuckWrite { entered: flag };
+            let mut stall = WriteStall::new(1);
+            write_capped(
+                &mut write,
+                &queue,
+                &overfull,
+                &gate_task,
+                &mut stall,
+                |plain| Ok(std::borrow::Cow::Borrowed(plain)),
+            )
+            .await
+        });
+        until_entered(&entered).await;
+        assert_eq!(gate.held_stamps(), 1);
+        task.abort();
+        task.await.expect_err("aborted");
+        assert_eq!(gate.held_stamps(), 0);
+    }
+
+    #[tokio::test]
+    async fn aborting_a_stuck_read_releases_the_stamp() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&entered);
+        let gate = LinkGate::new();
+        let gate_task = gate.clone();
+        let overfull = Arc::new(Overfull::new());
+        let inbound = crate::StreamEnds::open(64).inbound;
+        let task = tokio::spawn(async move {
+            let mut read = StuckRead { entered: flag };
+            read_capped(&mut read, inbound, &overfull, &gate_task, 1, |chunk| {
+                Ok(vec![chunk.to_vec()])
+            })
+            .await
+        });
+        until_entered(&entered).await;
+        assert_eq!(gate.held_stamps(), 1);
+        task.abort();
+        task.await.expect_err("aborted");
+        assert_eq!(gate.held_stamps(), 0);
     }
 }

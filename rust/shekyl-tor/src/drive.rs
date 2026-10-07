@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
-    accept_error_is_transient, node_gate, read_capped, write_capped, StreamEnds,
+    accept_error_is_transient, node_gate, read_capped, write_capped, InboundEnd, QueueHold,
+    StreamEnds,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
@@ -332,8 +333,10 @@ where
         .is_err()
     {
         ignore(owner.deregister());
+        let cause = CloseCause::new(CloseKind::LocalClose);
+        inbound.seal(&hold, cause);
         drop(hold);
-        return CloseCause::new(CloseKind::LocalClose);
+        return cause;
     }
 
     let overfull_write = Arc::clone(&overfull);
@@ -368,9 +371,13 @@ where
                 gap_open = false;
                 ignore(owner.deregister());
                 if result.is_err() {
-                    let cause = CloseCause::new(CloseKind::LocalClose);
-                    inbound_close.close(cause);
-                    return stop(hold.take(), &mut writer, cause).await;
+                    return stop(
+                        &inbound_close,
+                        hold.take(),
+                        &mut writer,
+                        CloseCause::new(CloseKind::LocalClose),
+                    )
+                    .await;
                 }
                 tracing::info!(
                     conn,
@@ -386,15 +393,13 @@ where
                     Err(_) => CloseKind::LocalClose,
                 };
                 let cause = CloseCause::new(kind);
-                inbound_close.close(cause);
-                return stop(hold.take(), &mut writer, cause).await;
+                return stop(&inbound_close, hold.take(), &mut writer, cause).await;
             }
             read_cause = &mut read_fut => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                inbound_close.close(read_cause);
-                return stop(hold.take(), &mut writer, read_cause).await;
+                return stop(&inbound_close, hold.take(), &mut writer, read_cause).await;
             }
             write_end = &mut writer => {
                 if gap_open {
@@ -404,20 +409,26 @@ where
                     Ok(cause) => cause,
                     Err(_) => CloseCause::new(CloseKind::LocalClose),
                 };
-                inbound_close.close(cause);
-                return stop(hold.take(), &mut writer, cause).await;
+                return stop(&inbound_close, hold.take(), &mut writer, cause).await;
             }
         }
     }
 }
 
+/// Seal the session, then abort the writer. A finished writer ignores the abort.
+///
+/// `hold` is absent only when a previous arm already took it. The inbound
+/// cause is recorded either way.
 async fn stop(
-    hold: Option<shekyl_capped_stream::QueueHold>,
+    inbound: &InboundEnd,
+    hold: Option<QueueHold>,
     writer: &mut tokio::task::JoinHandle<CloseCause>,
     cause: CloseCause,
 ) -> CloseCause {
     if let Some(hold) = hold.as_ref() {
-        hold.close_with(cause);
+        inbound.seal(hold, cause);
+    } else {
+        inbound.close(cause);
     }
     drop(hold);
     writer.abort();

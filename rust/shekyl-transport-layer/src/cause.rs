@@ -209,19 +209,55 @@ const fn connector_is_tor(connector: ConnectorId) -> bool {
     matches!(connector, ConnectorId::Tor)
 }
 
+/// RFC 1928 §6. The destination host was not reached.
+const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
+/// RFC 1928 §6. The destination refused the connection.
+const SOCKS_CONNECTION_REFUSED: u16 = 0x05;
+/// RFC 1928 §6. The command this node sent is not supported.
+const SOCKS_COMMAND_NOT_SUPPORTED: u16 = 0x07;
+/// RFC 1928 §6. The address type this node sent is not supported.
+const SOCKS_ADDRESS_TYPE_NOT_SUPPORTED: u16 = 0x08;
+/// Tor extended error (`socks-extensions`, proposal 304). Descriptor missing.
+const TOR_DESCRIPTOR_MISSING: u16 = 0xF0;
+/// Tor extended error. The descriptor is unusable.
+const TOR_DESCRIPTOR_UNUSABLE: u16 = 0xF1;
+/// Tor extended error. The introduction failed.
+const TOR_INTRODUCTION_FAILED: u16 = 0xF2;
+/// Tor extended error. Client authorization is missing. This node's request.
+const TOR_CLIENT_AUTH_MISSING: u16 = 0xF4;
+/// Tor extended error. Client authorization was rejected. This node's request.
+const TOR_CLIENT_AUTH_REJECTED: u16 = 0xF5;
+/// Tor extended error. Tor rejected the onion address. Validated before dial.
+const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
+
 /// Onion SOCKS replies that name the destination.
 ///
-/// RFC 1928 §6 `0x04` and `0x05`. Tor's extended codes (`socks-extensions`,
-/// "Extended error codes"; proposal 304) `0xF0`, `0xF1`, and `0xF2`.
+/// RFC 1928 §6 host unreachable and connection refused. Tor's extended
+/// codes for a missing or unusable descriptor, and a failed introduction.
 const fn onion_reply_names_the_destination(reply: u16) -> bool {
-    matches!(reply, 0x04 | 0x05 | 0xF0 | 0xF1 | 0xF2)
+    matches!(
+        reply,
+        SOCKS_HOST_UNREACHABLE
+            | SOCKS_CONNECTION_REFUSED
+            | TOR_DESCRIPTOR_MISSING
+            | TOR_DESCRIPTOR_UNUSABLE
+            | TOR_INTRODUCTION_FAILED
+    )
 }
 
 /// Replies that mean the request this node sent, not the onion.
 ///
 /// The dial path logs these at error. They do not forget the address.
+/// `0xF4` and `0xF5` are both client-authorization errors.
 pub const fn socks_reply_is_our_request(reply: u16) -> bool {
-    matches!(reply, 0x07 | 0x08 | 0xF4 | 0xF5 | 0xF6)
+    matches!(
+        reply,
+        SOCKS_COMMAND_NOT_SUPPORTED
+            | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED
+            | TOR_CLIENT_AUTH_MISSING
+            | TOR_CLIENT_AUTH_REJECTED
+            | TOR_ONION_ADDRESS_REJECTED
+    )
 }
 
 const HEADER_PREAMBLE: &str = "\

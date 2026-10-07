@@ -35,6 +35,15 @@ impl InboundEnd {
         }
     }
 
+    /// Record `cause` on this end and on the outbound queue.
+    ///
+    /// The first cause on each end stands. The connection task calls this
+    /// once, then aborts the other half. A later drop does not replace it.
+    pub fn seal(&self, hold: &QueueHold, cause: CloseCause) {
+        self.close(cause);
+        hold.close_with(cause);
+    }
+
     /// Hand one decoded frame to the session.
     pub async fn send(&self, frame: Vec<u8>) -> Result<(), mpsc::error::SendError<Vec<u8>>> {
         self.tx.send(frame).await

@@ -22,15 +22,16 @@ mod copy;
 mod gate;
 mod queue;
 mod session;
+mod stall;
 
 pub use accept::accept_error_is_transient;
-pub use copy::{
-    process_write_stall, read_capped, refund_unsent, write_all_counted, write_capped,
-    ProcessWriteStall, WriteStall, READ_CHUNK_BYTES,
-};
+pub use copy::{read_capped, refund_unsent, write_all_counted, write_capped, READ_CHUNK_BYTES};
 pub use gate::{node_gate, LinkGate};
 pub use queue::{ByteQueue, CloseReason, Overfull, PushError};
 pub use session::{
     FrameSender, InboundEnd, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES,
 };
-pub use shekyl_transport_layer::{monotonic_ms, recv_is_stalled, recv_mark_ms};
+pub use stall::{process_write_stall, ProcessWriteStall, WriteStall};
+// The stall-check FFI reads these beside the gate. shekyl-ffi does not
+// depend on shekyl-transport-layer.
+pub use shekyl_transport_layer::{monotonic_ms, recv_mark_ms};

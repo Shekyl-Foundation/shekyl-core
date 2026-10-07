@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
-    accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, Overfull,
-    QueueHold, StreamEnds,
+    accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, InboundEnd,
+    Overfull, QueueHold, StreamEnds,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
@@ -485,14 +485,16 @@ where
     let (mut writer, recv) = match opened {
         Ok(opened) => opened,
         Err(kind) => {
+            let cause = CloseCause::new(kind);
+            inbound.seal(&hold, cause);
             drop(hold);
-            return CloseCause::new(kind);
+            return cause;
         }
     };
     let (watch, gap_tx) = match arm_gap(&engine, job.gap_within) {
         Ok(Some(armed)) => (Some(armed.watch), Some(armed.established)),
         Ok(None) => (None, None),
-        Err(cause) => return end_connection(hold, &mut writer, cause).await,
+        Err(cause) => return end_connection(hold, &inbound, &mut writer, cause).await,
     };
     let published = Admitted {
         open: open.clone(),
@@ -502,7 +504,13 @@ where
         gap: gap_tx,
     };
     if admitted.send(published).is_err() {
-        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+        return end_connection(
+            hold,
+            &inbound,
+            &mut writer,
+            CloseCause::new(CloseKind::LocalClose),
+        )
+        .await;
     }
     let inbound_close = inbound.clone();
     let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
@@ -518,41 +526,47 @@ where
                 match end {
                     GapEnd::Established => {}
                     GapEnd::Dropped | GapEnd::Closed => {
-                        let cause = CloseCause::new(CloseKind::LocalClose);
-                        inbound_close.close(cause);
-                        return end_connection(hold, &mut writer, cause).await;
+                        return end_connection(
+                            hold,
+                            &inbound_close,
+                            &mut writer,
+                            CloseCause::new(CloseKind::LocalClose),
+                        )
+                        .await;
                     }
                     GapEnd::Timeout => {
-                        let cause = CloseCause::new(CloseKind::LevinHandshakeTimeout);
-                        inbound_close.close(cause);
-                        return end_connection(hold, &mut writer, cause).await;
+                        return end_connection(
+                            hold,
+                            &inbound_close,
+                            &mut writer,
+                            CloseCause::new(CloseKind::LevinHandshakeTimeout),
+                        )
+                        .await;
                     }
                 }
             }
             read_cause = &mut read_fut => {
-                inbound_close.close(read_cause);
-                return end_connection(hold, &mut writer, read_cause).await;
+                return end_connection(hold, &inbound_close, &mut writer, read_cause).await;
             }
             write_cause = &mut writer => {
                 let cause = write_cause
                     .ok()
                     .flatten()
                     .unwrap_or(CloseCause::new(CloseKind::LocalClose));
-                inbound_close.close(cause);
-                hold.close_with(cause);
-                drop(hold);
-                return cause;
+                return end_connection(hold, &inbound_close, &mut writer, cause).await;
             }
         }
     }
 }
 
+/// Seal both ends, then abort the writer. A finished writer ignores the abort.
 async fn end_connection(
     hold: QueueHold,
+    inbound: &InboundEnd,
     writer: &mut tokio::task::JoinHandle<Option<CloseCause>>,
     cause: CloseCause,
 ) -> CloseCause {
-    hold.close_with(cause);
+    inbound.seal(&hold, cause);
     drop(hold);
     writer.abort();
     drop(writer.await);

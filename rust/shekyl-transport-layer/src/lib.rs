@@ -27,6 +27,7 @@ mod admission;
 mod ban;
 mod budget;
 mod cause;
+mod clock;
 mod declaration;
 mod dial;
 
@@ -34,11 +35,9 @@ pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
 };
 pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
-pub use budget::{
-    monotonic_ms, recv_is_stalled, recv_mark_ms, unix_ms_of, LinkBudget, LinkDirection,
-    MessageClass, Observed, Turn,
-};
+pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, socks_reply_is_our_request, CloseCause, CloseKind, Phase};
+pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
     BannableInbound, ConnectorId, DeadlineInput, Declaration, DestinationAuth, InboundIdentity,

@@ -270,6 +270,43 @@ impl LinkGate {
         let (send, recv) = self.activity(conn);
         (unix_ms_of(send), unix_ms_of(recv))
     }
+
+    /// Hold this across a copy. Drop releases the fairness slot and the stamp,
+    /// including when the task is aborted before the copy returns.
+    pub(crate) fn lease(&self, direction: LinkDirection, conn: u64) -> DirectionLease {
+        DirectionLease {
+            gate: self.clone(),
+            direction,
+            conn,
+        }
+    }
+
+    /// Stamps currently stored, both directions.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn held_stamps(&self) -> usize {
+        let count =
+            |direction: LinkDirection| self.stamp_map(direction).lock().expect("byte stamps").len();
+        count(LinkDirection::Up) + count(LinkDirection::Down)
+    }
+}
+
+/// The copy's hold on one direction.
+///
+/// [`LinkGate::leave`] runs when this drops. The handshake queue does not
+/// stamp, so it releases its slot with [`LinkGate::leave`] and does not
+/// take a lease.
+#[must_use = "the lease releases the byte stamp when dropped"]
+pub(crate) struct DirectionLease {
+    gate: LinkGate,
+    direction: LinkDirection,
+    conn: u64,
+}
+
+impl Drop for DirectionLease {
+    fn drop(&mut self) {
+        self.gate.leave(self.direction, self.conn);
+    }
 }
 
 impl Default for LinkGate {
@@ -283,4 +320,34 @@ impl Default for LinkGate {
 pub fn node_gate() -> LinkGate {
     static GATE: LazyLock<LinkGate> = LazyLock::new(LinkGate::new);
     GATE.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_transport_layer::{LinkDirection, MessageClass};
+
+    use super::LinkGate;
+
+    #[tokio::test]
+    async fn a_grant_does_not_stamp_and_a_byte_does() {
+        let gate = LinkGate::new();
+        let conn = 7u64;
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+        let granted = gate
+            .acquire(LinkDirection::Down, conn, MessageClass::Session, 64)
+            .await;
+        assert_eq!(granted, 64);
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+        let stamp = gate.byte_stamp(LinkDirection::Down, conn);
+        assert_eq!(gate.held_stamps(), 1);
+        stamp.store();
+        let (send, recv) = gate.activity(conn);
+        assert_eq!(send, 0);
+        assert!(recv > 0);
+        drop(gate.lease(LinkDirection::Down, conn));
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+    }
 }
