@@ -806,8 +806,10 @@ impl Apparatus {
     ///
     /// # Errors
     ///
-    /// [`ApparatusError::Control`] if the events were already taken or the
-    /// control port refuses the subscription.
+    /// [`ApparatusError::Control`] if the events were already taken, or the
+    /// control port fails or answers anything but `250`. On a failed
+    /// subscription the events are not taken, so the call can be made
+    /// again.
     pub async fn observe_client(
         &self,
         events: &[&str],
@@ -818,14 +820,37 @@ impl Apparatus {
             .expect("the events slot is never held across a panic")
             .take()
             .ok_or_else(|| ApparatusError::Control("client events already taken".to_owned()))?;
-        self.client_tor
+        // The control actor answers `Ok` for a refusal too: a `552` for an
+        // event this tor does not know is a reply, not an error. Anything
+        // but `250` means nothing is subscribed, and the caller would wait
+        // on events that never come.
+        let subscribed = match self
+            .client_tor
             .control
             .ask(Command::SetEvents(
                 events.iter().map(|e| (*e).to_owned()).collect(),
             ))
             .await
-            .map_err(|e| ApparatusError::Control(e.to_string()))?;
-        Ok(rx)
+        {
+            Ok(reply) if reply.status() == 250 => Ok(()),
+            Ok(reply) => Err(ApparatusError::Control(format!(
+                "SETEVENTS answered {}",
+                reply.status()
+            ))),
+            Err(e) => Err(ApparatusError::Control(e.to_string())),
+        };
+        match subscribed {
+            Ok(()) => Ok(rx),
+            Err(e) => {
+                // Not subscribed, so the stream is still nobody's: put it
+                // back for a caller that asks again.
+                *self
+                    .client_events
+                    .lock()
+                    .expect("the events slot is never held across a panic") = Some(rx);
+                Err(e)
+            }
+        }
     }
 
     /// One fetch of `shard_id` from persona `persona_index` under a header

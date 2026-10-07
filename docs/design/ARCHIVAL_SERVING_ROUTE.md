@@ -229,8 +229,9 @@ is a stall or a refusal, never what a completed exchange means.
 
 The client dials `shekyl_p_fetch::ServingEndpoint::onion_address():80` through the
 daemon's own Tor client as SOCKS5**h** (`SF-D2`, `SF-D3`): the proxy
-resolves the name; the client resolves nothing and offers no SOCKS
-auth (no per-fetch circuit isolation).
+resolves the name; the client resolves nothing. Each read presents
+SOCKS credentials of its own, so Tor puts it on a circuit no other read
+is on (`SF-D3`, as ruled 2026-10-07).
 
 ---
 

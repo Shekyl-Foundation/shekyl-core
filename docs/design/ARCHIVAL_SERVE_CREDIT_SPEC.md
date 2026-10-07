@@ -1099,7 +1099,7 @@ The seed and the witness key have no label: they are fresh randomness.
 | Knock a producer offline | Suppresses observations only; cannot target a `P` |
 | One receipt for two draws | Impossible: the nonce is bound to `(h, j)` |
 | Fingerprint challenge requests | Prevented only by one client code path and identical formats |
-| Remember nonces, stall every first request, serve only a nonce that returns | Nothing returns: every read carries a fresh nonce, for every caller (`SCS-P13`) |
+| Remember nonces, stall every first request, serve only a nonce that returns | A returning nonce does not mark a challenge. Inside one read the stall retries repeat the nonce, seconds apart, and an organic read retries the same way, so `P` serving a returning nonce serves every caller's retries alike. Across reads nothing returns: a challenger's re-read carries a fresh nonce, as every new read does (`SCS-P13`) |
 | Stall every first request for a shard and serve the second | Costs `P` nothing against a challenger that re-reads, and degrades every organic reader the same way; `P` cannot tell which requests are challenges, so it cannot aim it |
 | File a record for a fourth read | Refused: `attempt ≥ K` |
 | Link a producer's reads, or a re-read to the read that failed, by the circuit they arrive on | Prevented: every read presents its own SOCKS credentials and rides its own rendezvous circuit (`SF-D3`) |
