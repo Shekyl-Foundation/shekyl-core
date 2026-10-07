@@ -258,6 +258,13 @@ path_set = "relay-fluff"
 # --- archival serve and fetch -----------------------------------------
 
 [[path_set]]
+id = "serve-floor-verdict"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+]
+
+[[path_set]]
 id = "archival-serve-fetch"
 spec = [
   "rust/shekyl-p-serve/src",
@@ -708,6 +715,23 @@ path_set = "chain-store-ibd"
 
 # --- BA-Q3: the single-pass serve. One prediction still open, and two
 # beside the floor measurement that settled each.
+
+# The floor device's serve verdict (BA-T5, 2026-10-07) holds on the frame
+# production serves, a full shard of `W` bytes. It is bound here to the
+# value of `W`: a shard small enough to be buffered whole between the
+# persona and the requester turns every abandoned request into a full
+# serve plus a signature. Change `W` and this row fails until the verdict
+# is re-graded on a new capture.
+[[constant]]
+name = "serve_floor_verdict_frame"
+defined_in = "config/consensus_constants.json"
+needle = '"archival_shard_length_bytes": 3000000'
+measured_by = ["BA-T5"]
+status = "current"
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
+capture_rev = "42233bd135"
+rev_source = "capture header, arm A"
+path_set = "serve-floor-verdict"
 
 [[constant]]
 name = "serve_prehead_work_floor"

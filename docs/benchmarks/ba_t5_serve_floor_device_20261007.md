@@ -233,10 +233,11 @@ serves is the full segment, and it is the only one.
   requester that has gone. A one-leaf response served back to back costs
   4.8 ms of CPU; abandoned, with a 30 ms gap before the next, 8.4 ms.
   What the extra 3.6 ms is has not been established.
-- **What the projection is for.** If a later design serves frames small
-  enough to be buffered whole, it must not sign until the requester has
-  taken the body, which a successful write cannot tell it. Nothing needs
-  that today.
+- **What the projection shows.** The cost of a countersigned read that
+  the requester never takes: the gate, the open and one signature, about
+  8 ms of CPU on this device, per request. `P` cannot avoid it by waiting
+  for the requester, because it cannot see the requester. See "How far
+  this verdict reaches", below.
 
 ### Lines (b), (c) and (d)
 
@@ -348,6 +349,74 @@ and 78 ms. So the first read of a shard that is not in memory costs about
   runtime, and here they have their own. The ledger row stays as it is,
   a prediction judged against the capture that judged it; this is the
   note that the instrument moved the number by about 10 ms.
+
+### How far this verdict reaches
+
+Accepted by the maintainer, 2026-10-07: line (a) is read on production's
+frame. Three things bound what that verdict covers. None of them was
+measured here.
+
+**1. It holds for the shard as it is cut today, and depends on that cut.**
+A shard is cut by archival length `W` (`SHT-Q2`), and `W` is 3,000,000
+bytes and PROVISIONAL (`archival_shard_length_bytes`). The only fixed
+lower bound on it is the largest archival length one transaction can
+have, 149,400 B. Line (a) holds because a full shard is far larger than
+what can be buffered between `P` and the requester. If `W` is re-derived
+small enough to be buffered whole, the one-leaf case stops being a
+projection: every abandoned request becomes a full serve plus a
+signature. So:
+
+- the verdict is tied to `W` in the measurement ledger
+  (`serve_floor_verdict_frame`): a change to the constant fails that row
+  until the verdict is re-graded;
+- the carrier for the re-grade is the `W` derivation (`BA-Q5`, `BA-T7`);
+- and the `W` derivation takes this as an input: below the buffered
+  amount in item 2, an abandoned request costs `P` a whole response.
+
+**2. In production `P`'s peer is the local tor process, not the
+requester.** The probe's requester closed its own socket, so `P`'s write
+failed at once and 720 bytes left. In production `P` writes to tor on
+loopback, and tor accepts bytes on a stream before the requester's
+progress matters at all. By the Tor specification a stream's package
+window is 500 cells and a data cell carries at most 498 bytes, about
+250 KB, to which the loopback socket buffers add. That figure is from
+the specification and **has not been measured here**; newer tor replaces
+stream windows with congestion control on circuits that negotiate it, and
+which applies to an onion service's streams was not checked. A 3.3 MB
+shard is well above 250 KB either way, so today's verdict does not turn
+on it. But the amount of work `P` can be made to do unpaid is "tor's
+window plus the kernel's buffers", not the 720 bytes this probe saw, and
+the projection and any re-grade under a smaller `W` must be stated
+against that. A probe through a real onion is what establishes the
+number; that is `BA-T7`'s condition and nobody should rely on 250 KB
+until it has run.
+
+**3. The projected cost is irreducible for `P`, and the control over it
+is tor's.** Over Tor, `P` knows only that tor took the bytes. It cannot
+hold a signature back until the requester has the body, so a response
+small enough to be taken whole is signed for whoever asked.
+
+- *Adversary:* any requester. No key, bond or stake is needed to ask.
+- *Capability:* one rendezvous circuit carries many streams, so a request
+  costs the requester about one cell, not a new circuit. Proof of work at
+  the introduction point prices circuits, not streams.
+- *Harm:* about 8 ms of `P`'s CPU per request at a frame that is taken
+  whole; about 4 ms today, where it is not. Sustained, that is load on
+  the daemon sharing the board, which is line (c).
+- *Control, already in place:* the serving onion is published with a cap
+  of 8 streams per rendezvous circuit, and tor closes a circuit that goes
+  past it (`SERVING_MAX_STREAMS`, and the `MaxStreamsCloseCircuit` flag
+  the control client always sets). So a requester pays for a new
+  rendezvous every 8 requests. The 8 is a carried placeholder, not a
+  derivation. Choosing it is an input to `BA-Q4`, beside `MAX_INFLIGHT`:
+  this run gives the cost per request it has to bound.
+
+**Runs still owed, in the order they matter.** Serving beside a daemon
+that is busy with its initial sync, which is when line (c) is really
+tested; this run's daemon was idle. Then 32 and 64 in flight, for
+`BA-Q4`; a block that times the work before the first byte alone, for
+the open estimate; and the probe through an onion in item 2. The sign
+phase is re-run alone when the FN-DSA-1024 receipt key lands.
 
 ### Limits of this run
 

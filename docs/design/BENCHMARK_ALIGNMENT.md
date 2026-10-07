@@ -651,10 +651,32 @@ which resource bound. The serving device class is itself open
 (`docs/FOLLOWUPS.md:1257`); the default keeps the floor as the conservative
 interim.
 
+*Inputs from the first `BA-T5` run (2026-10-07).* The floor device is
+ruled the serving floor, and it serves today's shards at 41 to 56 per
+second at eight in flight. The cost an unpaid request can impose is about
+4 ms of CPU today and about 8 ms at a frame small enough to be buffered
+whole. The control over how many such requests one rendezvous circuit can
+make is the serving onion's stream cap, 8 per circuit with the circuit
+closed past it (`SERVING_MAX_STREAMS`), a carried placeholder: its value
+is part of this question, beside `MAX_INFLIGHT`. 32 and 64 in flight have
+not been run.
+
 **BA-Q5 — Re-measure `W`, `L`, the retry budget and the read capacity on the
 v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an
 owner and a date entered beside the reopen condition in
 [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](CLIENT_VERSION_CONSTANTS_VALIDATION.md).
+
+*An input the `W` derivation must take (2026-10-07).* The floor device's
+serve verdict holds because a shard of `W` bytes is far larger than what
+can be buffered between the persona and the requester. If `W` falls to
+that amount, every abandoned request costs the persona a whole response
+and a signature
+([`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md),
+"How far this verdict reaches"). The amount is tor's stream window plus
+the kernel's socket buffers, about 250 KB by the specification and not
+yet measured through an onion; BA-T7 measures it. The ledger row
+`serve_floor_verdict_frame` fails when `W` changes, until the verdict is
+re-graded.
 
 **BA-Q6 — The key-dispatch gate and the re-route it waits on (BA-D8).**
 The design routes claims through `KeyEngine::try_claim_output`; the caller
