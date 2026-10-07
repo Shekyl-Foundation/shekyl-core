@@ -225,6 +225,11 @@ jobs:
           # glibc-hwcaps directory, a full extracted bundle.
           run_one "Tor pin gates self-test" \
             python3 scripts/ci/test_tor_pin_gates.py
+          # tor-pin-verify retries a live step once, and only when every
+          # failure in it is a Tor bootstrap timeout. The cases that must
+          # not retry (a pin mismatch, any other failure) are held here.
+          run_one "Tor live-test retry rule self-test" \
+            scripts/ci/test_run_live_tor_tests.sh
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'

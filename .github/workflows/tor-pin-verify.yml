@@ -22,6 +22,12 @@
 #     `#[ignore]`d boot-publish-rotate test: two boots, two different onion
 #     addresses, real reaps.
 #
+# The live tests bootstrap against the real Tor network, which times out now
+# and then from a runner. scripts/ci/run_live_tor_tests.sh retries a step once
+# when every failure in it is a bootstrap timeout and the pin-match test is
+# not among them; any other failure is final on the first attempt. A retry is
+# annotated on the run.
+#
 # There is no bundle-version input. The version, the URL and every digest come
 # from config/tor_pins.json, so the lane always verifies the pin of record and
 # has no default to go stale when the pin moves.
@@ -117,7 +123,7 @@ jobs:
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/tor" \
           SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
-            cargo test --locked -p shekyl-tor-control-client --lib -- --ignored --test-threads=1 | tee ignored-control.out
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-client ignored-control.out
           # The pin-match KAT is this lane's founding guarantee (a mistranscribed
           # pin otherwise fails closed for every user at first managed
           # launch) — assert it specifically ran and PASSED, not merely that some
@@ -138,7 +144,7 @@ jobs:
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/tor" \
           SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
-            cargo test --locked -p shekyl-tor-control-wallet --lib -- --ignored --test-threads=1 | tee ignored.out
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-wallet ignored.out
           # Floor = the supervisor's current linux ignored count (4:
           # bootstrap-timeout, crash-respawn, degraded-episode, onion-republish).
           # Same `-ge` discipline as above.
@@ -160,7 +166,7 @@ jobs:
           set -o pipefail
           cd rust
           SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
-            cargo test --locked -p shekyl-tor-control-daemon --lib -- --ignored --test-threads=1 | tee ignored-daemon.out
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-daemon.out
           # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
