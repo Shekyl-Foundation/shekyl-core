@@ -167,6 +167,17 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "the pinned point table); this limb is what keeps that edge off every "
     "normal consumer — the crate's production surface only verifies, "
     "through shekyl-ct-balance, and never derives",
+    (
+        "shekyl-p-host",
+        "test-signer",
+    ): "arms shekyl-p-serve's ephemeral TestKeySigner as a PassKey, so a host "
+    "under test can be bound with a key whose public half the test holds "
+    "(and, since SH-2, exposes RefusingKey — the always-refusing PassKey the "
+    "serving-task lifecycle tests bind in place of the persona's resident "
+    "key). Enabled from shekyl-engine-core's [dev-dependencies] edge only; "
+    "the production PassKey is the stake actor's ResidentPassKey, and "
+    "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
+    "every production graph",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -184,13 +195,16 @@ PERMANENT: dict[tuple[str, str], str] = {}
 
 # Crates whose feature table must be exhaustively categorized (third limb).
 # Adding a crate here is the declaration that no feature of it may exist
-# uncategorized; both listed crates are clean at registration
-# (`shekyl-chain-store` declares none; `shekyl-tor-control-client` and
-# `shekyl-chain-rules` declare only their TEST_ONLY row — the latter joined
-# 2026-09-19 when the fourth limb fired on `harness` in CI, the first
-# cross-crate feature declared after the limb landed).
+# uncategorized; every listed crate is clean at registration
+# (`shekyl-chain-store` declares none; `shekyl-tor-control-client`,
+# `shekyl-chain-rules` and `shekyl-p-host` declare only their TEST_ONLY row —
+# `shekyl-chain-rules` joined 2026-09-19 when the fourth limb fired on
+# `harness` in CI, the first cross-crate feature declared after the limb
+# landed; `shekyl-p-host` joined 2026-10-07 when the limb fired on
+# `test-signer`, first enabled across a crate boundary by the SH-2
+# serving-task tests in `shekyl-engine-core`).
 #
-# This set is opt-in — two crates out of a workspace approaching seventy — so
+# This set is opt-in — four crates out of a workspace approaching seventy — so
 # exhaustiveness holds *within* governance. The rule for joining: **a crate
 # joins this set in the commit that first declares a feature another crate
 # enables.** A feature only its own tests or its own `default` turn on does
@@ -201,7 +215,12 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # left open, on the argument that governing everything is churn; detecting
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
-    {"shekyl-chain-store", "shekyl-tor-control-client", "shekyl-chain-rules"}
+    {
+        "shekyl-chain-store",
+        "shekyl-tor-control-client",
+        "shekyl-chain-rules",
+        "shekyl-p-host",
+    }
 )
 
 Hit = tuple[str, str, str]  # feature, consumer, edge kind
