@@ -123,6 +123,7 @@ use shekyl_types::TxHash;
 use shekyl_wire::{Input, Transaction};
 
 use crate::census::CenRow;
+use crate::fault::ViewRead;
 use crate::rules::tx_emission::J19;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
@@ -171,7 +172,7 @@ impl BlockRule for G1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let mut listed_here: BTreeSet<TxHash> = BTreeSet::new();
         for (n, hash) in cx.candidate().block.transaction_hashes.iter().enumerate() {
             // The intra-block arm first: it costs no read, and a hash that
@@ -302,7 +303,7 @@ impl BlockRule for G7 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let triples: Vec<(Locus, ServeCreditKey)> = listed_inputs(cx)
             .filter_map(|(locus, item)| match ArchivalKey::of(item) {
                 Some(ArchivalKey::ServeCredit { p, shard, epoch }) => {
@@ -329,7 +330,7 @@ impl BlockRule for G9 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let mut pairs: Vec<(Locus, ([u8; 32], u64))> = Vec::new();
         for (locus, item) in listed_inputs(cx) {
             if let Some(ArchivalKey::Claims { p, epochs }) = ArchivalKey::of(item) {
@@ -359,7 +360,7 @@ impl BlockRule for G10 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let ids: Vec<(Locus, [u8; 32])> = listed_inputs(cx)
             .filter_map(|(locus, item)| match ArchivalKey::of(item) {
                 Some(ArchivalKey::BondPost { p }) => Some((locus, p)),

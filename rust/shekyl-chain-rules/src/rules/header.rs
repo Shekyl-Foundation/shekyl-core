@@ -51,6 +51,7 @@ use shekyl_wire::Block;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::ViewRead;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
@@ -140,7 +141,7 @@ impl BlockRule for B5 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let claimed = cx.candidate().block.header.curve_tree_root;
         match view.root_at(cx.connecting)? {
             AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),

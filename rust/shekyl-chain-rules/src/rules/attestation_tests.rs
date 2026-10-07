@@ -12,7 +12,9 @@
 //! I20 can see it), a header blob or witness that does not parse, and the
 //! record arm's two refusals this crate can witness without a bond on the
 //! view: a signed record below the anchor threshold, and one whose persona
-//! has no bond record. The accept of a signed record runs the same body
+//! has no bond record. A hole in the window and a stored key that is not
+//! canonical are `Corrupt`, witnessed by the mock's two job-3 instruments,
+//! not refusals. The accept of a signed record runs the same body
 //! the daemon's FFI pins (`shekyl-ffi`, `attestation_verify_tests::
 //! valid_block_verifies`); a chain that posts the bond and mints the
 //! `0x0B` field is not mintable under CEN-I20's grammar today (slice 8
@@ -21,8 +23,12 @@
 use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
+use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::harness::fixture::{candidate, candidate_on, chain_of};
-use crate::harness::{assert_refused, formed_on, infallible, judged, MockChain};
+use crate::harness::{
+    assert_refused, defined, formed_on, infallible, judged, MockChain, NonCanonicalHybridKey,
+    WithheldRead,
+};
 use crate::rule_set::RuleSet;
 use crate::rules::BlockContext;
 use crate::trust::Trust;
@@ -39,14 +45,14 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridSignature, SCHEME_DOMAIN_ATTESTATION};
 use shekyl_types::archival::AttestationWitness;
-use shekyl_types::{AttestationRoot, BlockCount, BlockHeight};
+use shekyl_types::{AttestationRoot, BlockCount, BlockHeight, PCanonicalId};
 use shekyl_wire::tx_extra::{parse, serialize, TxExtraField};
 
 /// Run B4 on its own against `chain`.
 fn check_alone_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(B4::check(
+        defined(B4::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
@@ -87,6 +93,7 @@ fn with_coinbase_field(mut candidate: Candidate, field: TxExtraField) -> Candida
 /// connecting chain's hash at `anchor`, and the header, witness and root
 /// a block carrying exactly that record commits.
 struct SignedRecord {
+    p_id: [u8; 32],
     header: Vec<u8>,
     witness: AttestationWitness,
     root: [u8; 32],
@@ -134,6 +141,7 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
     .to_canonical_bytes()
     .expect("witness bytes");
     SignedRecord {
+        p_id,
         header: header.to_canonical_bytes().to_vec(),
         witness: AttestationWitness::new(witness).expect("a non-empty witness"),
         root: attestation_root(std::slice::from_ref(&record)).expect("root"),
@@ -307,7 +315,7 @@ fn cen_b4_anchor_window_is_filled_from_the_connecting_chain() {
         .checked_sub_count(BlockCount::from_raw(1))
         .expect("a chain has a predecessor");
     let window = chain
-        .with_view(|view| infallible(anchor_window(&view, connecting)))
+        .with_view(|view| defined(anchor_window(&view, connecting)))
         .expect("above the threshold there is a window");
     let last = predecessor
         .checked_sub_count(PASS_ANCHOR_DEPTH_BLOCKS)
@@ -339,16 +347,71 @@ fn cen_b4_no_window_below_the_threshold_or_at_genesis() {
     // Predecessor exactly at the threshold: a window, starting at genesis.
     let chain = chain_of(min_pred.to_raw() + 1);
     let connecting = Tip::connecting_height(chain.tip().as_ref());
-    let window = chain.with_view(|view| infallible(anchor_window(&view, connecting)));
+    let window = chain.with_view(|view| defined(anchor_window(&view, connecting)));
     assert_eq!(window.map(|w| w.first()), Some(BlockHeight::ZERO));
     // One below: none.
     let chain = chain_of(min_pred.to_raw());
     let connecting = Tip::connecting_height(chain.tip().as_ref());
     assert!(chain
-        .with_view(|view| infallible(anchor_window(&view, connecting)))
+        .with_view(|view| defined(anchor_window(&view, connecting)))
         .is_none());
     // Genesis: no predecessor at all.
     assert!(MockChain::default()
-        .with_view(|view| infallible(anchor_window(&view, BlockHeight::ZERO)))
+        .with_view(|view| defined(anchor_window(&view, BlockHeight::ZERO)))
         .is_none());
+}
+
+/// A height inside the window answers `AboveTip` while the tip still says
+/// the chain is dense. That is a hole below the predecessor, so the window
+/// read and the rule both halt. It is not an absent window, and not B4.
+#[test]
+fn cen_b4_a_hole_in_the_anchor_window_is_corrupt_not_a_refusal() {
+    let chain = chain_with_window();
+    let record = signed_record(&chain, BlockHeight::ZERO);
+    let candidate = carrying(&chain, record);
+    let formed = formed_on(&chain, candidate);
+    let connecting = Tip::connecting_height(chain.tip().as_ref());
+    let hole = ViewRead::Corrupt(Corrupt::HoleBelowTip {
+        at: BlockHeight::ZERO,
+        record: PerHeightRecord::Block,
+    });
+    chain.with_view(|inner| {
+        let view = inner.withholding(WithheldRead::BlockAt(BlockHeight::ZERO));
+        assert_eq!(anchor_window(&view, connecting), Err(hole));
+        assert_eq!(
+            B4::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view,),
+            Err(hole)
+        );
+    });
+}
+
+/// Four bytes. A canonical hybrid public key is a versioned encoding, so
+/// these cannot parse — the same fixture length the slash fold uses when
+/// the key is not the subject.
+const NOT_A_HYBRID_KEY: [u8; 4] = [0xb1; 4];
+
+/// The persona's record is present and its hybrid key is not canonical.
+/// Absence of a record is B4's refusal; bytes the grammar rejects are the
+/// store's, so the rule halts instead of treating the bond as missing.
+#[test]
+fn cen_b4_a_non_canonical_bond_key_is_corrupt_not_an_absent_bond() {
+    let chain = chain_with_window();
+    let record = signed_record(&chain, BlockHeight::ZERO);
+    let persona = PCanonicalId::from_bytes(record.p_id);
+    let candidate = carrying(&chain, record);
+    let formed = formed_on(&chain, candidate);
+    let key = NonCanonicalHybridKey::from_bytes(NOT_A_HYBRID_KEY)
+        .expect("four bytes are not a canonical hybrid public key");
+    chain.with_view(|inner| {
+        let view = inner.with_non_canonical_bond(persona, key);
+        let served =
+            infallible(view.bond_record(&persona)).expect("the planted persona has a record");
+        assert_eq!(infallible(view.bond_records()), vec![(persona, served)]);
+        assert_eq!(
+            B4::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view,),
+            Err(ViewRead::Corrupt(Corrupt::BondHybridKeyMalformed {
+                persona
+            }))
+        );
+    });
 }

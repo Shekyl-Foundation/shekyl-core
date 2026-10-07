@@ -148,7 +148,7 @@ impl BlockRule for L1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let mut seen: BTreeSet<[u8; 32]> = BTreeSet::new();
         for (n, tx) in cx.candidate().transactions.iter().enumerate() {
             for (input, item) in tx.prefix.inputs.iter().enumerate() {

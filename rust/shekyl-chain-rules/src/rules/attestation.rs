@@ -59,9 +59,10 @@ use shekyl_types::{BlockCount, BlockHeight, PCanonicalId};
 use shekyl_wire::tx_extra::{parse, TxExtraField};
 
 use crate::census::CenRow;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::fault::{Corrupt, ViewRead};
+use crate::rules::{recorded, BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::{AtHeight, ChainView};
+use crate::view::ChainView;
 
 /// CEN-B4: `attestation_root` recomputes over the coinbase's kept headers
 /// paired with the sidecar witness, and every pass record's
@@ -85,7 +86,7 @@ impl BlockRule for B4 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let candidate = cx.candidate();
 
         // The kept headers: the first `0x0B` field of a coinbase extra that
@@ -123,16 +124,16 @@ impl BlockRule for B4 {
         }
 
         // The record arm: the window from the connecting chain, each
-        // record's bond from the view.
+        // record's bond key from the view. A hole and a key the grammar
+        // rejects are the view's, not this row's refusal.
         let window = anchor_window(view, cx.connecting)?;
         let mut pubkeys: Vec<([u8; 32], Option<HybridPublicKey>)> = Vec::new();
         for record in set.records() {
             if pubkeys.iter().any(|(p_id, _)| *p_id == record.p_id) {
                 continue;
             }
-            let pubkey = view
-                .bond_record(&PCanonicalId::from_bytes(record.p_id))?
-                .and_then(|bond| HybridPublicKey::from_canonical_bytes(&bond.hybrid_pubkey).ok());
+            let persona = PCanonicalId::from_bytes(record.p_id);
+            let pubkey = committed_hybrid_key(view, &persona)?;
             pubkeys.push((record.p_id, pubkey));
         }
         let pubkey_of = |p_id: &[u8; 32]| -> Option<&HybridPublicKey> {
@@ -148,6 +149,25 @@ impl BlockRule for B4 {
     }
 }
 
+/// `persona`'s committed hybrid key, or `None` when the persona has no
+/// bond. A record whose key bytes are not canonical is
+/// [`Corrupt::BondHybridKeyMalformed`]: the bytes are the view's, and a
+/// bond is admitted only with a key the grammar accepts.
+fn committed_hybrid_key<'id, V: ChainView<'id>>(
+    view: &V,
+    persona: &PCanonicalId,
+) -> Result<Option<HybridPublicKey>, ViewRead<V::Fault>> {
+    let Some(bond) = view.bond_record(persona)? else {
+        return Ok(None);
+    };
+    match HybridPublicKey::from_canonical_bytes(&bond.hybrid_pubkey) {
+        Ok(key) => Ok(Some(key)),
+        Err(_) => Err(ViewRead::Corrupt(Corrupt::BondHybridKeyMalformed {
+            persona: *persona,
+        })),
+    }
+}
+
 /// The SF-D8 anchor window for a candidate at `connecting`, filled from
 /// the connecting chain: the block hashes at
 /// `[pred − depth − L, pred − depth]` where `pred = connecting − 1` is the
@@ -156,15 +176,19 @@ impl BlockRule for B4 {
 /// predecessor below
 /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`](shekyl_archival_retention::PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT).
 ///
-/// Every height in the window is below the predecessor, so a conforming
-/// view has it recorded; an `AboveTip` there is reported as no window and
-/// the record arm refuses, which is the only decision a rule can take on
-/// a chain with a hole in it (G11).
+/// Every height in the window is strictly below the predecessor, so a
+/// conforming view has each block recorded. [`recorded`] reports
+/// `AboveTip` there as [`Corrupt::HoleBelowTip`] — the halt, not an absent
+/// window. An absent window is only genesis (no predecessor) or a
+/// predecessor below the anchor floor, and a record on that chain is
+/// CEN-B4's refusal. The table this fills is exactly the shape
+/// [`PassAnchorWindow::shape_for_predecessor`] named, so a `from_table`
+/// error is the window type disagreeing with itself.
 pub(crate) fn anchor_window<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
-) -> Result<Option<PassAnchorWindow>, V::Fault> {
-    let Some(predecessor) = connecting.checked_sub_count(BlockCount::from_raw(1)) else {
+) -> Result<Option<PassAnchorWindow>, ViewRead<V::Fault>> {
+    let Some(predecessor) = connecting.checked_sub_count(BlockCount::ONE) else {
         return Ok(None);
     };
     let Some((first, len)) = PassAnchorWindow::shape_for_predecessor(predecessor) else {
@@ -176,12 +200,13 @@ pub(crate) fn anchor_window<'id, V: ChainView<'id>>(
         let height = first
             .checked_add(BlockCount::from_raw(offset as u64))
             .expect("window heights lie below the predecessor");
-        match view.block_at(height)? {
-            AtHeight::Recorded(block) => hashes.push(*block.hash.as_bytes()),
-            AtHeight::AboveTip => return Ok(None),
-        }
+        let block = recorded(view, height)?;
+        hashes.push(*block.hash.as_bytes());
     }
-    Ok(PassAnchorWindow::from_table(predecessor, &hashes).ok())
+    Ok(Some(
+        PassAnchorWindow::from_table(predecessor, &hashes)
+            .expect("the filled table is the window shape_for_predecessor named"),
+    ))
 }
 
 #[cfg(test)]

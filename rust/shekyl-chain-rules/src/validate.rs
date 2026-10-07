@@ -24,8 +24,9 @@
 //! implement the traits without this crate naming them. Each returns a
 //! fault in the outer position and a verdict in the inner one; `validate`'s
 //! outer position is a [`Fault<V::Fault>`] — the view's, or one of the two
-//! kinds this crate defines (`fault.rs`). Inside a view-reading rule, `?`
-//! propagates a fault and only a fault; a refusal is always written out as
+//! kinds this crate defines (`fault.rs`). Inside a block rule, `?`
+//! propagates a [`ViewRead`] — the view's fault, or a corrupt observation —
+//! and `validate` maps that into [`Fault`]. A refusal is always written out as
 //! [`refused`](crate::refused) at the site that judged, so the row is named
 //! where the decision is made.
 //!
@@ -90,12 +91,14 @@ macro_rules! judge_form {
 }
 
 /// Run the listed view-bound rules in order; the first refusal is the
-/// verdict. A view fault is wrapped into its arm of [`Fault`].
+/// verdict. A [`ViewRead`] becomes [`Fault`] through [`From`]: the view's
+/// own fault stays [`Fault::View`], and a corrupt observation stays
+/// [`Fault::Corrupt`].
 macro_rules! judge_block {
     ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
         $(
             if let Err(refused) =
-                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::View)?
+                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::from)?
             {
                 return Ok(Err(refused));
             }

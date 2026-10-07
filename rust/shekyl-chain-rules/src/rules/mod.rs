@@ -68,8 +68,11 @@
 //! locus)`. The row is therefore named twice — structurally by `ROW`, and at
 //! the arm — and the pin holds the two together: a rule that refuses under
 //! another row's id still records its own coverage, and the fixture for the
-//! other row fails. `?` inside a rule propagates a **fault** and only a fault
-//! (`view.rs`, "Three answers, three positions").
+//! other row fails. `?` inside a rule propagates that rule's error and only
+//! that error (`view.rs`, "Three answers, three positions"). A [`BlockRule`]'s
+//! error is a [`ViewRead`]: the view's own fault, or a store invariant the
+//! read observed. A transaction rule's error stays the view's own fault; a
+//! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod anchors;
 pub(crate) mod attestation;
@@ -253,15 +256,18 @@ impl<'a> BlockContext<'a> {
 /// transaction that will apply the block.
 pub(crate) trait BlockRule: Rule {
     /// `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on `Self::ROW`;
-    /// `Err(fault)` the view could not answer. Shared connect facts (tip,
-    /// connecting height, window, target) live on [`BlockContext`]. A rule
-    /// that needs a further recorded fact reads `view` itself — a root, a
-    /// parent — so a new shared fact is a new context field, and a new
-    /// per-rule lookup is a new `ChainView` method.
+    /// `Err(ViewRead::View)` the view could not answer;
+    /// `Err(ViewRead::Corrupt)` the view answered with a hole or with bytes
+    /// no conforming store holds. Shared connect facts (tip, connecting
+    /// height, window, target) live on [`BlockContext`]. A rule that needs
+    /// a further recorded fact reads `view` itself — a root, a parent — so
+    /// a new shared fact is a new context field, and a new per-rule lookup
+    /// is a new `ChainView` method. `?` on a view method lifts `V::Fault`
+    /// into [`ViewRead::View`]; a parent-side hole goes through [`recorded`].
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault>;
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>>;
 }
 
 /// Run one block rule and, if it passed, record its row.
@@ -277,7 +283,7 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     cx: &BlockContext<'_>,
     view: &V,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<()>, V::Fault> {
+) -> Result<Verdict<()>, ViewRead<V::Fault>> {
     let verdict = R::check(cx, view)?;
     if verdict.is_ok() {
         coverage.insert(R::ROW);
@@ -449,11 +455,13 @@ pub(crate) fn run_tx<R: TxRule>(cx: &TxContext<'_>, coverage: &mut RuleCoverage)
 /// pool's view decorator (DRS-E5) — the C++'s `check_tx_inputs` arrangement
 /// after its stateless arms, with the DB lookups the arms make.
 ///
-/// Three positions, as [`BlockRule`]: `Ok(Ok(()))` passed; `Ok(Err(refused))`
-/// refused on `Self::ROW` at the context's locus; `Err(fault)` the view could
-/// not answer, which is never a verdict. A rule that needs a recorded fact
-/// reads `view` itself, so a new per-rule lookup is a new [`ChainView`]
-/// method (slice 6 commit 5 adds `height_of` that way).
+/// Three positions: `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on
+/// `Self::ROW` at the context's locus; `Err(fault)` the view could not
+/// answer, which is never a verdict. A parent-side hole is not this error.
+/// The walk that reads one (`judge_reference`) returns [`ViewRead`] at its
+/// own boundary, the same position a [`BlockRule`] returns. A rule that
+/// needs a recorded fact reads `view` itself, so a new per-rule lookup is
+/// a new [`ChainView`] method (slice 6 commit 5 adds `height_of` that way).
 pub(crate) trait TxAgainstRule: Rule {
     /// Which transactions this rule judges.
     const SCOPE: TxScope;

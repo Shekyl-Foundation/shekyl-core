@@ -800,10 +800,15 @@ pub fn tx_against<'id, V: ChainView<'id>>(
 ```
 
 Generic over `V: ChainView<'id>` (not `&dyn`) so E5's decorator implements the
-trait without this crate naming it. Inside a rule, `?` propagates a **fault**
-and only a fault; a refusal is always written out as `Ok(Err(InvalidBlock {
+trait without this crate naming it. Inside a rule, `?` propagates that rule's
+error and only that error; a refusal is always written out as `Ok(Err(InvalidBlock {
 rule, locus }))` at the site that judged — the row is named where the decision
-is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
+is made. A block rule's error is a `ViewRead` (2026-10-07): `?` on a view
+method lifts `V::Fault` into `ViewRead::View`, and a parent-side hole or a
+stored bond key that is not canonical is `ViewRead::Corrupt`. `validate`
+maps that into `Fault` once (`Fault::from`). A transaction rule's error stays
+`V::Fault`; `tx_against` widens to `ViewRead` at its own boundary, where I12
+already did. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx **at the slot each occupies** — both stages derive at the slot they
 judge, so a refusal's locus is left as the callee wrote it — unions the
 coverages, and mints the `ChainValid`. The view-bound per-tx rules are
@@ -870,7 +875,12 @@ CEN-A3 has no Rust rule of its own; and the empty set has **one**
 carrier — `None`, no store row — because the wire codec gives it no
 bytes and refuses a zero count (`WitnessError::ZeroCount`, 2026-10-07,
 review on #983), so a sidecar spelling it as eight zero bytes refuses
-as B4 instead of recording a row its peers do not), E1, then the slot loop, F4–F6,
+as B4 instead of recording a row its peers do not; a hole below the
+predecessor, and a stored bond hybrid key that is not canonical, are
+`Corrupt` — `HoleBelowTip` on the block row and `BondHybridKeyMalformed`
+on `archival_bond` — because a conforming writer cannot produce either,
+so neither is a B4 refusal; a persona with no record stays the refusal),
+E1, then the slot loop, F4–F6,
 G1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.

@@ -18,12 +18,15 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::archival::{RMarket, SigmaWorkMilli};
+use shekyl_types::archival::{
+    BondRecord, Holdings, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
-    LongTermWeight, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
+    LongTermWeight, PCanonicalId, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -66,10 +69,13 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// 2. **Faults the real substrate cannot be made to exhibit on demand** —
 ///    "a store fault propagates as a `Fault`, never a verdict" needs a view
 ///    that fails at height 7 ([`FaultingView`]); a real store will not.
-/// 3. **States a conforming store refuses to hold** — a tip that says one
-///    height and a row missing below it. The instrument is
-///    [`WithholdingView`]: one read ([`WithheldRead`]) answers `AboveTip`,
-///    and the assertion is the fault class, never a verdict.
+/// 3. **States a conforming store refuses to hold.** The assertion is the
+///    fault class, never a verdict. Two instruments: [`WithholdingView`]
+///    answers `AboveTip` for one per-height read ([`WithheldRead`]) while
+///    the tip still says the chain is dense; [`NonCanonicalBondView`]
+///    serves one persona a bond record whose hybrid key is not canonical
+///    bytes. A valid bond, a derived root, or a spent set is neither
+///    instrument — those are the real chain's to witness.
 ///
 /// The line between the three and everything else is whether the chain is
 /// the subject. "This block exists", "this root is what the tree grew",
@@ -544,6 +550,204 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     }
 
     crate::archival_reads!(delegate inner);
+}
+
+/// Hybrid-key bytes [`HybridPublicKey::from_canonical_bytes`] rejects.
+///
+/// The constructor is that rejection, so a [`NonCanonicalBondView`] cannot
+/// serve a key the admission grammar accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NonCanonicalHybridKey(Vec<u8>);
+
+impl NonCanonicalHybridKey {
+    /// `Some` when `bytes` are not a canonical hybrid public key.
+    #[must_use]
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Option<Self> {
+        let bytes = bytes.into();
+        if HybridPublicKey::from_canonical_bytes(&bytes).is_ok() {
+            None
+        } else {
+            Some(Self(bytes))
+        }
+    }
+}
+
+/// A [`MockView`] that serves one persona a bond record whose hybrid key
+/// is not canonical.
+///
+/// Job 3 of the mock's charter, beside [`WithholdingView`]. `bond_records`
+/// is the inner list with this persona's record planted, so the two bond
+/// reads agree and every other persona stays the inner mock's. A chain
+/// that posts a real bond is the writer's to witness, not this view's:
+/// the constructor will not accept a canonical key.
+pub struct NonCanonicalBondView<'a, 'id> {
+    inner: MockView<'a, 'id>,
+    persona: PCanonicalId,
+    record: BondRecord,
+}
+
+impl<'a, 'id> MockView<'a, 'id> {
+    /// Serve `persona` the record whose hybrid key is `key`. The record's
+    /// other fields are empty: this instrument exists so a rule can observe
+    /// the key, and it folds nothing.
+    #[must_use]
+    pub fn with_non_canonical_bond(
+        self,
+        persona: PCanonicalId,
+        key: NonCanonicalHybridKey,
+    ) -> NonCanonicalBondView<'a, 'id> {
+        NonCanonicalBondView {
+            inner: self,
+            persona,
+            record: BondRecord {
+                hybrid_pubkey: key.0,
+                bond_spend_pk: Vec::new(),
+                endpoint: [0; 32],
+                join_settlement_epoch: SettlementEpoch::ZERO,
+                bonded_total: AtomicUnits::ZERO,
+                holdings: Holdings::shard_set(Vec::new())
+                    .expect("an empty shard set is a holdings value"),
+                bad_intervals: Vec::new(),
+                claimed_settlement_epochs: Vec::new(),
+                first_paying_emission_height: None,
+            },
+        }
+    }
+}
+
+impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
+    type Fault = Infallible;
+
+    fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
+        self.inner.has_key_image(key_image)
+    }
+
+    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+        self.inner.total_burned()
+    }
+
+    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+        self.inner.block_at(height)
+    }
+
+    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+        self.inner.height_of(hash)
+    }
+
+    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+        self.inner.root_at(height)
+    }
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        self.inner.tip()
+    }
+
+    fn weights_window(
+        &self,
+        end: BlockHeight,
+        at_most: BlockCount,
+    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+        self.inner.weights_window(end, at_most)
+    }
+
+    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+        self.inner.has_transaction(hash)
+    }
+
+    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+        self.inner.tree_frontier()
+    }
+
+    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+        self.inner.leaf_count_at(height)
+    }
+
+    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+        self.inner.outputs_at(height)
+    }
+
+    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
+        if persona == &self.persona {
+            Ok(Some(self.record.clone()))
+        } else {
+            self.inner.bond_record(persona)
+        }
+    }
+
+    fn slash_log_after(
+        &self,
+        persona: &PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, Infallible> {
+        self.inner.slash_log_after(persona, height)
+    }
+
+    fn last_served_epoch(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+    ) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_served_epoch(persona, shard)
+    }
+
+    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
+        self.inner.served_shards(persona)
+    }
+
+    fn pass_count(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<PassCount, Infallible> {
+        self.inner.pass_count(persona, shard, epoch)
+    }
+
+    fn r_market(
+        &self,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<RMarket>, Infallible> {
+        self.inner.r_market(shard, epoch)
+    }
+
+    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        self.inner.sigma_work(epoch)
+    }
+
+    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget(epoch)
+    }
+
+    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
+        self.inner.last_settled_slash_epoch()
+    }
+
+    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
+        let mut records = self.inner.bond_records()?;
+        if let Some((_, record)) = records
+            .iter_mut()
+            .find(|(persona, _)| *persona == self.persona)
+        {
+            *record = self.record.clone();
+        } else {
+            records.push((self.persona, self.record.clone()));
+        }
+        Ok(records)
+    }
+
+    fn slash_applied(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, Infallible> {
+        self.inner.slash_applied(persona, shard, epoch)
+    }
+
+    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget_accruing(epoch)
+    }
 }
 
 /// The environment a fixture is judged in: a fixed clock and a longhash
