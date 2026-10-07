@@ -161,10 +161,12 @@ it (`hidden_outbound_ids`). The dialer does not choose the edge. An
 empty pool is the relay's `NoOwnEdge`. The draw stays the relay
 lane's. The relay never sees a per-connector count.
 
-A later connector, I2P included, is one declaration column and that
-connector's crate. `shekyl-relay` does not change. The cells are
-address hiding, cover class, and measured transit. An unassessed
-transit is not a stem edge.
+A later connector, I2P included, is a declaration column, that
+connector's measured transit added in `verify_cost`
+(`shekyl-relay-privacy`), which the declaration reads, and the
+connector crate. `shekyl-relay` is not edited. The column's cells are
+address hiding, cover class, and that transit. An unassessed transit
+is not a stem edge.
 
 ## Support flags
 
