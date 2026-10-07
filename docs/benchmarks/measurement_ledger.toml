@@ -388,6 +388,11 @@ spec = [
 stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5838269c20", note = "A mismatched dial and a clearnet proxy failure are LocalClose instead of DialFailed, and the write half logs its stall after the copy. TCP connect, SOCKS, and the handshake do the same I/O, so the span waits are unchanged. Not re-measured." },
+  { through = "29d3d75860", note = "Send and receive instants leave the connection board and sit on the byte tally, so a new second no longer republishes every row. That republish was outside the dial, handshake, and gap waits. A direct clearnet connect counts only when the peer refuses it. Not re-measured." },
+  { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "23189972dc", note = "The connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The clock and the clearnet tests moved to their own modules. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -437,6 +442,11 @@ spec = [
 ]
 stale_through = [
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5838269c20", note = "A Tor dial that does not open, and a wake that is dropped, are LocalClose instead of DialFailed. A SOCKS reply that is this node's request is logged. The dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "29d3d75860", note = "Send and receive instants leave the connection board and sit on the byte tally in the transport layer. A direct connect counts only when the peer refuses it. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "23189972dc", note = "The Tor connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the dial. Dial and gap I/O are unchanged. Not re-measured." },
+  { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]
