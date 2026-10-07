@@ -44,10 +44,18 @@ const LAMBDA: u64 = CHALLENGES_PER_PAIR_PER_EPOCH as u64;
 /// rather than evaluated at a point.
 pub const NOTICE_TAUS: [u64; 4] = [25, 50, 100, 200];
 
-/// Deterministic SplitMix64 — tie-breaking only (see module doc).
-struct SplitMix64(u64);
+/// Deterministic SplitMix64 — tie-breaking only here (see module doc);
+/// `secret_draw` drives its draws, dropout and reveal lag from the same
+/// generator, so the crate has one.
+pub(crate) struct SplitMix64(u64);
 
 impl SplitMix64 {
+    /// The generator for run `seed`. Seeds are small integers; the multiply
+    /// spreads them and the `+ 1` keeps seed 0 off the all-zero state.
+    pub(crate) fn seeded(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9e37_79b9).wrapping_add(1))
+    }
+
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
@@ -58,7 +66,7 @@ impl SplitMix64 {
 
     /// Uniform draw in `[0, n)` by rejection (no modulo bias).
     /// `n` must be nonzero — an empty range has no uniform draw.
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         assert!(n > 0, "uniform draw from an empty range");
         let zone = u64::MAX - (u64::MAX % n);
         loop {
@@ -154,7 +162,7 @@ pub fn run_epoch(pairs: u32, total_draws: u64, band: bool, seed: u64) -> Coverag
         "a settlement epoch needs at least one bonded pair to draw from"
     );
     let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let mut rng = SplitMix64(seed.wrapping_mul(0x9e37_79b9).wrapping_add(1));
+    let mut rng = SplitMix64::seeded(seed);
     let mut buckets = Buckets::new(pairs);
     let k_avg = total_draws as f64 / seb as f64;
     let mut exposed = [0u64; 4];
