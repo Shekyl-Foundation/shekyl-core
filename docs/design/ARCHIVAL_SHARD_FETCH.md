@@ -984,7 +984,12 @@ deleted (`RefusingKey` survives as a test fixture on the dev-only
 asks for is `engine-core`'s `serving::round_trip_tests`: the resident
 key behind a real `PServeEndpoint`, fetched by the real `PFetchClient`,
 verified under the bond identity. The unsigned HTTP half is not a
-substitute for a countersigned loopback test.
+substitute for a countersigned loopback test. *Pending re-key (Slice C
+Round 0 ruling, 2026-10-07, not yet on `dev`):* the pass receipt moves to
+a **separate FN-DSA-1024 receipt key** carried in the bond record, with
+the identity staying ML-DSA-65 and the receipt signature algorithm-tagged;
+the in-actor shape, the weak handle and the loopback harness survive, and
+`SH2_RESIDENT_KEY_AUDIT.md` §6 names what changes.
 
 **Named residency: the serving host becomes a hot signer.** Every
 read now costs a hybrid signature with `P`'s identity secret, so that

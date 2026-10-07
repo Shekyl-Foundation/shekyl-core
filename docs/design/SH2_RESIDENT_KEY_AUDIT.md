@@ -1,8 +1,10 @@
 # SH-2 resident attestation key — Round 0 pre-flight audit
 
 **Status:** OPEN — Round 0 (pre-flight) recorded 2026-10-06; implementation
-follows in the same PR. Flips to CLOSED-as-record and moves to
-`docs/completed/` when the PR lands.
+landed in the same PR (#990). §9.7 item 3 RULED 2026-10-07 (§4). Stays in
+`docs/design/` while it owns the receipt-key re-key named in §6; flips to
+CLOSED-as-record and moves to `docs/completed/` when that re-key lands or is
+re-owned by the consolidated serve-credit spec.
 **Substrate verified at:** `origin/dev` = `0e1d1d6126` (PR #982 merged).
 **Branch / worktree:** `feat/sh2-resident-pass-key`.
 **Anchors:** `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 (the SH- composition
@@ -125,6 +127,20 @@ reopen criterion (one production pinner, reviewable by reading it) is put
 to the maintainer with this record; the item's text in §9.7 is updated to
 name `ReportedSet` either way, so the next reader does not re-derive this.
 
+**RULED 2026-10-07 (maintainer, reading #990 at source) — re-ruled against
+the reopen criterion; the seal is not built.** The only code that can
+fabricate a `ReportedSet` runs inside the operator's own wallet process, so
+the attacker is the operator against themselves; a fabricated set cannot
+make `P` serve bytes it does not hold, and a pass for a shard outside `P`'s
+bond is refused on chain by `J9` — the chain, not the wallet's report, is
+authoritative. A wrong set can only make `P` fail its own challenges. One
+production pinner (`serve_set_source.rs`) is what the criterion asks for.
+**Dependency named:** the ruling stands on `J9` landing with SO-D8 Slice C;
+until then `set_archival_settlement` has no production caller, so nothing is
+exposed in the interval. The reopen criterion in §9.7 is unchanged. The
+ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
+(RULED 2026-10-07).
+
 ## 5. Part B disciplines
 
 - **B1 / B4** — the proving test is the production call graph end to end
@@ -143,11 +159,39 @@ name `ReportedSet` either way, so the next reader does not re-derive this.
 - **B9** — the budget the sign has to fit is the client's 30 s `body_stall`;
   the hybrid sign is sub-second on the floor and the only other term is one
   scan-step mailbox wait. No new bench is prescribed; `BA-T5` owns per-phase
-  serve cost and is unaffected by which key signs.
+  serve cost and is unaffected by which key signs. *Not measured, by ruling
+  (2026-10-07):* a timing of the current key would measure the ML-DSA-65
+  hybrid that the Slice C Round 0 ruling replaces with an FN-DSA-1024 receipt
+  key (§6), and the floor device is the **daemon** floor, not a serving floor
+  — nobody serves from it. When it is measured, it is FN-DSA-1024 sign on a
+  serving-class host. (A dev-box reading of the production
+  `sign_pass_transcript`, taken while setting that run up: p50 ≈ 0.4 ms, p99
+  ≈ 1.8 ms, n = 50 — four orders under the budget, and not the key that
+  ships.)
 
 ## 6. What this PR leaves owed
 
-- §9.7 item 3's `ReportedSet` sealing (§4 above) — a maintainer decision.
+- **The receipt-key re-key — owed by name, so the proving test does not
+  become a false claim.** The Slice C Round 0 ruling (maintainer's brief,
+  2026-10-07; at this writing on `dev` in no document and in no open PR) puts
+  a **separate FN-DSA-1024 receipt key** in the bond record, keeps identity
+  on ML-DSA-65, and algorithm-tags the receipt signature. #990 is correct
+  against its pin — it binds the pass receipt to the bond *identity* key, and
+  `serving/pass_key.rs`'s proving test is literally
+  `signs_under_the_bond_identity_key` — and will be re-keyed. What survives
+  unchanged: in-actor signing, the key never leaving `HeldPersona`,
+  `ResidentPassKey`/`ready()`, `RefusingKey`, the `ServeHealth` row, the
+  loopback harness. What changes: `SignPassTranscript` reads
+  `receipt_sign_sk` instead of `hybrid_sign_sk`; the transcript carries the
+  algorithm tag; the bond record carries the receipt public key; the proving
+  test asserts signing under the *receipt* key, with a negative control that
+  an identity-key signature is refused. What gets better: `persona.rs`'s
+  doc comment that "`hybrid_sign_sk` authorises three" things is discharged —
+  the receipt key authorises exactly one. **Order:** the ruling reaches the
+  consolidated serve-credit spec before anything builds against it; the
+  re-key then lands with, or directly after, that spec.
 - `BENCHMARK_ALIGNMENT.md` §S's default ("S, with the pre-flight method")
   stays the maintainer's to rule; this PR supplies the answer §S was waiting
-  on and edits that sentence to say so.
+  on and edits that sentence to say so. `BA-T5` is the only remaining input.
+- ~~§9.7 item 3's `ReportedSet` sealing — a maintainer decision.~~ RULED
+  2026-10-07, not built (§4).
