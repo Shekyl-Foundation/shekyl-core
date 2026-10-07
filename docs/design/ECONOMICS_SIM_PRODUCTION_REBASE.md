@@ -1138,7 +1138,12 @@ the 2-of-3 rule's, not the draw's. Neither is converted to currency
 here measures whether a producer can complete 117 reads per won block.
 Dropout is independent per block; a producer that is offline for a
 stretch, or one that withholds selectively, is not in the model. The
-previous epoch's last `W₂` blocks are not carried in.
+previous epoch's last `W₂` blocks are not carried in. For the count rule
+that is the rule itself: the serve-credit specification stops the
+in-flight term at the epoch's open (its count rule), so an epoch's counts
+do not depend on the one before. What the run leaves out at the
+boundary is the producer's work: reads owed for the previous epoch's
+draws overlap the first `W₂` blocks of the next.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
