@@ -834,8 +834,9 @@ async fn write_response<W: AsyncWrite + Unpin>(
         // task's executor thread does neither. The body and the digest
         // travel into the hop and come back with what it produced. This
         // function cannot advance the digest itself (`absorb` is private
-        // to `delivery`), so a served byte is hashed in the hop or not at
-        // all.
+        // to `delivery`), so the hash cannot drift apart from the read
+        // and back onto this thread; keeping the pair inside
+        // `spawn_blocking` is this line's job.
         let (returned, digest, folded) =
             tokio::task::spawn_blocking(move || read_and_fold(body, running))
                 .await

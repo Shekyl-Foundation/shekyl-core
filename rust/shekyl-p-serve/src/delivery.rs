@@ -25,18 +25,25 @@
 //! # Where the fold runs
 //!
 //! The fold is a hash over every byte of the shard: software Keccak, tens
-//! of milliseconds for a full segment on the floor device. It runs on the
-//! blocking pool, in the same hop as the store read that produced the
-//! chunk ([`read_and_fold`]), and never on the async executor, where it
-//! would hold a worker thread away from every other connection's task for
-//! as long as it hashed.
+//! of milliseconds for a full segment on the floor device. The serve loop
+//! runs it on the blocking pool, in the same hop as the store read that
+//! produced the chunk ([`read_and_fold`]), so that it does not hold an
+//! executor thread away from every other connection's task while it
+//! hashes.
 //!
-//! That is a property of this module's surface, not of a comment. The
-//! serve loop can start a digest, move it into [`read_and_fold`] and
-//! finish it. It cannot advance one: [`FramedDigest::absorb`] is private
-//! to this module, and [`fold_chunk`], its only caller outside the tests
-//! below, is too. So a served byte enters the digest inside the hop or
-//! not at all, and a change that hashes on the executor does not compile.
+//! What this module's surface enforces is narrower than "never on the
+//! executor", and it is stated exactly so nobody leans on more. The serve
+//! loop can start a digest, move it into [`read_and_fold`] and finish it.
+//! It cannot advance one: [`FramedDigest::absorb`] is private to this
+//! module, and so is [`fold_chunk`], its only caller outside the tests
+//! below. So **the hash cannot be separated from the read**: there is no
+//! way to read a chunk in one place and fold it in another, which is the
+//! shape that put the hash on the executor before. Which thread the
+//! combined step runs on is the caller's choice, and the type system does
+//! not make it: `write_response` wraps [`read_and_fold`] in
+//! `spawn_blocking`, as it always wrapped the store read, and calling it
+//! directly on the executor would compile and would block that thread on
+//! synchronous store I/O as well as on the hash.
 
 use shekyl_archival_retention::{PassDeliveryHasher, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
 use shekyl_curve_tree::served_frame::ServedFrameHeader;
@@ -144,11 +151,15 @@ fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, Provide
 /// of the send loop, and one blocking-pool hop.
 ///
 /// The read is synchronous store I/O and the fold is CPU-bound hashing,
-/// so both belong off the executor and they go together. The body and the
-/// digest are taken by value and handed back with the result, because the
-/// hop owns them while it runs: the caller holds neither across the
-/// `await`, and has no other way to advance the digest (see the module
-/// docs).
+/// so both belong off the executor and they go together: call this inside
+/// `spawn_blocking`. The body and the digest are taken by value and handed
+/// back with the result, because the hop owns them while it runs: the
+/// caller holds neither across the `await`, and has no other way to
+/// advance the digest (see the module docs).
+///
+/// The chunk size is the serve loop's [`WRITE_CHUNK_BYTES`], read here and
+/// not passed in, so the endpoint and the `BA-T3` compositions cannot read
+/// at different sizes: the gate would then be counting a different loop.
 pub(super) fn read_and_fold(
     mut body: ShardBody,
     mut running: FramedDigest,
