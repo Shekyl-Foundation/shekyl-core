@@ -183,11 +183,31 @@ fn proof_reference(tx: &Transaction) -> Option<BlockHash> {
     }
 }
 
+/// Which inputs are `ToKey` — the spend subset a proof is verified over,
+/// as input slots in input order: every input on a regular spend, the fee
+/// inputs on an emission (CEN-J26), the funding inputs on a bond post.
+/// One derivation for the three, in I7's shape (the input's kind, never
+/// the transaction's class, decides membership), so the subset
+/// [`I15::verify`] takes is the same thing under every attribution and a
+/// class arm cannot hand it a different one. The class dispatch in
+/// [`judge_reference`] decides *whether* the sequence runs; this decides
+/// *over what* (`05-system-thinking`: two decisions, two places).
+pub(crate) fn to_key_slots(tx: &Transaction) -> Vec<usize> {
+    let mut slots = Vec::new();
+    for (slot, input) in tx.prefix.inputs.iter().enumerate() {
+        let Input::ToKey { .. } = input else {
+            continue;
+        };
+        slots.push(slot);
+    }
+    slots
+}
+
 /// The curve-tree context a proof-bearing transaction's reference names,
 /// yielded by [`judge_reference`] for the rows that verify against it:
-/// CEN-I15 on a spend (its body is [`I15::verify`]; not run on that class
-/// yet — see [`I12`]), CEN-J25's backing proof and CEN-J26's fee-input
-/// proof on an emission.
+/// CEN-I15 on a spend (its body is [`I15::verify`] over [`to_key_slots`];
+/// not run on that class yet — see [`I12`]), CEN-J25's backing proof and
+/// CEN-J26's fee-input proof on an emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReferenceContext {
     /// I10's operand: the reference's recorded height.
