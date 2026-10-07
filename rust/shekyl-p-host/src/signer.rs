@@ -56,6 +56,9 @@
 //! `HostSigner` stays `pub(crate)`.
 
 use std::sync::Arc;
+// Used only by `signer_at_synced_tip`; the production lib has no other
+// `Duration`, and `-D warnings` on that build sees an unused import otherwise.
+#[cfg(any(test, feature = "test-signer"))]
 use std::time::Duration;
 
 use shekyl_crypto_pq::signature::HybridSignature;
