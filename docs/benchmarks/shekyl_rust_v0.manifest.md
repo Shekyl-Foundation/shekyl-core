@@ -1041,9 +1041,12 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   into the existing `crypto_bench_*` class. Sections previously numbered
   §§12–14 (Known gaps, Cross-references, Change log) renumbered to
   §§13–15.
-- The delivery-digest fold moves into the blocking-pool hop with the
-  read (`read_and_fold`), so the endpoint no longer hashes on an executor
-  thread. §12's compositions call the same function. The work is the same
+- The per-chunk fold of the delivery digest moves into the blocking-pool
+  hop with the read (`read_and_fold`), so the endpoint no longer hashes a
+  shard's bytes on an executor thread. Starting the digest over the frame
+  header and finalizing it stay on the connection's task, a fixed few
+  Keccak permutations whatever the shard's size. §12's compositions call
+  the same function. The work is the same
   and only the thread differs, which an instruction count on one thread
   cannot see; what it does see is the digest state now travelling into
   and out of each hop by value, about 270 instructions per chunk. x86

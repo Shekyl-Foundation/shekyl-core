@@ -31,6 +31,12 @@
 //! executor thread away from every other connection's task while it
 //! hashes.
 //!
+//! That is the part of the digest that scales with the shard, and it is
+//! the only part that moves. [`FramedDigest::start`], which absorbs the
+//! frame header, and [`FramedDigest::finish`], which finalizes, run on
+//! the connection's task: a fixed few Keccak permutations whatever the
+//! shard's size, and less work than a hop to the pool would be.
+//!
 //! What this module's surface enforces is narrower than "never on the
 //! executor", and it is stated exactly so nobody leans on more. The serve
 //! loop can start a digest, move it into [`read_and_fold`] and finish it.
