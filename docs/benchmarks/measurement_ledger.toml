@@ -280,6 +280,9 @@ stale_through = [
   { through = "b42854193a", note = "A test added to the test module of shekyl-p-fetch client.rs: two requests for one shard differ only in their nonce. No executable fetch or serve code changed." },
   { through = "6068ba31e9", note = "SF-D3 reopened: every read presents its own SOCKS credentials, so Tor builds a rendezvous circuit per read where reads to one persona shared one. The ruling's estimate is 1 to 5 s of circuit setup per read and a higher first-try failure rate; proof of work is paid per read against a flooded onion. Not measured (BA-T31). The serve path is unchanged." },
   { through = "71b41cb6cf", note = "The read's nonce moves from the SOCKS password to the username, in shekyl-p-fetch header.rs. The same handshake with the two fields exchanged; no cost moved." },
+  { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
+  { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
+  { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
 ]
 
 [[constant]]
@@ -720,7 +723,7 @@ needle = "| Work before the first byte | under 1 ms | not measured on the floor 
 measured_by = ["BA-T3", "BA-T5"]
 status = "estimated"
 estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
-basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,334,665 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
 basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
 carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
 path_set = "archival-serve-fetch"
