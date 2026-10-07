@@ -1247,25 +1247,38 @@ only rule that produces one is B4 (`anchor_window` through `recorded`,
 claim `16-architectural-inheritance` demotes; this gate is the check. It
 strips `//` comments, collects every function whose return type is
 `Result<…, ViewRead<…>>` (the lifting functions; `recorded` must be among
-them or the gate refuses its own subject), then walks each balanced `impl
-BlockRule for X {}` body for three site shapes: the literal
-`ViewRead::Corrupt(`; a `?` whose operand is a call to a lifting function
-not on the receiver `view` (a `?` on `view.method()` is `View`, never
-`Corrupt`; a `?` on something that is not a call is counted, since the gate
-cannot see its type); and a bare outer `Err(` that is neither the inner half
-of `Ok(Err(` nor wraps `InvalidBlock` nor is a match-arm pattern. The set of
-rules with at least one site must equal `CORRUPT_CAPABLE = {B4}`: a second
-rule with a site is a finding naming the site, and a listed rule with no site
-(or no `impl`) is a stale entry and refuses too. Subject refusals exit 2: no
-rule sources, no `impl BlockRule`, fewer than ten of them, no lifting
-function, `recorded` not a lifter. `--describe` prints every rule's sites;
-`--selftest` bites each refusal on synthetic sources and proves the three
-non-sites (a refusal built inside a `match`, `Err(_) =>` as a pattern,
-`Vec::extend` sharing a lifting method's name) stay clean. Wired as two steps
-in `docs-gates.yml` after the §6.4 pair, same append pattern. Falsified on
-the real tree before landing: a `recorded(view, cx.connecting)?` planted in
-G1 produced `block rule G1 can produce ViewRead::Corrupt (rules/body.rs:181
-recorded(…)?)`, exit 1.
+them or the gate refuses its own subject) and every function whose return
+type is `ViewRead` itself (the converters: `parent_read`,
+`record_invariant`), then walks each balanced `impl BlockRule for X {}`
+body. A site is the path `ViewRead::Corrupt` in either form the crate
+writes — the call `ViewRead::Corrupt(…)` or the constructor passed as a
+function, `map_err(ViewRead::Corrupt)`, which is how the archival folds
+lift a `Corrupt` — unless that path opens a match arm
+(`ViewRead::Corrupt(c) =>`). A use of a converter is a site too:
+`map_err(parent_read)` names neither the path nor a lifting function, and
+the return type is the position `Corrupt` travels in. The other shapes are
+unchanged: a `?` whose operand calls a lifting function not on the receiver
+`view` (a `?` on `view.method()` is `View`, never `Corrupt`; a `?` on
+something that is not a call is counted, since the gate cannot see its
+type), and a bare outer `Err(` that is neither the inner half of `Ok(Err(`
+nor wraps `InvalidBlock` nor is a match-arm pattern. `map_err(ViewRead::View)`
+is not a site. The set of rules with at least one site must equal
+`CORRUPT_CAPABLE = {B4}`: a second rule with a site is a finding naming the
+site, and a listed rule with no site (or no `impl`) is a stale entry and
+refuses too. Subject refusals exit 2: no rule sources, no `impl BlockRule`,
+fewer than ten of them, no lifting function, `recorded` not a lifter.
+`--describe` prints every rule's sites; `--selftest` bites each refusal on
+synthetic sources, including `map_err(ViewRead::Corrupt)?` and
+`map_err(parent_read)?`, and proves the non-sites stay clean: a refusal
+built inside a `match`, `Err(_) =>` and `ViewRead::Corrupt(c) =>` as
+patterns, `map_err(ViewRead::View)?`, and `Vec::extend` sharing a lifting
+method's name. Wired as two steps in `docs-gates.yml` after the §6.4 pair,
+same append pattern. Falsified on the real tree before landing: a
+`recorded(view, cx.connecting)?` planted in G1 produced `block rule G1 can
+produce ViewRead::Corrupt (rules/body.rs:181 recorded(…)?)`, exit 1. The
+`map_err(ViewRead::Corrupt)?` hole was the same shape, caught by review on
+#983 after the gate landed: the literal required a `(`, and the `?` walker
+does not treat `map_err` as a lifter.
 
 ## 7. Raising the conversion-ban gate (in this PR) — DONE, commit 7
 
