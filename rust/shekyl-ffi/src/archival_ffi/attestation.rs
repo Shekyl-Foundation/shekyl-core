@@ -145,8 +145,9 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 
 /// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
 ///
-/// `witness` is the opaque `count ‖ (nonce ‖ anchor_height_le ‖ signature)*` blob
-/// (`connect.attestation_witness`); an empty blob is the zero-record set. Returns a
+/// `witness` is the opaque `count ‖ (nonce ‖ anchor_height_le ‖ digest ‖ signature)*`
+/// blob (`connect.attestation_witness`); an empty blob is the zero-record set — its only
+/// encoding; an eight-byte zero count is `MALFORMED_WITNESS`. Returns a
 /// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
 ///
 /// # Safety
@@ -195,7 +196,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     };
 
     // 1–3. Header blob (cap FIRST, then parsed ONCE), witness (an empty blob is the
-    //    zero-signature set), and the pairing of pass headers with witness entries — the
+    //    zero-signature set; a zero count is malformed), and the pairing of pass headers with witness entries — the
     //    admission body's parse stage (`shekyl_archival_retention::AttestationSet`), shared
     //    with the Rust validator's CEN-B4. The parsed records are carried through coverage /
     //    recompute / countersig below — never re-parsed.

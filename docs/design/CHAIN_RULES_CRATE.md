@@ -866,7 +866,11 @@ coinbase's record field paired with the witness plus every record's
 countersignature under the SF-D8 window, through the retention crate's
 `attestation_admission::AttestationSet`, the body the C++ shim marshals
 to; a non-empty root with nothing supplied refuses as B4, which is why
-CEN-A3 has no Rust rule of its own), E1, then the slot loop, F4–F6,
+CEN-A3 has no Rust rule of its own; and the empty set has **one**
+carrier — `None`, no store row — because the wire codec gives it no
+bytes and refuses a zero count (`WitnessError::ZeroCount`, 2026-10-07,
+review on #983), so a sidecar spelling it as eight zero bytes refuses
+as B4 instead of recording a row its peers do not), E1, then the slot loop, F4–F6,
 G1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.

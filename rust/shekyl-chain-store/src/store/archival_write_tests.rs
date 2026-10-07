@@ -25,7 +25,6 @@
 //! and `slash_writes_land_at_the_m_epoch_deadline` there is the 9b witness
 //! in the unit lane; the `#[ignore]`d B9 bench shares the chain.
 
-use shekyl_archival_retention::BlockAttestationWitness;
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault, Locus,
@@ -103,7 +102,6 @@ fn connect_one(
     hashes: &mut Vec<BlockHash>,
     listed: Vec<Transaction>,
     rules: RuleSet,
-    witness: Option<AttestationWitness>,
 ) -> ArchivalDelta {
     let height = u64::try_from(hashes.len()).expect("fits");
     let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
@@ -114,7 +112,7 @@ fn connect_one(
     let out: Result<(BlockHash, ArchivalDelta), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;
-        let cand = candidate_over(root, height, previous, listed).with_attestation_witness(witness);
+        let cand = candidate_over(root, height, previous, listed);
         let judged = judge_under(&view, cand, &rules)?;
         let hash = judged.block().hash();
         let delta = judged.block().archival().clone();
@@ -128,7 +126,7 @@ fn connect_one(
 
 /// `connect_one` for a coinbase-only block.
 fn connect_empty(store: &ChainStore, hashes: &mut Vec<BlockHash>, rules: RuleSet) -> ArchivalDelta {
-    connect_one(store, hashes, Vec::new(), rules, None)
+    connect_one(store, hashes, Vec::new(), rules)
 }
 
 /// [`judge_under`] that hands the **verdict** back instead of panicking on
@@ -188,7 +186,7 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     assert!(before.is_some(), "the coinbase-only blocks accrued");
 
     let [join, credit] = credited(11, P);
-    let joined = connect_one(&store, &mut hashes, vec![join], RuleSet::GENESIS, None);
+    let joined = connect_one(&store, &mut hashes, vec![join], RuleSet::GENESIS);
     let [write] = joined.records() else {
         panic!("one record write: {:?}", joined.records());
     };
@@ -205,7 +203,7 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         "this block's inflow moved the accrual"
     );
 
-    let credited_delta = connect_one(&store, &mut hashes, vec![credit], RuleSet::GENESIS, None);
+    let credited_delta = connect_one(&store, &mut hashes, vec![credit], RuleSet::GENESIS);
     assert!(
         credited_delta.records().is_empty(),
         "a credit writes no record"
@@ -282,14 +280,14 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     }
     let p = persona(P);
     let [join, credit] = credited(12, P);
-    connect_one(&store, &mut hashes, vec![join], SHORT, None);
+    connect_one(&store, &mut hashes, vec![join], SHORT);
     const CREDIT_HEIGHT: u64 = SHORT_SEB + 2;
     const CLOSING_HEIGHT: u64 = 2 * SHORT_SEB - 1;
     for _ in (FIRST_SPEND_HEIGHT + 1)..CREDIT_HEIGHT {
         connect_empty(&store, &mut hashes, SHORT);
     }
     assert_eq!(hashes.len(), 18, "the next block is 18, the credit's");
-    connect_one(&store, &mut hashes, vec![credit], SHORT, None);
+    connect_one(&store, &mut hashes, vec![credit], SHORT);
     let mut accrued_through_30 = None;
     for _ in (CREDIT_HEIGHT + 1)..CLOSING_HEIGHT {
         accrued_through_30 = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
@@ -297,7 +295,7 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     let accrued_through_30 = accrued_through_30.expect("blocks 19..=30 connected");
     assert_eq!(hashes.len(), 31, "the next block is 31, the closing one");
 
-    let closing = connect_one(&store, &mut hashes, Vec::new(), SHORT, None);
+    let closing = connect_one(&store, &mut hashes, Vec::new(), SHORT);
     let close = closing.close().expect("block 31 closes epoch 1");
     assert_eq!(close.epoch(), epoch(1));
     assert_eq!(
@@ -346,7 +344,7 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     drop(snap);
 
     hashes.pop();
-    let again = connect_one(&store, &mut hashes, Vec::new(), SHORT, None);
+    let again = connect_one(&store, &mut hashes, Vec::new(), SHORT);
     assert_eq!(again, closing, "the same block, the same verdict");
     let snap = store.begin_read().expect("read");
     assert_eq!(snap.budget(epoch(1)).expect("read"), Some(close.budget()));
@@ -362,42 +360,48 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
 
 // -------------------------------------------------------------- phase 5
 
-/// The candidate's attestation witness is written at the block's height
-/// (DRS-E4 §3.2 phase 5), once CEN-B4 has judged it: a block carrying one
-/// reads back its bytes, a block without reads back `None`, and the pop
-/// lifts the row with the block. The witness here is the canonical
-/// zero-pass witness — the only one B4 admits against the fixtures' empty
-/// root — so what is pinned is the write and the pop, not the judgement.
+/// The attestation witness row has one persisted form per block (DRS-E4
+/// §3.2 phase 5): the empty set is `None` on the candidate and **no row**
+/// — `Recorded(None)` at the height, `AboveTip` once the block is popped
+/// — and the only other spelling of the empty set, an eight-byte zero
+/// count on the sidecar, is refused at CEN-B4 (`Locus::Block`) before the
+/// writer is handed anything, so no node records a present-but-empty row
+/// for a block its peers record none for. A present row needs a genuine
+/// non-empty witness, which no block can carry until CEN-I20's coinbase
+/// grammar admits the `0x0B` field (`CHAIN_RULES_SLICE_8.md` §5.1, row 10
+/// finding); the write itself is the FFI's and the rules crate's to
+/// witness until then.
 #[test]
-fn the_attestation_witness_is_written_at_the_blocks_height_and_popped_with_it() {
+fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut hashes = Vec::new();
     connect_empty(&store, &mut hashes, RuleSet::GENESIS);
-    let bytes = BlockAttestationWitness { passes: Vec::new() }
-        .to_canonical_bytes()
-        .expect("zero passes is under the cap");
-    let witness = AttestationWitness::new(bytes.clone()).expect("non-empty, under the cap");
-    connect_one(
-        &store,
-        &mut hashes,
-        Vec::new(),
-        RuleSet::GENESIS,
-        Some(witness),
-    );
+    connect_empty(&store, &mut hashes, RuleSet::GENESIS);
 
     let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(0))
-            .expect("read"),
-        AtHeight::Recorded(None)
-    );
-    assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(1))
-            .expect("read"),
-        AtHeight::Recorded(Some(bytes))
-    );
+    for h in 0..2 {
+        assert_eq!(
+            snap.attestation_witness_at(BlockHeight::from_raw(h))
+                .expect("read"),
+            AtHeight::Recorded(None)
+        );
+    }
     drop(snap);
+
+    // The zero-count sidecar on the block that would connect at height 2.
+    let zero_count = AttestationWitness::new(0u64.to_le_bytes().to_vec())
+        .expect("eight bytes: non-empty, under the cap");
+    let height = hashes.len() as u64;
+    let previous = *hashes.last().expect("a chain");
+    let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let root = batch_root_going_into(&view, height)?;
+        let cand = candidate_over(root, height, previous, Vec::new())
+            .with_attestation_witness(Some(zero_count));
+        Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
+    });
+    assert_refused(out.expect("judging only reads"), CenRow::B4, Locus::Block);
 
     pop(&store);
     let snap = store.begin_read().expect("read");
@@ -452,7 +456,6 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
         &mut hashes,
         vec![fixture::join_market(fixture::point(11), P)],
         RuleSet::GENESIS,
-        None,
     );
     let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
 
@@ -637,7 +640,6 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
         &mut hashes,
         vec![fixture::join_market(fixture::point(14), [0xc1; 32])],
         RuleSet::GENESIS,
-        None,
     );
     assert!(
         store

@@ -33,7 +33,9 @@ pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 /// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS`.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
-/// Fixed framing prefix of a canonical witness: `count_le(8)`.
+/// Fixed framing prefix of a canonical **non-empty** witness: `count_le(8)`,
+/// `count ≥ 1`. The empty set has no prefix — its canonical bytes are no
+/// bytes ([`BlockAttestationWitness::to_canonical_bytes`]).
 pub const WITNESS_PREFIX_LEN: usize = 8;
 
 /// One witness entry:
@@ -254,6 +256,10 @@ pub enum WitnessError {
         "attestation witness shorter than the {WITNESS_PREFIX_LEN}-byte count prefix: got {0}"
     )]
     TooShort(usize),
+    /// A count prefix of zero: the empty set's only encoding is no bytes,
+    /// so an eight-byte zero count is a second spelling of it, refused.
+    #[error("attestation witness declares zero entries; the empty set is carried as no bytes")]
+    ZeroCount,
     #[error("attestation witness count {0} exceeds cap {MAX_ATTESTATION_RECORDS}")]
     CountExceedsCap(u64),
     #[error("attestation witness length {got}, expected {expected} for {count} entry(ies)")]
@@ -271,10 +277,21 @@ pub enum WitnessError {
 }
 
 impl BlockAttestationWitness {
-    /// Canonical bytes:
-    /// `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature)[0..count]`.
+    /// Canonical bytes: **no bytes** for the empty set; otherwise
+    /// `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature)[0..count]`
+    /// with `count ≥ 1`.
+    ///
+    /// The empty set has exactly one encoding so that a block's witness
+    /// has exactly one persisted form: a carrier holds the empty set as
+    /// *no witness* (`Option::None`, no store row —
+    /// `shekyl_types::archival::AttestationWitness` refuses empty bytes),
+    /// and a zero count on the wire is [`WitnessError::ZeroCount`] on
+    /// decode, never a present-but-empty row.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, WitnessError> {
         let count = self.passes.len();
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         if count > MAX_ATTESTATION_RECORDS {
             return Err(WitnessError::CountExceedsCap(count as u64));
         }
@@ -294,13 +311,21 @@ impl BlockAttestationWitness {
         Ok(out)
     }
 
-    /// Decode a witness blob. Cap is checked before allocating.
+    /// Decode a witness blob: no bytes is the empty set; any other blob
+    /// must be a non-empty canonical witness, exactly. Cap is checked
+    /// before allocating.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, WitnessError> {
+        if bytes.is_empty() {
+            return Ok(Self { passes: Vec::new() });
+        }
         if bytes.len() < WITNESS_PREFIX_LEN {
             return Err(WitnessError::TooShort(bytes.len()));
         }
         let count_u64 =
             u64::from_le_bytes(bytes[0..WITNESS_PREFIX_LEN].try_into().expect("8 bytes"));
+        if count_u64 == 0 {
+            return Err(WitnessError::ZeroCount);
+        }
         if count_u64 > MAX_ATTESTATION_RECORDS as u64 {
             return Err(WitnessError::CountExceedsCap(count_u64));
         }

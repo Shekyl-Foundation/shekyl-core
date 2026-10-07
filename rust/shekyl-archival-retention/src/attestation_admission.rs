@@ -108,9 +108,10 @@ impl AttestationSet {
     /// `headers` is the raw `tx_extra` blob of [`ATTESTATION_HEADER_LEN`]-byte
     /// records — empty is the committed empty set; whether the extra was
     /// *readable* at all is the caller's to decide first. `witness` is the
-    /// opaque sidecar (`count ‖ (nonce ‖ anchor_height_le ‖ digest ‖
-    /// signature)*`); empty is the zero-record set, and any non-empty blob
-    /// must decode exactly. The cap is checked before any per-record parse.
+    /// opaque sidecar in [`BlockAttestationWitness`]'s canonical form: no
+    /// bytes is the zero-record set — its only encoding — and any
+    /// non-empty blob must decode exactly (an eight-byte zero count is
+    /// malformed). The cap is checked before any per-record parse.
     ///
     /// # Errors
     ///
@@ -130,12 +131,8 @@ impl AttestationSet {
             parsed_headers.push(header);
         }
 
-        let witness = if witness.is_empty() {
-            BlockAttestationWitness { passes: Vec::new() }
-        } else {
-            BlockAttestationWitness::from_canonical_bytes(witness)
-                .map_err(|_| AttestationSetError::MalformedWitness)?
-        };
+        let witness = BlockAttestationWitness::from_canonical_bytes(witness)
+            .map_err(|_| AttestationSetError::MalformedWitness)?;
 
         let records = pass_records_from_headers_and_witness(&parsed_headers, &witness)
             .map_err(|_| AttestationSetError::MalformedWitness)?;

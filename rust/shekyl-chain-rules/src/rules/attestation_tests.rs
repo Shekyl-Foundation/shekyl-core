@@ -239,6 +239,26 @@ fn cen_b4_witness_that_does_not_decode_is_refused() {
     assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
 }
 
+/// The empty set's one carrier is `None`. A sidecar spelling it as an
+/// eight-byte zero count would pass the root recompute and reach the store
+/// as a present row for a block whose peers record none — so the block is
+/// refused here, by the codec's canonical form, not recorded.
+#[test]
+fn cen_b4_zero_count_sidecar_is_refused_not_recorded() {
+    let chain = chain_of(3);
+    let bytes = 0u64.to_le_bytes().to_vec();
+    assert!(BlockAttestationWitness::from_canonical_bytes(&bytes).is_err());
+    let candidate = candidate_on(&chain, Vec::new())
+        .with_attestation_witness(Some(AttestationWitness::new(bytes).expect("bytes")));
+    assert_eq!(
+        candidate.block.header.attestation_root.as_bytes(),
+        &empty_attestation_root(),
+        "the root alone would admit it: the refusal is the canonical form's"
+    );
+    assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
+    assert_refused(judge_on(&chain, candidate), CenRow::B4, Locus::Block);
+}
+
 /// A well-formed record whose root was mined wrong: the recompute refuses
 /// before any signature is read (the root is checked first).
 #[test]

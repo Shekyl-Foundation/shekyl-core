@@ -264,7 +264,10 @@ pub const MAX_ATTESTATION_WITNESS_BYTES: usize = ATTESTATION_WITNESS_COUNT_LEN
 /// witness** — `Option<AttestationWitness>::None` — never an empty one, so
 /// the daemon store's rule that an empty witness is no row rather than an
 /// empty row (`blockchain_db.cpp:669–671`) holds by the type, and a reader
-/// that finds a row knows it has bytes to parse. Judged by CEN-B4
+/// that finds a row knows it has bytes to parse. The wire codec gives the
+/// empty set no bytes and refuses a zero count
+/// (`attestation_wire::WitnessError::ZeroCount`), so `Some` of a zero-count
+/// blob is refused by CEN-B4, never recorded. Judged by CEN-B4
 /// (`verify_block_attestation`); until that row lands in `validate` the
 /// bytes are carried and recorded under a coverage gap, not judged
 /// (DRS-E4 `DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5).
