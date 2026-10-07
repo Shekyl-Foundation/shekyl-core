@@ -855,7 +855,7 @@ work then drifted the per-thread totals by up to 14 % between runs of
 one input, which no ±5 % threshold survives. So the measured functions
 are `serve_one_in_memory`, `prehead_in_memory` and
 `read_and_fold_in_memory` (`bench-internals` feature): the endpoint's own
-steps — `gate_and_open`, `response_head`, `read_chunk` with the fold,
+steps — `gate_and_open`, `response_head`, `read_and_fold`,
 `sign_envelope` — composed in the endpoint's order on the calling thread,
 with no runtime and no socket. They are not second serve paths.
 `serve_bench_seam_tests.rs` holds each to the live endpoint for a served
@@ -1041,3 +1041,18 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   into the existing `crypto_bench_*` class. Sections previously numbered
   §§12–14 (Known gaps, Cross-references, Change log) renumbered to
   §§13–15.
+- The per-chunk fold of the delivery digest moves into the blocking-pool
+  hop with the read (`read_and_fold`), so the endpoint no longer hashes a
+  shard's bytes on an executor thread. Starting the digest over the frame
+  header and finalizing it stay on the connection's task, a fixed few
+  Keccak permutations whatever the shard's size. §12's compositions call
+  the same function. The work is the same
+  and only the thread differs, which an instruction count on one thread
+  cannot see; what it does see is the digest state now travelling into
+  and out of each hop by value, about 270 instructions per chunk. x86
+  dev: `serve_response` 12,357,813 / 26,974,704 / 191,348,047 (a full
+  segment +0.007 %); `serve_read_and_fold` 27,397 / 19,397,222 /
+  155,013,333 (one leaf +2.0 %, on a base of 27 K; a full segment
+  +0.009 %); `serve_prehead` and `serve_digest_alone` unchanged. Whether
+  the move is worth anything is the floor's to say (`BA-T5`). Schema
+  version unchanged.
