@@ -1562,10 +1562,10 @@ namespace
       return conns.size();
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
-      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
     {
       // Production returns false only when the id is absent. The callback
-      // runs on the connection strand and its bool is not the lookup.
+      // runs on the connection strand and does not report the lookup.
       for (auto &c : conns)
         if (c.m_connection_id == id)
         {

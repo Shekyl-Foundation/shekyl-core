@@ -1554,7 +1554,7 @@ wrong was calling them the round.*
 
 | Step | What | Note |
 | --- | --- | --- |
-| **c** | **CLOSED 2026-10-07, code-anchored, outside the unified stamp (`241bc4eb9c`).** The connection registry, including its own count. `rg -n 'for_each_connection\(' src rust tests` returns nothing. `peer_sync_idle_maker` (`net_node.inl:2346`) posts through `foreach_connection` (`levin_protocol_handler_async.h:979`). `rg -n m_current_number_of_ src rust tests` returns nothing. The peers-monitor thread is gone. `node_server::run` (`net_node.inl:1181`) is the net_service loop and does not write peer counts. *Records-was 2026-10-04: the hub lock writes the row. The strand writes the C++ context. Walkers read snapshots. A change is a post. Records-was before that: "the strand is the only writer."* | The `rg` results in this row. *Records-was: the `foreach_connection` race.* |
+| **c** | **CLOSED 2026-10-07, code-anchored, outside the unified stamp (`241bc4eb9c`).** The connection registry, including its own count. `rg -n 'for_each_connection\(' src rust tests` returns nothing. `peer_sync_idle_maker` (`net_node.inl:2345`) posts through `foreach_connection` (`levin_protocol_handler_async.h:979`). `rg -n m_current_number_of_ src rust tests` returns nothing. The peers-monitor thread is gone. `node_server::run` (`net_node.inl:1180`) is the net_service loop and does not write peer counts. *Records-was 2026-10-04: the hub lock writes the row. The strand writes the C++ context. Walkers read snapshots. A change is a post. Records-was before that: "the strand is the only writer."* | The `rg` results in this row. *Records-was: the `foreach_connection` race.* |
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | The two context walks post onto the connection strand and return. Forget-cause, write-stall samples, and the four handshake gates read the board's `established`. **UPDATE 2026-10-06.** *Records-was: ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle.* | Follows step c. |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
@@ -1668,13 +1668,13 @@ or a view over it.
 unified stamp (`241bc4eb9c`). `rg -n 'for_each_connection\(' src rust tests`
 returns nothing; the name remains in a comment at
 `rpc_facts_ffi.cpp:1252`. `peer_sync_idle_maker` posts:
-`net_node.inl:2354` calls `foreach_connection`, which posts
+`net_node.inl:2353` calls `foreach_connection`, which posts
 `post_on_strand` and returns. `rg -n m_current_number_of_ src rust tests`
 returns nothing. The peers-monitor thread is gone.
-`node_server::run` (`net_node.inl:1181`) remains the net_service loop
+`node_server::run` (`net_node.inl:1180`) remains the net_service loop
 and does not write peer counts. The dial cap reads
 `shekyl_seam_board_count` (`get_outgoing_connections_count`,
-`net_node.inl:2180`) and does not store the count. Slice 3 keeps the
+`net_node.inl:2179`) and does not store the count. Slice 3 keeps the
 fill loops. *Records-was: the two mutable walks become posts,
 `for_each_connection` (`:158`) handing its callback a mutable context
 and `peer_sync_idle_maker` (`:2321`) setting `m_in_timedsync`. The
@@ -1761,7 +1761,7 @@ ran on `async_invoke`'s caller.*
 | `:329`, `:331` the invoke-timeout completion | Yes. Posted onto the connection strand. |
 | `post_each` (`net_node.inl`), via `collect_context_posts` then `post_on_strand` | Yes. The protocol handler still reads support flags, pull state, and byte counters. The walk does not wait. **UPDATE 2026-10-07:** the admin connection view does, for two seconds. *Records-was: the caller does not wait. Before that: No, and waiting on each strand from that walk is the deadlock this step does not introduce.* |
 | `peer_sync_idle_maker` (`net_node.inl`), via `foreach_connection` | Yes. It writes `m_in_timedsync` on the strand. *Records-was: No. Same wait.* |
-| `node_server::for_connection` (`net_node.inl`) | Yes. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state on the strand. The return is whether the id was queued, not the callback's bool. *Records-was: No.* |
+| `node_server::for_connection` (`net_node.inl`) | Yes. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state on the strand. The return is whether the id was queued. The callback is void. *Records-was: No.* |
 
 **UPDATE 2026-10-06:** `:946` and `:960` post the callback onto the connection strand and return. `get_context_ref` runs inside that post. *Records-was: the two `:946` callers are the step-b holdouts, and `:960` is the same class.*
 

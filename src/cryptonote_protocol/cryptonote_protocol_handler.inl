@@ -1431,9 +1431,8 @@ namespace cryptonote
             if (shekyl_drop_verdict_severs(prepare_verdict))
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f){
                 drop_connection(context, false, true);
-                return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");
             }
@@ -1471,11 +1470,10 @@ namespace cryptonote
             if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
-                if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
+                if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f){
                   LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
                     "dropping connections");
                   drop_connection(context, false, true);
-                  return 1;
                 }))
                   LOG_ERROR_CCONTEXT("span connection id not found");
 
@@ -1506,10 +1504,9 @@ namespace cryptonote
             if (block_sync_drop(sync))
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [this, sync](cryptonote_connection_context& context, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [this, sync](cryptonote_connection_context& context, uint32_t f){
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
                 drop_connection_with_score(context, block_sync_heavier_score(sync) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
-                return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");
 
@@ -1534,7 +1531,6 @@ namespace cryptonote
                 const uint64_t chain_length = chain_length_of_accepted_block(get_block_height(*added));
                 m_p2p->for_connection(span_connection_id, [this, chain_length](cryptonote_connection_context& origin, uint32_t) {
                   raise_remote_height(origin, chain_length);
-                  return true;
                 });
               }
             }
@@ -1687,7 +1683,6 @@ skip:
           MLOG_PEER_STATE("requesting callback");
         }
       }
-      return true;
     }, {});
 
     return true;
@@ -1748,10 +1743,9 @@ skip:
           MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
           if (synced + syncing >= max_out_peers && syncing < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && drop_id != boost::uuids::nil_uuid())
           {
-            if (!m_p2p->for_connection(drop_id, [this, syncing, synced, max_out_peers](cryptonote_connection_context& ctx, uint32_t)->bool{
+            if (!m_p2p->for_connection(drop_id, [this, syncing, synced, max_out_peers](cryptonote_connection_context& ctx, uint32_t){
               MINFO(ctx << "dropping synced peer, " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
               drop_connection(ctx, false, false);
-              return true;
             }))
               MDEBUG("Failed to find peer we wanted to drop");
           }
@@ -1772,7 +1766,6 @@ skip:
         ++context.m_callback_request_count;
         m_p2p->request_callback(context);
       }
-      return true;
     }, {});
     return true;
   }
@@ -2297,21 +2290,20 @@ skip:
         if(context.m_state < cryptonote_connection_context::state_synchronizing)
         {
           MDEBUG(context << "not ready, ignoring");
-          return true;
+          return;
         }
         // One ask. The strands run together, so the claim is the exclusion
         // the old early-return was. A refusal gives the claim back; a strand
         // that already lost it does not retry.
         bool claim = false;
         if (!asked->compare_exchange_strong(claim, true, std::memory_order_acq_rel))
-          return true;
+          return;
         if (!request_txpool_complement(context))
         {
           MERROR(context << "Failed to request txpool complement");
           asked->store(false, std::memory_order_release);
-          return true;
+          return;
         }
-        return true;
       }, [this, asked]() {
         // Every strand passed, or the one that claimed it failed after the
         // others had already passed. The flag was cleared before the walk.
@@ -2589,10 +2581,9 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connection(const boost::uuids::uuid& id)
   {
-    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
+    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f){
       // This _could be_ outside of strand, so careful on actions
       drop_connection(context, true, false);
-      return true;
     });
   }
   //------------------------------------------------------------------------------------------------------------------------
@@ -2623,10 +2614,9 @@ skip:
 
     m_p2p->post_each([this, address](cryptonote_connection_context& context, uint32_t) {
       if (!address.is_same_host(context.m_remote_address))
-        return true;
+        return;
       m_block_queue.flush_spans(context.m_connection_id, true);
       drop_connection(context, true, false);
-      return true;
     }, {});
   }
   //------------------------------------------------------------------------------------------------------------------------

@@ -991,8 +991,8 @@ bool async_protocol_handler_config<t_connection_context>::for_connection(const b
   async_protocol_handler<t_connection_context>* aph = nullptr;
   if (find_and_lock_connection(connection_id, aph) != LEVIN_OK)
     return false;
-  // Found. The callback's bool is not this return: the caller is not
-  // waiting, and a false callback cannot mean "the id is absent".
+  // Found. The callback does not report absence: the caller is not
+  // waiting, and only this return says the id was queued.
   aph->post_on_strand([cb](t_connection_context& ctx) {
     cb(ctx);
   });

@@ -169,7 +169,6 @@ namespace nodetool
               && !ran->exchange(true, std::memory_order_acq_rel)
               && *finish)
             (*finish)();
-          return true;
         }, posts);
     }
     left->store(posts.size(), std::memory_order_release);
@@ -181,14 +180,14 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> f)
   {
     // True when some zone queued the callback. The callback runs on that
     // connection's strand. False means the id is not in a zone.
     for(auto& zone : m_network_zones)
     {
       const bool queued = zone.second.m_net_server.get_config_object().for_connection(connection_id, [f](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
+        f(cntx, cntx.support_flags);
       });
       if (queued)
         return true;
