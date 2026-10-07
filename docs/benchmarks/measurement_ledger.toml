@@ -393,6 +393,7 @@ stale_through = [
   { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "23189972dc", note = "The connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The clock and the clearnet tests moved to their own modules. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "8fa5ba8bbb", note = "The clearnet writer is joined once, on the select arm that already took it. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -447,6 +448,7 @@ stale_through = [
   { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The Tor dial and the gap wait are unchanged. Not re-measured." },
   { through = "23189972dc", note = "The Tor connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the dial. Dial and gap I/O are unchanged. Not re-measured." },
   { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "8fa5ba8bbb", note = "The Tor writer is joined once, on the select arm that already took it. The dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]
