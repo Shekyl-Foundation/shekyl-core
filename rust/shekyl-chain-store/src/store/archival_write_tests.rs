@@ -25,6 +25,7 @@
 //! and `slash_writes_land_at_the_m_epoch_deadline` there is the 9b witness
 //! in the unit lane; the `#[ignore]`d B9 bench shares the chain.
 
+use shekyl_archival_retention::BlockAttestationWitness;
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault, Locus,
@@ -361,17 +362,21 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
 
 // -------------------------------------------------------------- phase 5
 
-/// The candidate's attestation witness is written **unjudged** at the
-/// block's height (CEN-B4's gap, DRS-E4 §3.2 phase 5): a block carrying
-/// one reads back its bytes, a block without reads back `None`, and the
-/// pop lifts the row with the block.
+/// The candidate's attestation witness is written at the block's height
+/// (DRS-E4 §3.2 phase 5), once CEN-B4 has judged it: a block carrying one
+/// reads back its bytes, a block without reads back `None`, and the pop
+/// lifts the row with the block. The witness here is the canonical
+/// zero-pass witness — the only one B4 admits against the fixtures' empty
+/// root — so what is pinned is the write and the pop, not the judgement.
 #[test]
 fn the_attestation_witness_is_written_at_the_blocks_height_and_popped_with_it() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut hashes = Vec::new();
     connect_empty(&store, &mut hashes, RuleSet::GENESIS);
-    let bytes = vec![0xab; 40];
+    let bytes = BlockAttestationWitness { passes: Vec::new() }
+        .to_canonical_bytes()
+        .expect("zero passes is under the cap");
     let witness = AttestationWitness::new(bytes.clone()).expect("non-empty, under the cap");
     connect_one(
         &store,

@@ -100,6 +100,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::A2,
             CenRow::B1,
             CenRow::B2,
+            // Slice 8 row 10: B4 over the attestation witness
+            // (`CHAIN_RULES_SLICE_8.md` §5 row 10). A3 is decided by B4's
+            // empty arm and stays `pending` as a row.
+            CenRow::B4,
             CenRow::B5,
             CenRow::B6,
             CenRow::B7,

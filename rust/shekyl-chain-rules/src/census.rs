@@ -312,8 +312,11 @@ census_rows! {
         // test that observes the outcome byte.
         A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
         A2 implemented(crate::rules::topology::A2),
-        // A3: subsumed by B4's empty-witness arm — never its own rule; the
-        // row closes when B4 lands (Q3).
+        // A3: subsumed by B4's empty-witness arm — never its own rule
+        // (slice 1 Q3); B4 landed with slice 8 row 10, and this row is
+        // judged wherever B4 is. It stays `pending` as a *row* because the
+        // census keeps it as one and the bijection gate counts it; the
+        // rule that decides it is `rules::attestation::B4`.
         A3 pending,
         A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
         // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
@@ -328,7 +331,7 @@ census_rows! {
         B1 implemented(crate::rules::header::B1),
         B2 implemented(crate::rules::header::B2),
         B3 pending,
-        B4 pending,
+        B4 implemented(crate::rules::attestation::B4),
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),

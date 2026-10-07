@@ -50,6 +50,7 @@ use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
+use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::D4;
@@ -396,13 +397,19 @@ pub fn validate<'id, V: ChainView<'id>>(
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(&mut coverage);
 
-    // View-bound block-level predicates (4.A–4.G), in census order. G1
-    // (no listed transaction already on the chain, or twice in this block)
-    // is here, **before** the slot loop — the C++'s order, and the only one
-    // under which it has a witness on a spend: after the loop I7 and L1
-    // refuse the same shapes first (slice 7 Q8; `body_tests` pins it).
+    // View-bound block-level predicates (4.A–4.G), in census order, with
+    // one placement the C++'s order fixes: B4 (the attestation set) runs
+    // after D1 and before the slot loop, where `verify_block_attestation`
+    // runs — before the coinbase is judged — so a coinbase extra that does
+    // not parse is B4's refusal, not I20's (slice 8 §4). B4 is always
+    // evaluated: no sidecar is the empty witness against the mined root.
+    // G1 (no listed transaction already on the chain, or twice in this
+    // block) is here, **before** the slot loop — the C++'s order, and the
+    // only one under which it has a witness on a spend: after the loop I7
+    // and L1 refuse the same shapes first (slice 7 Q8; `body_tests` pins
+    // it).
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6, G1);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, B4, E1, F4, F5, F6, G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).

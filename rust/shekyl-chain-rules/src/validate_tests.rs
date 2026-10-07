@@ -40,7 +40,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // B5 from the view-bound one, B6 from the derivation — slice 2's
         // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
-        // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
+        // comparison, D1 the predicate), slice 8's B4 (the attestation
+        // witness, after D1), slice 3's E1, and slice 4's 4.F
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
         // F13, F15, F20 the emission definitions), slice 7's G2 (the
         // body's pairing, in form), its two
@@ -57,6 +58,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::A2,
                 CenRow::B1,
                 CenRow::B2,
+                // Slice 8 row 10: B4, always in coverage — `None` is the
+                // empty preimage against the header's root.
+                CenRow::B4,
                 CenRow::B5,
                 CenRow::B6,
                 CenRow::B7,

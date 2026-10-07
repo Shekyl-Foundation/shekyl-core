@@ -386,10 +386,14 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // passes only if the projection shows it block 0 and the root block
         // 0 left. The title's claim is now the verdict, not just the type.
         // Since wave B the coinbase must also pay what the block owes
-        // (CEN-F18), priced against the same view.
+        // (CEN-F18), priced against the same view; since slice 8 row 10 a
+        // candidate with no witness is judged against the empty set's root
+        // (CEN-B4), so the placeholder root is replaced for this one too.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
+        b1.header.attestation_root =
+            AttestationRoot::from_bytes(shekyl_archival_retention::empty_attestation_root());
         let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
             formed(&view, b1)?,
