@@ -105,6 +105,8 @@ leaf parameterisation).
 
 ## 3. THE GATING DECISION — record format + field residence
 
+> **Specification:** the record, its kept and prunable parts and the carrier are stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 and §8. This section is the credit-wire round's record.
+
 The scan (§4) and the deletion (§5) both key off *what the record is*, so this
 is decided first. **Two standing principles drive the shape to its floor
 (maintainer, 2026-08-03): derive rather than store wherever recompute is
@@ -405,6 +407,8 @@ none, and propagates the gap.
 ---
 
 ## 4. Settlement-scan fold (depends on §3)
+
+> **Specification:** issuance, misses and settlement are stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.2–§9.4. This section is the credit-wire round's record.
 
 The current scan assumes a beacon fired and writes **one bit per epoch**. Under
 miner-chosen records it must fold, **per `(P, s)` per epoch**, the multiset of

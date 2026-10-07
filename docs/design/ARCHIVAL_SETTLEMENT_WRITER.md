@@ -171,6 +171,8 @@ not as a property of a regime.
 
 ## 3. `SO-D1` — RULED: the writer enumerates the issued set and writes one row per issued pair
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.2–§9.3. Since 2026-10-07 "issued" means revealed, the writer reads the stored issued-draw index and does not run an urn, and it selects each pair's three counted draws by beacon. "The writer enumerates; it is not record-driven" is unchanged and is this ruling's.
+
 **The forcing case is a drawable pair that passes nothing.** All three of its
 challenges expire; expiry ⇒ miss (fork §7.3); the epoch settles **Missed**. And
 there are **zero on-chain artifacts** — no pass record, no vin, nothing — to
@@ -234,6 +236,8 @@ function of (epoch-open snapshot, `block_hash(h_open..h_close−1)`).
 
 ## 4. `SO-D2` — RULED: key and value
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3 item 4. The row's key and three-byte value stand; `passes` counts the selected draws that passed, and `issued` can exceed 3 (`SCS-P8`).
+
 **Key — 48 B, byte-identical in shape to `m_archival_serve_credit`:**
 
 ```text
@@ -293,6 +297,8 @@ enforcing site is the only site that can produce a row.
 ---
 
 ## 5. `SO-D3` — RULED: the writer runs once per epoch, as one derivation
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3.
 
 The alternative — accumulate incrementally as records arrive and finalise at
 close — was considered and **rejected**: it needs the close-time enumeration

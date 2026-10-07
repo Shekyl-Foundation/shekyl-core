@@ -961,6 +961,8 @@ hole per call.
 
 ### `SF-D13` — countersigning key — RULED 2026-09-13
 
+> **Reopened 2026-10-07 (rule 21):** receipts are signed by a separate receipt key, Ed25519 + FN-DSA-1024, which the bond record gains beside the identity key ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.3). "This ruling does not invent a second key field" stood until then. The identity key is unchanged and still defines `p_canonical_id`.
+
 The countersignature uses P's stable **hybrid identity key** from the
 bond record (`shekyl_wire::BondPost.hybrid_public_key`), both Ed25519
 and ML-DSA legs. This ruling does not invent a second key field.
@@ -1052,6 +1054,8 @@ not remove it.
   opportunistic key swap in `shekyl-p-serve`.
 
 ### `SF-D8` — returned signature and verify seam — RULED 2026-09-13
+
+> **Specification:** what `P` signs and the delivery digest are this section's and are unchanged. How a receipt is admitted on chain — the nonce bound to `(h, j)`, the anchor's lower bound keyed on `h`, the record carrying `j` in place of the nonce — is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5, §7.2 and §9.1. The admission window below (`[h − 720 − L, h − 720]` on the including block's predecessor) is the record of the form that landed for CEN-B4.
 
 The original `R_k`-only lean was incomplete. The fetcher's output is a
 **typed result both callers consume**, produced only after all three

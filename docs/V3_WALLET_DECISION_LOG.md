@@ -6059,3 +6059,70 @@ place). `RF-R1`'s "one identical 404 for every non-servable outcome": the
 (the carrier).
 
 ---
+
+## 2026-10-07 — Serve credit: a secret per-block draw replaces the public urn; FN-DSA-1024 receipts under a separate receipt key
+
+**Decision (maintainer, in review; stated as the Slice C Round 0 brief of
+this date).** The serve-credit mechanism is re-based on a draw only the
+block's producer knows. The specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md);
+this entry records what was decided and what it replaces. Nothing is built.
+
+1. **The draw is secret and per block.** The producer of `h` commits to a
+   seed in its coinbase, draws pairs with replacement from the epoch's
+   drawable set using the seed and `block_hash(h)`, reads them, and
+   reveals the whole seed with that block's pass records within `W₂`.
+   *Replaces* the public urn derived from `block_hash(h − 1)` (challenge
+   mechanism §2, `SO-D8e`), which was never wired.
+2. **Issued means revealed.** A draw is issued only when its seed is
+   revealed. An unrevealed block issues nothing: no passes and no misses.
+   A miss is an issued draw with no pass by `h + W₂`, derived as before.
+3. **Settlement selects the three counted draws at close.** A beacon at
+   `h_close(E) + W₂` picks 3 of each pair's issued draws; 2 or 3 passes
+   among them is Served, fewer is Missed, fewer than 3 issued is
+   NonObservation. *Replaces* two earlier forms: the landed
+   `settle_epoch`, which settles on every issued draw with a floor of 2,
+   and a "first three" selection ruled earlier the same day and not
+   otherwise recorded. The reason for selecting at close is that `P` must
+   not be able to learn mid-epoch that its outcome is settled.
+4. **FN-DSA-1024 (level V)** for the receipt and for the witness's carrier
+   signature, inside the hybrid structure with Ed25519, under a new value
+   of the existing scheme byte. Against ML-DSA-65: a 1,280-byte signature
+   against 3,309, faster, more margin. The implementation is the `fn-dsa`
+   crate, which is pre-standard; its keys and signatures will change when
+   FIPS 206 is final. That risk is not privacy-exposing and is accepted
+   pre-genesis, with an exact version pin, a FOLLOWUPS row and a genesis
+   gate (no genesis on a pre-1.0 `fn-dsa`) landing with the integration.
+5. **A separate receipt key.** The bond record keeps its identity key
+   (Ed25519 + ML-DSA-65), which defines `p_canonical_id` and authorizes
+   JoinMarket and Reinstate, and gains a receipt key (Ed25519 +
+   FN-DSA-1024) bound by the identity key's signature on the JoinMarket
+   post. The reason is algorithm isolation: persona identity stays on a
+   finalized standard, and the pre-standard scheme touches only signatures
+   whose value expires within an epoch. **This is a rule-21 reopening of
+   `SF-D13`**, which ruled the countersigning key to be the identity key
+   and said it "does not invent a second key field".
+6. **`W₂` is the only window.** Admission keys the anchor's lower bound on
+   `h` (`anchor_height ≥ h − 720 − L`) and requires inclusion by
+   `h + W₂`. There is no separate read window. *Replaces* the landed
+   window `[h − 720 − L, h − 720]` keyed on the including block's
+   predecessor, which belonged to a design where the read and the
+   inclusion were one event.
+7. **Provisional (rule 21).** The draw weighting (1 for a pair visibly
+   short of 3 issued, 1/16 otherwise), the count per block (a base of one
+   draw per pair per epoch plus a top-up, capped at 3 × nominal), and the
+   bar they are held to (at most 3 % of pairs short of 3 at 10 % producer
+   dropout). The sim reads 1.18 % at that bar (`ESR-11`).
+
+**What the brief left open, and where it is posed.** Twelve questions,
+`SCS-P1`–`P12` in the specification's §13.3, each with a default. Three
+reopen an earlier ruling and are posed as such: the length of the `0x0C`
+field (Q13), whether the coinbase key material is re-derivable (Q10), and
+the reading of the count rule's "in flight" term, where the brief's own
+model and the better-performing rule differ.
+
+**Where.** `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`; pointers from the
+five documents that stated the mechanism before; the index rows for the
+document and for `SCS-P` / `SCS-F`.
+
+---

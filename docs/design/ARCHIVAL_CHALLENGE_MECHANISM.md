@@ -133,6 +133,8 @@ indexes per shard (§5.5; welded in `ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`,
 
 ## 2. The lifecycle under derived assignment (the ratified direction)
 
+> **Specification:** the lifecycle is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md). Since 2026-10-07 selection is a secret per-block draw revealed with the block's pass records, not a public function of `block_hash(h − 1)`; the record is filed by the producer of `h`, not by any miner. "A miss is never asserted", "satisfaction does not drain the pool" and the reorg argument below carry over. This section is the ruling record of derived assignment.
+
 **Selection is a pure function of chain state.** The assignment for block h —
 which pair is challenged, and the window in which the read must resolve — is
 derived from block h−1's hash over the epoch's drawable set (§4 defines
@@ -243,6 +245,8 @@ settlement and at the witness.
 
 ## 3. Nested measurement: 2-of-3 within an epoch, m-of-n across epochs
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3 states the settlement rule. Since 2026-10-07 the three counted draws are selected at close from the pair's issued draws, and a pair with fewer than three issued settles NonObservation. The 2-of-3 argument below is unchanged and is this section's.
+
 Two nested systems, and the nesting is load-bearing:
 
 - **Inner (per epoch):** each drawable pair receives 3 derived challenges in
@@ -289,6 +293,8 @@ Missed epoch is now the stronger claim "failed a majority," so
 attestation-resistance as a co-objective).
 
 ## 4. Three-valued settlement, drawability, and the schema-gating finding
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.1 (drawability) and §9.2–§9.3 (issuance, misses, the three outcomes).
 
 Per `(P, s, E)`, settlement is one of **Served** (≥2 of 3 passed), **Missed**
 (challenged, <2 passed — an observation, counts in the outer window), or

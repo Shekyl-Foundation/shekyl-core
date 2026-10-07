@@ -792,6 +792,8 @@ issuing block. Open: Q9 set-commitment vectors (§7.6.1). Q4 RESOLVED
 
 ## 3. `SO-D8a` — boundary arithmetic and the deadline gates, under R-B — RULED 2026-09-16
 
+> **Specification:** the admission window is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 (step 0 and step 6). This section is the ruling record.
+
 **RULED 2026-09-16: transcription of the R-B ratification.** `E = epoch(h)` —
 the issuing block's epoch — enforced by `SO-D9` (i) evaluated at `h`. The
 fire gate dies. `h_close` is replaced by the per-challenge `W₂` bound:
@@ -823,6 +825,8 @@ deadline re-bound) plus witness authentication. All belong to the §8 atomic
 cutover.
 
 ## 4. `SO-D8b` — dedup and the membership gate, under R-B — RULED 2026-09-16
+
+> **Specification:** membership and dedup are stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 (steps 3 and 8). Since 2026-10-07 the draw is secret and per block, so membership is "`(P, s)` is draw `j` of `h`'s revealed seed" and the dedup key is `(P, s, E, h, j)`. This section is the ruling record of the public-urn form.
 
 **RULED 2026-09-16: transcription.** Dedup widens to `(P, s, E, h)` exact-get;
 membership against `assignment(h)`. The exact-get resolves here because `h`
@@ -1108,7 +1112,9 @@ through the slash deadline" (Q7, collapsed by §6.3 item 2); "three edits
 make these layers fire" (the pruned-journal edit fires upstream); the
 five-ground rejection (ground 3 withdrawn).*
 
-## 7. `SO-D8e` RULED 2026-09-16 — the `EpochAssignmentCache`
+## 7. `SO-D8e` RULED 2026-09-16 — the `EpochAssignmentCache` — mechanism SUPERSEDED 2026-10-07
+
+> **SUPERSEDED 2026-10-07 as mechanism:** the public urn and its `W₂` ring are replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10). §7.4 (the drawable set) and §7.6.2 (carrier semantics) stand. The rest of §7.1–§7.3 is the ruling record of the urn.
 
 ### 7.1 Two consumers, two cadences
 
@@ -1124,7 +1130,9 @@ not estimated here. Even at this host's speed, ~1 s of pure derivation per
 block on the admission path is not acceptable; per epoch in the slash pass it
 is.
 
-### 7.2 `SO-D8e` RULED 2026-09-16 — a forward urn, a `W₂` ring, no checkpoints, one set live
+### 7.2 `SO-D8e` RULED 2026-09-16 — a forward urn, a `W₂` ring, no checkpoints, one set live — SUPERSEDED 2026-10-07
+
+> **SUPERSEDED 2026-10-07:** see [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 (the draw) and §10 (the issued-draw index).
 
 **What.** The structure, lifetime, persistence and rewind of the derived
 assignment state that `SO-D8b`'s membership gate, `SO-D8d` layer 2, and
@@ -1319,6 +1327,8 @@ through the slash deadline is the recommendation" (Q7).*
   derivation domain. Neither exists.
 
 ### 7.4 Q3 RULED 2026-09-16 — the enumerator
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.1 states the drawable set and §9.3 the settlement filter. This section owns the set's construction and its pins.
 
 `assign_epoch(pairs, prev_hashes)` (`challenge_assignment.rs`, λ from the constant since Q4)
 consumes the set of `(p_id, shard_id)` pairs eligible for challenge in epoch
@@ -1546,6 +1556,8 @@ one predicate, not two.
 
 ### 7.5 Q8 RULED 2026-09-16 — the witness key
 
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2 states the witness key and the draw seed as sibling derivations, and §6.2 its scheme (Ed25519 + FN-DSA-1024 since 2026-10-07). This section is the ruling record of the derivation.
+
 Under R-B the filer is not positional in `h`. Consensus needs a key the
 producer of `h` can sign with, whose public half is committed in `h`.
 
@@ -1688,6 +1700,8 @@ identifies `h`'s coinbase, which was already public. *SUPERSEDED:
 inheritance."*
 
 ### 7.6 Q9 RULED 2026-09-16 — set-commitment batching, carrier fail-whole, resubmission within `W₂`; amended same day
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 states the carrier, the reveal it now carries, and the set commitment with computed vectors. §7.6.2 here owns carrier fail-whole and resubmission.
 
 The question was whether the witness files ~97 records for issuing
 block `h` as one transaction sharing one pk reveal and one signature, or
@@ -1833,6 +1847,8 @@ median-bound blocks.
 
 #### 7.6.1 The set commitment — PROPOSED 2026-09-16, string settled; vectors re-cut same day
 
+> **Specification:** the construction, the amendment that covers the seed, and the computed vectors are in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7.3, posed there as `SCS-P6`. The paragraph below that separates "unpruned validators" from "a pruned node" describes a split that does not exist: every node verifies once at connect and none after the prune (spec §8).
+
 **Review finding (valid).** The shape ruled above does not fix bytes,
 and rule 30 requires every hash to sit under an explicit, versioned
 domain; rule 05 wants the spec before Slice C writes the bytes. With
@@ -1952,6 +1968,8 @@ block weight" as an unread claim (now confirmed); "who pays the fee";
 
 ### 7.7 Q10 RULED 2026-09-16 — accept loss
 
+> **Reopening posed 2026-10-07 (rule 21):** the secret draw requires the coinbase key material to be re-derivable, which this ruling named as a fallback and did not build. [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P3`.
+
 The question was what happens to the witness-seed ring across a daemon
 restart: persist it encrypted, or accept the loss.
 
@@ -2043,6 +2061,8 @@ policy; "500 live seeds" as the expected ring depth (that is the
 capacity, not the steady state).
 
 ### 7.8 Q13 RULED 2026-09-16 — the `0x0C` content rule
+
+> **Reopening posed 2026-10-07 (rule 21):** `0x0C` must also commit to the draw seed, which moves its length. [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2, `SCS-P1`.
 
 **One `CEN-` row in `shekyl-chain-rules` (id at Slice C), one predicate
 over one field, five fixtures. Domain: from genesis, unconditionally.
@@ -2263,6 +2283,8 @@ criterion; count-pin +1 in this docs PR.
 ## 8. Slice C — implementation plan (AUTHORIZED 2026-10-04)
 
 ### 8.0 Slice C's first increment — Round 0: the design inputs (brief, 2026-10-04)
+
+> **Round 0 is open as [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) (2026-10-07).** Inputs 1 to 3 below are posed there: the set-commitment bytes as `SCS-P6`, the record layout as `SCS-P5`, the height that replaced the fire height as `SCS-P12`. Input 4 is discharged.
 
 **1. Owner, authorization, surface.** The SO-D8 round owns Slice C, which is
 authorized (`SCV-Q3`). One document holds the admission rows and the
