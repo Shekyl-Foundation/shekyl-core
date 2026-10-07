@@ -11,6 +11,9 @@
 //! not keep the buffer.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use shekyl_transport_layer::{CloseCause, CloseKind, LinkDirection, MessageClass};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -64,6 +67,59 @@ pub fn refund_unsent(
 /// drift between them.
 pub const READ_CHUNK_BYTES: usize = 8 * 1024;
 
+struct StallLog {
+    max_ns: std::sync::atomic::AtomicU64,
+    samples_ns: Mutex<Vec<u64>>,
+}
+
+fn stall_logs() -> &'static Mutex<HashMap<u64, StallLog>> {
+    static LOGS: OnceLock<Mutex<HashMap<u64, StallLog>>> = OnceLock::new();
+    LOGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn note_write_stall(conn: u64, elapsed: std::time::Duration) {
+    let ns = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+    let mut logs = stall_logs()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let log = logs.entry(conn).or_insert_with(|| StallLog {
+        max_ns: std::sync::atomic::AtomicU64::new(0),
+        samples_ns: Mutex::new(Vec::new()),
+    });
+    log.samples_ns
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(ns);
+    log.max_ns
+        .fetch_max(ns, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The completed socket writes for `conn`: the longest, then each sample.
+///
+/// A write that has not returned is not a sample. There is no threshold
+/// and no count of writes over one. The samples are the distribution.
+#[must_use]
+pub fn write_stall(conn: u64) -> Option<(u64, Vec<u64>)> {
+    let logs = stall_logs()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let log = logs.get(&conn)?;
+    let samples = log
+        .samples_ns
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let max = log.max_ns.load(std::sync::atomic::Ordering::Relaxed);
+    Some((max, samples))
+}
+
+fn drop_write_stall(conn: u64) {
+    stall_logs()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&conn);
+}
+
 /// Write queued bytes until the queue closes or the cap trips.
 ///
 /// `encode` turns one queued buffer into the socket bytes. An empty
@@ -83,6 +139,7 @@ where
 {
     let cause = write_queued(write, outbound, overfull, gate, conn, &mut encode).await;
     gate.leave(LinkDirection::Up, conn);
+    drop_write_stall(conn);
     cause
 }
 
@@ -154,7 +211,12 @@ where
                             shutdown(write).await;
                             return CloseCause::new(CloseKind::SendQueueFull);
                         }
-                        result = write_all_counted(write, &wire[off..end]) => {
+                        result = async {
+                            let started = Instant::now();
+                            let result = write_all_counted(write, &wire[off..end]).await;
+                            note_write_stall(conn, started.elapsed());
+                            result
+                        } => {
                             if let Err(wrote) = result {
                                 refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
                                 outbound.release(n);
@@ -275,7 +337,7 @@ mod tests {
     use shekyl_transport_layer::CloseKind;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{read_capped, write_capped};
+    use super::{read_capped, write_capped, write_stall};
     use crate::gate::LinkGate;
     use crate::queue::{ByteQueue, Overfull, PushError};
     use crate::UNREAD_FRAMES;
@@ -292,6 +354,41 @@ mod tests {
         ) -> Poll<Result<usize, std::io::Error>> {
             self.entered.store(true, Ordering::Release);
             Poll::Pending
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Pending once, then the whole buffer. The gap is the stall.
+    struct DelayWrite {
+        entered: Arc<AtomicBool>,
+        waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+    }
+
+    impl AsyncWrite for DelayWrite {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize, std::io::Error>> {
+            if !self.entered.load(Ordering::Acquire) {
+                self.entered.store(true, Ordering::Release);
+                *self.waker.lock().unwrap() = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+            Poll::Ready(Ok(buf.len()))
         }
 
         fn poll_flush(
@@ -404,6 +501,54 @@ mod tests {
             .expect("writer finished")
             .expect("joined");
         assert_eq!(cause.kind(), CloseKind::LocalClose);
+    }
+
+    /// One delayed socket write is one sample. The max is the longest
+    /// sample. Nothing counts how many exceeded a threshold.
+    #[tokio::test]
+    async fn a_delayed_write_is_a_sample_and_the_max() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&entered);
+        let slot: Arc<std::sync::Mutex<Option<std::task::Waker>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let parked = Arc::clone(&slot);
+        let queue = ByteQueue::new(8);
+        let closer = queue.clone();
+        let overfull = queue.overfull();
+        queue.try_push(b"abcd".to_vec()).expect("queue");
+        let task = tokio::spawn(async move {
+            let mut write = DelayWrite {
+                entered: flag,
+                waker: parked,
+            };
+            let gate = LinkGate::new();
+            write_capped(&mut write, &queue, &overfull, &gate, 41, |plain| {
+                Ok(std::borrow::Cow::Borrowed(plain))
+            })
+            .await
+        });
+        until_entered(&entered).await;
+        std::thread::sleep(Duration::from_millis(20));
+        slot.lock().unwrap().take().expect("waker").wake();
+        let start = std::time::Instant::now();
+        let seen = loop {
+            if let Some(stall) = write_stall(41) {
+                break stall;
+            }
+            assert!(start.elapsed() < Duration::from_secs(2), "sample");
+            tokio::task::yield_now().await;
+        };
+        let (max, samples) = seen;
+        assert!(!samples.is_empty());
+        assert_eq!(max, samples.iter().copied().max().unwrap_or(0));
+        assert!(max > 0);
+        closer.close();
+        let cause = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("writer finished")
+            .expect("joined");
+        assert_eq!(cause.kind(), CloseKind::LocalClose);
+        assert!(write_stall(41).is_none());
     }
 
     #[tokio::test]

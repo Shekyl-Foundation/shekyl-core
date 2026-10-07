@@ -189,6 +189,25 @@ namespace nodetool
   //! `network_address::host_str()` so they compare equal to a candidate.
   std::set<std::string> local_interface_hosts();
 
+  /// A dial failure the address should remember. A timeout, a close this
+  /// node chose, and a payload this node refused are not that failure:
+  /// the address stays dialable.
+  inline bool address_failure_counts(std::uint8_t cause)
+  {
+    return cause == SHEKYL_CLOSE_DIAL_FAILED
+        || cause == SHEKYL_CLOSE_PROXY_REFUSED
+        || cause == SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED;
+  }
+
+  struct handshake_outcome
+  {
+    bool ok = false;
+    bool timed_out = false;
+    /// `process_payload_sync_data` refused the peer's sync data. That is
+    /// this node's decision, not an unreachable address.
+    bool payload_refused = false;
+  };
+
   // There is no announced node identifier of any kind. The eclipse-oracle
   // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
   // as the rationale for the field's ABSENCE at `basic_node_data`
@@ -310,7 +329,13 @@ namespace nodetool
     typedef shekyl::zone_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
 
     struct network_zone;
-    using connect_func = std::optional<p2p_connection_context>(network_zone&, epee::net_utils::network_address const&);
+    struct dial_result
+    {
+      std::optional<p2p_connection_context> context;
+      std::uint8_t cause = SHEKYL_CLOSE_LOCAL_CLOSE;
+    };
+
+    using connect_func = dial_result(network_zone&, epee::net_utils::network_address const&);
 
     struct config_t
     {
@@ -574,7 +599,7 @@ namespace nodetool
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
-    virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
+    virtual size_t for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f, std::atomic<size_t>* countdown = nullptr);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
     bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
@@ -606,7 +631,7 @@ namespace nodetool
 
     bool connections_maker();
     bool peer_sync_idle_maker();
-    bool do_handshake_with_peer(p2p_connection_context& context, bool just_take_peerlist = false);
+    handshake_outcome do_handshake_with_peer(p2p_connection_context& context, bool just_take_peerlist = false);
     bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context);
 
     bool make_new_connection_from_peerlist(epee::net_utils::connector_id connector, network_zone& zone, bool use_white_list);
@@ -624,7 +649,7 @@ namespace nodetool
     void delete_upnp_port_mapping(uint32_t port);
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
     bool make_expected_connections_count(epee::net_utils::connector_id connector, network_zone& zone, PeerType peer_type, size_t expected_connections);
-    void record_addr_failed(const epee::net_utils::network_address& addr);
+    void record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause);
     /*! Clear an address's failure record after a successful handshake. */
     void record_addr_success(const epee::net_utils::network_address& addr);
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);
@@ -724,7 +749,7 @@ namespace nodetool
     //keep connections to initiate some interactions
 
 
-    static std::optional<p2p_connection_context> public_connect(network_zone&, epee::net_utils::network_address const&);
+    static dial_result public_connect(network_zone&, epee::net_utils::network_address const&);
     shekyl_zone_params transport_spans() const;
     shekyl_inbound_ceiling transport_ceiling() const;
 

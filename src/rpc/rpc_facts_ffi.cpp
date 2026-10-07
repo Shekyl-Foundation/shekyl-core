@@ -5,9 +5,13 @@
 
 #include "rpc_facts_ffi.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstring>
+#include <future>
 #include <memory>
 #include <string>
+#include <map>
 #include <variant>
 #include <mutex>
 #include <vector>
@@ -23,6 +27,8 @@
 #include "cryptonote_protocol/block_queue.h"
 #include "net/net_utils_base.h"
 #include "p2p/net_node.h"
+#include "p2p/seam_board.h"
+#include "p2p/seam_endpoint.h"
 #include "string_tools.h"
 #include "rpc_tx_json.h"
 #include "misc_log_ex.h"
@@ -1251,52 +1257,91 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     // one: it is the same entry point `get_connections()` uses.
     nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
       h->rpc->get_p2p();
-    endpoint.for_each_connection(
-      [&](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
+    // Address, direction, and the handshake flag come from the board.
+    // Height, support flags, and the pull state stay on the C++ context,
+    // read on that connection's strand. This thread is the operator's,
+    // not a connection strand, so waiting here is not the walk that
+    // deadlocks an io worker on its own post.
+    struct sync_bits
     {
+      uint64_t started = 0;
+      uint64_t last_recv = 0;
+      uint64_t last_send = 0;
+      uint64_t height = 0;
+      uint32_t support_flags = 0;
+      uint8_t state = 0;
+    };
+    auto bits = std::make_shared<std::map<boost::uuids::uuid, sync_bits>>();
+    auto bits_mu = std::make_shared<std::mutex>();
+    // Shared with the strand callbacks. A timeout returns before every
+    // post has run, and those callbacks must not touch this frame.
+    auto left = std::make_shared<std::atomic<size_t>>(0);
+    auto ready = std::make_shared<std::promise<void>>();
+    const size_t posted = endpoint.for_each_connection(
+      [bits, bits_mu, left, ready](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
+      {
+        sync_bits row;
+        row.started = static_cast<uint64_t>(ctx.m_started);
+        row.last_recv = static_cast<uint64_t>(ctx.m_last_recv);
+        row.last_send = static_cast<uint64_t>(ctx.m_last_send);
+        row.height = ctx.m_remote_blockchain_height;
+        row.support_flags = support_flags;
+        row.state = static_cast<uint8_t>(ctx.m_state);
+        {
+          std::lock_guard<std::mutex> lock(*bits_mu);
+          (*bits)[ctx.m_connection_id] = row;
+        }
+        if (left->fetch_sub(1, std::memory_order_acq_rel) == 1)
+          ready->set_value();
+        return true;
+      }, left.get());
+    if (posted == 0)
+      ready->set_value();
+    else
+      ready->get_future().wait_for(std::chrono::seconds(2));
+
+    for (const auto& row : shekyl::seam_board_snapshot())
+    {
+      const epee::net_utils::network_address address = shekyl::seam_network_address(row.endpoint);
+      const boost::uuids::uuid id = shekyl::seam_connection_id(row.id);
       shekyl_rpc_connection_facts e;
       std::memset(&e, 0, sizeof(e));
-      owned->address.push_back(ctx.m_remote_address.str());
-      owned->host.push_back(ctx.m_remote_address.host_str());
-      std::memcpy(e.connection_id, ctx.m_connection_id.data, sizeof(e.connection_id));
-      e.started = static_cast<uint64_t>(ctx.m_started);
-      e.last_recv = static_cast<uint64_t>(ctx.m_last_recv);
-      e.last_send = static_cast<uint64_t>(ctx.m_last_send);
-      e.recv_count = ctx.m_recv_cnt;
-      e.send_count = ctx.m_send_cnt;
-      e.current_speed_down = ctx.m_current_speed_down;
-      e.current_speed_up = ctx.m_current_speed_up;
+      owned->address.push_back(address.str());
+      owned->host.push_back(address.host_str());
+      std::memcpy(e.connection_id, id.data, sizeof(e.connection_id));
+      e.port = address.port();
+      e.address_type = static_cast<uint8_t>(address.get_type_id());
+      e.incoming = row.endpoint.direction == SHEKYL_DIRECTION_INBOUND ? 1 : 0;
+      e.localhost = address.is_loopback() ? 1 : 0;
+      e.local_ip = address.is_local() ? 1 : 0;
+      if (row.id != 0)
       {
-        // Totals feed the lifetime average. Current speed is the
-        // budget's recent window, from the engine's clock. It is not
-        // a second limit.
-        std::uint64_t socket_id = 0;
-        std::memcpy(&socket_id, ctx.m_connection_id.data + 8, sizeof(socket_id));
-        if (socket_id != 0)
+        std::uint64_t up = 0;
+        std::uint64_t down = 0;
+        shekyl_link_connection(row.id, &up, &down);
+        e.send_count = up;
+        e.recv_count = down;
+        std::uint64_t speed_up = 0;
+        std::uint64_t speed_down = 0;
+        shekyl_link_speed(row.id, &speed_up, &speed_down);
+        e.current_speed_up = static_cast<double>(speed_up);
+        e.current_speed_down = static_cast<double>(speed_down);
+      }
+      {
+        std::lock_guard<std::mutex> lock(*bits_mu);
+        const auto found = bits->find(id);
+        if (found != bits->end())
         {
-          std::uint64_t up = 0;
-          std::uint64_t down = 0;
-          shekyl_link_connection(socket_id, &up, &down);
-          e.send_count = up;
-          e.recv_count = down;
-          std::uint64_t speed_up = 0;
-          std::uint64_t speed_down = 0;
-          shekyl_link_speed(socket_id, &speed_up, &speed_down);
-          e.current_speed_up = static_cast<double>(speed_up);
-          e.current_speed_down = static_cast<double>(speed_down);
+          e.started = found->second.started;
+          e.last_recv = found->second.last_recv;
+          e.last_send = found->second.last_send;
+          e.height = found->second.height;
+          e.support_flags = found->second.support_flags;
+          e.state = found->second.state;
         }
       }
-      e.height = ctx.m_remote_blockchain_height;
-      e.support_flags = support_flags;
-      e.port = ctx.m_remote_address.port();
-      e.state = static_cast<uint8_t>(ctx.m_state);
-      e.address_type = static_cast<uint8_t>(ctx.m_remote_address.get_type_id());
-      e.incoming = ctx.m_is_income ? 1 : 0;
-      e.localhost = ctx.m_remote_address.is_loopback() ? 1 : 0;
-      e.local_ip = ctx.m_remote_address.is_local() ? 1 : 0;
       owned->entries.push_back(e);
-      return true;
-    });
+    }
 
     for (size_t i = 0; i < owned->entries.size(); ++i)
     {

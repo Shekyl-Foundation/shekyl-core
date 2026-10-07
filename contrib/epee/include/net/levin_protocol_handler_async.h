@@ -116,6 +116,8 @@ public:
   bool update_connection_context(const t_connection_context& contxt);
   bool request_callback(boost::uuids::uuid connection_id);
   template<class callback_t>
+  void collect_context_posts(const callback_t &cb, std::vector<std::function<void()>>& posts);
+  template<class callback_t>
   bool foreach_connection(const callback_t &cb);
   template<class callback_t>
   bool for_connection(const boost::uuids::uuid &connection_id, const callback_t &cb);
@@ -827,6 +829,24 @@ public:
   boost::uuids::uuid get_connection_id() {return m_connection_context.m_connection_id;}
   //------------------------------------------------------------------------------------------
   t_connection_context& get_context_ref() {return m_connection_context;}
+
+  /// Run `fn` on this connection's strand, then release the outer-call
+  /// ref `start_outer_call` took. The caller does not wait. A missing
+  /// endpoint runs `fn` here: there is no strand to post to, and the ref
+  /// still has to be released.
+  void post_on_strand(std::function<void(t_connection_context&)> fn)
+  {
+    if (!m_pservice_endpoint)
+    {
+      fn(m_connection_context);
+      finish_outer_call();
+      return;
+    }
+    m_pservice_endpoint->post([this, fn = std::move(fn)] {
+      fn(get_context_ref());
+      finish_outer_call();
+    });
+  }
 };
 //------------------------------------------------------------------------------------------
 template<class t_connection_context>
@@ -926,14 +946,9 @@ int async_protocol_handler_config<t_connection_context>::invoke_async(int comman
 }
 //------------------------------------------------------------------------------------------
 template<class t_connection_context> template<class callback_t>
-bool async_protocol_handler_config<t_connection_context>::foreach_connection(const callback_t &cb)
+void async_protocol_handler_config<t_connection_context>::collect_context_posts(const callback_t &cb, std::vector<std::function<void()>>& posts)
 {
   std::vector<typename connections_map::mapped_type> conn;
-
-  auto scope_exit_handler = misc_utils::create_scope_leave_handler([&conn]{
-    for (auto &aph: conn)
-      aph->finish_outer_call();
-  });
 
   CRITICAL_REGION_BEGIN(m_connects_lock);
   conn.reserve(m_connects.size());
@@ -942,10 +957,25 @@ bool async_protocol_handler_config<t_connection_context>::foreach_connection(con
       conn.push_back(e.second);
   CRITICAL_REGION_END()
 
+  // The closure posts. It does not run the callback, so the caller can
+  // publish a countdown before any strand enters `get_context_ref`.
   for (auto &aph: conn)
-    if (!cb(aph->get_context_ref()))
-      return false;
-
+  {
+    posts.push_back([aph, cb] {
+      aph->post_on_strand([cb](t_connection_context& ctx) {
+        cb(ctx);
+      });
+    });
+  }
+}
+//------------------------------------------------------------------------------------------
+template<class t_connection_context> template<class callback_t>
+bool async_protocol_handler_config<t_connection_context>::foreach_connection(const callback_t &cb)
+{
+  std::vector<std::function<void()>> posts;
+  collect_context_posts(cb, posts);
+  for (auto& post: posts)
+    post();
   return true;
 }
 //------------------------------------------------------------------------------------------
@@ -955,10 +985,11 @@ bool async_protocol_handler_config<t_connection_context>::for_connection(const b
   async_protocol_handler<t_connection_context>* aph = nullptr;
   if (find_and_lock_connection(connection_id, aph) != LEVIN_OK)
     return false;
-  auto scope_exit_handler = misc_utils::create_scope_leave_handler(
-    boost::bind(&async_protocol_handler<t_connection_context>::finish_outer_call, aph));
-  if(!cb(aph->get_context_ref()))
-    return false;
+  // Found. The callback's bool is not this return: the caller is not
+  // waiting, and a false callback cannot mean "the id is absent".
+  aph->post_on_strand([cb](t_connection_context& ctx) {
+    cb(ctx);
+  });
   return true;
 }
 //------------------------------------------------------------------------------------------

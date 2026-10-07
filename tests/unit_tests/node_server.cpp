@@ -1393,6 +1393,37 @@ TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
   EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS + 1));
 }
 
+TEST(node_server, a_timeout_and_a_local_refusal_leave_the_address_dialable)
+{
+  nodetool::failed_addr_cache cache;
+  const epee::net_utils::network_address addr{
+    epee::net_utils::ipv4_network_address{0x04030201, 12021}};
+  const time_t t0 = 1000000;
+  const std::uint8_t ignored[] = {
+    SHEKYL_CLOSE_TRANSPORT_TIMEOUT,
+    SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT,
+    SHEKYL_CLOSE_LOCAL_CLOSE,
+  };
+  for (const std::uint8_t cause : ignored)
+  {
+    if (nodetool::address_failure_counts(cause))
+      cache.record_failure(addr, t0);
+  }
+  EXPECT_FALSE(cache.is_recently_failed(addr, t0));
+
+  const std::uint8_t counted[] = {
+    SHEKYL_CLOSE_DIAL_FAILED,
+    SHEKYL_CLOSE_PROXY_REFUSED,
+    SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED,
+  };
+  for (const std::uint8_t cause : counted)
+  {
+    ASSERT_TRUE(nodetool::address_failure_counts(cause)) << static_cast<unsigned>(cause);
+  }
+  cache.record_failure(addr, t0);
+  EXPECT_TRUE(cache.is_recently_failed(addr, t0));
+}
+
 TEST(node_server, unknown_zone_keeps_the_public_window)
 {
   // The window is selected by NAMING the anonymity zones. A not-public test
@@ -1512,23 +1543,27 @@ namespace
       conns.push_back(std::move(c));
     }
 
-    virtual void for_each_connection(
-      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+    virtual size_t for_each_connection(
+      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f,
+      std::atomic<size_t>* countdown) override
     {
+      if (countdown)
+        countdown->store(conns.size(), std::memory_order_release);
       for (auto &c : conns)
-        if (!f(c, 0))
-          return;
+        f(c, 0);
+      return conns.size();
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
       std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
     {
-      // Production propagates the callback's own result: epee's
-      // `for_connection` returns false both when the id is absent and when the
-      // callback returns false (`levin_protocol_handler_async.h`,
-      // `if(!cb(...)) return false;`). A double that always returned true on a
-      // match would be more permissive than the endpoint it stands for.
+      // Production returns false only when the id is absent. The callback
+      // runs on the connection strand and its bool is not the lookup.
       for (auto &c : conns)
-        if (c.m_connection_id == id) return f(c, 0);
+        if (c.m_connection_id == id)
+        {
+          f(c, 0);
+          return true;
+        }
       return false;
     }
     virtual bool drop_connection(const epee::net_utils::connection_context_base &context) override

@@ -371,24 +371,30 @@ public:
     return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), &params, &ceiling) == 0;
   }
 
-  bool open(const epee::net_utils::network_address& address, connection_context& out)
+  /// 0 when `out` is the opened context. Otherwise the seam cause.
+  /// An address this process cannot encode, and a dial the link map does
+  /// not hold, are `LocalClose`: this node stopped, the address did not fail.
+  std::uint8_t open(const epee::net_utils::network_address& address, connection_context& out)
   {
     shekyl_seam_address ffi{};
     if (!detail::address_from(address, ffi))
-      return false;
+      return SHEKYL_CLOSE_LOCAL_CLOSE;
     const shekyl_seam_open_result result = shekyl_seam_open(&ffi, 0);
     if (result.id == 0)
     {
-      MINFO("seam open refused cause " << seam_close_name(result.cause_kind)
+      const std::uint8_t cause = result.cause_kind == 0
+          ? static_cast<std::uint8_t>(SHEKYL_CLOSE_DIAL_FAILED)
+          : result.cause_kind;
+      MINFO("seam open refused cause " << seam_close_name(cause)
           << " reply " << result.reply_code);
-      return false;
+      return cause;
     }
     std::lock_guard<std::mutex> lock(m_mu);
     const auto found = m_links.find(result.id);
     if (found == m_links.end())
-      return false;
+      return SHEKYL_CLOSE_LOCAL_CLOSE;
     out = found->second->context();
-    return true;
+    return 0;
   }
 
   void enqueue(std::uint64_t id, std::uint32_t kind, shekyl_seam_observed observed, bool have_observed, std::vector<std::uint8_t> bytes) override

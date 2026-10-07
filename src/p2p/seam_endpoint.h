@@ -74,6 +74,27 @@ namespace shekyl
     return id;
   }
 
+  inline std::uint64_t seam_socket_id(const boost::uuids::uuid& id)
+  {
+    std::uint64_t socket_id = 0;
+    std::memcpy(&socket_id, id.data + 8, sizeof(socket_id));
+    return socket_id;
+  }
+
+  /// The board's handshake flag for this session.
+  ///
+  /// `1` has finished, `0` is a row that has not. Production sessions have
+  /// a row, and that flag is the gate. No row (`-1`) is not a seam session:
+  /// a protocol unit test states the handshake as `m_state`, whose
+  /// before-handshake value is 0.
+  inline bool seam_handshake_established(const boost::uuids::uuid& id, int state)
+  {
+    const int on_board = shekyl_seam_session_established(seam_socket_id(id));
+    if (on_board >= 0)
+      return on_board == 1;
+    return state != 0;
+  }
+
   inline epee::net_utils::network_address seam_network_address(const shekyl_seam_observed& obs)
   {
     using epee::net_utils::ipv4_network_address;

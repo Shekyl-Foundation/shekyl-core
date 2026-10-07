@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <boost/uuid/uuid.hpp>
 #include <utility>
 #include <vector>
@@ -62,7 +63,7 @@ namespace nodetool
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context)=0;
     virtual void request_callback(const epee::net_utils::connection_context_base& context)=0;
     virtual uint64_t get_public_connections_count()=0;
-    virtual void for_each_connection(std::function<bool(t_connection_context&, uint32_t)> f)=0;
+    virtual size_t for_each_connection(std::function<bool(t_connection_context&, uint32_t)> f, std::atomic<size_t>* countdown = nullptr)=0;
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(t_connection_context&, uint32_t)> f)=0;
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = 0, bool add_only = false)=0;
     virtual bool unblock_host(const epee::net_utils::network_address &address)=0;
@@ -97,9 +98,11 @@ namespace nodetool
     {
 
     }
-    virtual void for_each_connection(std::function<bool(t_connection_context&,uint32_t)> f)
+    virtual size_t for_each_connection(std::function<bool(t_connection_context&,uint32_t)> f, std::atomic<size_t>* countdown = nullptr)
     {
-
+      (void)f;
+      (void)countdown;
+      return 0;
     }
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(t_connection_context&,uint32_t)> f)
     {

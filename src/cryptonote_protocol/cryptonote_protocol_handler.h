@@ -151,7 +151,6 @@ namespace cryptonote
     }
     bool no_sync() const { return m_no_sync; }
     void set_no_sync(bool value) { m_no_sync = value; }
-    std::string get_peers_overview() const;
     bool needs_new_sync_connections(epee::net_utils::connector_id zone) const;
     bool is_busy_syncing();
 
@@ -174,7 +173,6 @@ namespace cryptonote
     //----------------------------------------------------------------------------------
     //bool get_payload_sync_data(HANDSHAKE_DATA::request& hshd, cryptonote_connection_context& context);
     bool request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span = false);
-    size_t get_synchronizing_connections_count();
     bool on_connection_synchronized();
     bool should_download_next_span(cryptonote_connection_context& context, bool standby);
     void drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans);

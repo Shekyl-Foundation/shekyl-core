@@ -370,12 +370,9 @@ namespace levin
          then waited on a silence that peer was never given a chance to break.
          Found sweeping the carrier's own conversion; fixed here rather than
          left as the next instance of it. */
-      bool in_registry = false;
-      p2p.for_connection(destination, [&in_registry](detail::p2p_context&) {
-        in_registry = true;
+      if (!p2p.for_connection(destination, [](detail::p2p_context&) {
         return true;
-      });
-      if (!in_registry)
+      }))
       {
         MINFO("seam send refused conn " << destination << " registry no");
         return false;
@@ -426,12 +423,9 @@ namespace levin
         {
           if (!entry.registry)
             continue;
-          bool found = false;
-          entry.registry->for_connection(id, [&found](detail::p2p_context&) {
-            found = true;
+          if (entry.registry->for_connection(id, [](detail::p2p_context&) {
             return true;
-          });
-          if (found)
+          }))
             return held_session{entry.registry.get(), entry.connector};
         }
         return std::nullopt;

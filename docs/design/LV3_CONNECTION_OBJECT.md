@@ -131,7 +131,7 @@ this round has failed to justify — delete it or find its ruling.
 
 ## 1. ~~Why this slice is first~~ — WITHDRAWN 2026-09-21; why the consumers still converge
 
-**UPDATE 2026-10-06:** step a owns the session record (`Connection` in `shekyl-seam`). Steps b and c, the handle and the remaining sync walks, are open. *Records-was: nothing in Rust owns a connection.* `shekyl-levin` owns bytes;
+**UPDATE 2026-10-06:** step a owns the session record (`Connection` in `shekyl-seam`). Step c's board is what the address walks read. Step b posts the two context walks and does not make `p2p_connection_context` a handle. *Records-was: steps b and c, the handle and the remaining sync walks, are open. Records-was before that: nothing in Rust owns a connection.* `shekyl-levin` owns bytes;
 `shekyl-peer-policy` owns stateless verdicts that C++ calls with values C++
 walked itself. *Records-was: the connection lives in `net_node.inl`'s
 `foreach_connection` lambda and epee's context.* The session record is
@@ -1557,7 +1557,7 @@ wrong was calling them the round.*
 | --- | --- | --- |
 | **c** | The connection registry, **including its own count**. **UPDATE 2026-10-04: the hub lock writes the row. The strand writes the C++ context.** Walkers read snapshots. A change is a post. *Records-was: "the strand is the only writer."* | the `foreach_connection` race, above |
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
-| **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
+| **b** | The two context walks post onto the connection strand and return. Forget-cause, write-stall samples, and the four handshake gates read the board's `established`. **UPDATE 2026-10-06.** *Records-was: ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle.* | Follows step c. |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
 **What slice 5 inherits from slices 1–4. UPDATE 2026-09-25: it does not
@@ -1682,8 +1682,8 @@ Slice 3 keeps the fill loops. They recount.
 **Which of the twelve move in step c.** The board carries the id, the
 connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
-relationship. Those arrive when their owner publishes them, through
-the step-b handle, not as blanks on the board. The `run` thread is
+relationship. Those arrive when their owner publishes them. Step b does not
+publish them: the readers are still C++. *Records-was: through the step-b handle, not as blanks on the board.* The `run` thread is
 gone. The dial cap reads `shekyl_seam_board_count`. A zone's count is
 `Board::count(connector, direction)`, handshake or not.
 `Board::direction_count(Outbound)` is that count across connectors.
@@ -1693,7 +1693,7 @@ The rest of this subset reads the board.
 
 | Step c | Step b |
 | --- | --- |
-| `for_each_connection` `:164`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. **UPDATE 2026-10-06: still the walk. The protocol handler reads support flags, pull state, and byte counters the board does not carry.** | `peer_sync_idle_maker` `:2342`. It reads the pull relationship and writes `m_in_timedsync`. **UPDATE 2026-10-06: still the walk.** |
+| `for_each_connection` `:164`, for the reads this row answers. **UPDATE 2026-10-06: the callback is posted onto the connection strand. The caller does not wait. A countdown, when the caller passes one, is stored before any post.** *Records-was: a callback that reads support flags or the pull relationship waits.* The protocol handler still reads support flags, pull state, and byte counters the board does not carry. | `peer_sync_idle_maker` `:2342`. **UPDATE 2026-10-06: `foreach_connection` posts. The timed sync starts on the strand.** *Records-was: still the walk, on the caller's thread.* It reads the pull relationship and writes `m_in_timedsync`. |
 | `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The peer-count caches are deleted. *Records-was: the stored out-count was not refreshed by the thread.* |
 | `send_stop_signal` — **UPDATE 2026-10-06: reads the board, then `close` by id.** *Records-was: `:1248`.* | |
 | `has_outbound_connection_to_host` — **UPDATE 2026-10-06: the board.** *Records-was: `:1492`.* | |
@@ -1718,8 +1718,8 @@ mutable context across a strand write. `rg get_context_ref` in
 | `:829` | the definition. *Records-was: `:808`, and before that `:815`, and before that `:790`.* |
 | `:329`, `:331` | the invoke-timeout completion, inside the post at `:321`. It reports timeout unless close set the report to destroyed. *Records-was: `:313` and `:315`, inside `:303`, gated on `m_timer_cancelled`. Records-was before that: `:319` and `:321`, inside `:314`, gated on `m_cancel_timer_called`.* |
 | `:283` | `anvoke_handler::cancel`, the callback. This is where the report becomes destroyed. |
-| `:946` | `foreach_connection` hands the walker the context. *Records-was: `:925`, and before that `:932`, and before that `:907`.* |
-| `:960` | `for_connection` hands the caller the context. *Records-was: `:939`, and before that `:946`, and before that `:921`.* |
+| `:973` | `foreach_connection` posts the walker. `get_context_ref` runs inside that post. *Records-was: `:946` handed the walker the context on the caller's thread, and before that `:925`, `:932`, `:907`.* |
+| `:983` | `for_connection` posts the caller. `get_context_ref` runs inside that post. *Records-was: `:960` handed the caller the context on the caller's thread, and before that `:939`, `:946`, `:921`.* |
 
 `:283` is strand-side. `cancel` is called only from
 `release_protocol`, and `begin_closed` calls that from `on_strand`
@@ -1753,14 +1753,11 @@ ran on `async_invoke`'s caller.*
 | --- | --- |
 | `:283` `anvoke_handler::cancel` | Yes. `release_protocol` from `begin_closed`, and `begin_closed` runs from `on_strand`. |
 | `:329`, `:331` the invoke-timeout completion | Yes. Posted onto the connection strand. |
-| `:946` from `for_each_connection` (`net_node.inl:164`) | No. The protocol handler reads support flags, pull state, and byte counters. Waiting on each strand from that walk is the deadlock this step does not introduce. |
-| `:946` from `peer_sync_idle_maker` (`net_node.inl:2342`) | No. It writes `m_in_timedsync`. Same wait. |
-| `:960` from `node_server::for_connection` (`net_node.inl:169`) | No. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state. |
+| `for_each_connection` (`net_node.inl`), via `collect_context_posts` then `post_on_strand` | Yes. The protocol handler still reads support flags, pull state, and byte counters. The caller does not wait. *Records-was: No, and waiting on each strand from that walk is the deadlock this step does not introduce.* |
+| `peer_sync_idle_maker` (`net_node.inl`), via `foreach_connection` | Yes. It writes `m_in_timedsync` on the strand. *Records-was: No. Same wait.* |
+| `node_server::for_connection` (`net_node.inl`) | Yes. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state on the strand. The return is whether the id was queued, not the callback's bool. *Records-was: No.* |
 
-The two `:946` callers are the step-b holdouts. `:960` is the same
-class: anything that needs sync state. Step c is not green on
-"only strand-side callers" until those posts exist. A caller that
-cannot move onto the strand is this list, not a silent carve-out.
+**UPDATE 2026-10-06:** `:946` and `:960` post the callback onto the connection strand and return. `get_context_ref` runs inside that post. *Records-was: the two `:946` callers are the step-b holdouts, and `:960` is the same class.*
 
 `:960` is not only a walker. *Records-was: `:939`, and before that `:946`, and before that `:921`.* `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
@@ -1799,16 +1796,9 @@ ahead of the struct.* Constraint 2 covers the object:
 nothing in it is stable across reconnects except the observed
 endpoint, which is already public.
 
-**Step b is the ownership cut.** `p2p_connection_context` becomes a
-handle to the Rust object. Through b the C++ handler still runs
-`handle_recv` and the invoke timers, so it reads local state and
-claimed fields, and writes local state only, through FFI accessors on
-the handle. The observed bin is write-once at establishment, by the
-seam. C++ never writes an observed field. The forget-cause split and
-the per-session write-stall samples land here. `message_writer::finalize`
-stays C++ through b. Swapping the reader for `BucketReader`,
-`send_txs` handing a plan to the seam, and deleting `levin_notify.cpp`
-and `levin.cpp` are the RD row.
+**Step b is not an ownership cut.** *Records-was: `p2p_connection_context` becomes a handle to the Rust object, and C++ reads claimed fields through FFI accessors.* Every reader of the claimed fields is C++. Moving them into `Connection` would be a write through FFI and a read back through FFI with no Rust consumer. Claims move with their readers: the sync driver's height, last-known hash, and accepted chain length when that driver moves; `support_flags` and the advertised address when handshake processing is Rust. `m_state` stays with the sync driver. The `Connection` claim slots stay empty until then.
+
+Step b is four things. The two `get_context_ref` hands (`foreach_connection` and `for_connection`) post the callback onto that connection's strand and return. They do not wait. A session the seam does not hold has no row: the protocol tests state that handshake on `m_state`, and a production session has the row, so the row is the gate. `zone_server::open` returns the seam cause, and `record_addr_failed` counts `DialFailed`, `ProxyRefused`, and `LevinHandshakeRejected` only. The writer both connectors share records each completed socket write: the samples and the max, with no threshold. The four handshake gates read the board's `established` for that session, so `m_state` is the pull relationship. The operator view reads direction, the endpoint, and the handshake flag from the board; height, support flags, and the pull state stay on the context, read on the strand. `message_writer::finalize` stays C++ through b. Swapping the reader for `BucketReader`, `send_txs` handing a plan to the seam, and deleting `levin_notify.cpp` and `levin.cpp` are the RD row.
 
 **Shape.** Three PRs, one per step, each inside rule 06.
 `check-goldens` is unchanged at every step. `unit_tests` and the

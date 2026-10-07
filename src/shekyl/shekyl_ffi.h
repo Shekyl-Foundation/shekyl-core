@@ -4418,6 +4418,11 @@ std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t dir
 /// or a direction index that is not one, is 0.
 std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
 
+/// 1 when the board row for `id` has finished the Levin handshake, 0 when
+/// the row is present and the handshake has not, -1 when there is no row.
+/// The id is the socket id, not the UUID.
+int shekyl_seam_session_established(std::uint64_t id);
+
 /// Copy the process hub's board through `visit`, one fixed-size row per
 /// call. There is one hub. A missing hub, or a board with no rows, visits
 /// once with a null row. The pointer is valid only for that call. Returns

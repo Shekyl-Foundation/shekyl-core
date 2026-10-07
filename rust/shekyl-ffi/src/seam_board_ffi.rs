@@ -71,6 +71,22 @@ pub extern "C" fn shekyl_seam_board_count(connector: u32, direction: u32) -> u64
     u64::try_from(hub.board().count(connector, direction)).unwrap_or(u64::MAX)
 }
 
+/// 1 when `id`'s row has finished the Levin handshake, 0 when the row is
+/// present and the handshake has not, -1 when the hub has no such row.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_session_established(id: u64) -> i32 {
+    if id == 0 {
+        return -1;
+    }
+    let Some(hub) = hub() else {
+        return -1;
+    };
+    match hub.board().rows().iter().find(|row| row.id().get() == id) {
+        Some(row) => i32::from(row.established()),
+        None => -1,
+    }
+}
+
 /// Rows in `direction` on every connector.
 ///
 /// The sum of [`shekyl_seam_board_count`] across the connectors this
