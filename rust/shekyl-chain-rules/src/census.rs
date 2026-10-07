@@ -476,9 +476,9 @@ census_rows! {
         I12 implemented(crate::rules::tx_against::I12),
         // I13's predicate and depth read exist (`tx_against::I13`) and run
         // on the emission under J21 (slice 8 row 9); the row stays pending
-        // until it runs on the spend class, which is held with I15 on the
-        // filler-spend fixture migration (FOLLOWUPS, *The view-bound rows
-        // of slices 2–4 …*).
+        // until it runs on the spend class, which lands with I15 in the
+        // filler-fixture migration ruled 2026-10-07 (FOLLOWUPS, the I13 /
+        // I15 rows: one PR after #983, 115 fixtures become scenarios).
         I13 pending,
         I14 implemented(crate::rules::tx_inputs::I14),
         // I15's body exists (`tx_against::I15::verify`) and runs on the

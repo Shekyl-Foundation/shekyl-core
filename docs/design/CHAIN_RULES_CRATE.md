@@ -902,7 +902,8 @@ the emission claim's statics in `rules/tx_emission.rs`, slice 8 row 8;
 and J21, J23, J25, J26 — the emission claim's context and verify,
 `judge_reference`'s emission arm and `rules/tx_emission_against.rs`,
 slice 8 row 9, with I13's predicate and I15's body live but their
-Spend-class rows held `pending` for a ruling; and from 4.B, B4 in
+Spend-class rows `pending` until the flip PR after #983 (ruled
+2026-10-07; the FOLLOWUPS I13/I15 rows); and from 4.B, B4 in
 `rules/attestation.rs`, slice 8 row 10 — all 2026-10-06);
 H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
