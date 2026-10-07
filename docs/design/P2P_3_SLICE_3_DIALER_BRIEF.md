@@ -32,15 +32,150 @@ The dial is `Hub::connect`. The outbound Levin handshake is a
 timing-engine owner. It is not a thread waiting on an event, and it
 is not a job of the C++ timing-engine bridge.
 
-The outcome goes through `implicates_address` into a Rust
-failed-address memory. That memory carries the Tor and clearnet
-windows from `failed_addr_cache::window` (`net_node.h:221`). Clearnet
-is the hour. Tor starts at the short window and doubles, capped at
-the hour.
+The outcome goes through `implicates_address` into the failed-address
+memory below. That memory carries the Tor and clearnet windows from
+`failed_addr_cache::window` (`net_node.h:221`). Clearnet is the hour.
+Tor starts at the short window and doubles, capped at the hour.
 
-White promotion happens only through the slice-1 type contract: a
-completed dial. The peer's sync data is handed to the C++ sync driver
-as a fire-and-forget post onto that connection's strand.
+White promotion of a gray draw is a completed dial, defined below.
+The Foundation fleet stays slice 1 §3.
+
+## Outbound handshake frames
+
+On an outbound session, frames before the handshake ends are read by
+this slice's handshake owner, `shekyl-levin`'s reader. They are not
+delivered to the strand.
+
+On success, that owner queues one established delivery to the strand,
+ahead of the first frame after the handshake. The delivery carries
+the response's support flags, the peer's sync payload, and the board's
+established flag. The strand is the first reader of those three. The
+owner does not call `process_payload_sync_data`.
+
+On failure, the cause is the one the connector closed with. The
+handshake owner has it. It does not read it back from the hub.
+
+The gap deadline is the only clock on an outbound handshake. The 5 s
+Levin invoke timer (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`,
+`cryptonote_config.h:199`) has no outbound-handshake role and is not
+armed for one.
+
+Test: no frame after the handshake reaches the strand before the
+established delivery.
+
+## The request's sync payload
+
+`get_payload_sync_data` (`cryptonote_protocol_handler.inl:458`) reads
+the core on the caller: height, top id, the ideal hard-fork version
+at that height, and cumulative difficulty, low 64 and top 64, then
+adds one to the height. The handshake request carries that
+`CORE_SYNC_DATA`.
+
+The dialer does not call the core. The core publishes that snapshot
+when the tip changes. The handshake reads the latest snapshot. A tip
+that moves while the handshake is in flight stays the snapshot the
+request already took. The fields are public chain data.
+
+## Completed dial
+
+A gray draw is promoted when the strand has accepted the sync payload
+and reported that acceptance back to the dialer. The report is a
+post. The dialer does not wait on it. Until the report, the session
+may be up and the address is still gray.
+
+A valid Levin response is not the promotion. The strand can refuse
+the payload after the response was well-formed. That refusal closes
+the session, leaves the address off white, and does not write the
+failed-address memory: the peer answered. `implicates_address` is
+unchanged.
+
+Wargame: a peer completes the handshake and sends a payload the sync
+driver refuses. Promoting on the Levin response would put that peer
+on white and hand the next draw an address this node drops on sight.
+Waiting for the strand's acceptance keeps the peer on gray. The
+report does not block the dialer, so a slow strand cannot stall the
+next dial. A session that dies before the report is not white.
+
+The Foundation fleet is not this definition. Slice 1 §3 writes white
+on a confirmed handshake with that fleet even though the dial is a
+harvest and closes. A harvest does not post the established delivery,
+so the sync driver never sees that session. The exception is the six
+addresses, not a second door for anyone else.
+
+## Seeds and harvest dials
+
+`connect_to_seed` (`net_node.inl:1955`) and `just_take_peerlist` are
+one disposition: a harvest. The handshake runs. The response peerlist
+is admitted to gray through slice 1. The session is closed. There is
+no established delivery and no white write, except slice 1 §3.
+
+Two callers become that disposition.
+
+- The seed pass. Slice 1 reports both lists empty
+  (`has_no_known_peers`, `net_peerlist.h:147`), or a fill pass added
+  no session while the connector is still under its outbound target.
+  The dialer walks the compiled seed list (`get_seed_nodes`, filled
+  at `net_node.inl:1965`). Clearnet, once, after every seed has
+  failed, adds `get_ip_seed_nodes` and walks those too. An exclusive
+  list skips the pass. Offline skips it.
+- The gray re-test. `gray_peerlist_housekeeping` (`net_node.inl:3258`)
+  dials one random gray peer through
+  `check_connection_and_handshake_with_peer` (`:1645`), which today
+  calls `do_handshake_with_peer` with `just_take_peerlist` (`:1665`)
+  and closes. Same disposition. An exclusive list skips it.
+
+A harvest that completes clears that address in the failed-address
+memory. A harvest that fails uses the connector's cause.
+
+## Outbound targets
+
+Each connector has one outbound target. The dialer fills toward it
+and does not invent the number.
+
+Clearnet's target is the zone cap `set_max_out_peers` writes
+(`net_node.inl:2884`). The default is `shekyl_p2p_default_out_peers`,
+which is `P2P_DEFAULT_OUT_PEERS` (12). The floor is
+`MIN_PROVISIONED_OUT_PEERS` (12,
+`shekyl-relay-privacy/src/params.rs:195`). `--out-peers` is that cap.
+A cap of 0 stays legal.
+
+Tor's target is `HOP0_OUTBOUND_TARGET` (4, `params.rs:205`), asserted
+below `MIN_PROVISIONED_OUT_PEERS`. Today `net_node.inl:926` writes it
+with `shekyl_hop0_outbound_target` onto the ephemeral Tor zone, and
+the comment there says `--out-peers` does not set it. The source of
+truth is the Rust constant.
+
+The dialer feeds the relay's own-edge pool. `Relay::own_edge` draws
+uniformly from the hidden-address outbound sessions this slice keeps
+up (`hidden_outbound_ids`). The dialer does not choose the edge. An
+empty pool is the relay's `NoOwnEdge`. This is a cross-lane
+dependency on the relay: the Tor target is that pool's size, and the
+relay lane owns the draw.
+
+## Support flags
+
+The handshake response carries `support_flags`. That value, including
+zero, is what the established delivery hands the strand.
+`try_get_support_flags` (`net_node.inl:1359`) asks again when the
+field is zero. The field is optional on the wire
+(`KV_SERIALIZE_OPT`, default 0), and the second invoke is how an
+omitted field was recovered. Shekyl sends the field. Zero is the
+peer's answer. The dialer does not own a second command.
+
+The inbound call (`net_node.inl:2764`) is the same ask inside the
+inbound handshake. Slice 4 deletes it for this reason. This slice
+deletes the outbound call.
+
+## Failed-address memory
+
+The key is the host and the port, the address that was dialed. A
+refused port is not evidence about another port on that host. The C++
+keys `addr.host_str()` only (`net_node.h:240`). That host key is
+records-was.
+
+The memory is not kept across restarts. It is the process map
+`m_conn_fails_cache`. `store_config` writes the peerlist and does not
+write this map. A restart dials again.
 
 ## What is deleted
 
@@ -58,6 +193,8 @@ has landed, the `rg` returns nothing.
 | The dial path in `idle_worker` | `idle_worker` is `net_node.inl:2226`. The dial is the `connections_maker` call at `:2229` | `rg -n 'connections_maker' src/p2p/net_node.inl` |
 | `zone_server::open` | `zone_server.h:374` | `rg -n 'bool open\(' src/p2p/zone_server.h` |
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:301` | the function returns without waiting for the handler to arm |
+| `shekyl_seam_session_cause` | lands with #991 at `rust/shekyl-ffi/src/seam_ffi.rs:402`. Absent on this branch's pin `9eb5f473cd`. Re-read the line after #991 merges | `rg -n shekyl_seam_session_cause rust src` |
+| The outbound call of `try_get_support_flags` | `net_node.inl:1359`. The function and the inbound call at `:2764` remain until slice 4 | `rg -n try_get_support_flags src/p2p/net_node.inl` finds no call from `do_handshake_with_peer` |
 
 ## Wargame
 
@@ -84,15 +221,17 @@ refused dial, a rejected handshake, and an onion reply in
 peer close, a local failure, and a clearnet proxy reply do not. The
 window is the one `failed_addr_cache::window` already derived. An
 attacker who can force reply 4 still buys only the short Tor window.
-That residual is unchanged.
+That residual is unchanged. The key is host and port, so a refused
+port does not suppress another port on the same host. The memory
+dies with the process.
 
-**Tor dial concurrency against the managed Tor.** Many simultaneous
-onion dials are a load the managed Tor process was not sized for, and
-a way to stall every other dial behind one SOCKS exchange. The answer
-is a bound on in-flight Tor dials, owned by this slice, separate from
-the clearnet bound. The number is not in this brief. It is measured
-before the implementation PR names it. Until then the implementation
-does not pick one.
+**Dial concurrency.** Many simultaneous onion dials are a load the
+managed Tor process was not sized for, and a way to stall every other
+dial behind one SOCKS exchange. Many simultaneous clearnet dials pin
+the dialer's tasks and the peers' handshake slots the same way. Each
+connector has its own in-flight bound, owned by this slice. Both
+numbers are measured before the implementation PR names them. This
+brief picks neither.
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a
 timed-sync payload are gray entries. They become dials only through
@@ -115,6 +254,10 @@ flight. The pair-run repro is the before and the after. Before: a
 dial on the 2-worker io pool can leave `get_connections` with claims
 unknown. After: the same dial leaves every io worker free, and the
 claim post lands.
+
+The established-delivery test above. A strand that refuses the sync
+payload leaves the address off white. A harvest leaves it off white
+too, and a Foundation-fleet handshake writes white.
 
 ## Known defect this slice carries
 
