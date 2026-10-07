@@ -162,11 +162,12 @@ pub struct HardForkInfoRequest {
 /// line carried the current fork's version and the next fork's height with
 /// nothing saying which was which.
 ///
-/// The voting fields are carried **verbatim** from what the daemon reports.
-/// Nothing here re-expresses threshold accounting, the rolling window or the
-/// vote predicate: CEN-B2 and CEN-B3 are bucket-4 rows reserved for the R4
-/// round that owns the hard-fork subsystem, so a reimplementation would be
-/// work that round has to undo.
+/// The counters are carried **verbatim** from what the daemon reports, and
+/// the daemon writes `window`, `votes` and `threshold` as 0: there is no
+/// vote. CEN-B2 (the reserved minor byte) is ratified in `shekyl-chain-rules`
+/// and is not this struct. CEN-B3 (the height schedule and the class that
+/// owns it) stays bucket 4 until `hard_fork_info` is deleted; this projection
+/// is that surface, not a second model of the schedule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HardForkInfoResponse {

@@ -477,7 +477,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
                                      const std::optional<uint8_t>& hf_ver)
 {
   blk.major_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MAJOR_VERSION;
-  blk.minor_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MINOR_VERSION;
+  blk.minor_version = CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
   fill_curve_tree_root(blk);

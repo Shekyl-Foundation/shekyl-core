@@ -105,13 +105,14 @@ pub struct Frontier {
 /// At `layer >= 1` the children are tree **nodes**, and they are everything a
 /// membership path needs at that layer.
 ///
-/// At `layer == 0` the children are leaf **scalars** — four per leaf. A path
-/// needs the siblings as compressed *points* (`O`, `I`, `C`) beside `CM.x`,
-/// and `O.x` is a one-way projection of `O`, so the points cannot be
-/// recovered from here. Layer 0 is still reported, because the *event* is what
-/// a capturing caller needs: it says which leaf chunk closed and at which
-/// index, and the caller assembles the identities from the leaf entries it
-/// already holds.
+/// At `layer == 0` the children are leaf **scalars** — four per leaf. The
+/// path types take the siblings as compressed *points* (`O`, `I`, `C`) beside
+/// `CM.x`, and `O.x` is a one-way projection of `O`, so the points cannot be
+/// recovered from these scalars. The circuit tape hashes the scalars; the
+/// prover API does not take these scalars yet. Layer 0 is still reported,
+/// because the *event* is what a capturing caller needs: it says which leaf
+/// chunk closed and at which index, and the caller assembles the identities
+/// from the leaf entries it already holds.
 #[derive(Clone, Copy, Debug)]
 pub struct FoldedChunk<'a> {
     /// Absolute tree layer of the node whose children these are.
@@ -376,8 +377,10 @@ impl Frontier {
     /// a path's open branch and the root it must hash to cannot be read from
     /// different states.
     ///
-    /// Layer 0 is **not** here. The open leaf chunk holds scalars, and a path
-    /// needs its siblings as points; those come from the leaf rows.
+    /// Layer 0 is **not** here. [`Self::encode`] persists the open leaf chunk's
+    /// scalars, and this method hashes them into the parent. The path types
+    /// still take sibling points — the circuit tape is those scalars, the
+    /// prover API is not — so the points come from the leaf rows.
     ///
     /// The last entry is never empty on a non-empty frontier; lower entries
     /// can be — a layer whose open node has no children yet, because the
