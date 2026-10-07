@@ -4589,6 +4589,59 @@ on burst tolerance and on what a throttled peer experiences:
 concrete, observable at the sync path, and the failure that would mean the rate
 was chosen against the wrong traffic.
 
+#### On Windows there is no bound for this to be a refinement of — measured on a live daemon, 2026-10-06
+
+Everywhere else B1 is hardening on top of a derived safety bound. On Windows
+it is the **only** inbound bound available, which makes it an **addition to the
+p2p Rust migration rather than a transfer**: there is no C++ mechanism to port,
+so a slice that moves the stack faithfully still lands Windows unbounded.
+
+**Three absences, not one.** A Windows node today is bounded by nothing:
+
+| route | state |
+| --- | --- |
+| by count | `InboundCeiling` resolves `NoPerProcessLimit` — no per-process descriptor quantity exists to read (200,000 sockets opened in one process, no refusal; the loop stopped at the harness's array cap). An unset `--in-peers` is `UINT32_MAX` in `set_max_in_peers`, so the derived ceiling is the only automatic bound and there is no default beneath it. |
+| by source address | PWD-I7's per-host cap deleted 2026-09-22. |
+| by rate | **this row**, ruled and unbuilt. |
+
+**The warning that reports it does not reach an operator, and it no longer
+names the consequence.** Both measured on `shekyld` built from `e0fb3eaa8`
+(MSVC on a Windows 11 client SKU, Ninja rather than CI's `Visual Studio 18
+2026` generator, which CMake 3.31.6 does not carry), run `--offline` at three
+log settings:
+
+| run | reached p2p init | WARN lines | ceiling warning |
+| --- | --- | --- | --- |
+| default (no `--log-level`) | yes | 3 | **absent** |
+| `--log-level 1` | yes | 4 | present |
+| `--log-level "*:WARNING,global:INFO,net.p2p:WARNING"` | yes | 4 | present |
+
+`net_node.inl` logs under `net.p2p`, and level 0's default category set is
+`*:WARNING` with `net.p2p` explicitly carved down to `FATAL`
+(`contrib/epee/src/mlog.cpp:127`) — so the message is filtered three levels
+below where it is emitted. `daemon` and `blockchain::db::lmdb` WARNs print at
+default in the same run, so WARN is not globally off; the carve-out is
+specific. It predates this use and is still right for suppressing
+per-connection `net.p2p` chatter — startup operator guidance sharing that
+category is the defect, so the remedy is the message's category, not the level.
+
+The arm selected is still `NO_PER_PROCESS_LIMIT` after the connector rework,
+so `001f9e957` moving enforcement to the Rust admission table did not change
+which arm Windows takes.
+
+**And the wording was softened a day after it was deliberately strengthened.**
+`82b275f71` added *“this node will accept inbound peers without limit”*
+on 2026-09-22; `0f2c37d58` removed it on 2026-09-23 during the Rust-decision
+refactor, leaving *“the inbound ceiling is unbounded”*. The softening
+was not argued, and the original reasoning stands: *unbounded* reads as
+generous rather than as absent to anyone without this history.
+
+**Why this is recorded here rather than fixed.** Both remedies — restoring
+the clause, and moving the message to `global` — are changes to C++ the
+migration is replacing, which `20-rust-vs-cpp-policy` makes the exception
+rather than the default. The bound itself is this row's, in Rust.
+
+
 ### PWD-B2 — jitter, and the discriminator is observability
 
 **RULED.** The five node-server idle makers are fixed-interval
