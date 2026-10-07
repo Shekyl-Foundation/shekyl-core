@@ -99,7 +99,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
-use crate::provider::{ProviderError, ShardBody, ShardProvider};
+use crate::provider::{ShardBody, ShardProvider};
 use shekyl_archival_retention::{
     PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
 };
@@ -110,7 +110,7 @@ use shekyl_types::BlockHeight;
 // module, and the digest type is private to it.
 #[path = "delivery.rs"]
 mod delivery;
-use delivery::FramedDigest;
+use delivery::{read_and_fold, Folded, FramedDigest};
 
 // The route grammar this endpoint answers — `GET /shard/{id}`, the
 // `application/octet-stream` content type, the request header's name and
@@ -645,7 +645,7 @@ enum Lookup {
 /// The gate, the open and the pre-flight: everything this persona does
 /// before its first response byte, as one blocking-pool hop.
 ///
-/// A named function and not a closure, like [`read_chunk`] and
+/// A named function and not a closure, like [`read_and_fold`] and
 /// [`sign_envelope`], because the serve path's cost is gated per thread
 /// (`benches/serve_response_iai.rs`): Callgrind keeps one collection state
 /// per thread, so the gate measures these steps composed on one thread
@@ -669,46 +669,6 @@ fn gate_and_open(
             Ok(()) => Lookup::Held(body),
             Err(_) => Lookup::NoKey,
         },
-    }
-}
-
-/// One chunk of the body for the send loop. The body travels with the
-/// result because the read is a blocking-pool hop that owns it meanwhile.
-fn read_chunk(mut body: ShardBody) -> (ShardBody, Result<Option<Vec<u8>>, ProviderError>) {
-    let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
-    (body, chunk)
-}
-
-/// What folding one read of the body into the delivery digest produced.
-enum Folded {
-    /// Bytes inside the frame, now part of the digest: write them.
-    Bytes(Vec<u8>),
-    /// The body ended. Whether it ended at the frame's declared length is
-    /// [`FramedDigest::finish`]'s to say.
-    End,
-    /// The store failed part-way.
-    StoreFault,
-    /// The store yielded a byte past the frame's declared length. Not
-    /// folded, and not to be written.
-    PastFrame,
-}
-
-/// Fold one read of the body into the running digest.
-///
-/// The one place a served byte enters the digest. [`write_response`] calls
-/// it between the read and the write, and the `BA-T3` compositions call it
-/// in the same place, so the gate counts the fold the endpoint runs and
-/// not a copy of it: a second digest pass added here moves the gate, and
-/// one added anywhere else in `write_response` is a second call site of a
-/// function that has one.
-fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
-    match chunk {
-        Ok(Some(bytes)) => match running.absorb(&bytes) {
-            Some(()) => Folded::Bytes(bytes),
-            None => Folded::PastFrame,
-        },
-        Ok(None) => Folded::End,
-        Err(_) => Folded::StoreFault,
     }
 }
 
@@ -869,13 +829,20 @@ async fn write_response<W: AsyncWrite + Unpin>(
         .ok_or_else(|| io::Error::other("response head"))?;
     write_bounded(stream, &head).await?;
     loop {
-        // The store read is synchronous redb, so each chunk crosses to the
-        // blocking pool and the body comes back with it.
-        let (returned, chunk) = tokio::task::spawn_blocking(move || read_chunk(body))
-            .await
-            .map_err(|_| io::Error::other("shard body task"))?;
+        // The store read is synchronous redb and the fold is a hash over
+        // the chunk, so both cross to the blocking pool together: this
+        // task's executor thread does neither. The body and the digest
+        // travel into the hop and come back with what it produced. This
+        // function cannot advance the digest itself (`absorb` is private
+        // to `delivery`), so a served byte is hashed in the hop or not at
+        // all.
+        let (returned, digest, folded) =
+            tokio::task::spawn_blocking(move || read_and_fold(body, running))
+                .await
+                .map_err(|_| io::Error::other("shard body task"))?;
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(bytes) => write_bounded(stream, &bytes).await?,
             Folded::End => break,
             Folded::PastFrame => {
@@ -958,8 +925,8 @@ fn admit_in_memory(
 /// keeps one collection state per thread and the endpoint's steps run on
 /// tokio's blocking pool, whose idle work made per-thread counts drift by
 /// up to 14 % between runs of one input. So the gate measures the steps
-/// here: [`gate_and_open`], [`response_head`], [`read_chunk`],
-/// [`fold_chunk`], [`sign_envelope`], in the order [`resolve`] and [`write_response`]
+/// here: [`gate_and_open`], [`response_head`], [`read_and_fold`],
+/// [`sign_envelope`], in the order [`resolve`] and [`write_response`]
 /// run them. It is not a second serve path. The steps are the endpoint's
 /// own functions, and `serve_bench_seam_tests.rs` holds this composition
 /// to the live endpoint for every outcome: the same bytes, and the same
@@ -994,9 +961,10 @@ pub fn serve_one_in_memory(
     };
     out.extend_from_slice(&response_head);
     loop {
-        let (returned, chunk) = read_chunk(body);
+        let (returned, digest, folded) = read_and_fold(body, running);
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
             Folded::End => break,
             Folded::PastFrame | Folded::StoreFault => return InMemoryServe::Truncated,
@@ -1064,9 +1032,10 @@ pub fn read_and_fold_in_memory(
     let mut body = provider.shard_bytes(shard_id).ok()??;
     let mut running = FramedDigest::start(&body.header(), nonce)?;
     loop {
-        let (returned, chunk) = read_chunk(body);
+        let (returned, digest, folded) = read_and_fold(body, running);
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(_) => {}
             Folded::End => return running.finish(),
             Folded::PastFrame | Folded::StoreFault => return None,
