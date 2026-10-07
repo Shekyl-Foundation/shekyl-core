@@ -2306,7 +2306,13 @@ not wait on them; building does.
    segment must exist at `H_fire`"* is stated on the leaf segment, which
    dies with the engine swap. This round re-bases it on the ruled partition
    (`SHT-Q1`, `SHT-Q2`), with possession proved on transaction bodies, not
-   leaf chunks.
+   leaf chunks. Possession is verified against what the txid binds
+   (added 2026-10-05): the digests `txs_prunable_hash` and
+   `txs_pqc_auth_hash`, and the length `txs_archival_len` (`SHT-Q2`). The
+   Rust store keeps all three after pruning
+   (`rust/shekyl-chain-store/src/store/prune.rs:51-52`, `:99-100`), so a
+   pruned validator can check a whole-shard read. That this slice precedes
+   the engine swap is `DEL-008`'s gate (`SCV-Q5`, item 1 above).
 
    Answered for E6 slice 8 (`CHAIN_RULES_SLICE_8.md` §3.4, asked
    2026-10-05): the signature `fn closed_and_final(view: &ChainView,

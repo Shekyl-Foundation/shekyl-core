@@ -208,6 +208,30 @@ fn an_empty_chain_or_an_empty_table_has_no_conflict() {
     assert_eq!(conflict(&five_blocks(), &ReleaseAnchors::EMPTY), None);
 }
 
+/// `conflict_with` is the view face of `conflict_over`. A second walk
+/// would let the store's open and the view's open disagree about which
+/// pin is first.
+#[test]
+fn conflict_with_is_the_view_face_of_the_one_walk() {
+    let chain = five_blocks();
+    let anchors = pinning_genesis(OTHER);
+    chain.with_view(|view| {
+        let via_view = infallible(anchors.conflict_with(&view));
+        let tip = infallible(view.tip());
+        let via_walk = infallible(anchors.conflict_over(tip, |height| {
+            Ok(match view.block_at(height)? {
+                AtHeight::Recorded(block) => Some(block.hash),
+                AtHeight::AboveTip => None,
+            })
+        }));
+        assert_eq!(via_view, via_walk);
+        assert_eq!(
+            via_walk.map(|conflict| conflict.remedy()),
+            Some(Remedy::RefuseToRun)
+        );
+    });
+}
+
 /// A view that cannot answer is a fault, not a conflict and not agreement.
 #[test]
 fn a_faulting_view_is_a_fault_not_a_verdict() {

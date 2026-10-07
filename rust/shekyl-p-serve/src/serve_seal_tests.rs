@@ -68,6 +68,9 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
 /// discovered after the body has gone out.
 struct RefusesLate;
 impl PassKey for RefusesLate {
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
     fn sign_pass(
         &self,
         _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -119,7 +122,12 @@ async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer()
         HybridSignature::from_canonical_bytes(trailer).is_err(),
         "the trailer can never be read as a signature"
     );
-    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 1);
+    assert_eq!(
+        ep.sign_failure_count(),
+        0,
+        "not a pre-flight refusal: the key said yes and the shard went out"
+    );
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 }
@@ -144,8 +152,8 @@ fn a_real_signature_is_never_the_refusal_trailer() {
 /// A persona with no resident key: it knows before the first byte.
 struct Keyless;
 impl PassKey for Keyless {
-    fn can_sign(&self) -> bool {
-        false
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new("not resident"))
     }
     fn sign_pass(
         &self,
@@ -175,6 +183,7 @@ async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
         render_unavailable().as_bytes()
     );
     assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 0, "no shard was sent");
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 

@@ -9,16 +9,16 @@
 //! release-carried table. Two are this crate's; one is not yet:
 //!
 //! - **CEN-E5** — the binary's anchors agree with the file it opens. Not a
-//!   per-block predicate: it is run **once, by the writer, at open**, over
-//!   the recorded chain ([`E5::conflict_with`]), and its verdict is a
-//!   an [`AnchorConflict`] the writer remedies (pop to a chain count, or
-//!   refuse to run) rather than an `InvalidBlock`. The check, the conflict,
-//!   and the remedy live in this module; the table
-//!   ([`ReleaseAnchors`](crate::ReleaseAnchors)) stays data. The first row
-//!   this crate enforces at a site other than `validate` —
-//!   `RowStatus::EnforcedAt` is its registry status (slice 3 Q4), excluded
-//!   from per-block completeness because no per-block coverage could ever
-//!   contain it.
+//!   per-block predicate: it is run **once, at open**, over the recorded
+//!   chain ([`E5::conflict_over`]; [`E5::conflict_with`] is that walk over a
+//!   [`ChainView`]), and its finding is an [`AnchorConflict`] the writer
+//!   remedies (pop to a chain count, or refuse to run) rather than a
+//!   consensus verdict. The check, the conflict, and the remedy live in
+//!   this module; the table ([`ReleaseAnchors`](crate::ReleaseAnchors))
+//!   stays data. The first row this crate enforces at a site other than
+//!   `validate` — `RowStatus::EnforcedAt` is its registry status (slice 3
+//!   Q4), excluded from per-block completeness because no per-block
+//!   coverage could ever contain it.
 //! - **CEN-E1** — a block connecting at an anchored height carries that
 //!   anchor's hash. Per block, view-bound ([`E1`]); reads the anchors from
 //!   the `Trust` input that carries them into `validate`.
@@ -36,7 +36,7 @@ use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::{AtHeight, ChainView};
+use crate::view::{AtHeight, ChainView, Tip};
 
 /// CEN-E1: a block connecting at an anchored height carries that anchor's
 /// hash — the anchor's own rule (`PDM-Q11`), the `assumevalid` argument
@@ -78,9 +78,12 @@ impl BlockRule for E1 {
 ///
 /// What survives of the census row after `PDM-Q-F23` removed the runtime
 /// checkpoint file: C2-R1b clause (3), run once at open over the
-/// release-carried table. The check is [`E5::conflict_with`]; the remedy
-/// is [`AnchorConflict::remedy`]. The writer executes the remedy. This
-/// crate has no store handle and cannot pop.
+/// release-carried table. The check is [`E5::conflict_over`];
+/// [`E5::conflict_with`] is that walk over a [`ChainView`]. The remedy is
+/// [`AnchorConflict::remedy`]. The writer executes the remedy. This crate
+/// has no store handle and cannot pop. The store's public-network open
+/// refuses on the conflict and does not pop; the pop stays the ingest
+/// driver's (`docs/FOLLOWUPS.md`).
 pub(crate) struct E5;
 
 impl Rule for E5 {
@@ -89,33 +92,36 @@ impl Rule for E5 {
 
 impl E5 {
     /// The first pin the recorded chain contradicts, if any, in height
-    /// order — the genesis identity at 0, then the anchors. Pins above the
-    /// tip are not yet checkable and are skipped, as the C++ `continue`s
-    /// past `pt.first >= blockchain_height`.
+    /// order — the genesis identity at 0, then the anchors.
     ///
-    /// `Err` is the view failing to answer — a fault, not a conflict.
-    pub(crate) fn conflict_with<'id, V: ChainView<'id>>(
+    /// `tip` is the recorded tip. `None` is an empty file, which
+    /// contradicts nothing: there is no block for a pin to disagree with
+    /// (the C++ skips every point at or above height 0 when the DB is
+    /// empty). `recorded_at` answers a pinned height at or below that tip:
+    /// `Some` is the block's identity, `None` is a hole where the chain
+    /// claims a block. Pins above the tip are not yet checkable and are
+    /// skipped, as the C++ `continue`s past `pt.first >= blockchain_height`.
+    ///
+    /// `Err` is the reader failing to answer — a fault, not a conflict.
+    /// [`conflict_with`](Self::conflict_with) is this walk over a view.
+    pub(crate) fn conflict_over<E>(
         anchors: &ReleaseAnchors,
-        view: &V,
-    ) -> Result<Option<AnchorConflict>, V::Fault> {
-        let Some(tip) = view.tip()? else {
-            // An empty file contradicts nothing: there is no block for an
-            // anchor to disagree with (the C++ skips every point at or
-            // above height 0 when the DB is empty).
+        tip: Option<Tip>,
+        mut recorded_at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
+    ) -> Result<Option<AnchorConflict>, E> {
+        let Some(tip) = tip else {
             return Ok(None);
         };
         for (height, expected) in anchors.pins() {
             if height > tip.height {
                 break;
             }
-            let recorded = match view.block_at(height)? {
-                AtHeight::Recorded(block) => Some(block.hash),
-                // Heights at or below the tip are dense (the store's
-                // invariant); a hole at a pinned height is the file
-                // missing a block it claims to have — a conflict, with
-                // nothing recorded to name.
-                AtHeight::AboveTip => None,
-            };
+            // Heights at or below the tip are dense (the store's
+            // invariant). A hole at a pinned height is the file missing a
+            // block it claims to have — a conflict, with nothing recorded
+            // to name. A reader that cannot answer returns `Err` instead,
+            // and that stays a fault.
+            let recorded = recorded_at(height)?;
             if recorded != Some(expected) {
                 return Ok(Some(AnchorConflict {
                     height,
@@ -125,6 +131,20 @@ impl E5 {
             }
         }
         Ok(None)
+    }
+
+    /// [`conflict_over`](Self::conflict_over) over `view`: the tip, then
+    /// each pinned block's identity.
+    pub(crate) fn conflict_with<'id, V: ChainView<'id>>(
+        anchors: &ReleaseAnchors,
+        view: &V,
+    ) -> Result<Option<AnchorConflict>, V::Fault> {
+        Self::conflict_over(anchors, view.tip()?, |height| {
+            Ok(match view.block_at(height)? {
+                AtHeight::Recorded(block) => Some(block.hash),
+                AtHeight::AboveTip => None,
+            })
+        })
     }
 }
 
@@ -183,10 +203,35 @@ pub enum Remedy {
 }
 
 impl ReleaseAnchors {
-    /// **CEN-E5.** The first anchor the recorded chain contradicts, if any.
+    /// **CEN-E5.** The first pin the recorded chain contradicts, if any.
     ///
-    /// Run once, at open, before connecting anything. Anchors above the tip
-    /// are not yet checkable. An empty file contradicts nothing.
+    /// `tip` is the recorded tip (`None`: an empty file, which contradicts
+    /// nothing). `recorded_at` answers a pinned height at or below that
+    /// tip. Pins above the tip are not yet checkable. Run once, at open,
+    /// before connecting anything.
+    ///
+    /// [`conflict_with`](Self::conflict_with) is this walk over a
+    /// [`ChainView`](crate::ChainView). A reader that is not a view — the
+    /// store's snapshot, whose `ChainView` impl is deferred — calls this
+    /// with the tip and the identity it recorded, so the two cannot grow
+    /// different policies.
+    ///
+    /// # Errors
+    ///
+    /// `recorded_at`'s error, when the reader could not answer. A fault is
+    /// not a conflict.
+    pub fn conflict_over<E>(
+        &self,
+        tip: Option<Tip>,
+        recorded_at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
+    ) -> Result<Option<AnchorConflict>, E> {
+        E5::conflict_over(self, tip, recorded_at)
+    }
+
+    /// **CEN-E5** over a [`ChainView`](crate::ChainView).
+    ///
+    /// [`conflict_over`](Self::conflict_over) is the walk. This is that walk
+    /// with the view's tip and `block_at`.
     ///
     /// # Errors
     ///

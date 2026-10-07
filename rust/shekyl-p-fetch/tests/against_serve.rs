@@ -223,8 +223,8 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 struct Keyless;
 
 impl PassKey for Keyless {
-    fn can_sign(&self) -> bool {
-        false
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new("no key"))
     }
 
     fn sign_pass(
@@ -245,6 +245,10 @@ impl PassSigner for Keyless {
 struct RefusesLate;
 
 impl PassKey for RefusesLate {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -303,6 +307,7 @@ async fn a_signer_that_fails_after_the_body_is_a_failed_read() {
     assert!(matches!(err, FetchError::Unsigned), "{err}");
     assert_eq!(err.next_move(false), NextMove::FailedRead);
     assert!(!err.retries_same_p());
-    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 1);
+    assert_eq!(ep.sign_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 }
