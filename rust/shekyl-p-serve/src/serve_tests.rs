@@ -5,8 +5,9 @@
 
 //! Endpoint tests for [`crate::serve`]. Lives beside the production loop so
 //! the file that answers the wire stays under a thousand lines; private
-//! items remain visible via `#[path]` from `serve.rs`. The two-read seal
-//! cases live in [`seal`], for the same reason.
+//! items remain visible via `#[path]` from `serve.rs`. The countersignature's
+//! placement and the unsigned-body cases live in [`seal`], for the same
+//! reason.
 
 use super::*;
 use crate::countersign::{PassKey, SignRefused, TestKeySigner};
@@ -279,25 +280,52 @@ async fn two_personas_are_header_identical() {
 }
 
 #[test]
-fn not_found_uses_the_declared_header_set_and_content_type() {
-    // One source of truth: 404 is not a second fingerprint with a
-    // divergent header list or content-type spelling.
-    let not_found = render_not_found();
-    assert!(not_found.contains(&format!("content-type: {CONTENT_TYPE}")));
-    let head = not_found
-        .split("\r\n\r\n")
-        .next()
-        .expect("status + headers");
-    assert_eq!(header_names(head), RESPONSE_HEADER_NAMES);
+fn the_bare_answers_use_the_declared_header_set_and_content_type() {
+    // One source of truth: none of the three bare answers is a second
+    // fingerprint with a divergent header list or content-type spelling,
+    // and they differ from each other in the status line alone.
+    for bare in [
+        render_not_found(),
+        render_bad_request(),
+        render_unavailable(),
+    ] {
+        assert!(bare.contains(&format!("content-type: {CONTENT_TYPE}")));
+        assert!(bare.ends_with("content-length: 0\r\n\r\n"), "empty body");
+        let head = bare.split("\r\n\r\n").next().expect("status + headers");
+        assert_eq!(header_names(head), RESPONSE_HEADER_NAMES);
+    }
+    assert_eq!(
+        render_not_found()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+        render_bad_request()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+    );
+    assert_eq!(
+        render_not_found()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+        render_unavailable()
+            .split_once("\r\n")
+            .expect("status line")
+            .1,
+    );
+    assert_ne!(render_not_found(), render_bad_request());
+    assert_ne!(render_not_found(), render_unavailable());
+    assert_ne!(render_bad_request(), render_unavailable());
 }
 
 #[tokio::test]
-async fn every_non_servable_outcome_renders_one_identical_404() {
-    // Every complete-head miss is the one `render_not_found()`. A 405, a 500, or a
-    // second 404 shape is an implementation fingerprint; a distinct
-    // store-failure response is a live health oracle. Holdings are
-    // chain-public — GET 200 vs 404 is already the availability oracle —
-    // so this is not an existence test. It does NOT cover incomplete heads
+async fn every_invalid_request_is_the_one_bare_400_held_or_not() {
+    // An invalid request is refused from the head alone, before the shard
+    // store is consulted — so it is the same response for a held shard
+    // (3) and an unheld one (4), and nothing in it names the check that
+    // refused. A 405, a 500 or a second 400 shape would be an
+    // implementation fingerprint. It does NOT cover incomplete heads
     // (oversized / EOF / timeout): those close, like over-capacity.
     let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
     let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -305,13 +333,11 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
         ("GET", "/"),
         ("GET", "/health"),
         ("GET", "/x-spike/v0/shard/3"),
-        ("GET", "/x-provisional/v0/shard/3"), // RF-R1 predecessor — a miss, not an alias
+        ("GET", "/x-provisional/v0/shard/3"), // RF-R1 predecessor — not an alias
         ("GET", "/shard/"),
         ("GET", "/shard/abc"),
-        ("GET", "/shard/4"), // valid route, unheld shard
         // Wrong METHOD on a path GET would serve: a method-aware server
-        // answers 405 or 200 here. Either is a second shape, not an
-        // existence leak.
+        // answers 405 or 200 here. Either is a second shape.
         ("POST", "/shard/3"),
         ("HEAD", "/shard/3"),
         ("PUT", "/shard/3"),
@@ -321,69 +347,101 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
         seen.push(request(ep.addr(), method, path).await);
     }
 
-    // The request header's failure modes (`SF-D5`): each is the same 404
-    // as a wrong path. Names are case-insensitive and OWS is trimmed (that
-    // is HTTP, not a second encoding); the value is canonical or nothing.
+    // The request header's failure modes (`SF-D5`). Names are
+    // case-insensitive and OWS is trimmed (that is HTTP, not a second
+    // encoding); the value is canonical or nothing.
     let good = encode_request_header(&good_header());
     let mut uppercase = good.clone();
     uppercase.make_ascii_uppercase();
-    for head in [
-        // Missing entirely.
-        "GET /shard/3 HTTP/1.1\r\nhost: x\r\n\r\n".to_string(),
-        // Duplicate — even when both copies are valid.
-        format!(
-            "GET /shard/3 HTTP/1.1\r\n{}{}\r\n",
-            header_line(&good_header()),
-            header_line(&good_header())
-        ),
-        // Non-canonical hex (uppercase).
-        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {uppercase}\r\n\r\n"),
-        // Wrong length: one byte short, one byte long, empty.
-        format!(
-            "GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
-            &good[..good.len() - 2]
-        ),
-        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {good}00\r\n\r\n"),
-        format!("GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}:\r\n\r\n"),
-        // Not hex at all.
-        format!(
-            "GET /shard/3 HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
-            "zz".repeat(PASS_REQUEST_HEADER_LEN)
-        ),
-        // Out of gate, both sides.
-        format!(
-            "GET /shard/3 HTTP/1.1\r\n{}\r\n",
-            header_line(&header_at(
-                IN_GATE_ANCHOR - PASS_ANCHOR_LAG_BLOCKS.to_raw() - 1
-            ))
-        ),
-        format!(
-            "GET /shard/3 HTTP/1.1\r\n{}\r\n",
-            header_line(&header_at(
-                IN_GATE_ANCHOR + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1
-            ))
-        ),
-    ] {
-        seen.push(request_raw(ep.addr(), &head).await);
+    for shard in [3u64, 4] {
+        for head in [
+            // Missing entirely.
+            format!("GET /shard/{shard} HTTP/1.1\r\nhost: x\r\n\r\n"),
+            // Duplicate — even when both copies are valid.
+            format!(
+                "GET /shard/{shard} HTTP/1.1\r\n{}{}\r\n",
+                header_line(&good_header()),
+                header_line(&good_header())
+            ),
+            // Non-canonical hex (uppercase).
+            format!("GET /shard/{shard} HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {uppercase}\r\n\r\n"),
+            // Wrong length: one byte short, one byte long, empty.
+            format!(
+                "GET /shard/{shard} HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
+                &good[..good.len() - 2]
+            ),
+            format!("GET /shard/{shard} HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {good}00\r\n\r\n"),
+            format!("GET /shard/{shard} HTTP/1.1\r\n{REQUEST_HEADER_NAME}:\r\n\r\n"),
+            // Not hex at all.
+            format!(
+                "GET /shard/{shard} HTTP/1.1\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
+                "zz".repeat(PASS_REQUEST_HEADER_LEN)
+            ),
+            // Out of gate, both sides.
+            format!(
+                "GET /shard/{shard} HTTP/1.1\r\n{}\r\n",
+                header_line(&header_at(
+                    IN_GATE_ANCHOR - PASS_ANCHOR_LAG_BLOCKS.to_raw() - 1
+                ))
+            ),
+            format!(
+                "GET /shard/{shard} HTTP/1.1\r\n{}\r\n",
+                header_line(&header_at(
+                    IN_GATE_ANCHOR + PASS_ANCHOR_LAG_BLOCKS.to_raw() + 1
+                ))
+            ),
+        ] {
+            seen.push(request_raw(ep.addr(), &head).await);
+        }
     }
-    assert_eq!(
-        ep.lookup_failure_count(),
-        0,
-        "header refusals happen before the store is touched"
-    );
-
-    let (failing, _) = bind(Arc::new(FailingProvider)).await;
-    seen.push(fetch(failing.addr(), "/shard/3").await);
-    assert_eq!(failing.lookup_failure_count(), 1);
-
     for resp in &seen {
         assert_eq!(
             resp.as_slice(),
-            render_not_found().as_bytes(),
-            "every complete-head miss must be the shared 404"
+            render_bad_request().as_bytes(),
+            "every invalid request must be the one bare 400"
         );
     }
-    assert_eq!(ep.served_count(), 0, "a miss is not counted as a serve");
+    assert_eq!(ep.served_count(), 0);
+    assert_eq!(ep.lookup_failure_count(), 0);
+
+    // No store lookup: a store that fails every read is never asked.
+    let (failing, _) = bind(Arc::new(FailingProvider)).await;
+    let out_of_gate = format!(
+        "GET /shard/3 HTTP/1.1\r\n{}\r\n",
+        header_line(&header_at(OWN_HEIGHT))
+    );
+    assert_eq!(
+        request_raw(failing.addr(), &out_of_gate).await,
+        render_bad_request().as_bytes()
+    );
+    assert_eq!(
+        failing.lookup_failure_count(),
+        0,
+        "an invalid request is refused before the store is touched"
+    );
+}
+
+#[tokio::test]
+async fn only_a_valid_request_for_an_unheld_shard_is_the_404() {
+    // The 404 means one thing: the request was valid and the shard is not
+    // held. A store that could not answer is this persona's fault and is
+    // the bare 503 — never the 404, which would say "not held" of a shard
+    // the chain says is.
+    let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
+    assert_eq!(
+        fetch(ep.addr(), "/shard/4").await,
+        render_not_found().as_bytes()
+    );
+    assert_eq!(ep.lookup_failure_count(), 0, "not held is not a fault");
+    assert_eq!(ep.served_count(), 0, "a 404 is not counted as a serve");
+
+    let (failing, _) = bind(Arc::new(FailingProvider)).await;
+    assert_eq!(
+        fetch(failing.addr(), "/shard/3").await,
+        render_unavailable().as_bytes()
+    );
+    assert_eq!(failing.lookup_failure_count(), 1);
+    assert_eq!(failing.sign_failure_count(), 0);
 }
 
 #[tokio::test]
@@ -391,9 +449,9 @@ async fn a_request_body_does_not_reset_the_response() {
     // Unread bytes left in the receive queue at close make Linux send
     // RST instead of FIN, and the RST can destroy the response already
     // queued for sending. A complete head followed by a body must still
-    // deliver the whole shared 404 — the invariant says every
-    // complete-head non-servable outcome renders *the same bytes*, and
-    // "reset instead" is not the same bytes.
+    // deliver the whole bare 400 — the invariant says every invalid
+    // request renders *the same bytes*, and "reset instead" is not the
+    // same bytes.
     let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
     let body = vec![b'z'; 64 * 1024];
@@ -412,8 +470,8 @@ async fn a_request_body_does_not_reset_the_response() {
     s.read_to_end(&mut out).await.expect("read response");
     assert_eq!(
         out,
-        render_not_found().as_bytes(),
-        "the complete shared 404 must survive a request that carried a body"
+        render_bad_request().as_bytes(),
+        "the complete bare 400 must survive a request that carried a body"
     );
 }
 
@@ -614,7 +672,7 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
 #[tokio::test]
 async fn the_gate_is_two_sided_with_the_admission_lag() {
     // `anchor_height ∈ [p − 720 − L, p − 720 + L]`: both edges serve, one
-    // past either edge is the shared 404 with no store read and no sign.
+    // past either edge is the bare 400 with no store read and no sign.
     let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
     let l = PASS_ANCHOR_LAG_BLOCKS.to_raw();
     for (anchor, servable) in [
@@ -639,7 +697,7 @@ async fn the_gate_is_two_sided_with_the_admission_lag() {
                 "anchor {anchor}"
             );
         } else {
-            assert_eq!(r, render_not_found().as_bytes(), "anchor {anchor}");
+            assert_eq!(r, render_bad_request().as_bytes(), "anchor {anchor}");
         }
     }
     assert_eq!(ep.served_count(), 3);
@@ -648,51 +706,18 @@ async fn the_gate_is_two_sided_with_the_admission_lag() {
 }
 
 #[tokio::test]
-async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
-    // The host's key is not resident (SH-2 not yet wired, signer down):
-    // the endpoint stays up, the shard is looked up, and the response is
-    // the identical 404 — never an unsigned body. The counter is the only
-    // place this is distinguishable from a missing pin.
-    struct Refusing;
-    impl PassKey for Refusing {
-        fn sign_pass(
-            &self,
-            _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-        ) -> Result<HybridSignature, SignRefused> {
-            Err(SignRefused::new("not resident"))
-        }
-    }
-    impl PassSigner for Refusing {
-        fn own_height(&self) -> Option<BlockHeight> {
-            Some(BlockHeight::from_raw(OWN_HEIGHT))
-        }
-    }
-    let signer: Arc<dyn PassSigner> = Arc::new(Refusing);
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
-        .await
-        .expect("bind");
-    let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, render_not_found().as_bytes());
-    assert_eq!(ep.sign_failure_count(), 1);
-    assert_eq!(ep.lookup_failure_count(), 0);
-    assert_eq!(ep.served_count(), 0);
-    // An unheld shard is an ordinary miss — neither a lookup failure nor
-    // a sign failure: the persona never signs for a shard it does not
-    // hold, and not holding one is not a fault.
-    let r = fetch(ep.addr(), "/shard/9").await;
-    assert_eq!(r, render_not_found().as_bytes());
-    assert_eq!(ep.sign_failure_count(), 1);
-    assert_eq!(ep.lookup_failure_count(), 0);
-}
-
-#[tokio::test]
-async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure() {
+async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     // The host cannot read its own height — its serving store is gone.
-    // Nothing is looked up and nothing is signed: the 404 is identical,
-    // and the fault lands in `lookup_failure_count` (a store read that
-    // failed), not in `sign_failure_count` and not silently in neither.
+    // The gate cannot run, so the request cannot be judged invalid; the
+    // fault is this persona's, and a requester should move on. Nothing is
+    // looked up and nothing is signed: the bare 503, and the fault lands
+    // in `lookup_failure_count` (a store read that failed), not in
+    // `sign_failure_count` and not silently in neither.
     struct Storeless(Arc<TestKeySigner>);
     impl PassKey for Storeless {
+        fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
+            self.0.ready(shard_id, anchor_height)
+        }
         fn sign_pass(
             &self,
             m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -711,7 +736,7 @@ async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure
         .await
         .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, render_not_found().as_bytes());
+    assert_eq!(r, render_unavailable().as_bytes());
     assert_eq!(ep.lookup_failure_count(), 1);
     assert_eq!(ep.sign_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
@@ -721,7 +746,7 @@ async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure
 async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
     // The constructor-level half of the same rule, at the wire: the
     // frame declares a leaf count, so bytes that are not a leaf array
-    // have no representable header. Rendering the shared 404 — rather
+    // have no representable header. Rendering the bare 404 — rather
     // than a body some witness would then fail to verify — is what
     // keeps an unframeable payload from looking like a serve.
     struct RaggedProvider;
@@ -824,7 +849,7 @@ async fn the_cap_does_not_refuse_below_it() {
 #[tokio::test]
 async fn oversized_request_head_is_closed_not_answered() {
     // Incomplete / hostile head: close with no HTTP bytes — same wire
-    // class as over-capacity, not the complete-head shared 404. The
+    // class as over-capacity, not a complete-head status. The
     // pre-allocation bound is enforced while reading.
     let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 0))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
@@ -961,3 +986,9 @@ fn request_header_parsing_is_http_lenient_and_value_strict() {
 
 #[path = "serve_seal_tests.rs"]
 mod seal;
+
+#[path = "serve_invariant_tests.rs"]
+mod invariant;
+
+#[path = "serve_bench_seam_tests.rs"]
+mod bench_seam;

@@ -35,6 +35,18 @@
 # The only edit that retires a stale constant is a capture, under the same
 # name, whose revision contains that constant's `stale_since`.
 #
+# An `estimated` constant is a prediction: its `estimate` (a band,
+# `{ low, high, unit }`), its `basis` (the arithmetic) and `basis_captures`
+# (the capture files the arithmetic reads, each one exact tracked file).
+# It has no capture of its own. It leaves that status only as `unmeasured`
+# with a reason, as a measured row on a capture file the parent tree did
+# not hold, or into `[[retired_estimate]]` on the same condition.
+#
+# `[[retired_estimate]]` keeps a prediction beside the measurement that
+# settled it: the band, `measured` in the band's unit, the capture and its
+# revision, a `note`, and a `verdict` of `held` or `falsified` that the
+# check computes from the two and refuses when the row says otherwise.
+#
 # `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
 # for the whole ledger. It is owed while any constant is current across the
 # change, because a compiler bump is on no path set's spec and moves them
@@ -257,6 +269,14 @@ stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
   { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "bfbd0d915c", note = "The serve path reads each shard once and digests it once, where #954 read and digested twice; the signature is made after the send. An invalid request is refused before the store is consulted. Measured on the floor device at 7c9140f297: 67.2 ms per response against 102.7 ms on the two-read tree and 24.6 ms before the digest (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md, run 3). The constants stay stale: the run prices the serve path over loopback and does not re-run the readings they rest on." },
+  { through = "c5e45d4a54", note = "A bare 503 for a store, tip or key fault; one can_sign call before the body; a refusal trailer written when the signer fails after it; the client compares the envelope to the trailer and types the 503. A good read gains the can_sign call and one envelope comparison and nothing else. Not measured; the run-3 arm predates it." },
+  { through = "096c742626", note = "Doc comments only, in shekyl-p-fetch error.rs and shekyl-p-host host.rs. No executable serve or fetch code changed." },
+  { through = "2bc0b9fd61", note = "Three commits on the single-pass serve. The pre-flight is PassKey::ready(shard_id, anchor_height) with no default, in place of can_sign: still one call before the body. A signing failure after the body increments its own counter in place of the pooled one. The response writer takes any AsyncWrite so a test can stand a sink in for the socket; TcpStream is the only production caller. No read, hash or sign is added, removed or moved. Not measured." },
+  { through = "f7740a762b", note = "Review follow-up in provider.rs: the test-only counting body counts chunks yielded rather than calls. Compiled only under cfg(test); no shipped code path changed and no cost moved." },
+  { through = "bb9ce3a8c8", note = "BA-T3 seam: three blocking-pool closures in serve.rs become named functions and the 200 head is rendered by one; three bench-only compositions are added behind a feature that is not on the shipped graph. No read, hash or sign is added, removed or reordered, and a seam test holds the composition to the endpoint on bytes and on counts of opens, chunk reads and signatures. This is the commit that adds the gate; its first counts are in the manifest, section 12." },
+  { through = "ac52a7a35d", note = "Review follow-up: the fold of a chunk into the delivery digest becomes one function, fold_chunk, called by write_response and by the bench compositions. Same reads, same hash, same order, still on the thread it ran on; BA-T3 moved by a few hundred instructions in 191 million." },
+  { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
 ]
 
 [[constant]]
@@ -568,8 +588,14 @@ spec = [
   "rust/shekyl-fcmp/src",
 ]
 stale_through = [
+  { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
+  { through = "2e3576d34c", note = "The ingest's expectation match returns its result instead of mutating, and the ingest applies it after the store commit. Same lookups, same count; no cost moved. Not measured." },
+  { through = "480a9ba42a", note = "Test-only: four casts in the expectation tests (ct6_oracle/expected.rs) rewritten for clippy. No production code changed, no cost moved." },
+  { through = "34c7daa686", note = "Registration at construction (CT6_PROVING_STATE.md §11.13): ingest_block now looks each transaction up in a map of expected outputs — one BTreeMap lookup per transaction, skipped entirely while the map is empty — and TxLeafInputs carries a transaction hash. Nothing on the spend path changed; not measured." },
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
+  { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
 ]
 
@@ -679,3 +705,39 @@ measured_by = ["BA-T13"]
 status = "unmeasured"
 carrier = "BA-T13 (BA-G6). The ratio is pre-registered; only the LMDB arm has run, and the redb arm waits on a build target (FOLLOWUPS, DRS-BENCH redb arm)."
 path_set = "chain-store-ibd"
+
+# --- BA-Q3: the single-pass serve. Two figures predicted and not yet
+# measured, and one prediction that was measured and did not hold.
+
+[[constant]]
+name = "serve_prehead_work_floor"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Work before the first byte | under 1 ms | not measured on the floor | open |"
+measured_by = ["BA-T3", "BA-T5"]
+status = "estimated"
+estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,334,665 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
+carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "serve_throughput_8_inflight_floor"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 37.0, high = 60.0, unit = "responses per second" }
+basis = "Run 3's two eight-in-flight blocks on the single-pass tree read 59.6 and 39.7 responses per second. The floor of the band is the two-read arm's 37, taken as a lower bound because the single pass does strictly less work per response; the ceiling is the better block. Two blocks do not say which is typical."
+basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
+carrier = "BA-T5: a floor run with enough eight-in-flight blocks per arm to say which figure is typical."
+path_set = "archival-serve-fetch"
+
+[[retired_estimate]]
+name = "serve_median_per_response_single_pass_floor"
+estimate = { low = 40.0, high = 60.0, unit = "ms" }
+measured = 67.2
+capture = "docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"
+capture_rev = "7c9140f297"
+verdict = "falsified"
+note = "Predicted 2026-10-06 as the pre-#954 arm, 24.8 ms, plus one digest pass at its standalone cost, 23.9 ms. Inside the stream the digest costs 43 ms. BA-T3 shows the chunked read-and-fold is 2.2 % above the one-shot digest in instructions, so the other 19 ms is not instruction work in the loop; the on-disk read path, the per-chunk blocking-pool hand-off and cache behaviour are what BA-T5 has to separate."

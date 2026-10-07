@@ -153,6 +153,10 @@ pub mod inbound_ceiling_ffi;
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;
 
+// The published board. Counts are integers. Address walks receive a
+// snapshot whose row is the id, the handshake flag, and the endpoint.
+pub mod seam_board_ffi;
+
 // The thread ledger at the C boundary: one executor row, and the report
 // of every row. The floor check is ExecutorBudget::above_floor; this
 // module does not reimplement it.

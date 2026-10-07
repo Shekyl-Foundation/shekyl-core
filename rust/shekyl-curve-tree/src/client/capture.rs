@@ -17,16 +17,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration, OwnershipSync,
+    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
+    OwnedRegistration, OwnershipSync,
 };
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::drained_sorted;
+use crate::recon::OutputAssignment;
 use crate::segment::outputs_per_node;
 use crate::store::CapturedChunk;
 use crate::types::{BlockHeight, Gindex, LeafEntry, OneTimePubkey, TreePosition};
 use shekyl_fcmp::tree::{
     build_layers, layer_count_for_leaves, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+use shekyl_types::TxHash;
 
 /// Width of one curve element in a capture body: a compressed point or a scalar.
 pub(crate) const CURVE_ELEMENT_BYTES: usize = 32;
@@ -149,6 +152,18 @@ pub(crate) struct BlockCaptures {
     pub(crate) pending_owned: Vec<(u64, Gindex)>,
 }
 
+/// What one block's transactions resolved of the wallet's expectations
+/// ([`CurveTreeClient::match_expected_outputs`]), for the ingest to apply
+/// once the block has committed.
+#[derive(Default)]
+pub(super) struct ExpectedMatches {
+    /// Confirmed outputs that became leaves, with the gindex just assigned.
+    pub(super) registered: Vec<(Gindex, OneTimePubkey)>,
+    /// Expected outputs whose transaction carried another key, or no such
+    /// `vout`.
+    pub(super) mismatches: u64,
+}
+
 impl CurveTreeClient {
     /// Capture this output's membership-path material as the fold closes the
     /// chunks over it.
@@ -232,6 +247,119 @@ impl CurveTreeClient {
         } else {
             OwnedRegistration::BeforeDrain
         }
+    }
+
+    /// Replace the outputs the wallet expects the chain to carry
+    /// ([`ExpectedOutput`]), for [`Self::ingest_block`] to register as it
+    /// sees their transactions.
+    ///
+    /// Replaced whole, not merged: the wallet derives the set on every pass
+    /// from its records of unconfirmed transactions, so an expectation ends
+    /// when its record does. Registrations already made from an earlier set
+    /// are not touched — they are owned outputs now, held in the registry
+    /// like any other. An expectation for a transaction the client has
+    /// *already* ingested is not resolved here: the client keeps no
+    /// transaction hashes for ingested leaves, and resolving by key alone
+    /// would reopen the copied-key case this type exists to close. Such an
+    /// output is registered by its pair, later, when the wallet learns its
+    /// gindex (§11.13 names that window).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`].
+    pub fn set_expected_outputs(&mut self, expected: &[ExpectedOutput]) -> Result<(), ClientError> {
+        self.ensure_live()?;
+        let mut by_tx: BTreeMap<TxHash, Vec<(u64, OneTimePubkey)>> = BTreeMap::new();
+        for output in expected {
+            by_tx
+                .entry(output.tx_hash)
+                .or_default()
+                .push((output.vout, output.output_key));
+        }
+        self.expected_outputs = by_tx;
+        Ok(())
+    }
+
+    /// How many expected outputs this client has seen arrive under a
+    /// different key than the wallet named (none of them registered), since
+    /// it was opened.
+    #[must_use]
+    pub fn expected_output_mismatches(&self) -> u64 {
+        self.expected_output_mismatches
+    }
+
+    /// The expected outputs this block carries, as the pairs to register.
+    ///
+    /// `assigned` is [`crate::recon::collect_block_leaves`]'s assignment for
+    /// this block, parallel to `block.txs`: `assigned[tx_index][vout]`. A
+    /// transaction is looked up by its hash; each expected `vout` is
+    /// confirmed against the key the transaction carries there. A confirmed
+    /// output that became a leaf is returned with the gindex the collector
+    /// assigned. An output that consumed an index and did not become a leaf
+    /// is neither registered nor counted: it has no path to prepare.
+    ///
+    /// A key that does not match, or a `vout` the transaction does not have,
+    /// is counted and skipped, never an error. The hash is the block feed's
+    /// and only the key is the wallet's own, so a feed that mislabels a
+    /// transaction can cost the wallet an early registration and nothing else.
+    ///
+    /// Takes `&self` and returns what it found. The block is not committed
+    /// yet, and a block that is then refused — by the fold, or by the store
+    /// — must leave no trace, including in the mismatch count. The ingest
+    /// applies [`ExpectedMatches`] with the rest of the block's effect.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::TxHashMissing`] when expectations are live and a
+    /// transaction arrives without its hash.
+    pub(super) fn match_expected_outputs(
+        &self,
+        block: &BlockLeaves<'_>,
+        assigned: &[Vec<OutputAssignment>],
+    ) -> Result<ExpectedMatches, ClientError> {
+        let mut matched = ExpectedMatches::default();
+        if self.expected_outputs.is_empty() {
+            return Ok(matched);
+        }
+        debug_assert_eq!(
+            block.txs.len(),
+            assigned.len(),
+            "the collector's assignment is one vec per transaction"
+        );
+        for (tx_index, (tx, slots)) in block.txs.iter().zip(assigned).enumerate() {
+            debug_assert_eq!(
+                tx.outputs.len(),
+                slots.len(),
+                "the collector's assignment is one slot per output"
+            );
+            let Some(tx_hash) = tx.tx_hash else {
+                return Err(ClientError::TxHashMissing {
+                    height: block.height,
+                    tx_index,
+                });
+            };
+            let Some(expected) = self.expected_outputs.get(&tx_hash) else {
+                continue;
+            };
+            for (vout, output_key) in expected {
+                let Some(index) = usize::try_from(*vout).ok() else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                let Some(raw) = tx.outputs.get(index) else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                if raw.output_key != *output_key {
+                    matched.mismatches += 1;
+                    continue;
+                }
+                if let Some(OutputAssignment::Leaf(gindex)) = slots.get(index).copied() {
+                    matched.registered.push((gindex, *output_key));
+                }
+            }
+        }
+        Ok(matched)
     }
 
     /// Register a batch of owned outputs and reconcile **once** if any of

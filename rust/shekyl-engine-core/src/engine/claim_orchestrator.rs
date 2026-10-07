@@ -707,6 +707,7 @@ mod tests {
                     let txs: Vec<TxLeafInputs<'_>> = if h == owned_block {
                         vec![TxLeafInputs {
                             is_miner: false,
+                            tx_hash: None,
                             leaf_entry_blob: Some(&leaf_blob),
                             outputs: &raw_outputs,
                         }]

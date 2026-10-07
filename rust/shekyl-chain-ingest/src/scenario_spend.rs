@@ -249,6 +249,7 @@ impl Spender {
             .enumerate()
             .map(|(i, _)| TxLeafInputs {
                 is_miner: i == 0,
+                tx_hash: None,
                 leaf_entry_blob: Some(leaf_blobs[i].as_slice()),
                 outputs: raw[i].as_slice(),
             })

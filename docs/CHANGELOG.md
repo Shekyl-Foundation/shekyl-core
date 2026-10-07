@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
+
+- **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
+- **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours once its failure score passes 10 (the eleventh failed handshake, at one point each), and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
+- Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
+- Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) records a round ruled 2026-10-06 and not yet implemented: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every file in tor's directory and the directory holds nothing else, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
+- **Benchmarks: the archival serve path is gated per PR.** `BA-T3` adds four `crypto_bench_serve_*` instruction-count functions to `shekyl-p-serve` (a whole response at three shard sizes, the work before the first byte at two, and the chunked read-and-fold beside the one-shot digest), on the single-pass serve. First readings: a full segment is 191 M instructions; work before the head is 13.5 K and does not grow with the shard; chunking adds 2.2 % to the digest. The measurement ledger gains an `estimated` status with a typed band and `[[retired_estimate]]`, which keeps a prediction beside the measurement that settled it with a verdict the check computes; the first entry is the 40–60 ms single-pass prediction against the floor's 67.2 ms, falsified. `BENCHMARK_ALIGNMENT.md` records `BA-Q3` as ruled.
+- **C++ version gates swept.** Every version comparison in `src/` is classified in `docs/ci/cxx-version-gates.tsv` and held there by a CI gate (`CXX_VERSION_GATES.md`). Deleted with it: the unreachable `get_output_distribution` surface (`RpcHandler`, its message struct, the function through core, blockchain and LMDB) behind `major_version >= 4`, the peer top-version check behind `version >= 6`, and two always-true `HF_VERSION_FCMP_PLUS_PLUS_PQC` gates. `HF_VERSION_DYNAMIC_FEE` and `HF_VERSION_FCMP_PLUS_PLUS_PQC` are gone. Widened 2026-10-06: the gate reads a comparison on any version name, including a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion` and the bootstrap file version, and it scans `.cc`. 99 sites in 89 rows, counted on code alone: a comparison quoted in a string literal is not a row. Disposition and landing are closed tokens. The hard-fork mechanism is ruled deleted (Rick, 2026-10-06): its rows are `delete`, and it goes in its own PR. No behaviour changes.
+
+### Archival serving — one store read, and five answers that each mean one thing
+
+- `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends
+  it, then signs the finished digest and appends the signature. On a Pi 4
+  a served shard takes 67 ms, against 103 ms on the two-read path.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). The
+  signed message and the pass record are unchanged.
+  - `400`: the request is not valid (wrong route or method, a request
+    header that is missing or malformed, an anchor outside the gate).
+    Decided before the shard is looked up.
+  - `404`: the shard is not held. Nothing else answers 404 any more.
+  - `503`: the persona cannot serve through its own fault: its store or
+    its tip could not be read, or it has no resident key. These answered
+    404 before.
+  - A signer that fails after the body has gone out ends the response
+    with a refusal trailer in the signature's place. A response that
+    stops short is always treated as a transport failure and retried.
+- `shekyl-p-fetch` types each: `FetchError::Rejected` (400),
+  `FetchError::Unavailable` (503) and `FetchError::Unsigned` (the refusal
+  trailer). `FetchError::next_move` gives the scheduler's rule: a first
+  400 earns one retry of the same `P` with a freshly derived anchor and a
+  second is a failed read; a 503 and a refusal trailer are failed reads
+  with no retry.
+- A persona bound without a resident key (`NoResidentKey`) answers 503
+  and sends no shard.
+
 ### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
 
 - The Rust validator now refuses a JoinMarket whose shard set names a

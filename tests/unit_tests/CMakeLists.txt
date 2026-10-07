@@ -69,7 +69,6 @@ set(unit_tests_sources
   net.cpp
   node_server.cpp
   notify.cpp
-  output_distribution.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
   peer_policy_block_ingest.cpp

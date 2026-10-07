@@ -34,9 +34,9 @@ use shekyl_curve_tree::{
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
-/// when it is a lookup failure and **never distinguishable on the wire** —
-/// the peer sees the same 404 as any other miss, because a distinct failure
-/// response would let a prober read store health through the rendezvous.
+/// when it is a lookup failure. On the wire it is the bare 503 the endpoint
+/// gives for every fault of its own — never the 404, which means "not
+/// held", and never a response that says which fault.
 ///
 /// Variants are for operator-side / harness diagnostics only; the wire path
 /// collapses them.
@@ -143,6 +143,29 @@ enum Source {
     Segment(FrozenSegmentBody),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
+    /// An in-memory payload that counts the chunks it yields into a counter
+    /// the test holds. How a test sees that a requester who stopped taking
+    /// bytes stopped the serve loop reading them. A read at the end of the
+    /// body yields nothing and is not counted: the count is of shard bytes
+    /// handed over, in chunks, which is the work the invariant is about.
+    #[cfg(test)]
+    Counted {
+        bytes: Arc<[u8]>,
+        read: usize,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    },
+}
+
+/// The next chunk of at most `max_bytes` out of `bytes` from `*read`,
+/// advancing the cursor; `None` at the end.
+fn slice_chunk(bytes: &[u8], read: &mut usize, max_bytes: usize) -> Option<Vec<u8>> {
+    if *read >= bytes.len() {
+        return None;
+    }
+    let stop = bytes.len().min(*read + max_bytes.max(1));
+    let chunk = bytes[*read..stop].to_vec();
+    *read = stop;
+    Some(chunk)
 }
 
 impl ShardBody {
@@ -162,6 +185,23 @@ impl ShardBody {
         let header = flat_header(bytes.len())?;
         Some(Self {
             source: Source::Flat { bytes, read: 0 },
+            header,
+        })
+    }
+
+    /// [`Self::flat`], counting every chunk it yields into `reads`.
+    #[cfg(test)]
+    pub(crate) fn counted(
+        bytes: Arc<[u8]>,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Option<Self> {
+        let header = flat_header(bytes.len())?;
+        Some(Self {
+            source: Source::Counted {
+                bytes,
+                read: 0,
+                reads,
+            },
             header,
         })
     }
@@ -203,6 +243,8 @@ impl ShardBody {
         match &self.source {
             Source::Segment(body) => body.remaining_bytes(),
             Source::Flat { bytes, read } => bytes.len() - read,
+            #[cfg(test)]
+            Source::Counted { bytes, read, .. } => bytes.len() - read,
         }
     }
 
@@ -218,14 +260,14 @@ impl ShardBody {
             Source::Segment(body) => body
                 .next_chunk(max_bytes)
                 .map_err(ProviderError::from_store),
-            Source::Flat { bytes, read } => {
-                if *read >= bytes.len() {
-                    return Ok(None);
+            Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
+            #[cfg(test)]
+            Source::Counted { bytes, read, reads } => {
+                let chunk = slice_chunk(bytes, read, max_bytes);
+                if chunk.is_some() {
+                    reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                let stop = bytes.len().min(*read + max_bytes.max(1));
-                let chunk = bytes[*read..stop].to_vec();
-                *read = stop;
-                Ok(Some(chunk))
+                Ok(chunk)
             }
         }
     }
@@ -235,17 +277,17 @@ impl ShardBody {
 ///
 /// `Ok(None)` is the *unservable* case — unknown id, or a segment that has
 /// not frozen yet (no committed `R_k`, so nothing content-verifiable to
-/// serve). `Err` is infrastructure failure. The endpoint renders both as
-/// the single shared 404; only the local counters tell them apart.
+/// serve). `Err` is infrastructure failure. The endpoint renders the first
+/// as the bare 404 and the second as the bare 503.
 pub trait ShardProvider: Send + Sync + 'static {
     /// Open the body for `shard_id` — the frozen segment's leaf bytes in
     /// tree order, exactly what the witness hashes against `R_k`.
     ///
     /// Servability is settled by this call, before any byte of response is
     /// written; the returned [`ShardBody`] then only streams. That
-    /// ordering is what keeps store health off the wire — a body that
-    /// discovered missing bytes half-way through would leak it as a
-    /// truncated `200` that no 404 can be mistaken for.
+    /// ordering is what lets the endpoint answer a fault with a status — a
+    /// body that discovered missing bytes half-way through could only stop,
+    /// and a requester would read that as a stall and retry it.
     ///
     /// # Errors
     ///

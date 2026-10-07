@@ -302,8 +302,8 @@ residual, `FCMP_SPEND_LINKABILITY.md` §13).
 
 Coinbase transactions do not carry `pqc_auths` (no real inputs to sign).
 Coinbase outputs still need a distinct per-output leaf commitment in the curve
-tree. When `hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` and the miner
-address includes a PQC encapsulation key, `construct_miner_tx` performs the same
+tree. When the miner address includes a PQC encapsulation key,
+`construct_miner_tx` performs the same
 hybrid KEM encapsulation **to the miner’s own address** for each coinbase
 output as a transfer would: one 1120-byte hybrid ciphertext per output in the
 `0x06` blob, standard HKDF per-output derivation, shared secret wiped after
@@ -1275,7 +1275,6 @@ Do not reintroduce them. Archival emission is a different vin
 | `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_HYBRID_KEM_CT_BYTES` in `shekyl_ffi.h`) |
 | `PQC_LEAF_ENTRY_LEN` | 64 (`CM ‖ record` per output, `PL-D3`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_PQC_LEAF_ENTRY_BYTES` in `shekyl_ffi.h`) |
 | `COINBASE_NONCE_BYTES` | 8 (coinbase `0x02`, fixed; `TXE-Q6′`, `CEN-I20`) | `shekyl-wire/src/tx_extra.rs` (`SHEKYL_COINBASE_NONCE_BYTES`) |
-| `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---
 

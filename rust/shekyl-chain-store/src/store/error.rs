@@ -34,7 +34,7 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::RuleSet;
+use shekyl_chain_rules::{AnchorConflict, RuleSet};
 use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
@@ -312,6 +312,17 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
+    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    ///
+    /// The file is coherent; this session is the wrong one for it — the
+    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
+    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
+    /// file, or a remint. A later checkpoint carries a pop the ingest
+    /// driver still owes; this open reports that conflict and does not
+    /// pop, so a session cannot start on a chain that disagrees with its
+    /// pins and then forget to rewind. The payload is the rules crate's
+    /// conflict, not a second shape of it.
+    ReleasePin(AnchorConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -604,6 +615,24 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
+            Self::ReleasePin(conflict) => match conflict.recorded {
+                Some(recorded) => write!(
+                    f,
+                    "block {height} is {recorded} but this binary pins {expected}; \
+                     the file is not this release's chain ({remedy:?})",
+                    height = conflict.height,
+                    expected = conflict.expected,
+                    remedy = conflict.remedy(),
+                ),
+                None => write!(
+                    f,
+                    "block {height} is absent below the tip but this binary pins {expected}; \
+                     the file is not this release's chain ({remedy:?})",
+                    height = conflict.height,
+                    expected = conflict.expected,
+                    remedy = conflict.remedy(),
+                ),
+            },
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::PoolFileForeign => f.write_str(

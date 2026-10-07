@@ -12,9 +12,12 @@ use std::time::Duration;
 use shekyl_capped_stream::{FrameSender, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Sockets};
+use shekyl_transport_layer::{
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, SocketId, Sockets,
+};
 
 use super::{Hub, Phase, Post};
+use crate::connection::{AdvertisedEndpoint, ChainLength, HeightMessage, RedialRefusal};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
 
@@ -409,6 +412,118 @@ fn a_transport_close_does_not_ban_the_host() {
 }
 
 #[test]
+fn a_claim_lands_on_the_row_and_a_snapshot_does_not() {
+    let rig = rig();
+    let opened = adopt(&rig, Direction::Inbound, 32);
+    let mut copied = rig.hub.snapshot(opened.id).expect("row");
+    copied.note_claimed_height(9, HeightMessage::Handshake);
+    assert!(rig
+        .hub
+        .snapshot(opened.id)
+        .expect("row")
+        .claimed_height()
+        .is_none());
+    assert!(rig
+        .hub
+        .note_claimed_height(opened.id, 4, HeightMessage::Handshake));
+    let length = ChainLength::from_coinbase_height(3).expect("length");
+    assert!(rig.hub.raise_accepted_chain_length(opened.id, length));
+    let row = rig.hub.snapshot(opened.id).expect("row");
+    assert_eq!(row.claimed_height().expect("claim").height(), 4);
+    assert_eq!(row.accepted_chain_length(), Some(length));
+    assert!(matches!(
+        rig.hub
+            .finish(opened.id, CloseCause::new(CloseKind::LocalClose)),
+        CloseResult::Recorded(_)
+    ));
+    assert!(!rig
+        .hub
+        .note_claimed_height(opened.id, 8, HeightMessage::TimedSync));
+    assert_eq!(
+        rig.hub
+            .snapshot(opened.id)
+            .expect("closed")
+            .claimed_height()
+            .expect("claim")
+            .height(),
+        4
+    );
+    assert!(!rig.hub.note_claimed_height(
+        SocketId::from_ffi(u64::MAX).expect("id"),
+        1,
+        HeightMessage::ChainEntry
+    ));
+}
+
+#[test]
+fn a_redial_is_admitted_only_when_it_observes_the_claim() {
+    let rig = rig();
+    let origin = adopt(&rig, Direction::Inbound, 32);
+    let advertised = AdvertisedEndpoint::clearnet(22021).expect("port");
+    assert!(rig.hub.note_advertised(origin.id, advertised));
+    let observed = Endpoint::Clearnet {
+        ip: IpAddr::V4(doc_ip()),
+        port: 22021,
+        direction: Direction::Outbound,
+    };
+    let mismatch = Endpoint::Clearnet {
+        ip: IpAddr::V4(doc_ip()),
+        port: 18080,
+        direction: Direction::Outbound,
+    };
+    let refused = admit_open(&rig, mismatch);
+    let Err(RedialRefusal::NotThisClaim) =
+        rig.hub
+            .adopt_redial(origin.id, refused.open, refused.session, mismatch, None)
+    else {
+        panic!("a mismatched port was admitted");
+    };
+    let dialed = admit_open(&rig, observed);
+    let attached = rig
+        .hub
+        .adopt_redial(origin.id, dialed.open, dialed.session, observed, None)
+        .expect("redial");
+    assert_eq!(
+        rig.hub.snapshot(attached.id).expect("new").endpoint(),
+        &observed
+    );
+    assert_eq!(
+        rig.hub
+            .snapshot(origin.id)
+            .expect("origin")
+            .endpoint()
+            .clearnet_ip(),
+        endpoint(doc_ip(), Direction::Inbound).clearnet_ip()
+    );
+    assert_eq!(
+        rig.hub
+            .snapshot(origin.id)
+            .expect("origin")
+            .advertised()
+            .expect("claim")
+            .claim(),
+        &advertised
+    );
+}
+
+struct Admitted {
+    open: shekyl_transport_layer::OpenSocket,
+    session: shekyl_capped_stream::Session,
+}
+
+fn admit_open(rig: &Rig, endpoint: Endpoint) -> Admitted {
+    let ends = StreamEnds::open(32);
+    let now = rig.clock.now();
+    let ceiling = rig.hub.lock().ceiling;
+    let sockets = rig.hub.lock().sockets.clone();
+    let open = admit(&sockets, &endpoint, now, ceiling).expect("admit");
+    Admitted {
+        open,
+        session: ends.session,
+    }
+}
+
+#[test]
 fn established_carries_the_endpoint() {
     let rig = rig();
     let _opened = adopt(&rig, Direction::Outbound, 32);
@@ -555,4 +670,30 @@ fn published_rows_follow_admission_order() {
     assert!(published.windows(2).all(|pair| pair[0] < pair[1]));
     assert_eq!(board.direction_count(Direction::Outbound), 8);
     assert_eq!(board.direction_count(Direction::Inbound), 0);
+}
+
+/// `Board::count` for one connector. The handshake does not change it.
+/// `shekyl_seam_board_count` is the integer the dial cap reads.
+#[test]
+fn an_unestablished_outbound_row_still_counts_toward_the_dial_cap() {
+    let rig = rig();
+    let opened: Vec<_> = (0..12)
+        .map(|_| adopt(&rig, Direction::Outbound, 32))
+        .collect();
+    let board = rig.hub.board();
+    assert_eq!(board.len(), 12);
+    assert!(board.rows().iter().all(|row| !row.established()));
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Outbound), 12);
+    assert_eq!(board.count(ConnectorId::Tor, Direction::Outbound), 0);
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Inbound), 0);
+    assert_eq!(
+        board.direction_count(Direction::Outbound),
+        board.count(ConnectorId::Clearnet, Direction::Outbound)
+            + board.count(ConnectorId::Tor, Direction::Outbound)
+    );
+    rig.hub.session_established(opened[0].id);
+    let after = rig.hub.board();
+    assert!(after.get(opened[0].id).expect("row").established());
+    assert_eq!(after.count(ConnectorId::Clearnet, Direction::Outbound), 12);
+    assert_eq!(after.direction_count(Direction::Outbound), 12);
 }

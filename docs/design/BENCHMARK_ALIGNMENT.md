@@ -1,9 +1,10 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
 **Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
-BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
-disposition in §2 and row of §5 is a *proposal*. No benchmark, workflow,
-baseline or threshold changes with this document.
+BA-Q3, BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
+disposition in §2 and row of §5 is a *proposal*. No workflow, baseline or
+threshold changes with this document. One tracked benchmark has been built
+since: BA-T3, the serve-path gate (§5, 2026-10-06).
 
 **Pins.** `shekyl-core`: verified at `dev` `63e456fb95`. `shekyl-gui-wallet`:
 branch `dev` at `447908f` (the working branch; `main` is `319517a`,
@@ -399,7 +400,7 @@ a live node.
 | --- | --- | --- | --- | --- | --- |
 | **BA-T1** | Pool-admission verify at the modal shape | T1, CI runner | gungraun; scope per BA-Q9 | BA-I10 | relay privacy |
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
-| **BA-T3** | Serve one response: digest pass, send pass, countersignature, at three shard sizes from an in-memory store | T1, CI runner | gungraun | new (BA-G1) | archival serve |
+| **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, four `crypto_bench_serve_*` functions (manifest §12) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
 | **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
@@ -426,6 +427,7 @@ a live node.
 | **BA-T27** | RandomX Rust-to-C latency ratio, typical and adversarial | Gated on a CI runner by exception (BA-Q22); daily and weekly cron | As `rust/shekyl-randomx-differential` runs it today | BA-I33, BA-I52, BA-I53 | PoW |
 | **BA-T28** | The engine-trait hot paths the trait spec names: `synced_height`, `balance` and its body, `account_public_address` through the actor handle, `base_emission_at`, `parameters_snapshot`; and key dispatch | T1, CI runner | gungraun; the thresholds `scripts/bench/compare.py` already routes | BA-I2, BA-I6, BA-I7, BA-I8, BA-I11, BA-I12, BA-I13 | wallet engine |
 | **BA-T29** | Multisig intent and envelope operations | T2, CI runner | Criterion | BA-I16 | wallet engine |
+| **BA-T30** | A block producer's reader: completing one won block's challenge reads inside `W₂` — about 117 whole-shard reads at the sim's mean, 156 at 30 % dropout — and the sustained rate at a hashrate share (about 290 KB/s at a tenth) | T3 protocol on a **mining-class box**, not the floor: the load is a producer's, and the floor device essentially never produces. Measured, not gated (`SCS-P10`, ruled 2026-10-07) | Readers against real serving personas over Tor, the reads spread at random across `W₂`; completion share and time per won block at 1, 5 and 50 won blocks per window; `n` stated. The count rule it would inform is provisional | none: no producer-side reader exists in the tree | archival serve credit ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §12) |
 
 The gate's machinery (BA-I37 to BA-I40, BA-I44, BA-I46 to BA-I50, BA-I54,
 BA-I59) persists with the tiers it serves and has no row of its own. The
@@ -461,7 +463,8 @@ capture.** PR #968 merged a record and two observation files,
 and pointed the read-capacity row in `docs/FOLLOWUPS.md` at the result.
 Nothing is left to rule.
 
-**BA-Q3 — The order of read, digest and sign on the serve path.** As ruled
+**BA-Q3 — RULED 2026-10-05: one pass, signed last, as an abuse mitigation.**
+The order of read, digest and sign on the serve path. As ruled
 on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
 persona reads the shard once to compute the delivery digest `D`, signs, then
 reads it again to send, holding no more than a chunk. Neither the ruling nor
@@ -567,11 +570,74 @@ range is a prediction until BA-T5 times read, hash and sign apart with S as
 an arm. A faster digest (TurboSHAKE or KangarooTwelve) is a separate change
 to the wire and the domain registry and is not part of S.
 
-S changes the order the 2026-10-04 ruling set (sign before the first byte)
-and leaves the digest alone. It is the maintainer's to rule and is **not
-ruled**. Default: S, with the pre-flight method, once BA-T5 has reported the
-cost by phase for both arms and the `SH-2` question above is answered;
-until then two passes stand. T is not an option.
+*The ruling (maintainer, 2026-10-05).* S, framed as an abuse mitigation,
+which gives it a rule that can be tested: **`P` does no work that scales
+with shard size until the requester has received the bytes that work is
+for.** Before the 200 head `P` does constant work only: parsing, the
+anchor gate, opening the shard, and the key's pre-flight. Each read, hash
+and write after the head is paid for by the requester receiving the
+bytes, and the signature comes last. T is not an option.
+
+The same day's rulings on what a held shard may answer replace property 3
+above. There is no shared 404: an invalid request is a bare 400, a shard
+that is not held is the 404, a fault on `P`'s own side (store, tip or key)
+is a bare 503, and a signer that fails after the body closes the response
+with a refusal trailer where the signature goes, so the response is its
+full declared length and says in `P`'s own bytes that it did not sign.
+Cost 1 above is therefore not a truncated 200. PR #974 built the order
+and the five answers and amended `SF-D8`
+([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)); PR #982 added the
+tests that hold the invariant, made the pre-flight a required method
+(`PassKey::ready`), and counted the late refusal apart.
+
+*Costs the ruling accepts.* A signing fault after the body spends a whole
+shard on a response nobody can use; it is counted on its own. A store
+that changes a shard under a response is signed for the bytes sent, not
+withheld (cost 2), which moves detection to content verification and
+raises BA-G2's priority. *Not covered, and left to BA-Q4:* a slow reader
+holding an in-flight permit to the stall timeout, which costs `P` a
+permit and no CPU, so it is not an amplification.
+
+*What was predicted, and what was measured.* The section above predicted
+that S would recover "between 24 ms and something over 50 ms of the 78".
+A sharper prediction was made on 2026-10-06 before the floor result was
+read: about 50 ms per response at one in flight, band 40 to 60, being the
+pre-#954 arm (24.8 ms) plus one digest pass (23.9 ms). Run 3 on the floor
+device measured the single-pass tree the same day
+([`sfd8_serve_cost_floor_device_20261005.md`](../benchmarks/sfd8_serve_cost_floor_device_20261005.md)):
+
+| Quantity | Predicted | Measured | Verdict |
+| --- | --- | --- | --- |
+| Median per response, one in flight | 40 to 60 ms | 67.2 ms | **falsified** |
+| Digest cost inside the stream | 23.9 ms, its cost alone | 43 ms (67.2 − 24.6) | 19 ms unexplained |
+| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |
+| Work before the first byte | under 1 ms | not measured on the floor | open |
+
+The prediction assumed the digest costs the same inside the stream as
+alone. It does not. BA-T3 narrows where the difference can be: on x86 the
+chunked read-and-fold loop is 2.2 % above the one-shot digest in
+instructions, at an eighth of a segment and at a full one, so the 19 ms
+is not instructions spent interleaving the hash with the read. What the
+instruction count leaves out is what remains to suspect: the on-disk
+store's read path, the blocking-pool hand-off per chunk (51 for a full
+segment), and cache behaviour on the floor device. BA-T5's split by phase
+is the measurement that says which.
+
+BA-T3 also puts a first number on the abuse figure. Work before the head
+is 13,527 instructions for one leaf and 13,579 for a full segment, flat
+across a 25,992-fold change in size, and 0.007 % of a full response. By
+that share of the measured 67.2 ms it is about 5 µs on the floor; the
+store is in memory in the gate, so a cold shard open is not in the figure
+and the estimate keeps its ceiling of 1 ms until the floor measures it.
+
+The falsified estimate and the two open ones are in the measurement
+ledger (`[[retired_estimate]]` and two `estimated` rows), where a check
+holds them: an estimate becomes a measurement only through a capture that
+lands.
+
+*Carried.* The invariant is general, and a rules-queue row in
+`docs/FOLLOWUPS.md` asks the same of daemon RPC, Levin object and
+transaction requests, and the fetch client's handling of large responses.
 
 **BA-Q4 — Derive serve-side `MAX_INFLIGHT`.** Default: derive it from BA-T5
 on the floor, as the constant's own comment promises (BA-D15), and state

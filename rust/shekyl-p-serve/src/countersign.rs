@@ -67,17 +67,45 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
 pub trait PassKey: Send + Sync {
+    /// Whether this key will sign a pass for `shard_id` at `anchor_height`.
+    ///
+    /// Asked once per request, after the shard is opened and before the
+    /// first response byte, so it must be cheap and must not sign. An
+    /// `Err` means the answer is already known — no key is resident, or
+    /// the host will not sign for this shard — and the serve loop answers
+    /// the bare 503 without sending a shard it could not countersign.
+    /// `Ok` is not a promise: a signer can still fail at
+    /// [`Self::sign_pass`], after the body, and that is the refusal
+    /// trailer. The two arguments are what the key may decide on; the
+    /// request's nonce and anchor hash are not offered, because nothing a
+    /// key refuses by policy depends on them.
+    ///
+    /// **No default, on purpose.** A default of "yes" would let a new
+    /// implementor that forgets this method stream whole shards it cannot
+    /// sign — honest bandwidth spent on responses that all end in the
+    /// refusal trailer — with nothing in the type system to say so. Every
+    /// key states its answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignRefused`] when the key will not sign. Counted in
+    /// `sign_failure_count`.
+    fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
+
     /// Sign the 112-byte SF-D8 transcript under the attestation domain.
     ///
     /// # Errors
     ///
-    /// Returns [`SignRefused`] when the host cannot sign — key not
-    /// resident, signer offline, or a host-side policy refusal. The serve
-    /// loop turns this into the identical 404 and counts it in
-    /// `sign_failure_count`, separately from `lookup_failure_count`
-    /// (store-read faults), so an operator can tell "key not available"
-    /// from "store not readable". An ordinary miss — a shard the persona
-    /// does not hold — is counted by neither.
+    /// Returns [`SignRefused`] when the signer fails after [`Self::ready`]
+    /// said yes — it went offline, or the signature could not be made. The
+    /// serve loop asks only after the body is out, so it closes the
+    /// response with the refusal trailer in place of the signature and
+    /// counts it in `late_sign_failure_count`. That is apart from
+    /// `sign_failure_count` (a pre-flight refusal: the 503, no shard sent)
+    /// and from `lookup_failure_count` (store-read faults), so an operator
+    /// can tell "signer failed with the shard already sent" from "key not
+    /// available" and from "store not readable". An ordinary miss — a
+    /// shard the persona does not hold — is counted by none of them.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -99,7 +127,7 @@ pub trait PassSigner: PassKey {
     ///
     /// `None` means the height could not be read — the serving store is
     /// unreadable, or whatever the host reads it from is gone. The serve
-    /// loop renders the identical 404 and counts a **lookup failure**
+    /// loop renders the 503 and counts a **lookup failure**
     /// (the same bucket as a store read that fails on the shard itself),
     /// so a host that has lost its store is visible in the aggregate
     /// rather than refusing every anchor silently. A fresh store at
@@ -214,6 +242,11 @@ impl TestKeySigner {
 
 #[cfg(any(test, feature = "test-signer"))]
 impl PassKey for TestKeySigner {
+    /// The ephemeral key is always resident and signs for any shard.
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],

@@ -34,13 +34,13 @@ The CI workflows install all dependencies automatically. For local builds:
    `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
    empty `## Unreleased` section above it. Commit on `dev`.
 
-2. **Merge `dev` into `main`** with a merge commit to preserve branch
-   topology and create a clear release boundary:
-
-   ```bash
-   git checkout main
-   git merge --no-ff dev -m "release: merge dev for vX.Y.Z"
-   ```
+2. **Promote `dev` to `main`** by pull request, titled `Release: vX.Y.Z`, and
+   merge it with GitHub's **Create a merge commit** — never squash, rebase or
+   fast-forward. The merge commit preserves branch topology and is the release
+   boundary. `RELEASE_PROMOTION.md` §4 is the full sequence, including the
+   pre-flight on the frozen SHA; this pull request is also the first full build
+   and test run on it. (`git merge --no-ff dev` on a local `main` produces the
+   same commit, but `main` is protected and takes it through the pull request.)
 
 3. **Tag the release** on `main` with the Foundation institutional
    signing key, following the ceremony in `docs/SIGNING.md`
@@ -66,10 +66,15 @@ The CI workflows install all dependencies automatically. For local builds:
    # misleading "No secret key" error even when the card is plugged in.
    gpg --card-status
 
+   # The merge happened on the remote. Fetch, and tag the merge commit by
+   # name: a local main, or an origin/main from before the fetch, is the
+   # previous release.
+   git fetch origin
+
    # Sign with the Foundation release-signing subkey explicitly.
    # -u overrides git config user.signingkey for this single command,
    # so your personal commit-signing key stays configured for normal work.
-   git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 -m "Shekyl v3.0.3-RC1"
+   git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main -m "Shekyl v3.0.3-RC1"
 
    # Verify BEFORE pushing. A wrong signer can still be undone locally.
    git verify-tag v3.0.3-RC1
@@ -80,30 +85,34 @@ The CI workflows install all dependencies automatically. For local builds:
    For pre-releases use a suffix: `v3.0.3-RC1`, `v3.1.0-alpha.5`,
    `v3.1.0-beta.1`, etc.
 
-4. **Push the branch and tag.** CI triggers on tag push. Push the
-   branch first so the tag commit is reachable:
+4. **Push the tag.** CI triggers on tag push. `main` is already on the
+   remote, because the merge happened there:
 
    ```bash
-   git push origin main
-   git push origin v3.0.3-RC1
+   git merge-base --is-ancestor v3.0.3-RC1 origin/main && git push origin v3.0.3-RC1
    ```
 
    > **Important:** The tag must point to a commit that is already on
-   > the remote's `main` branch. Push the branch first, then the tag.
+   > the remote's `main` branch.
 
 5. **(Optional) Bump the dev default** -- after tagging, update
    `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next
    planned version so that un-tagged development builds show the
    correct series.
 
-6. **Reverse-merge `main` into `dev`** so `dev` carries the release
-   merge commit and its tag parent chain stays clean. Either a
-   fast-forward (if `dev` hasn't moved) or a `--no-ff` reverse-merge
-   PR (if it has) is acceptable.
+6. **`dev` is not synced with `main`.** The promotion is a
+   non-fast-forward merge, so `dev`'s history is unchanged and work
+   continues on it; no sync step is needed
+   (`.cursor/rules/06-branching.mdc`, release flow step 6). A reverse-merge
+   pull request from `main` into `dev` is not part of the flow. While `dev`
+   has not moved since the freeze it can be fast-forwarded to the release
+   merge commit, which keeps `git log origin/main ^origin/dev` empty;
+   `v3.1.0-alpha.8` and `v3.1.0-alpha.9` did that. It is optional, and
+   once `dev` has moved it is not done.
 
 7. **GitHub Actions takes over.** The `gitian` workflow automatically:
    - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
-     armhf, riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
+     riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
      inside isolated Docker containers
    - Packages Linux x86_64 and aarch64 binaries as `.deb` and `.rpm`
    - Builds a Windows NSIS installer (`.exe`)
@@ -113,11 +122,26 @@ The CI workflows install all dependencies automatically. For local builds:
 
 8. **Verify the release** at https://github.com/Shekyl-Foundation/shekyl-core/releases
 
+9. **Sign the asset manifest.** The release job publishes an unsigned
+   `SHA256SUMS`. With the token inserted, run the manifest ceremony
+   (`docs/SIGNING.md` §"Release assets"):
+
+   ```bash
+   python3 scripts/release/sign_release_assets.py vX.Y.Z --download --upload --clobber
+   ```
+
+   Until this has run, a downloader can check hashes but not who published
+   them.
+
 ## Tag Naming
 
-- Release tags: `v3.0.3`, `v3.1.0`, `v4.0.0`
-- Pre-release tags: `v3.0.3-RC1`, `v3.1.0-alpha`, `v3.1.0-beta`
-- Tags containing `RC`, `alpha`, or `beta` are automatically marked as pre-releases
+- Release tags: `v3.1.0`, `v3.2.0`, `v4.0.0`
+- Pre-release tags, in the canonical form `docs/VERSIONING.md` defines:
+  `v3.1.0-alpha.9`, `v3.1.0-beta.1`, `v3.1.0-rc.1`
+- The release job marks a tag as a pre-release when its name contains `RC`,
+  `alpha` or `beta` (`.github/workflows/gitian.yml`, the `prerelease:`
+  expression). GitHub's `contains()` is not case sensitive, so the canonical
+  lowercase `rc.N` is covered as well as the older `-RC1` spelling.
 
 ## Release Artifacts
 
@@ -127,7 +151,6 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 |------|-------------|
 | `shekyl-x86_64-linux-gnu-vX.Y.Z.tar.bz2` | Linux x86_64 binaries |
 | `shekyl-aarch64-linux-gnu-vX.Y.Z.tar.bz2` | Linux ARM64 binaries |
-| `shekyl-riscv64-linux-gnu-vX.Y.Z.tar.bz2` | Linux RISC-V 64-bit binaries |
 | `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu x86_64 package with systemd unit |
 | `shekyl_X.Y.Z_arm64.deb` | Debian/Ubuntu ARM64 package with systemd unit |
 | `shekyl-X.Y.Z-1.x86_64.rpm` | RPM x86_64 package for Fedora/RHEL/SUSE |
@@ -139,6 +162,10 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 | `shekyl-x86_64-unknown-freebsd-vX.Y.Z.tar.bz2` | FreeBSD x86_64 binaries |
 | `shekyl-vX.Y.Z-source.tar.gz` | Complete source with submodules |
 | `SHA256SUMS` | Checksums for all artifacts |
+| `SHA256SUMS.asc` | Detached signature over `SHA256SUMS`, added by the manifest ceremony (step 9) |
+
+The Gitian Linux build also produces a RISC-V 64-bit tarball; the release job
+does not publish it (see "Future Platforms").
 
 ## Linux Package Details
 
@@ -193,11 +220,12 @@ If a tag needs to be moved (e.g. to include a last-minute fix):
 ```bash
 git tag -d v3.0.3-RC1                              # delete local
 git push origin :refs/tags/v3.0.3-RC1               # delete remote
+git fetch origin                                    # the fix reached main by pull request
 gpg --card-status                                   # warm the agent
-git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 \
-  -m "Shekyl v3.0.3-RC1"                           # recreate on HEAD, signed
+git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main \
+  -m "Shekyl v3.0.3-RC1"                           # recreate on the new merge commit, signed
 git verify-tag v3.0.3-RC1                           # MUST pass before pushing
-git push origin main && git push origin v3.0.3-RC1
+git push origin v3.0.3-RC1
 ```
 
 Re-tagging goes through the same signing ceremony as a fresh release;

@@ -7,8 +7,10 @@
 //!
 //! One table, and the axis is the caller's next move, not the mechanism
 //! that failed. Every variant answers "name the same `P` again with the
-//! same header, name another `P`, or stop?" — the client itself never
-//! retries.
+//! same header, name it once more with a fresh one, or name another `P`?"
+//! — [`FetchError::next_move`]. The client itself never retries: the
+//! header's anchor comes from the caller's chain state, so only the caller
+//! can build a fresh one.
 
 use std::fmt;
 use std::io;
@@ -29,14 +31,49 @@ pub enum FetchError {
     /// never happened. How many times is the caller's budget.
     Stall(Stall),
     /// **A completed exchange whose answer is "not here."** `P` rendered
-    /// its identical 404: wrong route, unknown or unfrozen shard, store
-    /// failure, a header it could not decode, or an `anchor_height` outside
-    /// its gate — deliberately one outcome, so the requester cannot probe
-    /// which (`RF-R1`). **Name another `P`.** Not a retry of this one: the
-    /// same request would render the same 404.
+    /// its bare 404: the request was valid and `P` does not hold that
+    /// shard — unknown or unfrozen, one outcome for both (`RF-R1`). A
+    /// fault of `P`'s own is never this; it is [`Self::Unavailable`].
+    /// **Name another `P`.** Not a retry of this one:
+    /// the same request would render the same 404.
     Miss,
+    /// **A completed exchange whose answer is "this request is not valid."**
+    /// `P` rendered its bare 400. From this client the route and the header
+    /// encoding are fixed, so what it means in practice is that
+    /// `anchor_height` fell outside `P`'s gate — and that can be clock or
+    /// chain skew on either side, so one 400 says nothing yet about `P`.
+    ///
+    /// **Name the same `P` once more, with a header built from a freshly
+    /// derived anchor.** A fresh nonce is safe: no signature came back, so
+    /// no record can carry the old one. A second 400 is a failed read —
+    /// `P`'s gate sits within ±`L` of `P`'s own height, so a `P` that
+    /// refuses a fresh anchor is itself out of step.
+    /// [`Self::next_move`] holds that rule.
+    Rejected,
+    /// **A completed exchange whose answer is "I cannot serve this right
+    /// now."** `P` rendered its bare 503: the fault is `P`'s own — a tip or
+    /// a store it could not read, or no resident key — and the response does
+    /// not say which. A held shard never 404s, so this is how `P` failing
+    /// before the body shows.
+    ///
+    /// **A failed read: name another `P`.** No retry of this one.
+    Unavailable,
+    /// **`P` sent the whole frame and then said it would not sign.** A 200
+    /// of its full declared length whose envelope is the refusal trailer
+    /// (`serving_route::is_refusal_trailer`) in place of a signature. `P`
+    /// holds the shard and served it; its signer then failed. The body is
+    /// discarded unverified — without a signature nothing binds it to this
+    /// request.
+    ///
+    /// **A failed read: name another `P`.** No retry. This is `P`'s own
+    /// statement, in bytes only `P` can put on the stream, and that is why
+    /// it is not inferred from a response that stopped: a relay can cut a
+    /// stream at any byte, the frame's end included, and the same guard
+    /// sits on every retry. A cut is [`Stall::Truncated`] wherever it
+    /// falls.
+    Unsigned,
     /// **A completed exchange that is not the contract.** A status other
-    /// than 200 or 404, a header set other than the ruled two, a
+    /// than 200, 400, 404 or 503, a header set other than the ruled two, a
     /// `content-length` that is missing, unparseable, below the envelope
     /// width, or above the ceiling, or an envelope that is not a canonical
     /// `HybridSignature`. Refused before, or without, reading the body.
@@ -55,13 +92,50 @@ pub enum FetchError {
     ContentRefused(ContentRefused),
 }
 
+/// What a scheduler does after a failed fetch of one `P` (`SF-D6`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextMove {
+    /// Dial the same `P` again with the **same** header. Nothing was
+    /// decided; how many times is the caller's budget.
+    RetrySameHeader,
+    /// Dial the same `P` **once** more with a header built from a freshly
+    /// derived anchor.
+    RetryFreshAnchor,
+    /// `P` answered "not here". Name another `P`; nothing is held against
+    /// this one beyond not serving the shard.
+    NotHeld,
+    /// The read failed and the failure is `P`'s. Name another `P`.
+    FailedRead,
+}
+
 impl FetchError {
     /// Whether the scheduler may dial the **same** `P` again with the same
     /// header (`SF-D6`). Only a stall is; every other variant is a
-    /// completed decision about this `P`.
+    /// completed decision about this `P`, or needs a different header.
     #[must_use]
     pub fn retries_same_p(&self) -> bool {
         matches!(self, Self::Stall(_))
+    }
+
+    /// The scheduler's next move for this `P`.
+    ///
+    /// `rejected_before` is whether an earlier attempt of this same read
+    /// against this same `P` already ended in [`Self::Rejected`]. The first
+    /// 400 earns one retry with a fresh anchor; the second is a failed
+    /// read. No other variant reads it.
+    #[must_use]
+    pub fn next_move(&self, rejected_before: bool) -> NextMove {
+        match self {
+            Self::Stall(_) => NextMove::RetrySameHeader,
+            Self::Miss => NextMove::NotHeld,
+            Self::Rejected if !rejected_before => NextMove::RetryFreshAnchor,
+            Self::Rejected
+            | Self::Unavailable
+            | Self::Unsigned
+            | Self::Malformed(_)
+            | Self::BadCountersignature
+            | Self::ContentRefused(_) => NextMove::FailedRead,
+        }
     }
 }
 
@@ -70,6 +144,11 @@ impl fmt::Display for FetchError {
         match self {
             Self::Stall(s) => write!(f, "stall: {s}"),
             Self::Miss => f.write_str("miss: P answered 404"),
+            Self::Rejected => f.write_str("rejected: P answered 400"),
+            Self::Unavailable => f.write_str("unavailable: P answered 503"),
+            Self::Unsigned => {
+                f.write_str("P sent the whole frame and a refusal in place of the countersignature")
+            }
             Self::Malformed(m) => write!(f, "malformed response: {m}"),
             Self::BadCountersignature => {
                 f.write_str("countersignature does not verify under the target key")
@@ -112,7 +191,9 @@ pub enum Stall {
     /// body did not arrive within its deadline.
     BodyTimeout,
     /// The connection closed with fewer body bytes than `content-length`
-    /// declared.
+    /// declared, at whatever offset. Never read as `P` declining to sign:
+    /// that is the refusal trailer ([`FetchError::Unsigned`]), which `P`
+    /// writes and a relay cannot.
     Truncated {
         /// Bytes `content-length` declared.
         declared: u64,
@@ -157,14 +238,15 @@ pub enum Malformed {
     HeadTooLong,
     /// The status line did not parse as `HTTP/1.x <3-digit> …`.
     StatusLine,
-    /// A parseable status that is neither 200 nor 404.
+    /// A parseable status that is not 200, 400, 404 or 503.
     Status(u16),
     /// The header set is not exactly `RESPONSE_HEADER_NAMES`, or a name
     /// repeats, or a line is not `name: value`.
     HeaderSet,
     /// `content-type` is not the ruled type.
     ContentType,
-    /// `content-length` is missing, unparseable, or (on a 404) non-zero.
+    /// `content-length` is missing, unparseable, or (on a 400, a 404 or a
+    /// 503) non-zero.
     ContentLength,
     /// `content-length` is shorter than the fixed-width signature envelope
     /// — there cannot be a countersignature in it.
@@ -198,7 +280,7 @@ impl fmt::Display for Malformed {
         match self {
             Self::HeadTooLong => f.write_str("head exceeded its bound without terminating"),
             Self::StatusLine => f.write_str("status line does not parse"),
-            Self::Status(code) => write!(f, "status {code} is neither 200 nor 404"),
+            Self::Status(code) => write!(f, "status {code} is not 200, 400, 404 or 503"),
             Self::HeaderSet => f.write_str("header set is not the ruled two"),
             Self::ContentType => f.write_str("content-type is not the ruled type"),
             Self::ContentLength => f.write_str("content-length missing or invalid"),

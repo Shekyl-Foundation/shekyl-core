@@ -557,6 +557,13 @@ than its title suggests.
 
 ### PWD-E7 — how a node obtains an **overlay** endpoint: two postures, ephemeral by default
 
+> **Amended 2026-10-06 (ruled by Rick, not yet implemented):**
+> [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-1`…`TB-3`
+> rule that a node has Tor unless its operator explicitly declines it, and
+> that the seam row "tor control unavailable" below splits into a refused start
+> and a runtime degrade. The code behaves as this section describes until the
+> refusal lands, which `TB-12` orders last.
+
 **RULED by Rick, 2026-09-07.** PWD-E1/E2 answer the clearnet question — a
 candidate endpoint proposed by NAT, IGD or an operator, and a verifier that
 decides. **This row is the overlay case, and it is not the same question.**

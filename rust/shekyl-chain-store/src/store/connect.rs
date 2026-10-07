@@ -316,7 +316,7 @@ impl<'id> WriteBatch<'_, 'id> {
             cumulative_difficulty: block.cumulative_difficulty(),
             hash,
             // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
-            // count and the accumulation arm is dead (CEN-L15) — see
+            // count and nothing accumulates it (CEN-L15) — see
             // `BlockInfo::rct_outputs`.
             rct_outputs,
             // G6b: the block's weight clamped under the median in force.

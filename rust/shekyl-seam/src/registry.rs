@@ -13,11 +13,12 @@
 //! the open rows and sorts that copy. The sort is the admission order a
 //! reader sees. The hash map is the lookup.
 //!
-//! This is not the C++ connection context. A walker that needs a fact asks
-//! the board. It does not borrow the row the strand is writing. Support
-//! flags and the pull relationship are not here: the seam does not know
-//! them, and a blank field would be a second context. They arrive when
-//! their owner publishes them.
+//! This is not the session. A walker that needs a fact asks the board.
+//! It does not borrow the row the strand is writing. Support flags and
+//! the pull relationship are not on the board: a blank field here would
+//! be a second context. The session holds a claim when one has been
+//! recorded. The board publishes it when that record is part of the row
+//! a walker is allowed to see.
 //!
 //! Republishing copies the slice. An accept flood against a large inbound
 //! cap is O(N) per accept, so O(N²) across the flood. The readers' guarantee
@@ -137,18 +138,31 @@ impl Board {
         self.rows.is_empty()
     }
 
-    /// Rows in `direction`, handshake or not.
+    /// Rows of this connector and direction, handshake or not.
     ///
     /// The handshake flag is not part of this count. A dial in flight
-    /// still occupies an outbound slot, so the dial cap's predicate is
-    /// [`Direction::Outbound`]. `established` is a separate fact on the
-    /// row, and a count of established rows would let the node dial past
-    /// the cap while handshakes are outstanding.
+    /// still occupies an outbound slot, so a zone's dial cap reads
+    /// [`Direction::Outbound`] for that connector. `established` is a
+    /// separate fact on the row. A count of established rows would let
+    /// the node dial past the cap while handshakes are outstanding.
     #[must_use]
-    pub fn direction_count(&self, direction: Direction) -> usize {
+    pub fn count(&self, connector: ConnectorId, direction: Direction) -> usize {
         self.rows
             .iter()
-            .filter(|row| row.direction() == direction)
+            .filter(|row| row.connector() == connector && row.direction() == direction)
             .count()
+    }
+
+    /// Rows in `direction` on every connector, handshake or not.
+    ///
+    /// This is [`Self::count`] summed across [`ConnectorId::ALL`]. A
+    /// connector that is not in that list is not a row this board can hold.
+    #[must_use]
+    pub fn direction_count(&self, direction: Direction) -> usize {
+        ConnectorId::ALL
+            .iter()
+            .copied()
+            .map(|connector| self.count(connector, direction))
+            .sum()
     }
 }

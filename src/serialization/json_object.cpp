@@ -1486,31 +1486,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::DaemonInfo& inf
   info.wide_cumulative_difficulty += info.cumulative_difficulty;
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::rpc::output_distribution& dist)
-{
-  dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, distribution, dist.data.distribution);
-  INSERT_INTO_JSON_OBJECT(dest, amount, dist.amount);
-  INSERT_INTO_JSON_OBJECT(dest, start_height, dist.data.start_height);
-  INSERT_INTO_JSON_OBJECT(dest, base, dist.data.base);
-
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::output_distribution& dist)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, dist.data.distribution, distribution);
-  GET_FROM_JSON_OBJECT(val, dist.amount, amount);
-  GET_FROM_JSON_OBJECT(val, dist.data.start_height, start_height);
-  GET_FROM_JSON_OBJECT(val, dist.data.base, base);
-}
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_block_template_backlog_entry& entry)
 {
   dest.StartObject();

@@ -5891,13 +5891,15 @@ shard byte arrived.
    3,425) and the witness maximum is 885,000 B (was 876,808). `D` joins
    each record's contribution to `attestation_root`. **The empty root is
    unchanged**, so the genesis header value does not move.
-4. **The signature is the response's last bytes.** `P` reads the body
-   once to compute `D`, signs, then reads it again and streams it while
-   hashing what it writes, and appends the signature only if the sent
-   bytes hash to the signed `D`. Neither pass holds more than one chunk,
-   so the serving ceiling's memory bound is unchanged. A transfer that
-   fails mid-body, or a body that differs between the two reads, yields
-   no signature.
+4. **The signature is the response's last bytes.** `P` reads the store
+   once: it hashes each chunk as it sends it, then finishes `D`, signs,
+   and appends the signature. No more than one chunk is resident, so the
+   serving ceiling's memory bound is unchanged. Signing comes after the
+   body, so a signer fault there is a refusal trailer in the signature's
+   place, not a 404. A transfer that fails mid-body yields no signature
+   either.
+   *(Rewritten by the entry of 2026-10-06; as first landed, `P` read the
+   shard twice and signed between the reads.)*
 5. **The scheme domain** rotates `shekyl/archival-attestation-scheme-v2` →
    `…-v3`. One label never names two messages (`30-cryptography.mdc`); a v2
    signature can never verify as v3. No retired-label constant is kept;
@@ -5938,5 +5940,245 @@ signature at all are Slice C's Round 0
   its digest can be re-derived.
 - `docs/test_vectors/PQC_HYBRID_V2_KAT.json`: the attestation vector's
   domain.
+
+---
+
+## 2026-10-06 — Archival serving: one store read, and five answers that each mean one thing
+
+**Decision.** Changes to the serving route (`RF-R1`), ruled 2026-10-05 and
+2026-10-06 and landed together because they touch one serve path and one
+client outcome table. The signed message, the scheme domain and the pass
+record are unchanged.
+
+The rule the answers follow: **a failure shows as a failure.** A held
+shard never answers 404, and `P` failing is never inferred from a response
+that stopped.
+
+| Response | Meaning |
+| --- | --- |
+| 400, empty | The request is invalid. Decided from the head and `P`'s own height, with no store lookup and no branch on holdings. |
+| 404, empty | Not held. Only a valid request reaches this, and nothing else does. |
+| 503, empty | `P` cannot serve right now and the fault is its own: an unreadable tip, a store failure, or no resident key. |
+| 200, body, signature | A good read. |
+| 200, body, refusal trailer | `P`'s signer failed after the body went out. |
+
+1. **One read.** `P` reads the store once, hashes each chunk as it sends
+   it, then finishes `D`, signs, and appends the signature. The second
+   read, the comparison between two digests and the "body changed between
+   reads" path are deleted. On the floor device the two-read path took
+   102.7 ms per served shard and this one takes 67.2 ms, against 24.6 ms
+   before the digest
+   (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`, run 3).
+2. **An invalid request is a 400, decided before the lookup.** `P`
+   validates the request before it looks up the shard, so every malformed
+   or out-of-gate request gets the same bare 400 whether or not `P` holds
+   that shard. Holdings are public, so nothing is hidden by keeping them
+   one code; the store is simply not consulted for a request that is going
+   to be refused. As built, "invalid" is everything decidable without the
+   shard store: a wrong method or route, a malformed shard id, a request
+   header that is missing, duplicated or does not decode, and an anchor
+   outside the gate.
+3. **A fault of `P`'s own is a 503.** A store that fails to open the
+   shard, a tip `P` cannot read, and a persona with no resident key all
+   answer one bare 503. The earlier text answered the first two with the
+   404 on the ground that a distinct status "would be a live health
+   oracle". That ground fails: holdings are chain-public, so a 404 for a
+   bonded shard already tells anyone watching that `P` is failing, and
+   tells it as "not held". The 503 does not say which fault; the counters
+   do, to the operator.
+4. **A persona with no key says so before the body.** `P` knows it has no
+   resident key before the first byte (`PassKey::ready`), so it
+   answers the 503 and does not send a shard it cannot countersign.
+5. **A signer that fails after the body writes a refusal trailer.** The
+   body is out and the status cannot change. `P` closes the response with
+   a fixed trailer where the signature goes, so the response is its full
+   declared length and says, in bytes `P` wrote, that `P` served and did
+   not sign.
+
+**Why a trailer and not an inference from a short body.** Signing after
+sending first landed as "the response ends at the frame, with no
+signature", and the client read a body cut cleanly at that offset as `P`
+declining to sign. A relay on the circuit can count bytes, and the frame
+length is public, so it can cut a good response exactly there. Allowing a
+retry does not help: Tor pins guards, so the witness's entry guard is on
+every circuit it builds and the service's guards are on every circuit it
+builds, and a relay in guard position on either side sees every retry.
+Such a relay could make an honest `P` fail every challenge.
+
+What a relay cannot do is write. Relay cells on an onion-service circuit
+are end-to-end encrypted and integrity-checked between the client and the
+service, so a relay can drop cells or destroy the circuit and cannot
+inject bytes. That leaves three cases, and the cut is never the first:
+
+| Client sees | Meaning | Next move |
+| --- | --- | --- |
+| Body, then the refusal trailer | `P` failed. Authored by `P`. | Failed read, no retry |
+| Body, then nothing | Transport cut, at whatever offset | Stall, retried as before |
+| Body, then a valid signature | A good read | Pass |
+
+What remains is the general residual: a network adversary can deny any
+read at any point. That is not specific to the frame boundary, and
+nothing at this layer fixes it.
+
+**The trailer's encoding.** The envelope's own width (3,385 bytes) of
+`0xFF`, in place of the signature
+(`serving_route::REFUSAL_TRAILER_BYTE`, `is_refusal_trailer`). Chosen over
+a status byte ahead of the envelope for three reasons. A good read's
+bytes and every `content-length` stay exactly what they were, so nothing
+pinned on the good path moves. Every 200 is then its full declared
+length, which is what lets "short" mean "transport" with no exception.
+And it cannot be read as a signature: a canonical `HybridSignature`
+opens with a four-byte header and a little-endian length, and
+`0xFFFF_FFFF` is not a length an envelope can hold
+(`a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`
+asserts the parse fails; `a_real_signature_is_never_the_refusal_trailer`
+asserts the other direction). The cost is 3,385 bytes on a response that
+has already failed.
+
+**The client's rows.** A 400 is neither a miss nor `P`'s failure on first
+sight, because the anchor gate can trip on clock or chain skew on either
+side. The witness retries once with a freshly derived anchor. A second
+400 is a failed read: `P`'s gate sits within ±`L` of `P`'s own height, so
+a `P` that is persistently out of step is `P`'s problem. A 503 is a
+failed read with no retry of that `P`. A refusal trailer is a failed read
+with no retry. A body that stops short, anywhere, is a stall. The fetch
+client does not retry — the anchor is the caller's, from chain state — so
+the counting is the scheduler's and `FetchError::next_move` is the rule
+it reads.
+
+**Reverses.** Item 4 of the 2026-10-04 entry (two reads; rewritten in
+place). `RF-R1`'s "one identical 404 for every non-servable outcome": the
+404 now means "not held" and nothing else.
+
+**Where.** `rust/shekyl-p-serve/src/serve.rs`, `delivery.rs`,
+`countersign.rs` (`PassKey::ready`);
+`rust/shekyl-curve-tree/src/serving_route.rs` (the trailer);
+`rust/shekyl-p-fetch/src/error.rs`, `client.rs`;
+`rust/shekyl-p-host/src/signer.rs`; `ARCHIVAL_SERVING_ROUTE.md`;
+`ARCHIVAL_SHARD_FETCH.md` `SF-D6` (the outcome table's rows) and `SF-D8`
+(the carrier).
+
+---
+
+## 2026-10-07 — Serve credit: a secret per-block draw replaces the public urn; FN-DSA-1024 receipts under a separate receipt key
+
+**Decision (maintainer, in review; stated as the Slice C Round 0 brief of
+this date).** The serve-credit mechanism is re-based on a draw only the
+block's producer knows. The specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md);
+this entry records what was decided and what it replaces. Nothing is built.
+
+1. **The draw is secret and per block.** The producer of `h` commits to a
+   seed in its coinbase, draws pairs with replacement from the epoch's
+   drawable set using the seed and `block_hash(h)`, reads them, and
+   reveals the whole seed with that block's pass records within `W₂`.
+   *Replaces* the public urn derived from `block_hash(h − 1)` (challenge
+   mechanism §2, `SO-D8e`), which was never wired.
+2. **Issued means revealed.** A draw is issued only when its seed is
+   revealed. An unrevealed block issues nothing: no passes and no misses.
+   A miss is an issued draw with no pass by `h + W₂`, derived as before.
+3. **Settlement selects the three counted draws at close.** A beacon at
+   `h_close(E) + W₂` picks 3 of each pair's issued draws; 2 or 3 passes
+   among them is Served, fewer is Missed, fewer than 3 issued is
+   NonObservation. *Replaces* two earlier forms: the landed
+   `settle_epoch`, which settles on every issued draw with a floor of 2,
+   and a "first three" selection ruled earlier the same day and not
+   otherwise recorded. The reason for selecting at close is that `P` must
+   not be able to learn mid-epoch that its outcome is settled.
+4. **FN-DSA-1024 (level V)** for the receipt and for the witness's carrier
+   signature, inside the hybrid structure with Ed25519, under a new value
+   of the existing scheme byte. Against ML-DSA-65: a 1,280-byte signature
+   against 3,309, faster, more margin. The implementation is the `fn-dsa`
+   crate, which is pre-standard; its keys and signatures will change when
+   FIPS 206 is final. That risk is not privacy-exposing and is accepted
+   pre-genesis, with an exact version pin, a FOLLOWUPS row and a genesis
+   gate (no genesis on a pre-1.0 `fn-dsa`) landing with the integration.
+5. **A separate receipt key.** The bond record keeps its identity key
+   (Ed25519 + ML-DSA-65), which defines `p_canonical_id` and authorizes
+   JoinMarket and Reinstate, and gains a receipt key (Ed25519 +
+   FN-DSA-1024) bound by the identity key's signature on the JoinMarket
+   post. The reason is algorithm isolation: persona identity stays on a
+   finalized standard, and the pre-standard scheme touches only signatures
+   whose value expires within an epoch. **This is a rule-21 reopening of
+   `SF-D13`**, which ruled the countersigning key to be the identity key
+   and said it "does not invent a second key field".
+6. **`W₂` is the only window.** A carrier for `h` is admitted in
+   `(h, h + W₂]`. There is no separate read window, and admission checks
+   no bound on the receipt's anchor (ruling 7 below). *Replaces* the
+   landed window `[h − 720 − L, h − 720]` keyed on the including block's
+   predecessor, which belonged to a design where the read and the
+   inclusion were one event.
+7. **Provisional (rule 21).** The draw weighting (1 for a pair visibly
+   short of 3 issued, 1/16 otherwise), the count per block (a base of one
+   draw per pair per epoch plus a top-up, capped at 3 × nominal), and the
+   bar they are held to (at most 3 % of pairs short of 3 at 10 % producer
+   dropout). The sim reads 1.18 % at that bar (`ESR-11`).
+
+**Rulings on the twelve questions the specification posed (maintainer,
+same date, on review of #992 and #993).** `SCS-P1`–`P12`, specification
+§13.3.
+
+1. **`0x0C` is 32 bytes** (`SCS-P1`): one commitment over
+   `witness_pk ‖ seed` under its own registered domain. Q13's length
+   stands. *Replaces* Q12's bare hash of the witness key alone
+   (2026-09-16), which is not built.
+2. **Each carrier carries the whole seed** (`SCS-P2`).
+3. **Q10 stands; re-derivability is dropped** (`SCS-P3`). The seed and the
+   witness key are fresh randomness per block, independent of each other,
+   held in memory only. *Rejected:* deriving either from the coinbase
+   output's shared secret, because the coinbase recipient would learn the
+   seed (this also retires Q8's derivation of 2026-09-16); a persistent
+   producer secret; and re-derivability, which Q10 had held as a named
+   fallback. Losing the ring is harmless: the block's draws are not
+   revealed and issue nothing.
+4. **Selection is rejection sampling with a deterministic cap**
+   (`SCS-P4`): after 256 attempts the current candidate is accepted. A
+   vector pins the cap.
+5. **A record keeps its input tag and `j`** (`SCS-P5`). The pair is
+   derived from `(seed, h, j)`; `h` rides the carrier beside the seed;
+   the witness key and signature are the carrier's prunable part. One
+   rule-42 bump covers record and carrier.
+6. **The set commitment covers the seed and `h`** (`SCS-P6`), with a
+   fifth vector.
+7. **No bound on `anchor_height` at admission** (`SCS-P7`). A lower bound
+   keyed on `h` is implied by the nonce, which contains `block_hash(h)`.
+   The anchor stays on the wire for `P`'s own gate and for organic reads.
+8. **`issued` saturates at 255** (`SCS-P8`).
+9. **"In flight" counts unrevealed draws only** (`SCS-P9`).
+10. **The producer's read load is measured, not gated** (`SCS-P10`), on a
+    mining-class machine (`BA-T30`).
+11. **The pass is carried by the serve-credit input** (`SCS-P11`). The
+    attestation path's pass records and CEN-B4's operand are deleted with
+    the implementation, with the reason recorded (rule 15), not left
+    inert.
+12. **The drop filter reads per draw, at `h`** (`SCS-P12`): the state
+    after `h` connects, strictly above a same-block slash.
+
+**A refusal this decision reverses.** `SO-D8e` (2026-09-16) foreclosed
+stateless per-block draws with replacement on three grounds: about 20 % of
+pairs unobservable per epoch at three draws per pair, a longer time to
+slash, and that an absolute threshold of two passes is a different test
+over two draws than over six. The draw is now with replacement. What
+answers each ground is in the specification: the top-up and the 16:1
+weighting hold the share of pairs short of three issued draws to 1.10 % at
+10 % producer dropout, 1.18 % at most over eight seeds (`ESR-11`, §12); and settlement counts exactly three
+selected draws for every pair that has them, so the threshold is one test.
+The urn's own recorded weakness, that a pair late in a wave could
+anticipate its draw, has no counterpart: nothing about a block's draws is
+public before the reveal.
+
+**Also recorded.** The receipt key is derived from the wallet master seed
+when the engine is assembled, as the identity key is; the brief's "per-persona
+seed in the stake-engine actor" does not exist (`SCS-F5`). Registry rows
+for the new labels land with their constants (`SCS-F4`). At the `fn-dsa`
+integration, key-generation and verification vectors are pinned on both
+x86_64 and aarch64; signing uses hardware floating point. Sequencing: the
+specification first, the settlement writer wired before the secret draw
+goes live, then the FN-DSA integration.
+
+**Where.** `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`. The superseded
+mechanism text is deleted from the five documents that stated it before
+and replaced by pointers; what each still owns is the specification's
+§15. Index rows for the document and for `SCS-P` / `SCS-F`.
 
 ---
