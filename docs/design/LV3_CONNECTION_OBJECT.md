@@ -970,8 +970,8 @@ So the cap provides **zero** protection against the only *measured* inbound
 adversary in the project. It is not weakly relevant to the diversity job — it is
 **orthogonal to it**. And the defence that does exist lives in another lane
 entirely: the transport gate
-([`FluffReach::OutboundOnly`](../../rust/shekyl-relay/src/zone/mod.rs#L216),
-enforced at [`zone/mod.rs:833`](../../rust/shekyl-relay/src/zone/mod.rs#L833))
+([`FluffReach::OutboundOnly`](../../rust/shekyl-relay/src/graph/mod.rs#L216),
+enforced at [`zone/mod.rs:833`](../../rust/shekyl-relay/src/graph/mod.rs#L833))
 plus the embargo, **both designed on the assumption that the observer sees
 everything** — which is the correct posture, and one a door filter cannot
 contribute to.

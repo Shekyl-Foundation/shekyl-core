@@ -38,9 +38,9 @@ pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
 pub use cause::{c_header, CloseCause, CloseKind, Phase};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
-    BannableInbound, ConnectorId, DeadlineInput, Declaration, DestinationAuth, InboundIdentity,
-    LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous, StackPlan,
-    StreamKind, YesNo,
+    BannableInbound, ConnectorId, CoverClass, DeadlineInput, Declaration, DestinationAuth,
+    InboundIdentity, LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous,
+    StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
 pub use shekyl_net_address::NetworkAddress;

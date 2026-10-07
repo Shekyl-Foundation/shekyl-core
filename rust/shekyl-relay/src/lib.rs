@@ -69,18 +69,18 @@
 
 pub mod driver;
 pub mod floor_diag;
+pub mod graph;
 mod noise_queue;
 pub mod stem_watch;
-pub mod zone;
 
 pub use driver::{Driver, Effect};
 pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
-pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
-pub use shekyl_relay_privacy::SlotIndex;
-pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
-pub use zone::{
+pub use graph::{
     address_hidden_from_peer, any_hides_address_from_peer, any_link_encrypted, any_open_link,
     cover_class, link_encrypted, longest_measured_transit, measured_transit_ms, ConnectorId,
     CoverClass, NodeSync, PeerFluff, Relay, RelayCarrier, RelayDispatch, RelayNewError, RelayPlan,
     TxBlob,
 };
+pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
+pub use shekyl_relay_privacy::SlotIndex;
+pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};

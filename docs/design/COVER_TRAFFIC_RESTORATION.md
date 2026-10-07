@@ -82,7 +82,7 @@ zones other than Tor.)* Everything below is what that change would wake up.
 
 | component | file | state |
 | --- | --- | --- |
-| `CovertSchedule` | `shekyl-relay/src/zone/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
+| `CovertSchedule` | `shekyl-relay/src/graph/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
 | `Zone::covert_deadline` / `due_covert_channel` / `covert_deadline_at` / `covert_enabled` | same | complete |
 | `inherited::NOISE_CHANNELS` mirror | `shekyl-relay-privacy/src/params.rs` | pins the C++ constant |
 | `carrier::WINDOW_BYTES` / `MAX_FRAGMENTS` | `shekyl-relay-privacy/src/params/carrier.rs` | derived window and fragment cap; **not** inherited mirrors |
@@ -1258,7 +1258,7 @@ not a convenience; it is the property that makes the arm separable.
 **And the emitter is batch-blind structurally, which is why the carrier arms
 survive PWD-B12 at all.** `NoiseQueues` is held BESIDE `Driver` in
 `RelayZoneHandle` and never inside it, and `Driver` owns `Zone` — so
-PWD-B12's subject, `rust/shekyl-relay/src/zone/mod.rs`, cannot reach the
+PWD-B12's subject, `rust/shekyl-relay/src/graph/mod.rs`, cannot reach the
 carrier's buffers. Batch composition changes what `Zone` releases; it cannot
 change what the carrier emits.
 

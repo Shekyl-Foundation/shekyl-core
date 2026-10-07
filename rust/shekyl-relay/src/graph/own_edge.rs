@@ -18,7 +18,7 @@
 use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use super::{address_hidden_from_peer, Relay, RelayPlan};
+use super::{hides_address, Relay, RelayPlan};
 
 impl Relay {
     /// Draw or reuse this epoch's own-edge.
@@ -55,18 +55,16 @@ impl Relay {
     }
 
     fn hop0_peer_live(&self, id: ConnectionId) -> bool {
-        self.contexts.get(&id).is_some_and(|peer| {
-            Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-        })
+        self.contexts
+            .get(&id)
+            .is_some_and(|peer| Self::stem_candidate(peer) && hides_address(&peer.declaration))
     }
 
     /// Hidden-address outbound sessions, in connection-id order.
     fn hidden_outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
-            .filter(|(_, peer)| {
-                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-            })
+            .filter(|(_, peer)| Self::stem_candidate(peer) && hides_address(&peer.declaration))
             .map(|(id, _)| *id)
             .collect()
     }

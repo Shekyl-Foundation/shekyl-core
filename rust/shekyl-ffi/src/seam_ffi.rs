@@ -60,6 +60,8 @@ pub(crate) const ADDR_IPV6: u8 = 2;
 pub(crate) const ADDR_TOR: u8 = 4;
 
 const _: () = {
+    assert!(ConnectorId::Clearnet.index() == 0);
+    assert!(ConnectorId::Tor.index() == 1);
     assert!(ConnectorId::Clearnet as u8 as u32 == SHEKYL_CONNECTOR_CLEARNET);
     assert!(ConnectorId::Tor as u8 as u32 == SHEKYL_CONNECTOR_TOR);
     assert!(Direction::Inbound.index() == SHEKYL_DIRECTION_INBOUND as usize);

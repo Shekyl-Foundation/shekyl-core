@@ -213,7 +213,7 @@ path_set = "relay-aes"
 [[path_set]]
 id = "relay-anon-transit"
 spec = [
-  "rust/shekyl-relay/src/zone",
+  "rust/shekyl-relay/src/graph",
   "rust/shekyl-tor/src",
 ]
 
@@ -229,7 +229,7 @@ path_set = "relay-anon-transit"
 [[path_set]]
 id = "relay-adopted-transit"
 spec = [
-  "rust/shekyl-relay/src/zone",
+  "rust/shekyl-relay/src/graph",
   "rust/shekyl-clearnet/src",
 ]
 

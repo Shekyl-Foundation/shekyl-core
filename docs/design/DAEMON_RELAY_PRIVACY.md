@@ -168,6 +168,13 @@ this lane.
      The dialer opens 12 onion circuits on the managed Tor. The
      assignment at `net_node.inl:926` stays until the dialer deletes
      it; it now reads this floor. Clearnet keeps its own degree.
+     The graph is connector-agnostic. Measured transit and cover class
+     are declaration cells. The relay reads them through
+     `declaration(connector.column())`, as it already reads
+     `address_hidden_from_peer`. It does not match `ConnectorId`.
+     An unassessed transit is not a stem edge. Adding a connector is
+     one variant, one declaration column, and that connector's crate.
+     `shekyl-relay` (`src/graph`) does not change.
    - **Embargo.** The stem watch records the connector the stem was
      forwarded on, and the observation window is that connector's
      measured transit, matched on `ConnectorId`: clearnet is
@@ -817,7 +824,7 @@ The relay-privacy adversary is a **P2P-network-layer observer of the origin
 daemon's peer traffic** — a peer, a set of sybil peers, or a passive network
 observer — reached only through the P2P interface, never the RPC one. Its
 visibility of a node's *fluff* is gated by transport, at
-[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526):
+[`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526):
 
 ```text
 // When i2p/tor, only fluff to outbound connections
@@ -923,7 +930,7 @@ The delta is stark and structural: a clearnet supernode observes **every** fluff
 and attributes the source with the paper's first-spy precision (rising with its
 reach to ~0.42 at a 30 % attack); the same supernode over Tor observes
 **nothing**, because fluff never traverses its inbound edges
-([`zone/mod.rs:521`](../../rust/shekyl-relay/src/zone/mod.rs#L521)).
+([`zone/mod.rs:521`](../../rust/shekyl-relay/src/graph/mod.rs#L521)).
 That collapse is the measured additional security of the Tor configuration.
 
 **Honest scope of the Tor benefit.** It collapses the *passive*
@@ -2011,7 +2018,7 @@ structurally — not by simulation.** The candidate was a passive out-neighbour:
 spy that receives a prefix node's *forced fluff* by neighbouring it, whose leak
 (unlike the black-hole's) would *scale down* with the embargo mean and so reopen
 `ε` as a live lever. Whether that observable exists is decided entirely by who a
-fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526)
+fluff reaches, and [`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526)
 settles it (§6.3): on the public zone fluff reaches inbound peers, so an
 inbound sybil *does* see it — the observable is **real on clearnet**; on I2P/Tor
 fluff is outbound-only, so an inbound sybil sees nothing — the observable is
@@ -2135,7 +2142,7 @@ reasons — *and a refuted one I record so it is not re-argued*:
 > [`stem_map.rs`](../../rust/shekyl-relay-privacy/src/stem_map/mod.rs), the cached
 > `in_mapping_[source]` is its `inbound` map, and the caller that would choose
 > the alternate is `Zone::plan_relay` in
-> [`zone.rs`](../../rust/shekyl-relay/src/zone/mod.rs). **The line numbers below are
+> [`zone.rs`](../../rust/shekyl-relay/src/graph/mod.rs). **The line numbers below are
 > kept as written** — they record what was verified at the time, and rewriting
 > them would silently re-attribute that verification to code nobody checked.
 > RP-2b re-grounds against the Rust source.
@@ -2243,7 +2250,7 @@ traffic (not a new peer), the net is dominated by the ~86× rate reduction.
 - **Coupling note — the outbound structure read on two channels (net, don't
   double-count).** Two *distinct* source facts both flow from the origin's use of
   outbound connections: fluff is outbound-only on Tor
-  ([zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)),
+  ([zone/mod.rs:521](../../rust/shekyl-relay/src/graph/mod.rs#L521)),
   which makes the inbound passive supernode structurally absent (§6.3, reshape's
   *friend*); and the stem pool is the outbound set
   (dandelionpp.cpp:103,
@@ -2586,7 +2593,7 @@ mechanism* of §12.9, under which the broadcast disappears as a consequence.
 *Reconciliation with §6.5/§6.6 (verified at source; those sections are already
 pushed):* they model the **fluff phase's** inbound observability — the
 *channel-observer* axis — transport-gated at
-[zone/mod.rs:521](../../rust/shekyl-relay/src/zone/mod.rs#L521)
+[zone/mod.rs:521](../../rust/shekyl-relay/src/graph/mod.rs#L521)
 (`fluff_notify` runs per-zone; on Tor it fluffs outbound-only). That is a *different
 phase and a different axis* from stem occupancy, so §6.5's "Tor collapses the
 inbound supernode" is correct **for the channel-observer axis** and must not be read
@@ -4973,7 +4980,7 @@ would need a different shape. Three ingredients, all present today:
 
 | Ingredient | Site | Survives the inversion |
 | --- | --- | --- |
-| ground truth from the owning structure | `Zone::stem_slots() -> &[Option<ConnectionId>]` ([`zone/mod.rs:464`](../../rust/shekyl-relay/src/zone/mod.rs#L464)) | yes — the inversion does not touch `map.slots()` |
+| ground truth from the owning structure | `Zone::stem_slots() -> &[Option<ConnectionId>]` ([`zone/mod.rs:464`](../../rust/shekyl-relay/src/graph/mod.rs#L464)) | yes — the inversion does not touch `map.slots()` |
 | emission capture in a test | `rec_slots` ([`tests.rs:33`](../../rust/shekyl-ffi/src/relay_zone_ffi/tests.rs#L33)), a supplied `extern "C"` collector | yes — a `rec_covert_send` is the same pattern |
 | deterministic time | `shekyl_relay_zone_poll(handle, now_ms, …)` | yes — "channel comes due" is driven, not awaited |
 
@@ -5916,7 +5923,7 @@ capability, per §20.9) starts from the literature, untouched by any of this.
   `CRYPTONOTE_NOISE_BYTES = 3 KiB` (no Rust representation; C++-owned payload
   size) and `CRYPTONOTE_NOISE_CHANNELS = 2` (Rust-mirrored and
   construction-refusing at
-  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/zone/mod.rs#L256)) join the
+  [`zone/mod.rs:256`](../../rust/shekyl-relay/src/graph/mod.rs#L256)) join the
   Q-11 ledger. The aggregate is ≈ 2 × 3072 B / 12.5 s ≈ **491 B/s per noise
   zone**, and a rate target trades bytes against interval — a derivation
   scoped to intervals alone can only see one axis, with the other bound by
@@ -6231,7 +6238,7 @@ against T?"* rather than *"what does the lineage do?"*.
 
 **What survives — and it is stronger than what it replaces. (b), verified at
 source.**
-[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/zone/mod.rs#L171)
+[`CovertSchedule::due_one`](../../rust/shekyl-relay/src/graph/mod.rs#L171)
 re-arms from **`now`**, not from the elapsed deadline. Its own comment states
 the trade — *"phase may lag; rate does not"* — and that decomposition is
 correct **against load**, which is the only case it was evaluated against.
@@ -6365,7 +6372,7 @@ Three statements of the same rule, in increasing strength:
 
 1. **Inherited C++** ([`levin_notify.cpp:1054-1058`](../../src/cryptonote_protocol/levin_notify.cpp#L1054-L1058))
    — *anonymity networks provide sybil protection*.
-2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/zone/mod.rs#L521-L526))
+2. **Our Rust doc** ([`zone/mod.rs:521-526`](../../rust/shekyl-relay/src/graph/mod.rs#L521-L526))
    — selection-based: an inbound peer is a stranger who dialled us; only
    outbound are ones we chose.
 3. **Correct, and it subsumes both** — on an anonymity network **inbound peer
@@ -7537,8 +7544,8 @@ mode is itself a candidate design, the control does double duty — rare, and to
 be taken when it appears.)*
 
 **3. The perturbation drives production, with zero test-only code.**
-[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/zone/mod.rs#L284) and
-[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/zone/mod.rs#L292)
+[`Zone::covert_deadline()`](../../rust/shekyl-relay/src/graph/mod.rs#L284) and
+[`Zone::due_covert_channel(now, rng)`](../../rust/shekyl-relay/src/graph/mod.rs#L292)
 both take `now` as a **parameter** (verified). **A stall is simply not calling
 `due_covert_channel` across a range of `now` and then resuming** — which
 reproduces the re-arm-from-`now` semantics **because it is that code path.**
@@ -7620,7 +7627,7 @@ alone.**
 ### 33.2 §12.11 reads an oracle that production does not wire
 
 **Verified at source today:** `PeerFluff`
-([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/zone/mod.rs#L41-L53))
+([`zone/mod.rs:41-53`](../../rust/shekyl-relay/src/graph/mod.rs#L41-L53))
 carries **`queued` and `direction` — nothing else.** A grep for `disarm` across
 `rust/` and `src/` returns only *derivation* (`derive.rs`), *doc comments*
 (`params.rs`) and *simulation* (`conformance/stem.rs`) — **no production code
@@ -15251,7 +15258,7 @@ decisions none of which was made for it:**
 > field and this row still names `ANON_ZONE_SENTINEL_PEER_ID = 1`, the check
 > resolves against a mechanism that is gone, and the honest answer — *the leg is
 > now unconditional* — is unavailable from the text. The same note is owed to
-> `rust/shekyl-relay/src/zone/mod.rs`, whose §91.4 argument cites the sentinel
+> `rust/shekyl-relay/src/graph/mod.rs`, whose §91.4 argument cites the sentinel
 > by name.
 >
 > **Nothing about A changes.** The leg is currently satisfied by the sentinel and
@@ -15801,7 +15808,7 @@ anonymity zone's embargo (§91.6).
 reconstructing, and states it more strongly: *"on an anonymity network inbound
 peer identity is free to mint… it is that you can never establish you have more
 than one distinct one. Effective inbound anonymity set ≈ 1 against anyone willing
-to generate keys."* It names `rust/shekyl-relay/src/zone/mod.rs`'s
+to generate keys."* It names `rust/shekyl-relay/src/graph/mod.rs`'s
 `FluffReach::OutboundOnly` doc as the load-bearing misattribution — **the exact
 site corrected two rounds later**, without the connection being made at the time.
 Cross-referenced here so the next reader gets it in one hop.

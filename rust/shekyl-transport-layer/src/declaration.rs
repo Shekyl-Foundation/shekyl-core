@@ -259,6 +259,19 @@ pub enum Rendezvous {
     Enabled,
 }
 
+/// What hides a stem on this connector.
+///
+/// Not derived from encryption or from address hiding. Those cells can
+/// agree with this one, and a later connector may set only one of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverClass {
+    /// An envelope is the only cover a wire observer cannot already see
+    /// through. Substitution cover may run when the carrier was requested.
+    OpenLink,
+    /// The connector's own traffic is the cover. No envelope.
+    Volume,
+}
+
 /// One column of the D7 table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Declaration {
@@ -276,6 +289,9 @@ pub struct Declaration {
     inbound_identity: Assessment<InboundIdentity>,
     deadline_inputs: Assessment<DeadlineInput>,
     rendezvous: Assessment<Rendezvous>,
+    /// Milliseconds. Not assessed means the relay does not stem here.
+    measured_transit_ms: Assessment<u32>,
+    cover_class: Assessment<CoverClass>,
 }
 
 impl Declaration {
@@ -349,6 +365,50 @@ impl Declaration {
     pub const fn rendezvous(self) -> Assessment<Rendezvous> {
         self.rendezvous
     }
+    /// Measured transit, in milliseconds.
+    ///
+    /// [`Assessment::NotAssessed`] means the relay does not stem on this
+    /// connector.
+    #[must_use]
+    pub const fn measured_transit_ms(self) -> Assessment<u32> {
+        self.measured_transit_ms
+    }
+    /// Cover for a stem on this connector.
+    #[must_use]
+    pub const fn cover_class(self) -> Assessment<CoverClass> {
+        self.cover_class
+    }
+
+    /// A column that is not a built connector.
+    ///
+    /// The relay guard drives this through stem draw, own-edge draw, and
+    /// the embargo. Production columns are [`declaration`]. Every cell
+    /// this function does not take is not assessed.
+    #[must_use]
+    pub const fn synthetic(
+        address_hidden_from_peer: Assessment<YesNo>,
+        measured_transit_ms: Assessment<u32>,
+        cover_class: Assessment<CoverClass>,
+    ) -> Self {
+        Self {
+            addressing: Assessment::NotAssessed,
+            encryption: Assessment::NotAssessed,
+            destination_authenticated: Assessment::NotAssessed,
+            address_hidden_from_peer,
+            destination_hidden_from_local_observer: Assessment::NotAssessed,
+            address_hidden_from_remote_observer: Assessment::NotAssessed,
+            correlation: Assessment::NotAssessed,
+            local_observer_visibility: Assessment::NotAssessed,
+            relay_origin: Assessment::NotAssessed,
+            bannable_inbound: Assessment::NotAssessed,
+            stream: Assessment::NotAssessed,
+            inbound_identity: Assessment::NotAssessed,
+            deadline_inputs: Assessment::NotAssessed,
+            rendezvous: Assessment::NotAssessed,
+            measured_transit_ms,
+            cover_class,
+        }
+    }
 }
 
 /// The column for `which`.
@@ -369,7 +429,10 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tcp),
             inbound_identity: Assessment::Assessed(InboundIdentity::SocketAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
+            // `ADOPTED_TRANSIT_ASSUMPTION_MS` in `shekyl-relay-privacy`.
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
+            measured_transit_ms: Assessment::Assessed(50),
+            cover_class: Assessment::Assessed(CoverClass::OpenLink),
         },
         NetworkColumn::Tor => Declaration {
             addressing: Assessment::Assessed(Addressing::OnionV3),
@@ -385,7 +448,10 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tor),
             inbound_identity: Assessment::Assessed(InboundIdentity::ZoneNoAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
+            // `ANON_ZONE_TRANSIT_ASSUMPTION_MS` in `shekyl-relay-privacy`.
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
+            measured_transit_ms: Assessment::Assessed(1_625),
+            cover_class: Assessment::Assessed(CoverClass::Volume),
         },
     }
 }
@@ -417,7 +483,7 @@ pub fn connector_for(address: &NetworkAddress) -> Option<ConnectorId> {
 mod tests {
     use super::{
         addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
-        BannableInbound, ConnectorId, DeadlineInput, DestinationAuth, InboundIdentity,
+        BannableInbound, ConnectorId, CoverClass, DeadlineInput, DestinationAuth, InboundIdentity,
         LocalVisibility, NativeEncryption, NetworkColumn, NotProvided, Rendezvous, StackPlan,
         StreamKind, YesNo,
     };
@@ -481,6 +547,15 @@ mod tests {
             cell(column.rendezvous(), |value| match value {
                 Rendezvous::NotApplicable => "not applicable",
                 Rendezvous::Enabled => "enabled",
+            }),
+            cell(column.measured_transit_ms(), |ms| match ms {
+                50 => "50 ms",
+                1_625 => "1625 ms",
+                _ => "measured",
+            }),
+            cell(column.cover_class(), |value| match value {
+                CoverClass::OpenLink => "substitution envelope",
+                CoverClass::Volume => "volume cover",
             }),
         ]
     }
