@@ -133,28 +133,33 @@ memory. A harvest that fails uses the connector's cause.
 
 ## Outbound targets
 
-Each connector has one outbound target. The dialer fills toward it
-and does not invent the number.
-
-Clearnet's target is the zone cap `set_max_out_peers` writes
+Clearnet's target is the cap `set_max_out_peers` writes
 (`net_node.inl:2884`). The default is `shekyl_p2p_default_out_peers`,
 which is `P2P_DEFAULT_OUT_PEERS` (12). The floor is
 `MIN_PROVISIONED_OUT_PEERS` (12,
 `shekyl-relay-privacy/src/params.rs:195`). `--out-peers` is that cap.
-A cap of 0 stays legal.
+A cap of 0 stays legal. Clearnet is not folded into the hidden target.
+The fluff measurement was taken at degree 12, and sharing one cap of
+12 across both connectors would move that degree.
 
-Tor's target is `HOP0_OUTBOUND_TARGET` (4, `params.rs:205`), asserted
-below `MIN_PROVISIONED_OUT_PEERS`. Today `net_node.inl:926` writes it
-with `shekyl_hop0_outbound_target` onto the ephemeral Tor zone, and
-the comment there says `--out-peers` does not set it. The source of
-truth is the Rust constant.
+**UPDATE 2026-10-07 (Rick).** The address-hiding outbound target is
+`MIN_PROVISIONED_OUT_PEERS`. The own-edge pool is the outbound
+sessions whose connector declares `address_hidden_from_peer`. That is
+a property of the connector. *Records-was: Tor's target is
+`HOP0_OUTBOUND_TARGET` (4, `params.rs:205`), and `net_node.inl:926`
+writes it onto the ephemeral Tor zone with
+`shekyl_hop0_outbound_target`.* The 4 read the paper's 4-regular
+anonymity graph (Dandelion++ §4.3, Algorithm 2: two outbound edges
+plus about two inbound) as the size of the pool the relays are drawn
+from. The paper draws those edges from the node's P2P outbound edges
+(η = 8 in the simulations; ours is the measured 12). The relay lane
+deletes the constant. This slice deletes the assignment at
+`net_node.inl:926`, because the dialer owns outbound targets.
 
-The dialer feeds the relay's own-edge pool. `Relay::own_edge` draws
-uniformly from the hidden-address outbound sessions this slice keeps
-up (`hidden_outbound_ids`). The dialer does not choose the edge. An
-empty pool is the relay's `NoOwnEdge`. This is a cross-lane
-dependency on the relay: the Tor target is that pool's size, and the
-relay lane owns the draw.
+The dialer keeps that pool up. `Relay::own_edge` draws uniformly from
+it (`hidden_outbound_ids`). The dialer does not choose the edge. An
+empty pool is the relay's `NoOwnEdge`. The draw stays the relay
+lane's.
 
 ## Support flags
 
@@ -236,6 +241,21 @@ the dialer's tasks and the peers' handshake slots the same way. Each
 connector has its own in-flight bound, owned by this slice. Both
 numbers are measured before the implementation PR names them. This
 brief picks neither.
+
+**Full-pool capture.** Per epoch, the chance the own-edge is a spy is
+about the spy fraction `p`, at any pool size. The chance an attacker
+holds every session in the pool is `p^k`. At `p = 0.3` that is about
+0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`. Holding the pool
+means every own-edge, every epoch, is the attacker's: they see the
+first hop of every transaction this node originates, and rotation
+protects nothing. Hidden addressing keeps the IP off that hop. It
+does not keep the transactions from linking to one origin. The target
+of 12 is the pool the stem draw already assumes. The cost is 12 onion
+circuits on the managed Tor, where the old target opened 4. The
+in-flight dial bound limits how fast they open. Total outbound is
+clearnet plus hidden, and stems are drawn over all of them. A hidden
+degree above the measured floor moves away from that floor. The floor
+is a minimum.
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a
 timed-sync payload are gray entries. They become dials only through
