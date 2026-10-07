@@ -1717,7 +1717,7 @@ namespace nodetool
   {
     const auto connector = static_cast<std::uint8_t>(epee::net_utils::require_address_connector(addr));
     const int recorded = shekyl_close_implicates_address(cause, reply, connector);
-    MDEBUG("addr " << addr.host_str() << " close cause " << static_cast<unsigned>(cause)
+    MDEBUG("addr " << addr.str() << " close cause " << static_cast<unsigned>(cause)
         << " (" << shekyl::seam_close_name(cause) << ") reply " << reply
         << (recorded == 1 ? " recorded" : " not recorded"));
     if (recorded != 1)

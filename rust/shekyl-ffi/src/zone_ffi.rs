@@ -248,7 +248,17 @@ async fn recv_admitted<T>(
     tokio::pin!(fail);
     tokio::select! {
         biased;
-        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::LocalClose)),
+        admitted = rx.recv() => match admitted {
+            Some(value) => Ok(value),
+            // The dial task sends the cause and then drops the admission
+            // channel. Both are ready together, and this arm is first, so
+            // a closed channel is not itself the cause. The cause is the
+            // one the dial sent. No cause at all is this node.
+            None => match fail.await {
+                Ok(cause) => Err(cause),
+                Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
+            },
+        },
         result = &mut fail => match result {
             Ok(cause) => Err(cause),
             Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
@@ -966,5 +976,22 @@ mod tests {
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
         }
+    }
+
+    #[test]
+    fn a_closed_admission_keeps_the_dial_cause() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let (tx, rx) = mpsc::unbounded_channel::<u8>();
+            let (fail_tx, fail_rx) = oneshot::channel();
+            fail_tx
+                .send(CloseCause::new(CloseKind::DialFailed))
+                .expect("cause");
+            drop(tx);
+            let err = recv_admitted(rx, fail_rx).await.expect_err("dial failed");
+            assert_eq!(err.kind(), CloseKind::DialFailed);
+        });
     }
 }
