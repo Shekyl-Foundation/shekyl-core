@@ -80,9 +80,11 @@ Nettype selecting a code path is the defect.
 4. **The allowlist shrinks, never grows silently.** Adding an
    allowlist entry is a claim you defend: it requires either the rule
    2 ratification trail or a named migration owner. Data-selection
-   written as branches (the hard-fork table selection) is allowlisted
-   as migration debt toward the parameter table, not blessed as a
-   pattern.
+   written as branches is allowlisted as migration debt toward the
+   parameter table, not blessed as a pattern. The hard-fork schedule
+   was that debt and is one table now (`hard_fork_schedule`), installed
+   by every issued network; regtest reads that row rather than keeping
+   a private copy.
 
 ## Relationship to other rules
 

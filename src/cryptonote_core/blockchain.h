@@ -840,14 +840,19 @@ namespace cryptonote
     void set_show_time_stats(bool stats) { m_show_time_stats = stats; }
 
     /**
-     * @brief gets the hardfork voting state object
+     * @brief operator hint that this software may be old
      *
-     * @return the HardFork object
+     * Not a vote. Ready, UpdateNeeded, or LikelyForked, from the schedule's
+     * last fork time.
+     *
+     * @return the state
      */
     HardFork::State get_hard_fork_state() const;
 
     /**
-     * @brief gets the current hardfork version in use/voted for
+     * @brief the version the next block must carry
+     *
+     * The height schedule at the chain height. Not a vote.
      *
      * @return the version
      */
@@ -868,8 +873,7 @@ namespace cryptonote
     uint8_t get_next_hard_fork_version() const { return m_hardfork->get_next_version(); }
 
     /**
-     * @brief returns the newest hardfork version voted to be enabled
-     * as of a certain height
+     * @brief the version the height schedule names at `height`
      *
      * @param height the height for which to check version info
      *
@@ -901,16 +905,19 @@ namespace cryptonote
     const std::vector<hardfork_t>& get_hardforks() const { return m_hardfork->get_hardforks(); }
 
     /**
-     * @brief get information about hardfork voting for a version
+     * @brief schedule facts for the hard_fork_info projection
+     *
+     * There is no vote. `window`, `votes` and `threshold` are written as 0.
+     * The method stays until hard_fork_info is deleted.
      *
      * @param version the version in question
-     * @param window the size of the voting window
-     * @param votes the number of votes to enable <version>
-     * @param threshold the number of votes required to enable <version>
-     * @param earliest_height the earliest height at which <version> is allowed
-     * @param voting which version this node is voting for/using
+     * @param window written as 0
+     * @param votes written as 0
+     * @param threshold written as 0
+     * @param earliest_height the earliest height at which <version> is scheduled
+     * @param voting the newest scheduled version
      *
-     * @return whether the version queried is enabled 
+     * @return whether the schedule at the chain height has reached <version>
      */
     bool get_hard_fork_voting_info(uint8_t version, uint32_t &window, uint32_t &votes, uint32_t &threshold, uint64_t &earliest_height, uint8_t &voting) const;
 
