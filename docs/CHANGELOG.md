@@ -36,9 +36,36 @@
   prefix); and the reward commit set is the loud outputs in order with a
   checked sum, refusing a missing commitment or an overflow (CEN-J24).
   The verify crossing that consumes the hash and the set (CEN-J25) is
-  the next row; until it lands, the Rust side admits an emission claim
-  these four rows pass and the C++ refuses one whose proof fails
-  (`CHAIN_RULES_SLICE_8.md` §5 rows 8–9).
+  the entry below (`CHAIN_RULES_SLICE_8.md` §5 rows 8–9).
+
+### Chain rules — the emission claim is verified (CEN-J21, J23, J25, J26)
+
+- The Rust validator now refuses an emission claim the C++ refuses: the
+  claim's reference block must exist, be inside the window and carry the
+  tree root its backing proof was made against, even with no fee inputs
+  (CEN-J21); every claimed epoch must have a frozen close (CEN-J23); the
+  claim window, work share, budget arithmetic, membership-only backing
+  proof and hybrid authorization are verified through the same retention
+  bodies the C++ calls, under the settlement schedule in force rather
+  than a process-wide latch (CEN-J25); and a claim that spends fee
+  inputs must carry an FCMP++ proof that verifies over them (CEN-J26).
+  Until this change the Rust side admitted a claim whose proof failed or
+  whose epoch had not closed, and let the block fold refuse it. The
+  FCMP++ verification body is now in the rules crate; its run over
+  ordinary spends and over a bond post's funding spends is held for a
+  ruling (`CHAIN_RULES_SLICE_8.md` §5 row 9).
+
+### Chain rules — the block's attestation set is judged (CEN-B4)
+
+- The Rust validator now refuses a block whose `attestation_root` is not
+  the root of the attestation set it carries: with no witness the header
+  must commit to the empty set, and with one every record must pair with
+  the coinbase's record field and carry a countersignature that verifies
+  under the holder's bond key. Until this change the Rust side admitted
+  any root. The admission body moved out of the C++-facing FFI into the
+  retention crate, so the daemon's existing check and the Rust validator
+  are one function; the daemon's verdicts are unchanged
+  (`CHAIN_RULES_SLICE_8.md` §5 row 10).
 
 ## [3.1.0-alpha.9] - 2026-10-05
 

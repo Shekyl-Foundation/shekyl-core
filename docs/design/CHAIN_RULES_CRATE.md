@@ -3,8 +3,10 @@
 **Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
 `feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
 questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
-`ChainValid<'id, V>`). §4 reflects what landed — **§4.3, §4.4 and §4.6 last
-verified against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
+`ChainValid<'id, V>`). §4 reflects what landed — **§4.6's `validate` order,
+`judge_reference` and the emission judge last verified against slice 8
+row 11 (`CHAIN_RULES_SLICE_8.md`), 2026-10-06; §4.3, §4.4 and the rest of
+§4.6 against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
 the E3 and slice-7 reads (`total_burned` included), `RecordedBlock`'s five
 fields, `ValidatedBlock`'s ten — eleven since DRS-E4 commit 4 added
 `archival` (2026-09-30) — (the increment-1 sketch had stood at four
@@ -809,8 +811,15 @@ coverages, and mints the `ChainValid`. The view-bound per-tx rules are
 `run_tx_against`, out-of-scope rows recorded vacuous like `TxRule`'s), plus
 two D4-arranged sequences that yield an operand and consume it —
 `judge_reference` (I10 yields the height, I11 measures it, I12 reads the
-anchor) and `judge_signatures` (I17 yields every input's signing hash, I18
-verifies over it), with `judge_serve_credit_bond` between them (one
+anchor; on the Emission class the same sequence is **J21** — the context
+is required with zero fee inputs because the vin's backing proof verifies
+against it — and the declared depth is judged through `I13::admits`
+against `depth_at(ref_height)`; it runs for `TxClass::Spend` and
+`Emission` and yields a `ReferenceContext` the later judges consume —
+slice 8 row 9, 2026-10-06; **the bond post's funding spends do not pass
+through it**, CEN-H21's open finding) and `judge_signatures` (I17 yields
+every input's signing hash, I18 verifies over it), with
+`judge_serve_credit_bond` between them (one
 `bond_record` read per serve-credit vin feeding J4, J5, J6 — the C++
 `check_tx_inputs` arm's order; `rules/tx_bond.rs`, slice 8) and then
 `judge_bond_post` (one `bond_record` read per bond-post vin feeding the
@@ -822,7 +831,15 @@ verifies the slot, so a wrong-key post refuses as J13 and not as a bad
 signature, slice 8 Q8; J16 reads the rule set for the connecting height's
 settlement epoch — the first transaction rule to read a parameter off it;
 `tx_against` itself only compares it to the formed one; *was* `judge_bond_post_key`,
-J13 alone, at slice 8 row 4) — and `TxScope`
+J13 alone, at slice 8 row 4), then **`judge_emission_claim`**
+(`rules/tx_emission_against.rs`, slice 8 row 9: after `judge_bond_post`,
+before the signatures, Emission class only — J23 gathers each claimed
+epoch's frozen close through `archival::gather_epoch_snapshot`, the epoch
+close's own gather; J25 runs the three retention legs under
+`Tip::connecting_height` with the settlement schedule passed in
+(`ARW-15`); J26 runs `I15::verify` over the fee inputs against J21's
+context — the row that mints coins calls the bodies the C++ marshals to,
+so connect and the shim are one function) — and `TxScope`
 has a `Coinbase` arm (I20: the coinbase only, vacuous on every listed
 transaction).
 Block-level **predicates** run in census order, each through
@@ -841,7 +858,16 @@ of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
 target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
 membership: `form` runs B1, B2, B7 and derives B6 and D2;
 `validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
-D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
+D1, **B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
+`Candidate::attestation_witness`, always in coverage — **`None` is the
+empty preimage against the header's `attestation_root`**, never a
+vacuous pass and never a gap; `Some(w)` is the recompute over the
+coinbase's record field paired with the witness plus every record's
+countersignature under the SF-D8 window, through the retention crate's
+`attestation_admission::AttestationSet`, the body the C++ shim marshals
+to; a non-empty root with nothing supplied refuses as B4, which is why
+CEN-A3 has no Rust rule of its own), E1, then the slot loop, F4–F6,
+G1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.
 
@@ -870,7 +896,14 @@ state read off the view in `rules/tx_bond.rs`, slice 8 row 3, 2026-10-04;
 and J11, J12, J13 — the bond post's statics in `tx_inputs.rs` and its
 key-selection rule in `tx_bond.rs`, slice 8 row 4, 2026-10-04; and J14,
 J16, J18 — the three kind verifies over the record in `tx_bond.rs`,
-slice 8 row 5, 2026-10-04);
+slice 8 row 5, 2026-10-04; and J15 in `judge_bond_post` over
+`closed_and_final`, slice 8 row 6, 2026-10-06; and J19, J20, J22, J24 —
+the emission claim's statics in `rules/tx_emission.rs`, slice 8 row 8;
+and J21, J23, J25, J26 — the emission claim's context and verify,
+`judge_reference`'s emission arm and `rules/tx_emission_against.rs`,
+slice 8 row 9, with I13's predicate and I15's body live but their
+Spend-class rows held `pending` for a ruling; and from 4.B, B4 in
+`rules/attestation.rs`, slice 8 row 10 — all 2026-10-06);
 H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
 applies, a pass is not coverage) until slice 6 lands the BP+ verification
@@ -882,7 +915,23 @@ the bodies the C++ already marshals to (`shekyl-ct-balance`,
 it is one function. **The wire twin** (`shekyl_wire::Transaction::validate`,
 the wallet's pre-check) is *not* the rule of record; it is held to `tx_form`
 by an enumerated conformance test (`rules/tx_conformance_tests.rs`, §8.5).
-`tx_against` is still empty and returns `RuleCoverage::EMPTY` until 4.I.
+*Records-was (through slice 5):* `tx_against` was empty and returned
+`RuleCoverage::EMPTY` until 4.I landed in slice 6.
+
+**The driver's re-made assemblies, and when extraction is the answer
+(slice 8 Q3, RULED 2026-10-04; carried here at row 11 so it outlives the
+slice doc's archive).** The scenario driver (`shekyl-chain-ingest`) builds
+the transactions it drives through `validate` by re-making the wallet
+handler's steps rather than calling a shared builder: the bond post
+(slice 8 row 2) and the emission claim (`emission_assembly`, row 7) are
+the two re-made assemblies. The hazard is CEN-I17's — a driver whose
+bytes differ from the engine's tests a transaction the wallet never
+produces — and the guard is a byte-identity test per assembly (the
+claim's: `shekyl-engine-core`, the driver's bytes equal to the handler's
+for one shape). **The trigger: a third re-made assembly makes extraction
+into a builder crate (the `shekyl-archival-bond-builder` shape) the
+answer, not a fourth re-making.** Reopen at the row that would re-make a
+third; the re-evaluation is that row's design round.
 
 The conversion ban (G2) covers the crate's own fault tokens: no `From`/`Into`
 between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
@@ -1711,6 +1760,7 @@ Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
 increment-1 deferral this section carried — the `_census.py` extraction,
 blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).
 Slice 1's own deferrals (CEN-B4 to the increment landing the bond-pubkey
-read; CEN-A3 subsumed into it; CEN-A5 subsumed into 4.G; CEN-A6/A7 to the
-wire-side invariant register) are recorded at
+read — landed slice 8 row 10, 2026-10-06; CEN-A3 subsumed into it; CEN-A5
+subsumed into 4.G; CEN-A6/A7 to the wire-side invariant register) are
+recorded at
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §3–§4 and §8 Q2/Q3.

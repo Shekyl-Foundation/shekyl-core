@@ -175,8 +175,9 @@ impl BlockRule for L1 {
 /// [`TxClass::Emission`] (CEN-J21's: the same context, *required even with
 /// zero fee inputs*, because the vin's backing proof verifies against that
 /// root — `blockchain.cpp:3868–3870`). The serve credit has no CT to carry
-/// one, and the bond post is CEN-H21's funding clause's — not run here
-/// (slice 8 §5 row 11 records it). A `Null` CT on a spend is CEN-H15's
+/// one, and the bond post is CEN-H21's funding clause's — not run here;
+/// the census H21 cell records that gap and the ruling it waits on
+/// (with the I13/I15 Spend-class flip). A `Null` CT on a spend is CEN-H15's
 /// refusal in `tx_form`, and here it is nothing to look up.
 fn proof_reference(cx: &TxContext<'_>) -> Option<BlockHash> {
     if !matches!(cx.class, TxClass::Spend { .. } | TxClass::Emission { .. }) {
