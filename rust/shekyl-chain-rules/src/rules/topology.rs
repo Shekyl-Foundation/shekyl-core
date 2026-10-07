@@ -20,6 +20,7 @@
 //! is refused as `InvalidBlock` and never reaches a belt.
 
 use crate::census::CenRow;
+use crate::fault::ViewRead;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
@@ -48,7 +49,7 @@ impl BlockRule for A2 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let expected = match cx.tip {
             Some(tip) => tip.hash,
             None => Self::GENESIS_PREVIOUS,

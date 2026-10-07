@@ -40,7 +40,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         // B5 from the view-bound one, B6 from the derivation — slice 2's
         // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
-        // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
+        // comparison, D1 the predicate), slice 8's B4 (the attestation
+        // witness, after D1), slice 3's E1, and slice 4's 4.F
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
         // F13, F15, F20 the emission definitions), slice 7's G2 (the
         // body's pairing, in form), its two
@@ -57,6 +58,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::A2,
                 CenRow::B1,
                 CenRow::B2,
+                // Slice 8 row 10: B4, always in coverage — `None` is the
+                // empty preimage against the header's root.
+                CenRow::B4,
                 CenRow::B5,
                 CenRow::B6,
                 CenRow::B7,
@@ -152,10 +156,24 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::J11,
                 CenRow::J12,
                 CenRow::J13,
-                // Slice 8 row 5: the post against its record, vacuous likewise.
+                // Slice 8 rows 5 and 6: the post against its record and the
+                // join's admission, vacuous likewise.
                 CenRow::J14,
+                CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
+                // Slice 8 row 8: the emission statics, vacuous on the
+                // coinbase (no emission vin).
+                CenRow::J19,
+                CenRow::J20,
+                // Slice 8 row 9: the emission's reference context, gathers
+                // and verify, vacuous on the coinbase likewise.
+                CenRow::J21,
+                CenRow::J22,
+                CenRow::J23,
+                CenRow::J24,
+                CenRow::J25,
+                CenRow::J26,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.
@@ -286,7 +304,11 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I20,
             CenRow::J2,
             CenRow::J11,
-            CenRow::J12
+            CenRow::J12,
+            CenRow::J19,
+            CenRow::J20,
+            CenRow::J22,
+            CenRow::J24
         ]
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
@@ -295,8 +317,10 @@ fn tx_entry_points_record_the_landed_rows() {
     // regular-spend reference rows), I17 and I18 (the signing preimage and
     // the signatures over it, of which a coinbase has none), J4–J6 (the
     // bond state behind a serve-credit vin, of which a coinbase has none),
-    // J13, J14, J16 and J18 (the bond post against its record, of which a
-    // coinbase has none) — are recorded vacuous on a coinbase.
+    // J13–J16 and J18 (the bond post against its record and the join's
+    // admission, of which a coinbase has none), J21, J23, J25 and J26 (the
+    // emission's reference context, gathers, verify and fee-input proof,
+    // of which a coinbase has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -316,8 +340,13 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::J6,
                 CenRow::J13,
                 CenRow::J14,
+                CenRow::J15,
                 CenRow::J16,
-                CenRow::J18
+                CenRow::J18,
+                CenRow::J21,
+                CenRow::J23,
+                CenRow::J25,
+                CenRow::J26
             ]
         );
     });

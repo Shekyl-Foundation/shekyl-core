@@ -117,7 +117,7 @@ mod tests;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) use actor::persona_canonical_id;
 pub(crate) use bond::AssembledBondPost;
-pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};
+pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim, TxKeyDraw};
 pub(crate) use handle::StakeEngineHandle;
 pub(crate) use helpers::prepare_funding_inputs;
 

@@ -5,8 +5,9 @@
 
 //! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
 //! the version fields (B1, B2, B7), the curve-tree root (B5) and the block's
-//! identity (B6). B3 is surface-bound and the store's; B4 is deferred (E4
-//! S-ARCH) and A3 is subsumed into it.
+//! identity (B6). B3 is surface-bound and the store's; B4 (the
+//! attestation set) is `rules::attestation` (slice 8 row 10), and A3 is
+//! its empty-witness arm.
 //!
 //! # The version pair
 //!
@@ -50,6 +51,7 @@ use shekyl_wire::Block;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::ViewRead;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
@@ -139,7 +141,7 @@ impl BlockRule for B5 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let claimed = cx.candidate().block.header.curve_tree_root;
         match view.root_at(cx.connecting)? {
             AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),

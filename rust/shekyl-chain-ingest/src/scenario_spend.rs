@@ -29,9 +29,21 @@
 //! the path (`assemble_path`); the signature (`sign_transaction`,
 //! `sign_pqc_auths`); the wire bytes (`encode_final_tx`). Nothing is a
 //! filler point or a conforming blob.
+//!
+//! E6 slice 8 row 7 widened the recipient and the owner. A spend can pay a
+//! [`Recipient`] other than the miner — a persona's base address — and the
+//! tree can be told to watch ([`Spender::own`]) for listed outputs so that,
+//! once a block carrying them is pushed, [`Spender::owned_input`] sources
+//! them for any [`Owner`] holding the matching secrets. That is what the
+//! driver's emission claim spends: a backing output and a fee output paid
+//! to the persona by an earlier spend of the miner's coinbase.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use shekyl_block_template::MinerKeys;
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_chain_rules::harness::fixture::newest_admissible_reference;
+use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
@@ -58,6 +70,94 @@ use shekyl_wire::{Ct, Transaction};
 use crate::scenario::{Mined, MinerWallet};
 use crate::scenario_archival::PostedBond;
 
+/// Whom a spend pays: the three public keys `construct_output` addresses
+/// an output to.
+pub struct Recipient {
+    /// The Edwards spend public key (`B`).
+    pub spend_public: [u8; 32],
+    /// X25519 half of the hybrid KEM target.
+    pub x25519_pk: [u8; 32],
+    /// ML-KEM-768 encapsulation key.
+    pub ml_kem_ek: Vec<u8>,
+}
+
+impl Recipient {
+    /// The miner — what the template pays, and what the coinbase spends
+    /// paid before row 7.
+    pub fn miner(keys: &MinerKeys) -> Self {
+        Self {
+            spend_public: keys.spend_public,
+            x25519_pk: keys.x25519_pk,
+            ml_kem_ek: keys.ml_kem_ek.clone(),
+        }
+    }
+
+    /// A persona's base address — where its backing and fee outputs live
+    /// (`ARCHIVAL_BOND_CONSTRUCTION.md`: funded by a plain payment to `P`).
+    pub fn persona(keys: &ArchivalPKeys) -> Self {
+        Self {
+            spend_public: *keys.spend_pk.as_canonical_bytes(),
+            x25519_pk: keys.x25519_pk,
+            ml_kem_ek: keys.ml_kem_ek.to_vec(),
+        }
+    }
+}
+
+/// What a wallet needs to recognise and spend an output paid to it: the
+/// scanner's two decapsulation secrets, and the spend pair.
+pub struct Owner<'a> {
+    /// The X25519 decapsulation scalar (the view secret).
+    pub x25519_sk: &'a [u8; 32],
+    /// The ML-KEM-768 decapsulation key.
+    pub ml_kem_dk: &'a [u8],
+    /// The Edwards spend public key the output was addressed to.
+    pub spend_public: &'a [u8; 32],
+    /// The Edwards spend secret `b`; `x = ho + b` is the one-time secret.
+    pub spend_secret: &'a [u8; 32],
+}
+
+impl Owner<'_> {
+    /// The miner's wallet.
+    pub fn miner(wallet: &MinerWallet) -> Owner<'_> {
+        Owner {
+            x25519_sk: &wallet.kem_secret.x25519,
+            ml_kem_dk: &wallet.kem_secret.ml_kem,
+            spend_public: &wallet.keys.spend_public,
+            spend_secret: &wallet.spend_secret,
+        }
+    }
+
+    /// A persona, over the same secrets the engine's
+    /// `derive_p_source_secrets_bundle` reads.
+    pub fn persona(keys: &ArchivalPKeys) -> Owner<'_> {
+        Owner {
+            x25519_sk: keys.view_sk.as_canonical_bytes(),
+            ml_kem_dk: keys.ml_kem_dk.as_canonical_bytes(),
+            spend_public: keys.spend_pk.as_canonical_bytes(),
+            spend_secret: keys.spend_sk.as_canonical_bytes(),
+        }
+    }
+}
+
+/// An output sourced for spending: the signer's input, its key image, and
+/// the tree context the path was assembled in.
+pub struct Sourced {
+    /// The tx-builder's view of the output, path included.
+    pub input: SpendInput,
+    /// `I = x·Hp(O)`.
+    pub key_image: shekyl_types::KeyImage,
+    /// The reference the path was assembled against.
+    pub tree: TreeContext,
+}
+
+/// A watched output found in a pushed block: the transaction that listed
+/// it, its index in that transaction, and its global index in the tree.
+struct Located {
+    tx: Transaction,
+    index_in_tx: u64,
+    gindex: u64,
+}
+
 /// The wallet-side tree over a scenario's mined blocks, and the facts a
 /// spend of one of its coinbases needs (module docs).
 pub struct Spender {
@@ -71,6 +171,11 @@ pub struct Spender {
     first_gid: Vec<u64>,
     /// The next global index — the count of outputs pushed so far.
     next: u64,
+    /// Output keys to register with the tree when a pushed block lists
+    /// them ([`Self::own`]).
+    watched: BTreeSet<[u8; 32]>,
+    /// Watched outputs a pushed block has listed, by output key.
+    located: BTreeMap<[u8; 32], Located>,
 }
 
 impl Spender {
@@ -82,11 +187,22 @@ impl Spender {
             coinbases: Vec::new(),
             first_gid: Vec::new(),
             next: 0,
+            watched: BTreeSet::new(),
+            located: BTreeMap::new(),
         };
         for block in mined {
             spender.push(block);
         }
         spender
+    }
+
+    /// Watch for `output_key`: when a pushed block lists it, the tree
+    /// registers it as owned (so its path material is captured) and
+    /// [`Self::owned_input`] can source it. Call before pushing the block
+    /// that carries it, as a wallet names what its scan found before the
+    /// block is folded in.
+    pub fn own(&mut self, output_key: [u8; 32]) {
+        self.watched.insert(output_key);
     }
 
     /// Feed the next mined block to the wallet-side tree, exactly as the
@@ -143,15 +259,37 @@ impl Spender {
         // captures path material only for outputs it has been told about,
         // and told now, this one is captured as its chunks close. The store
         // keys outputs dense in connect order, so the coinbase's index is
-        // the running count.
+        // the running count — and every watched output the block lists is
+        // named alongside it, at its own dense index.
+        let mut owned = vec![(
+            Gindex::from_raw(self.next),
+            shekyl_curve_tree::OneTimePubkey::from_bytes(
+                block.miner_transaction.prefix.outputs[0].key,
+            ),
+        )];
+        let mut gindex = self.next;
+        for tx in &txs {
+            for (index_in_tx, output) in tx.prefix.outputs.iter().enumerate() {
+                if self.watched.remove(&output.key) {
+                    owned.push((
+                        Gindex::from_raw(gindex),
+                        shekyl_curve_tree::OneTimePubkey::from_bytes(output.key),
+                    ));
+                    self.located.insert(
+                        output.key,
+                        Located {
+                            tx: (*tx).clone(),
+                            index_in_tx: index_in_tx as u64,
+                            gindex,
+                        },
+                    );
+                }
+                gindex += 1;
+            }
+        }
         self.client
-            .sync_owned(&[(
-                Gindex::from_raw(self.next),
-                shekyl_curve_tree::OneTimePubkey::from_bytes(
-                    block.miner_transaction.prefix.outputs[0].key,
-                ),
-            )])
-            .expect("the wallet-side tree registers the coinbase");
+            .sync_owned(&owned)
+            .expect("the wallet-side tree registers the coinbase and the watched outputs");
         self.client
             .ingest_block(BlockLeaves {
                 height: shekyl_curve_tree::BlockHeight::from_raw(height),
@@ -172,9 +310,9 @@ impl Spender {
 
     /// The wallet-side tree's root going into `height` — the state the
     /// header at `height` commits to, keyed as the store's `root_at` is.
-    pub fn root_at(&self, height: u64) -> CurveTreeRoot {
+    pub fn root_at(&self, height: BlockHeight) -> CurveTreeRoot {
         self.client
-            .root_at(shekyl_curve_tree::BlockHeight::from_raw(height))
+            .root_at(shekyl_curve_tree::BlockHeight::from_raw(height.to_raw()))
             .expect("a height at or below the ingested tip")
     }
 
@@ -185,8 +323,8 @@ impl Spender {
     pub fn spend_coinbase(
         &self,
         wallet: &MinerWallet,
-        height: u64,
-        connecting: u64,
+        height: BlockHeight,
+        connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
         self.spend_coinbase_posting(wallet, height, connecting, fee, None)
@@ -204,41 +342,59 @@ impl Spender {
     pub fn spend_coinbase_posting(
         &self,
         wallet: &MinerWallet,
-        height: u64,
-        connecting: u64,
+        height: BlockHeight,
+        connecting: BlockHeight,
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
-        let coinbase = &self.coinbases[usize::try_from(height).expect("small")];
-        let fields = parse(&coinbase.prefix.extra).expect("coinbase extra parses");
+        self.spend_coinbase_to(
+            wallet,
+            height,
+            connecting,
+            fee,
+            bond,
+            &Recipient::miner(&wallet.keys),
+        )
+    }
+
+    /// Source an output for spending: the scanner's recovery of what `tx`'s
+    /// output `index_in_tx` holds for `owner`, its key image, and its path
+    /// from the wallet-side tree at the newest admissible reference for
+    /// `connecting` (CEN-I11).
+    fn source(
+        &self,
+        owner: &Owner<'_>,
+        tx: &Transaction,
+        index_in_tx: u64,
+        gindex: u64,
+        connecting: BlockHeight,
+    ) -> Sourced {
+        let at = usize::try_from(index_in_tx).expect("small");
+        let fields = parse(&tx.prefix.extra).expect("the transaction's extra parses");
         let kem_blob = fields
             .iter()
             .find_map(|f| match f {
                 TxExtraField::PqcKemCiphertext(bytes) => Some(bytes.clone()),
                 _ => None,
             })
-            .expect("a coinbase carries its KEM ciphertext");
+            .expect("a paying transaction carries its KEM ciphertexts");
         let kem = pqc_kem_per_output(&kem_blob).expect("one ciphertext per output");
-        let kem = &kem[0];
-        let output = &coinbase.prefix.outputs[0];
-        let Ct::Null(base) = &coinbase.ct else {
-            panic!("a coinbase's ct is Null");
+        let kem = &kem[at];
+        let output = &tx.prefix.outputs[at];
+        let base = match &tx.ct {
+            Ct::Null(base) | Ct::Fcmp { base, .. } => base,
         };
-        let commitment = base.commitments[0];
-        let enc_amount = base.enc_amounts[0];
-        let enc_label = base.enc_labels[0];
+        let commitment = base.commitments[at];
+        let enc_amount = base.enc_amounts[at];
+        let enc_label = base.enc_labels[at];
 
         // The scanner's path: decapsulate, derive, verify, decrypt.
-        let combined_ss = recover_combined_ss(
-            &wallet.kem_secret.x25519,
-            &wallet.kem_secret.ml_kem,
-            &kem.x25519,
-            &kem.ml_kem,
-        )
-        .expect("the miner's KEM keys decapsulate its coinbase");
+        let combined_ss =
+            recover_combined_ss(owner.x25519_sk, owner.ml_kem_dk, &kem.x25519, &kem.ml_kem)
+                .expect("the owner's KEM keys decapsulate the output");
         let scanned = scan_output(
-            &wallet.kem_secret.x25519,
-            &wallet.kem_secret.ml_kem,
+            owner.x25519_sk,
+            owner.ml_kem_dk,
             &kem.x25519,
             &kem.ml_kem,
             &output.key,
@@ -248,28 +404,27 @@ impl Spender {
             enc_label[..8].try_into().expect("8-byte ciphertext"),
             enc_label[8],
             output.view_tag,
-            &wallet.keys.spend_public,
-            0,
+            owner.spend_public,
+            index_in_tx,
         )
-        .expect("the miner owns its coinbase output");
+        .expect("the owner owns the output");
         let hp_of_o = shekyl_curve_generators::biased_hash_to_point(output.key)
             .compress()
             .to_bytes();
-        let ki = compute_output_key_image(&combined_ss.0, 0, &wallet.spend_secret, &hp_of_o)
-            .expect("key image");
+        let ki =
+            compute_output_key_image(&combined_ss.0, index_in_tx, owner.spend_secret, &hp_of_o)
+                .expect("key image");
 
         // The path, from the wallet-side tree at the reference height.
-        let reference_height = newest_admissible_reference(BlockHeight::from_raw(connecting))
-            .expect("connecting height admits a reference")
-            .to_raw();
+        let reference_height =
+            newest_admissible_reference(connecting).expect("connecting height admits a reference");
         let reference = ReferenceBlock {
-            height: shekyl_curve_tree::BlockHeight::from_raw(reference_height),
+            height: shekyl_curve_tree::BlockHeight::from_raw(reference_height.to_raw()),
             curve_tree_root: self.root_at(reference_height),
             block_hash: shekyl_curve_tree::BlockHash::from_bytes(
-                self.hashes[usize::try_from(reference_height).expect("small")].to_bytes(),
+                self.hashes[usize::try_from(reference_height.to_raw()).expect("small")].to_bytes(),
             ),
         };
-        let gindex = self.first_gid[usize::try_from(height).expect("small")];
         let path = self
             .client
             .assemble_path(
@@ -280,7 +435,7 @@ impl Spender {
                 },
                 &reference,
             )
-            .expect("the coinbase has matured into the tree at the reference height");
+            .expect("the output has matured into the tree at the reference height");
         let leaf_chunk: Vec<LeafEntry> = path
             .leaf_chunk
             .iter()
@@ -291,21 +446,75 @@ impl Spender {
                 cm_x: cl.cm_x,
             })
             .collect();
-        let spend_input = SpendInput {
-            output_key: output.key,
-            commitment,
-            amount: AtomicUnits::from_raw(scanned.amount),
-            spend_key_x: *ki.spend_secret_x,
-            spend_key_y: scanned.y,
-            commitment_mask: scanned.z,
-            combined_ss: combined_ss.0.to_vec(),
-            output_index: 0,
-            leaf_chunk,
-            c1_layers: path.c1_layers.clone(),
-            c2_layers: path.c2_layers.clone(),
-        };
+        Sourced {
+            input: SpendInput {
+                output_key: output.key,
+                commitment,
+                amount: AtomicUnits::from_raw(scanned.amount),
+                spend_key_x: *ki.spend_secret_x,
+                spend_key_y: scanned.y,
+                commitment_mask: scanned.z,
+                combined_ss: combined_ss.0.to_vec(),
+                output_index: index_in_tx,
+                leaf_chunk,
+                c1_layers: path.c1_layers.clone(),
+                c2_layers: path.c2_layers.clone(),
+            },
+            key_image: ki.key_image,
+            tree: TreeContext {
+                reference_block: path.tree.reference_block,
+                tree_root: path.tree.tree_root,
+                tree_depth: path.tree.tree_depth,
+            },
+        }
+    }
 
-        // Two outputs back to the miner, each with its own KEM and leaf.
+    /// Source a watched output ([`Self::own`]) that a pushed block has
+    /// listed, for `owner`, anchored for a spend connecting at
+    /// `connecting`. Panics if no pushed block listed `output_key`.
+    pub fn owned_input(
+        &self,
+        owner: &Owner<'_>,
+        output_key: [u8; 32],
+        connecting: BlockHeight,
+    ) -> Sourced {
+        let located = self
+            .located
+            .get(&output_key)
+            .expect("a watched output some pushed block listed");
+        self.source(
+            owner,
+            &located.tx,
+            located.index_in_tx,
+            located.gindex,
+            connecting,
+        )
+    }
+
+    /// [`Self::spend_coinbase_posting`] paying `recipient` instead of the
+    /// miner (E6 slice 8 row 7): the two outputs are addressed to the
+    /// recipient's keys, each with its own KEM ciphertext and leaf entry,
+    /// so a persona can be funded by a coinbase spend and later source
+    /// them through [`Self::owned_input`].
+    pub fn spend_coinbase_to(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+        recipient: &Recipient,
+    ) -> Transaction {
+        let coinbase = &self.coinbases[usize::try_from(height.to_raw()).expect("small")];
+        let gindex = self.first_gid[usize::try_from(height.to_raw()).expect("small")];
+        let Sourced {
+            input: spend_input,
+            key_image,
+            tree,
+        } = self.source(&Owner::miner(wallet), coinbase, 0, gindex, connecting);
+        let amount = spend_input.amount.to_raw();
+
+        // Two outputs to the recipient, each with its own KEM and leaf.
         // The balance the signer proves: `amount + debit = outputs + fee +
         // credit` (`shekyl_ct_balance::verify_ct_balance`, CEN-H21's
         // equation), so what the outputs carry is what is left after the
@@ -316,8 +525,7 @@ impl Spender {
         let debit = bond
             .and_then(|b| b.debit)
             .map_or(0, |t| t.amount().to_raw());
-        let spendable = scanned
-            .amount
+        let spendable = amount
             .checked_add(debit)
             .and_then(|funds| funds.checked_sub(fee))
             .and_then(|funds| funds.checked_sub(credit))
@@ -326,15 +534,15 @@ impl Spender {
         let change_amount = spendable - payment_amount;
         let tx_secret = {
             let mut s = [0u8; 32];
-            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting).to_le_bytes());
+            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
             s
         };
         let pay = |amount: u64, index: u64| -> OutputData {
             construct_output(
                 &tx_secret,
-                &wallet.keys.x25519_pk,
-                &wallet.keys.ml_kem_ek,
-                &wallet.keys.spend_public,
+                &recipient.x25519_pk,
+                &recipient.ml_kem_ek,
+                &recipient.spend_public,
                 amount,
                 index,
             )
@@ -380,7 +588,7 @@ impl Spender {
         let extra_input_terms: Vec<InputTerm> = bond.and_then(|b| b.debit).into_iter().collect();
         let extra_output_terms: Vec<OutputTerm> = bond.and_then(|b| b.credit).into_iter().collect();
         let tx_prefix_hash = tx_prefix_hash_from_parts_with_extra(
-            &[*ki.key_image.as_bytes()],
+            &[*key_image.as_bytes()],
             &extra_inputs,
             &output_keys,
             &[0, 0],
@@ -395,23 +603,22 @@ impl Spender {
             AtomicUnits::from_raw(fee),
             &extra_input_terms,
             &extra_output_terms,
-            &TreeContext {
-                reference_block: path.tree.reference_block,
-                tree_root: path.tree.tree_root,
-                tree_depth: path.tree.tree_depth,
-            },
+            &tree,
         )
         .expect("sign the spend");
         // The PQC auth signs `Transaction::pqc_signing_payload_hashes` — a
         // hash over the assembled body with the public key in place (CEN-I17
         // / I18) — so the body is encoded once with the key and an empty
         // signature, hashed, signed, and encoded again with the signature.
-        let revealed_pk = derive_pqc_public_key(&combined_ss.0, 0).expect("hybrid pk");
+        let combined64: &[u8; 64] = spend_input.combined_ss[..]
+            .try_into()
+            .expect("a 64-byte combined shared secret");
+        let revealed_pk = derive_pqc_public_key(combined64, 0).expect("hybrid pk");
         let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
             .expect("the signer's Bulletproof+ blob reads back");
         let wire = |pqc_auths: Vec<shekyl_tx_builder::PqcAuth>| -> WireEncodeInput {
             WireEncodeInput {
-                key_images: vec![*ki.key_image.as_bytes()],
+                key_images: vec![*key_image.as_bytes()],
                 extra_inputs: extra_inputs.clone(),
                 output_keys: output_keys.to_vec(),
                 output_amounts: vec![0, 0],
@@ -477,10 +684,10 @@ impl Spender {
                 num_inputs: 1,
                 tree_depth: signed.tree_depth,
             },
-            &[ki.key_image],
+            &[key_image],
             &signed.pseudo_outs,
             &[PqcKeyScalar::from_pqc_public_key(&revealed_pk)],
-            path.tree.tree_root.as_bytes(),
+            tree.tree_root.as_bytes(),
             signed.tree_depth,
             tx_prefix_hash.to_bytes(),
         )

@@ -437,6 +437,34 @@ fn a_bond_record_the_folds_refuse_is_si7_on_archival_bond() {
     cleanup(&path);
 }
 
+/// A bond record whose hybrid key is not canonical
+/// (`Corrupt::BondHybridKeyMalformed`) is SI-7 on `archival_bond`: the
+/// cell decoded far enough to name a persona, and the key bytes are ones
+/// admission cannot have written.
+#[test]
+fn a_bond_whose_hybrid_key_is_not_canonical_is_si7_on_archival_bond() {
+    let path = tmp("connect-refuse-corrupt-bond-key");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::BondHybridKeyMalformed {
+                persona: shekyl_types::PCanonicalId::from_bytes([0xa1; 32]),
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "archival_bond",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "bond_record",
+            reason: "the hybrid public key is not canonical",
+        }),
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7);
+    cleanup(&path);
+}
+
 /// The accruing budget overflowing (`Corrupt::AccrualOverflow`, CEN-L8's
 /// overflow clause) is SI-8 on `archival_budget_accruing`, observed by
 /// the validator that computes the post-image (`ARW-Q1`).

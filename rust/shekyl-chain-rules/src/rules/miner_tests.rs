@@ -22,8 +22,8 @@ use crate::harness::fixture::{
     candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, credited_to_this_falsifier, expected_seed, formed_on, infallible, judged,
-    Faulted, MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, defined, expected_seed, formed_on, judged, Faulted,
+    MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
@@ -95,7 +95,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate) -> Verdict<()> {
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))

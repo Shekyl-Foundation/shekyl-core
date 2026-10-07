@@ -6,9 +6,8 @@
 //! Credit-wire attestation admission verify (ARCHIVAL_CREDIT_WIRE.md §3–§4).
 
 use shekyl_archival_retention::{
-    attestation_root, pass_records_from_headers_and_witness, verify_pass_countersignature,
-    AttestationHeader, AttestationKind, BlockAttestationWitness, PassAnchorWindow,
-    PassAnchorWindowError, PassCountersignatureError, ATTESTATION_HEADER_LEN,
+    AttestationHeader, AttestationKind, AttestationRootError, AttestationSet, AttestationSetError,
+    CountersignatureRefusal, PassAnchorWindow, PassAnchorWindowError, ATTESTATION_HEADER_LEN,
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS, PASS_ANCHOR_HASH_LEN,
 };
 use shekyl_crypto_pq::signature::HybridPublicKey;
@@ -146,8 +145,9 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 
 /// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
 ///
-/// `witness` is the opaque `count ‖ (nonce ‖ anchor_height_le ‖ signature)*` blob
-/// (`connect.attestation_witness`); an empty blob is the zero-record set. Returns a
+/// `witness` is the opaque `count ‖ (nonce ‖ anchor_height_le ‖ digest ‖ signature)*`
+/// blob (`connect.attestation_witness`); an empty blob is the zero-record set — its only
+/// encoding; an eight-byte zero count is `MALFORMED_WITNESS`. Returns a
 /// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
 ///
 /// # Safety
@@ -195,8 +195,11 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
     };
 
-    // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
-    //    records are carried through coverage / recompute / countersig — never re-parsed.
+    // 1–3. Header blob (cap FIRST, then parsed ONCE), witness (an empty blob is the
+    //    zero-signature set; a zero count is malformed), and the pairing of pass headers with witness entries — the
+    //    admission body's parse stage (`shekyl_archival_retention::AttestationSet`), shared
+    //    with the Rust validator's CEN-B4. The parsed records are carried through coverage /
+    //    recompute / countersig below — never re-parsed.
     let headers: &[u8] = if ctx.headers_len == 0 {
         &[]
     } else if ctx.headers_ptr.is_null() {
@@ -204,37 +207,24 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     } else {
         unsafe { std::slice::from_raw_parts(ctx.headers_ptr, ctx.headers_len) }
     };
-    if !headers.len().is_multiple_of(ATTESTATION_HEADER_LEN) {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS;
-    }
-    if headers.len() / ATTESTATION_HEADER_LEN > MAX_ATTESTATION_RECORDS {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED;
-    }
-    let mut parsed_headers = Vec::with_capacity(headers.len() / ATTESTATION_HEADER_LEN);
-    for chunk in headers.chunks_exact(ATTESTATION_HEADER_LEN) {
-        match AttestationHeader::from_canonical_bytes(chunk) {
-            Ok(h) => parsed_headers.push(h),
-            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS,
-        }
-    }
-
-    // 2. Witness. An empty blob is the zero-signature set; any non-empty blob must decode exactly.
-    let witness = if witness_len == 0 {
-        BlockAttestationWitness { passes: Vec::new() }
+    let witness: &[u8] = if witness_len == 0 {
+        &[]
     } else {
-        let witness_bytes = unsafe { std::slice::from_raw_parts(witness_ptr, witness_len) };
-        match BlockAttestationWitness::from_canonical_bytes(witness_bytes) {
-            Ok(w) => w,
-            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
+        unsafe { std::slice::from_raw_parts(witness_ptr, witness_len) }
+    };
+    let set = match AttestationSet::parse(headers, witness) {
+        Ok(set) => set,
+        Err(AttestationSetError::MalformedHeaders) => {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS
+        }
+        Err(AttestationSetError::CapExceeded) => {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED
+        }
+        Err(AttestationSetError::MalformedWitness) => {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
         }
     };
-
-    // 3. Pair pass headers (tx_extra order) with the witness entries. A count mismatch is a
-    //    malformed witness for this block. Parsed ONCE above — carried through below.
-    let records = match pass_records_from_headers_and_witness(&parsed_headers, &witness) {
-        Ok(r) => r,
-        Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
-    };
+    let records = set.records();
 
     // 4. Validate + collect the (p_id, pubkey) pairs; reject a duplicate pair p_id. `None` is the
     //    bond-absent marker; a wrong pubkey length is malformed, never a bad-signature verdict.
@@ -286,48 +276,46 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
 
     // 6. Recompute the root and compare — signatures NOT evaluated here (marshaling-drift gate).
     //    `attestation_root` cannot fail over signatures that already decoded from the witness.
-    let recomputed = match attestation_root(&records) {
-        Ok(root) => root,
-        Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS,
-    };
-    if recomputed != ctx.attestation_root {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH;
+    match set.verify_root(&ctx.attestation_root) {
+        Ok(()) => {}
+        Err(AttestationRootError::MalformedWitness) => {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_WITNESS
+        }
+        Err(AttestationRootError::Mismatch) => {
+            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH
+        }
     }
 
     // 7. Per-pass countersignature — only after the root agrees. Each record's carried nonce and
     //    anchor height, the connecting chain's hash at that height (one indexed lookup in the
     //    window), and the record's own shard_id form the SF-D8 transcript; the record's p_id must
     //    be the paired pubkey's canonical id. Below the anchor threshold there is no window, so
-    //    a block with any pass record is refused there (genesis boundary).
-    if records.is_empty() {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK;
-    }
-    let Some(window) = window else {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD;
-    };
-    for record in &records {
-        let (_, pk) = resolved
+    //    a block with any pass record is refused there (genesis boundary). The pubkey for each
+    //    p_id is the pair C++ resolved — coverage above guarantees one per pass record, so a
+    //    `None` here is the bond-absent marker, never a missing pair.
+    let pubkey_of = |p_id: &[u8; 32]| -> Option<&HybridPublicKey> {
+        resolved
             .iter()
-            .find(|(pid, _)| *pid == record.p_id)
-            .expect("coverage guarantees a pair for every pass p_id");
-        let Some(pk) = pk else {
-            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT;
-        };
-        match verify_pass_countersignature(&window, pk, record) {
-            Ok(()) => {}
-            Err(PassCountersignatureError::AnchorOutOfWindow { .. }) => {
-                return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW;
-            }
-            Err(
-                PassCountersignatureError::PIdMismatch
-                | PassCountersignatureError::InvalidSignature,
-            ) => {
-                return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID;
-            }
+            .find(|(pid, _)| pid == p_id)
+            .expect("coverage guarantees a pair for every pass p_id")
+            .1
+            .as_ref()
+    };
+    match set.verify_countersignatures(window.as_ref(), pubkey_of) {
+        Ok(()) => SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK,
+        Err(CountersignatureRefusal::BelowAnchorThreshold) => {
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD
+        }
+        Err(CountersignatureRefusal::BondAbsent) => {
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT
+        }
+        Err(CountersignatureRefusal::AnchorOutOfWindow) => {
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW
+        }
+        Err(CountersignatureRefusal::CountersigInvalid) => {
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID
         }
     }
-
-    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
 }
 
 /// Step 0: the table shape C++ must fill for a block connecting to `predecessor_height`.

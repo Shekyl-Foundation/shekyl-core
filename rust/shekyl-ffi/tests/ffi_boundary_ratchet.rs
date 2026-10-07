@@ -62,7 +62,10 @@ use std::path::Path;
 const BASELINE: &[(&str, usize, usize)] = &[
     ("account_ffi.rs", 7, 0),
     ("archival_admission_ffi.rs", 3, 0),
-    ("archival_ffi/attestation.rs", 6, 2),
+    // with_capacity 2 -> 1 (2026-10-06): the admission body moved to
+    // shekyl-archival-retention::attestation_admission (E6 slice 8 row 10
+    // c1); the header-parse buffer went with it. The file is the shim.
+    ("archival_ffi/attestation.rs", 6, 1),
     ("archival_ffi/bond.rs", 2, 0),
     ("archival_ffi/ct_balance.rs", 1, 0),
     ("archival_ffi/emission.rs", 9, 3),
