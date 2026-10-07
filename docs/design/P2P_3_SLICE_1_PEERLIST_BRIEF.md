@@ -9,8 +9,21 @@ drops.
 Owed before slice 1's first increment
 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.4).
-Quarry lines below were read on this branch at `81746913c`. Re-read them
-before the first increment; `net_node.inl` has moved during this round.
+Quarry lines below were read at `81746913c`. **Re-read 2026-10-07
+against `dev` `9eb5f473cd`.** `net_node.inl` has moved. The citations
+checked that day, and where they are now:
+
+| Was | Now, at `9eb5f473cd` | What the line is |
+| --- | --- | --- |
+| `net_node.inl:731` and `:738` | `get_seed_nodes` at `:796`; the seed vector is filled at `:1965` | the compiled seed list |
+| `:1285` and `:1588` | `set_peer_just_seen` at `:1332` and `:1392` | the two white writes on a kept dial |
+| `:1619` | the `just_take_peerlist` branch at `:1618` | the harvest close |
+| `:3008` | `connect_to_peerlist` at `:2840` | the exclusive list |
+| `:1004` | `append_operator_candidate` at `:1036` | `--add-peer` |
+| `:2376` | still `:2376` | a received peerlist |
+
+The other pins in this brief were not re-derived on that pass. Re-read
+them before slice 1's first increment.
 
 ---
 
@@ -18,9 +31,12 @@ before the first increment; `net_node.inl` has moved during this round.
 
 Rust owns the peerlist: the gray list, the white list, the one door between
 them, the 24-hour demotion, disclosure, and the file. At the end of the slice
-`peerlist_manager` is gone from `src/p2p`. The dial and the socket stay in C++
-until later slices. They report an outcome. They do not insert, replace, or
-erase list entries.
+`peerlist_manager` is gone from `src/p2p`. **UPDATE 2026-10-07:** dial
+outcomes are reported by the Rust dialer (P2P-3 slice 3), not by the C++
+dial path. The dialer is the only writer of a white promotion, and it
+writes through this slice's type contract. *Records-was: the dial and the
+socket stay in C++ until later slices, and they report an outcome.* They
+do not insert, replace, or erase list entries except through that contract.
 
 ---
 
