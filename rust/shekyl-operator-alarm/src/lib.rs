@@ -477,6 +477,19 @@ pub enum OperatorAlarm {
         /// Lookup failures this tick.
         failures: u64,
     },
+    /// The host's loopback listener failed to accept connections this tick.
+    /// This is the counter `shekyl-p-serve` keeps *because* a listener that
+    /// has become unusable — sustained descriptor exhaustion, a socket that
+    /// will never accept again — is otherwise indistinguishable from a quiet
+    /// epoch: every other counter simply stops moving, and the persona would
+    /// learn about it from a slash. Ranked below the other two: an accept
+    /// error alongside a refusal or a failed lookup means the door is at
+    /// least partly open, and those name the remedy; alone, it is the only
+    /// sign the operator gets.
+    ServeListenerFailing {
+        /// Accept-loop errors this tick.
+        accept_errors: u64,
+    },
 }
 
 impl OperatorAlarm {
@@ -530,11 +543,13 @@ impl OperatorAlarm {
             // acknowledgment state, tracked in `docs/FOLLOWUPS.md`
             // ("Forfeited-claim record does not survive a wallet restart").
             | Self::ClaimForfeited { .. }
-            // Both are per-tick windows over session totals: a tick in which
-            // nothing was refused and nothing failed to look up clears them,
-            // and the next tick re-derives them from the counters alone.
+            // All three are per-tick windows over session totals: a tick in
+            // which nothing was refused, nothing failed to look up and every
+            // accept succeeded clears them, and the next tick re-derives
+            // them from the counters alone.
             | Self::ServeSigningRefused { .. }
-            | Self::ServeLookupsFailing { .. } => AlarmLifetime::Episode,
+            | Self::ServeLookupsFailing { .. }
+            | Self::ServeListenerFailing { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -556,9 +571,9 @@ impl OperatorAlarm {
             Self::ChainProgressStalled { .. } => AlarmCondition::ChainProgress,
             Self::EpochUnclaimed { .. } => AlarmCondition::EpochClaim,
             Self::ClaimForfeited { .. } => AlarmCondition::ClaimForfeiture,
-            Self::ServeSigningRefused { .. } | Self::ServeLookupsFailing { .. } => {
-                AlarmCondition::ServeHealth
-            }
+            Self::ServeSigningRefused { .. }
+            | Self::ServeLookupsFailing { .. }
+            | Self::ServeListenerFailing { .. } => AlarmCondition::ServeHealth,
         }
     }
 }

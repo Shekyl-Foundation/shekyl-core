@@ -10,12 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_operator_alarm::disk::{apply as report_disk, DiskObservation};
-use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObservation};
+use shekyl_operator_alarm::serve_health::{
+    apply as report_health, ServeHealthObservation, TickWindow,
+};
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeCounters,
-    ServeObligation, ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
+    ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -378,15 +380,15 @@ async fn run_serving_task<P>(
 
     // TJ-D's operator surface (`SF-D6`): the host's serve counters are
     // session totals, and the question on the board is "is the key refusing
-    // *now*", so the task windows them tick to tick and reports the
-    // movement. A freshly started host has answered nothing, so the first
-    // report arms the row clean rather than leaving it `NotServing` for a
-    // cadence while the onion is already published.
-    let mut counters_at_last_tick = host.counters();
-    report_health(
-        &alarms,
-        ServeHealthObservation::Tick(ServeCounters::default()),
-    );
+    // *now*", so each reading is windowed against the previous one and the
+    // movement is reported. The window starts at zero, so this first read
+    // arms the row with whatever the host has answered since it bound —
+    // usually nothing, and never a refusal silently folded into a baseline.
+    // Reporting now rather than at the first tick closes the same window
+    // as the serve-set read above: a published onion must not sit
+    // `NotServing` for a cadence.
+    let mut health = TickWindow::new();
+    report_health(&alarms, health.observe(host.counters()));
 
     // Own task: the probe is not a serve-set reading, and a wedged
     // refresh must not also silence the volume check. First reading is
@@ -413,14 +415,10 @@ async fn run_serving_task<P>(
         }
 
         report(&alarms, observe(&host, bound).await);
-        // The window is this tick's movement; `since` is the one home of the
-        // subtraction, so a restart-reset total reads as no movement.
-        let counters_now = host.counters();
-        report_health(
-            &alarms,
-            ServeHealthObservation::Tick(counters_now.since(&counters_at_last_tick)),
-        );
-        counters_at_last_tick = counters_now;
+        // This tick's movement over the totals; the window owns the
+        // baseline and `since` the subtraction, so a restart-reset total
+        // reads as no movement.
+        report_health(&alarms, health.observe(host.counters()));
         // Re-read after every refresh so a host whose obligation *arm*
         // changes is not stuck on the start snapshot. The type is the
         // arm, not the size — a growing prefix does not change what we
@@ -891,10 +889,16 @@ mod lifecycle_tests {
 
     /// TJ-D's operator surface reaches the board: a started host arms
     /// `ServeHealth` clean (nothing answered yet is nothing refused), and
-    /// teardown disarms it. The refusal/lookup arithmetic is
-    /// `shekyl-operator-alarm`'s (`serve_health::tests`); what only this
-    /// layer can prove is that the counters are read and the row is kept,
-    /// which is the `SH-2` falsifier in `docs/FOLLOWUPS.md`.
+    /// teardown disarms it. The window — zero baseline, movement between
+    /// reads, a quiet tick clearing — is `TickWindow`'s, and its tests in
+    /// `shekyl-operator-alarm` drive that sequence through the same
+    /// `observe` → `apply` pair this task calls. The listener's loopback
+    /// port is not exposed by `ServingHandle` (nothing in production reads
+    /// it), so a counted refusal cannot be driven from this level without
+    /// adding a test-only accessor; what only this layer can prove is that
+    /// the counters are read and the row is kept, which is the `SH-2`
+    /// falsifier in `docs/FOLLOWUPS.md`. The counters moving on a real
+    /// refusal is `shekyl-p-host/tests/composition.rs`'s.
     #[tokio::test]
     async fn a_started_host_watches_its_serve_health() {
         let dir = tempfile::tempdir().expect("tmp");

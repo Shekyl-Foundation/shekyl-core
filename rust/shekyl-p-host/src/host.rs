@@ -106,7 +106,9 @@ impl fmt::Debug for PersonaServing {
 /// `shekyl-operator-alarm`'s `serve_health` producer — the `TJ-D` operator
 /// surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` names. A tick in which the key
 /// refused is an alarm; a tick in which only lookups failed is a different
-/// alarm; a quiet tick clears the row.
+/// alarm; a tick in which only the listener failed to accept is a third; a
+/// quiet tick clears the row. `refused` is load, not a fault, and is not on
+/// the board.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).

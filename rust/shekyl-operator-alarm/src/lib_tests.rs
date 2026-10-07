@@ -145,6 +145,11 @@ fn lifetime_classification_is_pinned_per_variant() {
         AlarmLifetime::Episode,
         "same window; a tick in which every lookup succeeded ends it",
     );
+    assert_eq!(
+        OperatorAlarm::ServeListenerFailing { accept_errors: 1 }.lifetime(),
+        AlarmLifetime::Episode,
+        "same window; a tick in which every accept succeeded ends it",
+    );
 }
 
 /// Serve health is its own row, not a serve-set reading: a persona can
@@ -157,6 +162,7 @@ fn serve_health_alarms_report_on_their_own_condition() {
             late: 1,
         },
         OperatorAlarm::ServeLookupsFailing { failures: 1 },
+        OperatorAlarm::ServeListenerFailing { accept_errors: 1 },
     ] {
         assert_eq!(alarm.condition(), AlarmCondition::ServeHealth);
         assert_ne!(alarm.condition(), AlarmCondition::ServeSetIntegrity);

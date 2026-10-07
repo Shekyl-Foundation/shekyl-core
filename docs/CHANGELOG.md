@@ -50,8 +50,12 @@
   per refresh tick, whether the host's answers are being answered:
   `ServeSigningRefused { pre_flight, late }` when the key refused during
   the tick, `ServeLookupsFailing { failures }` when only lookups (store or
-  daemon tip) failed, and a clean armed row when neither. The row is
-  disarmed `NotServing` outside the host's life. Previously the serve
+  daemon tip) failed, `ServeListenerFailing { accept_errors }` when only
+  the loopback listener failed to accept, and a clean armed row when none
+  did. Connections closed over the in-flight cap are load, not an alarm.
+  The first reading is windowed against zero, so a refusal answered before
+  the first read is reported rather than folded into the baseline. The row
+  is disarmed `NotServing` outside the host's life. Previously the serve
   counters were readable only by tests.
 
 ## [3.1.0-alpha.9] - 2026-10-05
