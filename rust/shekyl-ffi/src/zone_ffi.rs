@@ -698,6 +698,20 @@ pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32
     0
 }
 
+/// Drop the operator inbound cap for one connector. Later accepts are
+/// bounded only by the process ceiling.
+///
+/// `connector` is the FFI connector word ([`connector_from_index`]).
+/// Returns 0, or -1 when `connector` is not one.
+#[no_mangle]
+pub extern "C" fn shekyl_zone_clear_connector_cap(connector: u32) -> i32 {
+    let Some(connector) = connector_from_index(connector) else {
+        return -1;
+    };
+    process_sockets().set_zone_cap(connector, None);
+    0
+}
+
 /// The handshake finished. The row's gap sender fires, which disarms the
 /// connector's deadline. An unknown id has nothing to disarm.
 #[no_mangle]
@@ -740,6 +754,9 @@ pub extern "C" fn shekyl_zone_shutdown() {
         in_flight_max_ns = stall.in_flight_at_close_max_ns,
         "process write stall"
     );
+    // The connector caps are this zone's. The socket table outlives the
+    // pool, so they are released only after its tasks have stopped.
+    process_sockets().clear_zone_caps();
 }
 
 #[cfg(test)]

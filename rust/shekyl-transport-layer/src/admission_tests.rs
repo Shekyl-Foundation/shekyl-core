@@ -155,6 +155,33 @@ fn an_explicit_zone_cap_bounds_that_connector_when_the_process_ceiling_is_unboun
 }
 
 #[test]
+fn clearing_one_zone_cap_leaves_the_other_connector_closed() {
+    let sockets = Sockets::new();
+    let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));
+    sockets.set_zone_cap(ConnectorId::Tor, Some(0));
+    sockets.set_zone_cap(ConnectorId::Clearnet, None);
+    let _clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect("clearnet cap released");
+    let tor = sockets.accept_tor(ceiling).expect_err("tor cap remains");
+    assert_eq!(refused(tor), CloseKind::InboundNotAccepted);
+}
+
+#[test]
+fn clearing_every_zone_cap_lets_both_connectors_accept() {
+    let sockets = Sockets::new();
+    let ceiling = InboundCeiling::Unbounded(UnboundedReason::Unlimited);
+    sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));
+    sockets.set_zone_cap(ConnectorId::Tor, Some(0));
+    sockets.clear_zone_caps();
+    let _clearnet = sockets
+        .accept_clearnet(ip([10, 0, 0, 1]), ceiling, now())
+        .expect("clearnet cap released");
+    let _tor = sockets.accept_tor(ceiling).expect("tor cap released");
+}
+
+#[test]
 fn a_zone_cap_of_zero_never_accepts_that_connector() {
     let sockets = Sockets::new();
     sockets.set_zone_cap(ConnectorId::Clearnet, Some(0));

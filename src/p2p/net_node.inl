@@ -3002,8 +3002,19 @@ namespace nodetool
 
     for (const auto& entry : m_network_zones)
     {
-      if (!entry.second.m_inbound_cap_explicit)
+      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
+      if (entry.first == epee::net_utils::connector_id::tor)
+        connector = SHEKYL_CONNECTOR_TOR;
+      else if (entry.first != epee::net_utils::connector_id::clearnet)
         continue;
+      // The cap lives on the process socket table, which outlives this zone.
+      // An unset `--in-peers` is no cap. Leaving a previous zone's cap would
+      // keep refusing inbound after this zone replaced it.
+      if (!entry.second.m_inbound_cap_explicit)
+      {
+        shekyl_zone_clear_connector_cap(connector);
+        continue;
+      }
       const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
       if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
       {
@@ -3012,11 +3023,6 @@ namespace nodetool
             << "; refusing to start.");
         return false;
       }
-      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
-      if (entry.first == epee::net_utils::connector_id::tor)
-        connector = SHEKYL_CONNECTOR_TOR;
-      else if (entry.first != epee::net_utils::connector_id::clearnet)
-        continue;
       shekyl_zone_set_connector_cap(connector, cap);
     }
 

@@ -4542,6 +4542,9 @@ int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// still enforces the process ceiling on the sum. Returns 0, or -1 for an
 /// unknown connector.
 int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
+/// Drop that cap. Later accepts are bounded only by the process ceiling.
+/// Returns 0, or -1 for an unknown connector.
+int shekyl_zone_clear_connector_cap(std::uint32_t connector);
 void shekyl_zone_session_established(std::uint64_t id);
 void shekyl_zone_shutdown(void);
 
