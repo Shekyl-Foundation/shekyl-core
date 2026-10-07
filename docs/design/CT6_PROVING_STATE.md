@@ -1579,7 +1579,7 @@ chunk rather than once per output; and it reaches a layer-4 span
 twenty-four. On a lightly loaded chain the same arithmetic gives
 proportionally less. None of it is in the drain any more, and none of it
 grows with how long the persona held the output. The dependency this creates
-on the store's leaf rows is §11.11's third item.
+on the store's leaf rows is §11.11's fourth item.
 
 An unreadable persona seal is **read as empty and reported** — the opposite
 of every staking read, deliberately. Those reads decide what the wallet tells
@@ -1856,8 +1856,8 @@ the proof system.** What that buys, and what it does not:
 - It does not touch the *spent* output: its four points stay full points,
   and the wallet has them.
 
-*The identity account before `entries` retires (increment 7).* Two things
-still read from it. A path whose owned leaf sits in the **open** leaf chunk at
+*The identity account before `entries` retires (increment 7).* Three things
+still read from it. **First**, a path whose owned leaf sits in the **open** leaf chunk at
 the reference height needs that chunk's sibling *points* **as the prover API
 stands** — no snapshot holds them, since the frontier keeps scalars and `O.x`
 is a one-way projection; with the anchor fixed at `tip - REF_ANCHOR_AGE` that
@@ -1865,21 +1865,25 @@ is a bounded tail of a few chunks, not a window of history, and today it is a
 ranged read of at most `SELENE_CHUNK_WIDTH - 1` leaf rows. The answer above
 makes this reader conditional: once siblings travel as x-coordinates the
 snapshot supplies the open chunk and the read goes away, so the account
-should price it as "kept until the prover API changes", not as permanent. And the owned positions reconciliation
-recomputes come from `drained_sorted` over `entries` (§11.10); without
-`entries`, those come from the store. Both say one thing: retiring `entries`
-needs a precise account of which identities the wallet must still be able to
-produce, each case supplied or refused.
+should price it as "kept until the prover API changes", not as permanent.
 
-One *point* is still read for its own sake, and the account has to name it:
-registration is bound to `(gindex, O)`, and the check that a registered pair
-is the output the tree holds reads `O` from the leaf's identity
-(`held_output`). The tree's own leaf holds `O.x`. Whether that binding can be
-made on `O.x` — the wallet can always project its own key — or needs the
-point kept is the account's to settle; it is the last use of a stored
-sibling-shaped point that is not the prover API's.
+**Second**, the owned positions reconciliation recomputes come from
+`drained_sorted` over `entries` (§11.10); without `entries`, those come from
+the store.
 
-A third reader is not of `entries` but belongs in the same account, because
+**Third**, registration is bound to `(gindex, O)`, and the check that a
+registered pair is the output the tree holds reads `O` from the entry's
+identity (`held_output`, a lookup in `entries` by gindex). This is the one
+*point* still read for its own sake rather than for the prover API. The
+tree's own leaf holds `O.x`; whether the binding can be made on `O.x` — the
+wallet can always project its own key — or needs the point kept is the
+account's to settle.
+
+All three say one thing: retiring `entries` needs a precise account of which
+identities the wallet must still be able to produce, each case supplied or
+refused.
+
+A fourth reader is not of `entries` but belongs in the same account, because
 it is the standing consumer of the late path: **the persona's registration is
 late for every output the wallet did not build** (§11.12, narrowed by
 §11.13). Its rebuild reads the store's drained leaf rows over
