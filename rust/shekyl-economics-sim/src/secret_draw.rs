@@ -441,6 +441,86 @@ pub fn window_check(short_permille: f64) -> WindowCheck {
     }
 }
 
+/// Attempts the witness makes at one read before abandoning it: the first
+/// try and the fetch client's two retries, spread across `W₂`.
+pub const RETRY_ATTEMPTS: u32 = 3;
+
+/// The correlations the retry table is printed at, from the calibration
+/// (every failure common to all tries) to independent tries.
+pub const RETRY_CORRELATIONS: [f64; 6] = [1.0, 0.5, 0.25, 0.10, 0.05, 0.0];
+
+/// Probability a read fails after `attempts` tries, when a share
+/// `correlation` of single-try failures is common to every try of that read
+/// and the rest are independent.
+///
+/// `p · (ρ + (1 − ρ) · p^(a−1))`. At `ρ = 1` it is `p`, the feasibility
+/// module's calibration, which credits one attempt. At `ρ = 0` it is `p^a`.
+/// `ρ` is the quantity a measurement of retries at hour-scale spacing
+/// supplies; nothing in the tree has measured it.
+#[must_use]
+pub fn correlated_read_failure(p_attempt: f64, attempts: u32, correlation: f64) -> f64 {
+    let p = p_attempt.clamp(0.0, 1.0);
+    let rho = correlation.clamp(0.0, 1.0);
+    let independent_rest = p.powi(attempts.saturating_sub(1) as i32);
+    p * (rho + (1.0 - rho) * independent_rest)
+}
+
+/// The production window at one retry correlation.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RetryRow {
+    pub attempts: u32,
+    pub correlation: f64,
+    pub read_failure: f64,
+    pub miss_given_observation: f64,
+    pub false_slash_bound: f64,
+    pub false_slash_max_holder: f64,
+    pub clears_floor: bool,
+}
+
+/// The production window with [`RETRY_ATTEMPTS`] tries per read at one
+/// correlation, judged on the per-archiver axis.
+#[must_use]
+pub fn retry_row(correlation: f64) -> RetryRow {
+    let read_failure =
+        correlated_read_failure(default_sources().p_attempt, RETRY_ATTEMPTS, correlation);
+    let q = missed_two_of_three(read_failure);
+    let per_pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, BOND_LIFE_EPOCHS);
+    let max_holder = max_holder_exposure(per_pair);
+    RetryRow {
+        attempts: RETRY_ATTEMPTS,
+        correlation,
+        read_failure,
+        miss_given_observation: q,
+        false_slash_bound: per_pair,
+        false_slash_max_holder: max_holder,
+        clears_floor: max_holder <= FeasibilityTargets::operative_defaults().false_slash_target,
+    }
+}
+
+/// The largest correlation at which the production window clears the
+/// per-archiver budget with [`RETRY_ATTEMPTS`] tries, or `None` if it does
+/// not clear even with independent tries. The exposure rises with the
+/// correlation, so the boundary is found by bisection.
+#[must_use]
+pub fn clearing_correlation() -> Option<f64> {
+    if !retry_row(0.0).clears_floor {
+        return None;
+    }
+    if retry_row(1.0).clears_floor {
+        return Some(1.0);
+    }
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if retry_row(mid).clears_floor {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo)
+}
+
 /// The pair counts the evidence set runs at: the genesis set
 /// `--challenge-coverage` uses, and maturity.
 pub const EVIDENCE_PAIRS: [u32; 2] = [4_096, 324_000];
@@ -549,6 +629,40 @@ pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fm
         FeasibilityTargets::operative_defaults().false_slash_target,
         if w.clears_floor { "clears" } else { "EXCEEDS" }
     )?;
+    writeln!(
+        out,
+        "retries: {RETRY_ATTEMPTS} tries per read at per-try failure {:.2}; rho = share of failures \
+         common to every try (1 = the calibration, one attempt credited)",
+        w.read_failure
+    )?;
+    writeln!(
+        out,
+        "{:>6} {:>10} {:>10} {:>12} {:>14} {:>8}",
+        "rho", "read fail", "q", "per pair", "per archiver", "budget"
+    )?;
+    for rho in RETRY_CORRELATIONS {
+        let r = retry_row(rho);
+        writeln!(
+            out,
+            "{:>6.2} {:>10.4} {:>10.5} {:>12.2e} {:>14.2e} {:>8}",
+            r.correlation,
+            r.read_failure,
+            r.miss_given_observation,
+            r.false_slash_bound,
+            r.false_slash_max_holder,
+            if r.clears_floor { "clears" } else { "EXCEEDS" }
+        )?;
+    }
+    match clearing_correlation() {
+        Some(rho) => writeln!(
+            out,
+            "the window clears the per-archiver budget at rho <= {rho:.4}; rho is unmeasured"
+        )?,
+        None => writeln!(
+            out,
+            "the window does not clear the per-archiver budget even with independent tries"
+        )?,
+    }
     for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
         let verdict = match bar_holds(cells, in_flight) {
             Some(true) => "HOLDS",
@@ -713,6 +827,47 @@ mod tests {
         // The bound is priced at one observation per epoch, so it is the
         // same at every observation rate.
         assert!((w.false_slash_bound - window_check(0.0).false_slash_bound).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_fully_correlated_retry_is_one_attempt_and_an_independent_one_is_a_power() {
+        let p = default_sources().p_attempt;
+        // Every failure common to all tries: retries buy nothing, and the
+        // row is the calibration's.
+        assert!((correlated_read_failure(p, RETRY_ATTEMPTS, 1.0) - p).abs() < 1e-15);
+        let calibrated = window_check(0.0);
+        let row = retry_row(1.0);
+        assert!((row.false_slash_bound - calibrated.false_slash_bound).abs() < 1e-18);
+        assert_eq!(row.clears_floor, calibrated.clears_floor);
+        // No failure common: three tries fail together at p cubed.
+        assert!((correlated_read_failure(p, 3, 0.0) - p * p * p).abs() < 1e-15);
+        assert!((correlated_read_failure(0.30, 3, 0.0) - 0.027).abs() < 1e-12);
+        // One try is one try at any correlation.
+        assert!((correlated_read_failure(p, 1, 0.0) - p).abs() < 1e-15);
+        assert!((correlated_read_failure(p, 1, 0.4) - p).abs() < 1e-15);
+        // Halfway is the mixture, not the midpoint of the exponents.
+        assert!((correlated_read_failure(0.30, 3, 0.5) - 0.30 * (0.5 + 0.5 * 0.09)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn exposure_rises_with_the_correlation_and_the_boundary_separates_the_verdicts() {
+        let mut last = -1.0_f64;
+        for rho in [0.0, 0.05, 0.10, 0.25, 0.5, 1.0] {
+            let r = retry_row(rho);
+            assert!(
+                r.false_slash_max_holder >= last,
+                "exposure fell at rho = {rho}"
+            );
+            last = r.false_slash_max_holder;
+        }
+        // Independent tries clear the budget and the calibration does not, so
+        // a boundary exists strictly between them.
+        assert!(retry_row(0.0).clears_floor);
+        assert!(!retry_row(1.0).clears_floor);
+        let rho = clearing_correlation().expect("independent tries clear");
+        assert!(rho > 0.0 && rho < 1.0);
+        assert!(retry_row(rho).clears_floor);
+        assert!(!retry_row(rho + 1e-6).clears_floor);
     }
 
     #[test]

@@ -1145,6 +1145,54 @@ do not depend on the one before. What the run leaves out at the
 boundary is the producer's work: reads owed for the previous epoch's
 draws overlap the first `W₂` blocks of the next.
 
+### 5.15 ESR-11 — the failure window against retry correlation (2026-10-07)
+
+§5.14's window check credits one attempt per read, the feasibility
+module's calibration (`default_sources()`: `p_attempt = 0.30`,
+`attempts = 1`). The module credits one because, on the worst day the W₂
+size ladder measured, misses were mostly circuit failures that cluster
+inside a window, so a retry there is not an independent draw
+(`mn_feasibility.rs`, `MissSources::attempts`).
+
+Under the secret draw the producer spreads its reads across `W₂`, 500
+blocks, about 16.7 hours. A retry can come hours after the failed try, on
+a fresh circuit. Whether tries that far apart fail together is not
+measured. This section does not assume an answer. It prints the window at
+each answer.
+
+**Model.** A read is tried up to three times: the first try and the fetch
+client's two retries. A share `ρ` of single-try failures is common to
+every try of that read, and the rest are independent, so the read fails
+with probability `p · (ρ + (1 − ρ) · p²)`. At `ρ = 1` that is `p`, the
+calibration. At `ρ = 0` it is `p³`. The settlement rule and `(m, n)` are
+unchanged. This was added after §5.14 was read and was not pre-registered;
+it has no bar of its own.
+
+| `ρ` | Read failure | Missed observation `q` | False slash, per pair | Per archiver at 4,096 shards | Against `10⁻³` |
+| --- | --- | --- | --- | --- | --- |
+| 1.00 | 0.3000 | 0.21600 | `2.85 × 10⁻⁴` | `6.89 × 10⁻¹` | exceeds |
+| 0.50 | 0.1635 | 0.07146 | `2.01 × 10⁻⁹` | `8.23 × 10⁻⁶` | clears |
+| 0.25 | 0.0953 | 0.02549 | `2.61 × 10⁻¹⁴` | `1.07 × 10⁻¹⁰` | clears |
+| 0.10 | 0.0543 | 0.00853 | `1.58 × 10⁻¹⁹` | `6.47 × 10⁻¹⁶` | clears |
+| 0.05 | 0.0406 | 0.00482 | `3.02 × 10⁻²²` | `1.24 × 10⁻¹⁸` | clears |
+| 0.00 | 0.0270 | 0.00215 | `4.14 × 10⁻²⁶` | `1.70 × 10⁻²²` | clears |
+
+**The production `(11, 13)` clears the per-archiver budget when
+`ρ ≤ 0.661`.** That is the number a measurement has to answer: of reads
+whose first try failed, do fewer than about two in three also fail both
+retries taken hours apart? The per-try failure stays at the retained 0.30;
+the measured single-try miss is 0.041 on a typical window and 0.20 on the
+worst day observed, so the table is conservative in `p` and open only in
+`ρ`.
+
+**What this does not say.** `ρ` is unmeasured, so the window's verdict is
+unchanged: it exceeds the budget at the calibration. The two-point mixture
+is the simplest model that has the calibration and independence as its
+ends; a failure that persists for some hours and then clears sits between
+them and depends on how the tries are spaced, which the model does not
+represent. A persona that is down for the whole of `W₂` fails all three
+tries at any `ρ`, and that is a miss the window is meant to count.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
