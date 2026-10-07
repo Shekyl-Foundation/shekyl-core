@@ -100,6 +100,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::A2,
             CenRow::B1,
             CenRow::B2,
+            // Slice 8 row 10: B4 over the attestation witness
+            // (`CHAIN_RULES_SLICE_8.md` §5 row 10). A3 is decided by B4's
+            // empty arm and stays `pending` as a row.
+            CenRow::B4,
             CenRow::B5,
             CenRow::B6,
             CenRow::B7,
@@ -201,8 +205,25 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // Slice 8 row 5: the post against its record — a join's floor and
             // claim slot, a Release's exit, a Reinstate's open interval.
             CenRow::J14,
+            // Slice 8 row 6: a compact join's held shards closed, final,
+            // priced and viable at the parent.
+            CenRow::J15,
             CenRow::J16,
             CenRow::J18,
+            // Slice 8 row 8: the emission statics — the vin's parse, the
+            // slot's key, the signable hash and the reward commit set.
+            CenRow::J19,
+            CenRow::J20,
+            // Slice 8 row 9: the emission's reference context (I10–I13's
+            // reads, judged as one row in `judge_reference`), the frozen
+            // closes gathered per claimed epoch and the verify over them
+            // (`judge_emission_claim`).
+            CenRow::J21,
+            CenRow::J22,
+            CenRow::J23,
+            CenRow::J24,
+            CenRow::J25,
+            CenRow::J26,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.

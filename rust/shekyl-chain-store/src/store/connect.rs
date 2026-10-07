@@ -285,9 +285,10 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
         // ---- 5. attestation witness (DRS-E4; `archival_write.rs`) -------
-        // The verdict's sidecar, written unjudged until CEN-B4 lands in
-        // `validate`: the provenance widening above records B4 as a
-        // coverage gap for exactly as long as that is so.
+        // The verdict's sidecar, judged by CEN-B4 in `validate` (E6 slice 8
+        // row 10): `None` is the empty set against the mined root, `Some`
+        // the recompute and every record's countersignature. B4 is always
+        // in coverage, so the widening above never names it.
         self.record_attestation_witness(height, block.attestation_witness())?;
 
         // ---- 6. block --------------------------------------------------

@@ -9,7 +9,7 @@ use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::harness::fixture::{candidate_on, root};
-use crate::harness::{assert_refused, formed_on, infallible, FaultingView, MockChain};
+use crate::harness::{assert_refused, defined, formed_on, FaultingView, MockChain};
 use crate::rules::BlockContext;
 use crate::verdict::{Locus, Verdict};
 use shekyl_types::BlockHash;
@@ -17,7 +17,7 @@ use shekyl_types::BlockHash;
 fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(A2::check(
+        defined(A2::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))

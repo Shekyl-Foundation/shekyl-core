@@ -516,6 +516,17 @@ pub trait ChainView<'id> {
 ///
 /// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(empty, r_market from <path>, close from <path>)` —
+///   `empty`, except that `r_market` answers from the first `self.<path>`,
+///   a `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of planted prices,
+///   and `sigma_work` / `budget` answer from the second, a
+///   `BTreeMap<SettlementEpoch, (SigmaWorkMilli, AtomicUnits)>` of planted
+///   closes. The archival reads a no-bonds view may plant: CEN-J15's
+///   accept needs a priced shard, CEN-J25's refusal a closed epoch, and no
+///   driven chain in the tree closes either (`rules/tx_bond.rs`, J15's
+///   witness note; `rules/tx_emission_against.rs`). A price and a frozen
+///   close are settled values the close wrote, not records, so planting
+///   them tests no construction.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
 ///   The expression is pasted into each method, so it is a unit constructor
 ///   or another value that is cheap to repeat.
@@ -529,6 +540,9 @@ pub trait ChainView<'id> {
 macro_rules! archival_reads {
     (empty) => {
         $crate::archival_reads!(@methods {empty});
+    };
+    (empty, r_market from $($price:ident).+, close from $($close:ident).+) => {
+        $crate::archival_reads!(@methods {planted $($price).+ ; $($close).+});
     };
     (fault $err:expr) => {
         $crate::archival_reads!(@methods {fault $err});
@@ -609,6 +623,30 @@ macro_rules! archival_reads {
             (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok($empty)
+        }
+    };
+    // The planted reads: matched before the generic `planted` arm below,
+    // so only `r_market`, `sigma_work` and `budget` read their maps and
+    // every other read is `empty`'s.
+    (@emit {planted $($price:ident).+ ; $($close:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($price).+.get(&($($arg),*)).copied())
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($close:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($close).+.get(&($($arg),*)).map(|close| close.0))
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($close:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn budget(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($close).+.get(&($($arg),*)).map(|close| close.1))
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($close:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Ok($empty)

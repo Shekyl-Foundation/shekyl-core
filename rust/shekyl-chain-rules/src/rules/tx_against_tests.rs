@@ -5,15 +5,16 @@
 
 //! Fixtures for the view-bound 4.I rows landed so far — CEN-I7 through
 //! `tx_against` at the pool's slot and through `validate` at a listed slot,
-//! CEN-L1 through `validate` — and the two 4.I rows held by construction
+//! CEN-L1 through `validate` — the emission's reference context (CEN-J21,
+//! the same reads under one row), and the two 4.I rows held by construction
 //! (I2's falsifier lives here; I3's is `f2_the_wire_admits_one_transaction_version`).
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::harness::fixture::{
-    anchored_on, candidate_on, coinbase, listed, listed_on, point, point_at, serve_credit_only,
-    spend, spendable_chain, TWO_G,
+    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, listed, listed_on, point,
+    point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
@@ -22,7 +23,7 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
 use crate::rules::tx_against::{
-    judge_reference, judge_signatures, I11, I17, I18, REFERENCE_BLOCK_MAX_AGE,
+    judge_reference, judge_signatures, I11, I13, I17, I18, REFERENCE_BLOCK_MAX_AGE,
     REFERENCE_BLOCK_MIN_AGE,
 };
 use crate::rules::TxContext;
@@ -419,9 +420,10 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&credit, TxSlot::Lone, &mut coverage)
             .expect("a serve-credit-only body classifies");
-        defined(judge_reference(&cx, &view, &mut coverage))
+        let context = defined(judge_reference(&cx, &view, &mut coverage))
             .expect("a serve credit has no reference to judge");
-        for row in [CenRow::I10, CenRow::I11, CenRow::I12] {
+        assert_eq!(context, None, "no context: nothing verifies against one");
+        for row in [CenRow::I10, CenRow::I11, CenRow::I12, CenRow::J21] {
             assert!(coverage.contains(row), "{row} recorded vacuous");
         }
     });
@@ -450,6 +452,130 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
             }))
         );
     });
+}
+
+// ---- CEN-J21 (I13) ------------------------------------------------------
+//
+// The emission's reference context is the spend's reads under one row, so
+// the mock's share is the same three things: the predicates (`I13::admits`
+// over two depths; the window is I11's, pinned above), absence (an
+// unrecorded hash, a reference the window refuses, a body with no
+// declared depth), and the two holes below the tip (the root, the leaf
+// count the depth is a function of). The mock's tree is **empty** — every
+// recorded height's depth is 0 — so no declared depth is admitted on it,
+// and an anchored emission here is J21's refusal, not its pass. The pass
+// is the driver's: an assembled claim's declared depth is the tree's at
+// its reference (`scenario_emission_tests`), and the context it yields is
+// what the emission's proof rows verify against.
+
+/// `I13::admits`: `[1, depth]`, closed at both ends; nothing is admitted
+/// against an empty tree.
+#[test]
+fn i13_admits_a_declared_depth_in_one_through_the_depth_at_the_reference() {
+    assert!(!I13::admits(0, 5), "a zero depth names no tree");
+    assert!(I13::admits(1, 5));
+    assert!(I13::admits(5, 5), "the depth at the reference itself");
+    assert!(!I13::admits(6, 5), "one layer more than the reference held");
+    assert!(!I13::admits(1, 0), "the empty tree holds no proof");
+    assert!(!I13::admits(u64::from(u8::MAX) + 1, u8::MAX), "beyond a u8");
+}
+
+/// A fee-bearing emission with a parseable vin, unanchored.
+fn emission(key_image: [u8; 32]) -> Transaction {
+    let Input::ArchivalRewardEmission { canonical_bytes } = emission_vin(0x13, &[1]) else {
+        unreachable!("emission_vin builds an emission input");
+    };
+    balanced_emission(key_image, canonical_bytes, 5)
+}
+
+/// J21 refuses at the transaction: the reference no chain holds (I10's
+/// read), and a reference the window refuses (I11's — the tip itself,
+/// zero blocks old). The refusal row is J21 on an emission, where the
+/// spend's would be I10 or I11.
+#[test]
+fn j21_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
+    let chain = spendable_chain();
+    let tip = chain.tip().expect("a spendable chain has a tip").hash;
+    chain.with_view(|view| {
+        for tx in [emission(KI), referencing(emission(KI), tip)] {
+            assert_refused(
+                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                CenRow::J21,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+        }
+    });
+}
+
+/// An anchored emission whose declared depth the tree at the reference
+/// does not hold — here, any depth, against the mock's empty tree — is
+/// J21's refusal; so is a body with no prunable region to declare one.
+#[test]
+fn j21_refuses_a_declared_depth_the_reference_does_not_hold() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, emission(KI));
+    let mut declared_one = anchored.clone();
+    let mut pruned = anchored.clone();
+    match (&mut declared_one.ct, &mut pruned.ct) {
+        (
+            Ct::Fcmp {
+                prunable: Some(p), ..
+            },
+            Ct::Fcmp { prunable, .. },
+        ) => {
+            p.tree_depth = 1;
+            *prunable = None;
+        }
+        _ => unreachable!("an emission is an Fcmp ct with a prunable region"),
+    }
+    chain.with_view(|view| {
+        for tx in [anchored, declared_one, pruned] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("an emission classifies");
+            assert_refused(
+                defined(judge_reference(&cx, &view, &mut coverage)),
+                CenRow::J21,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J21),
+                "a refused row is not recorded"
+            );
+        }
+    });
+}
+
+/// J21's two per-height reads at a height I10 just found recorded: a view
+/// that answers `AboveTip` for either has a hole below its tip — the
+/// `Corrupt` class, over the record that was missing, never a verdict.
+#[test]
+fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() {
+    let chain = spendable_chain();
+    // Anchored on genesis (`newest_admissible_reference` of the connecting
+    // height), so genesis's rows are the ones withheld.
+    let tx = anchored_on(&chain, emission(KI));
+    for (withheld, record) in [
+        (
+            WithheldRead::RootAt(BlockHeight::ZERO),
+            PerHeightRecord::CurveTreeRoot,
+        ),
+        (
+            WithheldRead::LeafCountAt(BlockHeight::ZERO),
+            PerHeightRecord::LeafCount,
+        ),
+    ] {
+        chain.with_view(|inner| {
+            let view = inner.withholding(withheld);
+            assert_eq!(
+                tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
+                Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                    at: BlockHeight::ZERO,
+                    record,
+                }))
+            );
+        });
+    }
 }
 
 // ---- CEN-I17 ------------------------------------------------------------

@@ -245,7 +245,7 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            spender.root_at(h),
+            spender.root_at(BlockHeight::from_raw(h)),
             ours,
             "wallet-side vs store root going into {h}"
         );
@@ -263,7 +263,12 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
     // The spend: block 0's coinbase, referenced at the newest admissible
     // height, self-verified against the wallet-side root there.
     let fee = 1_000_000;
-    let spend = spender.spend_coinbase(scenario.wallet(), 0, connecting, fee);
+    let spend = spender.spend_coinbase(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        BlockHeight::from_raw(connecting),
+        fee,
+    );
     let block = scenario
         .mine_listing(vec![spend.clone()])
         .await
@@ -301,7 +306,10 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
         .await
         .expect("read")
         .expect("recorded");
-    assert_eq!(spender.root_at(connecting + 1), after);
+    assert_eq!(
+        spender.root_at(BlockHeight::from_raw(connecting + 1)),
+        after
+    );
 
     scenario.close().await;
 }

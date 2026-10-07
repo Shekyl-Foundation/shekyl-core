@@ -17,15 +17,16 @@
 
 use shekyl_archival_retention::emission_verify::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, AuthVerified, BackingVerified, ClaimantBondRecord,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError,
+    emission_vin_verify_claims, emission_vin_verify_claims_under, AuthVerified, BackingVerified,
+    ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError,
 };
 use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, credited_work_milli, epoch_close_height, reward_share_floor,
     sigma_work_milli, ArchivalRewardEmissionVin, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardClose, ShardSet, ShardWorkEntry,
-    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, SettlementEpochBlocks,
+    SettlementSchedule, ShardClose, ShardSet, ShardWorkEntry, WorkEpochClaim,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
@@ -273,6 +274,52 @@ fn finalization_boundary() {
     ctx.height = epoch_close_height(E).unwrap() + 1;
     emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)])
         .expect("accepts at h_close + 1");
+}
+
+/// The same F-E1 boundary under a schedule the caller holds
+/// (`emission_vin_verify_claims_under`, the validator's CEN-J25 form,
+/// `ARW-15`): step 1 reads the **passed** schedule's `h_close(E)`, not the
+/// process latch's. A ten-block epoch puts `h_close(5)` at 60 — a height the
+/// genesis schedule has not closed epoch 0 at — and the verdict flips there
+/// exactly as it does at the genesis `h_close`. The passed-schedule form
+/// under `GENESIS` is byte-for-byte the latched form, so the two cannot
+/// drift on the boundary.
+#[test]
+fn finalization_boundary_under_a_passed_schedule() {
+    let fx = Fixture::new(E);
+    let vin = honest_vin(&fx);
+    let mut ctx = Ctx::accepting(&fx);
+    let short = SettlementSchedule::new(SettlementEpochBlocks::new(10).expect("non-zero"));
+    let short_close = short.close_height(E).expect("no overflow");
+    assert_eq!(short_close, 60);
+    assert!(
+        short_close < epoch_close_height(0).unwrap(),
+        "the short schedule's h_close(E) is below the genesis schedule's first close"
+    );
+
+    ctx.height = short_close;
+    let err = emission_vin_verify_claims_under(short, &vin, &ctx.as_context(), &[source(&fx)])
+        .unwrap_err();
+    assert!(
+        matches!(err, EmissionVerifyError::EpochNotFinalized { epoch, .. } if epoch == E),
+        "at the short schedule's h_close: {err}"
+    );
+
+    ctx.height = short_close + 1;
+    emission_vin_verify_claims_under(short, &vin, &ctx.as_context(), &[source(&fx)])
+        .expect("accepts at the short schedule's h_close + 1");
+
+    // Under `GENESIS`, the passed form is the latched form.
+    ctx.height = epoch_close_height(E).unwrap();
+    let under = emission_vin_verify_claims_under(
+        SettlementSchedule::GENESIS,
+        &vin,
+        &ctx.as_context(),
+        &[source(&fx)],
+    )
+    .unwrap_err();
+    let latched = emission_vin_verify_claims(&vin, &ctx.as_context(), &[source(&fx)]).unwrap_err();
+    assert_eq!(under.to_string(), latched.to_string());
 }
 
 /// §6.6 claim-age boundary: `E` at `C − W` accepts; one epoch older rejects.

@@ -21,16 +21,33 @@
 //! The replica is the fixture's **state**, reached through the production
 //! stack rather than seeded: two personas join through real bond posts,
 //! the served persona's passes are the regtest injector's, and every block
-//! is formed, judged and connected. It runs under a levered regtest
-//! schedule — a hundred-block settlement epoch, where the production
-//! epoch is ten thousand — so epoch eleven's deadline is a height a test
-//! can mine to. The capture and the replica are therefore the same
-//! *shape* under two schedules, and the comparison is role-mapped
-//! ([`Roles`]): persona by role, epoch by epoch, height through each
-//! side's own schedule. A row that compares equal here compares equal on
-//! the facts the inputs file names as state; what differs **by
-//! construction** is enumerated in [`by_construction`] and asserted to be
-//! exactly that, never skipped.
+//! is formed, judged and connected. It runs under the levered regtest
+//! schedule (`scenario_shard`: a twenty-block settlement epoch, where the
+//! production epoch is ten thousand) so epoch eleven's deadline is a
+//! height a test can mine to. The capture and the replica are therefore
+//! the same *shape* under two schedules, and the comparison is role-mapped
+//! ([`Roles`]): persona by role, shard by role, epoch by offset, height
+//! through each side's own schedule. A row that compares equal here
+//! compares equal on the facts the inputs file names as state; what
+//! differs **by construction** is enumerated in [`by_construction`] and
+//! asserted to be exactly that, never skipped.
+//!
+//! # The shard, and the join epoch
+//!
+//! The fixture seeded both bonds on shard 7 in epoch 0, on a chain that
+//! had closed no shard: the C++ admitted a join onto any shard id. CEN-J15
+//! (E6 slice 8 §5 row 6) admits a compact join only onto a shard closed,
+//! final and priced at its parent, so the replica fills shard 0 with real
+//! spends first and both personas join it at the first height J15 admits
+//! — epoch `E_join`, not 0. The role map carries both: fixture shard 7 is
+//! replica shard 0, and fixture epoch `e` is replica epoch `e + E_join`.
+//! Everything the fixture's state says about epochs — the join epoch, the
+//! eleven pass epochs, the slash epoch, the deadline, the close families'
+//! keys — compares through that offset; the replica's epochs below
+//! `E_join`, which the fill mined through, are its own by construction.
+//! The fill is a few hundred real proofs: this test runs in the live lane
+//! (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
+//! the_lmdb_slash_fixture`).
 //!
 //! # What this does and does not discharge
 //!
@@ -53,49 +70,39 @@
 //! production writer's own state.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU128;
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_chain_rules::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::codec::Canonical;
-use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings, SlashLogEntry};
+use shekyl_types::archival::{
+    BadInterval, BondRecord, HeldShard, Holdings, SlashLogEntry, SlashedHolding,
+};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
+use crate::archival_driver::first_spending_height;
 use crate::connector::{ArchivalState, Inject, Injected};
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_shard::{
+    close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, mine_to,
+    ClosedShard, EPOCH_BLOCKS,
+};
 use crate::scenario_spend::Spender;
-use crate::schedule::ChainRules;
 use crate::snapshot_json::{from_json, unhex};
 use crate::source::ServeCredit;
 
 const ROWS: &str = include_str!("../fixtures/archival_fixture_slash_m_of_n.rows.json");
 const INPUTS: &str = include_str!("../fixtures/archival_fixture_slash_m_of_n.inputs.json");
 
-/// The replica's settlement epoch: the smallest the fixture's shape fits
-/// in. Both joins must land in epoch 0, and a coinbase first spends 71
-/// blocks after its height (unlock window 60, spendable age 10, one more).
-const REPLICA_SEB: u64 = 100;
-/// The reorg cap under the replica schedule; any `0 < cap < SEB`.
-const REPLICA_CAP: u64 = 50;
-/// The one shard both personas hold, as the fixture's.
-const SHARD: u64 = 7;
+/// The one shard both fixture personas held — seeded, on a chain that had
+/// closed none. The replica's is the shard the fill closes (module docs).
+const FIXTURE_SHARD: u64 = 7;
+/// The first coinbase the fill spends; the two joins ride coinbases 0 and 1.
+const FILL_FROM_COINBASE: u64 = 10;
 const FEE: u64 = 1_000_000;
 const ENDPOINT: [u8; 32] = [0xEE; 32];
-
-/// The replica's rules: regtest at difficulty one, on the levered epoch.
-fn replica_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
-            SettlementEpochBlocks::new(REPLICA_SEB).expect("non-zero"),
-            BlockCount::from_raw(REPLICA_CAP),
-        )
-        .expect("50 is inside 100"),
-    }
-}
 
 /// The fixture's named inputs, read off `inputs.json` rather than
 /// restated: the two personas by role, the schedule's deadline and the
@@ -173,9 +180,15 @@ impl Inputs {
 }
 
 /// The role map between the two sides: which replica persona plays which
-/// fixture persona, and each side's schedule.
+/// fixture persona, which shard plays the fixture's, the epoch offset the
+/// replica's join sits at, and each side's schedule.
 struct Roles {
     personas: BTreeMap<PCanonicalId, PCanonicalId>,
+    /// Fixture shard 7 is the replica's filled shard.
+    shard: ShardId,
+    /// Fixture epoch `e` is replica epoch `e + epoch_offset`: the fixture
+    /// joined in epoch 0, the replica in the first epoch CEN-J15 admits.
+    epoch_offset: u64,
     fixture: SettlementSchedule,
     replica: SettlementSchedule,
 }
@@ -189,14 +202,73 @@ impl Roles {
             .get(&id)
             .unwrap_or_else(|| panic!("fixture persona {} has no role here", hex(theirs)))
     }
+
+    /// The fixture shard `theirs` as the replica knows it.
+    fn shard(&self, theirs: u64) -> u64 {
+        assert_eq!(theirs, FIXTURE_SHARD, "the fixture holds one shard");
+        self.shard.to_raw()
+    }
+
+    /// The fixture epoch `theirs` as the replica knows it.
+    fn epoch(&self, theirs: u64) -> u64 {
+        theirs + self.epoch_offset
+    }
+
+    fn settlement_epoch(&self, theirs: SettlementEpoch) -> SettlementEpoch {
+        SettlementEpoch::from_raw(self.epoch(theirs.to_raw()))
+    }
+
+    /// A fixture interval through the offset; an open end stays open.
+    fn interval(&self, theirs: &BadInterval) -> BadInterval {
+        BadInterval {
+            start_epoch: self.epoch(theirs.start_epoch),
+            end_exclusive: if theirs.end_exclusive == BadInterval::OPEN_END {
+                BadInterval::OPEN_END
+            } else {
+                self.epoch(theirs.end_exclusive)
+            },
+        }
+    }
+
+    /// The fixture's holdings through both maps.
+    fn holdings(&self, theirs: &Holdings) -> Holdings {
+        match theirs {
+            Holdings::CompleteTree => Holdings::CompleteTree,
+            Holdings::ShardSet(held) => Holdings::shard_set(
+                held.as_slice()
+                    .iter()
+                    .map(|h| HeldShard {
+                        shard: ShardId::from_raw(self.shard(h.shard.to_raw())),
+                        add_epoch: self.settlement_epoch(h.add_epoch),
+                    })
+                    .collect(),
+            )
+            .expect("a mapped set is a set"),
+        }
+    }
+
+    fn slashed_holding(&self, theirs: &SlashedHolding) -> SlashedHolding {
+        match theirs {
+            SlashedHolding::CompleteTree => SlashedHolding::CompleteTree,
+            SlashedHolding::Shard { add_epoch } => SlashedHolding::Shard {
+                add_epoch: self.settlement_epoch(*add_epoch),
+            },
+        }
+    }
 }
 
 /// The replica, as built: the snapshot at its tip, the schedule it ran
-/// under, and the heights its construction fixed.
+/// under, the shard it filled and the heights its construction fixed.
 struct Replica {
     snapshot: ArchivalSnapshot,
     schedule: SettlementSchedule,
     tip: BlockHeight,
+    /// The shard the fill closed, and where.
+    closed: ClosedShard,
+    /// The first height CEN-J15 admitted a join onto it; the first join's.
+    join_height: BlockHeight,
+    /// The epoch both joins landed in — the fixture's epoch 0.
+    join_epoch: u64,
     /// The one height every injected pass was attributed to.
     pass_height: BlockHeight,
     p_miss: Persona,
@@ -204,33 +276,44 @@ struct Replica {
 }
 
 /// Build the fixture's state through the production stack under the
-/// replica schedule: two joins in epoch 0, `m` injected passes for the
-/// served persona, then blocks through one past epoch `slash_epoch`'s
+/// levered schedule: fill shard 0 and let it close, two joins onto it in
+/// the first epoch CEN-J15 admits, `m` injected passes for the served
+/// persona, then blocks through one past the mapped slash epoch's
 /// deadline — the fixture's tip, mapped.
 async fn build(inputs: &Inputs) -> Replica {
-    let rules = replica_rules();
-    let in_force = rules.in_force(BlockHeight::from_raw(0));
-    let schedule = in_force.settlement_schedule();
-    let first_spend =
-        in_force.mined_money_unlock_window().to_raw() + in_force.tx_spendable_age().to_raw() + 1;
+    let rules = levered_rules();
+    let schedule = rules
+        .in_force(BlockHeight::from_raw(0))
+        .settlement_schedule();
     let mut scenario = Scenario::open_under("archival-fixture-replica", FreeHash, rules);
-    let mut mined = scenario.mine(first_spend).await;
+    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let closed = filled.closed[0];
+    assert_eq!(closed.shard, ShardId::from_raw(0));
+
+    // The two joins and the passes injected after them sit in one epoch,
+    // as the fixture's did in epoch 0: the join height, the next, and the
+    // tip the injector writes at are all inside it.
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, closed), 2);
+    mine_to(&mut scenario, &mut mined, join_height).await;
+    let join_epoch = schedule.epoch_at_height(join_height.to_raw());
 
     let p_miss = Persona::at(1);
     let p_served = Persona::at(2);
     for (coinbase, persona) in [(0u64, &p_miss), (1, &p_served)] {
         let spender = Spender::over(&mined);
-        let connecting = u64::try_from(mined.len()).expect("small");
+        let connecting =
+            ChainCount::from_raw(u64::try_from(mined.len()).expect("small")).next_height();
         assert_eq!(
-            schedule.epoch_at_height(connecting),
-            0,
-            "both joins land in the join epoch the fixture seeds"
+            schedule.epoch_at_height(connecting.to_raw()),
+            join_epoch,
+            "both joins land in one epoch, as the fixture's in epoch 0"
         );
-        let join = persona.join(shard_set(vec![SHARD]), ENDPOINT);
+        let join = persona.join(shard_set(vec![closed.shard.to_raw()]), ENDPOINT);
         let block = scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                coinbase,
+                BlockHeight::from_raw(coinbase),
                 connecting,
                 FEE,
                 Some(&join),
@@ -246,8 +329,8 @@ async fn build(inputs: &Inputs) -> Replica {
         let Injected { at } = connector
             .ask(Inject(ServeCredit {
                 persona: p_served.id(),
-                shard: ShardId::from_raw(SHARD),
-                epoch: SettlementEpoch::from_raw(epoch),
+                shard: closed.shard,
+                epoch: SettlementEpoch::from_raw(join_epoch + epoch),
             }))
             .await
             .expect("a bonded persona's pass is injected");
@@ -260,10 +343,9 @@ async fn build(inputs: &Inputs) -> Replica {
     );
     let pass_height = pass_heights.into_iter().next().expect("one");
 
-    let tip = BlockHeight::from_raw(schedule.slash_deadline_height(inputs.slash_epoch) + 1);
-    let have = ChainCount::from_raw(u64::try_from(mined.len()).expect("small"));
-    let want = ChainCount::with_tip(tip).expect("a tip names a count");
-    scenario.mine((want - have).to_raw()).await;
+    let tip =
+        BlockHeight::from_raw(schedule.slash_deadline_height(join_epoch + inputs.slash_epoch) + 1);
+    mine_to(&mut scenario, &mut mined, tip + BlockCount::ONE).await;
     let snapshot = connector
         .ask(ArchivalState)
         .await
@@ -273,6 +355,9 @@ async fn build(inputs: &Inputs) -> Replica {
         snapshot,
         schedule,
         tip,
+        closed,
+        join_height,
+        join_epoch,
         pass_height,
         p_miss,
         p_served,
@@ -298,21 +383,48 @@ fn u64_keys(side: &ArchivalSnapshot, family: SnapshotFamily) -> BTreeSet<u64> {
 /// each with the fact that makes it so. Asserted, not skipped: a
 /// difference that stops being one — or a new one — fails here.
 fn by_construction(inputs: &Inputs, replica: &Replica, roles: &Roles) {
-    // Schedules: production versus the hundred-block lever; the tip is
-    // one past epoch `slash_epoch`'s deadline on both.
+    // Schedules: production versus the twenty-block lever; the tip is one
+    // past the slash epoch's deadline on both, that epoch mapped.
     assert_eq!(roles.fixture.blocks().get(), inputs.seb);
-    assert_eq!(roles.replica.blocks().get(), REPLICA_SEB);
+    assert_eq!(roles.replica.blocks().get(), EPOCH_BLOCKS);
     assert_eq!(inputs.tip, inputs.deadline + BlockCount::ONE);
     assert_eq!(
         replica.tip.to_raw(),
-        replica.schedule.slash_deadline_height(inputs.slash_epoch) + 1
+        replica
+            .schedule
+            .slash_deadline_height(roles.epoch(inputs.slash_epoch))
+            + 1
     );
-    // Passes: the C++ test wrote its eleven bits at one height of its
-    // choosing; the injector attributes a bit to the tip it is written at.
-    assert_eq!(inputs.pass_height, BlockHeight::from_raw(1_000));
+    // The shard and the join epoch: the fixture seeded shard 7 on a chain
+    // that had closed none (its `archival_r_market` rows are the credits',
+    // not a close's, below); the replica's shard is the one it filled, and
+    // its join epoch is the first CEN-J15 admits a join onto it — final
+    // after `reorg_cap`, priced by an epoch close — adjusted only so the
+    // joins and the passes sit in one epoch, as the fixture's do.
+    assert_eq!(roles.shard, replica.closed.shard);
+    assert_eq!(roles.epoch_offset, replica.join_epoch);
+    let rules = levered_rules();
+    let admissible = first_admissible_compact_join(&rules, replica.closed);
     assert!(
-        replica.pass_height.to_raw() < REPLICA_SEB,
-        "injected inside epoch 0"
+        admissible <= replica.join_height
+            && replica.join_height.to_raw() - admissible.to_raw() < EPOCH_BLOCKS,
+        "the join sits at or just after J15's first admissible height"
+    );
+    assert_eq!(
+        replica.schedule.epoch_at_height(admissible.to_raw()),
+        replica.join_epoch
+    );
+    assert!(replica.join_epoch > 0, "the fill mined through epoch 0");
+    // Passes: the C++ test wrote its eleven bits at one height of its
+    // choosing; the injector attributes a bit to the tip it is written at,
+    // inside the join epoch.
+    assert_eq!(inputs.pass_height, BlockHeight::from_raw(1_000));
+    assert_eq!(
+        replica
+            .schedule
+            .epoch_at_height(replica.pass_height.to_raw()),
+        replica.join_epoch,
+        "injected inside the join epoch"
     );
     // Bonds: the C++ seeded two floors per persona; a join pins exactly the
     // floor its holdings imply (gate-4 §4.1), one here.
@@ -338,6 +450,7 @@ fn bond(side: &ArchivalSnapshot, persona: &PCanonicalId) -> BondRecord {
 /// The one test: build the replica once, then hold every family of the
 /// capture against it through the role map.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills a shard with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored the_lmdb_slash_fixture"]
 async fn the_lmdb_slash_fixture_rebuilt_on_the_rust_stack_matches_on_state_and_disagrees_on_the_key(
 ) {
     let inputs = Inputs::read();
@@ -349,6 +462,8 @@ async fn the_lmdb_slash_fixture_rebuilt_on_the_rust_stack_matches_on_state_and_d
             (inputs.p_miss, replica.p_miss.id()),
             (inputs.p_served, replica.p_served.id()),
         ]),
+        shard: replica.closed.shard,
+        epoch_offset: replica.join_epoch,
         fixture: SettlementSchedule::new(SettlementEpochBlocks::new(inputs.seb).expect("non-zero")),
         replica: replica.schedule,
     };
@@ -365,7 +480,7 @@ async fn the_lmdb_slash_fixture_rebuilt_on_the_rust_stack_matches_on_state_and_d
         &theirs, ours, &inputs, &replica, &roles,
     );
     slash_applied_and_watermark_match(&theirs, ours, &inputs, &roles);
-    the_close_families_match_by_epoch(&theirs, ours);
+    the_close_families_match_by_epoch(&theirs, ours, &inputs, &roles);
     assert!(
         theirs.rows(SnapshotFamily::AttestationWitness).is_empty()
             && ours.rows(SnapshotFamily::AttestationWitness).is_empty(),
@@ -390,17 +505,36 @@ fn bonds_match_on_state(
         let fixture = BondRecord::decode(row).expect("the fixture's bond row decodes");
         let persona = roles.persona(key);
         let rust = bond(ours, &persona);
-        assert_eq!(rust.join_settlement_epoch, fixture.join_settlement_epoch);
-        assert_eq!(rust.holdings, fixture.holdings, "{}", hex(key));
-        assert_eq!(rust.bad_intervals, fixture.bad_intervals, "{}", hex(key));
+        assert_eq!(
+            rust.join_settlement_epoch,
+            roles.settlement_epoch(fixture.join_settlement_epoch)
+        );
+        assert_eq!(
+            rust.holdings,
+            roles.holdings(&fixture.holdings),
+            "{}",
+            hex(key)
+        );
+        assert_eq!(
+            rust.bad_intervals,
+            fixture
+                .bad_intervals
+                .iter()
+                .map(|i| roles.interval(i))
+                .collect::<Vec<_>>(),
+            "{}",
+            hex(key)
+        );
         assert_eq!(
             rust.claimed_settlement_epochs,
-            fixture.claimed_settlement_epochs
+            fixture
+                .claimed_settlement_epochs
+                .iter()
+                .map(|e| roles.settlement_epoch(*e))
+                .collect::<Vec<_>>()
         );
-        assert_eq!(
-            rust.first_paying_emission_height,
-            fixture.first_paying_emission_height
-        );
+        assert_eq!(fixture.first_paying_emission_height, None);
+        assert_eq!(rust.first_paying_emission_height, None);
         let burned_there = inputs.seeded_bonded - fixture.bonded_total.to_raw();
         let burned_here = ARCHIVAL_BOND_FLOOR_ATOMIC - rust.bonded_total.to_raw();
         assert_eq!(burned_here, burned_there, "{}", hex(key));
@@ -421,7 +555,7 @@ fn bonds_match_on_state(
             assert_eq!(
                 rust.bad_intervals,
                 vec![BadInterval {
-                    start_epoch: inputs.slash_epoch,
+                    start_epoch: roles.epoch(inputs.slash_epoch),
                     end_exclusive: BadInterval::OPEN_END,
                 }]
             );
@@ -429,8 +563,8 @@ fn bonds_match_on_state(
             assert_eq!(
                 rust.holdings,
                 Holdings::shard_set(vec![HeldShard {
-                    shard: ShardId::from_raw(SHARD),
-                    add_epoch: SettlementEpoch::from_raw(0),
+                    shard: roles.shard,
+                    add_epoch: SettlementEpoch::from_raw(roles.epoch(0)),
                 }])
                 .expect("one shard")
             );
@@ -460,7 +594,11 @@ fn passes_match_by_persona_shard_epoch(
     for key in theirs.rows(SnapshotFamily::ServeCredit).keys() {
         let (persona, shard, epoch, height) = split(key);
         assert_eq!(height, inputs.pass_height.to_raw());
-        there.insert((roles.persona(&persona), shard, epoch));
+        there.insert((
+            roles.persona(&persona),
+            roles.shard(shard),
+            roles.epoch(epoch),
+        ));
     }
     let mut here = BTreeSet::new();
     for key in ours.rows(SnapshotFamily::ServeCredit).keys() {
@@ -476,7 +614,7 @@ fn passes_match_by_persona_shard_epoch(
     assert_eq!(here.len(), usize::try_from(inputs.m).expect("m"));
     assert!(here
         .iter()
-        .all(|(p, s, _)| *p == replica.p_served.id() && *s == SHARD));
+        .all(|(p, s, _)| *p == replica.p_served.id() && *s == roles.shard.to_raw()));
 }
 
 /// One slash row on each side, equal on everything the entry records —
@@ -513,13 +651,19 @@ fn the_slash_log_key_disagreement_is_exactly_the_one_posed(
         roles.persona(entry_there.persona.as_bytes())
     );
     assert_eq!(entry_here.persona, replica.p_miss.id());
-    assert_eq!(entry_here.shard, entry_there.shard);
-    assert_eq!(entry_here.epoch, entry_there.epoch);
+    assert_eq!(
+        entry_here.shard.to_raw(),
+        roles.shard(entry_there.shard.to_raw())
+    );
+    assert_eq!(entry_here.epoch, roles.settlement_epoch(entry_there.epoch));
     assert_eq!(
         entry_here.epoch,
-        SettlementEpoch::from_raw(inputs.slash_epoch)
+        SettlementEpoch::from_raw(roles.epoch(inputs.slash_epoch))
     );
-    assert_eq!(entry_here.holding, entry_there.holding);
+    assert_eq!(
+        entry_here.holding,
+        roles.slashed_holding(&entry_there.holding)
+    );
 
     // The key: the same decision, named two ways. Read each side's raw
     // `u64` as the quantity that side wrote — the count of the chain whose
@@ -536,7 +680,11 @@ fn the_slash_log_key_disagreement_is_exactly_the_one_posed(
     assert_eq!(key_there, inputs.log_key, "as the inputs file states");
     assert_eq!(
         key_here,
-        BlockHeight::from_raw(replica.schedule.slash_deadline_height(inputs.slash_epoch)),
+        BlockHeight::from_raw(
+            replica
+                .schedule
+                .slash_deadline_height(roles.epoch(inputs.slash_epoch))
+        ),
         "the Rust writer keys it by the connecting height — the deadline itself"
     );
     // Through the bridge, both keys name the deadline block — the C++'s as
@@ -564,7 +712,10 @@ fn slash_applied_and_watermark_match(
             .map(|k| (map(&k[..32]), le(&k[32..40]), le(&k[40..48])))
             .collect::<BTreeSet<_>>()
     };
-    let there = applied(theirs, &|p| roles.persona(p));
+    let there = applied(theirs, &|p| roles.persona(p))
+        .into_iter()
+        .map(|(p, s, e)| (p, roles.shard(s), roles.epoch(e)))
+        .collect::<BTreeSet<_>>();
     let here = applied(ours, &|p| {
         PCanonicalId::from_bytes(p.try_into().expect("32"))
     });
@@ -573,40 +724,65 @@ fn slash_applied_and_watermark_match(
         here,
         BTreeSet::from([(
             roles.persona(inputs.p_miss.as_bytes()),
-            SHARD,
-            inputs.slash_epoch
+            roles.shard.to_raw(),
+            roles.epoch(inputs.slash_epoch)
         )])
     );
     assert_eq!(
-        u64_keys(theirs, SnapshotFamily::LastSlashEpoch),
+        u64_keys(theirs, SnapshotFamily::LastSlashEpoch)
+            .into_iter()
+            .map(|e| roles.epoch(e))
+            .collect::<BTreeSet<_>>(),
         u64_keys(ours, SnapshotFamily::LastSlashEpoch)
     );
     assert_eq!(
         u64_keys(ours, SnapshotFamily::LastSlashEpoch),
-        BTreeSet::from([inputs.slash_epoch])
+        BTreeSet::from([roles.epoch(inputs.slash_epoch)])
     );
 }
 
-/// The close families compare by **epoch**: both sides closed epochs
-/// `0..=12` and hold epoch 13 open. Their values do not compare — the C++
-/// fixture's minimal blocks accrue nothing (`accrual_per_block: 0`), the
-/// replica's coinbases are priced — so the fixture's are asserted zero and
-/// the replica's are the close writer's, witnessed by the captured corpus.
-fn the_close_families_match_by_epoch(theirs: &ArchivalSnapshot, ours: &ArchivalSnapshot) {
-    for family in [
-        SnapshotFamily::SigmaWork,
-        SnapshotFamily::Budget,
-        SnapshotFamily::BudgetAccruing,
-    ] {
-        assert_eq!(u64_keys(theirs, family), u64_keys(ours, family), "{family}");
+/// The close families compare by **epoch**, through the offset: the
+/// fixture closed epochs `0..=12` and holds 13 open; the replica closed
+/// `0..=E_join + 12` and holds `E_join + 13` open — the epochs below
+/// `E_join` are the fill's, by construction, and exactly those. Their
+/// values do not compare — the C++ fixture's minimal blocks accrue nothing
+/// (`accrual_per_block: 0`), the replica's coinbases are priced — so the
+/// fixture's are asserted zero and the replica's are the close writer's,
+/// witnessed by the captured corpus.
+fn the_close_families_match_by_epoch(
+    theirs: &ArchivalSnapshot,
+    ours: &ArchivalSnapshot,
+    inputs: &Inputs,
+    roles: &Roles,
+) {
+    let fill_epochs = (0..roles.epoch_offset).collect::<BTreeSet<_>>();
+    for family in [SnapshotFamily::SigmaWork, SnapshotFamily::Budget] {
+        let mapped = u64_keys(theirs, family)
+            .into_iter()
+            .map(|e| roles.epoch(e))
+            .collect::<BTreeSet<_>>();
+        let here = u64_keys(ours, family);
+        assert_eq!(
+            here.difference(&mapped).copied().collect::<BTreeSet<_>>(),
+            fill_epochs,
+            "{family}: the replica's extra closes are the fill's epochs"
+        );
+        assert!(mapped.is_subset(&here), "{family}");
     }
     assert_eq!(
+        u64_keys(theirs, SnapshotFamily::BudgetAccruing)
+            .into_iter()
+            .map(|e| roles.epoch(e))
+            .collect::<BTreeSet<_>>(),
+        u64_keys(ours, SnapshotFamily::BudgetAccruing)
+    );
+    assert_eq!(
         u64_keys(ours, SnapshotFamily::Budget),
-        (0..13).collect::<BTreeSet<_>>()
+        (0..roles.epoch(inputs.slash_epoch + 2)).collect::<BTreeSet<_>>()
     );
     assert_eq!(
         u64_keys(ours, SnapshotFamily::BudgetAccruing),
-        BTreeSet::from([13])
+        BTreeSet::from([roles.epoch(inputs.slash_epoch + 2)])
     );
     for family in [SnapshotFamily::Budget, SnapshotFamily::BudgetAccruing] {
         for value in theirs.rows(family).values() {
@@ -617,15 +793,27 @@ fn the_close_families_match_by_epoch(theirs: &ArchivalSnapshot, ours: &ArchivalS
             );
         }
     }
-    // `archival_r_market` is the non-zero set: both sides' passes are
-    // bits, not responses the close counts.
+    // `archival_r_market` is the non-zero set: `(shard, epoch) → r`, one
+    // row per epoch the served persona was credited in, `r = 1` — the
+    // fixture's on its seeded shard, the replica's on the filled one, the
+    // same epochs through the offset. (The fixture's rows are the credits'
+    // alone: its chain closed no shard, so no close priced one.)
+    let r_rows = |side: &ArchivalSnapshot, map: &dyn Fn(u64, u64) -> (u64, u64)| {
+        side.rows(SnapshotFamily::RMarket)
+            .iter()
+            .map(|(k, v)| (map(le(&k[..8]), le(&k[8..16])), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let there = r_rows(theirs, &|shard, epoch| {
+        (roles.shard(shard), roles.epoch(epoch))
+    });
+    let here = r_rows(ours, &|shard, epoch| (shard, epoch));
+    assert_eq!(here, there);
     assert_eq!(
-        theirs
-            .rows(SnapshotFamily::RMarket)
-            .keys()
-            .collect::<Vec<_>>(),
-        ours.rows(SnapshotFamily::RMarket)
-            .keys()
-            .collect::<Vec<_>>()
+        here.keys().copied().collect::<BTreeSet<_>>(),
+        (1..=inputs.m)
+            .map(|e| (roles.shard.to_raw(), roles.epoch(e)))
+            .collect::<BTreeSet<_>>(),
+        "one priced row per pass epoch"
     );
 }

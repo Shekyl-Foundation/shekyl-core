@@ -39,6 +39,16 @@
 //! deadline scan's progress, not a slash, and the epoch-crossing chain
 //! carries it — so the `SlashLog` *gate* has a stub witness through the
 //! watermark while the slash *rows* have none.
+//!
+//! **A witness chain that predates a rule suspends its stub half.** The
+//! stub half needs the replay to reach the tip or to be ended by the
+//! missing rows; a chain `vectors_tests::PREDATES` records is ended by the
+//! rule it predates instead, at the same height whatever is stubbed, so a
+//! refusal equal to its record is **not** the stub being noticed — it is
+//! read as `Suspended`, reported, and counted for nothing. The census half
+//! is unaffected (it reads the committed `0x04` record, not a replay).
+//! Today that is `emission-claim`'s four families and the watermark: their
+//! stub witnesses resume when the chain is regenerated against CEN-J15.
 
 // A whole-file test module, gated at `lib.rs` by
 // `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
@@ -55,7 +65,9 @@ use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_chain_store::archival_snapshot::{disposition, Disposition, SnapshotFamily};
 
 use crate::trace::Trace;
-use crate::vectors_tests::{captured_chains, mock_with_the_real_clock, replay_under, Manifest};
+use crate::vectors_tests::{
+    captured_chains, mock_with_the_real_clock, predates, replay_under, Manifest,
+};
 
 /// What stands behind a family's `identical` at the captured tips.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,6 +328,19 @@ async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     let report = replay_under(dir, manifest, substrate, policy)
         .await
         .expect("no row the chain's blocks need is behind the slash log's gate");
+    // The watermark is written at the epoch close (512); a chain refused
+    // below it by a rule it predates never gets there, stubbed or not. The
+    // witness is suspended, pinned to the record, and resumes the day the
+    // record is deleted (module doc).
+    if let Some(record) = predates(&manifest.shape) {
+        assert_eq!(report.refused, Some(record.refused), "{}", record.why);
+        eprintln!(
+            "SlashLog stubbed on `{}`: watermark witness SUSPENDED — refused at {:?} by {:?} \
+             before the epoch closes; resumes when the chain is regenerated",
+            manifest.shape, record.refused.0, record.refused.1.rule
+        );
+        return;
+    }
     assert!(report.refused.is_none(), "{:?}", report.refused);
     let archival = report.archival.as_ref().expect("the tip was compared");
     let diverged: Vec<SnapshotFamily> = archival.diff.diverged().map(|d| d.family).collect();
@@ -327,7 +352,7 @@ async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     );
 }
 
-/// How a stubbed replay went red.
+/// How a stubbed replay went red — or did not get the chance.
 #[derive(Debug)]
 enum Red {
     /// The run reached the tip and the oracle named these families.
@@ -335,6 +360,10 @@ enum Red {
     /// The run ended before the tip: a refusal at the height, or a store
     /// fault — a cascade of the missing rows, recorded as such.
     Cascade(String),
+    /// The run ended exactly where `vectors_tests::PREDATES` says the
+    /// chain is refused regardless of the stub. Not the stub's doing;
+    /// the witness is suspended until the chain is regenerated.
+    Suspended,
 }
 
 /// Stub half: each corpus-witnessed family's writer, stubbed on its
@@ -357,6 +386,11 @@ async fn stubbing_each_witnessed_family_is_noticed() {
         let red = match replay_under(dir, manifest, Arc::clone(&substrate), policy).await {
             Err(fault) => Red::Cascade(fault),
             Ok(report) => match (&report.refused, &report.archival) {
+                (Some(refused), _)
+                    if predates(shape).is_some_and(|record| record.refused == *refused) =>
+                {
+                    Red::Suspended
+                }
                 (Some(refused), _) => Red::Cascade(format!("refused: {refused:?}")),
                 // Neither red nor compared is not a stub's doing — the
                 // trace or the run lost the tip. A finding, not an outcome.
@@ -380,6 +414,13 @@ async fn stubbing_each_witnessed_family_is_noticed() {
             }
             Red::Cascade(how) => {
                 eprintln!("{family:?} stubbed on `{shape}`: cascade before the tip — {how}");
+            }
+            Red::Suspended => {
+                eprintln!(
+                    "{family:?} stubbed on `{shape}`: witness SUSPENDED — the chain predates a \
+                     rule and is refused at the same height whatever is stubbed; resumes when \
+                     it is regenerated"
+                );
             }
         }
     }
