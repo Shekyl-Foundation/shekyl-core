@@ -122,3 +122,14 @@ claim post lands.
 flight, one thread runs every strand, and the operator view can
 report claims unknown. Recorded on #991. The reopen is this slice
 landing the dial off that pool. Do not fix it in C++.
+
+The post-handshake cause race is the same carrier. The dial thread
+reads `shekyl_seam_session_cause` after the strand has queued the
+reap, so a cause that does not implicate the address can be read as
+`LocalClose`. The closed post logs the cause and does not hand it to
+the strand. No counted cause takes that path. The closeout pair's
+shut-write row was `PeerClosed` once and `LocalClose` otherwise, not
+recorded either way. This slice's handshake receives the cause
+directly. Do not patch the C++. The record is
+`LV3_CONNECTION_OBJECT.md`. Reopen if the Rust handshake still
+classifies a shut write by reading a row the strand can reap first.
