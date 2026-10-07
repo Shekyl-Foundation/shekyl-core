@@ -127,36 +127,15 @@ store what they claim:
   sustained failure.
 
 **Settled doctrine (do not redesign):** coverage is exhaustive, not sampled —
-every bonded pair is challenged every epoch. Structural: the emission formula
+every bonded pair is drawable every epoch and the draw is weighted to reach
+each one. A pair the draw does not reach three times settles NonObservation
+([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.3, §4.4, §12). Structural: the emission formula
 indexes per shard (§5.5; welded in `ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`,
 `ARCHIVAL_TIMING_CONSTANTS.md`).
 
 ## 2. The lifecycle under derived assignment (the ratified direction)
 
-> **Specification:** the lifecycle is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md). Since 2026-10-07 selection is a secret per-block draw revealed with the block's pass records, not a public function of `block_hash(h − 1)`; the record is filed by the producer of `h`, not by any miner. "A miss is never asserted", "satisfaction does not drain the pool" and the reorg argument below carry over. This section is the ruling record of derived assignment.
-
-**Selection is a pure function of chain state.** The assignment for block h —
-which pair is challenged, and the window in which the read must resolve — is
-derived from block h−1's hash over the epoch's drawable set (§4 defines
-drawable). Every node computes it identically; nothing is recorded for
-selection. Grinding the assignment costs discarding a valid block (a full
-block reward), as in the TJ round.
-
-**There is no commitment record.** The prior design's Phase B (an explicit
-in-block "I am challenging (P, s)" record, with window W₁ between selection
-and commitment) is **superseded**: since assignment is derivable, the block
-*is* the commitment, and W₁ dissolves. Recorded as considered-and-superseded,
-not deleted, because the commitment record was the previous answer to putting
-the denominator on-chain — the denominator is now derived (§4).
-
-**Grounding note — this ruling dissolves a documented dead-end.** The
-audit-by-omission retraction (FOLLOWUPS, credit-wire round, 2026-08-02) found
-that a commitment riding the same block as the records is post-hoc — the
-miner picks its pair list *after* learning outcomes — and that fixing it
-needed the commitment on-chain **before** the reads: "a two-block protocol
-requiring the miner to win twice — dead on arrival." Derived assignment is
-that fix without the obstacle: the assignment is public at h−1's publication,
-before any read, with no second win required.
+> **Specification:** the lifecycle is [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)'s. Selection is a secret per-block draw: the producer of `h` commits to a seed in its coinbase, reads the pairs it draws, and reveals the seed with that block's pass records (its §4, §7). Nothing about a block's draws is public before the reveal. What this section holds is the read, the rule that a miss is never asserted, continued drawability, and the reorg argument.
 
 The read itself (unchanged from the TJ round):
 
@@ -184,9 +163,12 @@ The read itself (unchanged from the TJ round):
    §7.2(i) anchor-key fork is **closed**). P gates `anchor_height`
    against its own height ±`L` before signing; admission looks the anchor
    hash up on the connecting chain inside `[h − 720 − L, h − 720]`. The
-   v1 block-bound-nonce-alone message is deleted.
-4. The pass record is broadcast as a transaction; any miner may include it
-   within the resolution window **W₂**.
+   v1 block-bound-nonce-alone message is deleted. *This step describes the
+   landed verifier. The receipt the specification rules — a nonce bound to
+   `(h, j)`, a separate receipt key, no anchor bound at admission — is its
+   §5, §6 and §9.1, and is not built.*
+4. The producer of `h` files the pass record in a carrier it signs, within
+   the resolution window **W₂** (specification §7).
 
 **A miss is never asserted.** It is the expiry of a derived challenge with no
 pass recorded within W₂. No miss record exists on the wire; no party attests
@@ -220,12 +202,6 @@ against. It also gives the anti-evasion exponent: a colluding witness must
 intercept *every* draw a pair receives, succeeding with probability q^k
 rather than q — at q = 0.1, one draw per epoch is a 10 % shield, two is
 1 %.
-
-**Anti-DDoS scope property (part of the ruling):** deriving from the
-*previous block's hash* strictly limits how far ahead challenge windows are
-knowable, so an attacker cannot precompute P's obligated-to-serve schedule.
-This property is in tension with exact-coverage scheduling — that tension is
-fork §7.1, not something to resolve silently.
 
 **Reorg semantics fall out for free:** a `pop_block` leaves nothing to void —
 assignments re-derive on the new chain; a pass record anchored to a reorged
@@ -391,6 +367,9 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 
 - `settle_epoch` (`attestation.rs:75`) rewrites: a majority rule needs the
   derived denominator, not a pass multiset. Pass-priority retires.
+  *(The rule to build is the specification's §9.3: three counted draws
+  selected at close, fewer than three issued is NonObservation. What
+  follows is `settle_epoch` as landed.)*
   **The threshold sub-decision is RATIFIED (2026-08-11): absolute-2.**
   `settle_epoch(passes, issued)`, three-valued: Served iff passes ≥ 2,
   full stop; issued < 2 settles **NonObservation** (a pair the urn could

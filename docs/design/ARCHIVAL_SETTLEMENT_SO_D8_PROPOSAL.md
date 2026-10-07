@@ -15,8 +15,11 @@ Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
 `SO-D8d` (three local layers; store-invariant Fault, not a verdict;
 amended same day against `dev@5fde3b1ce` — §6.3); `SO-D8e` (forward
 urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
-**Still to be ruled:** Q9's set-commitment bytes (§7.6.1, PROPOSED —
-one customization + KAT; carrier semantics RULED (B), §7.6.2). **Q4
+**SUPERSEDED 2026-10-07** by the secret per-block draw
+([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)): the
+urn and ring of `SO-D8e`, Q8's derivation, Q12's bare hash, and the
+public-urn form of `SO-D8b`. Q9's set-commitment bytes are ruled there
+(`SCS-P6`); carrier semantics are (B), §7.6.2. **Q4
 RESOLVED 2026-09-17** (one production constructor reads the constant;
 `assign_epoch` feeds it; explicit λ is `#[cfg(test)]` —
 `fix/so-q4-pin-lambda`). **Slice C AUTHORIZED 2026-10-04** (maintainer;
@@ -35,10 +38,7 @@ security and quantum resilience are preconditions; privacy is second, as the
 product. The 2026-09-13 opening brief inverted the top two
 (*"privacy > security > correctness > performance > features"*) — **SUPERSEDED
 here**. A hiding commitment that weakens the binding is refused; the
-privacy gain does not enter the arithmetic. Q12 RULED independently
-(§7.9): hiding without stopping the pk reveal is theater, so a bare
-hash is the only purchasable option. The hierarchy still binds if a
-reopener conceals `h` and forbids publishing `pk`.
+privacy gain does not enter the arithmetic.
 
 > **Line-number era.** `blockchain.cpp:NNNN` citations in this document are
 > pinned at `dev@37accf6f` (the brief's read); `dev` has since shed ~195 lines
@@ -94,8 +94,8 @@ reopener conceals `h` and forbids publishing `pk`.
 > | SO-D9 `epoch(h) == E` | **surface-free** | E6 increment |
 > | `0x0C` content (Q13 RULED) | coinbase `tx_extra` predicate, no store handle; **surface-free** | E6 increment |
 > | witness verification | `h`'s coinbase commitment from `tx_extra`; **surface-bound to the block/tx surface**, which ports well ahead of S-ARCH | E6-or-tx, not E4 |
-> | membership against `assignment(h)` | drawable set produced by `DrawableSet::at_epoch_open` (Q3 RULED, chain-rules over `ChainView`; no snapshot table). Gate still **surface-bound to S-ARCH** with the writer — Q3 names the producer, it does not re-home the gate | E4 |
-> | dedup `(P,s,E,h)` exact-get | **surface-bound to S-ARCH** | E4 |
+> | membership (the pair is draw `j` of `h`'s revealed seed) | drawable set produced by `DrawableSet::at_epoch_open` (Q3 RULED, chain-rules over `ChainView`; no snapshot table). Gate still **surface-bound to S-ARCH** with the writer — Q3 names the producer, it does not re-home the gate | E4 |
+> | dedup per draw, `(h, j)` exact-get | **surface-bound to S-ARCH** | E4 |
 >
 > Waiting is **stronger than the shim prohibition.** Landing R-B
 > pre-cutover writes the gates into `blockchain.cpp`; the port then
@@ -131,9 +131,7 @@ reopener conceals `h` and forbids publishing `pk`.
 > The two falsifier conditions above are no longer waits. The first
 > stands as Slice C's landing rule: Rust only, in `shekyl-chain-rules`,
 > never a C++-verdict shim. Q14's prohibition stands: the C++ tautology
-> is not repaired.* **Q12 RULED 2026-09-16 (§7.9):** bare
-> 32-byte hash, on its own analysis, not as F5 inheritance. *SUPERSEDED:
-> "Q12 is sequenced behind F5."*
+> is not repaired.*
 
 **Grounded at** `dev@37accf6f` (fresh worktree `~/shekyl/wt-so-settlement`,
 branch `feat/so-a-settlement-surface` carrying the three Slice-A commits
@@ -364,7 +362,7 @@ transaction; any miner may include it within the resolution window W₂"* —
 shape R-B. Both are ratified text; they cannot both be the mechanism.
 
 **The herd premise is inverted.** Under R-A every miner attempting `h` must
-fetch `~λ·D/SEB` segments (≈ 97 at maturity, §7.1) from their `P`s *inside the
+fetch `~λ·D/SEB` segments (≈ 97 at maturity) from their `P`s *inside the
 block interval*, speculatively, because the record can only ride `h` and only
 `h`'s winner gets paid for it. That is ~97 concurrent fetches per pool per
 block hitting the same `P`s — the herd `PC-D2` was written to avoid. Under
@@ -539,35 +537,24 @@ that recommendation is **withdrawn** and the reason it was wrong is F4.
 
 Items **7 and 8 RULED 2026-09-16** (Q10, Q9). **`SO-D8a`/`b`/`c` RULED
 2026-09-16** (items 3b/fire, 4, 5 — transcriptions). **`SO-D8d` RULED
-2026-09-16** (§6). **`SO-D8e` RULED 2026-09-16** (§7.2). **Q4 RESOLVED
+2026-09-16** (§6). **`SO-D8e` RULED 2026-09-16** (§7.2; mechanism superseded 2026-10-07). **Q4 RESOLVED
 2026-09-17** (item 6's λ pin landed).
 
 Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
 disagrees with the enumeration the correction is marked.
 
-1. **Record format — genesis-frozen, and the RF round reopens.** `h` on the
-   kept side (varint ≤ 10 B), kept ceiling `117 → 127` worst case
-   (`1 + 32 + 10 + 10 + 10 + 64`). That moves `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES`
-   (`cryptonote_config.h:425`), its `static_assert` (`:426`) and the
-   const-asserted twin in `shekyl-wire` (`transaction.rs:184,:197`) — three
-   sites, one literal. Witness pk + sig go **pruned** (§2.2), so the pruned
-   ceiling re-derives (`ARCHIVAL_RESPONSE_FORMAT.md:845` gives 5,107 B
-   pre-`RF-D6`, `:974` ~3,411 B after; the new figure is that plus the witness
-   material, or plus its amortised share under batching — item 8).
-   `attestation_wire.rs`'s kept header is the *attestation* path's, not the
-   vin's (F3); the vin header that gains `h` is `ArchivalServeCreditResponse`
-   (`wire.rs`). **Rule 42 fires**: persisted block bytes move, version bump
-   owed. **Rule 21 reopening criterion for the RF close (2026-08-21) is met**
+1. **Record format — genesis-frozen, and the RF round reopens.** The
+   layout is the specification's §7 and §8 (`SCS-P5`): `h` rides the
+   carrier, a record keeps its input tag and `j`. **Rule 42 fires**:
+   persisted block bytes move, one version bump for record and carrier.
+   **Rule 21 reopening criterion for the RF close (2026-08-21) is met**
    — the ruled mechanism changed; this is the substrate change the close
    named, not preference.
-2. **The leaf-index operand rebinds to the issuing block** (corrected from
-   *"nonce operands"* — F3). `PC-D3`'s `challenge_leaf_index` takes
-   `block_hash(h − 1)`, the issuing block's predecessor, in place of
-   `prev_block_hash` of the including block; the validator fetches it by
-   validated height from `ChainView`. `ctx.block_hash_at_seal`
-   (`blockchain.cpp:5305`) and `challenge_fire_height` die with the beacon.
-   *2026-09-13 text named an FFI ctx field; Q15 deletes the FFI — `h` is a
-   field of the rule's input, not of a C++ context struct.*
+2. **The challenge binds to the issuing block.** The nonce is computed
+   from `h`'s revealed seed and `block_hash(h)` (specification §5); the
+   validator fetches the hash by validated height from `ChainView`.
+   `ctx.block_hash_at_seal` and `challenge_fire_height` die with the
+   beacon.
 3. **Admission path — five changes (semantics 2026-09-13; home SUPERSEDED
    2026-09-16 by Q15).** *Superseded site: `blockchain.cpp:5100–5330`.* The
    five changes land as `CEN-` rows in `shekyl-chain-rules` (§8), not in
@@ -577,21 +564,16 @@ disagrees with the enumeration the correction is marked.
    `h = tip` is in range); (b) **replace** the `h_close` gate (`:5186`)
    with the per-challenge deadline — the upper bound in (a) *is* the deadline;
    (c) `SO-D9` (i) as `settlement_epoch_at_height(h) == E`; (d) membership:
-   `(P, s) ∈ assignment(h)` — the urn must answer for the last `W₂` blocks,
-   not only the current one (§7); (e) witness authentication — read `h`'s
-   coinbase witness commitment, compare the hash of the presented witness
-   key, verify the hybrid signature over the record's binding preimage
-   (§2.2). Order matters for which refusal a test observes; the `SO-D9`
-   ruling's ordering note applies.
-4. **The dedup key stops being vacuous — an unexpected win.** `PC-D4` widened
-   the ledger key to `(P, s, E, block)` but kept dedup pair-epoch-wide
-   (`blockchain.cpp:5156` is `archival_serve_credit_pass_count(P,s,E) > 0`)
-   because the exact-get would probe a block not yet in the DB. Under R-B the
-   key's block is `h`, **in the past and in the DB**, so `(P, s, E, h)` is an
-   exact-get that resolves; `PC-D7`'s deferred half discharges without the
-   workaround. **Semantic change to record:** the ledger's height field means
-   *including* block today and must mean *issuing* block; the 48-byte-prefix
-   `pass_count` is unaffected either way.
+   the pair is draw `j` of `h`'s revealed seed; (e) witness authentication —
+   read `h`'s coinbase commitment, check the presented witness key and seed
+   against it, verify the signature over the set commitment. The order, which
+   decides the refusal a test observes, is the specification's §9.1.
+4. **Dedup stops being pair-epoch-wide.** Today's probe is
+   `archival_serve_credit_pass_count(P,s,E) > 0`, kept that way because an
+   exact-get would probe a block not yet in the DB. Under R-B the key names
+   the issuing block, **in the past and in the DB**, so an exact-get
+   resolves. The key is per draw, `(h, j)` (specification §9.1 step 7).
+   The ledger's height field means *issuing* block.
 5. **Emission gather — the real cost, and smaller than billed.**
    `gather_archival_emission_epoch_snapshot` (`db_lmdb.cpp:8334`) at
    `h_close(E)` becomes incomplete: records for `E` land up to `W₂ = 500`
@@ -612,66 +594,28 @@ disagrees with the enumeration the correction is marked.
    row **discharged**. `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
    (`:183–185`) becomes load-bearing (item 5 depends on it). `λ` is
    pinned to `CHALLENGES_PER_PAIR_PER_EPOCH` at the urn's entry points
-   (Q4 RESOLVED 2026-09-17, §7.3).
+   (Q4 RESOLVED 2026-09-17).
 7. **New daemon-side secret lifetime — Q10 RULED 2026-09-16 (§7.7): accept
    loss.** The producer of `h` retains the material to sign as witness
    until the batch is included (deadline `W₂`, expected latency much
    shorter). Rust-owned, memory-only, `ZeroizeOnDrop`, rules 35/36.
    Persist-encrypted is **REJECTED** (a daemon has no passphrase; rule 36
    §3 is a wallet envelope). Restart loss is β, logged as dropped
-   in-flight count. Named fallback if β is restart-dominated:
-   re-derivable `tx_key`, not persist. §2.2 / §7.5 say *which* secret.
-8. **Block weight — batching RULED 2026-09-16, amended same day (§7.6): set-commitment carrier, fail-whole, resubmission within `W₂`.** At
-   maturity (~97 draws/block; provisional on `D ≈ 324k`) witness addition per
-   record is `PQC_HYBRID_SINGLE_KEY_LEN + PQC_HYBRID_SINGLE_SIG_LEN` =
-   1,996 + 3,385 = 5,381 B (`cryptonote_config.h:386,:388`) against a record
-   that is ~3,411 B post-`RF-D8`-retraction (`ARCHIVAL_RESPONSE_FORMAT.md:1012`).
-   Unbatched ≈ 850 KB/block-equivalent; fully batched (one pk + one sig for
-   the set) ≈ 335 KB. Ruled form: one pk reveal, one signature over a
-   **set commitment** of the carrier's records (§7.6.1); no per-record
-   inclusion paths. *SUPERSEDED same day: Merkle-root form with
-   ⌈log₂ 97⌉ = 7 hashes, 224 B/record, ~22 KB/block — its isolation premise
-   was false under the carrier contract (§7.6.2).*
-   Permanent (kept) bytes: ~12 KB/block ≈ 3.2 GB/yr at 120 s/block either
-   way. Relayed volume at maturity ≈ 223 GB/yr unbatched vs ≈ 88 GB/yr
-   batched, mostly prunable. **Why batch:** at maturity archival traffic
-   sets the chain's median, and the fee ladder prices against the long-term
-   effective median (`block_weight.rs:10–17`); 850 KB vs 335 KB is a 2.5×
-   difference in the baseline every other participant's fees price against.
-   **Not** penalty avoidance. **SUPERSEDED:** "against a 300 KB penalty-free
-   zone" — 300,000 is `get_min_block_weight` (`cryptonote_basic_impl.cpp:81–85`
-   = `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`), a floor; `effective_median`
-   is a 100k-block long-term median and a 100-block short-term median clamped
-   to `[Mlw, S·Mlw]` (`block_weight.rs:36–39`); sustained archival load raises
-   the median and the steady state is penalty-free. **SUPERSEDED:** "who pays
-   the fee" (item 8(a) / F3's surviving half) — a serve-credit tx cannot pay
-   a fee by construction (`txin_archival_serve_credit_response` is a `txin_v`
-   variant, `cryptonote_basic.h:269,315`; coinbase `vin` must be exactly one
-   `txin_gen`, `blockchain.cpp:1394–1395`; `archival_tx_kind::serve_credit_only`
-   at `blockchain.cpp:3484–3488` is non-spending; `txnFee != 0` is a refusal,
-   `tx_verification_utils.cpp:117–119`). Records ride ordinary
-   `serve_credit_only` transactions, never the coinbase. **Prunable bytes
-   count toward `block_weight`**, read at source before this ruling:
-   `get_transaction_weight` is the full-blob size plus Bp+ clawback
-   (`cryptonote_format_utils.cpp:323–334`; clawback 0 for serve-credit,
-   empty `bulletproofs_plus`); `get_pruned_transaction_weight` reconstructs
-   the same number by adding `ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES * n`
-   (`:374–379`); Rust `Transaction::weight` is `serialized_len() + clawback`
-   (`transaction.rs:1457–1466`) and `write` includes the prunable region
-   (RF-D1). Two consequences ruled with it: the dedup key stays `(P, s, E, h)`
-   per record — a batch is a carrier, not a unit of credit; admission of a
-   record proves inclusion in a set that witness authored, not that the set
-   was complete. **Carrier is fail-whole** (§7.6.2 (B)): one bad member
-   refuses the carrier naming it; the witness refiles without it inside
-   `W₂` — a round-trip, not a loss. *SUPERSEDED: "fail-whole refused."*
-   **Split under `TX_WEIGHT_LIMIT` (re-derived 2026-09-16):** 42
-   records/carrier; 97 draws = 42 / 42 / 13; ≈ 347 KB/block; amortization
-   42:1. Cap-raise worth ~11 KB/block ≈ 2.8 GB/year — same fee-and-weight
-   round. Three txs are three inclusion decisions: inter-carrier blast
-   radius of 42; `W₂` is resubmission headroom. Partition leaks nothing
-   (set at `h` is public from `block_hash(h−1)`). Unpaid inclusion of
-   zero-fee data, and any discount of prunable archival bytes, belong to
-   a fee-and-weight round, not Q9.
+   in-flight count. Re-derivability is **REJECTED** (`SCS-P3`). The
+   secrets are the draw seed and the witness key (specification §4.2).
+8. **Block weight — batching RULED 2026-09-16, amended same day (§7.6): set-commitment carrier, fail-whole, resubmission within `W₂`.**
+   One witness key reveal and one signature per carrier, over a set
+   commitment; no per-record inclusion paths. **Why batch:** at maturity
+   archival traffic sets the chain's median, and the fee ladder prices
+   against the long-term effective median (`block_weight.rs:10–17`).
+   **Not** penalty avoidance: 300,000 is `get_min_block_weight`, a floor.
+   A serve-credit tx cannot pay a fee by construction, and prunable bytes
+   count toward `block_weight` (both read at source, §7.6). A batch is a
+   carrier, not a unit of credit. **Carrier is fail-whole** (§7.6.2 (B)):
+   one bad member refuses the carrier naming it; the witness refiles
+   without it inside `W₂` — a round-trip, not a loss. Unpaid inclusion of
+   zero-fee data, and any discount of prunable archival bytes, belong to a
+   fee-and-weight round, not Q9. Sizes: specification §7.4.
 
 ### 2.2 Two checks Rick asked for before ruling, and what they returned
 
@@ -681,8 +625,8 @@ any reorg deep enough to remove `h` also removes `h_incl`. There is no
 reachable state in which a connected record references a block that no longer
 exists; `pop_block` reverting `h_incl` removes the record before `h` can be
 touched. Written down because R-B is the first mechanism where evidence and
-its reference live in different blocks, and a reader will ask. The cache
-(§7) rewinds by the same suffix.
+its reference live in different blocks, and a reader will ask. The
+issued-draw index reverts by the same suffix (specification §10).
 
 **Linkability of an early witness-key reveal — the answer was F5; under
 `PL-D3` (#745) it is `PL-D3`'s own premise, and it rules the key the same
@@ -714,85 +658,49 @@ equality, with no commitment in the way:
   a KEM ciphertext (1,120 B) — permanently, for a key that is never used to
   spend; and its `0x07` entry must still pass `check_pqc_leaf_entries` and be
   scan-verified for nothing.
-- **Proposed instead, unchanged: a dedicated witness key that is not an
-  output.** Derive a hybrid keypair from the coinbase `combined_ss` under a
-  **distinct HKDF `info`** — a third child of the same `prk`, beside the
-  per-output path and `PL-D3`'s `r`/`r_h` labels; HKDF is registry mechanism 2,
-  so like those two labels it is a review duty the count-pin does not cover
-  (`PL` §6.2) — and commit the key in the coinbase under a **new `tx_extra`
-  tag** (`0x0C` is the next free after `0x0B`; #745 adds no tag). The
-  commitment is a **transparent** 32-B cSHAKE256 read of the canonical key
-  bytes under its own registered customization (`shekyl/archival-witness-key-v1`,
-  a mechanism-1 row, count-pin +1) — **not** `PL-D3`'s leaf-key scalar
-  (`shekyl/pqc-leaf-key-v1` is a domain for a scalar that opens a Pedersen
-  commitment; reusing it would put a non-leaf key under a leaf domain) and
-  **not** a hiding commitment, because hiding buys nothing here: the witness
-  role is public by construction (the producer of `h` is the producer of `h`)
-  and the key is revealed within `W₂` blocks anyway. 32 B/block permanent, no
-  output, no leaf, nothing the spend path ever touches. The witness reveals
-  `witness_pk` + a hybrid signature in the record's pruned half; verification
-  is (§2.1 item 3e) hash-compare against `h`'s coinbase tag, then verify.
-  HKDF children under distinct `info` are independent under the PRF
-  assumption the derivation already rests on, so the witness key reveals
-  nothing about the sibling per-output key, `r`, or `r_h`. Same
-  secret-lifetime cost as any alternative (item 7); the node retains
-  `combined_ss` or the derived seed for `W₂` blocks.
-
+- **Ruled (Q8): a dedicated witness key that is not an output.** It is
+  committed in the coinbase under a **new `tx_extra` tag** (`0x0C`), and
+  revealed with a signature in the carrier's prunable part. No output, no
+  leaf, nothing the spend path ever touches. It is fresh randomness, so it
+  reveals nothing about any output key, `r`, or `r_h`.
 **Q8 RULED 2026-09-16 (§7.5): the dedicated non-output key, against
 `PL-D3` rather than against the defect.** Commitment home is the new
-coinbase tag `0x0C` (the proposal's first cut). **SUPERSEDED:** extending
-`0x0B`'s blob instead of minting `0x0C` — the blob is `k × 49` B with no
-version prefix, empty = absent tag, and it names records *included in*
-this block, not this block *as issuer*. Combined_ss is reachable only
-inside Rust `construct_output`; it is not on `ShekylOutputData` and does
-not cross the FFI. Pins Q13 and Q10 inherit (§7.5 P1/P2): `0x0C` is
-**mandatory-present** (commitment 2, not byte count); per-block uniqueness
-of `combined_ss` is a derivation requirement with a fixture, not a KEM
-inheritance; Q10 RULED: the `W₂` ring *capacity* is 500, depth tracks
-fill-to-inclusion; persist-encrypted **REJECTED**. Q12 RULED (§7.9):
-bare 32-byte `cSHAKE256` under `shekyl/archival-witness-key-v1`. Q13
-RULED (§7.8): one CEN row, five fixtures, genesis-unconditional; it
-does not re-open optionality.
-
+coinbase tag `0x0C`; extending `0x0B`'s blob is refused (§7.5). `0x0C` is
+**mandatory-present** (commitment 2, not byte count). The key and the
+draw seed are fresh randomness per block, and `0x0C` is one 32-byte
+commitment over both (`SCS-P1`, `SCS-P3`; specification §4.2). Q10 RULED:
+the `W₂` ring *capacity* is 500, depth tracks fill-to-inclusion;
+persist-encrypted **REJECTED**. Q13 RULED (§7.8): one CEN row, five
+fixtures, genesis-unconditional; it does not re-open optionality.
 **Q9 RULED 2026-09-16, amended same day (§7.6): set-commitment
-batching, carrier fail-whole, resubmission within `W₂`.** One pk, one
-signature over a set commitment of the carrier's records; no inclusion
-paths. One bad member refuses the carrier naming it; the witness refiles
-without it. Dedup stays per-record. There is no fee. The 300 KB figure
-is a floor. Prunable bytes count toward weight (read at the weight path,
-not inferred from a missing carve-out). The unpaid-inclusion residual is
-a fee-and-weight round (FOLLOWUPS row), not Q9. Against
-`TX_WEIGHT_LIMIT` the 97-record set splits 42 / 42 / 13 (≈ 347 KB/block;
-42:1 amortization). Inter-carrier blast radius is 42; `W₂` is
-resubmission headroom. Partition leaks nothing. *SUPERSEDED: Merkle-root
-batching with inclusion paths; "fail-whole refused"; 39 / 39 / 19.*
-
+batching, carrier fail-whole, resubmission within `W₂`.** One witness key
+reveal, one signature over a set commitment; no inclusion paths. One bad
+member refuses the carrier naming it; the witness refiles without it.
+There is no fee. The 300 KB figure is a floor. Prunable bytes count
+toward weight (read at the weight path, not inferred from a missing
+carve-out). The unpaid-inclusion residual is a fee-and-weight round
+(FOLLOWUPS row), not Q9. Bytes, reveal and sizes: specification §7.
 **Q10 RULED 2026-09-16 (§7.7): accept loss.** Memory-only
 `ZeroizeOnDrop` ring; persist-encrypted **REJECTED**. File promptly;
 evict on inclusion. Orderly shutdown logs remaining depth then drops;
-unclean restart logs that in-flight count is **unknown**. Named fallback:
-re-derivable `tx_key` from a long-lived node secret and `h`, not persist.
+unclean restart logs that in-flight count is **unknown**. Re-derivability
+from a long-lived node secret is **REJECTED** (`SCS-P3`, 2026-10-07).
 
 **Q13 RULED 2026-09-16 (§7.8): one `CEN-` row, five fixtures.** Exactly
-one entry, length `WITNESS_COMMITMENT_BYTES` (32; Q12 RULED, stays 32
-unless a Q12 reopener fires), coinbase only, **present**, from genesis.
+one entry, length `WITNESS_COMMITMENT_BYTES` (32, `SCS-P1`), coinbase only, **present**, from genesis.
 Dedicated parser — do not copy `0x0B`'s empty-set convention. First-wins
 is the red edit for duplicates.
 
-**Q12 RULED 2026-09-16 (§7.9): bare 32-byte hash.** `cSHAKE256` of the
-canonical witness pk under `shekyl/archival-witness-key-v1` (registry
-checked, no collision; TSV row at Slice C). Hiding is theater because
-the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
-payout already in the block), not a miner identity. Real residual is
-P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q9 set-commitment vectors (§7.6.1). Q4 RESOLVED
-2026-09-17. `SO-D8e` RULED (§7.2); Q9 carrier semantics RULED (B) (§7.6.2).
+**Q12 SUPERSEDED 2026-10-07 (`SCS-P1`).** `0x0C` is one 32-byte
+commitment over `witness_pk ‖ seed` (specification §4.2). Q4 RESOLVED
+2026-09-17. `SO-D8e`'s mechanism is superseded with the urn (§7); Q9
+carrier semantics RULED (B) (§7.6.2).
 
 ---
 
 ## 3. `SO-D8a` — boundary arithmetic and the deadline gates, under R-B — RULED 2026-09-16
 
-> **Specification:** the admission window is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 (step 0 and step 6). This section is the ruling record.
+> **Specification:** the admission window is stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 (step 1). This section is the ruling record.
 
 **RULED 2026-09-16: transcription of the R-B ratification.** `E = epoch(h)` —
 the issuing block's epoch — enforced by `SO-D9` (i) evaluated at `h`. The
@@ -826,43 +734,19 @@ cutover.
 
 ## 4. `SO-D8b` — dedup and the membership gate, under R-B — RULED 2026-09-16
 
-> **Specification:** membership and dedup are stated in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 (steps 3 and 8). Since 2026-10-07 the draw is secret and per block, so membership is "`(P, s)` is draw `j` of `h`'s revealed seed" and the dedup key is `(P, s, E, h, j)`. This section is the ruling record of the public-urn form.
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.1 states membership (step 4) and dedup (step 7).
 
-**RULED 2026-09-16: transcription.** Dedup widens to `(P, s, E, h)` exact-get;
-membership against `assignment(h)`. The exact-get resolves here because `h`
-is in the past and in the DB, which is what `PC-D4` could not do.
+**Ruled 2026-09-16 and standing.** Admission checks that the record's pair
+was drawn at `h`, and dedup is per draw, not per pair-epoch. The
+pair-epoch-wide probe refuses the second and third honest passes of a
+pair, so it goes. Without the membership check a miner colluding with `P`
+files pass records for `P`'s pair citing any `h` it likes and settles
+**Served** with zero honest draws.
 
-- Dedup today (`blockchain.cpp:5156`): one serve-credit vin per `(P,s,E)`
-  **per epoch** — pair-epoch-wide, `pass_count > 0`. Correct under the beacon
-  (one challenge per pair-epoch). Under derived assignment with `λ = 3` draws
-  per pair-epoch it would refuse the second and third honest passes, so it
-  **must** widen. The widened key `(P,s,E,h)` exact-gets against the `PC-D4`
-  ledger whose height field now means *issuing* block (§2.1 item 4) —
-  **resolves because `h` is in the past and in the DB**, which is what
-  `PC-D4` could not do. Two
-  records answering different draws of the same pair may share `h_incl` and
-  both admit. (This once read "mirror in `serve_credit_decisions.rs` in
-  lockstep"; the mirror was deleted 2026-10-02, DRS-E4 commit 10d. The Rust
-  side of this rule is CEN-J8–J10's, built from the ruling.)
-- **Membership gate, consensus-visible:** admitted only if
-  `(P, s) ∈ assignment(h)`. Without it a miner colluding with `P` includes
-  pass records for `P`'s pair citing any `h` it likes — regardless of whether
-  the urn drew the pair at `h` — and settles **Served** with zero honest
-  draws. With it, plus witness authentication, a collusive pass costs *a won
-  block at an assigned height* **and** that block's witness key, which is the
-  2-of-3 quadratic's pricing assumption.
-- Cost: answering `(P,s) ∈ assignment(h)` for any `h` in the trailing `W₂`
-  window needs the urn's per-block draws retained for `W₂` blocks, **including
-  across the epoch boundary** — a record arriving at `h_incl` can cite an
-  `h` in the previous epoch. That window is `SO-D8e`'s structural claim;
-  `SO-D8b` is unimplementable without it. See `SO-D8e`.
-- **Authority, stated (review 2026-09-16):** `SO-D8b` is RULED as to the
-  **key and predicate** — what admission checks. Its implementation is
-  STAGED behind `SO-D8e` — how `assignment(h)` is served for a past `h`
-  — RULED 2026-09-16 (§7.2: the `W₂` ring).
-  Rule 23: a staged item with a named consumer in a live plan, not a
-  silent deferral; the two are not independent, and only one of them is
-  a design decision still to make.
+The form both take is the specification's: the pair is derived as draw
+`j` of `h`'s revealed seed, and the key is `(h, j)`. The public-urn form
+— `(P, s) ∈ assignment(h)`, key `(P, s, E, h)`, a `W₂` ring of per-block
+draws — is superseded with the urn.
 
 ## 5. `SO-D8c` — emission gather, under R-B — RULED 2026-09-16
 
@@ -883,6 +767,8 @@ settlement slashes on absolute-2; `PC-D6` says *"no economic disposition
 opens"* and this proposal does not open one.
 
 ## 6. `SO-D8d` RULED 2026-09-16 — three local layers, none of them on chain; amended same day against `dev@5fde3b1ce`
+
+> **Open against the secret draw (`SCS-F11`, 2026-10-07).** The three layers below are stated for a writer that re-derives `issued` by replaying the urn. Under [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §10 `issued` is stored at admission and read at settlement, so layer 1 has no second derivation to compare. Which layers carry over is not ruled; the text below is unchanged until it is.
 
 **RULED 2026-09-16; amended 2026-09-16** after examination against
 `dev@5fde3b1ce` (#761, #762, #764 merged). The check is not
@@ -1114,164 +1000,17 @@ five-ground rejection (ground 3 withdrawn).*
 
 ## 7. `SO-D8e` RULED 2026-09-16 — the `EpochAssignmentCache` — mechanism SUPERSEDED 2026-10-07
 
-> **SUPERSEDED 2026-10-07 as mechanism:** the public urn and its `W₂` ring are replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10). §7.4 (the drawable set) and §7.6.2 (carrier semantics) stand. The rest of §7.1–§7.3 is the ruling record of the urn.
+> **SUPERSEDED 2026-10-07 as mechanism:** the public urn, its replay and its `W₂` assignment ring are replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10; decision log, 2026-10-07). What stands below: §7.4 (the drawable set), §7.5's dedicated witness key and its `0x0C` home, §7.6's carrier form and §7.6.2, §7.7 (Q10), §7.8 (Q13).
 
-### 7.1 Two consumers, two cadences
+### 7.1 Two consumers, two cadences — SUPERSEDED 2026-10-07
 
-| Consumer | Question | Cadence | Cost if answered by pure replay (`assign_epoch`) |
-|---|---|---|---|
-| Admission (`SO-D8b`) | `(P,s) ∈ assignment(h)`, for any `h` in `[h_incl − W₂, h_incl)`? | **every block**, up to ~97 lookups | replay from `h_open(E)` to `h`: `O(draws so far)` — at maturity up to 972,000 cSHAKE draws **per block** |
-| Settlement writer (`SO-D1`) | `issued(P,s,E)` for every pair | once per epoch, in the slash pass | one full replay: 972,000 draws |
-
-Measured 2026-09-13, release, this host (`measure_full_epoch_replay_cost_at_maturity`,
-`challenge_assignment.rs:534–556`): **1.09 s for 972,000 draws.** Per rule 76
-the provisioning floor is the Pi 4, not this host; the Pi-4 figure is **owed**,
-not estimated here. Even at this host's speed, ~1 s of pure derivation per
-block on the admission path is not acceptable; per epoch in the slash pass it
-is.
+> **Superseded 2026-10-07.** The replay cost this section priced has no successor: admission derives one draw per record ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.4) and settlement reads the issued-draw index (§10).
 
 ### 7.2 `SO-D8e` RULED 2026-09-16 — a forward urn, a `W₂` ring, no checkpoints, one set live — SUPERSEDED 2026-10-07
 
-> **SUPERSEDED 2026-10-07:** see [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 (the draw) and §10 (the issued-draw index).
+> **SUPERSEDED 2026-10-07:** see [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 (the draw) and §10 (the issued-draw index). Nothing replays and no assignment ring exists. The instant `D` is taken at is the specification's §4.1.
 
-**What.** The structure, lifetime, persistence and rewind of the derived
-assignment state that `SO-D8b`'s membership gate, `SO-D8d` layer 2, and
-Q3's seed all depend on.
-
-**Why.** `SO-D8b` needs `assignment(h)` for any `h` in
-`[h_incl − W₂, h_incl)` — 500 blocks back, across an epoch boundary.
-`ChallengeUrn` is a sequential stream, so answering a past query naively
-means replaying from `h_open`: 1.09 s, on the admission path, per record.
-And `assign_epoch`'s full materialisation is ~39 MB of
-`Vec<Vec<DrawablePair>>` at maturity, on a floor device (rule 76).
-
-**Rust owns the urn; nothing else does.** `ChallengeUrn` already is the
-sequential form (`advance_block(prev_hash)` per block, `draws_done()`;
-`challenge_assignment.rs:131–255`). The wrapper is a type in
-`shekyl-archival-retention`, no new crate:
-
-```text
-EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store;
-                       one carve-out: the 32-B digest of D, written in the connect
-                       batch at h_open(E) — item 5 below; undo-logged, never read by a rule)
-  open(E, DrawableSet::at_epoch_open(view, E))   // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH read at the entry point (Q4); ONE set live
-  advance(h, prev_hash) -> &[DrawablePair]      // assignment(h); pushed onto the ring
-  is_assigned(h, P, s) -> bool                  // admission gate; O(1) for any h in the trailing W₂ ring; refuse-not-guess outside it
-  rewind_to(h)                                  // pop: truncate the ring; replay the urn forward from the wave boundary at or below h
-```
-
-**The design — five items.**
-
-1. **Forward-advancing urn plus a `W₂` ring of outputs.** The urn advances
-   as blocks connect, which happens anyway. Keep 500 blocks of assignment
-   outputs: `97 × 500 × 40 B ≈ 1.9 MB`. The membership gate reads the ring
-   — `O(1)`, nothing on the admission path. An `h` outside the ring is a
-   **refusal**, never a replay: the deadline gate (§3) has already refused
-   anything older than `W₂`, so the ring's depth and the deadline are the
-   same constant and are read from the same place.
-2. **No checkpoints. Replay from the wave boundary.** `advance_block`
-   resets `working` to canonical order at `remaining == 0`
-   (`challenge_assignment.rs:224–230`), so each wave is an independent
-   selection-without-replacement from a known state. Zero checkpoint
-   state, zero snapshot memory, no cadence to tune. *SUPERSEDED:
-   `checkpoint()`; "a reorg deeper than the retained checkpoints."*
-3. **One `DrawableSet` live, not two.** The ring holds self-contained
-   `(p_id, shard_id)` pairs, so `E`'s set drops at `h_close(E)` and only the
-   **ring** spans the boundary. Settlement rebuilds `E`'s set from the
-   journals under `SO-D8d` §6.3 item 2. *SUPERSEDED: "holds two
-   `DrawableSet`s during the overlap" (§4, §9, the R-B table) — the
-   overlap is real, the second set is not; the ring carries it.*
-4. **Lifetime `[h_open(E), h_close(E) + W₂]`**, then dropped. Settlement
-   does not read the cache; that is what gives `SO-D8d` layer 2 two
-   operands (Q7 collapsed, §6.3 item 2).
-5. **One carve-out to "never persisted": the 32-byte digest** of `D` at
-   `h_open(E)`, written in the connect batch, undo-logged via SI-6,
-   reorg-safe for free. No wire field, never read by validation, and safe
-   in the batch: the only store-wide digest, `digest_v0` (DRS-P0d), folds a
-   fixed family list and **deliberately excludes** the archival journals and
-   "every other table" (`digest_v0.rs` module docs), so a new local cell
-   does not perturb it; the rule-42 schema snapshot moves, as any new table
-   does.
-
-**Memory at maturity:** pairs `324k × 40 B ≈ 13 MB` + working list
-`324k × u32 ≈ 1.3 MB` + ring `1.9 MB` ≈ **16 MB**. Against `assign_epoch`'s
-~39 MB materialisation, and on the floor device.
-
-**Ordering hazard, named:** the cache is advanced with the *validated*
-predecessor's hash, never `prev_id` as supplied on an alt path — the same
-constraint `RF-D5` states for the attestation path's `prev_block_hash`.
-
-**Precedent:** `ArchivalSealHashCache` — derived, in-memory, rebuilt from
-chain on restart, the pattern `SO-D3` named. **Restart mid-epoch:** rebuild
-`D` from the journals (§7.4), replay from `h_open(E)` on first use,
-refill the ring for the trailing `W₂` — bounded by one epoch, 1.09 s here.
-
-#### Reorg — closed, two bounded paths
-
-- **Fork at or above `h_open(E)`** — `D` is untouched. `h_open`'s own
-  contents cannot change it in either direction, verified at source: a bond
-  posted there has `E_join = E` and `E_first = E_join + 1` excludes it
-  (`serve_eligibility.rs:8–18`); a **re-bond** there opens its interval at
-  `E_reinstate + 1` (`db_lmdb.cpp:6959–6987`), excluded the same way; **drops**
-  do not remove pairs (Q3 §7.4 (3.1)); a **release** clears nothing that
-  was held — an `Exited` record already holds no shards
-  (`db_lmdb.cpp:6626–6627`, "v6 coupling"); and a **slash** applied at an
-  epoch-open height is the slash pass's deterministic function of
-  settlement rows complete since `h_close + W₂`, ≥ 9,500 blocks below any
-  fork there, so both branches remove the same shard. Replay the urn
-  forward from the wave boundary at or below the fork, truncate the ring.
-  Bounded by one wave: ~324k draws, ~0.36 s.
-- **Fork below `h_open(E)`** — possible only in the first 720 blocks of an
-  epoch (`ARCHIVAL_REORG_DEPTH_BLOCKS = 720` against `SEB = 10,000`: 7.2 %).
-  Rebuild `D` from the journals, rebuild the urn from `h_open`, rewrite the
-  digest — the batch undo already rewinds the old one. When the fork lies
-  in `E − 1` (the tip is inside `E`'s first 720 blocks), `E − 1`'s tail is
-  reconnected on the alt suffix too: rebuild `E − 1`'s `D` (one more §7.4
-  walk) and replay its last wave from the wave boundary at or below the
-  fork, so the ring entries for those heights are recomputed. Same bound,
-  applied twice.
-
-**Wave boundaries are hash-independent** — `done` advances on the
-Bresenham schedule `⌊(h+1)·total/E⌋` (`due_through`,
-`challenge_assignment.rs:196–204`), a function of block index alone — so
-a reorg never moves one and the anchor is always valid.
-
-**Records survive reorgs and are re-submittable verbatim.**
-`assignment(h)` binds `block_hash(h−1)`, so every assignment at `h ≤ fork`
-is untouched. An orphaned record carries the same `h`, nonce,
-countersignature and witness signature, so the archiver does not
-re-serve, `P` does not re-sign, and the witness does not re-fetch 3.33 MB.
-`W₂ = 500` against a 720-block ceiling is the headroom that makes
-re-inclusion work.
-
-**Pin for Slice C (verified-shape, not a design choice):** the instant
-`D` is taken at is the same instant `archival_bond_holds_shard_of(·, h_open(E))`
-answers for — the two must share one convention (state after block
-`h_open(E)` connects, including its phase-9 slash pass), because the
-settlement filter (3.3) and the seed are the same predicate at the same
-height. Fixture: a slash applied at `h_open(E)` removes the pair from
-both, or from neither.
-
-#### Foreclosed, with reasons on record
-
-**Stateless per-block draws with replacement.** It would delete this
-entire disposition — pure `assignment(h)`, no ring, no replay, no rewind
-— and it is memoryless, so unlike the wave structure it leaks no timing at
-all. Refused on three grounds: ~20 % of pairs unobservable per epoch at
-`λ = 3` (`P(draws < 2) = e^{−3}(1 + 3) ≈ 0.199`, not the 5 % first
-quoted), ~25 % longer time-to-slash, and decisively it invalidates the
-absolute-2 ratification, since two passes required from exactly two
-draws and two passes required from six draws are not the same test.
-Matching exact-λ coverage would cost roughly double the witness fetch
-load.
-
-**Known property, recorded not fixed:** without-replacement leaks a
-widening warning window at each wave's tail — `P(next draw is me) =
-1/remaining`, publicly computable, so a still-undrawn pair late in a wave
-can anticipate its challenge. Relevant to the `TJ` free-rider case. Not
-grounds to reopen the urn.
-
-#### Owed
+**Owed from this ruling, and not the urn's:**
 
 - **`SI-` row for `SO-D8d`'s Fault: a new row, `SI-10`.** Checked against
   `STORE_INVARIANT_REGISTER.md` on `dev@5fde3b1ce`: rows **SI-1 through
@@ -1286,45 +1025,9 @@ grounds to reopen the urn.
   constant, and `PDM-Q-F24` exists because a ruling already inherited it
   wrongly once. This record uses 720 explicitly and does not name `D_max`.
 
-**No FFI. SUPERSEDED 2026-09-16 (Q15).** *Superseded text: "one opaque
-handle, five entry points … C++ marshals heights … In the redb store this
-FFI does not exist."* The five-call adaptor was the C++ mirroring Q15
-refused. `EpochAssignmentCache` is called from the Rust apply/pop path
-only (`DAEMON_REDB_STORE.md` S-CHAIN-W / S-ARCH). It is designed for that
-caller; nothing is listed on a deletion surface because nothing temporary
-is written.
+### 7.3 Inputs the shape needs — SUPERSEDED 2026-10-07
 
-*SUPERSEDED in this section: "Proposed shape … with checkpoints";
-`checkpoint()`; "two `DrawableSet`s during the overlap"; "a reorg deeper
-than the retained checkpoints replays from `h_open(E)`"; "retaining
-through the slash deadline is the recommendation" (Q7).*
-
-### 7.3 Inputs the shape needs
-
-- **`DrawableSet::at_epoch_open(view, E)` — RULED 2026-09-16 (Q3, §7.4).**
-  *Superseded: "no enumerator exists in the tree."* The set the urn is
-  seeded with is a pure `shekyl-chain-rules` function over a `ChainView`
-  projection of the append-only bond journals, evaluated at `h_open(E)`.
-  No snapshot table. Body lands with Slice C. Freeze point is `h_open(E)`,
-  not the seal (Pin 5, already ruled).
-- **`λ` — RESOLVED 2026-09-17 (Q4, `fix/so-q4-pin-lambda`).**
-  `ChallengeUrn::new(pairs, epoch_blocks)` reads
-  `CHALLENGES_PER_PAIR_PER_EPOCH` and takes no λ. `assign_epoch(pairs,
-  prev_hashes)` feeds that constructor — one production site, so the
-  one-shot cannot diverge from the streaming urn.
-  `EpochAssignmentCache::open` inherits the same shape. The explicit-λ
-  constructor (`with_lambda`) is `#[cfg(test)]` (`pub(crate)` under
-  test) for λ ∈ {0, 1, 2, `u32::MAX`}; there is no
-  `assign_epoch_with_lambda`. The 972,000 maturity figure is derived
-  from the constant in the measurement test, not typed. Pinned by
-  `production_doors_read_the_constant_and_take_no_lambda`. Reopen a `pub`
-  sim-facing door only for a named out-of-crate consumer (none exists; the
-  sim uses the constant analytically). *SUPERSEDED: "a bare `u32` parameter
-  at `:152` / `:264` … nothing connects it to the urn … must be pinned
-  before any production caller"; the FOLLOWUPS `lambda_target` row
-  (removed).*
-- **The witness commitment** (§2.2) — a new coinbase `tx_extra` tag and its
-  derivation domain. Neither exists.
+> **Superseded 2026-10-07.** Of the three inputs, the drawable set stands and is §7.4. The urn's `λ` constructor describes code the specification deletes (its §11.1). The witness commitment is the specification's §4.2.
 
 ### 7.4 Q3 RULED 2026-09-16 — the enumerator
 
@@ -1395,9 +1098,7 @@ Home: `shekyl-chain-rules`. No store handle (DRS-D12). Reads arrive as a
 DrawableSet::at_epoch_open(view, E) -> Vec<DrawablePair>
 ```
 
-No snapshot table. Runs once per epoch into `EpochAssignmentCache`, which
-was already designed as derived-never-persisted (`SO-D8e`) and is therefore
-untouched by the redb port. The named type is STAGED in this plan; the
+No snapshot table. Runs once per epoch. The named type is STAGED in this plan; the
 body lands with Slice C (authorized 2026-10-04, §8.0; *was* "not
 authorized").
 
@@ -1556,7 +1257,7 @@ one predicate, not two.
 
 ### 7.5 Q8 RULED 2026-09-16 — the witness key
 
-> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2 states the witness key and the draw seed as sibling derivations, and §6.2 its scheme (Ed25519 + FN-DSA-1024 since 2026-10-07). This section is the ruling record of the derivation.
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2 states the witness key and the draw seed (fresh randomness per block, independent, `SCS-P3`) and §6.2 the key's scheme (Ed25519 + FN-DSA-1024). The derivation from the coinbase output's shared secret is superseded and not built. What stands here: the key is dedicated, its commitment lives in `0x0C`, and the field is always present.
 
 Under R-B the filer is not positional in `h`. Consensus needs a key the
 producer of `h` can sign with, whose public half is committed in `h`.
@@ -1568,38 +1269,6 @@ publication labelled *"producer of `h`"*. A dedicated never-spent extra
 coinbase output works and is refused: it costs a leaf, a 64-B `0x07`
 entry, and a KEM ciphertext per block, all scan-verified for a key that
 never spends.
-
-#### Derivation
-
-IKM is the coinbase **output 0** `combined_ss` (the miner path is
-per-output KEM — `cryptonote_tx_utils.cpp:205–211`). Extract under the
-existing salt `HKDF_SALT_OUTPUT_DERIVE = "shekyl-output-derive-v1"`
-(`derivation.rs:94`). Expand under new labels `LABEL_WITNESS_PQC` /
-`LABEL_WITNESS_ED25519`. **Info is the label alone — no `output_index`.**
-`derive_output_secrets` concatenates `idx_le64` onto every expand
-(`derivation.rs:171–183`); the witness key is per-block, not per-output,
-and a sentinel index would be a colliding-looking child of the output
-scheme. Same Extract, distinct Expand, registry mechanism 2 (review
-duty, count-pin does not cover it). The resulting hybrid key has no
-leaf, no `h_pqc`, and no spend path — F5/`PL-D3` cannot reach it.
-
-#### `combined_ss` is not on the FFI result
-
-`shekyl_construct_output` is the coinbase construction site. Its result
-`ShekylOutputData` (`shekyl_ffi.h:644–661`) carries `output_key`,
-commitments, KEM ciphertexts, `pqc_public_key`, `pqc_leaf`, and
-`y`/`z`/`k_amount`. It does **not** carry `combined_ss`. After
-`shekyl_output_data_free` the secret is gone. The daemon constructing
-the miner tx holds `txkey.sec` only for that call and does not hold the
-miner's ML-KEM secret, so it cannot recover `combined_ss` later by
-decap.
-
-Derive the witness keypair **inside Rust** at miner-tx construction —
-the same call that already has output 0's `combined_ss`. Return only the
-32-byte commitment for `tx_extra`. Stash the seed in the Rust-owned
-`W₂` ring (Q10). **Do not punch `combined_ss` across the FFI** (rule 36).
-Do not hang a per-block field on the per-output `ShekylOutputData`
-struct; the miner-tx constructor (Q15: Rust) is the home.
 
 #### Commitment home is `0x0C` — extending `0x0B` is SUPERSEDED
 
@@ -1629,11 +1298,8 @@ allocated except retired `0x03`/`0xDE`; `0x0C` unused). Opaque
 `std::string` blob, same serializer shape as `0x07`/`0x0B`. Content
 rule (exactly one entry, exactly 32 B, coinbase only, **mandatory-present**)
 is Q13; presence is already decided (§7.5 P1). 34 B permanent in `h`'s
-coinbase prefix (tag + one-byte varint + 32 B); the 1,996-byte key
-(`PQC_HYBRID_SINGLE_KEY_LEN`) is revealed later in the pruned side of
-the record and hash-checked. Verify is `HybridPublicKey` /
-`HybridEd25519MlDsa` — the same path P's emission countersignature
-already uses (`emission_verify.rs:743–763`). No new primitive.
+coinbase prefix (tag + one-byte varint + 32 B); the key is revealed later
+in the carrier's prunable part and checked against the commitment.
 
 **SUPERSEDED:** "extend `0x0B` rather than mint `0x0C`." The original
 proposal's `0x0C` stands. Tag space is a genesis-frozen resource; this
@@ -1658,52 +1324,26 @@ byte count does not enter. Q13 RULED (§7.8): the CEN row is one
 predicate over one field, five fixtures; it does not re-open
 optionality. Length is `WITNESS_COMMITMENT_BYTES`, not a literal.
 
-**(P2) Per-block uniqueness of `combined_ss` is a derivation requirement,
-not a KEM inheritance.** Dropping `output_index` from the witness info is
-correct for a per-block key, which means uniqueness comes entirely from
-output 0's `combined_ss` differing block to block. `derive_kem_seed`
-(`derivation.rs:239–261`) is deterministic over `(tx_key, recipient
-x25519_pk ‖ ml_kem_ek, output_index)`. Today's miner path happens to
-call `keypair::generate` (`cryptonote_tx_utils.cpp:131`), so a fresh
-`tx_key` currently implies a fresh `combined_ss` — that is an accident
-of the constructor, not a property of the KEM. A miner whose coinbase
-encapsulation is deterministic over a fixed payout address (reused
-`tx_key`, or a later constructor that drops `tx_key` from the IKM)
-produces the same `combined_ss` for two blocks, the same witness key,
-and the 32-B `0x0C` blobs match: a cross-block miner identifier, which
-is exactly what the dedicated key exists to avoid. **Pin:** the miner-tx
-constructor must use a fresh `tx_key` per block; Slice C ships a fixture
-that two constructions to the same payout address with independently
-generated `tx_key`s yield distinct `0x0C` commitments, and that the same
-`(combined_ss)` pair yields the same witness key. The fixture fails if
-uniqueness is ever inherited from "the KEM is random" rather than from
-the constructor's freshness.
+**(P2) Per-block uniqueness.** Two blocks must not share a witness key or
+a seed, or their `0x0C` values match and identify the producer across
+blocks. Both come from fresh randomness per block (`SCS-P3`), and the
+fixture is the specification's: two constructions yield distinct `0x0C`
+commitments.
 
 **Q10 inherits the ring size from always-present — and RULED 2026-09-16
 (§7.7) accept loss against it.** Every block carries a witness key, so
 the `W₂` ring *capacity* is `CHALLENGE_RESPONSE_BLOCKS` (= 500,
-`constants.rs:147, :202`) seeds keyed by height, not one. Steady-state
+`constants.rs:147, :202`) entries keyed by height, not one. Steady-state
 depth tracks fill-to-inclusion, not the deadline. A restart that loses
 in-flight seeds surfaces as β (non-observation of those heights'
 draws), not as an error — same disposition the wargame already named;
 the cardinality is the inherited fact. Persist-encrypted is **REJECTED**.
 
-#### What Q8 does not pin — SUPERSEDED 2026-09-16 (Q12 RULED)
-
-The 32-B commitment's **shape** is Q12 RULED (§7.9): a bare
-`cSHAKE256` of the canonical key bytes under
-`shekyl/archival-witness-key-v1`. The tag is no longer blocked on F5.
-Enumeration (`pre_shard_ids`) and join (F5, Q12) are different
-attacks. Q12's reveal publishes `pk`, so hiding is theater; the join
-identifies `h`'s coinbase, which was already public. *SUPERSEDED:
-"sequenced behind F5 / `PL-D3`"; "do not land the tag ahead of that
-inheritance."*
-
 ### 7.6 Q9 RULED 2026-09-16 — set-commitment batching, carrier fail-whole, resubmission within `W₂`; amended same day
 
-> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 states the carrier, the reveal it now carries, and the set commitment with computed vectors. §7.6.2 here owns carrier fail-whole and resubmission.
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 states the carrier, the reveal it carries, the set commitment with computed vectors, and the sizes. This section owns the carrier's form, the weight facts it rests on, and (§7.6.2) fail-whole and resubmission.
 
-The question was whether the witness files ~97 records for issuing
+The question was whether the witness files the records for issuing
 block `h` as one transaction sharing one pk reveal and one signature, or
 as separate records each carrying its own witness material.
 
@@ -1712,7 +1352,7 @@ carrier, over a **set commitment** of the carrier's records (§7.6.1). The
 carrier is **fail-whole**: any member failing its own record predicate
 refuses the carrier (`InvalidBlock`, naming member `i`), and the witness
 refiles without it inside `W₂`. No per-record inclusion paths. Unbatched
-(5,381 B of witness material per record) remains rejected.
+(witness material on every record) remains rejected.
 
 **SUPERSEDED same day: Merkle-root batching with per-record inclusion
 paths.** It was chosen so that "a corrupt record can be excluded and the
@@ -1721,22 +1361,16 @@ rest verify." That premise was false under the carrier contract
 refuses the transaction whether the signature is over a root or a
 concatenation — so the paths bought isolation at the *signature* while
 admission stayed fail-whole regardless. Once that is seen, the paths are
-22 KB/block for nothing: resubmission — which the reorg finding (§7.2)
-makes mandatory machinery anyway, since orphaned records are
-re-submittable verbatim — already provides the isolation the paths were
+22 KB/block for nothing: resubmission — mandatory machinery anyway,
+since a record orphaned with its including block is re-submittable
+verbatim — already provides the isolation the paths were
 bought for. The malicious-witness case does not separate the two forms
-either: a witness that wants to deny 97 credits simply does not witness,
-at zero cost, under both. The original objection to fail-whole — one
-corrupt record costs 96 honest archivers their credit — priced a
+either: a witness that wants to deny a block's credits simply does not
+witness, at zero cost, under both. The original objection to fail-whole — one
+corrupt record costs the carrier's honest archivers their credit — priced a
 **loss**; with `W₂ = 500` it is a **round-trip**.
 
-**Two consequences ruled with it, unchanged.** The dedup key stays
-`(P, s, E, h)` per record — a batch is a carrier, not a unit of credit.
-Admission of a record proves membership in a set that witness authored,
-not that the set was complete; a witness filing a subset is
-indistinguishable from one that never drew those pairs, which it can
-already achieve by not witnessing. Subset filing grants no power it
-lacks today.
+**A batch is a carrier, not a unit of credit.** Dedup is per draw.
 
 **Why batching is worth doing (restated).** Not penalty avoidance.
 `effective_median` is a 100k-block long-term median and a 100-block
@@ -1746,13 +1380,9 @@ the fee ladder prices against the long-term effective median (`:10–17`).
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` at
 `cryptonote_config.h:58`), a floor, not a ceiling. Sustained archival
 load raises the median and the steady state is penalty-free. At
-maturity the archival traffic *sets* that median, so 850 KB versus
-335 KB is a 2.5× difference in the baseline every other participant's
-fees price against, and in relayed volume — roughly 223 GB/year against
-88 GB/year at 120 s/block, mostly prunable. Permanent bytes are
-unchanged at ~12 KB/block ≈ 3.2 GB/year either way. Both byte figures
-are provisional on `D ≈ 324k`, a maturity assumption from the proposal
-rather than a measured constant.
+maturity the archival traffic *sets* that median, so the bytes per block
+are the baseline every other participant's fees price against. The
+figures are the specification's §7.4.
 
 **There is no fee, and there cannot be one.**
 `txin_archival_serve_credit_response` is a `txin_v` variant
@@ -1793,38 +1423,10 @@ inclusion.
 (`tx_verification_utils.cpp:80–86, :203–207`;
 `CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE` at `cryptonote_config.h:60`;
 Rust `TX_WEIGHT_LIMIT` at `transaction.rs:144–149`) with no archival
-carve-out. A carrier above it is `m_too_big`. At the maturity figures a
-single-tx ~336 KB carrier of 97 records does not fit; the witness
+carve-out. A carrier above it is `m_too_big`; the witness
 splits into as many carriers as the limit requires. Split is subset
 filing — already granted. Raising the cap for archival is the same
 fee-and-weight round as a prunable-weight discount, not Q9.
-
-**Split arithmetic — re-derived 2026-09-16 for the amended form.** No
-path bytes, so a carrier holds
-`⌊(149,400 − 5,381) / 3,411⌋ = ⌊144,019 / 3,411⌋ = 42` records. 97
-draws split **42 / 42 / 13**. Witness material `3 × 5,381 = 16,143 B`
-instead of 5,381, +10.8 KB/block. Total
-`97 × 3,411 + 16,143 = 347,010 B ≈ 347 KB/block` rather than 336 KB,
-still ~2.4× better than 850 KB. Amortization **42:1**, not 97:1.
-Raising the cap to admit a single 97-record carrier is worth
-~11 KB/block ≈ 2.8 GB/year (262,980 blocks/year × 10,762 B) — carry to
-the fee-and-weight round; it is not a Q9 reopen. *SUPERSEDED: 39 / 39 /
-19 at depth 6 with a 192 B path; ≈ 365 KB/block; 39:1.*
-
-**Inter-carrier blast radius.** Three transactions are three
-independent inclusion decisions. A miner taking 2 of 3 costs **42**
-archivers that inclusion, and a carrier refused for one bad member costs
-its **41** honest members one round-trip. `W₂ = 500` is therefore
-resubmission headroom for an unincluded or refused carrier, not only
-fetch time; shrinking `W₂` must price that. *SUPERSEDED: "the blast
-radius Q9 refused inside a batch reappears between batches" — Q9 no
-longer refuses it inside the batch; it prices it as a round-trip in
-both places.*
-
-**Partition leaks nothing (non-finding).** Which records land in which
-carrier is witness-chosen and public. The set at `h` is derivable from
-`block_hash(h−1)` by anyone. Assignment is already public; the split
-does not add a leak.
 
 **The residual, held.** Nobody pays for these bytes anywhere in the
 pipeline: the witness is unpaid by ruling, and the record transaction
@@ -1836,8 +1438,7 @@ the median is to omit. Whether that bites is a dynamics question for
 the economics sim. The lever if inclusion turns out to be
 under-incentivised is to weight prunable archival bytes differently —
 the same decision as the weight-path fact above, approached from the
-other side. Both belong to a fee-and-weight round, not Q9. Cap-raise
-value (~11 KB/block) sits on the same round.
+other side. Both belong to a fee-and-weight round, not Q9.
 
 **FOLLOWUPS row added 2026-09-16** (rule 22: a deferral names its
 carrier): *Serve-credit inclusion incentive and archival weight pricing
@@ -1845,79 +1446,9 @@ carrier): *Serve-credit inclusion incentive and archival weight pricing
 discount, cap-raise; falsified by the economics sim's inclusion rate at
 median-bound blocks.
 
-#### 7.6.1 The set commitment — PROPOSED 2026-09-16, string settled; vectors re-cut same day
+#### 7.6.1 The set commitment — SUPERSEDED 2026-10-07
 
-> **Specification:** the construction, the amendment that covers the seed, and the computed vectors are in [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7.3, posed there as `SCS-P6`. The paragraph below that separates "unpruned validators" from "a pruned node" describes a split that does not exist: every node verifies once at connect and none after the prune (spec §8).
-
-**Review finding (valid).** The shape ruled above does not fix bytes,
-and rule 30 requires every hash to sit under an explicit, versioned
-domain; rule 05 wants the spec before Slice C writes the bytes. With
-inclusion paths gone the construction collapses to one hash.
-
-**The string is settled, not open.** The tree runs two consistent
-families with a clean split — `shekyl/<domain>-v<n>` for cSHAKE
-customization strings (`shekyl/archival-serve-credit-response-v1`,
-`shekyl/archival-attestation-root-v1`,
-`shekyl/archival-challenge-assignment-v1`; a `-v1`/`-v2` pair on
-`archival-serve-challenge-leaf` and `archival-attestation-scheme` shows
-versioning is exercised) and `shekyl-<purpose>-v1` for HKDF labels.
-`shekyl/archival-serve-credit-batch-v1` fits the first exactly and sits
-in the existing `serve-credit-*` cluster. The row lands in
-`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` — the single source
-(`CRYPTOGRAPHIC_INVENTORY.md:100` defers to it) that
-`scripts/ci/domain_registry_gate.sh` holds against the workspace — with
-the constant at Slice C; the gate is what forces the row when the
-constant lands, so none is minted here.
-
-Proposed, not ruled:
-
-- **Commitment.** `cSHAKE256_32(frame(record_1) ‖ … ‖ frame(record_n))`
-  under `shekyl/archival-serve-credit-batch-v1`, where each `record_i`
-  is the member's full serialization (kept vin ‖ pruned pass record) in
-  **vin order** — the order the witness signed — and
-  `frame(r) = varint(len(r)) ‖ r`.
-- **Framing is the whole anti-ambiguity mechanism.** Without the length
-  prefix, two distinct member sets can concatenate to one byte string
-  and share a commitment. It therefore carries its own vector (below);
-  a rule whose violation no check detects is not a rule.
-- **`n ≥ 1` is a structural check on the carrier**, named in §7.6.2's
-  list — cSHAKE over the empty string is well-defined, so the
-  construction does not refuse an empty carrier by itself, and the
-  zero-member carrier is the exact case (A) was rejected for. `n = 1`
-  is the same construction; no special case.
-- **What the signature binds, and through what.** The witness signature
-  is a bare signature over the 32-byte commitment. It is bound to the
-  issuing block **through the records**, not directly: every member
-  carries `h`, and the verifier checks `hash(witness_pk)` against
-  `h`'s `0x0C` (§7.9). Two consequences: (i) third-party relay of a
-  witness's carrier is possible and harmless — useful for resubmission,
-  since anyone holding the carrier can refile it; (ii) Q12's reopener
-  ("`h` removed in order to conceal the issuing block", §7.9) would
-  unbind this signature as well, so the two rows cross-reference.
-- **Enforced only where the data exists.** The commitment spans the
-  pruned region, so a pruned node cannot recompute it and cannot
-  evaluate the witness signature at all — it identifies the record and
-  cannot re-verify (`ARCHIVAL_RESPONSE_FORMAT.md:515`; the pruned-side
-  partition is `CR-D2`, RF row 1), exactly as it accepts `P`'s ML-DSA
-  leg. §7.6.2's "any failing member refuses the carrier" is universal
-  among unpruned validators and does not reach a pruned node, which
-  accepts the carrier on the chain it follows.
-- **KAT — re-cut.** With one flat hash the structural cases are `n = 1`
-  and `n > 1`; a 3-record vector was there for the odd tree level and
-  now exercises nothing. Vectors: (1) `n = 1`; (2) `n = 2`; (3) a
-  **collision pair** — two distinct member sets whose *unframed*
-  concatenations are byte-identical, pinned to distinct commitments;
-  (4) a **short-record** vector crossing the 1-byte/2-byte varint
-  boundary at 128 B, because real records are ~3,411 B and never cross
-  it in production, so the encoding would otherwise be untested where an
-  implementation is most likely to differ. *SUPERSEDED: the 3-record
-  vector.*
-
-Falsifier: the KAT — vector (3) goes red if framing is dropped and
-nothing else in the suite does. *SUPERSEDED (same day): the Merkle
-construction — leaf/node labels, odd-level rule, path direction from the
-leaf index. None of it is needed once no member is verified without the
-rest.*
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7.3 holds the construction, its customization `shekyl/archival-serve-credit-batch-v1`, and the computed vectors (`SCS-P6`, ruled 2026-10-07). It covers the seed and `h` as well as the framed records.
 
 #### 7.6.2 Carrier semantics — RULED 2026-09-16: (B), carrier fail-whole + resubmission
 
@@ -1941,11 +1472,12 @@ branches were recorded; **(B) is ruled.**
 - **(B) Carrier fail-whole + resubmission — RULED.** Structural checks
   on the carrier: kind `serve_credit_only`, fee 0, weight under the cap,
   pruned-record count equals vin count, **`n ≥ 1`** (the empty carrier is
-  refused here, not left to the construction — §7.6.1), witness
-  signature over the set commitment against `h`'s `0x0C`. Then any
+  refused here, not left to the construction), witness
+  signature over the set commitment, witness key and seed against `h`'s
+  `0x0C`. Then any
   failing member refuses the carrier (`InvalidBlock`, naming member `i`'s
-  predicate, as today) — among validators that hold the pruned region;
-  a pruned node cannot evaluate it (§7.6.1). The honest members are refiled in another carrier within
+  predicate, as today). Every node verifies the carrier once, at connect,
+  with the prunable part present (specification §8). The honest members are refiled in another carrier within
   `W₂`. Isolation is by resubmission, not by admission. The witness's
   incentive to pre-verify is intact (its carrier fails otherwise), and
   its seed is still in the ring (Q10 evicts on inclusion, and a refused
@@ -1953,7 +1485,7 @@ branches were recorded; **(B) is ruled.**
   consensus semantics, opens no free-weight channel, and removes the
   path rule and 22 KB/block.
 
-Neither branch touches dedup (`(P, s, E, h)` per record) or the
+Neither branch touches dedup (per draw) or the
 kept-wire ceiling. Fixture 13 is written for (B) (§8).
 
 **SUPERSEDED** in this section: Merkle-root batching with inclusion
@@ -1968,18 +1500,13 @@ block weight" as an unread claim (now confirmed); "who pays the fee";
 
 ### 7.7 Q10 RULED 2026-09-16 — accept loss
 
-> **Reopening posed 2026-10-07 (rule 21):** the secret draw requires the coinbase key material to be re-derivable, which this ruling named as a fallback and did not build. [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P3`.
+> **Stands (`SCS-P3`, 2026-10-07).** The ring holds, per height, the draw seed and the witness secret key, both fresh randomness: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2.
 
 The question was what happens to the witness-seed ring across a daemon
 restart: persist it encrypted, or accept the loss.
 
 **Form.** Accept loss. Memory-only ring, Rust-owned, `ZeroizeOnDrop`
-(rules 35/36). Persist-encrypted is **REJECTED**. The ring holds the
-32-B derived seed per height (`keygen_from_seed` takes `[u8; 32]`,
-`derivation.rs:36–38`), not the expanded hybrid secret
-(`ML_DSA_65_SECRET_KEY_LENGTH` + Ed25519 ≈ 4 KB,
-`signature.rs:114`) and not `combined_ss` (64 B, never on
-`ShekylOutputData`, `shekyl_ffi.h:644–661`). Size is not the question;
+(rules 35/36). Persist-encrypted is **REJECTED**. Size is not the question;
 posture is.
 
 **Why persist is refused.** It would make the daemon a secret-holder
@@ -2033,28 +1560,11 @@ across epochs, never as i.i.d. noise the window launders**. The
 and OOM kills hit many nodes in the same window. Loss is silent
 unless pin 4 fires.
 
-**Named fallback, REJECTED-for-now (rule 21).** If β turns out to be
-restart-dominated, the fix is **not persistence**. It is
-**re-derivability**: make the coinbase `tx_key` deterministic from a
-long-lived node secret and `h`, so `combined_ss` and everything
-downstream recompute after restart with nothing retained. That
-trades 500 ephemeral secrets for one persistent one — a strictly
-better shape for an encrypted-at-rest story if one is ever needed.
-It preserves Q8 P2 (independent `h` values still give distinct
-commitments) and the `tx_key` stays unpredictable to outsiders, so
-no coinbase privacy is lost. It changes coinbase construction, which
-is consensus-adjacent, so it is held as the named fix rather than
-built now.
-
-**Reopening criterion (falsify, do not wait).** Accept-loss stands if
-inclusion typically lands within a few blocks. It reopens to
-re-derivability — **not** to persist — if a sim of restart-to-restart
-intervals against fill-to-inclusion latency shows partial inclusion
-routinely dragging batches toward `W₂`, because then the ring really
-is deep and restarts really do cost a large slice. Falsify by running
-that sim; an unread "blocked until measured" is the shape rule 22
-forbids. Persist stays refused on independent grounds (no operator
-secret) even if the sim reopens the fallback.
+**Re-derivability: REJECTED 2026-10-07 (`SCS-P3`).** Neither secret is
+derived from a long-lived producer secret, and none is kept. A lost ring
+costs observation only: the block's draws are not revealed, issue
+nothing, and the count rule tops the shortfall up (specification §4.3,
+§9.2). Persist stays refused on its own grounds above.
 
 **SUPERSEDED** in this section: persist-encrypted as the restart
 policy; "500 live seeds" as the expected ring depth (that is the
@@ -2062,7 +1572,7 @@ capacity, not the steady state).
 
 ### 7.8 Q13 RULED 2026-09-16 — the `0x0C` content rule
 
-> **Reopening posed 2026-10-07 (rule 21):** `0x0C` must also commit to the draw seed, which moves its length. [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2, `SCS-P1`.
+> **Stands (`SCS-P1`, 2026-10-07).** The field is 32 bytes. Its content is one commitment over `witness_pk ‖ seed`: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2.
 
 **One `CEN-` row in `shekyl-chain-rules` (id at Slice C), one predicate
 over one field, five fixtures. Domain: from genesis, unconditionally.
@@ -2114,12 +1624,10 @@ calls it at `cryptonote_format_utils.cpp:699` with the default. A
 second `0x0C` is silently ignored unless something counts. The parser
 counts; first-wins is the red edit.
 
-**Length is `WITNESS_COMMITMENT_BYTES`, not a literal 32.** Q12 RULED
-(§7.9): the value is 32. A Q12 reopener (`h` removed in order to
-conceal the issuing block, or a `PL-` ruling that forbids publishing
-`pk`) revises this constant in one place — a revision to this row, not
-a new row. A compactness drop of `h` that leaves it public-by-join
-does not fire. Dropping exact-length for a minimum is the red edit.
+**Length is `WITNESS_COMMITMENT_BYTES`, not a literal 32.** The value is
+32 (`SCS-P1`). A change to the commitment's bytes revises this constant
+in one place — a revision to this row, not a new row. Dropping
+exact-length for a minimum is the red edit.
 
 **Domain: from genesis, unconditionally.** Pre-genesis there are no
 prior blocks. An unstated domain would make every block before the rule
@@ -2167,116 +1675,16 @@ against commitment 2). It does not move the 600-reserve question.
 | `0x0C` in a non-coinbase tx | reject that tx | omitting the rejection and letting a known tag's tolerance swallow it |
 
 **Does not:** mint the `CEN-` id (Slice C); re-open P1 optionality;
-re-open `0x0B`; implement a parser. The tag lands with Slice C; Q12
-no longer blocks it.
+re-open `0x0B`; implement a parser. The tag lands with Slice C.
 
 **SUPERSEDED:** optional-absent (already P1); copying the `0x0B`
 parser; four CEN rows for four clauses; unread
 "`COINBASE_BLOB_RESERVED_SIZE` is the coinbase extra ceiling"; a
 literal `32` as the length clause; "land the tag ahead of Q12/F5."
 
-### 7.9 Q12 RULED 2026-09-16 — witness commitment is a bare hash
+### 7.9 Q12 — the witness commitment — SUPERSEDED 2026-10-07
 
-**Bare `WITNESS_COMMITMENT_BYTES` (= 32) hash of the canonical witness
-pk, `cSHAKE256` under customization `shekyl/archival-witness-key-v1`.
-Ruled on its own analysis, not as an inheritance from F5.** Located by
-question (2) against `PL-D3`'s reveal-once: the circuit opens `CM`
-without publishing `pk`; Q12's ML-DSA verify publishes `pk`. Conclusion
-unchanged. *SUPERSEDED: arguing as if F5 were still an open round
-(the 2026-09-16 F5 agent brief, WITHDRAWN §1.5).* Not
-`PL-D3`'s `pqc_key_scalar`. The real residual is P2 (fixture 12), not
-the hash shape.
-
-**Customization, checked against the registry before naming.**
-`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` is the single census (SA-3b).
-Mech 1 is cSHAKE256 customization; live archival strings are
-`shekyl/<name>-vN` (`shekyl/archival-serve-credit-response-v1`,
-`shekyl/pqc-leaf-record-v1`, …). The hyphen form that looked like a
-second convention is a **different mechanism**: HKDF salt/info
-(`shekyl-output-derive-v1`, mech 2) and the retired Blake2b DST
-`shekyl-pqc-leaf` (mech 4, replaced by `shekyl/pqc-leaf-key-v1`). The
-TSV header states that style inconsistency across mechanisms is
-intended and permanent; aligning a live string is a KAT-remint. The
-candidate does not collide with any mech-1 literal. The TSV row, the
-const, and the mech-1 census pin (`domain_registry.rs` `30 → 31`) and
-count-pin +1 land with Slice C — a row without a defining site fails
-the gate. Do not mint the row in this docs PR.
-
-F5's mechanism and Q12's question look identical and aren't. The
-decision procedure, three questions **in this order**, is what locates
-Q12 relative to `PL-D3`. F5's round already answered (2) with
-reveal-once (in-circuit opening, `pk` unpublished until spend). Q12
-fails (2) because ML-DSA verify publishes `pk`. A reader who starts
-at (3) will propose hiding for objects where it buys nothing.
-*SUPERSEDED: "is what F5's round should apply" — that round closed
-two days before the 2026-09-16 brief treated it as open.*
-
-1. **Is the preimage enumerable?** If yes, the digest is an index;
-   hiding or a larger domain is required. `pre_shard_ids` fails here.
-   F5 and Q12 both pass — `PQC_HYBRID_SINGLE_KEY_LEN` = 1,996
-   (`cryptonote_config.h:386`). Collapsing (1) into F5's framing is
-   what made a 1,996-byte preimage look radioactive.
-2. **Does the reveal publish the preimage?** If yes, hiding is
-   theater: `C = H(pk ‖ blind)` in the coinbase with `(pk, blind)` in
-   the pruned half leaves the join intact — bytes and an opening for
-   nothing. The only remedy is a protocol that **stops publishing**.
-   Q12 fails here, which is why a bare hash is correct: nothing better
-   is purchasable. ML-DSA verification structurally requires the key;
-   putting the witness signature in zero knowledge is not an option,
-   it is unavailable. F5 passes (2) only because the circuit opens
-   without revealing (`PL-D3`).
-3. **Does the join identify more than the reveal was entitled to
-   identify?** F5 fails — membership was the entitlement, the specific
-   output is what the join gives. Q12 passes — one producer of `h`,
-   and identifying them *is* the predicate.
-
-The load-bearing fact for (3) is not that `h` is a kept field. `0x0C`
-sits in `h`'s miner transaction next to output 0 — co-location binds
-the commitment to a public block and a public payout whether or not
-the record names `h`. The kept field (`117 → ~125` B, §2.1) makes that
-explicit; it is not what prevents a leak. The join identifies `h`'s
-**coinbase**, not the miner as an entity: the coinbase pays a stealth
-address, so "whoever received `h`'s coinbase" is the most anyone
-learns, and that was already in the block. Nothing about the reveal
-reaches the payout identity.
-
-**Adjacent leaks, all closed.** Cross-block linkage of the witness
-key: P2, fixture 12 — that is the real residual. Output 0's hybrid
-key: sibling Expand under `LABEL_WITNESS_*` vs `LABEL_OUTPUT_PQC` /
-`LABEL_OUTPUT_PQC_ED25519` (`derivation.rs:94,:115–116`). Which blocks
-witnessed: records already name `h`; P1 priced always-present.
-
-**Reopeners:**
-
-1. **Falsify if `h` is removed in order to conceal the issuing
-   block.** A compactness move that leaves `h` public-by-join (verifier
-   searches `0x0C`) does not invert the analysis. Concealment would:
-   the transparent commitment becomes a fig leaf, and the protocol
-   would have to stop publishing `pk`. It would also **unbind the Q9
-   carrier signature**, which reaches the issuing block only through
-   the records' `h` (§7.6.1) — the two rows cross-reference.
-2. **A blanket "all published commitments hide" is a process
-   reopener, not an analysis inversion.** Pedersen-then-open-in-the-clear
-   still reveals `pk`; what an observer learns does not change.
-   `WITNESS_COMMITMENT_BYTES` still moves if the bytes do. Do not
-   re-derive `PL-D3`. Falsify: a `PL-` ruling whose stated scope
-   includes `0x0C` *and* forbids publishing `pk`.
-
-A firing reopener revises `WITNESS_COMMITMENT_BYTES` in the Q13 row —
-one edit, one place — not a new row.
-
-**Does not:** implement the hash; mint a `CEN-` id; add the TSV row
-(Slice C); reopen `PL-D3` on the FCMP leaf; land code. The tag is no
-longer sequenced behind F5.
-
-**SUPERSEDED:** "Q12 is sequenced behind F5 / `PL-D3`" (right in shape,
-wrong in conclusion); arguing as if F5 were still an open round (the
-2026-09-16 F5 agent brief, WITHDRAWN §1.5); `PL-D3a`'s `cSHAKE256(pk ‖ blind)` as Q12's
-default; hiding as a purchasable upgrade for an object that publishes
-`pk`; "a published hash of a low-entropy value is a lookup table" as
-F5's attack; "Q12 revises the 32" as if hiding were expected; reopener
-(1) as "if `h` leaves the kept side" without the concealment
-criterion; count-pin +1 in this docs PR.
+> **Superseded 2026-10-07 (`SCS-P1`).** `0x0C` is one 32-byte commitment over `witness_pk ‖ seed` under its own registered domain: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.2. The bare hash of the witness key alone, and its customization `shekyl/archival-witness-key-v1`, are not built and are not minted. The field's length and content rule are §7.8's and stand.
 
 ---
 
@@ -2284,7 +1692,7 @@ criterion; count-pin +1 in this docs PR.
 
 ### 8.0 Slice C's first increment — Round 0: the design inputs (brief, 2026-10-04)
 
-> **Round 0 is open as [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) (2026-10-07).** Inputs 1 to 3 below are posed there: the set-commitment bytes as `SCS-P6`, the record layout as `SCS-P5`, the height that replaced the fire height as `SCS-P12`. Input 4 is discharged.
+> **Round 0 is ruled (2026-10-07):** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md). Input 1, the set-commitment bytes, is its §7.3 (`SCS-P6`). Input 2, the record layout, is its §7 and §8 (`SCS-P5`), and the anchor window has no admission operand (`SCS-P7`). Input 3, the height that replaced the fire height, is its §9.3 (`SCS-P12`). Input 4 is discharged below.
 
 **1. Owner, authorization, surface.** The SO-D8 round owns Slice C, which is
 authorized (`SCV-Q3`). One document holds the admission rows and the
@@ -2301,13 +1709,10 @@ found each waiting on the other (`SCV-1`).
 
 **2. Round 0 — four inputs, ruled before anything is built.** Ownership does
 not wait on them; building does.
-1. **Q9's set-commitment bytes** (§7.6.1, PROPOSED): the customization and
-   the four-vector KAT.
+1. **Q9's set-commitment bytes**: the customization and the KAT.
 2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
    fields, including where `SF-D8`'s carried `nonce`, `anchor_height` and
-   32-byte delivery digest ride. The per-record figures this document
-   computes with (~3,411 B, §7's split arithmetic) predate those carried
-   fields and are re-derived from the layout this item writes. This is the response-format round's reopen (§2.1 item 1), with its
+   32-byte delivery digest ride.  This is the response-format round's reopen (§2.1 item 1), with its
    rule-42 version bump. It includes **the anchor window's operand**: the
    landed `PassAnchorWindow::shape_for_predecessor` keys it on the
    *including* block's predecessor; whether R-B keeps that or moves it to
@@ -2411,8 +1816,8 @@ not interim code:
 - **A credit on an unclosed shard id counts toward scarcity**
   (`close.rs:270–273`).
 
-The admission rows close the second and third (membership in
-`assignment(h)` implies holding at the epoch's open). The first is why the
+The admission rows close the second and third (being drawn at `h`
+implies holding at the epoch's open). The first is why the
 settlement writer and the admission rows land as one unit.
 
 
@@ -2420,26 +1825,20 @@ settlement writer and the admission rows land as one unit.
 and DRS-D12 agree: everything that computes lives in `shekyl-chain-rules`
 (admission / epoch-mismatch / membership / deadline / witness / tag
 content — new `CEN-` rows, ids at Slice C) and
-`shekyl-archival-retention` / `shekyl-crypto-pq` (urn, cache, settle fold,
-witness derivation). C++ is not a marshaling shim for this work; it is
+`shekyl-archival-retention` / `shekyl-crypto-pq` (the draw, the issued-draw
+index, the settle fold, the witness and receipt keys). C++ is not a marshaling shim for this work; it is
 not a consumer. The LMDB daemon keeps today's beacon / `h_close` / seal
 gates until `shekyl-chain-rules` is the live validator.
 
 | Item | Plan |
 |---|---|
-| **Where the enumeration walk goes** | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` (Q3 RULED, §7.4) seeds the cache. Writer: `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` from a streamed urn replay at the slash pass over the re-walked `D` (`SO-D8d` §6.3 item 2, `SO-D8e` item 4 — the cache is dropped at `h_close + W₂` and settlement never reads it). *SUPERSEDED: `EpochAssignmentCache::issued_histogram()`; "if not resident."* Per drawn pair, `holds_shard_of` at the fire height: not held ⇒ write no row (Q3 §7.4 (3.3)). The Rust apply/slash path (S-ARCH, DRS-E4) calls it and writes the rows **before** the fold, per `SO-D7`. No FFI; no C++ loop. |
-| **How `issued` is obtained** | From the urn (§7), never from records. **`SO-D8d` restates `SO-D1` §4.2 so it is not re-proposed:** an absent record would read as never-issued, which is the free-exit hole the scheme exists to close. |
+| **The draw, admission, the witness, the carrier, `issued`, sizes, what is deleted** | [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4–§11. The writer is `shekyl-archival-retention`'s pure fold; the Rust apply and slash path calls it and writes the rows before the slash fold, per `SO-D7`. No FFI; no C++ loop. |
 | **How `passes` is obtained** | The S-ARCH `archival_serve_credit_pass_count(P,s,E)` read — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Same count, same table, Rust store. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
 | **Settlement integrity (`SO-D8d` RULED, amended 2026-09-16)** | Three local layers at the Rust slash-pass writer, none on chain: (1) each record at `(P,s,E,h)` must equal the writer's `assignment(h)` — streamed replay, not a materialised epoch; (2) **persisted** local 32-B digest of `D`, written in the connect batch at `h_open(E)` (undo-logged), compared against a **re-walk of `D` at every slash pass** (§7.4; conditional on its churn benchmark, fallback = compare only when non-resident); (3) `passes ≤ issued` FATAL as backstop (strictly dominated — §6.1). The harmful direction (`NonObservation → Missed`, and the free exit) is layer 2's alone. Desync is a **store-invariant Fault** with a new `SI-` row (minted at Slice C) — `poison().arm(row)` → `ConnectState::Halted`; never a `CenRow`, never `InvalidBlock`, never clamp, never skip. The block at the slash height is not written on this node *because the writer halted*, not because it is invalid. On-chain `D`-digest **REJECTED** (four grounds; ground 3 withdrawn). Counting `issued` from records **REJECTED**. Layers 1–2 and the SI row land with Slice C; layer 3 already exists as `SettleError::MorePassesThanIssued`. |
-| **Admission changes (new `CEN-` rows in `shekyl-chain-rules`, not `blockchain.cpp`)** | Parse `h` (new kept field); admit only if `h_incl − CHALLENGE_RESPONSE_BLOCKS ≤ h < h_incl` **and** `ChainView` has `block_at(h)`. `h_incl` is the candidate's height (`tip + 1` on connect), so a response to the immediately preceding block (`h = tip`) is in range. **`h ≥ tip` as a refusal is SUPERSEDED** — it would reject that valid case. `block_hash(h−1)` from `ChainView` for the leaf index; `settlement_epoch_at_height(h)` is `SO-D9` (i); `is_assigned(h, P, s)` against the in-process cache; witness check takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe. The fire-height path is deleted; `ERR_CREDIT_DEADLINE` rebinds to the `W₂` window. Each refusal is a typed `InvalidBlock { rule: CenRow, … }` (CHAIN_RULES G3). Negative fixture per row (CHAIN_RULES §8). |
-| **Witness key (Q8 RULED; Q13 RULED; Q12 RULED)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` from coinbase output 0, existing `HKDF_SALT_OUTPUT_DERIVE`, new labels `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519`, **info without `output_index`** (registry mechanism 2, review duty). Commitment written under **`TX_EXTRA` tag `0x0C`** by the Rust miner-tx constructor; `combined_ss` never crosses the FFI. Fresh `tx_key` per block is a **derivation requirement** with a same-address / distinct-`tx_key` fixture (§7.5 P2), not a KEM inheritance. **Q12 RULED (§7.9):** the 32-B value is a bare `cSHAKE256` of the canonical witness pk under `shekyl/archival-witness-key-v1` (mechanism 1; TSV row + census pin `30 → 31` at Slice C; **not** `PL-D3`'s `pqc_key_scalar`). Independent of F5: hiding is theater because the reveal publishes `pk`; the join identifies `h`'s coinbase, not a miner identity. Reopen if `h` is removed in order to conceal the issuing block. Content rule (Q13 RULED, §7.8): one `CEN-` row, five fixtures, genesis-unconditional; dedicated parser must not copy `0x0B`'s empty-set; length is `WITNESS_COMMITMENT_BYTES` = 32; modelled on #745's `check_pqc_leaf_entries` — no FFI adapter. Q13 does not re-open optionality. **SUPERSEDED: extend `0x0B`; sequenced behind F5.** Node-side (Q10 RULED): a memory-only `ZeroizeOnDrop` ring of 32-B seeds keyed by height, Rust-owned; capacity `W₂` = 500, depth tracks fill-to-inclusion; evict on inclusion; file promptly. Orderly shutdown logs remaining depth then drops; unclean restart logs that in-flight count is **unknown** (capability limit, not error). Persist-encrypted **REJECTED**. A persisted cardinality beside the datadir is also refused (new at-rest surface for a log line; a crash still loses it unless fsynced on every fill). Re-derivable `tx_key` is the named fallback, not built. |
-| **Batching (Q9 RULED, amended 2026-09-16)** | Set-commitment batching: one pk + one signature per carrier over `cSHAKE256_32` of the length-framed records in vin order (§7.6.1, bytes PROPOSED); no inclusion paths. **Carrier fail-whole** (§7.6.2 (B), RULED): one failing member refuses the carrier naming it; the witness refiles the honest members within `W₂`. Dedup stays `(P,s,E,h)` per record; a batch is a carrier, not a unit of credit. Admission of a record proves membership in a set that witness authored, not completeness. Class is `serve_credit_only` (fee-less by construction). Each carrier still obeys `TX_WEIGHT_LIMIT` = 149,400; at maturity 97 draws split 42 / 42 / 13 (≈ 347 KB/block; 42:1 amortization; +10.8 KB witness vs a single carrier). Inter-carrier blast radius is 42; `W₂` is resubmission headroom. Partition leaks nothing. Cap-raise (~11 KB/block ≈ 2.8 GB/year) and unpaid inclusion are a fee-and-weight round (FOLLOWUPS row), not this row. *SUPERSEDED: Merkle-root batching; "fail-whole refused"; 39 / 39 / 19.* |
-| **Cost** | One epoch replay per settled epoch — **always**, under `SO-D8d` §6.3 item 2 (the cache is dropped at `h_close(E) + W₂`; Q7 collapsed) — 1.09 s here, Pi-4 owed, streamed; plus the §7.4 `D` re-walk, `O(holdings changes since h_open)`, benchmark owed. Both inside connect phase 9 at the slash height, once per 10,000 blocks, off the admission path. *SUPERSEDED: "if the cache is not resident."* Admission: `O(1)` ring lookups + one hybrid verify per **carrier** (unbatched would be 97 ML-DSA-65 verifies per block — itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 19 (§7.6.1):** the set-commitment KAT — four vectors: `n = 1`; `n = 2`; a collision pair (two distinct sets with byte-identical unframed concatenations, distinct commitments — the only vector that goes red when framing is dropped); a short-record vector crossing the 128-B varint boundary. Red edits: drop the framing (vector 3 only); a fixed-width or big-endian length (vector 4); a changed customization (all). **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. **New 17 (`SO-D8d`):** seed an admission-side urn from `D` as built at `h_open` and a settlement-side urn from a `D` **re-walked from divergent journals**; show the fold refusing through the Fault path (`poison().arm(<SI- row>)` → `ConnectState::Halted`, reads open). Must run the re-derivation, not the resident cache. A unit test of `settle_epoch(3, 2)` is **not** this fixture. Red: skip (write no row — `SO-D5` inversion), clamp (`min(passes, issued)`), an `InvalidBlock` verdict, or a persisted latch. **New 18 (`SO-D8d` §6.1):** the over-derived case — `issued_true = 1`, `issued_derived = 2`, `passes = 1` — is caught by layer 2's digest mismatch and by nothing else; red edit: skip the re-walk when a cache is resident. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 17 (`SO-D8d`):** seed an admission-side urn from `D` as built at `h_open` and a settlement-side urn from a `D` **re-walked from divergent journals**; show the fold refusing through the Fault path (`poison().arm(<SI- row>)` → `ConnectState::Halted`, reads open). Must run the re-derivation, not the resident cache. A unit test of `settle_epoch(3, 2)` is **not** this fixture. Red: skip (write no row — `SO-D5` inversion), clamp (`min(passes, issued)`), an `InvalidBlock` verdict, or a persisted latch. **New 18 (`SO-D8d` §6.1):** the over-derived case — `issued_true = 1`, `issued_derived = 2`, `passes = 1` — is caught by layer 2's digest mismatch and by nothing else; red edit: skip the re-walk when a cache is resident. **Vectors** for the draw, the cap and the set commitment, and the `0x0C` commitment fixture: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.5, §7.3. Items 7, 8, 10 and 11 read "drawn at `h`" as the specification's derivation of draw `j` from `h`'s revealed seed. |
 | **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
-| **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`; set-commitment batching of serve-credit records (Q9, amended) — one pk + one sig per carrier over the length-framed record set, no inclusion paths; carrier fail-whole with resubmission inside `W₂`; memory-only witness-seed ring (Q10; persist-encrypted REJECTED); `0x0C` content rule (Q13; one CEN row, five fixtures, genesis-unconditional); bare-hash witness commitment (Q12; `cSHAKE256` under `shekyl/archival-witness-key-v1`); `SO-D8d` three local integrity layers (assignment equality, persisted local `D`-digest + re-walk at the slash pass, `passes ≤ issued` backstop; store-invariant Fault with a new `SI-` row, not a verdict); one local 32-B digest cell per epoch (rule-42 schema snapshot moves). **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
 **Sequencing against DRS — SUPERSEDED 2026-09-16 (Q15), amended same
 day.** *Superseded text: "none of the above blocks on redb, and none of
@@ -2469,8 +1868,7 @@ gates do **not** all wait on the second:
    return code.
 2. **S-ARCH (DRS-E4) has ported the settlement write path** — today's
    `set_archival_settlement` four-tuple is still LMDB-only production
-   (known-unwired, `DAEMON_REDB_STORE.md` §3.5). Membership against
-   `assignment(h)` and dedup `(P,s,E,h)` exact-get are the two gates
+   (known-unwired, `DAEMON_REDB_STORE.md` §3.5). Membership and per-draw dedup are the two gates
    that wait here, with the writer call site. S-ARCH remains priority 7
    of 9 and gated on the P0b journal audit — **UPDATE 2026-09-23: that gate
    lifted 2026-09-05 (P0b RECONCILED) and was re-read by S-ARCH's Round-0
@@ -2516,19 +1914,19 @@ about it.
 
 | ID | Disposition | State |
 |---|---|---|
-| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`–`e` **RULED 2026-09-16**; Q3, Q8, Q9 (amended same day), Q10, Q12, Q13 **RULED 2026-09-16**; Q9 commitment bytes PROPOSED |
+| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`–`e` **RULED 2026-09-16**; Q3, Q8, Q9 (amended same day), Q10, Q12, Q13 **RULED 2026-09-16**; `SO-D8e`'s mechanism, Q8's derivation and Q12 **SUPERSEDED 2026-10-07**; Q9 commitment bytes **RULED 2026-10-07** (`SCS-P6`) |
 | `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology. **(i)**: the record's epoch equals `settlement_epoch_at_height(h)` of the validated issuing block. Lands as a `shekyl-chain-rules` row with the R-B cutover (Q15); not a C++ one-liner. FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound. Transcription of the R-B ratification. First admission-path reader of `CHALLENGE_RESPONSE_BLOCKS`; that FOLLOWUPS row **discharged**. | **RULED 2026-09-16** |
-| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get; membership against `assignment(h)`. Exact-get resolves because `h` is in the past and in the DB — what `PC-D4` could not do. Served by `SO-D8e`'s `W₂` ring (RULED 2026-09-16); the key and predicate ruled here, the structure there. | **RULED 2026-09-16** |
+| `SO-D8b` | Admission checks that the pair was drawn at `h`; dedup is per draw, not per pair-epoch. The form is the specification's §9.1: draw `j` of `h`'s revealed seed, key `(h, j)`. | **RULED 2026-09-16**; public-urn form **SUPERSEDED 2026-10-07** |
 | `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
 | `SO-D8d` | Three **local** layers, none on chain: (1) per-record assignment equality against the writer's `assignment(h)`, streamed; (2) **persisted** local 32-B digest of `D` written in the connect batch at `h_open(E)` (undo-logged), compared against a **re-walk at every slash pass** (option (b); conditional on §7.4's churn benchmark; fallback (a) stated); (3) `passes ≤ issued` FATAL backstop, **strictly dominated**. Guards Q3 reconstruction, not arithmetic. The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone — layer 1 cannot see a count divergence (§6.1). Desync is a **store-invariant Fault** with a new `SI-` row (Slice C), never `CenRow`/`InvalidBlock`; block at the slash height unwritten *because the writer halted* (§6.4). Q7 **collapsed**: cache drops at `h_close + W₂`. Pin 4 reconciled by call site. Clamp and skip **FORBIDDEN**. On-chain `D`-digest **REJECTED** on four grounds — **ground 3 WITHDRAWN**. Counting `issued` from records **REJECTED** (`SO-D1` §4.2). Four falsifier classes at the site (dedup revert; reconstruction perturbation; journal prune — fires upstream; λ divergence — Q4 is a coverage precondition). Fixture 17 runs the re-derivation; fixture 18 pins the over-derived case. Served-artifact `D` carried against PDM. | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`** |
-| `SO-D8e` | `EpochAssignmentCache`: forward-advancing `ChallengeUrn` plus a `W₂` ring of self-contained `(p_id, shard_id)` outputs (`≈ 1.9 MB`); membership gate reads the ring, `O(1)`, refuse outside it. **No checkpoints** — rewind replays from the wave boundary (`remaining == 0` resets `working`; boundaries are `⌊(h+1)·total/E⌋`, hash-independent). **One `DrawableSet` live** — only the ring spans the epoch boundary. Lifetime `[h_open(E), h_close(E) + W₂]`, then dropped; settlement never reads it (Q7 collapsed). One carve-out to never-persisted: the 32-B `D` digest in the connect batch at `h_open(E)` (undo-logged; `digest_v0` excludes it by construction). ~16 MB at maturity. Reorg: fork at/above `h_open` — `D` untouched (post, re-bond, drop, release, slash each verified at source), replay one wave (~0.36 s); fork below `h_open` (first 720 blocks, `ARCHIVAL_REORG_DEPTH_BLOCKS`) — rebuild `D`, urn, digest. Records survive reorgs verbatim. Stateless draws-with-replacement **FORECLOSED** (≈20 % unobservable at λ = 3; invalidates absolute-2). Wave-tail warning window recorded, not fixed. Owed: `SI-10` for `SO-D8d` (SI-5 exists, ruled-unbuilt; reuse refused); 720 not `D_max`. λ from the constant (Q4). Rust apply/pop path only; no FFI (Q15). *SUPERSEDED: checkpoints; two `DrawableSet`s; retain through the slash deadline.* | **RULED 2026-09-16** |
+| `SO-D8e` | The urn, its replay and its `W₂` assignment ring. Replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10). Owed items that are not the urn's stay in §7.2. | **SUPERSEDED 2026-10-07** |
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
-| Witness key (Q8) | **Dedicated non-output hybrid key** derived from coinbase output 0's `combined_ss` under `HKDF_SALT_OUTPUT_DERIVE` + `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519` (no `output_index` in info); 32-B commitment under **`0x0C`**; pk + sig pruned. Combined_ss stays in Rust. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**. **SUPERSEDED: extend `0x0B`.** Q13 RULED (§7.8) owns the CEN wording: **mandatory-present** (commitment 2, not byte count); **fresh `combined_ss` per block** is a derivation requirement with a fixture, not a KEM inheritance. Q10 RULED: `W₂` ring is memory-only, restart loss is β. Q12 RULED (§7.9): bare 32-B `cSHAKE256` under `shekyl/archival-witness-key-v1`; hiding is theater (reveal publishes `pk`); reopen if `h` is removed **in order to conceal** the issuing block. Construction §7.5. | **RULED 2026-09-16** |
-| Batching (Q9) | **Amended 2026-09-16:** set-commitment batching — one pk, one signature per carrier over `cSHAKE256_32` of the length-framed records in vin order; **no inclusion paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2 (B) RULED; (A) per-vin admission REJECTED — free-weight channel). Dedup stays `(P,s,E,h)` per record. Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight. Against `TX_WEIGHT_LIMIT` the 97-record set splits 42 / 42 / 13 (≈ 347 KB/block; 42:1). Inter-carrier blast radius 42; `W₂` is resubmission headroom. Partition leaks nothing. Unpaid inclusion, prunable-weight discount, cap-raise → fee-and-weight round (FOLLOWUPS row). Construction §7.6; bytes §7.6.1 (PROPOSED: one cSHAKE256 under `shekyl/archival-serve-credit-batch-v1`, KAT at Slice C). *SUPERSEDED same day: Merkle-root batching with per-record inclusion paths — its isolation-at-admission premise was false under the carrier contract, and resubmission (mandatory for reorgs anyway) provides the isolation for 22 KB/block less.* | **RULED 2026-09-16 (amended same day)**; commitment bytes **PROPOSED** |
-| Secret lifetime (Q10) | Accept loss. Memory-only `ZeroizeOnDrop` ring of 32-B seeds; persist-encrypted **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet envelope). File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key` from a long-lived node secret and `h` — not persist; reopens if a sim of restart-to-restart vs fill-to-inclusion shows batches routinely dragging toward `W₂`. Construction §7.7. | **RULED 2026-09-16** |
-| `0x0C` content (Q13) | One `CEN-` row (id at Slice C), one predicate, five fixtures. Exactly one entry, length `WITNESS_COMMITMENT_BYTES` (32; Q12 RULED; a reopener revises the constant), coinbase only, **present**, from genesis. Dedicated parser must not copy `0x0B`'s empty-set. First-wins is the red edit for duplicates. Surface-free; E6-landable. Construction §7.8. **SUPERSEDED:** four rows; copying the `0x0B` parser; unread 600-byte extra ceiling. | **RULED 2026-09-16** |
+| Witness key (Q8) | **Dedicated non-output key**, committed under **`0x0C`**, **mandatory-present** (commitment 2, not byte count). The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**; extending `0x0B` is refused. Key and seed are fresh randomness per block, one 32-byte commitment over both (specification §4.2). Construction §7.5. | **RULED 2026-09-16**; derivation **SUPERSEDED 2026-10-07** (`SCS-P1`, `SCS-P3`) |
+| Batching (Q9) | One witness key reveal and one signature per carrier over a set commitment; **no inclusion paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2 (B) RULED; (A) per-vin admission REJECTED — free-weight channel). Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight. Each carrier obeys `TX_WEIGHT_LIMIT`. Unpaid inclusion and a prunable-weight discount → fee-and-weight round (FOLLOWUPS row). Merkle-root batching with per-record inclusion paths REJECTED. Construction §7.6; bytes, reveal and sizes: specification §7. | **RULED 2026-09-16 (amended same day)**; commitment bytes **RULED 2026-10-07** (`SCS-P6`) |
+| Secret lifetime (Q10) | Accept loss. Memory-only `ZeroizeOnDrop` ring; persist-encrypted **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet envelope). File promptly; evict on inclusion; log dropped in-flight on restart. Re-derivability from a long-lived node secret **REJECTED 2026-10-07** (`SCS-P3`). Construction §7.7. | **RULED 2026-09-16** |
+| `0x0C` content (Q13) | One `CEN-` row (id at Slice C), one predicate, five fixtures. Exactly one entry, length `WITNESS_COMMITMENT_BYTES` (32, `SCS-P1`), coinbase only, **present**, from genesis. Dedicated parser must not copy `0x0B`'s empty-set. First-wins is the red edit for duplicates. Surface-free; E6-landable. Construction §7.8. **SUPERSEDED:** four rows; copying the `0x0B` parser; unread 600-byte extra ceiling. | **RULED 2026-09-16** |
 | Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
 | F3 | First cut's F1 row 1 cited the attestation path for the vin's binding; corrected at source. **SUPERSEDED 2026-09-16 (Q9):** the surviving half — "who pays the fee" — there is no fee, and there cannot be one (`serve_credit_only` is non-spending; `txnFee != 0` is a refusal). | **CORRECTED**; fee-half **SUPERSEDED** |
 | F4 | `PC-D2` ↔ mechanism §2 contradiction; `PC-D2`'s herd premise inverted; reversed by R-B. In-line supersession at `PC-D2` owed with the ruling PR. | **RECORDED** |
@@ -2537,28 +1935,24 @@ about it.
 
 ### 9.1 Figures flagged for re-derivation
 
+> Draws per block, record and carrier sizes and bytes per block are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7.4 and §12.
+
 | Figure | Source | Status 2026-09-13 |
 |---|---|---|
-| ~972,000 assignments / epoch | `CHALLENGES_PER_PAIR_PER_EPOCH × 324,000`, `measure_full_epoch_replay_cost_at_maturity` | **Holds** as `λ·pairs`; since Q4 (2026-09-17) `λ` is the constant, read at the urn's entry points and in the measurement test. *SUPERSEDED: "`λ = 3` is a test parameter, not a pinned constant."* Cost **measured** 1.09 s release on this host; Pi-4 owed. |
-| ~97 draws / block at maturity | `972,000 / 10,000` | Arithmetic; the per-block witness load and the ring size derive from it. |
 | 72 % unobservable at `k_cap = 30` | `ARCHIVAL_CHALLENGE_MECHANISM.md:1185` histogram `{0: 35 %, 1: 37 %, 2: 28 %}` | **Not re-derived** — doc-only figure, no code artifact. Under R-B the capped-regime mechanics are unchanged (the window changes when a draw is answered, not how many are drawn). Flagged *unverifiable at source*. |
-| ~3,411 B record; 5,107 B pre-`RF-D6` | `ARCHIVAL_RESPONSE_FORMAT.md:1012`, `cryptonote_config.h:432–433` | 3,411 B is the post-`RF-D8`-retraction record; 5,107 B is `ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES` (today's pruned-weight reconstruction constant). R-B adds `h` (≤ 10 B kept) and the witness material (1,996 + 3,385 B pruned, once per carrier; no per-record path bytes under the amended Q9; 42 records per carrier against `TX_WEIGHT_LIMIT`). |
 | 1,996 / 3,385 B hybrid key / sig | `cryptonote_config.h:386,:388` | **Grounded.** (Was cited `:396,:398` — line drift.) |
-| 850 KB / 335 KB per block | §2.1 item 8 / §7.6 | Arithmetic on the grounded figures; **provisional on `D ≈ 324k`**. Against the inherited cap the set splits 42 / 42 / 13 (no path bytes, 3 × 5,381 B witness) → ≈ **347 KB/block**. *SUPERSEDED: Merkle extra ≈ 22 KB; 39 / 39 / 19 → ≈ 365 KB.* **SUPERSEDED:** "300 KB penalty-free zone" — 300,000 is `get_min_block_weight`, a floor (`cryptonote_basic_impl.cpp:81–85`). Prunable-in-weight **confirmed** at `cryptonote_format_utils.cpp:323–334,:374–379`. Cap-raise vs a single 97-record carrier ≈ 11 KB/block ≈ 2.8 GB/year — fee-and-weight round. |
 
 ### 9.2 Wargames under R-B
 
+> The wargames of the secret draw — prediction, selective serving, a producer that reveals and withholds, a forged issuing block, a lost ring — are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §17. The rows below are those the draw does not change.
+
 | Scenario | What happens | What stops it |
 |---|---|---|
-| **Adaptive-selection archiver** — `P` serves only when it can predict it is assigned | `assignment(h)` is public at `h−1`; `P` can predict *that* it is drawn. But the witness is `h`'s winner, unknown until mined, who fetches within `W₂`; `P` refusing everyone but a colluding pool earns non-observation from honest winners, which under 2-of-3 with `λ = 3` is **Missed** unless the colluder wins ≥ 2 of the 3 assigned blocks. | Membership gate + witness authentication + `PC-D3` leaf drawn at `h−1`; residual priced by the quadratic. |
-| **Forged issuing block** — record cites an `h` at which the pair was not drawn, or which the includer did not produce | (a) `h` outside `[h_incl − W₂, h_incl)` → deadline refusal; (b) `(P,s) ∉ assignment(h)` → membership refusal; (c) `h` real and assigned but signer is not `h`'s producer → witness hash-compare against `h`'s coinbase commitment fails. | §2.1 item 3 (a), (d), (e). |
 | **Boundary-straddler** — draw at epoch-relative 9,999 of `E` | Answerable in blocks `[10,000, 10,499)` of the chain — epoch-relative `[0, 499)` of `E+1` — names `E` (`epoch(h) = E`), counted for `E`, present in the table by `h_close(E) + 500`, read by the writer and the emission gather at `h_close(E) + 10,000`. | `SO-D9` (i) at `h`; §5's move; `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`. |
-| **Reorg across `h_close(E)`, or across `h`** | Suffix property (§2.2): no connected record can reference a removed `h`. Alt branch's blocks carry their own records (leaf index bound to their own `h−1`); losing branch leaves no residue. Settlement rows for `E`, if written, are deleted by `revert_archival_slashes_at_height` and recomputed on reconnect (`SO-D6`); cache and ring rewind together. | `SO-D6` + §7.2. **Unread, named:** the pop order in `blockchain_db.cpp:748–749` reverts slashes before epoch-close; confirm the cache rewind is sequenced before either. |
-| **Witness key loss** — producer of `h` restarts and loses the witness seed | Draws at those heights that have not yet been included fall to non-observation; nothing errors. Shows up as β, which MECHANISM §7 item 7 requires treating as **common-mode**. Always-present (Q8 P1) means ring *capacity* is 500; steady-state depth is fill-to-inclusion. | Q10 RULED: accept loss; log the dropped in-flight count. Persist-encrypted **REJECTED**. Named fallback is re-derivable `tx_key`, not persist. Not a consensus concern; an availability one. |
-| **Reused coinbase `tx_key`** — encapsulation deterministic over a fixed payout | Two blocks share `combined_ss`, share the witness key, `0x0C` blobs match: a cross-block miner identifier, which is what the dedicated key exists to avoid. | §7.5 P2: constructor must use a fresh `tx_key` per block; Slice C fixture 12 fails if uniqueness is inherited from "the KEM is random". |
-| **Batch as single point of failure** (Q9 RULED, amended) | One carrier carries many credits and is fail-whole: one corrupt record refuses the carrier for its honest members — but with `W₂ = 500` that is a **round-trip**, not a loss; the witness refiles without the bad member. Underfunded is not the vector: there is no fee. Unrelayed / omitted at the median is the residual (miners voluntarily carrying zero-fee data); a dynamics question for the fee-and-weight round, not a Q9 ruling. **Inter-carrier:** three independent inclusion decisions; taking 2 of 3 costs 42 archivers that inclusion. A witness that wants to deny credits does not witness, at zero cost, under any form. Partition leaks nothing. | Resubmission within `W₂` (mandatory machinery anyway — orphaned records are re-submittable verbatim, §7.2). Dedup stays per-record. Subset filing ≡ not witnessing those pairs, a power the witness already has. *SUPERSEDED: Merkle inclusion (exclude the mutant, verify the rest).* |
-| **Under-issuance regime** (`k_cap` binding) | Pairs with `issued ≤ 1` settle NonObservation with a row (`SO-D1`), so degradation is measured, not silent. Unchanged by R-B. | `SO-D1`/`SO-D2`'s `issued` byte. |
-| **`PL-D3` interaction** (was "F5 interaction") | `PL-D3` (#745) holds because the per-output key is published once, at spend. A witness scheme keyed on a spendable output's pk publishes it a second time, labelled with `h`; the later spend is linked by byte equality — `PL-D3` void on every witnessing coinbase. Witness key derived under its own HKDF labels is independent of the sibling per-output key, `r` and `r_h`. | Q8 RULED: the non-output witness key under `0x0C`; Q13 RULED for the content rule; Q12 RULED: bare hash (§7.9), not `PL-D3` hiding. |
+| **Reorg across `h_close(E)`, or across `h`** | Suffix property (§2.2): no connected record can reference a removed `h`. Alt branch's blocks carry their own records (leaf index bound to their own `h−1`); losing branch leaves no residue. Settlement rows for `E`, if written, are deleted by `revert_archival_slashes_at_height` and recomputed on reconnect (`SO-D6`); the issued-draw index reverts with the blocks that wrote it. | `SO-D6` + specification §10. **Unread, named:** the pop order in `blockchain_db.cpp:748–749` reverts slashes before epoch-close; confirm the index revert is sequenced before either. |
+| **Witness key loss** — producer of `h` restarts and loses the witness seed | Draws at those heights that have not yet been included fall to non-observation; nothing errors. Shows up as β, which MECHANISM §7 item 7 requires treating as **common-mode**. Always-present (Q8 P1) means ring *capacity* is 500; steady-state depth is fill-to-inclusion. | Q10 RULED: accept loss; log the dropped in-flight count. Persist-encrypted **REJECTED**; re-derivability **REJECTED** (`SCS-P3`). Not a consensus concern; an availability one. |
+| **Batch as single point of failure** (Q9 RULED, amended) | One carrier carries many credits and is fail-whole: one corrupt record refuses the carrier for its honest members — but with `W₂ = 500` that is a **round-trip**, not a loss; the witness refiles without the bad member. Underfunded is not the vector: there is no fee. Unrelayed / omitted at the median is the residual (miners voluntarily carrying zero-fee data); a dynamics question for the fee-and-weight round, not a Q9 ruling. **Inter-carrier:** carriers are independent inclusion decisions. | Resubmission within `W₂`. Dedup is per draw. A producer that reveals and withholds passes is the specification's §17. *SUPERSEDED: Merkle inclusion (exclude the mutant, verify the rest).* |
+| **`PL-D3` interaction** (was "F5 interaction") | `PL-D3` (#745) holds because the per-output key is published once, at spend. A witness scheme keyed on a spendable output's pk publishes it a second time, labelled with `h`; the later spend is linked by byte equality — `PL-D3` void on every witnessing coinbase. The witness key is fresh randomness, independent of every output key. | Q8 RULED: the non-output witness key under `0x0C`; Q13 RULED for the content rule; the commitment is the specification's §4.2 (`SCS-P1`). |
 
 ---
 
@@ -2568,27 +1962,10 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 `SO-D9` ruled, and R-B ratified the same day, which resolves 1, 2 and 7. Four
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
-and is resolved by Q15 (2026-09-16). **Open question: Q9's set-commitment
-vectors (§7.6.1, PROPOSED — one customization and a KAT, registry row at
-Slice C).** Q4 RESOLVED 2026-09-17. Q9's carrier semantics RULED 2026-09-16
-(§7.6.2 (B)); Merkle-root batching SUPERSEDED the same day. `SO-D8e`
-RULED 2026-09-16 (§7.2). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
-PC-D4 / SO-D7). `SO-D8d` RULED 2026-09-16 (§6), amended same day:
-three local layers; persisted `D` digest + re-walk at every slash pass
-(Q7 collapsed); store-invariant Fault with an `SI-` row, never a
-verdict; on-chain digest REJECTED (ground 3 withdrawn). Q3 RULED
-2026-09-16 (§7.4). Q8 RULED 2026-09-16 (§7.5): dedicated non-output key,
-tag `0x0C` not `0x0B`; P1 mandatory-present and P2 `combined_ss`
-freshness. Q9 RULED 2026-09-16, amended same day (§7.6):
-set-commitment batching; carrier fail-whole + resubmission within `W₂`;
-no fee; 300,000 is a floor; prunable bytes count toward weight; split
-42 / 42 / 13 against `TX_WEIGHT_LIMIT`. *SUPERSEDED: Merkle-root
-batching; fail-whole refused; 39 / 39 / 19.* Q10 RULED 2026-09-16 (§7.7): accept loss;
-persist-encrypted **REJECTED**; named fallback is re-derivable `tx_key`.
-Q13 RULED 2026-09-16 (§7.8): one CEN row, five fixtures, genesis
-domain, named length constant; dedicated parser must not copy `0x0B`.
-Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
-*SUPERSEDED: sequenced behind F5.*
+and is resolved by Q15 (2026-09-16). **No question is open.** The secret
+per-block draw (2026-10-07) supersedes `SO-D8e`'s urn and ring, Q7, Q8's
+derivation and Q12, and rules Q9's commitment bytes; each item below says
+so where it applies.
 
 1. **RATIFIED — R-B.** The herd is R-A's, not R-B's (F4). Recorded §2.
 2. **RESOLVED by 1.** `CHALLENGE_RESPONSE_BLOCKS` becomes the per-challenge
@@ -2596,8 +1973,7 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
 3. **RULED 2026-09-16 — `DrawableSet::at_epoch_open(view, E)`.**
    Pure function in `shekyl-chain-rules` over a `ChainView` projection of
    the append-only bond journals (holdings-update, unbond, reinstate, slash).
-   Evaluated at `h_open(E)`. No snapshot table; seeds
-   `EpochAssignmentCache` once per epoch. A drawn pair whose shard has
+   Evaluated at `h_open(E)`. No snapshot table. A drawn pair whose shard has
    been dropped **stays in `D`**; the drop filter lives at settlement and
    at the witness, not at draw. Construction, drop-stability finding,
    pins, empty-`D` and slash-vs-drop: §7.4. Body lands with Slice C.
@@ -2611,7 +1987,6 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    bare `u32` at `challenge_assignment.rs:152` / `:264`; two independent
    `pub` doors; the first landing made them `pub(crate)`, which still
    left every non-test module in the crate able to pass a divergent λ.
-   §7.2's `open()` drops the parameter and reads the constant.
    *Records-was (2026-09-16, "Two doors"):* `assign_epoch` reads the
    constant, but `ChallengeUrn::new` is `pub` and re-exported, so the
    strong form is a `pub(crate)` constructor or a documented sim-facing
@@ -2626,61 +2001,36 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    R-B — it is **re-bound** to the `W₂` window, not kept as `h_close` (§3).
    The vacuous check was `ERR_EPOCH_MISMATCH` (`SO-D9`), ruled (i).
 6. **ANSWERED — keep A1.**
-7. **RESOLVED by 1; COLLAPSED 2026-09-16 by `SO-D8d` §6.3 item 2.** The
-   cache must retain `≥ W₂` of per-block draws for admission regardless,
-   and drops at `h_close(E) + W₂`. The writer re-derives at every slash
-   pass (layer 2 cannot exist otherwise), so retention past `h_close + W₂`
-   buys nothing at settlement; the writer is a pure function of chain
-   data (`SO-D1` §4.2, `SO-D6`). *SUPERSEDED: "Recommendation: retain."*
-   Fallback if §7.4's churn benchmark refuses the re-walk on the Pi 4:
-   retention returns, layer 2 compares only when non-resident.
-8. **RULED 2026-09-16 — (Witness key).** Dedicated non-output hybrid key
-   from coinbase output 0's `combined_ss`, existing salt, new labels,
-   info without `output_index`; 32-B commitment under **`0x0C`**. Combined_ss
-   is not on `ShekylOutputData` and does not cross the FFI. The coinbase
-   output's own per-output key remains **ruled out** (`PL-D3`). The
-   never-spent extra output remains refused. **SUPERSEDED: extend `0x0B`**
-   — no version prefix, `k × 49` B, empty = absent tag, different concern
-   (included records vs issuer identity); appending 32 B fails
-   `is_multiple_of(49)`. Construction §7.5. Pins Q13/Q10 inherit: mandatory-present
-   (P1); `combined_ss` uniqueness is a derivation requirement with a fixture
-   (P2); `W₂` ring capacity is 500 seeds, restart = β (Q10 RULED:
-   accept loss). Q12 RULED (§7.9): bare 32-B hash. Q13 RULED (§7.8): one CEN row,
-   five fixtures; it does not re-open optionality.
-9. **RULED 2026-09-16 — (Batching); amended same day.** Set-commitment
-   batching: one pk, one signature per carrier over `cSHAKE256_32` of the
-   length-framed records in vin order (§7.6.1, bytes PROPOSED — one
-   customization, one KAT, registry row at Slice C); **no inclusion
-   paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2
-   (B) RULED): one failing member refuses the carrier naming it; the
+7. **SUPERSEDED 2026-10-07.** The question was how long the assignment
+   cache is retained. No cache exists: the issued-draw index is stored
+   (specification §10).
+
+8. **RULED 2026-09-16 — (Witness key).** A dedicated non-output key,
+   committed under **`0x0C`**, always present (P1). The coinbase output's
+   own per-output key remains **ruled out** (`PL-D3`); the never-spent
+   extra output remains refused; extending `0x0B` is refused (§7.5). The
+   key and the seed are fresh randomness per block and the commitment
+   covers both (`SCS-P1`, `SCS-P3`; specification §4.2). The derivation
+   from coinbase output 0's `combined_ss` is superseded and not built.
+
+9. **RULED 2026-09-16 — (Batching); amended same day.** One witness key
+   reveal and one signature per carrier over a set commitment; **no
+   inclusion paths**. **Carrier fail-whole + resubmission within `W₂`**
+   (§7.6.2 (B)): one failing member refuses the carrier naming it; the
    witness refiles the honest members. (A) per-vin admission REJECTED —
-   a new consensus semantics and a free-weight channel for the
-   unpaid witness. Dedup stays `(P, s, E, h)` per record; a batch is a
-   carrier, not a unit of credit; admission proves membership in a set
-   the witness authored, not completeness. Subset filing ≡ not
-   witnessing those pairs. There is no fee (`serve_credit_only` is
-   non-spending; `txnFee != 0` is a refusal); records ride ordinary
-   txs, never the coinbase. 300,000 is `get_min_block_weight`, a floor;
-   the fee ladder prices against the long-term effective median, which
-   archival traffic sets at maturity. Prunable bytes count toward
-   `block_weight`. Each carrier obeys `TX_WEIGHT_LIMIT` = 149,400
-   (inherited; split is subset filing): 97 records split 42 / 42 / 13
-   (≈ 347 KB/block; 42:1 amortization; +10.8 KB witness vs a single
-   carrier). Inter-carrier blast radius 42; `W₂` is resubmission
-   headroom. Partition leaks nothing. Unpaid inclusion, prunable-weight
-   discount, and the ~11 KB/block cap-raise belong to the fee-and-weight
-   round (FOLLOWUPS row added 2026-09-16). **SUPERSEDED same day:**
-   Merkle-root batching with per-record inclusion paths — chosen so a
-   corrupt record could be excluded and the rest verify, a premise the
-   carrier contract falsifies (one failing vin refuses the transaction
-   under any signature form); resubmission, mandatory for reorgs anyway,
-   provides the isolation for 22 KB/block less; the malicious witness
-   does not separate the forms (not witnessing is free under both).
-   Also superseded: "fail-whole refused"; 39 / 39 / 19; ≈ 365 KB; "against
-   a 300 KB penalty-free zone"; "who pays the fee"; unread "prunable bytes
-   still count toward block weight."
+   a new consensus semantics and a free-weight channel for the unpaid
+   witness. A batch is a carrier, not a unit of credit. There is no fee
+   (`serve_credit_only` is non-spending); records ride ordinary txs,
+   never the coinbase. 300,000 is `get_min_block_weight`, a floor.
+   Prunable bytes count toward `block_weight`. Each carrier obeys
+   `TX_WEIGHT_LIMIT` = 149,400. Unpaid inclusion and a prunable-weight
+   discount belong to the fee-and-weight round (FOLLOWUPS row). Merkle-root
+   batching with per-record inclusion paths is REJECTED (§7.6). The
+   commitment's bytes, the reveal and the sizes are the specification's
+   §7.
+
 10. **RULED 2026-09-16 — (Secret lifetime).** Accept loss. Memory-only
-    `ZeroizeOnDrop` ring of 32-B seeds keyed by height; persist-encrypted
+    `ZeroizeOnDrop` ring keyed by height; persist-encrypted
     **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet
     envelope; a key file beside the data protects nothing with disk
     access). File promptly; evict on inclusion. Orderly shutdown logs
@@ -2691,11 +2041,9 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     persist by another name). Ring *capacity* is
     `CHALLENGE_RESPONSE_BLOCKS` = 500; steady-state depth tracks
     fill-to-inclusion. Restart loss is β, and β is common-mode
-    (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 7). Named fallback if a
-    sim of restart-to-restart vs fill-to-inclusion shows batches
-    routinely dragging toward `W₂`: re-derivable coinbase `tx_key` from
-    a long-lived node secret and `h` — **not persist**; consensus-adjacent,
-    held, not built. Construction §7.7. **SUPERSEDED:** persist-encrypted
+    (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 7). Re-derivability from
+    a long-lived node secret is **REJECTED** (`SCS-P3`, 2026-10-07).
+    Construction §7.7. **SUPERSEDED:** persist-encrypted
     as the restart policy; "500 live seeds" as expected ring depth;
     "log the exact dropped count on every restart" (unclean restart
     cannot).
@@ -2703,39 +2051,16 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     same day; `PL-D1` is the defect, `PL-D3` the fix, ratified and landing in
     #745; `PL-D4` at V4. #745 merging is discharged (§8, "Sequencing against `PL-D3`").
     *Superseded: "It gates nothing in `SO-D8` beyond #745 merging first."*
-    *SUPERSEDED: "Q12 inherits F5/`PL-D3`'s commitment-shape ruling
-    and is sequenced behind it."* Q12 RULED independently (§7.9). This
+    This
     proposal's FOLLOWUPS line is withdrawn; Q8's recommendation is
     re-made against `PL-D3`.
-12. **RULED 2026-09-16 — (Witness commitment is a bare hash).**
-    `WITNESS_COMMITMENT_BYTES` = 32, `cSHAKE256` of the canonical
-    witness pk under `shekyl/archival-witness-key-v1`. Registry
-    (`CRYPTO_DOMAIN_REGISTRY.tsv` mech 1) checked: slash-form matches
-    live archival cSHAKE strings; no collision; TSV row + census pin
-    `30 → 31` land with Slice C. Ruled on its own analysis, not as F5
-    inheritance. Construction §7.9. Three questions, in order: (1)
-    enumerable? No — 1,996 B, unlike `pre_shard_ids`. (2) does the
-    reveal publish the preimage? Yes — ML-DSA verify requires the key;
-    hiding without ZK is theater. (3) does the join identify more than
-    the reveal was entitled to? No — one producer of `h`; identifying
-    them is the predicate. The join identifies `h`'s **coinbase** (a
-    stealth payout already in the block), not a miner entity;
-    co-location of `0x0C` next to output 0 binds that whether or not
-    the record names `h`. Real residual: P2 / fixture 12. Reopeners:
-    (1) falsify if `h` is removed **in order to conceal** the issuing
-    block (a compactness drop that leaves `h` public-by-join does not
-    invert); (2) process, not analysis — a blanket hide that still
-    reveals `pk` is theater; falsify by a `PL-` ruling that forbids
-    publishing `pk`. Either revises `WITNESS_COMMITMENT_BYTES` in the
-    Q13 row. **Hierarchy still binds:** if concealment required
-    stopping the pk reveal and that weakened the binding, refuse.
-    *SUPERSEDED: sequenced behind F5; `PL-D3a` hiding as Q12 default;
-    F5 as a lookup-table; reopener (1) as "`h` leaves the kept side"
-    without concealment intent; count-pin +1 in this docs PR.*
+12. **SUPERSEDED 2026-10-07 (`SCS-P1`) — (Witness commitment).** `0x0C`
+    is one 32-byte commitment over `witness_pk ‖ seed` (specification
+    §4.2). The bare hash of the witness key alone is not built.
 13. **RULED 2026-09-16 — (Tag content rule).** One `CEN-` row in
     `shekyl-chain-rules` (id at Slice C), one predicate over one field,
     five fixtures. Exactly one entry, length `WITNESS_COMMITMENT_BYTES`
-    (32; Q12 RULED; a reopener revises the constant, not a new row), coinbase only,
+    (32, `SCS-P1`), coinbase only,
     **present**, from genesis unconditionally. Dedicated parser
     `parse_archival_witness_commitment_from_extra` — must **not** copy
     `0x0B`'s empty-set convention (`cryptonote_format_utils.cpp:687–692`);
@@ -2783,5 +2108,4 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     2026-10-04 (`SCV-Q3`, `SCV-Q5`; §8.0): Slice C is authorized; the
     falsifier conditions are no longer waits. "Wait until SO can be
     written directly in Rust; no C++ mirroring" stands as Slice C's
-    landing rule, and Q14's no-repair prohibition stands.* *SUPERSEDED: Q12
-    sequenced behind F5.* Q12 RULED independently (§7.9).
+    landing rule, and Q14's no-repair prohibition stands.*

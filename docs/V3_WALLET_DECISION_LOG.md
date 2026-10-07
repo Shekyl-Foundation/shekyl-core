@@ -6102,10 +6102,10 @@ this entry records what was decided and what it replaces. Nothing is built.
    whose value expires within an epoch. **This is a rule-21 reopening of
    `SF-D13`**, which ruled the countersigning key to be the identity key
    and said it "does not invent a second key field".
-6. **`W₂` is the only window.** Admission keys the anchor's lower bound on
-   `h` (`anchor_height ≥ h − 720 − L`) and requires inclusion by
-   `h + W₂`. There is no separate read window. *Replaces* the landed
-   window `[h − 720 − L, h − 720]` keyed on the including block's
+6. **`W₂` is the only window.** A carrier for `h` is admitted in
+   `(h, h + W₂]`. There is no separate read window, and admission checks
+   no bound on the receipt's anchor (ruling 7 below). *Replaces* the
+   landed window `[h − 720 − L, h − 720]` keyed on the including block's
    predecessor, which belonged to a design where the read and the
    inclusion were one event.
 7. **Provisional (rule 21).** The draw weighting (1 for a pair visibly
@@ -6114,15 +6114,71 @@ this entry records what was decided and what it replaces. Nothing is built.
    bar they are held to (at most 3 % of pairs short of 3 at 10 % producer
    dropout). The sim reads 1.18 % at that bar (`ESR-11`).
 
-**What the brief left open, and where it is posed.** Twelve questions,
-`SCS-P1`–`P12` in the specification's §13.3, each with a default. Three
-reopen an earlier ruling and are posed as such: the length of the `0x0C`
-field (Q13), whether the coinbase key material is re-derivable (Q10), and
-the reading of the count rule's "in flight" term, where the brief's own
-model and the better-performing rule differ.
+**Rulings on the twelve questions the specification posed (maintainer,
+same date, on review of #992 and #993).** `SCS-P1`–`P12`, specification
+§13.3.
 
-**Where.** `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`; pointers from the
-five documents that stated the mechanism before; the index rows for the
-document and for `SCS-P` / `SCS-F`.
+1. **`0x0C` is 32 bytes** (`SCS-P1`): one commitment over
+   `witness_pk ‖ seed` under its own registered domain. Q13's length
+   stands. *Replaces* Q12's bare hash of the witness key alone
+   (2026-09-16), which is not built.
+2. **Each carrier carries the whole seed** (`SCS-P2`).
+3. **Q10 stands; re-derivability is dropped** (`SCS-P3`). The seed and the
+   witness key are fresh randomness per block, independent of each other,
+   held in memory only. *Rejected:* deriving either from the coinbase
+   output's shared secret, because the coinbase recipient would learn the
+   seed (this also retires Q8's derivation of 2026-09-16); a persistent
+   producer secret; and re-derivability, which Q10 had held as a named
+   fallback. Losing the ring is harmless: the block's draws are not
+   revealed and issue nothing.
+4. **Selection is rejection sampling with a deterministic cap**
+   (`SCS-P4`): after 256 attempts the current candidate is accepted. A
+   vector pins the cap.
+5. **A record keeps its input tag and `j`** (`SCS-P5`). The pair is
+   derived from `(seed, h, j)`; `h` rides the carrier beside the seed;
+   the witness key and signature are the carrier's prunable part. One
+   rule-42 bump covers record and carrier.
+6. **The set commitment covers the seed and `h`** (`SCS-P6`), with a
+   fifth vector.
+7. **No bound on `anchor_height` at admission** (`SCS-P7`). A lower bound
+   keyed on `h` is implied by the nonce, which contains `block_hash(h)`.
+   The anchor stays on the wire for `P`'s own gate and for organic reads.
+8. **`issued` saturates at 255** (`SCS-P8`).
+9. **"In flight" counts unrevealed draws only** (`SCS-P9`).
+10. **The producer's read load is measured, not gated** (`SCS-P10`), on a
+    mining-class machine (`BA-T30`).
+11. **The pass is carried by the serve-credit input** (`SCS-P11`). The
+    attestation path's pass records and CEN-B4's operand are deleted with
+    the implementation, with the reason recorded (rule 15), not left
+    inert.
+12. **The drop filter reads per draw, at `h`** (`SCS-P12`): the state
+    after `h` connects, strictly above a same-block slash.
+
+**A refusal this decision reverses.** `SO-D8e` (2026-09-16) foreclosed
+stateless per-block draws with replacement on three grounds: about 20 % of
+pairs unobservable per epoch at three draws per pair, a longer time to
+slash, and that an absolute threshold of two passes is a different test
+over two draws than over six. The draw is now with replacement. What
+answers each ground is in the specification: the top-up and the 16:1
+weighting hold the share of pairs short of three issued draws to 1.10 % at
+10 % producer dropout, 1.18 % at most over eight seeds (`ESR-11`, §12); and settlement counts exactly three
+selected draws for every pair that has them, so the threshold is one test.
+The urn's own recorded weakness, that a pair late in a wave could
+anticipate its draw, has no counterpart: nothing about a block's draws is
+public before the reveal.
+
+**Also recorded.** The receipt key is derived from the wallet master seed
+when the engine is assembled, as the identity key is; the brief's "per-persona
+seed in the stake-engine actor" does not exist (`SCS-F5`). Registry rows
+for the new labels land with their constants (`SCS-F4`). At the `fn-dsa`
+integration, key-generation and verification vectors are pinned on both
+x86_64 and aarch64; signing uses hardware floating point. Sequencing: the
+specification first, the settlement writer wired before the secret draw
+goes live, then the FN-DSA integration.
+
+**Where.** `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`. The superseded
+mechanism text is deleted from the five documents that stated it before
+and replaced by pointers; what each still owns is the specification's
+§15. Index rows for the document and for `SCS-P` / `SCS-F`.
 
 ---

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; twelve questions are posed for ruling.
+- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
 - **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours once its failure score passes 10 (the eleventh failed handshake, at one point each), and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
