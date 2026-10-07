@@ -258,15 +258,23 @@ where
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async {
         let dialed = Instant::now();
-        let Ok(mut stream) = TcpStream::connect(target).await else {
-            // `target` is the proxy when one is configured, and the peer
-            // when it is not. A closed SOCKS port is this node.
-            let kind = if proxy.is_some() {
-                CloseKind::LocalClose
-            } else {
-                CloseKind::DialFailed
-            };
-            return Err(CloseCause::new(kind));
+        let mut stream = match TcpStream::connect(target).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                // `target` is the proxy when one is configured, and the peer
+                // when it is not. A closed SOCKS port is this node. On a
+                // direct dial, only the peer's RST names the address.
+                // Network unreachable, address not available, and permission
+                // denied are this node's link.
+                let kind = if proxy.is_some() {
+                    CloseKind::LocalClose
+                } else if err.kind() == std::io::ErrorKind::ConnectionRefused {
+                    CloseKind::DialFailed
+                } else {
+                    CloseKind::LocalClose
+                };
+                return Err(CloseCause::new(kind));
+            }
         };
         if proxy.is_some() {
             match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {

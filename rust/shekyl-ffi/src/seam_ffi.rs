@@ -562,6 +562,27 @@ pub extern "C" fn shekyl_seam_close(id: u64) {
     hub.close(id);
 }
 
+/// Record `kind` when the row has no cause yet. An unknown kind records
+/// nothing. The row stays until [`shekyl_seam_reap`].
+#[no_mangle]
+pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
+    let Some(hub) = hub() else {
+        return;
+    };
+    let Some(id) = SocketId::from_ffi(id) else {
+        return;
+    };
+    let Some(kind) = CloseKind::from_code(kind) else {
+        return;
+    };
+    let cause = if kind == CloseKind::ProxyRefused {
+        CloseCause::proxy_refused(reply)
+    } else {
+        CloseCause::new(kind)
+    };
+    hub.finish(id, cause);
+}
+
 /// Live sockets for one connector and direction.
 #[no_mangle]
 pub extern "C" fn shekyl_seam_socket_count(connector: u32, direction: u32) -> u64 {

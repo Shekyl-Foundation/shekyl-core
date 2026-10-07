@@ -1400,9 +1400,10 @@ TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
 // and `shekyl_close_implicates_address`. A send that never left, a payload
 // this node refused, and a negative invoke with no recorded seam cause are
 // `LocalClose` and stay dialable. A Levin response the layer rejected does
-// not. This does not open a socket: it does not cover the seam gap timer,
-// a peer that answers the wrong network id, or a closed SOCKS port. Those
-// run on the pair.
+// not. This does not open a socket. The recorded-cause read is
+// `handshake_close_cause_reads_the_recorded_seam_cause`. The seam gap
+// timer, a peer that answers the wrong network id, and a closed SOCKS
+// port run on the pair.
 TEST(node_server, handshake_close_cause_implicates_only_a_levin_rejection)
 {
   const auto clearnet = static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet);
@@ -1999,6 +2000,18 @@ namespace
           cprotocol, arg, ctx());
     }
   };
+}
+
+TEST(node_server, handshake_close_cause_reads_the_recorded_seam_cause)
+{
+  NotifyHarness h(false);
+  ASSERT_NE(h.socket_id, 0u);
+  shekyl_seam_record_cause(h.socket_id, SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT, 0);
+  const auto recorded = nodetool::handshake_close_cause(true, -1, false, false, h.socket_id);
+  EXPECT_EQ(recorded.kind, SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT);
+  EXPECT_EQ(recorded.reply, 0u);
+  const auto clearnet = static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet);
+  EXPECT_EQ(shekyl_close_implicates_address(recorded.kind, recorded.reply, clearnet), 0);
 }
 
 TEST(attributable_drop, a_form_failure_still_severs_and_abandons_the_batch)

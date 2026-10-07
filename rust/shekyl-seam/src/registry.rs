@@ -44,10 +44,6 @@ pub struct Row {
     established: bool,
     /// Unix seconds, taken when the row was admitted.
     started_unix: u64,
-    /// Unix seconds of the last delivered frame. Zero until one arrives.
-    last_recv_unix: u64,
-    /// Unix seconds of the last accepted send. Zero until one leaves.
-    last_send_unix: u64,
 }
 
 impl Row {
@@ -87,33 +83,17 @@ impl Row {
         self.started_unix
     }
 
-    /// Unix seconds of the last delivered frame. Zero until one arrives.
-    #[must_use]
-    pub const fn last_recv_unix(self) -> u64 {
-        self.last_recv_unix
-    }
-
-    /// Unix seconds of the last accepted send. Zero until one leaves.
-    #[must_use]
-    pub const fn last_send_unix(self) -> u64 {
-        self.last_send_unix
-    }
-
     pub(crate) const fn new(
         id: SocketId,
         endpoint: Endpoint,
         established: bool,
         started_unix: u64,
-        last_recv_unix: u64,
-        last_send_unix: u64,
     ) -> Self {
         Self {
             id,
             endpoint,
             established,
             started_unix,
-            last_recv_unix,
-            last_send_unix,
         }
     }
 }

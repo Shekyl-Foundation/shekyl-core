@@ -342,8 +342,10 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out);
 
 // One live p2p connection, raw.
 //
-// `started` / `last_recv` / `last_send` are absolute unix seconds and the
-// counters are absolute totals: the *elapsed* quantities the wire carries are
+// `started` is unix seconds at admission, from the board. `last_recv` and
+// `last_send` are unix seconds of the last granted byte (`shekyl_link_activity`,
+// milliseconds, divided by 1000), or 0 when that direction has not moved a
+// byte. The counters are absolute totals: the *elapsed* quantities the wire carries are
 // derived in Rust against the single `now` this export reports beside the
 // list. The C++ this replaces read the clock **twice** per connection — once
 // for the idle times and again for the averages — so a connection could
@@ -377,10 +379,11 @@ typedef struct shekyl_rpc_connection_facts {
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
-    /// `reserved[0]` is 1 when height, support flags, and state were read
-    /// on the strand. 0 means those three are unknown: state 0 would
-    /// otherwise read as "before handshake".
-    uint8_t      reserved[5];
+    /// 1 when height, support flags, and state were read on the strand.
+    /// 0 means those three are unknown: state 0 would otherwise read as
+    /// "before handshake". `height` and `support_flags` are then JSON null.
+    uint8_t      claims_known;
+    uint8_t      reserved[4];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were

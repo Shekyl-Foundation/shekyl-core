@@ -48,6 +48,15 @@ macro_rules! close_kinds {
                 }
             }
 
+            /// The discriminant, or `None` when `code` is not in the table.
+            #[must_use]
+            pub const fn from_code(code: u8) -> Option<Self> {
+                match code {
+                    $($disc => Some(Self::$name),)*
+                    _ => None,
+                }
+            }
+
             pub const fn c_name(self) -> &'static str {
                 match self {
                     $(Self::$name => $c_name,)*
@@ -162,8 +171,10 @@ impl CloseCause {
     /// is feeding us addresses. A cause that does not name the destination
     /// leaves the address dialable.
     ///
-    /// [`CloseKind::DialFailed`] is a connect to that address that failed.
-    /// [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging the
+    /// [`CloseKind::DialFailed`] is a direct connect the peer refused
+    /// (TCP RST). Any other connect error is [`CloseKind::LocalClose`]:
+    /// network unreachable, address not available, and permission denied
+    /// are this node's link. [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging the
     /// peer. [`CloseKind::ProxyRefused`] depends on `connector`. A clearnet
     /// proxy's reply is the exit's claim about a host, and the cache would
     /// suppress that whole host for an hour, so no clearnet reply counts.
@@ -269,7 +280,7 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 
 #[cfg(test)]
 mod tests {
-    use super::{c_header, onion_reply_names_the_destination, CloseCause, CloseKind, Phase};
+    use super::{c_header, CloseCause, CloseKind, Phase};
     use crate::ConnectorId;
 
     #[test]
@@ -350,7 +361,9 @@ mod tests {
         }
         for reply in 0u16..=0x00FF {
             let cause = CloseCause::proxy_refused(reply);
-            let onion = onion_reply_names_the_destination(reply);
+            // The expected set is the spec's, written here. It is not
+            // `onion_reply_names_the_destination`.
+            let onion = matches!(reply, 0x04 | 0x05 | 0xF0 | 0xF1 | 0xF2);
             assert_eq!(
                 cause.implicates_address(ConnectorId::Tor),
                 onion,
@@ -361,10 +374,6 @@ mod tests {
                 "clearnet reply {reply:#x} must stay dialable"
             );
         }
-        assert!(onion_reply_names_the_destination(0xF0));
-        assert!(onion_reply_names_the_destination(0xF2));
-        assert!(!onion_reply_names_the_destination(0xF3));
-        assert!(!onion_reply_names_the_destination(0xF7));
         assert!(!CloseCause::proxy_refused(0x0100).implicates_address(ConnectorId::Tor));
     }
 

@@ -1257,8 +1257,9 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     // one: it is the same entry point `get_connections()` uses.
     nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
       h->rpc->get_p2p();
-    // Address, direction, the handshake flag, and the three unix-second
-    // observations come from the board. Height, support flags, and the
+    // Address, direction, the handshake flag, and admission time come from
+    // the board. Last receive and last send are the byte-path instants.
+    // Height, support flags, and the
     // pull state are claims: they take the strand hop. This thread is the
     // operator's (`spawn_blocking`, and `get_connections` / `sync_info`
     // are admin-only), so waiting on `then` is not the walk that deadlocks
@@ -1309,10 +1310,13 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.localhost = address.is_loopback() ? 1 : 0;
       e.local_ip = address.is_local() ? 1 : 0;
       e.started = row.started;
-      e.last_recv = row.last_recv;
-      e.last_send = row.last_send;
       if (row.id != 0)
       {
+        std::uint64_t send_ms = 0;
+        std::uint64_t recv_ms = 0;
+        shekyl_link_activity(row.id, &send_ms, &recv_ms);
+        e.last_send = send_ms / 1000;
+        e.last_recv = recv_ms / 1000;
         std::uint64_t up = 0;
         std::uint64_t down = 0;
         shekyl_link_connection(row.id, &up, &down);
@@ -1332,7 +1336,7 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
           e.height = found->second.height;
           e.support_flags = found->second.support_flags;
           e.state = found->second.state;
-          e.reserved[0] = 1;
+          e.claims_known = 1;
         }
       }
       owned->entries.push_back(e);

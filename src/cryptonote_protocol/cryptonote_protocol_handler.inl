@@ -1856,10 +1856,16 @@ skip:
           std::uint64_t speed_up = 0;
           std::uint64_t speed_down = 0;
           shekyl_link_speed(other->id, &speed_up, &speed_down);
-          const time_t nowt = time(NULL);
-          const time_t last_recv = static_cast<time_t>(other->last_recv);
-          const time_t time_since_last_recv = last_recv == 0 ? nowt : nowt - last_recv;
-          const float last_activity = std::min(static_cast<float>(time_since_last_recv), dt / 1e6f);
+          std::uint64_t send_ms = 0;
+          std::uint64_t recv_ms = 0;
+          shekyl_link_activity(other->id, &send_ms, &recv_ms);
+          timespec now_ts{};
+          clock_gettime(CLOCK_REALTIME, &now_ts);
+          const std::uint64_t now_ms = static_cast<std::uint64_t>(now_ts.tv_sec) * 1000
+              + static_cast<std::uint64_t>(now_ts.tv_nsec) / 1000000;
+          const std::uint64_t mark = shekyl_recv_mark_ms(recv_ms, other->started * 1000);
+          const double since_s = now_ms >= mark ? static_cast<double>(now_ms - mark) / 1000.0 : 0.0;
+          const float last_activity = std::min(static_cast<float>(since_s), dt / 1e6f);
           bool download = last_activity > LAST_ACTIVITY_STALL_THRESHOLD;
           if (!download)
           {

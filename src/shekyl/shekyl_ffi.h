@@ -4391,6 +4391,9 @@ int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t le
 int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
     int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
+/// Record `kind` on `id` when the row has no cause yet. The row stays
+/// until `shekyl_seam_reap`. An unknown kind records nothing.
+void shekyl_seam_record_cause(std::uint64_t id, std::uint8_t kind, std::uint16_t reply);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 
@@ -4405,18 +4408,16 @@ struct shekyl_seam_board_row {
   std::uint8_t _pad[7];
   shekyl_seam_observed endpoint;
   std::uint8_t _pad_tail[2];
-  /// Unix seconds at admission.
+  /// Unix seconds at admission. Last receive and last send are not here:
+  /// they are millisecond instants on the byte path
+  /// (`shekyl_link_activity`).
   std::uint64_t started;
-  /// Unix seconds of the last delivered frame. Zero until one arrives.
-  std::uint64_t last_recv;
-  /// Unix seconds of the last accepted send. Zero until one leaves.
-  std::uint64_t last_send;
 };
 static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
 static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
 static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
 static_assert(offsetof(shekyl_seam_board_row, started) == 88, "seam board started");
-static_assert(sizeof(shekyl_seam_board_row) == 112, "seam board row");
+static_assert(sizeof(shekyl_seam_board_row) == 96, "seam board row");
 
 /// Rows of `connector` and `direction` on the process hub, handshake or
 /// not. A missing hub, or an index that is not a connector or a direction,
@@ -4553,6 +4554,13 @@ void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint
 /// Bytes per second right now, over the link budget's recent-speed
 /// window, read from the engine's clock. A null pointer is skipped.
 void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
+/// Unix milliseconds of the last granted byte on `id`. Zero until that
+/// direction has moved a byte. A null pointer is skipped. This is the
+/// stall check's clock, not the board.
+void shekyl_link_activity(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// The stall mark. `recv_ms` of 0 means no byte yet, and the mark is
+/// `started_ms` (admission, in unix milliseconds).
+std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_ms);
 
 /// The 16-byte network id for `nettype`
 /// (`cryptonote::network_type`: 0 mainnet, 1 testnet, 2 stagenet, 3 fakechain).

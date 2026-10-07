@@ -199,6 +199,17 @@ impl LinkGate {
             .expect("link budget")
             .connection(conn)
     }
+
+    /// Unix milliseconds of the last granted byte, `(send, recv)`.
+    /// Zero until that direction has moved a byte.
+    #[must_use]
+    pub fn activity(&self, conn: u64) -> (u64, u64) {
+        self.inner
+            .budget
+            .lock()
+            .expect("link budget")
+            .activity_ms(conn)
+    }
 }
 
 impl Default for LinkGate {

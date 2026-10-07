@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::{node_gate, Session};
+use shekyl_capped_stream::{node_gate, process_write_stall, recv_mark_ms, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
@@ -799,12 +799,41 @@ pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down
     }
 }
 
+/// Unix milliseconds of the last granted byte. Null pointers are skipped.
+#[no_mangle]
+pub extern "C" fn shekyl_link_activity(id: u64, last_send_ms: *mut u64, last_recv_ms: *mut u64) {
+    let (send, recv) = node_gate().activity(id);
+    unsafe {
+        if !last_send_ms.is_null() {
+            *last_send_ms = send;
+        }
+        if !last_recv_ms.is_null() {
+            *last_recv_ms = recv;
+        }
+    }
+}
+
+/// The stall mark. A receive instant of zero uses admission.
+#[no_mangle]
+pub extern "C" fn shekyl_recv_mark_ms(recv_ms: u64, started_ms: u64) -> u64 {
+    recv_mark_ms(recv_ms, started_ms)
+}
+
 /// Stop the transport runtime. Called from outside one of its tasks.
 ///
 /// D6's order: the engine takes no new deadline, the transport's tasks
-/// are cancelled, then the engine thread is joined.
+/// are cancelled, then the engine thread is joined. The process write-stall
+/// histogram is read here: nothing else in the daemon reads it.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
+    let stall = process_write_stall();
+    tracing::info!(
+        closes = stall.closes,
+        max_ns = stall.max_ns,
+        in_flight_at_close = stall.in_flight_at_close,
+        in_flight_max_ns = stall.in_flight_at_close_max_ns,
+        "process write stall"
+    );
     let host = HOST.lock().expect("zone host").take();
     let Some(host) = host else {
         return;

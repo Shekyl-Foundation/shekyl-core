@@ -206,8 +206,9 @@ namespace nodetool
   /// wrong network id, or a peerlist this node refused, is
   /// `LevinHandshakeRejected`. A negative invoke code is whatever the
   /// seam recorded on the session: the gap deadline closes the session
-  /// before the invoke timer, so that cause is `TransportTimeout` and
-  /// not a rejection.
+  /// before the invoke timer, so that cause is `LevinHandshakeTimeout`
+  /// (cause 7) and not a rejection. Neither that cause nor
+  /// `TransportTimeout` forgets the address.
   struct classified_close
   {
     std::uint8_t kind;

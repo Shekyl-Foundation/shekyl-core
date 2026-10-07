@@ -111,13 +111,9 @@ struct Conn {
     /// be open to frames before the handshake, and closed after it.
     established: bool,
     /// Unix seconds at admission. The operator view reads this. It is not
-    /// the timing engine's tick.
+    /// the timing engine's tick. Last receive and last send are not on
+    /// this row: they are millisecond instants on the byte path.
     started_unix: u64,
-    /// Unix seconds of the last frame posted to the strand, and of the
-    /// last send the queue accepted. Zero until that happens. Republish
-    /// runs when the second changes, not on every byte.
-    last_recv_unix: u64,
-    last_send_unix: u64,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -141,6 +137,8 @@ struct Inner {
     ceiling: InboundCeiling,
     /// The last board published. Readers clone this. They do not lock the table.
     board: Board,
+    /// How many times [`Hub::republish`] has run. Bytes do not increment it.
+    publishes: u64,
 }
 
 /// What one locked look at a row told [`Hub::deliver_async`].
@@ -188,6 +186,7 @@ impl Hub {
                 conns: HashMap::new(),
                 ceiling,
                 board: Board::empty(),
+                publishes: 0,
             })),
             ready: Arc::new(Condvar::new()),
             post,
@@ -431,8 +430,6 @@ impl Hub {
                 connection,
                 established: false,
                 started_unix: Self::unix_secs(),
-                last_recv_unix: 0,
-                last_send_unix: 0,
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
@@ -461,22 +458,17 @@ impl Hub {
         self.lock().board.clone()
     }
 
+    /// How many boards have been published. A byte does not increment this.
+    #[must_use]
+    pub fn publish_count(&self) -> u64 {
+        self.lock().publishes
+    }
+
     fn unix_secs() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or(0)
-    }
-
-    /// True when `slot` moved to a new unix second. The caller republishes
-    /// then. A second byte in the same second does not.
-    fn stamp(slot: &mut u64) -> bool {
-        let now = Self::unix_secs();
-        if *slot == now {
-            return false;
-        }
-        *slot = now;
-        true
     }
 
     /// Rebuild the published board from rows that are still connected.
@@ -486,9 +478,10 @@ impl Hub {
     /// flood that is O(N²) across the flood. D5's thread-budget flood leg
     /// measures that cost; it is not a reason to hand a reader the live
     /// row. A closed row stays in the table until [`Self::reap`] and is
-    /// not on the board. A byte in a second the row already recorded does
-    /// not call this.
+    /// not on the board. Open, close, and the handshake are the callers.
+    /// A byte is not.
     fn republish(inner: &mut Inner) {
+        inner.publishes = inner.publishes.saturating_add(1);
         let rows = inner
             .conns
             .iter()
@@ -499,8 +492,6 @@ impl Hub {
                     *conn.connection.endpoint(),
                     conn.established,
                     conn.started_unix,
-                    conn.last_recv_unix,
-                    conn.last_send_unix,
                 )
             })
             .collect();
@@ -645,26 +636,19 @@ impl Hub {
             (Phase::Closed, _) => DeliverStep::Done(false),
             (Phase::Open, false) => DeliverStep::Done(true),
             (Phase::Open, true) => {
-                let publish = {
-                    if conn.cause.is_some() {
-                        return DeliverStep::Done(false);
-                    }
-                    conn.phase = Phase::Delivering;
-                    conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                    let connector = conn.connection.endpoint().connector();
-                    let publish = Self::stamp(&mut conn.last_recv_unix);
-                    let frame = bytes.take().expect("checked above");
-                    (self.post)(Post::Deliver {
-                        id,
-                        connector,
-                        bytes: frame,
-                    });
-                    self.wake();
-                    publish
-                };
-                if publish {
-                    Self::republish(inner);
+                if conn.cause.is_some() {
+                    return DeliverStep::Done(false);
                 }
+                conn.phase = Phase::Delivering;
+                conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
+                let connector = conn.connection.endpoint().connector();
+                let frame = bytes.take().expect("checked above");
+                (self.post)(Post::Deliver {
+                    id,
+                    connector,
+                    bytes: frame,
+                });
+                self.wake();
                 DeliverStep::Wait
             }
             (Phase::Arming | Phase::Delivering, _) => DeliverStep::Wait,
@@ -734,14 +718,8 @@ impl Hub {
                     cause: None,
                 };
             };
-            let sent = send.try_send(bytes);
-            let publish = sent.is_ok() && Self::stamp(&mut conn.last_send_unix);
-            (sent, publish)
+            send.try_send(bytes)
         };
-        let (outcome, publish) = outcome;
-        if publish {
-            Self::republish(&mut self.lock());
-        }
         match outcome {
             Ok(()) => SendReport {
                 accepted: true,

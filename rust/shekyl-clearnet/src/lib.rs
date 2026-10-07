@@ -709,6 +709,76 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_direct_connect_names_the_address() {
+        let (engine, listener, seen) = start(
+            ClearnetOption::Off,
+            Tick::new(5_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        let handle = listener.runtime_handle().clone();
+        let port = handle.block_on(async {
+            let server = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind");
+            let port = server.local_addr().expect("addr").port();
+            drop(server);
+            port
+        });
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port,
+            },
+            None,
+        );
+        let start_at = Instant::now();
+        while !seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::DialFailed)
+        {
+            assert!(start_at.elapsed() < Duration::from_secs(2), "refused");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn an_unreachable_network_stays_dialable() {
+        let (engine, listener, seen) = start(
+            ClearnetOption::Off,
+            Tick::new(2_000_000_000),
+            InboundCeiling::Bounded(4),
+        );
+        listener.dial(
+            NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::new(255, 255, 255, 255),
+                port: 9,
+            },
+            None,
+        );
+        let start_at = Instant::now();
+        while !seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::LocalClose)
+        {
+            assert!(start_at.elapsed() < Duration::from_secs(3), "unreachable");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !seen
+                .lock()
+                .expect("causes")
+                .contains(&CloseKind::DialFailed),
+            "an unreachable network is this node's link"
+        );
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
     fn option_on_dials_and_both_sides_read_what_was_sent() {
         let within = Tick::new(5_000_000_000);
         let (engine_a, mut responder, _) =

@@ -17,6 +17,7 @@
 //! only class; the argument is what a later class fills.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const NANOS_PER_SEC: u128 = 1_000_000_000;
 
@@ -67,6 +68,42 @@ struct Flow {
     bytes: u64,
     packets: u64,
     pace: Pace,
+    /// Unix milliseconds of the last byte this direction granted.
+    /// Zero until one moves. The stall check and the operator view
+    /// read this. It is not a board field.
+    last_ms: u64,
+}
+
+/// Unix milliseconds. Zero when the clock is before the epoch.
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// The instant a stall check compares, in unix milliseconds.
+///
+/// `recv_ms` is the last received byte. Zero means none has arrived, and
+/// the mark is `started_ms`.
+#[must_use]
+pub const fn recv_mark_ms(recv_ms: u64, started_ms: u64) -> u64 {
+    if recv_ms == 0 {
+        started_ms
+    } else {
+        recv_ms
+    }
+}
+
+/// Whether `now_ms` is more than `threshold_ms` after [`recv_mark_ms`].
+#[must_use]
+pub const fn recv_is_stalled(
+    now_ms: u64,
+    recv_ms: u64,
+    started_ms: u64,
+    threshold_ms: u64,
+) -> bool {
+    now_ms.saturating_sub(recv_mark_ms(recv_ms, started_ms)) > threshold_ms
 }
 
 /// The recent rate of one direction on one connection.
@@ -310,6 +347,7 @@ impl Lane {
         let flow = self.per.entry(conn).or_default();
         flow.bytes = flow.bytes.saturating_add(n);
         flow.pace.observe(n, now);
+        flow.last_ms = unix_ms();
     }
 
     /// One message finished. A grant is not a message: a rate-limited
@@ -498,6 +536,22 @@ impl LinkBudget {
         (up, down)
     }
 
+    /// Unix milliseconds of the last granted byte, `(send, recv)`.
+    ///
+    /// Zero until that direction has moved a byte. Written beside the
+    /// tally [`Self::speed`] reads, on each granted chunk.
+    #[must_use]
+    pub fn activity_ms(&self, conn: u64) -> (u64, u64) {
+        let send = self.up.per.get(&conn).map(|flow| flow.last_ms).unwrap_or(0);
+        let recv = self
+            .down
+            .per
+            .get(&conn)
+            .map(|flow| flow.last_ms)
+            .unwrap_or(0);
+        (send, recv)
+    }
+
     /// What this connection has moved. Absent means nothing yet.
     #[must_use]
     pub fn connection(&self, conn: u64) -> Observed {
@@ -520,7 +574,7 @@ impl Default for LinkBudget {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkBudget, LinkDirection, MessageClass, Turn};
+    use super::{recv_is_stalled, unix_ms, LinkBudget, LinkDirection, MessageClass, Turn};
 
     const SEC: u64 = 1_000_000_000;
 
@@ -741,5 +795,38 @@ mod tests {
             1,
             "a refund returns bytes, not the message"
         );
+    }
+
+    #[test]
+    fn a_frame_in_pieces_over_two_seconds_is_not_stalled() {
+        let mut budget = LinkBudget::new();
+        let conn = 7u64;
+        assert_eq!(budget.activity_ms(conn), (0, 0));
+        assert!(!recv_is_stalled(1_000, 0, 0, 2_000));
+        assert!(!recv_is_stalled(2_000, 0, 1_000, 2_000));
+        assert!(recv_is_stalled(3_500, 0, 1_000, 2_000));
+        assert_eq!(
+            budget.take(LinkDirection::Down, conn, MessageClass::Session, 64, 0),
+            Turn::Granted(64)
+        );
+        let (_, first) = budget.activity_ms(conn);
+        assert!(first > 0, "the first piece stamps the receive instant");
+        assert!(
+            recv_is_stalled(first + 2_500, first, first, 2_000),
+            "silence after the first piece is a stall"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2_100));
+        assert_eq!(
+            budget.take(LinkDirection::Down, conn, MessageClass::Session, 64, 1),
+            Turn::Granted(64)
+        );
+        let (_, second) = budget.activity_ms(conn);
+        let now = unix_ms();
+        assert!(second >= first);
+        assert!(
+            now.saturating_sub(second) < 2_000,
+            "the later piece is the mark, not the first"
+        );
+        assert!(!recv_is_stalled(now, second, first, 2_000));
     }
 }

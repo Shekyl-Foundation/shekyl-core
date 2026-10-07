@@ -34,7 +34,9 @@ pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,
 };
 pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
-pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
+pub use budget::{
+    recv_is_stalled, recv_mark_ms, LinkBudget, LinkDirection, MessageClass, Observed, Turn,
+};
 pub use cause::{c_header, socks_reply_is_our_request, CloseCause, CloseKind, Phase};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,

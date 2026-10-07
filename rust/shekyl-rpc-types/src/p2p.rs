@@ -222,12 +222,12 @@ pub struct ConnectionInfo {
     pub current_download: u64,
     pub avg_upload: u64,
     pub current_upload: u64,
-    /// Absent when the strand has not reported the claim.
+    /// JSON null when the strand has not reported the claim.
     pub support_flags: Option<u32>,
     /// The connection uuid as 32 lowercase hex characters.
     pub connection_id: String,
-    /// The peer's claimed blockchain height. Absent when the strand has
-    /// not reported it. Zero would read as a real claim.
+    /// The peer's claimed blockchain height. JSON null when the strand
+    /// has not reported it. Zero would read as a real claim.
     pub height: Option<u64>,
     /// epee address type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
