@@ -676,7 +676,7 @@ mod lifecycle_tests {
             identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
             virtual_port: SERVING_VIRTUAL_PORT,
             max_streams: SERVING_MAX_STREAMS,
-            key: std::sync::Arc::new(shekyl_p_host::NoResidentKey),
+            key: std::sync::Arc::new(shekyl_p_host::RefusingKey),
             // Stamped, so these lifecycle cases exercise a persona whose
             // gate can answer. What the gate does with an unstamped cache is
             // `signer`'s and `daemon_tip`'s to assert, not this suite's.

@@ -244,10 +244,9 @@ impl PServeEndpoint {
     /// to get it wrong.
     ///
     /// `signer` supplies the persona's height for the `SF-D5` gate and the
-    /// `SF-D8` countersignature. A host whose key is not yet resident binds
-    /// a signer that refuses (`shekyl-p-host`'s `NoResidentKey`): the
-    /// endpoint stays up, and a valid request for a held shard gets the
-    /// bare 503 before any shard byte, counted in
+    /// `SF-D8` countersignature. A signer that refuses the pre-flight (the
+    /// key's owner is gone) keeps the endpoint up: a valid request for a
+    /// held shard gets the bare 503 before any shard byte, counted in
     /// [`Self::sign_failure_count`].
     ///
     /// # Errors

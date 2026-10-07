@@ -44,8 +44,9 @@ pub struct PersonaServing {
     /// chooses it (see [`OnionServiceSpec`]).
     pub max_streams: u16,
     /// The persona's attestation signing key for the `SF-D8` pass
-    /// countersignature — [`NoResidentKey`](crate::NoResidentKey) until the resident key is
-    /// wired (SH-2).
+    /// countersignature. In production this is the engine's resident pass
+    /// key: a round-trip into the stake actor that holds the secret, which
+    /// never crosses into this crate (`SF-D13`).
     pub key: Arc<dyn PassKey>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
@@ -76,11 +77,11 @@ impl fmt::Debug for PersonaServing {
 /// The counters split them into two buckets, in aggregate, and no finer:
 /// `lookup_failures` is "this persona could not read what it needed" (the
 /// store or the tip, pooled), and `sign_failures` is "the shard was held
-/// and the key refused its pre-flight" — no key resident, decided before
-/// any shard byte is read. A persona started with
-/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
-/// ordinary miss — a shard the persona simply does not hold — is the
-/// deliberate 404 and moves neither counter.
+/// and the key refused its pre-flight" — the actor holding the secret is
+/// gone, decided before any shard byte is read. A persona whose key says no
+/// to everything accrues only the latter. An ordinary miss — a shard the
+/// persona simply does not hold — is the deliberate 404 and moves neither
+/// counter.
 ///
 /// `late_sign_failures` is not a 503 at all: the pre-flight said yes, the
 /// whole shard went out, and the signer then refused, so the response

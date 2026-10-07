@@ -42,13 +42,14 @@
 //! # Why the key is
 //!
 //! The key is the persona's bonded attestation key, and its custody is the
-//! wallet's design (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2; SH-2 for the
-//! resident shape). This crate holds an `Arc<dyn PassKey>` and calls it
-//! once per served shard from the blocking pool; it never sees the secret.
-//! Until the resident key is wired, the caller passes [`NoResidentKey`] and
-//! the endpoint stays up and counted. It cannot produce a pass: a valid
-//! request for a held shard is answered with the bare 503, before any
-//! shard byte is sent.
+//! wallet's design (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2; `SF-D13`). This
+//! crate holds an `Arc<dyn PassKey>` and calls it once per served shard from
+//! the blocking pool; it never sees the secret. The production key is
+//! `shekyl-engine-core`'s resident pass key, which answers each call with a
+//! round-trip into the stake actor that holds the secret. A key that answers
+//! "no" keeps the endpoint up and counted: a valid request for a held shard
+//! is the bare 503, before any shard byte is sent. [`RefusingKey`] is that
+//! key for tests, on the same dev-only edge as `TestKeySigner`.
 
 use std::sync::Arc;
 
@@ -58,26 +59,28 @@ use shekyl_types::BlockHeight;
 
 use crate::daemon_tip::DaemonTipCache;
 
-/// The key a host binds before its resident attestation key is wired.
+/// A key that says no — the test fixture for the host's keyless path.
 ///
-/// Says it cannot sign, and refuses every transcript with a fixed reason
-/// if asked anyway. This is the SH-2 placeholder made a type: a key that
-/// says no.
-///
-/// The serve loop asks [`PassKey::ready`] before the first response
-/// byte, so a keyless persona answers a valid request for a held shard with
-/// the bare 503 and sends no shard. It is counted under
-/// `sign_failure_count`: a rising `sign_failure_count` with no
-/// `lookup_failure_count` is this state, not a store fault.
+/// Refuses the pre-flight and every transcript with a fixed reason. The
+/// serve loop asks [`PassKey::ready`] before the first response byte, so a
+/// host bound to this key answers a valid request for a held shard with the
+/// bare 503 and sends no shard, counted under `sign_failures`; that is the
+/// bucket the lifecycle and counter tests read. Production never binds it:
+/// the engine's resident pass key refuses on the same path when the actor
+/// holding the secret is gone, which is why the fixture is useful and why it
+/// is on the dev-only `test-signer` edge rather than in the shipped graph.
+#[cfg(any(test, feature = "test-signer"))]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoResidentKey;
+pub struct RefusingKey;
 
-impl NoResidentKey {
+#[cfg(any(test, feature = "test-signer"))]
+impl RefusingKey {
     /// The refusal detail, operator-facing only.
-    pub const REASON: &'static str = "persona attestation key not resident (SH-2 not wired)";
+    pub const REASON: &'static str = "refusing key (test fixture)";
 }
 
-impl PassKey for NoResidentKey {
+#[cfg(any(test, feature = "test-signer"))]
+impl PassKey for RefusingKey {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new(Self::REASON))
     }
@@ -148,7 +151,7 @@ mod tests {
 
     fn signer() -> (Arc<DaemonTipCache>, HostSigner) {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
-        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(NoResidentKey));
+        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
         (tip, signer)
     }
 
@@ -156,11 +159,11 @@ mod tests {
     /// before the body rather than a shard that ends in the refusal
     /// trailer; the host signer passes the question through to its key.
     #[test]
-    fn no_resident_key_refuses_at_the_pre_flight_and_the_host_passes_it_through() {
-        let err = NoResidentKey
+    fn refusing_key_refuses_at_the_pre_flight_and_the_host_passes_it_through() {
+        let err = RefusingKey
             .ready(7, BlockHeight::from_raw(9_280))
             .unwrap_err();
-        assert_eq!(err.detail, NoResidentKey::REASON);
+        assert_eq!(err.detail, RefusingKey::REASON);
         let (tip, signer) = signer();
         tip.stamp_synced(BlockHeight::from_raw(10_000));
         assert_eq!(
@@ -168,17 +171,17 @@ mod tests {
                 .ready(7, BlockHeight::from_raw(9_280))
                 .unwrap_err()
                 .detail,
-            NoResidentKey::REASON,
+            RefusingKey::REASON,
             "the host signer's pre-flight is its key's"
         );
     }
 
     #[test]
-    fn no_resident_key_refuses_with_its_fixed_reason() {
-        let err = NoResidentKey
+    fn refusing_key_refuses_with_its_fixed_reason() {
+        let err = RefusingKey
             .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
             .unwrap_err();
-        assert_eq!(err.detail, NoResidentKey::REASON);
+        assert_eq!(err.detail, RefusingKey::REASON);
     }
 
     /// WSS-24: the gate's height is the daemon's tip, not the principal's
@@ -215,7 +218,7 @@ mod tests {
     #[test]
     fn a_tip_past_the_age_bound_refuses_at_the_gate() {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
-        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(NoResidentKey));
+        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
         let long_ago = Instant::now()
             .checked_sub(MAX_AGE + Duration::from_secs(1))
             .expect("the test clock is past the age bound");
@@ -223,7 +226,7 @@ mod tests {
         assert_eq!(signer.own_height(), None);
     }
 
-    /// The key half is untouched by the height change: `NoResidentKey`
+    /// The key half is untouched by the height change: `RefusingKey`
     /// still refuses every transcript.
     #[test]
     fn the_key_still_refuses_independently_of_the_height() {

@@ -90,4 +90,5 @@ pub use serve_set::{
     Staleness, StalenessBound,
 };
 pub use shekyl_p_serve::{sign_pass_transcript, PassKey, SignRefused};
-pub use signer::NoResidentKey;
+#[cfg(any(test, feature = "test-signer"))]
+pub use signer::RefusingKey;
