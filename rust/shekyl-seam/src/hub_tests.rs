@@ -607,12 +607,13 @@ fn reap_forgets_the_row() {
 }
 
 #[test]
-fn connect_without_a_dialer_is_dial_failed() {
+fn connect_without_a_dialer_is_local() {
     let rig = rig();
     let Err(err) = rig.hub.connect(&endpoint(doc_ip(), Direction::Outbound)) else {
         panic!("connect without a dialer admitted a channel");
     };
-    assert_eq!(err.kind(), CloseKind::DialFailed);
+    assert_eq!(err.kind(), CloseKind::LocalClose);
+    assert!(!err.implicates_address(ConnectorId::Clearnet));
 }
 
 #[test]

@@ -377,6 +377,9 @@ typedef struct shekyl_rpc_connection_facts {
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
+    /// `reserved[0]` is 1 when height, support flags, and state were read
+    /// on the strand. 0 means those three are unknown: state 0 would
+    /// otherwise read as "before handshake".
     uint8_t      reserved[5];
 } shekyl_rpc_connection_facts;
 

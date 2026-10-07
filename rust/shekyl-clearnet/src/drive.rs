@@ -228,7 +228,7 @@ where
         return;
     }
     let Some((ip, port)) = socket_of(&address) else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     let dest = SocketAddr::new(ip, port);
@@ -259,7 +259,14 @@ where
     let connect = async {
         let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(target).await else {
-            return Err(CloseCause::new(CloseKind::DialFailed));
+            // `target` is the proxy when one is configured, and the peer
+            // when it is not. A closed SOCKS port is this node.
+            let kind = if proxy.is_some() {
+                CloseKind::LocalClose
+            } else {
+                CloseKind::DialFailed
+            };
+            return Err(CloseCause::new(kind));
         };
         if proxy.is_some() {
             match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
@@ -275,7 +282,7 @@ where
                     | SocksError::AuthFailed { .. },
                 ) => {
                     drop(stream.shutdown().await);
-                    return Err(CloseCause::new(CloseKind::DialFailed));
+                    return Err(CloseCause::new(CloseKind::LocalClose));
                 }
             }
         }
@@ -287,7 +294,7 @@ where
         result = wake.as_mut() => {
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::DialFailed,
+                Err(_) => CloseKind::LocalClose,
             };
             Err(CloseCause::new(kind))
         }
@@ -310,7 +317,7 @@ where
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::DialFailed).await;
+            finish_before_channel(&mut stream, &on_cause, CloseKind::LocalClose).await;
             return;
         }
     };
@@ -658,12 +665,13 @@ async fn write_half(
             SeamSend::Noise(send)
         }
     };
+    let mut stall = shekyl_capped_stream::WriteStall::new(conn);
     let cause = write_capped(
         &mut write,
         &outbound,
         &overfull,
         &node_gate(),
-        conn,
+        &mut stall,
         |plain| {
             seam.encode(plain)
                 .map(Cow::Owned)
@@ -671,6 +679,7 @@ async fn write_half(
         },
     )
     .await;
+    tracing::info!(conn, stall = %stall, "write stall");
     Some(cause)
 }
 

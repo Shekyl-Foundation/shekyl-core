@@ -1231,18 +1231,22 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
         send_count: c.send_count,
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: ConnectionState::from(c.state),
+        state: if c.claims_known {
+            ConnectionState::from(c.state)
+        } else {
+            ConnectionState::Unknown
+        },
         live_time,
         avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
         avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
-        support_flags: c.support_flags,
+        support_flags: c.claims_known.then_some(c.support_flags),
         // `hex::encode` is lowercase and undashed, which is exactly what
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
-        height: c.height,
+        height: c.claims_known.then_some(c.height),
         address_type: c.address_type,
     }
 }
@@ -3011,6 +3015,7 @@ pub(crate) mod tests {
             support_flags: 3,
             port: 18080,
             state: 3,
+            claims_known: true,
             address_type: ADDRESS_TYPE_IPV4,
             incoming: true,
             localhost: false,

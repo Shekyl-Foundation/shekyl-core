@@ -450,8 +450,8 @@ mod tests {
             ip: Ipv4Addr::LOCALHOST,
             port: 18080,
         });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
         listener.shutdown();
         drop(engine);
     }
@@ -668,8 +668,28 @@ mod tests {
             host: "not-a-v3-name.onion".into(),
             port: 18081,
         });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// The SOCKS port is closed. Covers the TCP connect to the local proxy
+    /// in `dial_one`. Does not cover a proxy that answers and then refuses,
+    /// and does not cover the C++ forget cache.
+    #[test]
+    fn a_closed_socks_port_does_not_implicate_the_onion() {
+        let (engine, listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(5_000_000_000),
+        );
+        listener.dial(NetworkAddress::Tor {
+            host: v3_onion_hostname(&[0x11; 32]),
+            port: 18081,
+        });
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
         listener.shutdown();
         drop(engine);
     }

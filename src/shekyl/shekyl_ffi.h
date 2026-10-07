@@ -4404,11 +4404,19 @@ struct shekyl_seam_board_row {
   std::uint8_t established;
   std::uint8_t _pad[7];
   shekyl_seam_observed endpoint;
+  std::uint8_t _pad_tail[2];
+  /// Unix seconds at admission.
+  std::uint64_t started;
+  /// Unix seconds of the last delivered frame. Zero until one arrives.
+  std::uint64_t last_recv;
+  /// Unix seconds of the last accepted send. Zero until one leaves.
+  std::uint64_t last_send;
 };
 static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
 static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
 static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
-static_assert(sizeof(shekyl_seam_board_row) == 88, "seam board row");
+static_assert(offsetof(shekyl_seam_board_row, started) == 88, "seam board started");
+static_assert(sizeof(shekyl_seam_board_row) == 112, "seam board row");
 
 /// Rows of `connector` and `direction` on the process hub, handshake or
 /// not. A missing hub, or an index that is not a connector or a direction,
@@ -4422,6 +4430,14 @@ std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
 /// the row is present and the handshake has not, -1 when there is no row.
 /// The id is the socket id, not the UUID.
 int shekyl_seam_session_established(std::uint64_t id);
+/// 1 when a hub is bound.
+int shekyl_seam_is_bound(void);
+/// 1 when `(kind, reply)` on `connector` should stop dials to that address.
+/// 0 otherwise, including an unknown kind. An unknown connector does not
+/// count a proxy reply.
+int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
+/// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
+int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);
 
 /// Copy the process hub's board through `visit`, one fixed-size row per
 /// call. There is one hub. A missing hub, or a board with no rows, visits

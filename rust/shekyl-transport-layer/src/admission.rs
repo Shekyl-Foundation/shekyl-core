@@ -421,7 +421,7 @@ impl Sockets {
     }
 
     /// Outbound Tor. The addressing cell says what may be dialed. Anything
-    /// else is [`CloseKind::DialFailed`] and reserves nothing.
+    /// else is [`CloseKind::LocalClose`] and reserves nothing.
     pub fn open_tor(&self, address: &NetworkAddress) -> Result<OpenSocket, OpenError> {
         check_dial(ConnectorId::Tor, address).map_err(OpenError::Refused)?;
         let mut inner = self.lock();

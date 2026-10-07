@@ -302,9 +302,12 @@ p2p dials, `shekyl-rpc-transport`, and `shekyl-p-fetch` pass
 `shekyl-p-transport`, which still dials through ureq. Moving that HTTP
 client onto `shekyl-socks` is a FOLLOWUPS row. The handshake keeps the
 proxy's reply byte, which `ProxyRefused` carries. A refusal is
-`ProxyRefused` with that byte. `ExtendedErrors` on the operator's
-`SocksPort` is what makes Tor's extended codes appear. That belongs in
-the operator docs. The initiator handshake runs on the blocking pool
+`ProxyRefused` with that byte. The managed `SocksPort` value is
+`auto ExtendedErrors` (a fixed part of the typed value, not an operator
+flag): Tor 0.4.9.11 leaves the flag off, and without it an introduction
+timeout and a missing descriptor are both reply 4. The flag changes
+only the reply byte our own Tor sends us. A clearnet proxy reply never
+forgets the host. The initiator handshake runs on the blocking pool
 under the same engine owner, armed when the socket exists.
 
 The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,

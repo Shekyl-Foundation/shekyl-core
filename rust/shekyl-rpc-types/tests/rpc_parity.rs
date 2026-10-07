@@ -1217,9 +1217,9 @@ fn vector_connection() -> ConnectionInfo {
         current_download: 12,
         avg_upload: 13,
         current_upload: 14,
-        support_flags: 3,
+        support_flags: Some(3),
         connection_id: "151c232a31383f464d545b626970777e".to_owned(),
-        height: 1_234_567,
+        height: Some(1_234_567),
         address_type: 1,
     }
 }

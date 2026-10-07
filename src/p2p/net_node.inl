@@ -152,22 +152,31 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f, std::atomic<size_t>* countdown)
+  size_t node_server<t_payload_net_handler>::post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then)
   {
-    // One of the two `foreach_connection` sites. The callback runs on each
-    // connection's strand. `countdown`, when set, is the number of posts
-    // before any of them runs, so the last strand to finish can tell.
+    // The count is stored before any post runs. The last strand calls
+    // `then`. No connections calls it here. `n == 0` does not post.
+    auto left = std::make_shared<std::atomic<size_t>>(0);
+    auto ran = std::make_shared<std::atomic<bool>>(false);
+    auto finish = std::make_shared<std::function<void()>>(std::move(then));
     std::vector<std::function<void()>> posts;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().collect_context_posts([f](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
-      }, posts);
+      zone.second.m_net_server.get_config_object().collect_context_posts(
+        [note, left, ran, finish](p2p_connection_context& cntx){
+          note(cntx, cntx.support_flags);
+          if (left->fetch_sub(1, std::memory_order_acq_rel) == 1
+              && !ran->exchange(true, std::memory_order_acq_rel)
+              && *finish)
+            (*finish)();
+          return true;
+        }, posts);
     }
-    if (countdown)
-      countdown->store(posts.size(), std::memory_order_release);
+    left->store(posts.size(), std::memory_order_release);
     for (auto& post : posts)
       post();
+    if (posts.empty() && !ran->exchange(true, std::memory_order_acq_rel) && *finish)
+      (*finish)();
     return posts.size();
   }
   //-----------------------------------------------------------------------------------
@@ -1295,25 +1304,26 @@ namespace nodetool
 
     epee::simple_event ev;
     std::atomic<bool> hsh_result(false);
-    bool timeout = false;
+    int invoke_code = 0;
+    bool levin_rejected = false;
     bool payload_refused = false;
 
     bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_HANDSHAKE::response>(context_, COMMAND_HANDSHAKE::ID, arg, zone.m_net_server.get_config_object(),
-      [this, &ev, &hsh_result, &just_take_peerlist, &context_, &timeout, &payload_refused](int code, const typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context)
+      [this, &ev, &hsh_result, &just_take_peerlist, &context_, &invoke_code, &levin_rejected, &payload_refused](int code, const typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context)
     {
       epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){ev.raise();});
 
+      invoke_code = code;
       if(code < 0)
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
-        if (code == LEVIN_ERROR_CONNECTION_TIMEDOUT)
-          timeout = true;
         return;
       }
 
       if(rsp.node_data.network_id != m_network_id)
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE Failed, wrong network!  (" << rsp.node_data.network_id << "), closing connection.");
+        levin_rejected = true;
         return;
       }
 
@@ -1321,6 +1331,7 @@ namespace nodetool
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE: failed to handle_remote_peerlist(...), closing connection.");
         add_host_fail(context.m_remote_address);
+        levin_rejected = true;
         return;
       }
       hsh_result = true;
@@ -1334,8 +1345,10 @@ namespace nodetool
           return;
         }
         // On this strand, before the callback returns. A later message
-        // queued behind it must already see the handshake flag.
+        // queued behind it must already see the handshake flag, and the
+        // relay registry flips with it.
         shekyl_zone_session_established(shekyl::seam_socket_id(context.m_connection_id));
+        m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
 
         context.support_flags = rsp.node_data.support_flags;
         const auto azone = epee::net_utils::require_session_connector(context.m_connector);
@@ -1358,10 +1371,15 @@ namespace nodetool
       ev.wait();
     }
 
+    classified_close recorded{SHEKYL_CLOSE_LOCAL_CLOSE, 0};
     if(!hsh_result)
     {
       LOG_WARNING_CC(context_, "COMMAND_HANDSHAKE Failed");
-      if (!timeout)
+      recorded = handshake_close_cause(r, invoke_code, levin_rejected, payload_refused,
+          shekyl::seam_socket_id(context_.m_connection_id));
+      // A negative code is the seam already closing the session. Closing
+      // again is the path that still has a live context.
+      if (r && invoke_code >= 0)
         zone.m_net_server.get_config_object().close(context_.m_connection_id);
     }
     else if (!just_take_peerlist)
@@ -1373,7 +1391,7 @@ namespace nodetool
         });
     }
 
-    return handshake_outcome{hsh_result.load(), timeout, payload_refused};
+    return handshake_outcome{hsh_result.load(), recorded.kind, recorded.reply};
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1605,7 +1623,7 @@ namespace nodetool
       bool is_priority = is_priority_node(na);
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, bool(opened.context), "Connect failed to " << na.str()
         /*<< ", try " << try_count*/);
-      record_addr_failed(na, opened.cause);
+      record_addr_failed(na, opened.cause, opened.reply);
       return false;
     }
 
@@ -1617,10 +1635,7 @@ namespace nodetool
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, *opened.context, "Failed to HANDSHAKE with peer "
         << na.str()
         /*<< ", try " << try_count*/);
-      const std::uint8_t cause = res.timed_out ? static_cast<std::uint8_t>(SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT)
-          : res.payload_refused ? static_cast<std::uint8_t>(SHEKYL_CLOSE_LOCAL_CLOSE)
-          : static_cast<std::uint8_t>(SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED);
-      record_addr_failed(na, cause);
+      record_addr_failed(na, res.kind, res.reply);
       return false;
     }
 
@@ -1645,13 +1660,6 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    m_notifier.on_session_established(con.m_connection_id, con.m_is_income, con.m_connector);
-    {
-      std::uint64_t socket_id = 0;
-      std::memcpy(&socket_id, con.m_connection_id.data + 8, sizeof(socket_id));
-      shekyl_zone_session_established(socket_id);
-    }
-
     LOG_DEBUG_CC(con, "CONNECTION HANDSHAKED OK.");
     return true;
   }
@@ -1672,7 +1680,7 @@ namespace nodetool
       bool is_priority = is_priority_node(na);
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, p2p_connection_context{}, "Connect failed to " << na.str());
-      record_addr_failed(na, opened.cause);
+      record_addr_failed(na, opened.cause, opened.reply);
 
       return false;
     }
@@ -1682,10 +1690,7 @@ namespace nodetool
       bool is_priority = is_priority_node(na);
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, *opened.context, "Failed to HANDSHAKE with peer " << na.str());
-      const std::uint8_t cause = res.timed_out ? static_cast<std::uint8_t>(SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT)
-          : res.payload_refused ? static_cast<std::uint8_t>(SHEKYL_CLOSE_LOCAL_CLOSE)
-          : static_cast<std::uint8_t>(SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED);
-      record_addr_failed(na, cause);
+      record_addr_failed(na, res.kind, res.reply);
       return false;
     }
 
@@ -1708,9 +1713,10 @@ namespace nodetool
 
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause)
+  void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause, std::uint16_t reply)
   {
-    if (!address_failure_counts(cause))
+    const auto connector = static_cast<std::uint8_t>(epee::net_utils::require_address_connector(addr));
+    if (shekyl_close_implicates_address(cause, reply, connector) != 1)
       return;
     m_conn_fails_cache.record_failure(addr, time(NULL));
   }
@@ -3485,9 +3491,9 @@ namespace nodetool
   node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
   {
     p2p_connection_context con{};
-    const std::uint8_t cause = zone.m_net_server.open(na, con);
-    if (cause != 0)
-      return {std::nullopt, cause};
-    return {std::move(con), 0};
+    const auto opened = zone.m_net_server.open(na, con);
+    if (opened.kind != 0)
+      return {std::nullopt, opened.kind, opened.reply};
+    return {std::move(con), 0, 0};
   }
 }

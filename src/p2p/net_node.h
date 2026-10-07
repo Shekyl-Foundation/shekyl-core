@@ -189,24 +189,46 @@ namespace nodetool
   //! `network_address::host_str()` so they compare equal to a candidate.
   std::set<std::string> local_interface_hosts();
 
-  /// A dial failure the address should remember. A timeout, a close this
-  /// node chose, and a payload this node refused are not that failure:
-  /// the address stays dialable.
-  inline bool address_failure_counts(std::uint8_t cause)
-  {
-    return cause == SHEKYL_CLOSE_DIAL_FAILED
-        || cause == SHEKYL_CLOSE_PROXY_REFUSED
-        || cause == SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED;
-  }
-
+  /// The close this handshake should remember. `ok` is the handshake.
+  /// `kind` and `reply` are the cause `record_addr_failed` asks Rust
+  /// about; they are meaningful when `ok` is false.
   struct handshake_outcome
   {
     bool ok = false;
-    bool timed_out = false;
-    /// `process_payload_sync_data` refused the peer's sync data. That is
-    /// this node's decision, not an unreachable address.
-    bool payload_refused = false;
+    std::uint8_t kind = SHEKYL_CLOSE_LOCAL_CLOSE;
+    std::uint16_t reply = 0;
   };
+
+  /// One classification for both dial paths.
+  ///
+  /// A payload this node refused, a send that never left, and a session
+  /// with no recorded cause are `LocalClose`. A Levin response with the
+  /// wrong network id, or a peerlist this node refused, is
+  /// `LevinHandshakeRejected`. A negative invoke code is whatever the
+  /// seam recorded on the session: the gap deadline closes the session
+  /// before the invoke timer, so that cause is `TransportTimeout` and
+  /// not a rejection.
+  struct classified_close
+  {
+    std::uint8_t kind;
+    std::uint16_t reply;
+  };
+
+  inline classified_close handshake_close_cause(bool invoked, int code, bool levin_rejected,
+      bool payload_refused, std::uint64_t socket_id)
+  {
+    if (!invoked || payload_refused)
+      return {SHEKYL_CLOSE_LOCAL_CLOSE, 0};
+    if (code >= 0)
+      return levin_rejected
+          ? classified_close{SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED, 0}
+          : classified_close{SHEKYL_CLOSE_LOCAL_CLOSE, 0};
+    std::uint8_t kind = 0;
+    std::uint16_t reply = 0;
+    if (shekyl_seam_session_cause(socket_id, &kind, &reply) == 1 && kind != 0)
+      return {kind, reply};
+    return {SHEKYL_CLOSE_LOCAL_CLOSE, 0};
+  }
 
   // There is no announced node identifier of any kind. The eclipse-oracle
   // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
@@ -333,6 +355,7 @@ namespace nodetool
     {
       std::optional<p2p_connection_context> context;
       std::uint8_t cause = SHEKYL_CLOSE_LOCAL_CLOSE;
+      std::uint16_t reply = 0;
     };
 
     using connect_func = dial_result(network_zone&, epee::net_utils::network_address const&);
@@ -599,7 +622,7 @@ namespace nodetool
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
-    virtual size_t for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f, std::atomic<size_t>* countdown = nullptr);
+    virtual size_t post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then);
     virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
     bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
@@ -649,7 +672,7 @@ namespace nodetool
     void delete_upnp_port_mapping(uint32_t port);
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
     bool make_expected_connections_count(epee::net_utils::connector_id connector, network_zone& zone, PeerType peer_type, size_t expected_connections);
-    void record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause);
+    void record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause, std::uint16_t reply);
     /*! Clear an address's failure record after a successful handshake. */
     void record_addr_success(const epee::net_utils::network_address& addr);
     bool is_addr_recently_failed(const epee::net_utils::network_address& addr);

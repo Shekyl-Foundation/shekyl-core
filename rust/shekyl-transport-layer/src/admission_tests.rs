@@ -260,7 +260,7 @@ fn a_tor_dial_that_is_not_an_onion_reserves_nothing() {
             port: 18080,
         })
         .expect_err("not an onion");
-    assert_eq!(refused(error), CloseKind::DialFailed);
+    assert_eq!(refused(error), CloseKind::LocalClose);
     assert_eq!(sockets.live(), 0);
     let host = v3_onion_hostname(&[0x22; 32]);
     let _open = sockets

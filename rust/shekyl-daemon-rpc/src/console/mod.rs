@@ -1093,7 +1093,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
             "{:<width$}{:<8}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
             format!("{direction}{}", c.address),
             address_type_name(c.address_type),
-            c.support_flags,
+            c.support_flags
+                .map(|flags| flags.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
             format!(
                 "{}({})/{}({})",
                 c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
@@ -1276,7 +1278,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
             "{:<24}  {:<16}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
             p.info.address,
             p.info.state.as_str(),
-            p.info.height,
+            p.info.height
+                .map(|height| height.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
             p.info.current_download,
             trimmed(megabytes, 6),
         ));

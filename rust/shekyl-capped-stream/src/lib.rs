@@ -25,7 +25,8 @@ mod session;
 
 pub use accept::accept_error_is_transient;
 pub use copy::{
-    read_capped, refund_unsent, write_all_counted, write_capped, write_stall, READ_CHUNK_BYTES,
+    process_write_stall, read_capped, refund_unsent, write_all_counted, write_capped,
+    ProcessWriteStall, WriteStall, READ_CHUNK_BYTES,
 };
 pub use gate::{node_gate, LinkGate};
 pub use queue::{ByteQueue, CloseReason, Overfull, PushError};

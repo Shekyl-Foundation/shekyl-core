@@ -83,16 +83,13 @@ namespace shekyl
 
   /// The board's handshake flag for this session.
   ///
-  /// `1` has finished, `0` is a row that has not. Production sessions have
-  /// a row, and that flag is the gate. No row (`-1`) is not a seam session:
-  /// a protocol unit test states the handshake as `m_state`, whose
-  /// before-handshake value is 0.
-  inline bool seam_handshake_established(const boost::uuids::uuid& id, int state)
+  /// `1` has finished. A row that has not, a missing row, and a missing
+  /// hub are not established. A closing session whose row is already gone
+  /// does not fall through to `m_state`: that state is the sync driver's,
+  /// and reading it here would admit a peer the seam does not hold.
+  inline bool seam_handshake_established(const boost::uuids::uuid& id)
   {
-    const int on_board = shekyl_seam_session_established(seam_socket_id(id));
-    if (on_board >= 0)
-      return on_board == 1;
-    return state != 0;
+    return shekyl_seam_session_established(seam_socket_id(id)) == 1;
   }
 
   inline epee::net_utils::network_address seam_network_address(const shekyl_seam_observed& obs)

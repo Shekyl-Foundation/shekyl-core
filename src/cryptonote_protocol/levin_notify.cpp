@@ -72,6 +72,8 @@
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "p2p/net_node.h"
+#include "p2p/seam_board.h"
+#include "p2p/seam_endpoint.h"
 #include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -370,9 +372,18 @@ namespace levin
          then waited on a silence that peer was never given a chance to break.
          Found sweeping the carrier's own conversion; fixed here rather than
          left as the next instance of it. */
-      if (!p2p.for_connection(destination, [](detail::p2p_context&) {
-        return true;
-      }))
+      // The board is the session when a hub is bound. This registry is the
+      // handler the send actually uses, and the lookup does not post.
+      // The relay puppet has no hub; its connections live only here.
+      if (shekyl_seam_is_bound() != 0)
+      {
+        if (shekyl_seam_session_established(shekyl::seam_socket_id(destination)) < 0)
+        {
+          MINFO("seam send refused conn " << destination << " registry no");
+          return false;
+        }
+      }
+      else if (!p2p.has_connection(destination))
       {
         MINFO("seam send refused conn " << destination << " registry no");
         return false;
@@ -419,13 +430,33 @@ namespace levin
 
       std::optional<held_session> session_of(const boost::uuids::uuid& id) const
       {
+        if (shekyl_seam_is_bound() != 0)
+        {
+          const std::uint64_t socket = shekyl::seam_socket_id(id);
+          if (shekyl_seam_session_established(socket) < 0)
+            return std::nullopt;
+          std::uint8_t connector = 0;
+          bool held = false;
+          for (const auto& row : shekyl::seam_board_snapshot())
+          {
+            if (row.id != socket)
+              continue;
+            connector = row.endpoint.connector;
+            held = true;
+            break;
+          }
+          if (!held)
+            return std::nullopt;
+          for (const auto& entry : registries)
+          {
+            if (entry.registry && entry.connector == connector)
+              return held_session{entry.registry.get(), entry.connector};
+          }
+          return std::nullopt;
+        }
         for (const auto& entry : registries)
         {
-          if (!entry.registry)
-            continue;
-          if (entry.registry->for_connection(id, [](detail::p2p_context&) {
-            return true;
-          }))
+          if (entry.registry && entry.registry->has_connection(id))
             return held_session{entry.registry.get(), entry.connector};
         }
         return std::nullopt;

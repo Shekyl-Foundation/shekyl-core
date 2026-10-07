@@ -34,13 +34,22 @@ pub struct ShekylSeamBoardRow {
     /// Aligns `endpoint` to 8. Not a field.
     pub _pad: [u8; 7],
     pub endpoint: ShekylSeamObserved,
+    /// Aligns the unix-second fields. Not a field.
+    pub _pad_tail: [u8; 2],
+    /// Unix seconds at admission.
+    pub started: u64,
+    /// Unix seconds of the last delivered frame. Zero until one arrives.
+    pub last_recv: u64,
+    /// Unix seconds of the last accepted send. Zero until one leaves.
+    pub last_send: u64,
 }
 
 const _: () = {
     assert!(std::mem::size_of::<ShekylSeamObserved>() == 70);
     assert!(std::mem::offset_of!(ShekylSeamBoardRow, established) == 8);
     assert!(std::mem::offset_of!(ShekylSeamBoardRow, endpoint) == 16);
-    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 88);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, started) == 88);
+    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 112);
     assert!(SHEKYL_DIRECTION_INBOUND == 0 && SHEKYL_DIRECTION_OUTBOUND == 1);
 };
 
@@ -50,6 +59,10 @@ fn board_row(row: &Row) -> ShekylSeamBoardRow {
         established: u8::from(row.established()),
         _pad: [0; 7],
         endpoint: observed_c(&row.endpoint()),
+        _pad_tail: [0; 2],
+        started: row.started_unix(),
+        last_recv: row.last_recv_unix(),
+        last_send: row.last_send_unix(),
     }
 }
 

@@ -35,7 +35,7 @@ pub use admission::{
 };
 pub use ban::{deadline_after, BanLeft, BanList, Ipv4Subnet, ListedBan};
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
-pub use cause::{c_header, CloseCause, CloseKind, Phase};
+pub use cause::{c_header, socks_reply_is_our_request, CloseCause, CloseKind, Phase};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,
     BannableInbound, ConnectorId, DeadlineInput, Declaration, DestinationAuth, InboundIdentity,

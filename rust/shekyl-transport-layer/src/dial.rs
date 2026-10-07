@@ -6,7 +6,8 @@
 //! Dial acceptance reads the connector's addressing cell.
 //!
 //! [`Addressing::OnionV3`] accepts a v3 onion hostname. [`Addressing::Ip`]
-//! accepts an IP address. Anything else is [`CloseKind::DialFailed`].
+//! accepts an IP address. Anything else is [`CloseKind::LocalClose`]:
+//! the address was not refused, this node asked the wrong connector.
 //! No socket is opened here.
 
 use shekyl_net_address::NetworkAddress;
@@ -30,15 +31,16 @@ const _: () = {
 ///
 /// A v3 onion hostname satisfies [`Addressing::OnionV3`]. An IPv4 or IPv6
 /// address satisfies [`Addressing::Ip`]. Every other pair is
-/// [`CloseKind::DialFailed`].
+/// [`CloseKind::LocalClose`]: a mismatch is this node's request, not the
+/// destination.
 pub fn check_dial(connector: ConnectorId, address: &NetworkAddress) -> Result<(), CloseCause> {
     let Assessment::Assessed(addressing) = declaration(connector.column()).addressing() else {
-        return Err(CloseCause::new(CloseKind::DialFailed));
+        return Err(CloseCause::new(CloseKind::LocalClose));
     };
     if endpoint_matches(addressing, address) {
         Ok(())
     } else {
-        Err(CloseCause::new(CloseKind::DialFailed))
+        Err(CloseCause::new(CloseKind::LocalClose))
     }
 }
 
@@ -110,7 +112,7 @@ mod tests {
         ];
         for (connector, address) in refused {
             let error = check_dial(connector, &address).expect_err("refused");
-            assert_eq!(error.kind(), CloseKind::DialFailed);
+            assert_eq!(error.kind(), CloseKind::LocalClose);
         }
         let ip = NetworkAddress::Ipv4 {
             ip: Ipv4Addr::LOCALHOST,

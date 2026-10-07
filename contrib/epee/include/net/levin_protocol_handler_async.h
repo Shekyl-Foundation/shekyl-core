@@ -121,6 +121,8 @@ public:
   bool foreach_connection(const callback_t &cb);
   template<class callback_t>
   bool for_connection(const boost::uuids::uuid &connection_id, const callback_t &cb);
+  /// The id is in this registry. Does not post and does not take a ref.
+  bool has_connection(const boost::uuids::uuid& connection_id);
   size_t get_connections_count();
   size_t get_out_connections_count();
   size_t get_in_connections_count();
@@ -831,9 +833,13 @@ public:
   t_connection_context& get_context_ref() {return m_connection_context;}
 
   /// Run `fn` on this connection's strand, then release the outer-call
-  /// ref `start_outer_call` took. The caller does not wait. A missing
-  /// endpoint runs `fn` here: there is no strand to post to, and the ref
-  /// still has to be released.
+  /// ref `start_outer_call` took. The caller does not wait.
+  ///
+  /// Production `seam_link` is the endpoint, so this posts. The inline
+  /// path is the unit-test handler in
+  /// `tests/unit_tests/epee_levin_protocol_handler_async.cpp`, which has
+  /// no endpoint and runs the callback on the caller. The ref is still
+  /// released.
   void post_on_strand(std::function<void(t_connection_context&)> fn)
   {
     if (!m_pservice_endpoint)
@@ -991,6 +997,13 @@ bool async_protocol_handler_config<t_connection_context>::for_connection(const b
     cb(ctx);
   });
   return true;
+}
+//------------------------------------------------------------------------------------------
+template<class t_connection_context>
+bool async_protocol_handler_config<t_connection_context>::has_connection(const boost::uuids::uuid& connection_id)
+{
+  CRITICAL_REGION_LOCAL(m_connects_lock);
+  return find_connection(connection_id) != nullptr;
 }
 //------------------------------------------------------------------------------------------
 template<class t_connection_context>

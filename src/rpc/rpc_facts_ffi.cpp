@@ -1257,48 +1257,42 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     // one: it is the same entry point `get_connections()` uses.
     nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
       h->rpc->get_p2p();
-    // Address, direction, and the handshake flag come from the board.
-    // Height, support flags, and the pull state stay on the C++ context,
-    // read on that connection's strand. This thread is the operator's,
-    // not a connection strand, so waiting here is not the walk that
-    // deadlocks an io worker on its own post.
+    // Address, direction, the handshake flag, and the three unix-second
+    // observations come from the board. Height, support flags, and the
+    // pull state are claims: they take the strand hop. This thread is the
+    // operator's (`spawn_blocking`, and `get_connections` / `sync_info`
+    // are admin-only), so waiting on `then` is not the walk that deadlocks
+    // an io worker on its own post.
+    //
+    // Two seconds is one missed strand hop under load. It is shorter than
+    // the handshake invoke (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, 5s),
+    // so a stuck strand does not hold an admin call for a full handshake.
+    // A row whose post has not landed leaves `claims_known` at 0. Those
+    // fields are then unknown, not zeroes that read as "before handshake".
+    constexpr auto kOperatorClaimWait = std::chrono::seconds(2);
     struct sync_bits
     {
-      uint64_t started = 0;
-      uint64_t last_recv = 0;
-      uint64_t last_send = 0;
       uint64_t height = 0;
       uint32_t support_flags = 0;
       uint8_t state = 0;
     };
     auto bits = std::make_shared<std::map<boost::uuids::uuid, sync_bits>>();
     auto bits_mu = std::make_shared<std::mutex>();
-    // Shared with the strand callbacks. A timeout returns before every
-    // post has run, and those callbacks must not touch this frame.
-    auto left = std::make_shared<std::atomic<size_t>>(0);
     auto ready = std::make_shared<std::promise<void>>();
-    const size_t posted = endpoint.for_each_connection(
-      [bits, bits_mu, left, ready](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
+    endpoint.post_each(
+      [bits, bits_mu](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
       {
         sync_bits row;
-        row.started = static_cast<uint64_t>(ctx.m_started);
-        row.last_recv = static_cast<uint64_t>(ctx.m_last_recv);
-        row.last_send = static_cast<uint64_t>(ctx.m_last_send);
         row.height = ctx.m_remote_blockchain_height;
         row.support_flags = support_flags;
         row.state = static_cast<uint8_t>(ctx.m_state);
-        {
-          std::lock_guard<std::mutex> lock(*bits_mu);
-          (*bits)[ctx.m_connection_id] = row;
-        }
-        if (left->fetch_sub(1, std::memory_order_acq_rel) == 1)
-          ready->set_value();
-        return true;
-      }, left.get());
-    if (posted == 0)
-      ready->set_value();
-    else
-      ready->get_future().wait_for(std::chrono::seconds(2));
+        std::lock_guard<std::mutex> lock(*bits_mu);
+        (*bits)[ctx.m_connection_id] = row;
+      },
+      [ready]() {
+        ready->set_value();
+      });
+    ready->get_future().wait_for(kOperatorClaimWait);
 
     for (const auto& row : shekyl::seam_board_snapshot())
     {
@@ -1314,6 +1308,9 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
       e.incoming = row.endpoint.direction == SHEKYL_DIRECTION_INBOUND ? 1 : 0;
       e.localhost = address.is_loopback() ? 1 : 0;
       e.local_ip = address.is_local() ? 1 : 0;
+      e.started = row.started;
+      e.last_recv = row.last_recv;
+      e.last_send = row.last_send;
       if (row.id != 0)
       {
         std::uint64_t up = 0;
@@ -1332,12 +1329,10 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
         const auto found = bits->find(id);
         if (found != bits->end())
         {
-          e.started = found->second.started;
-          e.last_recv = found->second.last_recv;
-          e.last_send = found->second.last_send;
           e.height = found->second.height;
           e.support_flags = found->second.support_flags;
           e.state = found->second.state;
+          e.reserved[0] = 1;
         }
       }
       owned->entries.push_back(e);

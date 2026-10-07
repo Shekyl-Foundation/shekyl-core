@@ -24,7 +24,8 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, socks_reply_is_our_request, CloseCause, CloseKind, CloseResult, ConnectorId,
+    OpenError, OpenSocket, Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -169,7 +170,7 @@ where
         admitted,
     } = dial;
     let NetworkAddress::Tor { host, port } = &address else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     if let Err(cause) = check_dial(ConnectorId::Tor, &address) {
@@ -186,26 +187,26 @@ where
             return;
         }
         Err(OpenError::Exhausted) => {
-            on_cause(CloseCause::new(CloseKind::DialFailed));
+            on_cause(CloseCause::new(CloseKind::LocalClose));
             return;
         }
     };
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     }
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(proxy).await else {
-            return Err(CloseCause::new(CloseKind::DialFailed));
+            return Err(CloseCause::new(CloseKind::LocalClose));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
@@ -218,6 +219,12 @@ where
             Ok(()) => Ok((stream, proxy_connect_ns, span_ns(dialed.elapsed()))),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
+                if socks_reply_is_our_request(u16::from(reply)) {
+                    tracing::error!(
+                        reply,
+                        "tor socks reply is this node's request, not the onion"
+                    );
+                }
                 Err(CloseCause::proxy_refused(u16::from(reply)))
             }
             Err(
@@ -227,7 +234,7 @@ where
                 | SocksError::AuthFailed { .. },
             ) => {
                 drop(stream.shutdown().await);
-                Err(CloseCause::new(CloseKind::DialFailed))
+                Err(CloseCause::new(CloseKind::LocalClose))
             }
         }
     };
@@ -237,7 +244,7 @@ where
         result = wake.as_mut() => {
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::DialFailed,
+                Err(_) => CloseKind::LocalClose,
             };
             ignore(owner.deregister());
             settle(reserved, CloseCause::new(kind), &on_cause);
@@ -332,15 +339,18 @@ where
     let overfull_write = Arc::clone(&overfull);
     let gate = node_gate();
     let mut writer = tokio::spawn(async move {
-        write_capped(
+        let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+        let cause = write_capped(
             &mut write,
             &writer_queue,
             &overfull_write,
             &gate,
-            conn,
+            &mut stall,
             |plain| Ok(Cow::Borrowed(plain)),
         )
-        .await
+        .await;
+        tracing::info!(conn, stall = %stall, "write stall");
+        cause
     });
     let gate = node_gate();
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {

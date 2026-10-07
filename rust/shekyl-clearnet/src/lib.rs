@@ -208,7 +208,7 @@ where
     /// Dial `address`. `proxy` is a SOCKS5 endpoint. `None` connects directly.
     ///
     /// The addressing cell is checked first. A name this connector does not
-    /// dial is [`CloseKind::DialFailed`] and opens nothing. A SOCKS refusal
+    /// dial is [`CloseKind::LocalClose`] and opens nothing. A SOCKS refusal
     /// is [`CloseCause::proxy_refused`] with the reply byte.
     pub fn dial(&self, address: NetworkAddress, proxy: Option<SocketAddr>) {
         let dial = drive::Dial {
@@ -699,7 +699,7 @@ mod tests {
         while !seen
             .lock()
             .expect("causes")
-            .contains(&CloseKind::DialFailed)
+            .contains(&CloseKind::LocalClose)
         {
             assert!(start.elapsed() < Duration::from_secs(2), "dial");
             std::thread::sleep(Duration::from_millis(5));

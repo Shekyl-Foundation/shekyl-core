@@ -121,12 +121,12 @@ impl Dial for ZoneDial {
                 direction,
             } => {
                 if *direction != Direction::Outbound {
-                    return Err(CloseCause::new(CloseKind::DialFailed));
+                    return Err(CloseCause::new(CloseKind::LocalClose));
                 }
                 self.dial_clearnet(*ip, *port)
             }
             Endpoint::Tor { key, port } => self.dial_tor(key, *port),
-            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::DialFailed)),
+            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::LocalClose)),
         }
     }
 }
@@ -144,7 +144,7 @@ impl ZoneDial {
                 tally: Arc::clone(&ready.tally),
                 proxy: ready.proxy,
             })
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = match ip {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
@@ -193,7 +193,7 @@ impl ZoneDial {
             .tor_proxy
             .lock()
             .expect("tor proxy")
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),
             port,
@@ -248,10 +248,10 @@ async fn recv_admitted<T>(
     tokio::pin!(fail);
     tokio::select! {
         biased;
-        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::DialFailed)),
+        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::LocalClose)),
         result = &mut fail => match result {
             Ok(cause) => Err(cause),
-            Err(_) => Err(CloseCause::new(CloseKind::DialFailed)),
+            Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
         },
     }
 }

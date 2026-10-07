@@ -38,6 +38,9 @@
 #include "unit_tests_utils.h"
 #include "net/tor_address.h"
 #include <condition_variable>
+#include <mutex>
+#include <thread>
+#include "p2p/seam_endpoint.h"
 #include <set>
 #include "shekyl/shekyl_ffi.h"
 #include <cstdlib>
@@ -1393,35 +1396,39 @@ TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
   EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS + 1));
 }
 
-TEST(node_server, a_timeout_and_a_local_refusal_leave_the_address_dialable)
+// Covers `handshake_close_cause`, the one function both dial paths call,
+// and `shekyl_close_implicates_address`. A send that never left, a payload
+// this node refused, and a negative invoke with no recorded seam cause are
+// `LocalClose` and stay dialable. A Levin response the layer rejected does
+// not. This does not open a socket: it does not cover the seam gap timer,
+// a peer that answers the wrong network id, or a closed SOCKS port. Those
+// run on the pair.
+TEST(node_server, handshake_close_cause_implicates_only_a_levin_rejection)
 {
-  nodetool::failed_addr_cache cache;
-  const epee::net_utils::network_address addr{
-    epee::net_utils::ipv4_network_address{0x04030201, 12021}};
-  const time_t t0 = 1000000;
-  const std::uint8_t ignored[] = {
-    SHEKYL_CLOSE_TRANSPORT_TIMEOUT,
-    SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT,
-    SHEKYL_CLOSE_LOCAL_CLOSE,
-  };
-  for (const std::uint8_t cause : ignored)
-  {
-    if (nodetool::address_failure_counts(cause))
-      cache.record_failure(addr, t0);
-  }
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0));
+  const auto clearnet = static_cast<std::uint8_t>(epee::net_utils::connector_id::clearnet);
+  const auto tor = static_cast<std::uint8_t>(epee::net_utils::connector_id::tor);
+  const auto unsent = nodetool::handshake_close_cause(false, 0, false, false, 0);
+  EXPECT_EQ(unsent.kind, SHEKYL_CLOSE_LOCAL_CLOSE);
+  EXPECT_EQ(shekyl_close_implicates_address(unsent.kind, unsent.reply, clearnet), 0);
 
-  const std::uint8_t counted[] = {
-    SHEKYL_CLOSE_DIAL_FAILED,
-    SHEKYL_CLOSE_PROXY_REFUSED,
-    SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED,
-  };
-  for (const std::uint8_t cause : counted)
-  {
-    ASSERT_TRUE(nodetool::address_failure_counts(cause)) << static_cast<unsigned>(cause);
-  }
-  cache.record_failure(addr, t0);
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0));
+  const auto payload = nodetool::handshake_close_cause(true, 1, false, true, 0);
+  EXPECT_EQ(payload.kind, SHEKYL_CLOSE_LOCAL_CLOSE);
+  EXPECT_EQ(shekyl_close_implicates_address(payload.kind, payload.reply, clearnet), 0);
+
+  const auto no_cause = nodetool::handshake_close_cause(true, -1, false, false, 0);
+  EXPECT_EQ(no_cause.kind, SHEKYL_CLOSE_LOCAL_CLOSE);
+  EXPECT_EQ(shekyl_close_implicates_address(no_cause.kind, no_cause.reply, clearnet), 0);
+
+  const auto rejected = nodetool::handshake_close_cause(true, 1, true, false, 0);
+  EXPECT_EQ(rejected.kind, SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED);
+  EXPECT_EQ(shekyl_close_implicates_address(rejected.kind, rejected.reply, clearnet), 1);
+
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_DIAL_FAILED, 0, clearnet), 1);
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_PROXY_REFUSED, 0x05, tor), 1);
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_PROXY_REFUSED, 0x05, clearnet), 0);
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_PROXY_REFUSED, 0xF2, tor), 1);
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_PROXY_REFUSED, 0xF7, tor), 0);
+  EXPECT_EQ(shekyl_close_implicates_address(SHEKYL_CLOSE_TRANSPORT_TIMEOUT, 0, clearnet), 0);
 }
 
 TEST(node_server, unknown_zone_keeps_the_public_window)
@@ -1543,14 +1550,14 @@ namespace
       conns.push_back(std::move(c));
     }
 
-    virtual size_t for_each_connection(
-      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f,
-      std::atomic<size_t>* countdown) override
+    virtual size_t post_each(
+      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> note,
+      std::function<void()> then) override
     {
-      if (countdown)
-        countdown->store(conns.size(), std::memory_order_release);
       for (auto &c : conns)
-        f(c, 0);
+        note(c, 0);
+      if (then)
+        then();
       return conns.size();
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
@@ -1911,9 +1918,23 @@ namespace
     return arg;
   }
 
-  void make_ready(cryptonote::cryptonote_connection_context &ctx)
+  void arm_harness_post(void*, std::uint64_t id, std::uint32_t kind,
+      const shekyl_seam_observed*, const std::uint8_t*, std::size_t, const shekyl_close_cause*)
   {
-    ctx.m_state = cryptonote::cryptonote_connection_context::state_normal;
+    if (kind != 1)
+      return;
+    // `open` posts this while it holds the hub lock, then waits until the
+    // handler is armed. Arming from this stack would take that lock again.
+    std::thread([id] { shekyl_seam_handler_armed(id, 1); }).detach();
+  }
+
+  void bind_harness_hub()
+  {
+    static int ctx = 0;
+    shekyl_inbound_ceiling ceiling{};
+    shekyl_inbound_ceiling_resolve(0, 0, &ceiling);
+    shekyl_seam_bind(&ctx, arm_harness_post, &ceiling);
+    shekyl_seam_install_loopback();
   }
 
   struct NotifyHarness
@@ -1921,15 +1942,43 @@ namespace
     test_core core;
     cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
     recording_endpoint endpoint;
+    std::uint64_t socket_id = 0;
 
-    NotifyHarness() : cprotocol(core, NULL)
+    explicit NotifyHarness(bool established = true) : cprotocol(core, NULL)
     {
       cprotocol.set_p2p_endpoint(&endpoint);
       cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+      bind_harness_hub();
+      shekyl_seam_address addr{};
+      addr.connector = SHEKYL_CONNECTOR_CLEARNET;
+      addr.address_type = SHEKYL_ADDR_IPV4;
+      addr.port = 18080;
+      addr.len = 4;
+      addr.bytes[0] = 127;
+      addr.bytes[3] = 1;
+      const shekyl_seam_open_result opened = shekyl_seam_open(&addr, 1);
+      socket_id = opened.id;
+      EXPECT_NE(socket_id, 0u) << "loopback open cause " << static_cast<unsigned>(opened.cause_kind);
       const auto ip = epee::net_utils::network_address{
           epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-      endpoint.add(fixed_uuid(1), ip);
-      make_ready(endpoint.conns.front());
+      endpoint.add(shekyl::seam_connection_id(socket_id == 0 ? 1 : socket_id), ip);
+      if (established && socket_id != 0)
+      {
+        shekyl_zone_session_established(socket_id);
+        endpoint.conns.front().m_state = cryptonote::cryptonote_connection_context::state_normal;
+      }
+    }
+
+    ~NotifyHarness()
+    {
+      if (socket_id != 0)
+      {
+        shekyl_seam_close(socket_id);
+        shekyl_seam_reap(socket_id);
+      }
+      // The relay puppet has no hub. Leaving this one bound would make
+      // its sessions look absent.
+      shekyl_seam_bind(nullptr, nullptr, nullptr);
     }
 
     cryptonote::cryptonote_connection_context &ctx() { return endpoint.conns.front(); }
@@ -2031,7 +2080,9 @@ TEST(tx_ingress, a_handshake_complete_peer_is_admitted)
 
 TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
 {
-  NotifyHarness h;
+  // The row is on the board and the handshake flag is clear. Covers the
+  // gate's "row present, not established" arm. Does not cover a missing hub.
+  NotifyHarness h(false);
   h.ctx().m_state = cryptonote::cryptonote_connection_context::state_before_handshake;
   EXPECT_EQ(1, h.notify_txs());
   EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
