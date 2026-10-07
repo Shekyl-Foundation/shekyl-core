@@ -19,7 +19,7 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
-- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (the open-leaf-chunk tail — kept only until siblings reach the prover as x-coordinates, which the circuit already permits — the owned positions `drained_sorted` still supplies, the leaf rows the persona's late registration rebuilds from, and the `O` the registration pair is checked against: `CT6_PROVING_STATE.md` §11.11). Falsify by that account existing with each case either supplied or refused.
+- **Account for the identities the wallet still owes itself before `CT-6` increment 7 retires in-memory `entries`** (named, in this order, in `CT6_PROVING_STATE.md` §11.11: the open leaf chunk, kept until the prover API carries x-coordinates and an accessor returns the open leaf scalars `Frontier::encode` already stores; the owned positions `drained_sorted` still supplies; the registration key `held_output` reads from `entries`; and the persona's drained leaf rows, which are not a reader of `entries`). Falsify by that account existing with each case either supplied or refused.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 

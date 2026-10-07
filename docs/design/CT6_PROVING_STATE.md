@@ -1132,13 +1132,18 @@ in the ring's own transaction — one undo path literally, not by analogy.
 | `0` | the leaf chunk's siblings as **identities**: `O ‖ C ‖ CM.x`, 96 B each | 38 × 96 = **3 648 B** stored |
 | `>= 1` | the node chunk as the frontier folded it, 32 B per child | 18 × 32 = 576 B (Helios) or 38 × 32 = **1 216 B** (Selene) |
 
-Layer 0 is identities rather than the frontier's scalars because a path needs
-the siblings as compressed points and `O.x` is a one-way projection of `O`.
-The prover consumes four fields per sibling (`O`, `I`, `C`, `CM.x` — 128 B,
-which is the leaf term in row 4's 9 024 B path figure), but **`I` is not
-stored**: it is `Hp(O)`, derived at assembly. A stored copy of a recomputable
-value is a second copy that can disagree, and the re-derivation is one
-hash-to-point per sibling against ~6 s of proving.
+Layer 0 is identities rather than the frontier's scalars because the path
+types still take compressed points (`Path::leaves`, `ChunkLeaf`,
+`ProveInputLeafChunk.leaf_outputs`), and `O.x` is a one-way projection of
+`O`. The circuit does not — **ANSWERED 2026-10-06**: `Circuit::first_layer`
+membership-tests `{O.x, I.x, C.x, CM.x}` against a branch tape that
+`flatten_leaves` fills with x-coordinates only (§11.11). The prover API
+still consumes four fields per sibling (`O`, `I`, `C`, `CM.x` — 128 B, the
+leaf term in row 4's 9 024 B path figure), but **`I` is not stored**: it is
+`Hp(O)`, derived at assembly, until that API carries the four scalars the
+tape already hashes. A stored copy of a recomputable value is a second copy
+that can disagree, and the re-derivation is one hash-to-point per sibling
+against ~6 s of proving.
 
 A fold cascade closes several layers on one leaf; those chunks share a key,
 because they became final at one instant and a rollback un-finalizes them at
@@ -1579,7 +1584,7 @@ chunk rather than once per output; and it reaches a layer-4 span
 twenty-four. On a lightly loaded chain the same arithmetic gives
 proportionally less. None of it is in the drain any more, and none of it
 grows with how long the persona held the output. The dependency this creates
-on the store's leaf rows is §11.11's fourth item.
+on the store's leaf rows is §11.11's persona leaf-row reader.
 
 An unreadable persona seal is **read as empty and reported** — the opposite
 of every staking read, deliberately. Those reads decide what the wallet tells
@@ -1800,99 +1805,81 @@ its expectations; unparseable bytes expect nothing.
 
 ### 11.11 What capture still does not do
 
-**One FOLLOWUPS row keeps its rationale here, not in the queue (rule 95); the
-other was the sibling-points read, now answered below.**
+**One FOLLOWUPS row keeps its rationale here, not in the queue (rule 95).**
+The sibling-points question is answered on the layer-0 row in §11.8: the
+path types take points, and the circuit tape does not.
 
-*The sibling-points question (rule 30) — ANSWERED 2026-10-06, read off the
-source: the gadget consumes a sibling's x-coordinates and nothing else.* The
-prover's API takes sibling compressed points
-(`ProveInputLeafChunk.leaf_outputs`, three per sibling) beside `leaf_cm_x`,
-and the question was whether the circuit needs them. It does not. In the
-vendored circuit crate (`rust/shekyl-oxide/crypto/fcmps`):
+*The sibling-points read (rule 30) — ANSWERED 2026-10-06, off
+`rust/shekyl-oxide/crypto/fcmps`.* The pins:
 
-- **The gadget.** `Circuit::first_layer` opens the *spent* output's `O`, `I`,
-  `C` and `CM` as full points — on-curve checks and the discrete-log legs
-  against the blinded input tuple — and then makes one statement about the
-  chunk: `tuple_member_of_list` over `{O.x, I.x, C.x, CM.x}` and `branch`.
-  `branch` is a list of vector-commitment tape variables; no sibling
-  y-coordinate is a variable anywhere in it.
-- **What fills the tape.** The prover's `flatten_leaves` writes, for each
-  leaf, `to_xy(leaf.O).0`, `to_xy(leaf.I).0`, `to_xy(leaf.C).0` and its
-  `cm_x` — the first coordinate of each, and the y is dropped at that line.
-  `Fcmp::prove` does the same when the leaves are the root branch.
-- **The other three uses of a sibling point are bookkeeping, not proof.**
-  `Path::opening_matches_chunk` compares each leaf with the *spent* output
-  to find it in the chunk; `Branches::new` compares whole leaf vectors for
-  equality when several inputs share a root-is-leaves tree; and
-  `Output::new` refuses an identity point, which has no x to take. None
-  reads a sibling's y for its value.
-- **Our own readers agree.** The signer (`shekyl-tx-builder`'s
-  `prove_input_from_spend`) finds the spent entry by its own `output_key`
-  and passes the rest through; `verify_path_against_its_branches` hashes
-  the chunk from x-coordinates; `PL-D3` already carries sibling `CM` as
-  `cm_x` alone, for exactly this reason.
+- `Circuit::first_layer` opens the *spent* output's `O`, `I`, `C` and `CM`
+  as full points, then `tuple_member_of_list` over `{O.x, I.x, C.x, CM.x}`
+  and `branch`. `branch` is vector-commitment tape. No sibling y-coordinate
+  is a variable in it.
+- `flatten_leaves` writes `to_xy(leaf.O).0`, `to_xy(leaf.I).0`,
+  `to_xy(leaf.C).0` and `cm_x`. `Fcmp::prove` writes the same four scalars
+  when the root branch is the leaves.
+- Three uses of a sibling point sit outside the tape.
+  `Path::opening_matches_chunk` compares each leaf with the spent output to
+  find it in the chunk. `Branches::new` compares whole leaf vectors when
+  several inputs share a leaves-only root, and that equality is the point,
+  sign included. `Output::new` refuses an identity point, which has no
+  affine x.
+- `verify_path_against_its_branches` hashes the chunk from x-coordinates,
+  after `ChunkLeaf::scalars` projects the points. `PL-D3` stores a sibling's
+  `CM` as `cm_x` because the leaf scalar is x and the opening point exists
+  only for the spent output; this reading agrees with that. The signer
+  (`prove_input_from_spend`) matches `(output_key, commitment)` and then
+  `cm_x`, and forwards the three compressed points. It is a carrier the
+  prover-API round has to change.
 
-**So the points are an API artefact, and the identity tail is not owed to
-the proof system.** What that buys, and what it does not:
+That round is its own change in the vendored proof crate (rule 30). The
+pinned vector is built through `Branches::new`, including a leaves-only
+root — the only arm that compares sibling points — and the proof it produces
+verifies against today's verifier. The statement is the same tape, so it
+should, and "should" is what the vector is for. Two x-only siblings that
+decompress to opposite signs never become a proof: `Branches::new` returns
+`None` first. The carriers that still name three points per sibling are
+`Path::leaves`, `ProveInputLeafChunk`, `ProveInput`, the signer's
+`LeafEntry`, and the FFI and multisig carriers. The verifier, the wire and
+consensus are untouched. The spent output's four points stay full points;
+the wallet has them.
 
-- Capture's layer-0 chunk can be the fold's own children — four scalars per
-  leaf, the shape every other layer already has and the shape the tree
-  itself commits — instead of `O ‖ C ‖ CM.x` with `I` re-derived at read
-  time. 128 bytes a leaf rather than 96, and no hash-to-point per sibling
-  on the spend path.
-- The **open** leaf chunk stops needing leaf rows at all: the frontier
-  snapshot at the reference height already holds that chunk's scalars. That
-  removes the first reader in the account below outright.
-- It is **not free**. The prover API takes points today, so the wallet
-  cannot simply stop keeping them: `Path::leaves` in the circuit crate,
-  `ProveInputLeafChunk` and `ProveInput` in `shekyl-fcmp`, the signer's
-  `LeafEntry`, and the FFI and multisig carriers all name three points per
-  sibling. Carrying x-coordinates instead is a prover-side change in a
-  vendored proof crate (rule 30: its own round, with a pinned vector
-  showing a proof made from x-only siblings verifies against today's
-  verifier unchanged — the statement is the same tape, so it should, and
-  "should" is what the vector is for). The verifier, the wire and consensus
-  are untouched; nothing is asked of the daemon.
-- It does not touch the *spent* output: its four points stay full points,
-  and the wallet has them.
+The open leaf chunk's scalars are already in the snapshot.
+`Frontier::encode` writes `leaf_chunk`. Nothing returns them:
+`open_branches` hashes that chunk into the parent and yields only the
+layers above the leaves, and the open layer-0 path is `leaf_chunk_at`'s
+ranged read of leaf rows. Retiring that read is an accessor for the field
+the snapshot already persists. It has no caller until the prover API
+carries x-coordinates, so it is not added here.
 
-*The identity account before `entries` retires (increment 7).* Three things
-still read from it. **First**, a path whose owned leaf sits in the **open** leaf chunk at
-the reference height needs that chunk's sibling *points* **as the prover API
-stands** — no snapshot holds them, since the frontier keeps scalars and `O.x`
-is a one-way projection; with the anchor fixed at `tip - REF_ANCHOR_AGE` that
-is a bounded tail of a few chunks, not a window of history, and today it is a
-ranged read of at most `SELENE_CHUNK_WIDTH - 1` leaf rows. The answer above
-makes this reader conditional: once siblings travel as x-coordinates the
-snapshot supplies the open chunk and the read goes away, so the account
-should price it as "kept until the prover API changes", not as permanent.
+*The identity account before `entries` retires (increment 7).* Retiring
+`entries` needs each of these identities supplied or refused.
 
-**Second**, the owned positions reconciliation recomputes come from
-`drained_sorted` over `entries` (§11.10); without `entries`, those come from
-the store.
-
-**Third**, registration is bound to `(gindex, O)`, and the check that a
-registered pair is the output the tree holds reads `O` from the entry's
-identity (`held_output`, a lookup in `entries` by gindex). This is the one
-*point* still read for its own sake rather than for the prover API. The
-tree's own leaf holds `O.x`; whether the binding can be made on `O.x` — the
-wallet can always project its own key — or needs the point kept is the
-account's to settle.
-
-All three say one thing: retiring `entries` needs a precise account of which
-identities the wallet must still be able to produce, each case supplied or
-refused.
-
-A fourth reader is not of `entries` but belongs in the same account, because
-it is the standing consumer of the late path: **the persona's registration is
-late for every output the wallet did not build** (§11.12, narrowed by
-§11.13). Its rebuild reads the store's drained leaf rows over
-the missing chunk's own span (`read_drained_range`), so it survives the
-retirement of the in-memory vector as it stands — and it stops working the
-day those rows are pruned below a chunk a persona output has yet to be
-registered under. Whatever increment 7 does to the leaf rows has to keep
-them for at least the persona scan's trail plus its catch-up, or give the
-persona a way to name its outputs before they drain.
+- **Open leaf chunk.** A path whose owned leaf sits in the open leaf chunk
+  at the reference height needs that chunk's sibling points as the prover
+  API stands. The anchor is `tip - REF_ANCHOR_AGE`, a tail of a few chunks,
+  read today as at most `SELENE_CHUNK_WIDTH - 1` leaf rows. Kept until the
+  prover API carries x-coordinates and the accessor above exists.
+- **Owned positions.** Reconciliation recomputes come from `drained_sorted`
+  over `entries` (§11.10). Without `entries`, those come from the store.
+- **Registration key.** Registration is bound to `(gindex, O)`. The check
+  that a registered pair is the output the client holds reads `O` from the
+  entry's identity (`held_output`, a lookup in `entries` by gindex,
+  including leaves that have not drained). This is the point read for the
+  binding rather than for the prover API. The tree's leaf holds `O.x`.
+  Whether the binding can be made on `O.x` — the wallet can project its own
+  key — or the point has to be kept is this reader's to settle.
+- **Persona leaf rows.** Not a reader of `entries`. The persona's
+  registration is late for every output the wallet did not build (§11.12,
+  narrowed by §11.13). Its rebuild reads the store's drained leaf rows over
+  the missing chunk's span (`read_drained_range`), so it survives retirement
+  of the in-memory vector as it stands, and it stops working the day those
+  rows are pruned below a chunk a persona output has yet to be registered
+  under.
+  Whatever increment 7 does to the leaf rows has to keep them for the
+  persona scan's trail plus its catch-up, or give the persona a way to name
+  its outputs before they drain.
 
 Two limits the oracle does not cover, named so a later commit does not
 inherit them silently. The fixture's depth puts only layer 1 under a closed
