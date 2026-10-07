@@ -101,44 +101,37 @@ fn cen_b1_major_version_must_be_the_admitted_one() {
 // --- CEN-B2 ---------------------------------------------------------------
 
 #[test]
-fn cen_b2_minor_version_is_unconstrained_under_genesis() {
-    // The census's effect: any vote passes at the shipped table.
-    for minor in [0, 1, 2, 0x7f, u8::MAX] {
-        judge(with_versions(1, minor))
-            .unwrap_or_else(|refused| panic!("minor_version {minor} was refused: {refused}"));
+fn cen_b2_minor_version_is_the_reserved_value_and_no_other() {
+    // The byte is reserved at zero. Every other value is refused: the one
+    // next to it, and the rest of the `u8`, since a producer choosing among
+    // 255 admitted values is the channel the rule closes.
+    assert_eq!(HEADER_MINOR_VERSION, 0);
+    boundary_pair(
+        HEADER_MINOR_VERSION,
+        HEADER_MINOR_VERSION + 1,
+        CenRow::B2,
+        Locus::Block,
+        |minor| check_alone::<B2>(&with_versions(1, minor), &RuleSet::GENESIS),
+    );
+    for minor in 1..=u8::MAX {
+        assert_refused(judge(with_versions(1, minor)), CenRow::B2, Locus::Block);
     }
+    judge(with_versions(1, HEADER_MINOR_VERSION)).expect("the reserved value is admitted");
 }
 
 #[test]
-fn cen_b2_ports_the_predicate_not_the_effect() {
-    // `hardfork.cpp:41–50`: `0` votes for `1`; everything else votes for
-    // itself. The comparison is `vote >= admitted`, and under `GENESIS`
-    // (`admitted == 1`) no `u8` can lose it — which is why the row reads
-    // "unconstrained". Under a rule set admitting `2` the same comparison
-    // refuses votes `0` and `1` exactly as `do_check` would; no such set is
-    // issued, so the fixture uses the test-only constructor.
-    assert_eq!(B2::normalised_vote(0), 1);
-    assert_eq!(B2::normalised_vote(1), 1);
-    assert_eq!(B2::normalised_vote(7), 7);
-
+fn cen_b2_does_not_follow_the_major_version() {
+    // Monero read this byte as a vote that had to reach the version in
+    // force. Under a rule set admitting `2` the reserved value is still
+    // zero, and `2` is refused: nothing about B2 reads the rule set.
     let admits_two = RuleSet::admitting_for_tests(2);
-    // The rule alone, so B1 (which also refuses `major != 2`) is out of the way.
-    boundary_pair(2, 1, CenRow::B2, Locus::Block, |minor| {
-        check_alone::<B2>(&with_versions(2, minor), &admits_two)
-    });
+    judge_under(with_versions(2, HEADER_MINOR_VERSION), &admits_two)
+        .expect("the reserved value under a later major version");
     assert_refused(
-        check_alone::<B2>(&with_versions(2, 0), &admits_two),
+        judge_under(with_versions(2, 2), &admits_two),
         CenRow::B2,
         Locus::Block,
     );
-    // And through the pipeline: `major == 2` satisfies B1, so B2's refusal
-    // is the verdict — the wiring, not only the predicate.
-    assert_refused(
-        judge_under(with_versions(2, 1), &admits_two),
-        CenRow::B2,
-        Locus::Block,
-    );
-    judge_under(with_versions(2, 2), &admits_two).expect("vote 2 under admitted 2 passes");
 }
 
 // --- CEN-B7 ---------------------------------------------------------------

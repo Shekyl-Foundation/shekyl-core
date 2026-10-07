@@ -429,7 +429,6 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
     let admits_two = RuleSet::admitting_for_tests(2);
     let mut input = candidate(Vec::new());
     input.block.header.major_version = 2;
-    input.block.header.minor_version = 2;
     // Formed under the rule set that admits 2; validated under GENESIS.
     let formed = form(
         input,
@@ -463,7 +462,6 @@ fn the_last_attempt_is_terminal() {
     let admits_two = RuleSet::admitting_for_tests(2);
     let mut input = candidate(Vec::new());
     input.block.header.major_version = 2;
-    input.block.header.minor_version = 2;
     let last = FormAttempt::last_for_tests();
     let formed = form(
         input,

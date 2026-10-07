@@ -754,45 +754,40 @@ fn f8_the_wire_admits_one_output_tag() {
     }
 }
 
-/// CEN-F21's epoch is the one-row hardfork table's height: `{ 1, 1, 0, … }`
-/// on every public network (`hardforks.cpp`), which
-/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns.
+/// CEN-F21's epoch is the one schedule's height. Issued networks share
+/// `hard_fork_schedule`; a per-network copy is how that height could drift.
+/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns it.
 /// Read from the table, not restated beside [`EMISSION_SPLIT_EPOCH`].
 #[test]
 fn the_emission_split_epoch_is_the_hardfork_tables_first_row() {
     let hardforks_cpp = include_str!("../../../../src/hardforks/hardforks.cpp");
-    for table in [
-        "mainnet_hard_forks",
-        "testnet_hard_forks",
-        "stagenet_hard_forks",
-    ] {
-        let start = hardforks_cpp
-            .find(&format!("const hardfork_t {table}[] = {{"))
-            .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
-        let body = &hardforks_cpp[start..];
-        let end = body.find("};").expect("the table closes");
-        let rows: Vec<&str> = body[..end]
-            .lines()
-            .skip(1)
-            .map(str::trim)
-            .filter(|l| l.starts_with('{'))
-            .collect();
-        assert_eq!(
-            rows.len(),
-            1,
-            "{table} has one row (all features from genesis)"
-        );
-        // `{ version, height, threshold, time }`
-        let fields: Vec<&str> = rows[0]
-            .trim_matches(|c| c == '{' || c == '}' || c == ',')
-            .split(',')
-            .map(str::trim)
-            .collect();
-        let height: u64 = fields[1].parse().expect("the row's height is an integer");
-        assert_eq!(
-            EMISSION_SPLIT_EPOCH,
-            BlockHeight::from_raw(height),
-            "{table}"
-        );
-    }
+    let table = "hard_fork_schedule";
+    let start = hardforks_cpp
+        .find(&format!("const hardfork_t {table}[] = {{"))
+        .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
+    let body = &hardforks_cpp[start..];
+    let end = body.find("};").expect("the table closes");
+    let rows: Vec<&str> = body[..end]
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|l| l.starts_with('{'))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "{table} has one row (all features from genesis)"
+    );
+    // `{ version, height, time }`
+    let fields: Vec<&str> = rows[0]
+        .trim_matches(|c| c == '{' || c == '}' || c == ',')
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let height: u64 = fields[1].parse().expect("the row's height is an integer");
+    assert_eq!(
+        EMISSION_SPLIT_EPOCH,
+        BlockHeight::from_raw(height),
+        "{table}"
+    );
 }

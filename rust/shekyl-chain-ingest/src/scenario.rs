@@ -438,7 +438,6 @@ where
                 shekyl_archival_retention::empty_attestation_root(),
             ),
             major_version: rule_set.header_major_version(),
-            minor_version: 0,
             now,
             median_timestamp: facts.median_timestamp,
             unlock_window: rule_set.mined_money_unlock_window(),

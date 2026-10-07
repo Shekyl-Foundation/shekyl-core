@@ -138,7 +138,6 @@ fn context<'a>(
             shekyl_archival_retention::empty_attestation_root(),
         ),
         major_version: RuleSet::GENESIS.header_major_version(),
-        minor_version: 0,
         now: NOW,
         median_timestamp: median_of(chain),
         unlock_window: RuleSet::GENESIS.mined_money_unlock_window(),

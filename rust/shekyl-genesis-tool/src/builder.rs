@@ -21,7 +21,7 @@
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
-use shekyl_wire::block::{Block, BlockHeader};
+use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
@@ -33,10 +33,6 @@ use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
 pub const GENESIS_BLOCK_MAJOR_VERSION: u8 = 1;
-
-/// Genesis block minor version (`CURRENT_BLOCK_MINOR_VERSION`,
-/// `src/cryptonote_config.h`).
-pub const GENESIS_BLOCK_MINOR_VERSION: u8 = 0;
 
 /// A built genesis coinbase transaction.
 pub struct BuiltGenesis {
@@ -176,7 +172,8 @@ pub fn build_genesis_tx(
 
 /// Assemble the genesis block around a built coinbase tx.
 ///
-/// Mirrors C++ `generate_genesis_block`: header 1/0, timestamp 0, zero
+/// Mirrors C++ `generate_genesis_block`: major [`GENESIS_BLOCK_MAJOR_VERSION`],
+/// minor [`HEADER_MINOR_VERSION`], timestamp 0, zero
 /// previous hash, the empty curve-tree root, the empty attestation root, and
 /// the configured nonce — which survives verbatim because genesis difficulty
 /// is 1 (the first nonce tried always satisfies the PoW check).
@@ -186,7 +183,7 @@ pub fn genesis_block(tx: Transaction, nonce: u32) -> Result<Block, GenesisToolEr
     Ok(Block {
         header: BlockHeader {
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
-            minor_version: GENESIS_BLOCK_MINOR_VERSION,
+            minor_version: HEADER_MINOR_VERSION,
             timestamp: 0,
             previous: BlockHash::NULL,
             nonce,

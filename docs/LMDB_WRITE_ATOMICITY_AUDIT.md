@@ -146,7 +146,7 @@ Ordering at the pin (the funnel every connected block traverses):
 5. **`m_hardfork->add(blk, prev_height)`** (`blockchain_db.cpp:683`) —
    immediately after the block row and before the accrual. It is a state
    transition, not bookkeeping: `HardFork::add` calls
-   `db.set_hard_fork_version(height, …)` (`hardfork.cpp:141`), which writes
+   `db.set_hard_fork_version(height, …)` (`hardfork.cpp:113`), which writes
    `hf_versions` through `TXN_BLOCK_PREFIX` and so joins this block's
    transaction (§1). A port that loses this step loses the fork-version row
    for the height it belongs to.
@@ -697,7 +697,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W12 | Fifteen archival apply/revert hooks on `BlockchainDB` have empty `{}` bodies, so a subclass that forgets one inherits a silent no-op | wart (latent: production 15/15; exposure is test doubles — evidence below) | RECORD-AND-SPECIFY: no default bodies on consensus hooks in the Rust store. C++ `= 0` patch **withdrawn**, not deferred |
 | DRS-W13 | Curve-tree pop reconstructs `TreePosition` as `leaf_count - drained_count + j` because the drain journal never recorded it | wart (latent, correct today by invariant — evidence below) | RECORD-AND-SPECIFY: journal the assigned position; pop reads it back |
 | DRS-W14 | Unbounded probe loops walk archival journal rows until first miss, so the reader holds the writer's density invariant | wart (no unsound state today — evidence below) | RECORD-AND-SPECIFY: range-scan the key prefix; gap-tolerance is a property of the query |
-| DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop, and **one** site reads them (`hardfork.cpp:300`, the file's only above-tip read) | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** structural — `hf_versions[h]` is journaled like every other connect write and the reverse replay deletes it on pop; whether an incremental vote window is rebuilt above the tip is still R4's, but no row survives a pop for it to read. |
+| DRS-W15 | **UPDATE 2026-10-06:** no site reads `hf_versions` above the tip; the window that did is deleted. Rows above the new tip are still not deleted on pop. `HardFork::add` (src/cryptonote_basic/hardfork.cpp:107–114) writes the scheduled version on connect | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** structural — `hf_versions[h]` is journaled like every other connect write and the reverse replay deletes it on pop; whether an incremental vote window is rebuilt above the tip is still R4's, but no row survives a pop for it to read. |
 | DRS-W16 | `remove_block` deletes from `m_cur_blocks` **without positioning it** (`db_lmdb.cpp:1053`), while positioning its two sibling cursors explicitly in the same function. The `mdb_cursor_get(…, MDB_SET)` that positioned it was **removed** by inherited commit `22c0fae47b`, whose subject ("db: store cumulative rct output distribution in the db for speed") is unrelated to block removal. It is correct today only because its **sole** caller reads the top block through the **same** write-cursor member one call earlier (`blockchain_db.cpp:743`), a coupling `remove_block` neither states nor can check | wart (**latent, not reachable in this tree** — one caller, no interleaved `blocks` read. A `blocks` read inserted in that window, or a second caller, makes the delete remove whatever row the cursor last landed on, and `mdb_cursor_del` at a valid-but-wrong position **succeeds**: a torn logical unit, not a crash, since `block_info` and `block_heights` are positioned explicitly) | RECORD-AND-SPECIFY: in the Rust store a delete names its key, so there is no ambient cursor position for a future edit to strand. Restoring the dropped `MDB_SET` is the cheap C++ guard and is **not** taken here |
 | DRS-W17 | `BlockchainLMDB::batch_start` returns `bool`, and two core callers **spin on `false`**: `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(blocks_entry.size(), bytes)))` and `:6743` `while (!m_db->batch_start(1, block_byte_estimate))`; two more (`:624`, `:6314`) call it once. The retry protocol is never exercised in practice because writers are serialized above the store by `m_blockchain_lock` (`CRITICAL_REGION_LOCAL1`, `blockchain.cpp:277`); LMDB's own writer mutex sits below and is never reached by a second thread | wart (**port-boundary divergence, not a C++ defect**: `shekyl-chain-store` refuses a second live batch with a typed `WriteInProgress` that means *contract violated, do not retry* — a concurrency property no state diff can see, the same blind spot as A4's durability flags) | DIVERGE-INTENTIONALLY at the port: the two spin loops must **not** be transliterated to `while begin_batch().is_err()`; serialization stays owned by the core layer, named here so every caller inherits one backoff policy rather than one per caller. No digest exclusion applies — the digest never saw the property — so the replacement KAT is a concurrency test — the **refusal half is delivered** (`store_tests.rs` `a_second_batch_from_another_thread_is_refused_not_queued`: a second thread gets `WriteInProgress` back while the holder is alive, not parked behind it); the **callers' half** — that the two spin loops are ported as a serialized wait above the store, never as a retry on the typed error — is owed with the S-TXN port **CLOSED-AT-PORT 2026-09-15 (S-CHAIN-W, `rust/shekyl-chain-store`):** as specified — `ChainStore::write` refuses a second live batch with `StoreCannot::WriteInProgress`; no spin loop exists to transliterate. |
 
@@ -826,15 +826,19 @@ writer. Applies to the epoch-marker seq on the same footing.
 
 ### DRS-W15 — `hf_versions` read-back on pop
 
-`hf_versions` rows above the new tip are **not deleted on pop**, and exactly
-one site reads them: `db.get_hard_fork_version(height)` at
-`src/cryptonote_basic/hardfork.cpp:300`, inside `HardFork::on_block_popped`
-(`:286`–`:309`). It is the file's **only** above-tip read — the other three
-reads are at or below the tip (`:214` in `reorganize_from_block_height` at
-the new tip block, `:266` in `rescan_from_block_height` at
-`db.height() - 1`, `:357` the public accessor). **The whole redb obligation
-descends from that one line**, so the row's grade has to be about it and not
-about the table in general.
+**UPDATE 2026-10-06:** the vote window is deleted. `on_block_popped` and both
+rescan/reorganize walks are gone, so nothing reads `hf_versions` above the
+tip. `HardFork::add` (`src/cryptonote_basic/hardfork.cpp:107–114`) still
+writes the scheduled version at the connecting height, and pop still does not
+delete the row. The read-back this section graded belonged to the window. The
+class, the table and the `hf_versions` rows go in the deletion PR named in
+`docs/FOLLOWUPS.md`. The paragraphs below are the record of that window.
+
+`hf_versions` rows above the new tip were **not deleted on pop**, and exactly
+one site read them: `db.get_hard_fork_version(height)` inside
+`HardFork::on_block_popped`. It was the file's **only** above-tip read.
+**The whole redb obligation descended from that one line**, so the row's grade
+was about it and not about the table in general.
 
 **What the read-back is worth, per caller.** `pop_block_from_blockchain`
 (`src/cryptonote_core/blockchain.cpp:814`) is the only caller of
