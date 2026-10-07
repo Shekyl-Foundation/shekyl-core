@@ -41,7 +41,9 @@ use shekyl_archival_retention::{
 use shekyl_types::SHARD_LENGTH;
 
 use crate::challenge_coverage::SplitMix64;
-use crate::mn_feasibility::{default_sources, false_slash_bound, BOND_LIFE_EPOCHS};
+use crate::mn_feasibility::{
+    default_sources, false_slash_bound, max_holder_exposure, FeasibilityTargets, BOND_LIFE_EPOCHS,
+};
 
 /// Draws counted per pair at settlement, and the count a pair must reach to
 /// be observed at all.
@@ -394,8 +396,14 @@ pub struct WindowCheck {
     /// fewer than 2 of the 3 counted reads passed.
     pub miss_given_observation: f64,
     /// Union bound on a false slash over the bond's life at production
-    /// `(m, n)`.
+    /// `(m, n)`, for one pair.
     pub false_slash_bound: f64,
+    /// The same bound for an archiver holding the maximum number of shards.
+    /// The feasibility module's budget is set on this axis, per archiver.
+    pub false_slash_max_holder: f64,
+    /// Whether the per-archiver exposure is inside the module's provisional
+    /// budget.
+    pub clears_floor: bool,
     /// Share of epochs that are observations: `1 − short`.
     pub observation_rate: f64,
     /// Epochs a pair that never serves takes to reach `m` misses.
@@ -420,15 +428,14 @@ pub fn window_check(short_permille: f64) -> WindowCheck {
         .powi(sources.attempts as i32);
     let q = missed_two_of_three(read_failure);
     let observation_rate = 1.0 - short_permille / 1000.0;
+    let per_pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, BOND_LIFE_EPOCHS);
+    let max_holder = max_holder_exposure(per_pair);
     WindowCheck {
         read_failure,
         miss_given_observation: q,
-        false_slash_bound: false_slash_bound(
-            FAILURE_WINDOW_M,
-            FAILURE_WINDOW_N,
-            q,
-            BOND_LIFE_EPOCHS,
-        ),
+        false_slash_bound: per_pair,
+        false_slash_max_holder: max_holder,
+        clears_floor: max_holder <= FeasibilityTargets::operative_defaults().false_slash_target,
         observation_rate,
         epochs_to_m_misses: f64::from(FAILURE_WINDOW_M) / observation_rate,
     }
@@ -532,6 +539,15 @@ pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fm
          missed-observation q = 3x^2(1-x) + x^3 = {:.4}; the false-slash bound does not depend \
          on the observation rate",
         w.read_failure, w.miss_given_observation
+    )?;
+    writeln!(
+        out,
+        "false slash over the bond's life: {:.2e} per pair; {:.3} for an archiver at the maximum \
+         holdings, against a per-archiver budget of {:.0e}: {}",
+        w.false_slash_bound,
+        w.false_slash_max_holder,
+        FeasibilityTargets::operative_defaults().false_slash_target,
+        if w.clears_floor { "clears" } else { "EXCEEDS" }
     )?;
     for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
         let verdict = match bar_holds(cells, in_flight) {
@@ -697,6 +713,22 @@ mod tests {
         // The bound is priced at one observation per epoch, so it is the
         // same at every observation rate.
         assert!((w.false_slash_bound - window_check(0.0).false_slash_bound).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_window_is_judged_per_archiver_not_per_pair() {
+        let w = window_check(0.0);
+        // The budget is per archiver. An archiver at the maximum holdings is
+        // exposed on every pair it holds, so its exposure is above one
+        // pair's and is what the verdict compares.
+        assert!(w.false_slash_max_holder > w.false_slash_bound);
+        let budget = FeasibilityTargets::operative_defaults().false_slash_target;
+        assert_eq!(w.clears_floor, w.false_slash_max_holder <= budget);
+        // At the module's read failure the per-pair bound is inside the
+        // budget and the per-archiver exposure is not: reading the first
+        // against the budget gives the wrong verdict.
+        assert!(w.false_slash_bound <= budget);
+        assert!(!w.clears_floor);
     }
 
     #[test]

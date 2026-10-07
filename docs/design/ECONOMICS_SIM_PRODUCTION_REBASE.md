@@ -1031,7 +1031,9 @@ observation is "fewer than 2 of 3 independent reads passed":
 `q = 3x²(1−x) + x³` with `x` the per-read failure probability the
 feasibility module already uses (`default_sources()`, `p_attempt = 0.30`,
 one attempt). The check prints `q`, the false-slash bound at the
-production `(m, n)` over the bond's life (`false_slash_bound`, unchanged),
+production `(m, n)` over the bond's life per pair (`false_slash_bound`,
+unchanged) and for an archiver at the maximum holdings
+(`max_holder_exposure`, the axis the module's budget is set on),
 and the observation rate `o = 1 − short`. `o` does not enter the
 false-slash bound, which is priced at a ceiling of one observation per
 epoch. It stretches the time a non-serving pair takes to reach `m` misses,
@@ -1093,12 +1095,26 @@ reproducible.
 **`(m, n)`.** With the 3 counted draws settled at 2 of 3, an honest pair
 at the feasibility module's per-read failure of 0.30 misses an observed
 epoch with probability `q = 0.216`. At the production `(11, 13)` the
-false-slash bound over the bond's life is `2.85 × 10⁻⁴`, inside the
-module's provisional `10⁻³` target, and it does not move with the
-observation rate. The observation rate under A is 0.995 / 0.989 / 0.962
-at 0 / 10 / 30 % dropout, so a pair that never serves reaches 11 misses
-in 11.05 / 11.12 / 11.44 epochs against 11. The window is not what the
-secret draw strains.
+false-slash bound over the bond's life is `2.85 × 10⁻⁴` **per pair**. The
+module's provisional `10⁻³` budget is **per archiver**, and its verdict
+compares the exposure of an archiver at the maximum holdings
+(`max_holder_exposure`, 4,096 shards): that is `0.689`, which **exceeds**
+the budget. The two are different measures and the run prints both.
+Neither moves with the observation rate, so the secret draw's dropout
+does not enter them.
+
+The window does not clear the per-archiver budget under this rule at this
+read failure. That is not new with the secret draw: the module's own
+report (`--stage2`) already reads the shipped pin as exceeding it, at
+`4.13 × 10⁻²` per pair under the rule it models. Two-of-three over three
+counted draws lowers the per-pair figure by two orders of magnitude and
+does not bring an archiver at the maximum holdings inside the budget. The
+`(m, n)` re-pin stays open
+([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §3).
+
+The observation rate under A is 0.995 / 0.989 / 0.962 at 0 / 10 / 30 %
+dropout, so a pair that never serves reaches 11 misses in
+11.05 / 11.12 / 11.44 epochs against 11.
 
 **Fetch volume per won block.** At the mean count and `SHARD_LENGTH`
 (3,000,000 B): 351 / 381 / 468 MB under A. A producer that wins a block
