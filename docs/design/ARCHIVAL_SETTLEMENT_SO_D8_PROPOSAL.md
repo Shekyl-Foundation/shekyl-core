@@ -2260,7 +2260,7 @@ criterion; count-pin +1 in this docs PR.
 
 ---
 
-## 8. Slice C — implementation plan (AUTHORIZED 2026-10-04; *was* "NOT AUTHORIZED; written so it can be built when ruled")
+## 8. Slice C — implementation plan (AUTHORIZED 2026-10-04)
 
 ### 8.0 Slice C's first increment — Round 0: the design inputs (brief, 2026-10-04)
 
@@ -2368,8 +2368,11 @@ not wait on them; building does.
    inside the view's fault type or the body decides what a fault means.
 
 Also owed with the census change that lands the rows (`SCV-Q6`): a
-`RowStatus` arm for a row retired by ruling, carrying its citation, so the
-gate's second half is a state a check reads.
+`RowStatus` arm for a row retired by ruling, carrying its citation and
+naming its successor rows, with the gate requiring each successor
+`Implemented`. CEN-J8, J9 and J10 are the rows it retires. That makes the
+gate's second half a state a check reads, and makes "retired" unable to
+mean "dropped".
 
 **3. Evidence facts** carried from the serve-credit round's withdrawn
 interim (`SCV-Q1`). Each becomes an expectation in the evidence plan below,
