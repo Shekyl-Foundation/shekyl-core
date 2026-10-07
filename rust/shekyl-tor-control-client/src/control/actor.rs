@@ -1713,11 +1713,26 @@ mod live_tests {
 
     /// Spawn an **offline** `tor` (`DisableNetwork 1`) with a cookie-authed control
     /// port on an OS-assigned port written to `ControlPortWriteToFile`.
+    ///
+    /// This is the fixture for the *attached* posture — a tor somebody else runs —
+    /// so it does not go through the managed launcher. It still has to start, and
+    /// the Expert Bundle's `tor` has no `RPATH`: it finds the libraries shipped
+    /// beside it only when the loader is pointed at them. A host that happens to
+    /// have a system `libevent-2.1.so.7` hides that; a CI runner does not have
+    /// one, and there this fixture timed out waiting for a tor that never ran.
+    /// So the fixture names tor's own directory to the loader, as whoever runs
+    /// the bundle's tor must.
     async fn spawn_offline_tor() -> TestTor {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().to_path_buf();
         let port_file = data_dir.join("control_port");
-        let child = ProcCommand::new(tor_binary())
+        let tor = tor_binary();
+        let mut cmd = ProcCommand::new(&tor);
+        #[cfg(target_os = "linux")]
+        if let Some(tor_dir) = tor.parent().filter(|d| d.is_absolute()) {
+            cmd.env("LD_LIBRARY_PATH", tor_dir);
+        }
+        let child = cmd
             .arg("--DataDirectory")
             .arg(&data_dir)
             .arg("--ControlPort")
