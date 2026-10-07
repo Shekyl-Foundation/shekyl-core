@@ -188,6 +188,9 @@ file meanwhile, with that as the stated reason.
      path from the witness). The cleared environment applies on every
      platform; whether a Windows `tor.exe` starts without `SystemRoot` is
      TB-11's launch test to establish.
+     Where the launcher sets the loader path, a directory whose own path
+     holds `:`, `;` or `$` is refused: the loader reads that variable as a
+     list and would search other directories than the one checked.
    - TB-8: `binary::candidate_from` takes no `PATH`.
    - TB-10: the two Linux rows of §4.
    - TB-13: `tor-licenses/` in each archive and `/usr/share/doc/shekyl/tor/`

@@ -29,9 +29,14 @@ moves that failure to the pull request.
   4. **`tor-pin-verify.yml` restates no bundle version.** It reads the pin
      file. A version written into the workflow is a second record that goes
      stale when the pin moves (it had, by three bundle releases, when this
-     gate was written), so the gate refuses one coming back.
+     gate was written), so the gate refuses one coming back — anywhere in the
+     file, a comment included, since a stale comment misleads as well.
   5. **`tor-pin-verify.yml` verifies every pinned host**, so a newly pinned
-     target is not left without its launch run.
+     target is not left without its launch run. Read from the parsed
+     workflow: a job's `strategy.matrix` must carry the host, and that same
+     job must have a step whose script runs `tor_bundle.py stage`. The words
+     appearing in a comment, or in a job that does not stage, satisfy
+     nothing (rule 47).
   6. **`docs/RELEASE_CHECKLIST.md` names every pinned bundle version** in its
      "Bundled Tor pin current" block, which is a pointer to the pin file and
      has to move with it.
@@ -46,6 +51,70 @@ import sys
 from pathlib import Path
 
 HOSTS_RE = re.compile(r'^\s*HOSTS="([^"]*)"\s*$', re.MULTILINE)
+STAGE_RE = re.compile(r"scripts/release/tor_bundle\.py\s+stage\b")
+
+
+def load_yaml(path):
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - environment, not logic
+        raise SystemExit(
+            "check_tor_pin_targets: PyYAML is required to read the workflow "
+            "structurally. Install python3-yaml (the grep-gates job does)."
+        ) from exc
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        raise Unreadable(f"{path.name}: not valid YAML: {exc}") from exc
+
+
+class Unreadable(Exception):
+    """A file this gate must read could not be parsed."""
+
+
+def script_lines(run):
+    """The lines of a step's script that execute: no blank lines, no comments."""
+    return [
+        line for line in (run or "").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def matrix_hosts(job):
+    """Every `host` value a job's matrix assigns, at any nesting."""
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "host" and isinstance(value, str):
+                    found.add(value)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk((job.get("strategy") or {}).get("matrix") or {})
+    return found
+
+
+def staged_hosts(workflow):
+    """Hosts with a job that both names them in its matrix and stages."""
+    hosts = set()
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        stages = any(
+            STAGE_RE.search(line)
+            for step in job.get("steps") or []
+            if isinstance(step, dict)
+            for line in script_lines(step.get("run"))
+        )
+        if stages:
+            hosts |= matrix_hosts(job)
+    return hosts
 
 
 def load_tor_bundle(root):
@@ -95,17 +164,21 @@ def check(root):
 
     workflow = root / ".github" / "workflows" / "tor-pin-verify.yml"
     workflow_text = workflow.read_text(encoding="utf-8")
-    if "scripts/release/tor_bundle.py" not in workflow_text:
-        problems.append(f"{workflow.name}: does not stage through scripts/release/tor_bundle.py")
+    try:
+        verified = staged_hosts(load_yaml(workflow) or {})
+    except Unreadable as exc:
+        verified = set()
+        problems.append(str(exc))
     for row in pinned:
         if row["bundle_version"] in workflow_text:
             problems.append(
                 f"{workflow.name}: restates the bundle version {row['bundle_version']}; "
                 "it reads config/tor_pins.json and must not carry a copy"
             )
-        if f"host: {row['gitian_host']}" not in workflow_text:
+        if row["gitian_host"] not in verified:
             problems.append(
-                f"{workflow.name}: has no job for the pinned host {row['gitian_host']}"
+                f"{workflow.name}: no job both names the pinned host {row['gitian_host']} "
+                "in its matrix and stages it through scripts/release/tor_bundle.py"
             )
 
     checklist = (root / "docs" / "RELEASE_CHECKLIST.md").read_text(encoding="utf-8")

@@ -57,6 +57,24 @@ fn checked_file_name<'a>(name: &'a str, context: &str) -> &'a str {
     name
 }
 
+/// A version or target label. These compose the system directory
+/// `/opt/shekyl/<bundle_version>-<bundle_target>/`, which the launcher then
+/// names to the dynamic loader, so they are a closed alphabet: nothing that
+/// could name another directory or split a loader path.
+fn checked_label<'a>(row: &'a Value, key: &str, context: &str) -> &'a str {
+    let label = str_field(row, key, context);
+    assert!(
+        !label.is_empty()
+            && label != "."
+            && label != ".."
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')),
+        "{context}: {key} is letters, digits, '.', '_' and '-', got {label:?}"
+    );
+    label
+}
+
 fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
     let executable = checked_file_name(str_field(row, "executable", context), context);
     // The tarball digest is the packaging side's gate, not the runtime's, but a
@@ -99,9 +117,9 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
     format!(
         "TorDisposition::Pinned(TorPin {{ bundle_version: {:?}, bundle_target: {:?}, \
          tor_version: {:?}, executable: {:?}, case_insensitive_names: {}, files: &[{}] }})",
-        str_field(row, "bundle_version", context),
-        str_field(row, "bundle_target", context),
-        str_field(row, "tor_version", context),
+        checked_label(row, "bundle_version", context),
+        checked_label(row, "bundle_target", context),
+        checked_label(row, "tor_version", context),
         executable,
         os == "windows",
         files_expr,

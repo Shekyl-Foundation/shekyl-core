@@ -1729,7 +1729,10 @@ mod live_tests {
         let tor = tor_binary();
         let mut cmd = ProcCommand::new(&tor);
         #[cfg(target_os = "linux")]
-        if let Some(tor_dir) = tor.parent().filter(|d| d.is_absolute()) {
+        if let Some(tor_dir) = tor
+            .parent()
+            .filter(|d| crate::binary::loader_reads_as_one_directory(d))
+        {
             cmd.env("LD_LIBRARY_PATH", tor_dir);
         }
         let child = cmd

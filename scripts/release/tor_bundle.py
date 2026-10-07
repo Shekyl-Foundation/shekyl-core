@@ -87,6 +87,18 @@ def is_digest(value):
     )
 
 
+def is_label(value):
+    """A version or target label. These compose `/opt/shekyl/<version>-<target>`
+    and the download URL, so they are a closed alphabet: nothing that could
+    name another directory, split a loader path, or bend a URL."""
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    return (
+        isinstance(value, str)
+        and value not in ("", ".", "..")
+        and all(c in allowed for c in value)
+    )
+
+
 def is_plain_name(value):
     return (
         isinstance(value, str)
@@ -138,8 +150,11 @@ def load_pins(path):
             raise Refused(f"{where}: disposition is 'pinned' or 'unavailable'")
 
         for key in ("bundle_version", "bundle_target", "tor_version"):
-            if not isinstance(row.get(key), str) or not row[key]:
-                raise Refused(f"{where}: missing {key!r}")
+            if not is_label(row.get(key)):
+                raise Refused(
+                    f"{where}: {key} is letters, digits, '.', '_' and '-' "
+                    "(it composes an install path and a URL)"
+                )
         if not is_digest(row.get("tarball_sha256")):
             raise Refused(f"{where}: tarball_sha256 is 64 lowercase hex characters")
         files = row.get("files")

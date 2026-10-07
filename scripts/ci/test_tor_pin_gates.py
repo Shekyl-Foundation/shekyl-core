@@ -270,6 +270,14 @@ def _(b):
     expect(b.stage(), 1, "states its reason")
 
 
+@case("pin file: a version label that could name another directory is refused")
+def _(b):
+    for bad in ("../9.9.9", "9.9.9:x", "9.9.9/x", "$ORIGIN"):
+        b.pins["targets"][0]["bundle_version"] = bad
+        b.write()
+        expect(b.run("install-dir", "--host", HOST), 1, "bundle_version is letters, digits")
+
+
 @case("pin file: a file name that is a path is refused")
 def _(b):
     b.pins["targets"][0]["files"][1]["name"] = "../libevent-2.1.so.7"
@@ -280,8 +288,21 @@ def _(b):
 # --- check_tor_pin_targets.py ---------------------------------------------
 
 
+STAGE_STEP = "      - run: |\n          python3 scripts/release/tor_bundle.py stage --host \"$HOST\"\n"
+
+
+def workflow_yaml(hosts, steps=STAGE_STEP):
+    return (
+        "on:\n  workflow_dispatch:\njobs:\n  verify:\n    runs-on: ubuntu-latest\n"
+        "    strategy:\n      matrix:\n        target:\n"
+        + ("".join(f"          - host: {h}\n" for h in hosts) or "          - host: none\n")
+        + "    steps:\n"
+        + steps
+    )
+
+
 def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
-                 workflow_hosts=("x86_64-linux-gnu",), workflow_extra="",
+                 workflow_hosts=("x86_64-linux-gnu",), workflow_extra="", workflow=None,
                  checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)"):
     root = Path(tmp) / "tree"
     (root / "scripts" / "release").mkdir(parents=True)
@@ -301,11 +322,9 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
             body += f'  HOSTS="{line}"\n'
         (root / "contrib" / "gitian" / f"gitian-d{i}.yml").write_text(body, encoding="utf-8")
     (root / ".github" / "workflows" / "tor-pin-verify.yml").write_text(
-        "on:\n  workflow_dispatch:\njobs:\n  verify:\n    strategy:\n      matrix:\n"
-        "        target:\n"
-        + "".join(f"          - host: {h}\n" for h in workflow_hosts)
-        + "    steps:\n      - run: python3 scripts/release/tor_bundle.py stage\n"
-        + workflow_extra,
+        workflow
+        if workflow is not None
+        else workflow_yaml(workflow_hosts) + workflow_extra,
         encoding="utf-8",
     )
     (root / "docs" / "RELEASE_CHECKLIST.md").write_text(
@@ -352,13 +371,41 @@ def _(tmp):
 
 @tcase("targets: a bundle version written back into the workflow fails")
 def _(tmp):
-    proc = targets_tree(tmp, workflow_extra='      - run: echo "default: 9.9.9"\n')
+    proc = targets_tree(tmp, workflow_extra="      - run: echo bundle-9.9.9\n")
     expect(proc, 1, "restates the bundle version 9.9.9")
 
 
 @tcase("targets: a pinned host with no verify job fails")
 def _(tmp):
-    expect(targets_tree(tmp, workflow_hosts=()), 1, "no job for the pinned host x86_64-linux-gnu")
+    proc = targets_tree(tmp, workflow_hosts=())
+    expect(proc, 1, "no job both names the pinned host x86_64-linux-gnu")
+
+
+@tcase("targets: a host named only in a comment satisfies nothing")
+def _(tmp):
+    wf = workflow_yaml(()) + "# host: x86_64-linux-gnu\n"
+    expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
+
+
+@tcase("targets: a stage command only in a script comment satisfies nothing")
+def _(tmp):
+    steps = (
+        "      - run: |\n"
+        "          # python3 scripts/release/tor_bundle.py stage --host x\n"
+        "          echo skipped\n"
+    )
+    wf = workflow_yaml(("x86_64-linux-gnu",), steps=steps)
+    expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
+
+
+@tcase("targets: a host in one job and the stage step in another satisfies nothing")
+def _(tmp):
+    wf = (
+        workflow_yaml(("x86_64-linux-gnu",), steps="      - run: echo no staging here\n")
+        + "  other:\n    runs-on: ubuntu-latest\n    steps:\n"
+        + STAGE_STEP
+    )
+    expect(targets_tree(tmp, workflow=wf), 1, "no job both names the pinned host")
 
 
 @tcase("targets: a checklist that does not name the pin fails")

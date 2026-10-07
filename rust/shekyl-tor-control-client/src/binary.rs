@@ -40,6 +40,11 @@
 //! 2. each pinned file hashes to its own recorded digest;
 //! 3. the candidate is the pinned executable and can be executed.
 //!
+//! One more condition on the directory's *name*, on Linux: the launcher gives
+//! it to the loader in `LD_LIBRARY_PATH`, which is a list, so a path
+//! containing `:`, `;` or `$` would be searched as some other directories.
+//! Such a path is refused ([`TorBinaryError::UnsafeLoaderPath`]).
+//!
 //! [`VerifiedTorBinary`] carries that directory, and the launcher takes its
 //! library path from the witness and nowhere else — so the directory that was
 //! checked is the directory the loader is given. A symlinked install directory
@@ -230,7 +235,8 @@ impl VerifiedTorBinary {
 
     /// The directory the verified `tor` lives in, whose contents the gate
     /// checked — the one directory the launcher may name to the loader.
-    /// `None` only for a test witness whose path has no usable parent.
+    /// `None` only for a test witness whose directory the loader could not be
+    /// given by name (no absolute parent, or a path it would read as a list).
     pub fn library_dir(&self) -> Option<&Path> {
         self.library_dir.as_deref()
     }
@@ -255,7 +261,7 @@ impl VerifiedTorBinary {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         let library_dir = path
             .parent()
-            .filter(|dir| dir.is_absolute())
+            .filter(|dir| loader_reads_as_one_directory(dir))
             .map(Path::to_path_buf);
         Self { path, library_dir }
     }
@@ -307,6 +313,13 @@ pub enum TorBinaryError {
         /// The entry that is not pinned.
         name: OsString,
     },
+    /// tor's directory has a path the dynamic loader would not read as one
+    /// directory. The launcher names the directory to the loader in
+    /// `LD_LIBRARY_PATH`, which is a *list*: `:` and `;` separate entries and
+    /// `$` introduces a token (`$ORIGIN`, `$LIB`) the loader expands. A
+    /// directory called `/srv/a:b/tor` would be checked as one place and
+    /// searched as two others, neither of them checked.
+    UnsafeLoaderPath(PathBuf),
     /// tor's directory lacks a file the pin lists.
     MissingFile {
         /// tor's directory.
@@ -380,6 +393,13 @@ impl std::fmt::Display for TorBinaryError {
                  files into a directory of their own)",
                 dir.display(),
                 name
+            ),
+            Self::UnsafeLoaderPath(dir) => write!(
+                f,
+                "the tor directory's path contains ':', ';' or '$', which the dynamic loader \
+                 reads as more than one directory: {}. Install the bundle under a path \
+                 without those characters",
+                dir.display()
             ),
             Self::MissingFile { dir, name } => write!(
                 f,
@@ -511,6 +531,23 @@ fn is_executable(_path: &Path) -> bool {
     true
 }
 
+/// Can `dir` be handed to the dynamic loader as a search path and mean
+/// exactly itself? `LD_LIBRARY_PATH` is a list, not a path: glibc splits it
+/// on `:` and `;` and expands `$`-tokens in each entry. A directory whose
+/// name contains any of the three is therefore *not* the directory the
+/// loader would search, and the pin gate checked only the one it was given.
+/// Byte-wise on Unix, so a non-UTF-8 path is judged on what the loader sees.
+pub(crate) fn loader_reads_as_one_directory(dir: &Path) -> bool {
+    #[cfg(unix)]
+    let bytes = {
+        use std::os::unix::ffi::OsStrExt;
+        dir.as_os_str().as_bytes()
+    };
+    #[cfg(not(unix))]
+    let bytes = dir.as_os_str().as_encoded_bytes();
+    dir.is_absolute() && !bytes.iter().any(|b| matches!(b, b':' | b';' | b'$'))
+}
+
 fn io_error(path: &Path, e: &std::io::Error) -> TorBinaryError {
     TorBinaryError::Io {
         path: path.to_owned(),
@@ -539,6 +576,11 @@ fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorB
     let Some(dir) = canonical.parent().map(Path::to_path_buf) else {
         return Err(TorBinaryError::NotAFile(canonical));
     };
+    // Where the launcher names this directory to the loader, the name has to
+    // mean this directory and no other.
+    if cfg!(target_os = "linux") && !loader_reads_as_one_directory(&dir) {
+        return Err(TorBinaryError::UnsafeLoaderPath(dir));
+    }
 
     // Exact contents, by allowlist. `symlink_metadata` on purpose: a pinned
     // name that is a symlink would pass a name check while the loader followed
@@ -758,6 +800,7 @@ mod tests {
                 dir: PathBuf::from("/x"),
                 name: "tor",
             },
+            TorBinaryError::UnsafeLoaderPath(PathBuf::from("/x:y")),
             TorBinaryError::HashMismatch {
                 path,
                 expected: [0; 32],
@@ -884,6 +927,51 @@ mod tests {
             verify_candidate(&exe, &pin_for(&LINUX_FILES, false)),
             Err(TorBinaryError::NotAFile(_))
         ));
+    }
+
+    /// `LD_LIBRARY_PATH` is a list. A bundle that is correct in every file
+    /// but lives under a name the loader would split or expand is refused on
+    /// Linux, where the launcher sets that variable: with `a:b` in the path
+    /// the loader would search two directories, neither the one checked.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verify_refuses_a_directory_the_loader_would_read_as_a_list() {
+        for odd in ["a:b", "a;b", "$ORIGIN", "x${LIB}"] {
+            let root = tempfile::tempdir().unwrap();
+            let dir = root.path().join(odd);
+            std::fs::create_dir(&dir).unwrap();
+            for (i, (name, bytes)) in LINUX_FILES.iter().enumerate() {
+                if i == 0 {
+                    write_executable(&dir.join(name), bytes);
+                } else {
+                    std::fs::write(dir.join(name), bytes).unwrap();
+                }
+            }
+            assert_eq!(
+                verify_candidate(&dir.join("tor"), &pin_for(&LINUX_FILES, false)).unwrap_err(),
+                TorBinaryError::UnsafeLoaderPath(dir.canonicalize().unwrap()),
+                "{odd}"
+            );
+        }
+    }
+
+    #[test]
+    fn loader_path_rule_accepts_ordinary_directories_only() {
+        for ok in [
+            "/opt/shekyl/15.0.24-linux-x86_64",
+            "/srv/My Name/shekyl/tor",
+        ] {
+            assert!(loader_reads_as_one_directory(Path::new(ok)), "{ok}");
+        }
+        for bad in [
+            "/opt/a:b",
+            "/opt/a;b",
+            "/opt/$ORIGIN/tor",
+            "relative/tor",
+            "",
+        ] {
+            assert!(!loader_reads_as_one_directory(Path::new(bad)), "{bad}");
+        }
     }
 
     #[test]

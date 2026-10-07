@@ -325,11 +325,13 @@ production constructors are the gate itself** (`discover_and_verify` / the setti
 be skipped on a future spawn path *by construction* (the SP-T0a `ServerVerified` pattern; the one test
 bypass is the greppable `unchecked_for_test`). There is **no fall-through on a verification failure**:
 the selected candidate's mismatch is terminal, so a present-but-tampered bundled binary can never
-silently defer to a different `tor`. (Fall-through on *absence* is how the tiers advance — deleting the
-bundled binary relocates discovery to `PATH`, where the candidate is still hash-gated; the relocation
-itself is silent, which is acceptable only because the gate travels with it.) A target with no
-`CURRENT_PIN` arm hard-refuses a managed launch (`Attached` still works); a new target is enabled by
-*pinning* it (checklist + `cfg` arm), never by relaxing the gate.
+silently defer to a different `tor`. (Fall-through on *absence* is how the tiers advance — with no
+bundle beside the executable, discovery moves to the system directory, where the candidate is gated the
+same way, and with none there either the answer is `NotFound`; the relocation itself is silent, which
+is acceptable only because the gate travels with it.) A target whose row in `config/tor_pins.json` is
+`unavailable` compiles `CURRENT_DISPOSITION` as `Unavailable` and hard-refuses a managed launch
+(`Attached` still works), and a target with no row does not compile; a new target is enabled by
+*pinning* it (checklist + its row in the pin file), never by relaxing the gate.
 
 **Scope boundary (named, not implied):** the pin defends *at-rest* integrity — a bad download, a
 supply-chain swap, a binary replaced before launch. Verification hashes the file; the launcher later
