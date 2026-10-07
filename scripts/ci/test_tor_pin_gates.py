@@ -267,7 +267,7 @@ def _(b):
 def _(b):
     b.pins["targets"][1].pop("reason")
     b.write()
-    expect(b.stage(), 1, "states its reason")
+    expect(b.stage(), 1, "must state its reason")
 
 
 @case("pin file: a version label that could name another directory is refused")
@@ -276,6 +276,14 @@ def _(b):
         b.pins["targets"][0]["bundle_version"] = bad
         b.write()
         expect(b.run("install-dir", "--host", HOST), 1, "bundle_version is letters, digits")
+
+
+@case("pin file: two licence texts that would stage under one name are refused")
+def _(b):
+    b.pins["targets"][0]["licenses"] = ["docs/tor.txt", "other/tor.txt"]
+    b.write()
+    expect(b.stage(), 1, "two licence texts would be staged under one name")
+    assert not b.dest.exists()
 
 
 @case("pin file: a file name that is a path is refused")
@@ -412,6 +420,19 @@ def _(tmp):
 def _(tmp):
     proc = targets_tree(tmp, checklist="Expert Bundle 9.9.8 (tor 0.0.0.1)")
     expect(proc, 1, "does not name the linux-x86_64 pin")
+
+
+@tcase("targets: a missing workflow fails with a diagnosis, not a traceback")
+def _(tmp):
+    proc = targets_tree(tmp)
+    root = Path(tmp) / "tree"
+    (root / ".github" / "workflows" / "tor-pin-verify.yml").unlink()
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root)],
+        capture_output=True, text=True,
+    )
+    expect(proc, 1, "tor-pin-verify.yml: cannot be read")
+    assert "Traceback" not in proc.stderr, proc.stderr
 
 
 @tcase("targets: a malformed pin file fails")

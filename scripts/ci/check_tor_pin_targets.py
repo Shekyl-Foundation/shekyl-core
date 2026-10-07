@@ -65,6 +65,8 @@ def load_yaml(path):
     try:
         with open(path, encoding="utf-8") as fh:
             return yaml.safe_load(fh)
+    except OSError as exc:
+        raise Unreadable(f"{path.name}: cannot be read: {exc}") from exc
     except yaml.YAMLError as exc:
         raise Unreadable(f"{path.name}: not valid YAML: {exc}") from exc
 
@@ -163,11 +165,12 @@ def check(root):
     pinned = [row for row in doc["targets"] if row["disposition"] == "pinned"]
 
     workflow = root / ".github" / "workflows" / "tor-pin-verify.yml"
-    workflow_text = workflow.read_text(encoding="utf-8")
     try:
         verified = staged_hosts(load_yaml(workflow) or {})
-    except Unreadable as exc:
+        workflow_text = workflow.read_text(encoding="utf-8")
+    except (Unreadable, OSError) as exc:
         verified = set()
+        workflow_text = ""
         problems.append(str(exc))
     for row in pinned:
         if row["bundle_version"] in workflow_text:

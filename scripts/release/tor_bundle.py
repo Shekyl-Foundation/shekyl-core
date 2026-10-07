@@ -144,7 +144,7 @@ def load_pins(path):
 
         if row["disposition"] == "unavailable":
             if not isinstance(row.get("reason"), str) or not row["reason"].strip():
-                raise Refused(f"{where}: an unavailable target states its reason")
+                raise Refused(f"{where}: an unavailable target must state its reason; none is given")
             continue
         if row["disposition"] != "pinned":
             raise Refused(f"{where}: disposition is 'pinned' or 'unavailable'")
@@ -174,9 +174,19 @@ def load_pins(path):
         licenses = row.get("licenses")
         if not isinstance(licenses, list) or not licenses:
             raise Refused(f"{where}: a pinned target lists the bundle's licence texts")
+        staged_names = []
         for member in licenses:
             if not isinstance(member, str) or member.startswith("/") or ".." in member.split("/"):
                 raise Refused(f"{where}: {member!r} is not a path inside the tarball")
+            staged_names.append(member.rsplit("/", 1)[-1].lower())
+        # Licence texts are staged flat, under their base names, beside the
+        # generated SOURCE.txt. Two members sharing a base name would leave
+        # one text silently overwriting the other.
+        if len(set(staged_names)) != len(staged_names) or "source.txt" in staged_names:
+            raise Refused(
+                f"{where}: two licence texts would be staged under one name "
+                "(base names must be unique, and SOURCE.txt is generated)"
+            )
     return doc
 
 
@@ -247,7 +257,13 @@ def read_member(tar, name):
         raise Refused(f"the tarball has no member {name!r}") from exc
     if not member.isreg():
         raise Refused(f"tarball member {name!r} is not a regular file")
-    return tar.extractfile(member).read()
+    try:
+        handle = tar.extractfile(member)
+        if handle is None:
+            raise Refused(f"tarball member {name!r} could not be opened")
+        return handle.read()
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise Refused(f"tarball member {name!r} could not be read: {exc}") from exc
 
 
 def source_note(doc, row):
@@ -321,7 +337,11 @@ def stage(doc, row, sources, dest, licenses):
 
     # Read and check everything first, write second: a file that fails its pin
     # leaves nothing behind for a later step to pack.
-    with tarfile.open(tarball, "r:gz") as tar:
+    try:
+        archive = tarfile.open(tarball, "r:gz")
+    except (tarfile.TarError, OSError) as exc:
+        raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
+    with archive as tar:
         staged = []
         for entry in row["files"]:
             data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
