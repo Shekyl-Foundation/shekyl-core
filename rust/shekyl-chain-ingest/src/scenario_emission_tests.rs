@@ -60,7 +60,7 @@ use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::archival::FirstPayingHeight;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch};
 use shekyl_wire::{Ct, Transaction};
 use zeroize::Zeroizing;
 
@@ -108,13 +108,8 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(closed.shard.to_raw(), 0);
 
     // The join and the credit after it sit in one epoch, neither a close.
-    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1).to_raw();
-    mine_to(
-        &mut scenario,
-        &mut mined,
-        BlockHeight::from_raw(join_height),
-    )
-    .await;
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1);
+    mine_to(&mut scenario, &mut mined, join_height).await;
     let mut spender = Spender::over(&mined);
     let mut seen = mined.len();
 
@@ -126,7 +121,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let join = persona.join(shard_set(vec![0]), ENDPOINT);
     let funding = spender.spend_coinbase_to(
         scenario.wallet(),
-        0,
+        BlockHeight::ZERO,
         join_height,
         FEE,
         Some(&join),
@@ -140,13 +135,13 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         .mine_listing(vec![funding])
         .await
         .unwrap_or_else(|outcome| panic!("the funding spend and the join connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(join_height));
+    assert_eq!(block.height, join_height);
     assert!(
         block.judged_by.contains(&CenRow::J15),
         "J15 judged the join"
     );
     mined.push(block);
-    let join_epoch = SettlementEpoch::from_raw(levered_schedule().epoch_at_height(join_height));
+    let join_epoch = levered_schedule().epoch_at(join_height);
     // The first epoch a persona joining in `join_epoch` may serve (CEN-J5).
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
     // Beside the credit, a second funding spend — coinbase 1 to the same
@@ -154,9 +149,15 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // block: the spender's output keys are drawn from the connecting
     // height, so two spends to one recipient at one height would pay the
     // same keys, and the twin's fee would be the claim's.
-    let twin_height = join_height + 1;
-    let twin_funding =
-        spender.spend_coinbase_to(scenario.wallet(), 1, twin_height, FEE, None, &recipient);
+    let twin_height = join_height + BlockCount::ONE;
+    let twin_funding = spender.spend_coinbase_to(
+        scenario.wallet(),
+        BlockHeight::from_raw(1),
+        twin_height,
+        FEE,
+        None,
+        &recipient,
+    );
     let twin_fee_key = twin_funding.prefix.outputs[1].key;
     assert_ne!(twin_fee_key, fee_key, "the twin's fee is its own output");
     spender.own(twin_fee_key);
@@ -164,7 +165,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         .mine_listing(vec![persona.serve_credit(0, served.to_raw()), twin_funding])
         .await
         .unwrap_or_else(|outcome| panic!("the credit and the twin's funding connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(twin_height));
+    assert_eq!(block.height, twin_height);
     mined.push(block);
 
     // Through the close of `served`: the fold closes it when the count
@@ -259,8 +260,8 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // `h_close` is J25's driven refusal below, and the same bytes connect
     // at `h_close + 1` (the reference, `h_close − MIN_AGE`, is admissible
     // at both).
-    let at_close = count_at_close;
-    let connecting = count_at_close + 1;
+    let at_close = BlockHeight::from_raw(count_at_close);
+    let connecting = at_close + BlockCount::ONE;
     let owner = Owner::persona(persona.keys());
     let backing = spender.owned_input(&owner, backing_key, at_close);
     let fee_input = spender.owned_input(&owner, fee_key, at_close);
@@ -288,7 +289,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
             slot: TxSlot::Listed(0),
         },
     );
-    mine_to(&mut scenario, &mut mined, BlockHeight::from_raw(connecting)).await;
+    mine_to(&mut scenario, &mut mined, connecting).await;
     catch_up(&mut spender, &mined, &mut seen);
 
     // CEN-G9 on the pipeline: a block listing this claim beside a twin —
@@ -383,7 +384,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         .mine_listing(vec![claim_tx])
         .await
         .unwrap_or_else(|outcome| panic!("the driver's emission claim connects: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(connecting));
+    assert_eq!(block.height, connecting);
     // The claim's rows in the connect: the shape (H22), the reference
     // context, the gathered closes, the verify over them and the fee
     // proof (J21, J23, J25, J26 — slice 8 row 9), the signatures (I18),
@@ -411,7 +412,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(record.claimed_settlement_epochs, vec![served]);
     assert_eq!(
         record.first_paying_emission_height,
-        FirstPayingHeight::new(BlockHeight::from_raw(connecting))
+        FirstPayingHeight::new(connecting)
     );
     assert_eq!(
         scenario.bond_record(persona.id()).await.expect("read"),

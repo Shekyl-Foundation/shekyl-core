@@ -302,9 +302,10 @@ async fn build(inputs: &Inputs) -> Replica {
     let p_served = Persona::at(2);
     for (coinbase, persona) in [(0u64, &p_miss), (1, &p_served)] {
         let spender = Spender::over(&mined);
-        let connecting = u64::try_from(mined.len()).expect("small");
+        let connecting =
+            ChainCount::from_raw(u64::try_from(mined.len()).expect("small")).next_height();
         assert_eq!(
-            schedule.epoch_at_height(connecting),
+            schedule.epoch_at_height(connecting.to_raw()),
             join_epoch,
             "both joins land in one epoch, as the fixture's in epoch 0"
         );
@@ -312,7 +313,7 @@ async fn build(inputs: &Inputs) -> Replica {
         let block = scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                coinbase,
+                BlockHeight::from_raw(coinbase),
                 connecting,
                 FEE,
                 Some(&join),

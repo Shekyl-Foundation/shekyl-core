@@ -26,7 +26,7 @@
 
 use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
@@ -41,7 +41,9 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     let mut chain: Vec<Mined> = scenario
         .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
         .await;
-    let next = |chain: &Vec<Mined>| chain.len() as u64;
+    let next = |chain: &Vec<Mined>| {
+        ChainCount::from_raw(u64::try_from(chain.len()).expect("small")).next_height()
+    };
     let (bonded, stranger, signer) = (Persona::at(21), Persona::at(22), Persona::at(23));
     let total = ARCHIVAL_BOND_FLOOR_ATOMIC;
 
@@ -51,7 +53,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
         let height = next(&chain);
         let joining = spender.spend_coinbase_posting(
             scenario.wallet(),
-            0,
+            BlockHeight::ZERO,
             height,
             FEE,
             Some(&bonded.join(complete_tree(), ENDPOINT)),
@@ -79,7 +81,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
         post.p_canonical_id = stranger.id();
         let riding = spender.spend_coinbase_posting(
             scenario.wallet(),
-            1,
+            BlockHeight::from_raw(1),
             height,
             FEE,
             Some(&signer.post_by_hand(post)),
@@ -113,7 +115,7 @@ async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
         assert_eq!(post.bond_debit, total);
         let riding = spender.spend_coinbase_posting(
             scenario.wallet(),
-            2,
+            BlockHeight::from_raw(2),
             height,
             FEE,
             Some(&signer.post_by_hand(post)),

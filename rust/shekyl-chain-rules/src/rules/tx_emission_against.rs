@@ -68,7 +68,7 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::archival::{gather_epoch_snapshot, recorded_credits, ClosedUniverse, EpochSnapshot};
 use crate::census::CenRow;
@@ -108,7 +108,7 @@ impl Rule for J23 {
 /// borrows the snapshot's rows.
 struct GatheredEpoch<'r> {
     epoch: u64,
-    close_height: u64,
+    close_height: BlockHeight,
     snapshot: EpochSnapshot<'r>,
     sigma_work_milli: u64,
     budget: u64,
@@ -132,7 +132,7 @@ impl J23 {
             let (Some(budget), Some(sigma_work), Some(close_height)) = (
                 view.budget(e).map_err(ViewRead::View)?,
                 view.sigma_work(e).map_err(ViewRead::View)?,
-                schedule.close_height(epoch),
+                schedule.close_height(epoch).map(BlockHeight::from_raw),
             ) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
@@ -140,10 +140,10 @@ impl J23 {
             // below the close height (`Transition::close`: `count =
             // connecting + 1 = (E + 1) · SEB`), and read the universe
             // before that connecting height.
-            let Some(closing_connected) = close_height.checked_sub(1) else {
+            let Some(closing_connected) = close_height.checked_sub_count(BlockCount::ONE) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
-            let universe = ClosedUniverse::before(view, BlockHeight::from_raw(closing_connected))?;
+            let universe = ClosedUniverse::before(view, closing_connected)?;
             let snapshot = gather_epoch_snapshot(view, &universe, records, Some(persona), |p| {
                 recorded_credits(view, *p, e)
             })?;
@@ -206,7 +206,7 @@ impl J25 {
                 inputs: EpochCloseInputs::under_schedule(
                     schedule,
                     g.epoch,
-                    g.close_height,
+                    g.close_height.to_raw(),
                     &g.snapshot.bonds,
                     &g.snapshot.shards,
                     &g.snapshot.pairs,

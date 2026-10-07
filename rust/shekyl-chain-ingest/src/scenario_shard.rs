@@ -35,7 +35,7 @@
 
 use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::archival::SHARD_LENGTH;
-use shekyl_types::{BlockCount, BlockHeight, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, ShardId};
 use shekyl_wire::Transaction;
 
 use crate::archival_driver::{first_spending_height, FEE};
@@ -117,7 +117,7 @@ pub async fn mine_to(
     chain: &mut Vec<Mined>,
     height: BlockHeight,
 ) {
-    while next_height(chain) < height.to_raw() {
+    while next_height(chain) < height {
         let block = scenario
             .mine_listing(Vec::new())
             .await
@@ -126,8 +126,10 @@ pub async fn mine_to(
     }
 }
 
-fn next_height(chain: &[Mined]) -> u64 {
-    u64::try_from(chain.len()).expect("a test chain's length is a height")
+/// The height the chain's next block connects at: its length, as a count.
+fn next_height(chain: &[Mined]) -> BlockHeight {
+    ChainCount::from_raw(u64::try_from(chain.len()).expect("a test chain's length is a count"))
+        .next_height()
 }
 
 /// Fill the chain with real spends until `want` shards are closed. Spends
@@ -162,7 +164,12 @@ pub async fn close_shards(
     .await;
     let mut spender = Spender::over(chain);
     let per_spend = spender
-        .spend_coinbase(scenario.wallet(), first_coinbase, next_height(chain), FEE)
+        .spend_coinbase(
+            scenario.wallet(),
+            BlockHeight::from_raw(first_coinbase),
+            next_height(chain),
+            FEE,
+        )
         .archival_len()
         .to_raw();
     assert!(per_spend > 0, "a driven spend carries archival good");
@@ -198,7 +205,7 @@ pub async fn close_shards(
         let connecting = next_height(chain);
         // Coinbase `c` is spendable at `c + maturity`; the matured supply not
         // yet spent, bounded by the batch.
-        let matured_through = connecting.saturating_sub(maturity);
+        let matured_through = connecting.to_raw().saturating_sub(maturity);
         let available = (matured_through + 1).saturating_sub(next_coinbase);
         let batch = usize::try_from(available)
             .expect("small")
@@ -206,7 +213,7 @@ pub async fn close_shards(
         if pending.is_empty() && batch == 0 {
             // The supply ran short of the bound: one empty block matures
             // one more coinbase.
-            mine_to(scenario, chain, BlockHeight::from_raw(connecting + 1)).await;
+            mine_to(scenario, chain, connecting + BlockCount::ONE).await;
             spender.push(chain.last().expect("mined"));
             continue;
         }
@@ -219,7 +226,9 @@ pub async fn close_shards(
                 .map(|&c| {
                     let spender = &spender;
                     let wallet = scenario.wallet();
-                    s.spawn(move || spender.spend_coinbase(wallet, c, connecting, FEE))
+                    s.spawn(move || {
+                        spender.spend_coinbase(wallet, BlockHeight::from_raw(c), connecting, FEE)
+                    })
                 })
                 .collect();
             handles

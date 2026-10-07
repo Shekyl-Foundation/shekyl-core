@@ -147,8 +147,8 @@ impl LeveredChain {
         let riding = |chain: &[Mined], scenario: &Scenario<FreeHash>, height: BlockHeight| {
             Spender::over(chain).spend_coinbase_posting(
                 scenario.wallet(),
-                0,
-                height.to_raw(),
+                BlockHeight::ZERO,
+                height,
                 FEE,
                 Some(&persona.join(shard_set(vec![unserved, served]), ENDPOINT)),
             )
@@ -347,8 +347,8 @@ impl LeveredChain {
             let spender = Spender::over(&self.chain);
             spender.spend_coinbase_posting(
                 self.scenario.wallet(),
-                1,
-                reinstate_height.to_raw(),
+                BlockHeight::from_raw(1),
+                reinstate_height,
                 FEE,
                 Some(&join.persona.reinstate(&slashed.record)),
             )
@@ -430,8 +430,8 @@ impl LeveredChain {
             let riding = |bond| {
                 spender.spend_coinbase_posting(
                     self.scenario.wallet(),
-                    2,
-                    height.to_raw(),
+                    BlockHeight::from_raw(2),
+                    height,
                     FEE,
                     Some(&bond),
                 )
@@ -516,8 +516,8 @@ impl LeveredChain {
             .release(reinstated.stored.bonded_total.to_raw());
         let at_deadline = Spender::over(&self.chain).spend_coinbase_posting(
             self.scenario.wallet(),
-            2,
-            boundary,
+            BlockHeight::from_raw(2),
+            BlockHeight::from_raw(boundary),
             FEE,
             Some(&full_release),
         );
@@ -539,8 +539,8 @@ impl LeveredChain {
         self.chain.push(settling);
         let past_boundary = Spender::over(&self.chain).spend_coinbase_posting(
             self.scenario.wallet(),
-            2,
-            boundary + 1,
+            BlockHeight::from_raw(2),
+            BlockHeight::from_raw(boundary + 1),
             FEE,
             Some(&full_release),
         );

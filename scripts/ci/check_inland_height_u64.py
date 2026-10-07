@@ -125,7 +125,7 @@ SCOPE = (
 # next-block height is `BlockHeight`, and `scenario_archival_tests.rs`'s
 # local `first_spending_height() -> u64` moved to `archival_driver` as
 # `BlockHeight`).
-GRANDFATHER_CEILING = 166
+GRANDFATHER_CEILING = 162
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

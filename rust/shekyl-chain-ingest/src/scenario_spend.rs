@@ -310,9 +310,9 @@ impl Spender {
 
     /// The wallet-side tree's root going into `height` — the state the
     /// header at `height` commits to, keyed as the store's `root_at` is.
-    pub fn root_at(&self, height: u64) -> CurveTreeRoot {
+    pub fn root_at(&self, height: BlockHeight) -> CurveTreeRoot {
         self.client
-            .root_at(shekyl_curve_tree::BlockHeight::from_raw(height))
+            .root_at(shekyl_curve_tree::BlockHeight::from_raw(height.to_raw()))
             .expect("a height at or below the ingested tip")
     }
 
@@ -323,8 +323,8 @@ impl Spender {
     pub fn spend_coinbase(
         &self,
         wallet: &MinerWallet,
-        height: u64,
-        connecting: u64,
+        height: BlockHeight,
+        connecting: BlockHeight,
         fee: u64,
     ) -> Transaction {
         self.spend_coinbase_posting(wallet, height, connecting, fee, None)
@@ -342,8 +342,8 @@ impl Spender {
     pub fn spend_coinbase_posting(
         &self,
         wallet: &MinerWallet,
-        height: u64,
-        connecting: u64,
+        height: BlockHeight,
+        connecting: BlockHeight,
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
@@ -367,7 +367,7 @@ impl Spender {
         tx: &Transaction,
         index_in_tx: u64,
         gindex: u64,
-        connecting: u64,
+        connecting: BlockHeight,
     ) -> Sourced {
         let at = usize::try_from(index_in_tx).expect("small");
         let fields = parse(&tx.prefix.extra).expect("the transaction's extra parses");
@@ -416,14 +416,13 @@ impl Spender {
                 .expect("key image");
 
         // The path, from the wallet-side tree at the reference height.
-        let reference_height = newest_admissible_reference(BlockHeight::from_raw(connecting))
-            .expect("connecting height admits a reference")
-            .to_raw();
+        let reference_height =
+            newest_admissible_reference(connecting).expect("connecting height admits a reference");
         let reference = ReferenceBlock {
-            height: shekyl_curve_tree::BlockHeight::from_raw(reference_height),
+            height: shekyl_curve_tree::BlockHeight::from_raw(reference_height.to_raw()),
             curve_tree_root: self.root_at(reference_height),
             block_hash: shekyl_curve_tree::BlockHash::from_bytes(
-                self.hashes[usize::try_from(reference_height).expect("small")].to_bytes(),
+                self.hashes[usize::try_from(reference_height.to_raw()).expect("small")].to_bytes(),
             ),
         };
         let path = self
@@ -473,7 +472,12 @@ impl Spender {
     /// Source a watched output ([`Self::own`]) that a pushed block has
     /// listed, for `owner`, anchored for a spend connecting at
     /// `connecting`. Panics if no pushed block listed `output_key`.
-    pub fn owned_input(&self, owner: &Owner<'_>, output_key: [u8; 32], connecting: u64) -> Sourced {
+    pub fn owned_input(
+        &self,
+        owner: &Owner<'_>,
+        output_key: [u8; 32],
+        connecting: BlockHeight,
+    ) -> Sourced {
         let located = self
             .located
             .get(&output_key)
@@ -495,14 +499,14 @@ impl Spender {
     pub fn spend_coinbase_to(
         &self,
         wallet: &MinerWallet,
-        height: u64,
-        connecting: u64,
+        height: BlockHeight,
+        connecting: BlockHeight,
         fee: u64,
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
     ) -> Transaction {
-        let coinbase = &self.coinbases[usize::try_from(height).expect("small")];
-        let gindex = self.first_gid[usize::try_from(height).expect("small")];
+        let coinbase = &self.coinbases[usize::try_from(height.to_raw()).expect("small")];
+        let gindex = self.first_gid[usize::try_from(height.to_raw()).expect("small")];
         let Sourced {
             input: spend_input,
             key_image,
@@ -530,7 +534,7 @@ impl Spender {
         let change_amount = spendable - payment_amount;
         let tx_secret = {
             let mut s = [0u8; 32];
-            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting).to_le_bytes());
+            s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
             s
         };
         let pay = |amount: u64, index: u64| -> OutputData {

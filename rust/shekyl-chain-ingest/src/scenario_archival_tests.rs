@@ -95,7 +95,7 @@ use shekyl_chain_rules::{Accrual, Candidate, CenRow, Locus, RecordWriteKind, Rul
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::store::{StoreCannot, StoreError};
 use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::{Input, Transaction};
@@ -116,17 +116,13 @@ use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Script
 
 /// The settlement epoch open at `height` under the genesis rule set — the
 /// epoch a join at `height` records and a credit at `height` is keyed by.
-fn epoch_at(height: u64) -> SettlementEpoch {
-    SettlementEpoch::from_raw(
-        RuleSet::GENESIS
-            .settlement_schedule()
-            .epoch_at_height(height),
-    )
+fn epoch_at(height: BlockHeight) -> SettlementEpoch {
+    RuleSet::GENESIS.settlement_schedule().epoch_at(height)
 }
 
 /// The same under the levered schedule the join test mines.
-fn levered_epoch_at(height: u64) -> SettlementEpoch {
-    SettlementEpoch::from_raw(levered_schedule().epoch_at_height(height))
+fn levered_epoch_at(height: BlockHeight) -> SettlementEpoch {
+    levered_schedule().epoch_at(height)
 }
 
 /// The first coinbase the join test's fill spends; the posts ride 0–3.
@@ -176,9 +172,8 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
             .max()
             .expect("two shards closed"),
         2,
-    )
-    .to_raw();
-    mine_to(&mut scenario, &mut mined, BlockHeight::from_raw(connecting)).await;
+    );
+    mine_to(&mut scenario, &mut mined, connecting).await;
     let mut spender = Spender::over(&mined);
 
     let compact = Persona::at(1);
@@ -186,8 +181,20 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let join_compact = compact.join(shard_set(shards.clone()), ENDPOINT);
     let join_whole = whole.join(complete_tree(), ENDPOINT);
     let listed = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join_compact)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&join_whole)),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join_compact),
+        ),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(1),
+            connecting,
+            FEE,
+            Some(&join_whole),
+        ),
     ];
     let epoch = levered_epoch_at(connecting);
     // The first epoch a persona joining in `epoch` may serve (CEN-J5).
@@ -202,7 +209,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         .mine_listing(listed)
         .await
         .unwrap_or_else(|outcome| panic!("two joins connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(connecting));
+    assert_eq!(block.height, connecting);
     for row in [
         CenRow::H21,
         CenRow::I18,
@@ -305,7 +312,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // J4, J5 and J6 over the persisted record (SI-15's row keyed to it),
     // and a release of the other persisted record is its `Update` — bonded
     // to zero, holding nothing, one clean interval close at the open epoch.
-    let next = connecting + 1;
+    let next = connecting + BlockCount::ONE;
     // A debit that is not the persisted total is CEN-J16's
     // (`DebitNotFullBalance`) at the post input — J13 passes it first,
     // the slot being `bond_spend_pk`'s; the fold's `DebitNotRecordTotal`
@@ -316,7 +323,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                2,
+                BlockHeight::from_raw(2),
                 next,
                 FEE,
                 Some(&wrong_debit),
@@ -332,11 +339,17 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let block = scenario
         .mine_listing(vec![
             compact.serve_credit(0, serving.to_raw()),
-            spender.spend_coinbase_posting(scenario.wallet(), 2, next, FEE, Some(&release_whole)),
+            spender.spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::from_raw(2),
+                next,
+                FEE,
+                Some(&release_whole),
+            ),
         ])
         .await
         .unwrap_or_else(|outcome| panic!("a credit and a release connect: {outcome}"));
-    assert_eq!(block.height, BlockHeight::from_raw(next));
+    assert_eq!(block.height, next);
     for row in [CenRow::H20, CenRow::J4, CenRow::J5, CenRow::J6] {
         assert!(block.judged_by.contains(&row), "{row} judged the credit");
     }
@@ -398,7 +411,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     // nothing and its only interval is a clean close, so CEN-J18 has
     // nothing to reinstate. Each is refused at the post's own input; the
     // chain stays where it was.
-    let after = next + 1;
+    let after = next + BlockCount::ONE;
     let at_post = Locus::Input {
         slot: TxSlot::Listed(0),
         input: 1,
@@ -408,7 +421,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                3,
+                BlockHeight::from_raw(3),
                 after,
                 FEE,
                 Some(&rejoin),
@@ -424,7 +437,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                3,
+                BlockHeight::from_raw(3),
                 after,
                 FEE,
                 Some(&reinstate),
@@ -447,7 +460,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         scenario
             .mine_listing(vec![spender.spend_coinbase_posting(
                 scenario.wallet(),
-                3,
+                BlockHeight::from_raw(3),
                 after,
                 FEE,
                 Some(&under_bonded),
@@ -480,9 +493,11 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
 /// row 2 held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-refusals");
-    let mined = scenario.mine(connecting).await;
+    let mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(3);
     let epoch = epoch_at(connecting);
@@ -492,8 +507,15 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     };
     // Every post spends block 0's coinbase at the same height — a refused
     // block leaves the chain where it was, so one funding serves them all.
-    let riding =
-        |bond| spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&bond));
+    let riding = |bond| {
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&bond),
+        )
+    };
 
     // A release (through `build_release_vin`, `bond_spend_sk` signing the
     // slot, the debit a source the outputs grow by) with no record to
@@ -579,9 +601,11 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
 /// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open("scenario-archival-g10");
-    let mined = scenario.mine(connecting).await;
+    let mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(4);
     let second = Locus::Input {
@@ -594,16 +618,40 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
     let join = persona.join(complete_tree(), ENDPOINT);
     let release = persona.release(ARCHIVAL_BOND_FLOOR_ATOMIC);
     let listed: Vec<Transaction> = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&release)),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        ),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(1),
+            connecting,
+            FEE,
+            Some(&release),
+        ),
     ];
     refused_at(scenario.mine_listing(listed).await, CenRow::J16, second);
     // The refused block wrote nothing, so both joins read no record and
     // J14 passes each; G10 counts the second.
     let again = persona.join(complete_tree(), ENDPOINT);
     let joins: Vec<Transaction> = vec![
-        spender.spend_coinbase_posting(scenario.wallet(), 0, connecting, FEE, Some(&join)),
-        spender.spend_coinbase_posting(scenario.wallet(), 1, connecting, FEE, Some(&again)),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::ZERO,
+            connecting,
+            FEE,
+            Some(&join),
+        ),
+        spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(1),
+            connecting,
+            FEE,
+            Some(&again),
+        ),
     ];
     refused_at(scenario.mine_listing(joins).await, CenRow::G10, second);
     scenario.close().await;
@@ -615,16 +663,18 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
 /// join would need a closed, final, priced shard (CEN-J15), this chain
 /// closes none, and the injected credit is the subject, not the holding.
 async fn bonded_chain(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Persona) {
-    let connecting = first_spending_height().to_raw();
+    let connecting = first_spending_height();
     let mut scenario = Scenario::open(name);
-    let mut mined = scenario.mine(connecting).await;
+    let mut mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(1);
     let join = persona.join(complete_tree(), ENDPOINT);
     let joined = scenario
         .mine_listing(vec![spender.spend_coinbase_posting(
             scenario.wallet(),
-            0,
+            BlockHeight::ZERO,
             connecting,
             FEE,
             Some(&join),
@@ -657,7 +707,7 @@ async fn an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row() {
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(tip.to_raw()),
+        epoch: epoch_at(tip),
     };
     let Injected { at } = connector
         .ask(Inject(credit))
@@ -747,7 +797,7 @@ async fn a_replayed_inject_is_reported_as_its_receipt_and_a_rewind_below_it_is_r
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(injected_at.to_raw()),
+        epoch: epoch_at(injected_at),
     };
     // The driver's clock, advanced past every block the scenario mined.
     let clock = || {
@@ -856,7 +906,7 @@ async fn an_inject_at_the_covered_tip_commits_before_the_checkpoint_is_compared(
     let credit = ServeCredit {
         persona: persona.id(),
         shard: ShardId::from_raw(7),
-        epoch: epoch_at(tip.to_raw()),
+        epoch: epoch_at(tip),
     };
     let connector = scenario.connector();
     let Injected { at } = connector
