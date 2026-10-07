@@ -51,7 +51,6 @@ namespace detail
     std::mutex mu;
     zone_binding* clearnet = nullptr;
     zone_binding* tor = nullptr;
-    bool seam_bound = false;
   };
 
   inline zone_slots& slots()
@@ -91,19 +90,18 @@ namespace detail
     target->enqueue(id, kind, stored, have, std::move(copy));
   }
 
+  /// The hub is the binding. The relay harness clears it with a null
+  /// `shekyl_seam_bind` when that test finishes, and the next listen
+  /// installs this zone's hub again. A flag set on the first bind would
+  /// stay set across that clear: the listen would only refresh a ceiling
+  /// on a hub that is no longer there, and every later port would fail.
   inline bool ensure_seam(const shekyl_inbound_ceiling& ceiling)
   {
     std::lock_guard<std::mutex> lock(slots().mu);
-    if (slots().seam_bound)
-    {
-      shekyl_seam_set_ceiling(&ceiling);
-      return true;
-    }
+    if (shekyl_seam_is_bound() != 0)
+      return shekyl_seam_set_ceiling(&ceiling) == 0;
     static int ctx = 1;
-    if (shekyl_seam_bind(&ctx, &zone_post, &ceiling) != 0)
-      return false;
-    slots().seam_bound = true;
-    return true;
+    return shekyl_seam_bind(&ctx, &zone_post, &ceiling) == 0;
   }
 
   inline void register_binding(std::uint32_t connector, zone_binding* binding)

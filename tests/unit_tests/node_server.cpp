@@ -1978,7 +1978,7 @@ namespace
         shekyl_seam_reap(socket_id);
       }
       // The relay puppet has no hub. Leaving this one bound would make
-      // its sessions look absent.
+      // its sessions look absent. The zone's next listen installs its own.
       shekyl_seam_bind(nullptr, nullptr, nullptr);
     }
 
@@ -2300,4 +2300,25 @@ TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
   d.server->change_max_out_public_peers(8);
   EXPECT_GT(d.server->get_max_in_public_peers(), after)
     << "lowering the outbound reserve must return the headroom";
+}
+
+// The relay harness unbinds the process hub when it returns. A listen
+// that remembered the first bind and only refreshed the ceiling then
+// found no hub, and every later fixed port in this suite failed at once.
+// These two ports are otherwise unused here, so a leftover listener is
+// not what a red result is reporting.
+TEST(node_server, a_cleared_seam_is_bound_again_on_the_next_listen)
+{
+  {
+    in_peers_fixture first;
+    ASSERT_TRUE(first.init("48096", -1));
+    first.server->deinit();
+  }
+  ASSERT_EQ(0, shekyl_seam_bind(nullptr, nullptr, nullptr));
+  ASSERT_EQ(0, shekyl_seam_is_bound());
+
+  in_peers_fixture second;
+  ASSERT_TRUE(second.init("48097", -1))
+    << "the next listen installs the hub again";
+  second.server->deinit();
 }
