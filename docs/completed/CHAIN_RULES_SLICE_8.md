@@ -1,6 +1,22 @@
 # `shekyl-chain-rules` slice 8 — census 4.J, the archival admission rules, and the 4.B row that waited for the bond record (DRS-E6 increment 9)
 
-**Status:** OPEN — **§5 rows 1–5 LANDED on PR-a (#953, 2026-10-04/05,
+**Status:** CLOSED-as-record — **implementation LANDED 2026-10-06**: §5
+rows 1–5 on PR-a (#953, 2026-10-04/05), rows 6–11 on PR-b (#983; open
+at this commit, merged when `dev` takes it). Record:
+`implemented 116 / validator-enforced 151` (`97 + 18 + 1`; I13 and I15
+held `pending` on the Spend class for a ruling, §5 row 9), `4.J 19 / 25`,
+`4.B 6 / 7`, `4.I 18 / 20`; §5.1 closed at 32 commits against eighteen,
+the signal fired, row 6's corpus leg the cause the estimate did not
+name. **Open residue lives in FOLLOWUPS, not here** (the I13/I15 flip
+and the bond post's funding-spend judgement, owner
+[`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md) §5 rows
+6/8; the attestation-record producer, owner
+[`ARCHIVAL_CREDIT_WIRE.md`](../design/ARCHIVAL_CREDIT_WIRE.md)). Do not
+implement from this file; the living contracts are
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6 and the
+census's 4.J, B4, A3, H21, I13 and I15 cells.
+*Records-was, the banner as it stood while the slice was open:* OPEN —
+**§5 rows 1–5 LANDED on PR-a (#953, 2026-10-04/05,
 ruled as PR-a's scope under Q7 (a), §5); rows 6–10 LANDED on PR-b (#983,
 2026-10-06: J15, the driver's emission claim with its byte-identity pin,
 the emission statics J19/J20/J22/J24, the emission verify J21/J23/J25/J26
@@ -18,8 +34,8 @@ verifier's Round 0; post-#942, CEN-J2; post-#937, DRS-E4 archived).
 implementation, not the pre-flight record" until 2026-10-05, five landed
 rows after it stopped being true. Registered before
 implementation (rule 94 §5): the DRS-E6 row in
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) and the doc row in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 name this file. No
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) and the doc row in
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §7 name this file. No
 identifier family is minted here: the slice's rows are the census's
 `CEN-J*` and `CEN-B4`, its questions are `Q1…Q8` of §8 (Q9 struck by
 ruling, kept as a numbered line so nothing re-uses it) scoped to this
@@ -74,15 +90,15 @@ Branch commits are named by PR and subject, never by SHA (slice 6's rule at
 its head, inherited). A `dev` SHA is an era; every line number in this file
 is read at `01a4494f1a` unless its sentence says otherwise.
 
-Parent: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6 (`validate`),
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 (the 4.J row, `:1785`,
+Parent: [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6 (`validate`),
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5 (the 4.J row, `:1785`,
 and the DRS-E6 row, `:1336`). Census:
-[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §4.J (`:478–519`) and
+[`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md) §4.J (`:478–519`) and
 CEN-B4 (`:338`). The state this slice judges over was delivered by DRS-E4
-([`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md),
+([`DRS_E4_ARCHIVAL_WRITER.md`](DRS_E4_ARCHIVAL_WRITER.md),
 archived; §2.3 *What E6 slice 8 gets*). The serve-credit rows this slice
 does **not** build had their own Round 0 —
-[`SERVE_CREDIT_VERIFIER.md`](../completed/SERVE_CREDIT_VERIFIER.md), closed
+[`SERVE_CREDIT_VERIFIER.md`](SERVE_CREDIT_VERIFIER.md), closed
 as record 2026-10-04 — and now belong to SO-D8 Slice C (§1.2 below).
 
 ---
@@ -161,7 +177,7 @@ wants — FOLLOWUPS `:190`).
   `bond_records` — every operand the 4.J rows and B4 consume, each with
   `BatchView` and `MockChain` bodies and the store's conformance test
   (DRS-E4 commits 1–4, PR #914). `r_market` / `sigma_work` / `budget`
-  return `Option` (`SAR-Q6`, [`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md)
+  return `Option` (`SAR-Q6`, [`DRS_E1_SARCH.md`](DRS_E1_SARCH.md)
   `:609`): the store stopped erasing absence so that this slice can ask
   what absence means (§3.3, Q4).
 - **The transition and L7** (`archival/mod.rs`, `inputs.rs`, `slash.rs`,
@@ -217,7 +233,7 @@ Three dispositions are made here, at the start, so the slice's record is
 honest from its first commit rather than corrected at its fourth.
 
 **1. CEN-J8, J9 and J10 are not this slice's; nor, with them, are J1, J3
-and J7.** [`SERVE_CREDIT_VERIFIER.md`](../completed/SERVE_CREDIT_VERIFIER.md)
+and J7.** [`SERVE_CREDIT_VERIFIER.md`](SERVE_CREDIT_VERIFIER.md)
 was their Round 0 — not this slice's. The seam is the one DRS-E4 drew when it scoped the
 verifier out of itself (`DRS_E4_ARCHIVAL_WRITER.md` §2.2, RULED 2026-09-29:
 *E4 owns the typed state and the transition, slice 8 owns the 4.J rule that
@@ -241,7 +257,7 @@ be deleted at Slice C. So they go with the surface.
 first draft of this item kept J1 — *the vin is an opaque blob; only the
 Rust codec parses it* (census `:484`) — as an eligibility row. Slice C's
 surface as ruled is **"the successors of CEN-J1–J3 and J7–J10"**
-([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](../design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
 §8.0 `:2240`, AUTHORIZED 2026-10-04), and the census says why: J1 is the
 vin's codec-parse row, and the codec parses the R-B record whose layout is
 Slice C's Round 0 input 2 (`SCV-3`; §8.0 `:2253–2259`). A parse rule moves
@@ -385,8 +401,8 @@ between the pure module `engine/emission_claim.rs` and the `StakeEngine`
 handler that adds the membership-only proof and the dual auth — the driver
 needs the latter half, which no builder crate exposes today; Q3); a
 witness-supplying path for B4; and the per-row perturbations.
-[`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5.3.3 and
-[`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md) §5.1 row 2
+[`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md) §5.3.3 and
+[`CHAIN_RULES_SLICE_7.md`](CHAIN_RULES_SLICE_7.md) §5.1 row 2
 both measured the first attempt at anything the driver has never done at
 **one commit each**; slice 7's estimate missed
 by 20 % (fifteen estimated, eighteen landed) *with* corpus witnesses for its
@@ -592,7 +608,7 @@ reads the **last settled epoch's** row per held shard:
 - **Default: `None` ⇒ the shard is not admissible yet.** A shard with no
   market row at the last settled epoch is one the market has never priced;
   under `PDM-Q6` item 3 the frontier shard is non-bondable
-  ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+  ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md)
   `:706–707`), and a shard
   that closed *after* the last settled close is in the same position with
   respect to the operand admission reads. Refusing it is the fail-closed
@@ -609,7 +625,7 @@ let the store collapse *absent* into *zero* precisely so admission could
 decide this on merit; and `None ⇒ 0` asserts a market value nobody computed
 on a consensus admission decision, which is `SPL-14`'s shape one domain
 over
-([`RELAY_STATE_REFERENCE_SHAPES.md`](RELAY_STATE_REFERENCE_SHAPES.md) §4 —
+([`RELAY_STATE_REFERENCE_SHAPES.md`](../design/RELAY_STATE_REFERENCE_SHAPES.md) §4 —
 a missing value resolving to the permissive answer). Third site for that
 defect, second time ruled against. The view's `Option` is what let the
 question be asked, which is what `SAR-Q6` said it was for.
@@ -620,7 +636,7 @@ question be asked, which is what `SAR-Q6` said it was for.
 `closed_shards_before` (`rules/miner.rs:564`, the F17 read) with
 `shard_close_height` (`archival/close.rs:51`). The predicate — *bond
 admission accepts only valid, closed, final shards* (RULED 2026-09-19,
-[`ARCHIVAL_BOND_ADD_ADMISSION.md`](ARCHIVAL_BOND_ADD_ADMISSION.md)) — has
+[`ARCHIVAL_BOND_ADD_ADMISSION.md`](../design/ARCHIVAL_BOND_ADD_ADMISSION.md)) — has
 no census id. The row leaves three questions open, and the substrate at the
 pin answers each:
 
@@ -690,7 +706,7 @@ slash it reads — in terms J15's implementer can test without reading
 SO-D8 §8.0. PR-b's row 6 does not land until that sentence exists.
 
 **Answered 2026-10-06 — the sentence exists**
-([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](../design/ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
 §8.0 input 4). Three things for row 6, each stated there: (1) the
 signature gains a fourth parameter, the in-force `RuleSet::reorg_cap()`,
 because the finality leg's cap is rule-set data a `ChainView` does not
@@ -1067,7 +1083,7 @@ and `4.B 6 / 7` as derived; `4.I 18 / 20`.
   post's. **Trigger, recorded before the evidence exists: a third re-made
   assembly makes extraction the answer**, not a fourth re-making. Row 11
   carries the trigger into the crate contract so it outlives this file's
-  archive — done: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6
+  archive — done: [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6
   (2026-10-06).
 - **The bond post's funding-spend judgement** — CEN-H21's funding clause:
   the C++ bond arm judges the funding spends' reference, window, root,
