@@ -4908,6 +4908,7 @@ dependencies = [
  "hmac",
  "kameo",
  "libc",
+ "serde_json",
  "sha2",
  "shekyl-onion-v3",
  "tempfile",

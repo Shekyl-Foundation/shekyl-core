@@ -856,44 +856,35 @@ async fn handshake(
     Ok((reader, writer, framer))
 }
 
-/// Spawn a **managed** `tor` (DQ-T0.1): the caller's `DataDirectory`, `ControlPort
-/// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
-/// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
-/// flag). Waits (bounded) for the control-port file + cookie, then returns the child plus
-/// the `(control_addr, cookie_path)` the handshake connects with. `kill_on_drop` is the
-/// last-resort backstop.
-async fn spawn_managed_tor(
-    managed: ManagedTor,
-) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
-    // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
-    // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
-    // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
-    // brief window before that is an empty dir, no secrets yet.
-    tokio::fs::create_dir_all(&managed.data_dir)
-        .await
-        .map_err(|_| ControlError::Spawn)?;
-    let port_file = managed.data_dir.join("control_port");
-    // A stale port file from a prior run would be read as *this* run's port — remove it so
-    // `wait_for_control_port` can only ever return a fresh value. `NotFound` is the normal
-    // case (no prior run); any *other* error means a stale file we could not clear, so fail
-    // fast rather than risk connecting to a stale control address. Async fs throughout so
-    // the spawn never blocks a runtime worker (this actor is the pattern for future socket
-    // actors — the async I/O should be correct, not just fast enough here).
-    if let Err(e) = tokio::fs::remove_file(&port_file).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(ControlError::Spawn);
-        }
-    }
-
+/// Build the command line and environment the managed tor is launched with — the whole of
+/// it, so the launch a test inspects is the launch a user gets. Split from
+/// [`spawn_managed_tor`] for exactly that reason: `std::process::Command` has no getter
+/// for "the environment was cleared", so the only honest test spawns through this.
+fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process::Command {
     // The witness type guarantees this path passed the hash-pin gate and is canonical
     // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
     let mut cmd = tokio::process::Command::new(managed.tor_binary.as_path());
+    // The child gets **no inherited environment** (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part
+    // 2). `LD_PRELOAD`, `LD_LIBRARY_PATH` or `DYLD_INSERT_LIBRARIES` from a shell, a unit
+    // file or a profile would load code into the process whose files were just verified,
+    // which makes the pin a check on the wrong thing. Everything tor needs from us it gets
+    // as an argument below.
+    cmd.env_clear();
+    // And at most one variable goes back in: on Linux, the loader's search path, set to
+    // the directory the gate checked. The bundle's `tor` has no `RPATH`, so without this
+    // it takes libevent and OpenSSL from the system. The directory comes from the witness
+    // and from nowhere else — it is the parent of the canonical path, computed once at
+    // verification — so the place that was checked is the place that is loaded from.
+    #[cfg(target_os = "linux")]
+    if let Some(dir) = managed.tor_binary.library_dir() {
+        cmd.env("LD_LIBRARY_PATH", dir);
+    }
     cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
         .arg("auto")
         .arg("--ControlPortWriteToFile")
-        .arg(&port_file)
+        .arg(port_file)
         .arg("--CookieAuthentication")
         .arg("1")
         .arg("--SocksPort")
@@ -949,6 +940,39 @@ async fn spawn_managed_tor(
     if managed.disable_network {
         cmd.arg("--DisableNetwork").arg("1");
     }
+    cmd
+}
+
+/// Spawn a **managed** `tor` (DQ-T0.1): the caller's `DataDirectory`, `ControlPort
+/// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
+/// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
+/// flag). Waits (bounded) for the control-port file + cookie, then returns the child plus
+/// the `(control_addr, cookie_path)` the handshake connects with. `kill_on_drop` is the
+/// last-resort backstop.
+async fn spawn_managed_tor(
+    managed: ManagedTor,
+) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
+    // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
+    // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
+    // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
+    // brief window before that is an empty dir, no secrets yet.
+    tokio::fs::create_dir_all(&managed.data_dir)
+        .await
+        .map_err(|_| ControlError::Spawn)?;
+    let port_file = managed.data_dir.join("control_port");
+    // A stale port file from a prior run would be read as *this* run's port — remove it so
+    // `wait_for_control_port` can only ever return a fresh value. `NotFound` is the normal
+    // case (no prior run); any *other* error means a stale file we could not clear, so fail
+    // fast rather than risk connecting to a stale control address. Async fs throughout so
+    // the spawn never blocks a runtime worker (this actor is the pattern for future socket
+    // actors — the async I/O should be correct, not just fast enough here).
+    if let Err(e) = tokio::fs::remove_file(&port_file).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(ControlError::Spawn);
+        }
+    }
+
+    let mut cmd = managed_tor_command(&managed, &port_file);
     let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
 
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
@@ -1396,6 +1420,115 @@ mod tests {
     // The actor's I/O paths (handshake, command correlation, event drain) are
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
+
+    /// Set in the re-executed copy of this test binary, to the directory the shim
+    /// `tor` and its environment dump live in.
+    #[cfg(unix)]
+    const ENV_TEST_DIR: &str = "SHEKYL_TEST_LAUNCHER_ENV_DIR";
+
+    /// TB-7 part 2: the managed tor inherits nothing from its parent's environment,
+    /// and on Linux gets back exactly the loader path of its own directory.
+    ///
+    /// It has to be a real spawn through [`managed_tor_command`] — `Command` cannot be
+    /// asked whether it was cleared — and the parent has to really carry the variables,
+    /// or their absence in the child proves nothing. Rather than `set_var` in a process
+    /// shared with every other test, this test re-executes its own binary with the
+    /// variables set on that one child: the outer half spawns it and reads the result,
+    /// the inner half (which is the process whose environment is dirty) runs the launcher.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_tor_child_inherits_no_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Some(dir) = std::env::var_os(ENV_TEST_DIR) {
+            // Inner: this process's environment carries LD_PRELOAD and the sentinel.
+            assert!(std::env::var_os("LD_PRELOAD").is_some());
+            assert!(std::env::var_os("SHEKYL_TEST_SENTINEL").is_some());
+            let dir = PathBuf::from(dir);
+            let managed = ManagedTor {
+                tor_binary: VerifiedTorBinary::unchecked_for_test(dir.join("tor")),
+                data_dir: dir.join("data"),
+                socks_port: SocksPort::Auto,
+                disable_network: true,
+                exit_observer: None,
+            };
+            let status = managed_tor_command(&managed, &dir.join("control_port"))
+                .spawn()
+                .expect("spawn the shim")
+                .wait()
+                .await
+                .expect("wait for the shim");
+            assert!(status.success(), "shim exited {status}");
+            return;
+        }
+
+        // Outer: stage a shim `tor` that writes its environment where `--DataDirectory`
+        // (its second argument) points, then run the inner half with a dirty environment.
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(dir_path.join("data")).unwrap();
+        let shim = dir_path.join("tor");
+        std::fs::write(&shim, "#!/bin/sh\nexec /usr/bin/env > \"$2/environ\"\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let test_name = concat!(
+            module_path!(),
+            "::managed_tor_child_inherits_no_environment"
+        )
+        .split_once("::")
+        .expect("module path has a crate segment")
+        .1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+            .env(ENV_TEST_DIR, &dir_path)
+            // A path that does not exist: the loader warns and carries on, so the
+            // re-executed test binary itself still runs.
+            .env("LD_PRELOAD", "/nonexistent/shekyl-test-preload.so")
+            .env("SHEKYL_TEST_SENTINEL", "must-not-reach-tor")
+            .output()
+            .expect("re-execute the test binary");
+        assert!(
+            output.status.success(),
+            "inner half failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The inner half must have run the test, not matched nothing and exited 0.
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "inner half ran no test:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+
+        let environ = std::fs::read_to_string(dir_path.join("data").join("environ"))
+            .expect("the shim wrote its environment");
+        // Names and values apart, and **only names ever reach a failure message**: when
+        // this test fails it is because the parent's environment leaked into the child,
+        // and a developer's or a runner's environment holds credentials.
+        let vars: Vec<(&str, &str)> = environ
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            // What `/bin/sh` sets for itself on the way to `exec`; not inherited.
+            .filter(|(name, _)| !matches!(*name, "PWD" | "SHLVL" | "_"))
+            .collect();
+        let names: Vec<&str> = vars.iter().map(|(name, _)| *name).collect();
+        assert!(
+            !names.contains(&"LD_PRELOAD"),
+            "LD_PRELOAD reached the child (variables present: {names:?})"
+        );
+        assert!(
+            !names.contains(&"SHEKYL_TEST_SENTINEL"),
+            "an inherited variable reached the child (variables present: {names:?})"
+        );
+        // Exactly one variable on Linux, none elsewhere.
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(names, ["LD_LIBRARY_PATH"], "the child's whole environment");
+            assert_eq!(Path::new(vars[0].1), dir_path, "the loader path");
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert!(names.is_empty(), "the child's whole environment: {names:?}");
+    }
 
     #[test]
     fn getinfo_renders_space_separated_keys() {

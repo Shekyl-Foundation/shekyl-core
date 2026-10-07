@@ -335,10 +335,11 @@ pub fn is_degraded(policy: &SupervisorPolicy, class: FailureClass, attempt: u32)
 #[derive(Debug, Clone)]
 pub enum TorBinarySource {
     /// The ambient production path: `binary::discover_and_verify()` (env
-    /// override → beside the wallet → `PATH`), hash-gated.
+    /// override → `tor/` beside the wallet → the `/opt/shekyl` system
+    /// directory), pin-gated.
     Discover,
     /// A caller-supplied path (the wallet's settings file):
-    /// `binary::discover_and_verify_at`, hash-gated.
+    /// `binary::discover_and_verify_at`, pin-gated.
     At(PathBuf),
     /// **Test-only bypass** of the gate (lifecycle tests injecting an arbitrary
     /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`,
@@ -1063,7 +1064,7 @@ mod tests {
     #[test]
     fn classify_maps_binary_to_trust_everything_else_transient() {
         assert_eq!(
-            classify(&ServiceFailure::Binary(TorBinaryError::Unpinned)),
+            classify(&ServiceFailure::Binary(TorBinaryError::NotFound)),
             FailureClass::Trust
         );
         assert_eq!(
@@ -1111,8 +1112,10 @@ mod tests {
     #[tokio::test]
     async fn trust_failure_degrades_loudly_and_retries_forever() {
         let dir = tempfile::tempdir().unwrap();
-        // A real file that can never match CURRENT_PIN: the gate itself
-        // produces the HashMismatch (no mocks).
+        // A real file the gate can never pass: on a pinned target its
+        // directory is not the pinned bundle, and on any other target there
+        // is no managed tor at all. The gate itself produces the refusal (no
+        // mocks).
         let bogus = dir.path().join("not-tor");
         std::fs::write(&bogus, b"definitely not the pinned tor").unwrap();
         #[cfg(unix)]
@@ -1146,7 +1149,8 @@ mod tests {
                             matches!(
                                 last,
                                 ServiceFailure::Binary(
-                                    TorBinaryError::HashMismatch { .. } | TorBinaryError::Unpinned
+                                    TorBinaryError::UnexpectedEntry { .. }
+                                        | TorBinaryError::Unavailable { .. }
                                 )
                             ),
                             "degraded must carry the gate's verdict, got {last:?}"

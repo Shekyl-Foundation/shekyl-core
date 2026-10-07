@@ -3969,6 +3969,7 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 #define SHEKYL_DAEMON_TOR_NO_BINARY          3
 #define SHEKYL_DAEMON_TOR_BAD_BINARY         4
 #define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
 #define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
 #define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
 
@@ -3983,10 +3984,12 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 //! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
 //! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
 //! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
-//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
-//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
-//! down before return, so a failed start commits the caller to nothing).
+//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
+//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
+//! differs, tor's directory holds something that is not pinned, unreadable);
+//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
+//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
+//! before return, so a failed start commits the caller to nothing).
 int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
                             uint32_t bootstrap_timeout_secs,
                             char* out_socks_addr, size_t out_socks_addr_len,
