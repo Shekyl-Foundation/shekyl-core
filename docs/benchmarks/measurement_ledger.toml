@@ -277,6 +277,9 @@ stale_through = [
   { through = "bb9ce3a8c8", note = "BA-T3 seam: three blocking-pool closures in serve.rs become named functions and the 200 head is rendered by one; three bench-only compositions are added behind a feature that is not on the shipped graph. No read, hash or sign is added, removed or reordered, and a seam test holds the composition to the endpoint on bytes and on counts of opens, chunk reads and signatures. This is the commit that adds the gate; its first counts are in the manifest, section 12." },
   { through = "ac52a7a35d", note = "Review follow-up: the fold of a chunk into the delivery digest becomes one function, fold_chunk, called by write_response and by the bench compositions. Same reads, same hash, same order, still on the thread it ran on; BA-T3 moved by a few hundred instructions in 191 million." },
   { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
+  { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
+  { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
+  { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
 ]
 
 [[constant]]
@@ -729,7 +732,7 @@ needle = "| Work before the first byte | under 1 ms | not measured on the floor 
 measured_by = ["BA-T3", "BA-T5"]
 status = "estimated"
 estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
-basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,334,665 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
 basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
 carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
 path_set = "archival-serve-fetch"
