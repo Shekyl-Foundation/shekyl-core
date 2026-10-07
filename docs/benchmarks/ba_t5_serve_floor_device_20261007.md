@@ -110,11 +110,16 @@ every round.
 - The store is on the USB SSD.
 - Governor and board temperature at the start and end of every block.
   The governor is `ondemand` and cannot be changed without root.
-- Warm cache for every block except the cold blocks. **Cold cache is the
-  store file's pages only**, dropped with `dd iflag=nocache` before each
-  fetch of a cold block, because the global page cache cannot be dropped
-  without root. Whether the drop took effect is checked with `fincore` on
-  the store file and recorded.
+- Warm cache for every block except the cold blocks. **A cold fetch is
+  the first fetch of a fresh process over a store file whose pages have
+  just been dropped** (`sync`, then `dd iflag=nocache`, checked with
+  `fincore` to read zero resident bytes). Two things forced that shape.
+  The global page cache cannot be dropped without root, so only the store
+  file's pages are. And a store written by the probe's own process sits
+  in the store's in-process cache whatever the kernel has dropped, so the
+  reader has to be a new process over an existing file. The control for
+  it is the same fresh process without the drop, which separates "cold
+  disk" from "new process".
 - Nothing else runs on the device: it is held under a quiet claim.
 
 ### The signature scheme
@@ -138,7 +143,7 @@ from the same state.
 | --- | --- | --- | --- |
 | 0 | `idle` | 1 block of 10 s | What the lateness task reads when nothing is served |
 | 1 | `phase` | 4 rounds; each 50 fetches at one in flight at each of three sizes (full segment from the store, an eighth of a segment and one leaf from memory), after 5 discarded; and 25 each of read, hash and sign alone | Per-response time at three sizes, n = 200 per cell; the phase split, n = 100 per cell |
-| 2 | `cold` | 1 block of 10 fetches, store pages dropped before each | First-read cost from the SSD |
+| 2 | `cold` | 10 fresh-process fetches with the store's pages dropped before each, and 10 without the drop as the control | First-read cost from the SSD, apart from the cost of a new process |
 | 3 | `load` | 6 rounds of 128 fetches at eight in flight, full segment from the store | Throughput and wake lateness. Six blocks per arm, to settle run 3's 59.6 against 39.7 |
 | 4 | `abandon` | 2 rounds of 200 abandoned requests per cell: not held, one leaf, full segment from memory, full segment from the store | Line (a), n = 400 per cell |
 | 5 | `sustain` | 1 hour at one fetch every 2 s, full segment from the store, B then A | Lines (c) and (d) |

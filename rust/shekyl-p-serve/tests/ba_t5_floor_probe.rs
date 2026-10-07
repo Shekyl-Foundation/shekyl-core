@@ -234,28 +234,39 @@ struct Served {
     provider: Arc<Shards>,
     lateness: Arc<Mutex<Vec<u64>>>,
     sampling: Arc<AtomicBool>,
-    store_file: String,
 }
 
 impl Served {
     fn start() -> Self {
         let dir = env("BAT5_STORE").expect("BAT5_STORE = a scratch directory for the store");
-        // A scratch directory from an earlier block may or may not be there.
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).expect("mkdir");
         let store_file = format!("{dir}/leaves.redb");
+        // `BAT5_REUSE`: open the store a previous invocation left, without
+        // writing it again. A cold block needs this: a store written by
+        // this process is in the store's own in-process cache whatever the
+        // kernel has dropped, so only a fresh process over an existing
+        // file reads from the disk.
+        let reuse = env("BAT5_REUSE").is_some() && std::path::Path::new(&store_file).exists();
+        if !reuse {
+            // A scratch directory from an earlier block may or may not be there.
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(&dir).expect("mkdir");
+        }
         let store = Arc::new(LeafStore::open(&store_file).expect("open store"));
-        store
-            .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-            .expect("append and freeze segment 0");
-        store.pin_serve_set(&[0]).expect("pin");
+        if !reuse {
+            store
+                .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
+                .expect("append and freeze segment 0");
+            store.pin_serve_set(&[0]).expect("pin");
+        }
         let provider = Arc::new(Shards {
             store: StoreShardProvider::new(ServingReader::new(Arc::clone(&store))),
             one_leaf: synthetic(size_of(1).1),
             eighth: synthetic(size_of(2).1),
             full: synthetic(size_of(3).1),
         });
-        store.prune_frozen(&[]).expect("prune");
+        if !reuse {
+            store.prune_frozen(&[]).expect("prune");
+        }
 
         let runtime = Builder::new_multi_thread()
             .worker_threads(4)
@@ -300,7 +311,6 @@ impl Served {
             provider,
             lateness,
             sampling,
-            store_file,
         }
     }
 
@@ -327,21 +337,6 @@ impl Served {
             percentile(&v, 999),
             v.last().copied().unwrap_or(0),
         );
-    }
-
-    /// Ask the kernel to drop the store file's cached pages. Works without
-    /// privilege on a file the caller owns, for pages that are clean.
-    fn drop_store_cache(&self) {
-        let status = std::process::Command::new("dd")
-            .args([
-                &format!("if={}", self.store_file),
-                "iflag=nocache",
-                "count=0",
-                "status=none",
-            ])
-            .status()
-            .expect("dd");
-        assert!(status.success(), "dd iflag=nocache failed");
     }
 }
 
@@ -504,20 +499,18 @@ fn ba_t5_floor_probe() {
                 },
             );
         }
-        // One in flight, the store file's pages dropped before each fetch.
+        // One whole fetch, first thing this process does. Run with
+        // `BAT5_REUSE` over a store whose pages the caller has just dropped
+        // from the page cache, it is a read from the disk.
         "cold" => {
-            let n = env_usize("BAT5_N", 10);
             let whole = size_of(0).1 + SIGNATURE_ENVELOPE_LEN;
-            for i in 0..n {
-                served.drop_store_cache();
-                let t = Instant::now();
-                let got = clients.block_on(fetch(addr, 0, nonce(0x44, i)));
-                assert!(got > whole, "short response: {got}");
-                println!(
-                    "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
-                    t.elapsed().as_micros()
-                );
-            }
+            let t = Instant::now();
+            let got = clients.block_on(fetch(addr, 0, nonce(0x44, 0)));
+            assert!(got > whole, "short response: {got}");
+            println!(
+                "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
+                t.elapsed().as_micros()
+            );
         }
         // A requester that reads the status line and closes. CPU and bytes
         // written per abandoned request, at the smallest frame and at a
