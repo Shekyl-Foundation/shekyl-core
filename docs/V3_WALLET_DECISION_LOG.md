@@ -6227,13 +6227,41 @@ and replaced by pointers; what each still owns is the specification's
    one hash and refuses `attempt ≥ K`. `K = 3` is a consensus constant.
    *Replaces* a nonce bound to `(h, j)` alone, which would have returned
    to `P` on a re-read.
-7. **Fresh circuit by spacing; `SF-D3` is not reopened.** Tor attaches no
-   new stream to a circuit past `MaxCircuitDirtiness`, ten minutes by
-   default, and re-reads are at least 30 blocks apart. The managed Tor
-   never sets that option above the spacing; a test holds its launch
-   surface closed. Recorded with it, from Tor's manual: for an onion
-   service the age is counted from a circuit's last use, so the re-read
-   is on a new circuit when the daemon sent that persona nothing in the
-   ten minutes before. And a new circuit shares the entry guard, which is
-   the dependence `BA-T31` measures.
+7. **`SF-D3` reopened (rule 21) and ruled: fresh SOCKS credentials per
+   read.** The 2026-09-12 ruling was unauthenticated SOCKS with no
+   isolation flags, on the premise that fetches would blend with overlay
+   P2P on shared circuits. For an onion destination the premise is
+   false: a connection to an onion uses a rendezvous circuit to that
+   onion only, and overlay P2P never dials a persona's serving onion.
+   The actual effect was that every read one daemon sent to one persona
+   rode one rendezvous circuit, kept alive from its last use, so `P`
+   could link a producer's reads, a re-read to its failed read, and
+   reads across blocks. Now every read, for every caller, presents fresh
+   SOCKS credentials, and Tor's default `IsolateSOCKSAuth` gives it a
+   circuit of its own. Stall retries inside a read keep the credentials.
+   No isolation flags; no Tor configuration change; works on any stock
+   Tor, and an operator-run `SocksPort` must not disable
+   `IsolateSOCKSAuth`. *Supersedes*, within the same day, "fresh circuit
+   by spacing with `SF-D3` not reopened": the spacing is scheduling only,
+   and the managed Tor's `MaxCircuitDirtiness` test stays as defence in
+   depth.
+
+   **Costs accepted, none measured (`BA-T31`):** about 1 to 5 seconds of
+   circuit setup per read; a higher first-try failure rate, offset by
+   the reads of a draw becoming independent; proof of work paid per read
+   against a flooded onion; slower organic bulk reads. `SF-D7`'s
+   in-flight cap loses its premise that no fetch builds a circuit.
+
+   **As built:** the credentials are a function of the read's nonce, a
+   fixed username with the nonce in hex as the password, taken from the
+   header inside the request layer. The ruling said fresh random
+   credentials. A nonce is fresh for every read and is random for an
+   organic read and pseudo-random for a challenge, and deriving from it
+   means a caller cannot give two reads one circuit or one read two.
+8. **Operator visibility of serving attacks is owed.** The design's
+   answer to a sustained flood against a persona's onion is that the
+   operator sees it and has months to respond. That holds only if the
+   data and a warning exist; neither does. FOLLOWUPS carries the row,
+   owned by the RPC lane (data) and the GUI lane (presentation).
+
 ---

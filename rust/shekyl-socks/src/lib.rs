@@ -10,10 +10,10 @@
 //! that produces is Tor's, selected by the credentials in the greeting.
 //!
 //! [`Isolation`] is required. [`Isolation::Principal`] offers only
-//! "no authentication". [`Isolation::Persona`] offers only
-//! username/password, and a proxy that selects anything else fails the
-//! handshake before CONNECT. Offering both would let the proxy drop the
-//! persona onto the principal's circuits with no error.
+//! "no authentication". [`Isolation::Persona`] and [`Isolation::Read`]
+//! offer only username/password, and a proxy that selects anything else
+//! fails the handshake before CONNECT. Offering both would let the proxy
+//! drop the stream onto the principal's circuits with no error.
 //!
 //! This crate does not derive a persona username. The caller supplies the
 //! bytes. [`SocksUsername`] redacts them in `Debug` and wipes its copies
@@ -41,10 +41,16 @@ const SUCCEEDED: u8 = 0x00;
 /// There is no default. A forgotten argument does not compile, so it
 /// cannot land in the principal's namespace by omission.
 pub enum Isolation<'a> {
-    /// No SOCKS authentication. The principal's traffic, and the daemon's.
+    /// No SOCKS authentication. The principal's traffic, and the daemon's
+    /// overlay.
     Principal,
     /// Username/password only. The username is the caller's.
     Persona(&'a SocksUsername),
+    /// Username/password only, and a pair no other read presents: one
+    /// archival shard read. Tor's `IsolateSOCKSAuth`, on by default, gives
+    /// each distinct pair its own circuit, so no two reads share one
+    /// (`SF-D3`, as ruled 2026-10-07).
+    Read(&'a SocksUsername),
 }
 
 /// RFC 1929 username and password bytes.
@@ -83,6 +89,7 @@ impl core::fmt::Debug for Isolation<'_> {
         match self {
             Self::Principal => f.write_str("Principal"),
             Self::Persona(user) => f.debug_tuple("Persona").field(user).finish(),
+            Self::Read(user) => f.debug_tuple("Read").field(user).finish(),
         }
     }
 }
@@ -162,7 +169,7 @@ where
 {
     let method = match isolation {
         Isolation::Principal => NO_AUTH,
-        Isolation::Persona(_) => USER_PASS,
+        Isolation::Persona(_) | Isolation::Read(_) => USER_PASS,
     };
     stream
         .write_all(&[VERSION, 1, method])
@@ -181,7 +188,7 @@ where
             selected: chosen[1],
         });
     }
-    if let Isolation::Persona(user) = isolation {
+    if let Isolation::Persona(user) | Isolation::Read(user) = isolation {
         userpass(stream, user).await?;
     }
     Ok(())
@@ -424,6 +431,63 @@ mod tests {
         .await
         .unwrap();
         peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_read_offers_only_username_password_and_sends_its_pair() {
+        let user = SocksUsername::new(b"shekyl-fetch", b"one-read").unwrap();
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move {
+            let mut greeting = [0u8; 3];
+            server.read_exact(&mut greeting).await.unwrap();
+            // One method offered, and it is not "no authentication".
+            assert_eq!(greeting, [0x05, 1, 0x02]);
+            server.write_all(&[0x05, 0x02]).await.unwrap();
+            let mut head = [0u8; 2];
+            server.read_exact(&mut head).await.unwrap();
+            assert_eq!(head[0], 0x01);
+            let mut name = vec![0u8; usize::from(head[1])];
+            server.read_exact(&mut name).await.unwrap();
+            let mut plen = [0u8; 1];
+            server.read_exact(&mut plen).await.unwrap();
+            let mut pass = vec![0u8; usize::from(plen[0])];
+            server.read_exact(&mut pass).await.unwrap();
+            server.write_all(&[0x01, 0x00]).await.unwrap();
+            let mut request = [0u8; 10];
+            server.read_exact(&mut request).await.unwrap();
+            server
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            (name, pass)
+        });
+        connect(&mut client, Isolation::Read(&user), Destination::Ip(v4()))
+            .await
+            .unwrap();
+        let (name, pass) = peer.await.unwrap();
+        assert_eq!(name, b"shekyl-fetch");
+        assert_eq!(pass, b"one-read");
+    }
+
+    #[tokio::test]
+    async fn a_proxy_that_picks_no_auth_for_a_read_does_not_connect() {
+        // The one case the ruling cannot survive: a proxy that drops the
+        // credentials puts every read back on one circuit, silently.
+        let user = SocksUsername::new(b"shekyl-fetch", b"one-read").unwrap();
+        let (mut client, mut server) = duplex(64);
+        let peer = tokio::spawn(async move {
+            let mut greeting = [0u8; 3];
+            server.read_exact(&mut greeting).await.unwrap();
+            server.write_all(&[0x05, 0x00]).await.unwrap();
+            let mut extra = [0u8; 1];
+            server.read(&mut extra).await.unwrap()
+        });
+        let err = connect(&mut client, Isolation::Read(&user), Destination::Ip(v4()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SocksError::AuthRejected { selected: 0x00 }));
+        drop(client);
+        assert_eq!(peer.await.unwrap(), 0, "CONNECT was not sent");
     }
 
     #[tokio::test]

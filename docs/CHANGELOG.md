@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Archival shard fetches ride a Tor circuit per read.** The fetch client now presents SOCKS credentials that belong to one read, so Tor isolates each read on its own rendezvous circuit and a serving persona cannot link a requester's reads by the circuit they arrive on. Stall retries inside a read keep the credentials. Username/password is the only SOCKS method offered. An operator running their own Tor for the daemon must leave `IsolateSOCKSAuth` on (its default). `SF-D3` reopened and ruled 2026-10-07.
 - The managed Tor's command line is built by one function, and two tests hold it: the launch surface is a closed list of typed options, and it never sets `MaxCircuitDirtiness` (the archival challenger's re-reads rely on Tor's default circuit reuse window). The fetch client gains a test that two requests for one shard differ only in their nonce.
 - Docs: the serve-credit specification states one request machinery for every shard fetch, a fresh nonce for every read (the record carries the read's `attempt`, bounded by a consensus constant of three), and a digest in place of re-derivation for the settlement writer's first integrity check.
 - Docs: the serve-credit specification gains the witness's re-read policy and the settlement writer's three integrity checks; the failure window is left open rather than re-pinned on a one-read figure, with two measurements registered (`BA-T31`, `BA-T32`).

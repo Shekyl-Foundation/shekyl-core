@@ -49,9 +49,11 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 ///   `SF-D7` refused (213 MB). Memory does not bind at 8.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a
 ///   single Tor instance whose per-stream throughput, not the client's
-///   parallelism, is the ceiling (`SF-D3`: no per-fetch circuit build).
-///   The (b) judgement that four outstanding transfers keep the stream
-///   busy still holds; eight is that judgement plus the W₂ room.
+///   parallelism, is the ceiling. That judgement was made when fetches
+///   shared circuits. Since 2026-10-07 each read builds a rendezvous
+///   circuit of its own (`SF-D3`), and what that does to the right cap is
+///   not measured (`BA-T31`, `BA-T6`); the constant is unmeasured either
+///   way.
 ///
 /// **Re-derive under `PDM-Q6`'s unit** once the body is a tx-range's and
 /// not a leaf shard's — the memory term changes, the shape does not.
@@ -234,7 +236,7 @@ impl PFetchClient {
             .await
             .expect("in-flight semaphore is never closed");
 
-        let mut stream = self.dial(&target.endpoint).await?;
+        let mut stream = self.dial(&target.endpoint, header).await?;
         let request = request_bytes(target.shard_id, header);
         timeout(self.timeouts.head, stream.write_all(&request))
             .await
@@ -340,15 +342,25 @@ impl PFetchClient {
     /// leak `SF-D3` exists to close; there is no code path that could,
     /// because an onion has no IP to resolve to — but the shape is kept
     /// deliberately so a future non-onion endpoint would not acquire one.
-    async fn dial(&self, endpoint: &ServingEndpoint) -> Result<TcpStream, FetchError> {
+    ///
+    /// The dial presents the read's own SOCKS credentials, taken from its
+    /// header, so each read is on a circuit of its own (`SF-D3`, as ruled
+    /// 2026-10-07). There is no caller argument for them: challenge and
+    /// organic reads cannot differ here.
+    async fn dial(
+        &self,
+        endpoint: &ServingEndpoint,
+        header: &RequestHeader,
+    ) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
+        let credentials = header.socks_credentials();
         let connect = async {
             let mut stream = TcpStream::connect(self.proxy)
                 .await
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(
                 &mut stream,
-                Isolation::Principal,
+                Isolation::Read(&credentials),
                 Destination::Name {
                     host: host.as_str(),
                     port: SERVING_VIRTUAL_PORT,

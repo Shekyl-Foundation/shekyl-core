@@ -294,8 +294,8 @@ to compare against.
 
 **Every shard fetch, challenge or organic, goes through the same client
 code path:** the same header format, the same envelope handling, the same
-stall retries inside a read, the same timeouts and the same
-classification of outcomes. `P` must see no difference between a
+stall retries inside a read, the same timeouts, the same classification
+of outcomes, and the same rule for the circuit a read rides. `P` must see no difference between a
 challenge and an ordinary read.
 
 There is one fetch entry point. It takes the header its caller built and
@@ -365,32 +365,26 @@ bound `K`.
   - The record is filed for the first read that succeeds, and names that
     read's `attempt`. A draw whose third read fails, or that runs out of
     window, is abandoned.
-- **Fresh circuit by spacing.** `SF-D3` stands: the fetch path presents no
-  SOCKS credentials and sets no isolation flags. A re-read lands on a new
-  circuit because of when it is made. Tor attaches no new stream to a
-  circuit older than `MaxCircuitDirtiness`, 10 minutes by default, and 30
-  blocks is about an hour. With a new circuit and a new nonce, a re-read
-  is to `P` one more request for that shard.
-
-  Two limits on that, stated so they are not rediscovered:
-  - For an onion service Tor counts a circuit's age from its **last**
-    use, not its first (Tor manual, `MaxCircuitDirtiness`). The re-read
-    is on a new circuit when this daemon sent `P` nothing in the ten
-    minutes before it. A producer reading many shards of one large
-    persona can keep one circuit to it alive across the hour, and `P` can
-    then tie the requests on that circuit together, as it can for any
-    caller under `SF-D3`.
-  - A new circuit shares this daemon's entry guard with the old one. The
-    reads of a draw are therefore not independent tries, and how far from
-    independent is what `BA-T31` measures (§12).
-
-  The daemon's managed Tor is never configured with a
-  `MaxCircuitDirtiness` above the re-read spacing. Its launch surface has
-  no such option, and a test holds that
-  (`shekyl-tor-control-client`,
-  `the_managed_launch_never_lengthens_circuit_reuse`). An operator who
-  points the daemon at a Tor of their own sets that Tor's options
-  themselves.
+- **Fresh circuit per read, by credentials.** Every read, for every
+  caller, presents SOCKS credentials no other read presents, and Tor's
+  default `IsolateSOCKSAuth` gives each its own rendezvous circuit
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D3`, reopened
+  and ruled 2026-10-07). This is the request layer's rule, not the
+  challenger's: it holds for organic reads the same. A re-read arrives on
+  a new circuit with a new nonce, so to `P` it is one more request for
+  that shard, and `P` cannot tie a producer's reads to each other by the
+  circuit they come in on.
+  - The 30-block spacing is scheduling only. It is no longer what makes
+    the circuit fresh.
+  - A new circuit shares this daemon's entry guard with the last one, so
+    the reads of a draw are still not fully independent tries. How far
+    from independent is what `BA-T31` measures (§12).
+  - Defence in depth: the daemon's managed Tor is never configured with a
+    `MaxCircuitDirtiness` above the re-read spacing
+    (`shekyl-tor-control-client`,
+    `the_managed_launch_never_lengthens_circuit_reuse`).
+  - An operator who points the daemon at a Tor of their own must not
+    disable `IsolateSOCKSAuth` on its `SocksPort`.
 - **Ordering.** The client builds no carrier for `h` until every read of
   `h` has completed or been abandoned. A carrier reveals the seed, and
   the seed exposes that block's remaining reads.
@@ -982,7 +976,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R12 | The witness reads a draw again when a read ends stall-class, as its own policy above `SF-D6` (§5.3). `(m, n)` is not re-pinned on the one-read figure; the unread share at hour-scale spacing is measured first (§12) |
 | R13 | **One request machinery** for every shard fetch: one entry point, a caller-built header, one outcome type, no challenge-only path in the request layer (§5.1) |
 | R14 | **A fresh nonce for every read**, for every caller; a challenge's is bound to `(h, j, attempt)`. The record carries `attempt` as one prunable byte and admission refuses `attempt ≥ K`, `K = 3` (`SCS-P13`) |
-| R15 | **Fresh circuit by spacing**, with no reopening of `SF-D3`; the managed Tor never sets `MaxCircuitDirtiness` above the re-read spacing (§5.3) |
+| R15 | **A fresh circuit per read, by SOCKS credentials**, for every caller: `SF-D3` reopened under rule 21 and ruled (§5.3). The spacing is scheduling only; the managed Tor's `MaxCircuitDirtiness` test stays as defence in depth |
 
 ### 13.2 Provisional (rule 21; reopen on the sim or on testnet measurement)
 
@@ -991,7 +985,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | V1 | Full-pair weight 1/16 | A better setting is measured |
 | V2 | Count rule of §4.3: base 1 per pair per epoch, catch-up by 70 %, minimum horizon 200, cap 3 × nominal | Same |
 | V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.18 % |
-| V4 | Consecutive reads of a draw are at least 30 blocks apart. Challenger scheduling, not consensus | `BA-T31` shows the unread share still falling, or already flat, at a different spacing. It may not fall to or below the managed Tor's circuit-reuse window |
+| V4 | Consecutive reads of a draw are at least 30 blocks apart. Challenger scheduling, not consensus | `BA-T31` shows the unread share still falling, or already flat, at a different spacing |
 
 ### 13.3 The twelve questions this round posed — RULED 2026-10-07
 
@@ -1102,6 +1096,8 @@ The seed and the witness key have no label: they are fresh randomness.
 | Remember nonces, stall every first request, serve only a nonce that returns | Nothing returns: every read carries a fresh nonce, for every caller (`SCS-P13`) |
 | Stall every first request for a shard and serve the second | Costs `P` nothing against a challenger that re-reads, and degrades every organic reader the same way; `P` cannot tell which requests are challenges, so it cannot aim it |
 | File a record for a fourth read | Refused: `attempt ≥ K` |
+| Link a producer's reads, or a re-read to the read that failed, by the circuit they arrive on | Prevented: every read presents its own SOCKS credentials and rides its own rendezvous circuit (`SF-D3`) |
+| Flood `P`'s onion so honest reads fail for months | The operator must be able to see it and act; that visibility is not built (FOLLOWUPS, *Operator visibility of serving attacks and slash risk*) |
 | An honest pair misses reads on a bad day and walks toward a slash | Up to three reads of a draw, spread across `W₂`; how far that goes depends on how often all three fail, which is unmeasured (§12) |
 | Learn mid-epoch that the epoch is settled, then stop serving | Prevented: the three counted draws are selected at close |
 | Read the public draw count to see that challenges have stopped | Prevented: the base rate keeps draws flowing to the end of every epoch |
