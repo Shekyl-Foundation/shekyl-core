@@ -872,13 +872,12 @@ fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process
     cmd.env_clear();
     // And at most one variable goes back in: on Linux, the loader's search path, set to
     // the directory the gate checked. The bundle's `tor` has no `RPATH`, so without this
-    // it takes libevent and OpenSSL from the system. The directory comes from the witness
-    // and from nowhere else — it is the parent of the canonical path, computed once at
-    // verification — so the place that was checked is the place that is loaded from.
+    // it takes libevent and OpenSSL from the system. The directory is a field of the
+    // witness — the parent of the canonical path, one absolute loader entry — so the
+    // place that was checked is the place that is loaded from. There is no branch:
+    // a witness that could not name that directory is not constructed.
     #[cfg(target_os = "linux")]
-    if let Some(dir) = managed.tor_binary.library_dir() {
-        cmd.env("LD_LIBRARY_PATH", dir);
-    }
+    cmd.env("LD_LIBRARY_PATH", managed.tor_binary.library_dir());
     cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
@@ -1717,24 +1716,18 @@ mod live_tests {
     /// This is the fixture for the *attached* posture — a tor somebody else runs —
     /// so it does not go through the managed launcher. It still has to start, and
     /// the Expert Bundle's `tor` has no `RPATH`: it finds the libraries shipped
-    /// beside it only when the loader is pointed at them. A host that happens to
-    /// have a system `libevent-2.1.so.7` hides that; a CI runner does not have
-    /// one, and there this fixture timed out waiting for a tor that never ran.
-    /// So the fixture names tor's own directory to the loader, as whoever runs
-    /// the bundle's tor must.
+    /// beside it only when the loader is pointed at them. The directory is the
+    /// witness's, the same one the managed launcher names, so a symlink resolves
+    /// to the target and a path the loader would split fails here instead of
+    /// waiting out the control-port timeout.
     async fn spawn_offline_tor() -> TestTor {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().to_path_buf();
         let port_file = data_dir.join("control_port");
-        let tor = tor_binary();
-        let mut cmd = ProcCommand::new(&tor);
+        let verified = crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary());
+        let mut cmd = ProcCommand::new(verified.as_path());
         #[cfg(target_os = "linux")]
-        if let Some(tor_dir) = tor
-            .parent()
-            .filter(|d| crate::binary::loader_reads_as_one_directory(d))
-        {
-            cmd.env("LD_LIBRARY_PATH", tor_dir);
-        }
+        cmd.env("LD_LIBRARY_PATH", verified.library_dir());
         let child = cmd
             .arg("--DataDirectory")
             .arg(&data_dir)

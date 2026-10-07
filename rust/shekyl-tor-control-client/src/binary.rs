@@ -109,29 +109,33 @@ pub struct PinnedFile {
 
 /// A pinned Tor release for one build target: its provenance labels and the
 /// complete contents of the directory `tor` runs from.
+///
+/// The lifetime is the pin's storage. The compiled disposition is `'static`;
+/// a test borrows a stack array of [`PinnedFile`]s for the same shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TorPin {
+pub struct TorPin<'a> {
     /// Tor Expert Bundle version the files were extracted from.
-    pub bundle_version: &'static str,
+    pub bundle_version: &'a str,
     /// The Expert Bundle's target label for this build target (the suffix of
     /// the upstream tarball name, e.g. `linux-x86_64`). Provenance like the
     /// versions, plus one runtime use: composing the version-exact system
     /// directory `/opt/shekyl/<bundle_version>-<bundle_target>/`.
-    pub bundle_target: &'static str,
+    pub bundle_target: &'a str,
     /// The `tor` version inside that bundle.
-    pub tor_version: &'static str,
+    pub tor_version: &'a str,
     /// The name of the `tor` executable among [`Self::files`].
-    pub executable: &'static str,
+    pub executable: &'a str,
     /// Whether file names in tor's directory are compared without regard to
     /// ASCII case. True on Windows, where `VERSION.DLL` and `version.dll` are
     /// one file to the loader, so the allowlist has to treat them as one name.
     pub case_insensitive_names: bool,
-    /// **Every** file tor's directory holds. The directory holding anything
-    /// else is a refusal, not a warning.
-    pub files: &'static [PinnedFile],
+    /// **Every** file tor's directory holds, in slot order. The directory
+    /// holding anything else is a refusal, not a warning. Each slot is matched
+    /// at most once.
+    pub files: &'a [PinnedFile],
 }
 
-impl TorPin {
+impl TorPin<'_> {
     fn names_match(&self, found: &OsStr, pinned: &str) -> bool {
         match found.to_str() {
             Some(found) if self.case_insensitive_names => found.eq_ignore_ascii_case(pinned),
@@ -141,8 +145,12 @@ impl TorPin {
         }
     }
 
-    fn pinned(&self, found: &OsStr) -> Option<&PinnedFile> {
-        self.files.iter().find(|f| self.names_match(found, f.name))
+    /// The slot `found` occupies in [`Self::files`], or `None` when the name
+    /// is not pinned.
+    fn file_index(&self, found: &OsStr) -> Option<usize> {
+        self.files
+            .iter()
+            .position(|file| self.names_match(found, file.name))
     }
 }
 
@@ -150,24 +158,24 @@ impl TorPin {
 /// target is pinned, or it has been ruled out with a reason, and a target with
 /// no row in `config/tor_pins.json` does not compile (`build.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TorDisposition {
+pub enum TorDisposition<'a> {
     /// Shekyl ships and launches this exact bundle.
-    Pinned(TorPin),
+    Pinned(TorPin<'a>),
     /// Shekyl does not manage a tor on this target. The operator runs their
     /// own and attaches it; `reason` is the sentence shown to them.
     Unavailable {
         /// Why there is no managed tor here.
-        reason: &'static str,
+        reason: &'a str,
     },
 }
 
 /// The disposition for the current build target, compiled from
 /// `config/tor_pins.json` by `build.rs`.
-pub const CURRENT_DISPOSITION: TorDisposition =
+pub const CURRENT_DISPOSITION: TorDisposition<'static> =
     include!(concat!(env!("OUT_DIR"), "/tor_disposition.rs"));
 
 /// The pin for this build target, or the typed reason there is none.
-fn current_pin() -> Result<TorPin, TorBinaryError> {
+fn current_pin() -> Result<TorPin<'static>, TorBinaryError> {
     match CURRENT_DISPOSITION {
         TorDisposition::Pinned(pin) => Ok(pin),
         TorDisposition::Unavailable { reason } => Err(TorBinaryError::Unavailable { reason }),
@@ -193,7 +201,7 @@ const WELL_KNOWN_TOR_DIR: &str = "/opt/shekyl";
 /// such convention exists for the platform.
 // The wrap is cfg-dependent, not unnecessary: the non-unix arm returns `None`.
 #[allow(clippy::unnecessary_wraps)]
-fn well_known_candidate(pin: &TorPin) -> Option<PathBuf> {
+fn well_known_candidate(pin: &TorPin<'_>) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         Some(
@@ -218,13 +226,17 @@ fn well_known_candidate(pin: &TorPin) -> Option<PathBuf> {
 /// on failure surfaces).
 ///
 /// The path inside is **canonicalized at verification time**, and the library
-/// directory is that path's parent, computed once. The launcher reads both
-/// from here: the bytes hashed, the path spawned and the directory the loader
-/// is pointed at cannot name different places.
+/// directory is that path's parent, computed once. Both are always present:
+/// a witness without a directory is not a witness. The launcher reads both
+/// from here, so the bytes hashed, the path spawned and the directory the
+/// loader is pointed at cannot name different places.
 #[derive(Debug, Clone)]
 pub struct VerifiedTorBinary {
     path: PathBuf,
-    library_dir: Option<PathBuf>,
+    /// The directory whose contents the gate checked. On Linux this path is
+    /// one absolute loader entry, and the launcher names it in
+    /// `LD_LIBRARY_PATH` with no further test.
+    library_dir: PathBuf,
 }
 
 impl VerifiedTorBinary {
@@ -233,12 +245,10 @@ impl VerifiedTorBinary {
         &self.path
     }
 
-    /// The directory the verified `tor` lives in, whose contents the gate
-    /// checked — the one directory the launcher may name to the loader.
-    /// `None` only for a test witness whose directory the loader could not be
-    /// given by name (no absolute parent, or a path it would read as a list).
-    pub fn library_dir(&self) -> Option<&Path> {
-        self.library_dir.as_deref()
+    /// The directory the verified `tor` lives in — the one directory the
+    /// launcher may name to the loader.
+    pub fn library_dir(&self) -> &Path {
+        &self.library_dir
     }
 
     /// **Test-only bypass** of the pin gate, for lifecycle tests that inject an
@@ -259,10 +269,21 @@ impl VerifiedTorBinary {
     #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
     pub fn unchecked_for_test(path: PathBuf) -> Self {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
-        let library_dir = path
-            .parent()
-            .filter(|dir| loader_reads_as_one_directory(dir))
-            .map(Path::to_path_buf);
+        let library_dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| {
+            panic!(
+                "unchecked_for_test: {} has no parent directory to give the loader",
+                path.display()
+            )
+        });
+        // Linux names this directory in `LD_LIBRARY_PATH`, which is a list.
+        // A witness that cannot be named that way is not a witness: the
+        // launcher would otherwise start tor on the system search path.
+        #[cfg(target_os = "linux")]
+        assert!(
+            loader_reads_as_one_directory(&library_dir),
+            "unchecked_for_test: {} is not one absolute loader path",
+            library_dir.display()
+        );
         Self { path, library_dir }
     }
 }
@@ -537,7 +558,7 @@ fn is_executable(_path: &Path) -> bool {
 /// name contains any of the three is therefore *not* the directory the
 /// loader would search, and the pin gate checked only the one it was given.
 /// Byte-wise on Unix, so a non-UTF-8 path is judged on what the loader sees.
-pub(crate) fn loader_reads_as_one_directory(dir: &Path) -> bool {
+fn loader_reads_as_one_directory(dir: &Path) -> bool {
     #[cfg(unix)]
     let bytes = {
         use std::os::unix::ffi::OsStrExt;
@@ -563,7 +584,7 @@ fn io_error(path: &Path, e: &std::io::Error) -> TorBinaryError {
 /// every pinned file hashes to its digest. Returns the witness, carrying that
 /// same directory, on success. Takes the pin as a parameter so the gate is
 /// KAT-testable against arbitrary pins.
-fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorBinaryError> {
+fn verify_candidate(path: &Path, pin: &TorPin<'_>) -> Result<VerifiedTorBinary, TorBinaryError> {
     let canonical = std::fs::canonicalize(path).map_err(|e| io_error(path, &e))?;
     let meta = std::fs::metadata(&canonical).map_err(|e| io_error(&canonical, &e))?;
     // Refuse non-regular files *before* opening: a FIFO would block the read
@@ -585,12 +606,14 @@ fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorB
     // Exact contents, by allowlist. `symlink_metadata` on purpose: a pinned
     // name that is a symlink would pass a name check while the loader followed
     // it out of the directory, and a subdirectory is somewhere the loader
-    // looks before the directory itself.
-    let mut present: Vec<(&PinnedFile, PathBuf)> = Vec::with_capacity(pin.files.len());
+    // looks before the directory itself. A slot is the index into
+    // `pin.files`; two directory entries that fold onto one slot are one
+    // name too many.
+    let mut paths_by_slot: Vec<Option<PathBuf>> = vec![None; pin.files.len()];
     for entry in std::fs::read_dir(&dir).map_err(|e| io_error(&dir, &e))? {
         let entry = entry.map_err(|e| io_error(&dir, &e))?;
         let name = entry.file_name();
-        let Some(pinned) = pin.pinned(&name) else {
+        let Some(slot) = pin.file_index(&name) else {
             return Err(TorBinaryError::UnexpectedEntry { dir, name });
         };
         let entry_path = entry.path();
@@ -599,23 +622,21 @@ fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorB
         if !entry_meta.is_file() {
             return Err(TorBinaryError::NotAFile(entry_path));
         }
-        // Two entries folding to one pinned name (a case-sensitive directory
-        // read under a case-insensitive rule) are one name too many.
-        if present.iter().any(|(seen, _)| std::ptr::eq(*seen, pinned)) {
+        if paths_by_slot[slot].is_some() {
             return Err(TorBinaryError::UnexpectedEntry { dir, name });
         }
-        present.push((pinned, entry_path));
+        paths_by_slot[slot] = Some(entry_path);
     }
-    if let Some(missing) = pin
-        .files
-        .iter()
-        .find(|f| !present.iter().any(|(seen, _)| std::ptr::eq(*seen, *f)))
-    {
-        return Err(TorBinaryError::MissingFile {
-            dir,
-            name: missing.name,
-        });
-    }
+    let paths_by_slot = paths_by_slot
+        .into_iter()
+        .enumerate()
+        .map(|(slot, path)| {
+            path.ok_or_else(|| TorBinaryError::MissingFile {
+                dir: dir.clone(),
+                name: pin.files[slot].name,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     // The candidate must be the executable, not merely something pinned.
     let is_the_executable = canonical
@@ -633,7 +654,7 @@ fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorB
 
     // One-shot read + digest per file, once at setup. `fs::read` retries
     // `ErrorKind::Interrupted` internally (unlike a hand-rolled read loop).
-    for (pinned, entry_path) in present {
+    for (pinned, entry_path) in pin.files.iter().zip(paths_by_slot) {
         let bytes = std::fs::read(&entry_path).map_err(|e| io_error(&entry_path, &e))?;
         let actual: [u8; 32] = Sha256::digest(&bytes).into();
         if actual != pinned.sha256 {
@@ -646,601 +667,10 @@ fn verify_candidate(path: &Path, pin: &TorPin) -> Result<VerifiedTorBinary, TorB
     }
     Ok(VerifiedTorBinary {
         path: canonical,
-        library_dir: Some(dir),
+        library_dir: dir,
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use hex_literal::hex;
-
-    /// A pinned known-answer for the hash itself: SHA-256 of the empty input
-    /// (NIST). An empty file must hash to it — this pins the algorithm,
-    /// independent of any tor binary being present.
-    const EMPTY_SHA256: [u8; 32] =
-        hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-
-    /// Write a file and make it executable (the gate requires launchability).
-    fn write_executable(path: &Path, bytes: &[u8]) {
-        std::fs::write(path, bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
-
-    fn sha256(bytes: &[u8]) -> [u8; 32] {
-        Sha256::digest(bytes).into()
-    }
-
-    /// A pin over `(name, contents)` pairs, the first being the executable.
-    /// Leaked, because a pin is `'static` data in production and a test's
-    /// handful of bytes is not worth a second, borrowed, shape of the type.
-    fn pin_for(files: &[(&'static str, &[u8])], case_insensitive_names: bool) -> TorPin {
-        let pinned: Vec<PinnedFile> = files
-            .iter()
-            .map(|(name, bytes)| PinnedFile {
-                name,
-                sha256: sha256(bytes),
-            })
-            .collect();
-        TorPin {
-            bundle_version: "0.0.0",
-            bundle_target: "test-target",
-            tor_version: "0.0.0.0",
-            executable: files[0].0,
-            case_insensitive_names,
-            files: Box::leak(pinned.into_boxed_slice()),
-        }
-    }
-
-    /// The Linux shape of a bundle: `tor` and three libraries.
-    const LINUX_FILES: [(&str, &[u8]); 4] = [
-        ("tor", b"tor"),
-        ("libevent-2.1.so.7", b"libevent"),
-        ("libssl.so.3", b"libssl"),
-        ("libcrypto.so.3", b"libcrypto"),
-    ];
-
-    /// Lay `files` out in a fresh directory as a correctly staged bundle and
-    /// return the directory and the path of its executable.
-    fn staged(files: &[(&'static str, &[u8])]) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        for (i, (name, bytes)) in files.iter().enumerate() {
-            let path = dir.path().join(name);
-            if i == 0 {
-                write_executable(&path, bytes);
-            } else {
-                std::fs::write(&path, bytes).unwrap();
-            }
-        }
-        let exe = dir.path().join(files[0].0);
-        (dir, exe)
-    }
-
-    #[test]
-    fn verify_matches_the_empty_input_sha256_vector() {
-        let (dir, exe) = staged(&[("tor", b"")]);
-        let pin = TorPin {
-            files: Box::leak(Box::new([PinnedFile {
-                name: "tor",
-                sha256: EMPTY_SHA256,
-            }])),
-            ..pin_for(&[("tor", b"")], false)
-        };
-        let verified = verify_candidate(&exe, &pin).unwrap();
-        // The witness carries the canonical form of the verified path, and
-        // its directory.
-        assert_eq!(verified.as_path(), exe.canonicalize().unwrap());
-        assert_eq!(
-            verified.library_dir(),
-            Some(dir.path().canonicalize().unwrap().as_path())
-        );
-    }
-
-    #[test]
-    fn verify_accepts_a_correctly_staged_bundle() {
-        let (_dir, exe) = staged(&LINUX_FILES);
-        assert!(verify_candidate(&exe, &pin_for(&LINUX_FILES, false)).is_ok());
-    }
-
-    /// The gate rejects a single flipped byte **in any pinned file**, not only
-    /// in `tor`, and the mismatch carries both digests so a bad pin bump is
-    /// self-diagnosing.
-    #[test]
-    fn verify_rejects_a_tampered_byte_in_any_pinned_file() {
-        let pin = pin_for(&LINUX_FILES, false);
-        for (name, original) in LINUX_FILES {
-            let (dir, exe) = staged(&LINUX_FILES);
-            let mut tampered = original.to_vec();
-            *tampered.last_mut().unwrap() ^= 1;
-            let victim = dir.path().join(name);
-            // Rewrite in place, keeping the mode.
-            let mode = std::fs::metadata(&victim).unwrap().permissions();
-            std::fs::write(&victim, &tampered).unwrap();
-            std::fs::set_permissions(&victim, mode).unwrap();
-            match verify_candidate(&exe, &pin) {
-                Err(TorBinaryError::HashMismatch {
-                    path,
-                    expected,
-                    actual,
-                }) => {
-                    assert_eq!(path, victim.canonicalize().unwrap(), "{name}");
-                    assert_eq!(expected, sha256(original), "{name}");
-                    assert_eq!(actual, sha256(&tampered), "{name}");
-                }
-                other => panic!("{name}: expected HashMismatch, got {other:?}"),
-            }
-        }
-    }
-
-    /// Every refusal is a sentence an operator reads in a log line. A string
-    /// continuation that swallowed its indentation renders as a run of spaces
-    /// mid-sentence, and nothing else in the tree would notice.
-    #[test]
-    fn refusals_render_as_single_spaced_sentences() {
-        let path = PathBuf::from("/x/tor");
-        let errors = [
-            TorBinaryError::Unavailable { reason: "r" },
-            TorBinaryError::NotFound,
-            TorBinaryError::NotAFile(path.clone()),
-            TorBinaryError::NotExecutable(path.clone()),
-            TorBinaryError::NotTheExecutable(path.clone()),
-            TorBinaryError::Io {
-                path: path.clone(),
-                kind: std::io::ErrorKind::NotFound,
-            },
-            TorBinaryError::UnexpectedEntry {
-                dir: PathBuf::from("/x"),
-                name: OsString::from("libz.so.1"),
-            },
-            TorBinaryError::MissingFile {
-                dir: PathBuf::from("/x"),
-                name: "tor",
-            },
-            TorBinaryError::UnsafeLoaderPath(PathBuf::from("/x:y")),
-            TorBinaryError::HashMismatch {
-                path,
-                expected: [0; 32],
-                actual: [1; 32],
-            },
-        ];
-        for error in errors {
-            let text = error.to_string();
-            assert!(!text.contains("  "), "{text:?}");
-            assert!(!text.is_empty());
-        }
-    }
-
-    // --- TB-7 part 3: the directory holds the pinned files and nothing else.
-    // Three plants, each of which a loader pointed at this directory would
-    // have used (TOR_BUNDLE_DISTRIBUTION.md §2 findings 10 to 12). ---
-
-    /// A file at the top level that the pin does not list. `libz.so.1` is the
-    /// library `tor` needs and the bundle does not carry.
-    #[test]
-    fn verify_refuses_a_planted_top_level_file() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        std::fs::write(dir.path().join("libz.so.1"), b"planted").unwrap();
-        match verify_candidate(&exe, &pin_for(&LINUX_FILES, false)) {
-            Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
-                assert_eq!(name, OsString::from("libz.so.1"));
-            }
-            other => panic!("expected UnexpectedEntry, got {other:?}"),
-        }
-    }
-
-    /// glibc searches `glibc-hwcaps/<level>/` under a library-path entry
-    /// before the entry itself. A listing of the top level shows a directory
-    /// and no library; a scan for library names passes it. The allowlist does
-    /// not, because the directory is not a pinned file.
-    #[test]
-    fn verify_refuses_a_planted_glibc_hwcaps_library() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        let hwcaps = dir.path().join("glibc-hwcaps").join("x86-64-v2");
-        std::fs::create_dir_all(&hwcaps).unwrap();
-        std::fs::write(hwcaps.join("libz.so.1"), b"planted").unwrap();
-        match verify_candidate(&exe, &pin_for(&LINUX_FILES, false)) {
-            Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
-                assert_eq!(name, OsString::from("glibc-hwcaps"));
-            }
-            other => panic!("expected UnexpectedEntry, got {other:?}"),
-        }
-    }
-
-    /// Windows searches the executable's directory first and treats
-    /// `VERSION.DLL` and `version.dll` as one name. The Windows pin lists
-    /// `tor.exe` alone, so either spelling beside it is refused — and under
-    /// the same rule `TOR.EXE` *is* the pinned executable, which is what shows
-    /// the comparison is by folded name and not a refusal of everything.
-    #[test]
-    fn verify_refuses_a_planted_version_dll_under_the_windows_name_rule() {
-        let files: [(&str, &[u8]); 1] = [("tor.exe", b"tor")];
-        let pin = pin_for(&files, true);
-
-        for planted in ["VERSION.DLL", "version.dll"] {
-            let (dir, exe) = staged(&files);
-            std::fs::write(dir.path().join(planted), b"planted").unwrap();
-            match verify_candidate(&exe, &pin) {
-                Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
-                    assert_eq!(name, OsString::from(planted));
-                }
-                other => panic!("{planted}: expected UnexpectedEntry, got {other:?}"),
-            }
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let upper = dir.path().join("TOR.EXE");
-        write_executable(&upper, b"tor");
-        assert!(verify_candidate(&upper, &pin).is_ok());
-    }
-
-    /// The case rule is the platform's, not a blanket one: where names are
-    /// case-sensitive, a differently-cased name is a different, unpinned file.
-    #[test]
-    fn verify_compares_names_exactly_where_the_platform_does() {
-        let files: [(&str, &[u8]); 1] = [("tor", b"tor")];
-        let dir = tempfile::tempdir().unwrap();
-        let upper = dir.path().join("TOR");
-        write_executable(&upper, b"tor");
-        assert!(matches!(
-            verify_candidate(&upper, &pin_for(&files, false)),
-            Err(TorBinaryError::UnexpectedEntry { .. })
-        ));
-    }
-
-    /// The first thing a developer tries: `SHEKYL_TOR_BINARY` pointed at the
-    /// `tor` inside a full extracted Expert Bundle. Its directory carries
-    /// `pluggable_transports/`, and the override tier is gated like any other.
-    #[test]
-    fn verify_refuses_a_full_extracted_bundle_through_the_override() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        let transports = dir.path().join("pluggable_transports");
-        std::fs::create_dir(&transports).unwrap();
-        std::fs::write(transports.join("lyrebird"), b"transport").unwrap();
-
-        let chosen = candidate_from(Some(exe.clone().into_os_string()), None, None, "tor")
-            .expect("the override is the candidate");
-        match verify_candidate(&chosen, &pin_for(&LINUX_FILES, false)) {
-            Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
-                assert_eq!(name, OsString::from("pluggable_transports"));
-            }
-            other => panic!("expected UnexpectedEntry, got {other:?}"),
-        }
-    }
-
-    /// A pinned name that is a symlink is refused even when it points at the
-    /// right bytes: the loader would follow it out of the checked directory.
-    #[cfg(unix)]
-    #[test]
-    fn verify_refuses_a_symlinked_entry_in_the_directory() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        let outside = tempfile::tempdir().unwrap();
-        let real = outside.path().join("libssl.so.3");
-        std::fs::write(&real, b"libssl").unwrap();
-        let link = dir.path().join("libssl.so.3");
-        std::fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(matches!(
-            verify_candidate(&exe, &pin_for(&LINUX_FILES, false)),
-            Err(TorBinaryError::NotAFile(_))
-        ));
-    }
-
-    /// `LD_LIBRARY_PATH` is a list. A bundle that is correct in every file
-    /// but lives under a name the loader would split or expand is refused on
-    /// Linux, where the launcher sets that variable: with `a:b` in the path
-    /// the loader would search two directories, neither the one checked.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn verify_refuses_a_directory_the_loader_would_read_as_a_list() {
-        for odd in ["a:b", "a;b", "$ORIGIN", "x${LIB}"] {
-            let root = tempfile::tempdir().unwrap();
-            let dir = root.path().join(odd);
-            std::fs::create_dir(&dir).unwrap();
-            for (i, (name, bytes)) in LINUX_FILES.iter().enumerate() {
-                if i == 0 {
-                    write_executable(&dir.join(name), bytes);
-                } else {
-                    std::fs::write(dir.join(name), bytes).unwrap();
-                }
-            }
-            assert_eq!(
-                verify_candidate(&dir.join("tor"), &pin_for(&LINUX_FILES, false)).unwrap_err(),
-                TorBinaryError::UnsafeLoaderPath(dir.canonicalize().unwrap()),
-                "{odd}"
-            );
-        }
-    }
-
-    #[test]
-    fn loader_path_rule_accepts_ordinary_directories_only() {
-        for ok in [
-            "/opt/shekyl/15.0.24-linux-x86_64",
-            "/srv/My Name/shekyl/tor",
-        ] {
-            assert!(loader_reads_as_one_directory(Path::new(ok)), "{ok}");
-        }
-        for bad in [
-            "/opt/a:b",
-            "/opt/a;b",
-            "/opt/$ORIGIN/tor",
-            "relative/tor",
-            "",
-        ] {
-            assert!(!loader_reads_as_one_directory(Path::new(bad)), "{bad}");
-        }
-    }
-
-    #[test]
-    fn verify_refuses_a_directory_missing_a_pinned_file() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        std::fs::remove_file(dir.path().join("libevent-2.1.so.7")).unwrap();
-        assert_eq!(
-            verify_candidate(&exe, &pin_for(&LINUX_FILES, false)).unwrap_err(),
-            TorBinaryError::MissingFile {
-                dir: dir.path().canonicalize().unwrap(),
-                name: "libevent-2.1.so.7",
-            }
-        );
-    }
-
-    /// An override naming one of the libraries is in a pinned directory but is
-    /// not what gets executed.
-    #[test]
-    fn verify_refuses_a_pinned_file_that_is_not_the_executable() {
-        let (dir, _exe) = staged(&LINUX_FILES);
-        assert!(matches!(
-            verify_candidate(
-                &dir.path().join("libssl.so.3"),
-                &pin_for(&LINUX_FILES, false)
-            ),
-            Err(TorBinaryError::NotTheExecutable(_))
-        ));
-    }
-
-    /// A missing candidate is a NotFound-kind `Io`, not a false pass.
-    #[test]
-    fn verify_missing_file_is_io_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("does-not-exist");
-        assert!(matches!(
-            verify_candidate(&missing, &pin_for(&LINUX_FILES, false)),
-            Err(TorBinaryError::Io {
-                kind: std::io::ErrorKind::NotFound,
-                ..
-            })
-        ));
-    }
-
-    /// A directory is refused as not-a-regular-file (before any read).
-    #[test]
-    fn verify_directory_is_not_a_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            verify_candidate(dir.path(), &pin_for(&LINUX_FILES, false)),
-            Err(TorBinaryError::NotAFile(_))
-        ));
-    }
-
-    /// A readable but non-executable candidate is refused with a curated error
-    /// — at spawn it would be a content-free failure tor never gets to log.
-    #[cfg(unix)]
-    #[test]
-    fn verify_non_executable_is_refused() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(
-            verify_candidate(&exe, &pin_for(&LINUX_FILES, false)).unwrap_err(),
-            TorBinaryError::NotExecutable(dir.path().canonicalize().unwrap().join("tor"))
-        );
-    }
-
-    /// One path, checked and used. Reached through a symlinked directory (an
-    /// install directory that is a link to the versioned one), the witness
-    /// names the **target** for both the executable and the library
-    /// directory — so what the loader is pointed at is what was checked.
-    #[cfg(unix)]
-    #[test]
-    fn verify_through_a_symlinked_directory_checks_and_uses_the_target() {
-        let (dir, _exe) = staged(&LINUX_FILES);
-        let links = tempfile::tempdir().unwrap();
-        let link = links.path().join("current");
-        std::os::unix::fs::symlink(dir.path(), &link).unwrap();
-
-        let real_dir = dir.path().canonicalize().unwrap();
-        let verified = verify_candidate(&link.join("tor"), &pin_for(&LINUX_FILES, false)).unwrap();
-        assert_eq!(verified.as_path(), real_dir.join("tor"));
-        assert_eq!(verified.library_dir(), Some(real_dir.as_path()));
-
-        // And the check is of the target: a plant there is seen through the link.
-        std::fs::write(dir.path().join("libz.so.1"), b"planted").unwrap();
-        assert!(matches!(
-            verify_candidate(&link.join("tor"), &pin_for(&LINUX_FILES, false)),
-            Err(TorBinaryError::UnexpectedEntry { .. })
-        ));
-    }
-
-    /// A candidate that is itself a symlink resolves to its target, and it is
-    /// the **target's** directory that must hold exactly the pinned files.
-    #[cfg(unix)]
-    #[test]
-    fn verify_canonicalizes_a_symlinked_candidate() {
-        let (dir, exe) = staged(&LINUX_FILES);
-        let links = tempfile::tempdir().unwrap();
-        let link = links.path().join("tor-link");
-        std::os::unix::fs::symlink(&exe, &link).unwrap();
-        let verified = verify_candidate(&link, &pin_for(&LINUX_FILES, false)).unwrap();
-        assert_eq!(verified.as_path(), exe.canonicalize().unwrap());
-        assert_eq!(
-            verified.library_dir(),
-            Some(dir.path().canonicalize().unwrap().as_path())
-        );
-    }
-
-    // --- candidate_from precedence KATs (the load-bearing selection policy,
-    // testable without touching process-global env). ---
-
-    /// Stage an executable at `<dir>/tor/tor`, the beside-the-executable
-    /// layout of an unpacked archive.
-    fn beside(dir: &Path) -> PathBuf {
-        let tor_dir = dir.join(BESIDE_TOR_DIR);
-        std::fs::create_dir(&tor_dir).unwrap();
-        let exe = tor_dir.join("tor");
-        write_executable(&exe, b"beside");
-        exe
-    }
-
-    #[test]
-    fn candidate_override_wins_even_over_an_existing_beside_binary() {
-        let dir = tempfile::tempdir().unwrap();
-        beside(dir.path());
-        let chosen = candidate_from(
-            Some(OsString::from("/explicit/override/tor")),
-            Some(dir.path()),
-            None,
-            "tor",
-        );
-        // The override is returned verbatim — even though it does not exist —
-        // so a typo surfaces as *its* error, never a silent fallback.
-        assert_eq!(chosen, Some(PathBuf::from("/explicit/override/tor")));
-    }
-
-    #[test]
-    fn candidate_empty_override_is_treated_as_unset() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = beside(dir.path());
-        let chosen = candidate_from(Some(OsString::new()), Some(dir.path()), None, "tor");
-        assert_eq!(chosen, Some(exe));
-    }
-
-    /// Tier 2 is `<exe_dir>/tor/tor`. A `tor` file directly beside the
-    /// executable — the layout before the bundle had a directory of its own —
-    /// is not a candidate: its directory is the executable's and could never
-    /// hold exactly the pinned files.
-    #[test]
-    fn candidate_beside_is_the_tor_directory_not_a_tor_file() {
-        let dir = tempfile::tempdir().unwrap();
-        write_executable(&dir.path().join("tor"), b"flat");
-        assert_eq!(candidate_from(None, Some(dir.path()), None, "tor"), None);
-
-        let dir = tempfile::tempdir().unwrap();
-        let exe = beside(dir.path());
-        assert_eq!(
-            candidate_from(None, Some(dir.path()), None, "tor"),
-            Some(exe)
-        );
-    }
-
-    /// The system tier is consulted when nothing is beside the executable, and
-    /// a beside bundle displaces it.
-    #[test]
-    fn candidate_well_known_yields_to_beside() {
-        let wk_dir = tempfile::tempdir().unwrap();
-        let wk = wk_dir.path().join("tor");
-        write_executable(&wk, b"staged");
-
-        let empty_beside = tempfile::tempdir().unwrap();
-        let chosen = candidate_from(None, Some(empty_beside.path()), Some(&wk), "tor");
-        assert_eq!(chosen, Some(wk.clone()));
-
-        let beside_dir = tempfile::tempdir().unwrap();
-        let exe = beside(beside_dir.path());
-        let chosen = candidate_from(None, Some(beside_dir.path()), Some(&wk), "tor");
-        assert_eq!(chosen, Some(exe));
-    }
-
-    /// The system candidate is version-exact, composed from the pin's own
-    /// labels — the layout contract with packaging (`/opt/shekyl/
-    /// <bundle_version>-<bundle_target>/tor`), pinned here so a layout drift
-    /// fails a test instead of silently never matching an installed bundle.
-    #[cfg(unix)]
-    #[test]
-    fn well_known_candidate_is_version_exact_from_the_pin() {
-        let pin = TorPin {
-            bundle_version: "15.0.24",
-            bundle_target: "linux-x86_64",
-            ..pin_for(&LINUX_FILES, false)
-        };
-        assert_eq!(
-            well_known_candidate(&pin),
-            Some(PathBuf::from("/opt/shekyl/15.0.24-linux-x86_64/tor"))
-        );
-    }
-
-    /// There is no `PATH` tier (TB-8): with nothing in the three tiers the
-    /// answer is "none", whatever `PATH` holds. `candidate_from` takes no
-    /// `PATH` argument, so this is the absence stated as a test rather than
-    /// left to be inferred from a signature.
-    #[test]
-    fn candidate_none_when_nothing_is_found() {
-        let empty = tempfile::tempdir().unwrap();
-        assert_eq!(candidate_from(None, Some(empty.path()), None, "tor"), None);
-    }
-
-    /// The compiled disposition is self-consistent: a pinned target's
-    /// executable is among its files and no two files fold to one name. (The
-    /// build script refuses a pin file that breaks these; this reads the
-    /// constant the binary actually carries.)
-    #[test]
-    fn compiled_disposition_is_well_formed() {
-        match CURRENT_DISPOSITION {
-            TorDisposition::Pinned(pin) => {
-                assert!(pin.files.iter().any(|f| f.name == pin.executable));
-                for (i, a) in pin.files.iter().enumerate() {
-                    for b in &pin.files[i + 1..] {
-                        assert!(!a.name.eq_ignore_ascii_case(b.name));
-                    }
-                }
-            }
-            TorDisposition::Unavailable { reason } => assert!(!reason.trim().is_empty()),
-        }
-        assert_eq!(TOR_SIGNING_KEY_FPR.len(), 40);
-    }
-
-    /// On a target we ship a managed tor for, the disposition must be
-    /// `Pinned` (so `discover_and_verify` can only fail on discovery or
-    /// verification, never on `Unavailable`). Guards against a row being
-    /// flipped in `config/tor_pins.json` without anyone meaning it.
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    #[test]
-    fn current_target_has_a_recorded_pin() {
-        assert!(
-            matches!(CURRENT_DISPOSITION, TorDisposition::Pinned(_)),
-            "linux/x86_64 and linux/aarch64 must have a recorded tor pin"
-        );
-    }
-
-    /// The recorded pin must match the *actual* bundle — the runtime guard for
-    /// the pin-time obligation (checklist bump correctness). Ignored in the
-    /// unit gate; the pin-verify lane (and the checklist re-verify step) runs
-    /// it with `SHEKYL_TEST_PINNED_TOR_BINARY` pointing at the `tor` inside a
-    /// directory staged by `scripts/release/tor_bundle.py` from the
-    /// signature-verified Expert Bundle — a distinct variable from the any-tor
-    /// `SHEKYL_TEST_TOR_BINARY` the lifecycle tests use, so the two contracts
-    /// cannot collide. Deliberately NOT `cfg`-gated: on a target with no pin it
-    /// fails loudly instead of compiling out and letting the checklist's
-    /// re-verify step pass with zero tests run.
-    #[test]
-    #[ignore = "requires the pinned Tor via SHEKYL_TEST_PINNED_TOR_BINARY"]
-    fn bundled_tor_matches_recorded_pin() {
-        let TorDisposition::Pinned(pin) = CURRENT_DISPOSITION else {
-            panic!("this build target has no recorded pin — pin it before re-verifying");
-        };
-        let bin = std::env::var_os("SHEKYL_TEST_PINNED_TOR_BINARY").expect(
-            "SHEKYL_TEST_PINNED_TOR_BINARY must point at the staged, pinned tor \
-             (GPG-verified per the RELEASE_CHECKLIST procedure) on the pin-verify lane",
-        );
-        verify_candidate(Path::new(&bin), &pin).expect(
-            "the staged bundle must match the recorded pin — if the bundle version changed, \
-             re-run the full checklist procedure (GPG-verify first), never record a hash \
-             from an unverified file",
-        );
-    }
-}
+#[path = "binary_tests.rs"]
+mod tests;
