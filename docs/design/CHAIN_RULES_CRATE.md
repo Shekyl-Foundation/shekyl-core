@@ -806,7 +806,12 @@ rule, locus }))` at the site that judged — the row is named where the decision
 is made. A block rule's error is a `ViewRead` (2026-10-07): `?` on a view
 method lifts `V::Fault` into `ViewRead::View`, and a parent-side hole or a
 stored bond key that is not canonical is `ViewRead::Corrupt`. `validate`
-maps that into `Fault` once (`Fault::from`). A transaction rule's error stays
+maps that into `Fault` once (`Fault::from`). The type over-claims — every
+block rule *can* halt the writer by its signature, and only B4 does — so the
+claim is held by a falsifier rather than a comment:
+`scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each `impl
+BlockRule` body for a way `Corrupt` can enter its error and refuses unless
+the set with a site is exactly `{B4}`. A transaction rule's error stays
 `V::Fault`; `tx_against` widens to `ViewRead` at its own boundary, where I12
 already did. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx **at the slot each occupies** — both stages derive at the slot they
@@ -1232,6 +1237,35 @@ adoption increments arrive rather than asserted. `BANNED` in the belt and
 together.
 
 ---
+
+### 6.6 The Corrupt-site gate — `scripts/ci/check_block_rule_corrupt_sites.py` (B4, review on #983)
+
+Added 2026-10-07 when `BlockRule::check` widened to `ViewRead<V::Fault>`
+(§4.6). The signature now admits a `Corrupt` from every block rule while the
+only rule that produces one is B4 (`anchor_window` through `recorded`,
+`committed_hybrid_key` for the bond key). A comment saying so is the kind of
+claim `16-architectural-inheritance` demotes; this gate is the check. It
+strips `//` comments, collects every function whose return type is
+`Result<…, ViewRead<…>>` (the lifting functions; `recorded` must be among
+them or the gate refuses its own subject), then walks each balanced `impl
+BlockRule for X {}` body for three site shapes: the literal
+`ViewRead::Corrupt(`; a `?` whose operand is a call to a lifting function
+not on the receiver `view` (a `?` on `view.method()` is `View`, never
+`Corrupt`; a `?` on something that is not a call is counted, since the gate
+cannot see its type); and a bare outer `Err(` that is neither the inner half
+of `Ok(Err(` nor wraps `InvalidBlock` nor is a match-arm pattern. The set of
+rules with at least one site must equal `CORRUPT_CAPABLE = {B4}`: a second
+rule with a site is a finding naming the site, and a listed rule with no site
+(or no `impl`) is a stale entry and refuses too. Subject refusals exit 2: no
+rule sources, no `impl BlockRule`, fewer than ten of them, no lifting
+function, `recorded` not a lifter. `--describe` prints every rule's sites;
+`--selftest` bites each refusal on synthetic sources and proves the three
+non-sites (a refusal built inside a `match`, `Err(_) =>` as a pattern,
+`Vec::extend` sharing a lifting method's name) stay clean. Wired as two steps
+in `docs-gates.yml` after the §6.4 pair, same append pattern. Falsified on
+the real tree before landing: a `recorded(view, cx.connecting)?` planted in
+G1 produced `block rule G1 can produce ViewRead::Corrupt (rules/body.rs:181
+recorded(…)?)`, exit 1.
 
 ## 7. Raising the conversion-ban gate (in this PR) — DONE, commit 7
 

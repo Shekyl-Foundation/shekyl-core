@@ -550,6 +550,31 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_chain_rules_coverage.py --selftest
 
+      - name: Run block-rule Corrupt-site gate
+        # `BlockRule::check` returns `ViewRead<V::Fault>` (CHAIN_RULES_CRATE.md
+        # §4.6, 2026-10-07), so every block rule's type says it can halt the
+        # writer while exactly one (CEN-B4) can. The gate reads each
+        # `impl BlockRule` body for the ways `Corrupt` can enter its error —
+        # a `ViewRead::Corrupt(` literal, a `?` on a lifting function, a bare
+        # outer `Err(` — and holds the set with a site to CORRUPT_CAPABLE
+        # exactly; a stale entry refuses too. Subject asserted: no rule
+        # files, no `impl BlockRule`, too few of them, no lifting function,
+        # `recorded` not among them — each exits 2 (47-gate-subject-assertion).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_block_rule_corrupt_sites.py
+
+      - name: Run block-rule Corrupt-site gate self-test
+        # Every refusal bitten red on synthetic sources: a second rule that
+        # lifts through `recorded`, one with the literal, one with an outer
+        # `Err(`, one with an opaque `?`, one calling a path-qualified lifting
+        # method; B4 with no site and B4 with no impl (stale entries); no
+        # impls, too few, no lifters, sentinel missing, empty tree. Proven NOT
+        # to trip: a comment naming the literal, `view.method()?`, a refusal
+        # built inside a `match`, `Err(_) =>` as a pattern, and `Vec::extend`
+        # sharing a lifting method's name.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_block_rule_corrupt_sites.py --selftest
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and

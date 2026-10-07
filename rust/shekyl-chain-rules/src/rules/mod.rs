@@ -264,6 +264,13 @@ pub(crate) trait BlockRule: Rule {
     /// a new shared fact is a new context field, and a new per-rule lookup
     /// is a new `ChainView` method. `?` on a view method lifts `V::Fault`
     /// into [`ViewRead::View`]; a parent-side hole goes through [`recorded`].
+    ///
+    /// The type says every block rule can halt the writer; only B4 can. That
+    /// gap is held by `scripts/ci/check_block_rule_corrupt_sites.py`, which
+    /// reads each `impl BlockRule` for a way `Corrupt` can enter its error
+    /// and refuses when the set is not exactly its `CORRUPT_CAPABLE`. A rule
+    /// that gains a `Corrupt` path is added there, with the reason, on a
+    /// reviewed day — not inferred from this signature.
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
