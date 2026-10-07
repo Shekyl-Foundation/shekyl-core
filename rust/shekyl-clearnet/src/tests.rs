@@ -17,7 +17,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, NetworkColumn, Sockets};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::mpsc;
 
 #[cfg(target_os = "linux")]
@@ -397,15 +397,13 @@ fn a_refused_direct_connect_names_the_address() {
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
     );
-    let handle = listener.runtime_handle().clone();
-    let port = handle.block_on(async {
-        let server = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .await
-            .expect("bind");
-        let port = server.local_addr().expect("addr").port();
-        drop(server);
-        port
-    });
+    // Bound, not listening. The port stays ours, so a parallel test cannot
+    // accept the dial, and the kernel answers it with RST.
+    let refusing = TcpSocket::new_v4().expect("socket");
+    refusing
+        .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind");
+    let port = refusing.local_addr().expect("addr").port();
     listener.dial(
         NetworkAddress::Ipv4 {
             ip: Ipv4Addr::LOCALHOST,
@@ -414,14 +412,18 @@ fn a_refused_direct_connect_names_the_address() {
         None,
     );
     let start_at = Instant::now();
-    while !seen
-        .lock()
-        .expect("causes")
-        .contains(&CloseKind::DialFailed)
-    {
-        assert!(start_at.elapsed() < Duration::from_secs(2), "refused");
+    loop {
+        let kinds = seen.lock().expect("causes").clone();
+        if kinds.contains(&CloseKind::DialFailed) {
+            break;
+        }
+        assert!(
+            start_at.elapsed() < Duration::from_secs(2),
+            "refused, saw {kinds:?}"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
+    drop(refusing);
     listener.shutdown();
     drop(engine);
 }
