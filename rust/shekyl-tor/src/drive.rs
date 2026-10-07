@@ -374,7 +374,7 @@ where
                     return stop(
                         &inbound_close,
                         hold.take(),
-                        &mut writer,
+                        WriteJoin::Pending(&mut writer),
                         CloseCause::new(CloseKind::LocalClose),
                     )
                     .await;
@@ -393,13 +393,25 @@ where
                     Err(_) => CloseKind::LocalClose,
                 };
                 let cause = CloseCause::new(kind);
-                return stop(&inbound_close, hold.take(), &mut writer, cause).await;
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    cause,
+                )
+                .await;
             }
             read_cause = &mut read_fut => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                return stop(&inbound_close, hold.take(), &mut writer, read_cause).await;
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
             }
             write_end = &mut writer => {
                 if gap_open {
@@ -409,20 +421,29 @@ where
                     Ok(cause) => cause,
                     Err(_) => CloseCause::new(CloseKind::LocalClose),
                 };
-                return stop(&inbound_close, hold.take(), &mut writer, cause).await;
+                return stop(&inbound_close, hold.take(), WriteJoin::Finished, cause).await;
             }
         }
     }
 }
 
-/// Seal the session, then abort the writer. A finished writer ignores the abort.
+/// Whether `select` has already polled the writer to completion.
+///
+/// A completed [`tokio::task::JoinHandle`] panics if it is polled again.
+/// [`WriteJoin::Finished`] is that arm. The others still hold a running task.
+enum WriteJoin<'a> {
+    Pending(&'a mut tokio::task::JoinHandle<CloseCause>),
+    Finished,
+}
+
+/// Seal the session. Abort the writer only when this select has not joined it.
 ///
 /// `hold` is absent only when a previous arm already took it. The inbound
 /// cause is recorded either way.
 async fn stop(
     inbound: &InboundEnd,
     hold: Option<QueueHold>,
-    writer: &mut tokio::task::JoinHandle<CloseCause>,
+    writer: WriteJoin<'_>,
     cause: CloseCause,
 ) -> CloseCause {
     if let Some(hold) = hold.as_ref() {
@@ -431,11 +452,27 @@ async fn stop(
         inbound.close(cause);
     }
     drop(hold);
-    writer.abort();
-    drop(writer.await);
+    if let WriteJoin::Pending(writer) = writer {
+        writer.abort();
+        drop(writer.await);
+    }
     cause
 }
 
 fn ignore<E>(result: Result<(), E>) {
     if let Err(_err) = result {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_joined_writer_is_not_polled_again() {
+        let ends = StreamEnds::open(8);
+        let mut writer = tokio::spawn(async { CloseCause::new(CloseKind::IoError) });
+        let joined = (&mut writer).await.expect("writer joined");
+        let cause = stop(&ends.inbound, Some(ends.hold), WriteJoin::Finished, joined).await;
+        assert_eq!(cause.kind(), CloseKind::IoError);
+    }
 }

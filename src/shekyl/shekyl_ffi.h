@@ -4435,6 +4435,9 @@ std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
 /// the row is present and the handshake has not, -1 when there is no row.
 /// The id is the socket id, not the UUID.
 int shekyl_seam_session_established(std::uint64_t id);
+/// The connector index of `id`'s row. Zero is clearnet. -1 when there is
+/// no row. The id is the socket id, not the UUID.
+int shekyl_seam_session_connector(std::uint64_t id);
 /// 1 when a hub is bound.
 int shekyl_seam_is_bound(void);
 /// 1 when `(kind, reply)` on `connector` should stop dials to that address.

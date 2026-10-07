@@ -9,13 +9,15 @@
 //! and direction, [`shekyl_seam_board_direction_count`] for that direction
 //! on every connector. Both count a row whether or not the handshake has
 //! finished. Address walks use [`shekyl_seam_board`]: one snapshot, and
-//! each visit is one fixed-size row. The row is the admission id, the
+//! each visit is one fixed-size row. An id is
+//! [`shekyl_seam_session_established`] or [`shekyl_seam_session_connector`].
+//! Those do not copy the board. The row is the admission id, the
 //! handshake flag, and the endpoint. Connector and direction are fields
 //! of that endpoint.
 
 use std::ffi::c_void;
 
-use shekyl_seam::{connector_from_index, direction_from_index, Row};
+use shekyl_seam::{connector_from_index, direction_from_index, Row, SocketId};
 
 use crate::seam_ffi::{
     hub, observed_c, ShekylSeamObserved, SHEKYL_DIRECTION_INBOUND, SHEKYL_DIRECTION_OUTBOUND,
@@ -82,19 +84,36 @@ pub extern "C" fn shekyl_seam_board_count(connector: u32, direction: u32) -> u64
     u64::try_from(hub.board().count(connector, direction)).unwrap_or(u64::MAX)
 }
 
+/// No published row for this id. A present row's answers are never negative.
+const NO_ROW: i32 = -1;
+
+/// The published row for `id`, copied out of the board.
+///
+/// The board is ordered by admission id. This is that order's lookup.
+fn published_row(id: u64) -> Option<Row> {
+    let id = SocketId::from_ffi(id)?;
+    hub()?.board().get(id).copied()
+}
+
 /// 1 when `id`'s row has finished the Levin handshake, 0 when the row is
-/// present and the handshake has not, -1 when the hub has no such row.
+/// present and the handshake has not, [`NO_ROW`] when the hub has no such row.
 #[no_mangle]
 pub extern "C" fn shekyl_seam_session_established(id: u64) -> i32 {
-    if id == 0 {
-        return -1;
-    }
-    let Some(hub) = hub() else {
-        return -1;
-    };
-    match hub.board().rows().iter().find(|row| row.id().get() == id) {
+    match published_row(id) {
         Some(row) => i32::from(row.established()),
-        None => -1,
+        None => NO_ROW,
+    }
+}
+
+/// The connector index of `id`'s row, or [`NO_ROW`] when the hub has no such row.
+///
+/// Zero is clearnet, so absence cannot be zero. A caller that needs the
+/// connector does not copy the board to find it.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_session_connector(id: u64) -> i32 {
+    match published_row(id) {
+        Some(row) => i32::from(row.connector() as u8),
+        None => NO_ROW,
     }
 }
 
@@ -307,6 +326,17 @@ mod tests {
         let row = seen.rows[0];
         assert_eq!(row.id, opened.id);
         assert_eq!(row.established, 0);
+        assert_eq!(shekyl_seam_session_established(opened.id), 0);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id),
+            i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
+        );
+        assert_eq!(shekyl_seam_session_established(0), NO_ROW);
+        assert_eq!(shekyl_seam_session_connector(0), NO_ROW);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id.wrapping_add(1)),
+            NO_ROW
+        );
         assert_doc_endpoint(&row);
         assert_eq!(
             shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
@@ -335,6 +365,11 @@ mod tests {
         assert_eq!(seen.rows.len(), 1);
         assert_eq!(seen.rows[0].id, opened.id);
         assert_eq!(seen.rows[0].established, 1);
+        assert_eq!(shekyl_seam_session_established(opened.id), 1);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id),
+            i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
+        );
         assert_doc_endpoint(&seen.rows[0]);
         assert_eq!(
             shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
@@ -342,6 +377,8 @@ mod tests {
         );
 
         shekyl_seam_close(opened.id);
+        assert_eq!(shekyl_seam_session_established(opened.id), NO_ROW);
+        assert_eq!(shekyl_seam_session_connector(opened.id), NO_ROW);
         assert_eq!(
             shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
             0

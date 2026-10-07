@@ -29,11 +29,27 @@ pub async fn write_all_counted<W>(write: &mut W, bytes: &[u8]) -> Result<(), usi
 where
     W: AsyncWrite + Unpin,
 {
+    write_counted(write, bytes, || {}).await
+}
+
+/// Write every byte, and call `on_accept` after each slice the socket took.
+///
+/// The hook runs before the next attempt. A prefix is therefore visible
+/// when a later write in the same grant fails, at the instant that slice
+/// was accepted.
+async fn write_counted<W, F>(write: &mut W, bytes: &[u8], mut on_accept: F) -> Result<(), usize>
+where
+    W: AsyncWrite + Unpin,
+    F: FnMut(),
+{
     let mut wrote = 0usize;
     while wrote < bytes.len() {
         match write.write(&bytes[wrote..]).await {
             Ok(0) | Err(_) => return Err(wrote),
-            Ok(n) => wrote += n,
+            Ok(n) => {
+                wrote += n;
+                on_accept();
+            }
         }
     }
     Ok(())
@@ -161,11 +177,8 @@ where
                             shutdown(write).await;
                             return CloseCause::new(CloseKind::SendQueueFull);
                         }
-                        result = write_all_counted(write, &wire[off..end]) => {
+                        result = write_counted(write, &wire[off..end], || stamp.store()) => {
                             stall.complete();
-                            if result.is_ok() {
-                                stamp.store();
-                            }
                             if let Err(wrote) = result {
                                 refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
                                 outbound.release(n);
@@ -364,6 +377,47 @@ mod tests {
 
     struct StuckRead {
         entered: Arc<AtomicBool>,
+    }
+
+    /// Accepts `limit` bytes, then fails. The flag is read on the failing poll,
+    /// which is after any accepted slice has had its chance to stamp.
+    struct PrefixThenFail {
+        taken: usize,
+        limit: usize,
+        gate: LinkGate,
+        conn: u64,
+        stamped_before_error: bool,
+    }
+
+    impl AsyncWrite for PrefixThenFail {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize, std::io::Error>> {
+            let this = self.get_mut();
+            if this.taken >= this.limit {
+                this.stamped_before_error = this.gate.activity(this.conn).0 > 0;
+                return Poll::Ready(Err(std::io::Error::other("stopped")));
+            }
+            let n = buf.len().min(this.limit - this.taken);
+            this.taken += n;
+            Poll::Ready(Ok(n))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
     }
 
     impl AsyncRead for StuckRead {
@@ -587,5 +641,49 @@ mod tests {
         task.abort();
         task.await.expect_err("aborted");
         assert_eq!(gate.held_stamps(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_prefix_before_an_error_stamps_the_send() {
+        let queue = ByteQueue::new(64);
+        queue.try_push(b"abcdef".to_vec()).expect("queue");
+        let overfull = queue.overfull();
+        let gate = LinkGate::new();
+        let mut stall = WriteStall::new(7);
+        let mut write = PrefixThenFail {
+            taken: 0,
+            limit: 2,
+            gate: gate.clone(),
+            conn: 7,
+            stamped_before_error: false,
+        };
+        let cause = write_capped(&mut write, &queue, &overfull, &gate, &mut stall, |plain| {
+            Ok(std::borrow::Cow::Borrowed(plain))
+        })
+        .await;
+        assert_eq!(cause.kind(), CloseKind::IoError);
+        assert!(write.stamped_before_error);
+    }
+
+    #[tokio::test]
+    async fn a_write_that_accepts_nothing_does_not_stamp() {
+        let queue = ByteQueue::new(64);
+        queue.try_push(b"abcdef".to_vec()).expect("queue");
+        let overfull = queue.overfull();
+        let gate = LinkGate::new();
+        let mut stall = WriteStall::new(7);
+        let mut write = PrefixThenFail {
+            taken: 0,
+            limit: 0,
+            gate: gate.clone(),
+            conn: 7,
+            stamped_before_error: false,
+        };
+        let cause = write_capped(&mut write, &queue, &overfull, &gate, &mut stall, |plain| {
+            Ok(std::borrow::Cow::Borrowed(plain))
+        })
+        .await;
+        assert_eq!(cause.kind(), CloseKind::IoError);
+        assert!(!write.stamped_before_error);
     }
 }

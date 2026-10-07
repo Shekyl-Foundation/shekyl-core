@@ -670,7 +670,17 @@ where
         session.close_cause()
     });
     drop(gap);
-    let seen = recorded.seen.lock().expect("causes").clone();
+    // The session publishes the cause at the seal. The sink is told after
+    // the writer join returns, so a snapshot taken here can still be empty.
+    let start = Instant::now();
+    let seen = loop {
+        let seen = recorded.seen.lock().expect("causes").clone();
+        if seen.contains(&cause.kind()) {
+            break seen;
+        }
+        assert!(start.elapsed() < Duration::from_secs(2), "cause");
+        std::thread::sleep(Duration::from_millis(5));
+    };
     pool.shutdown(Duration::from_millis(50));
     drop(engine);
     (cause, seen)
