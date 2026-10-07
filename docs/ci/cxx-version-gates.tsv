@@ -26,20 +26,13 @@ src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always tr
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_coinbase(tx))
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	return version <= 1;
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: whether the asked version is enabled	delete	hardfork	const bool enabled = current_version >= version;
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	const uint8_t start_version = height == 0 ? original_version : db.get_hard_fork_version(height);
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	earliest_height = get_earliest_ideal_height_for_version(version);
-src/cryptonote_basic/hardfork.cpp	1	block minor version (vote)	maps a zero vote to 1	delete	hardfork	if (b.minor_version == 0)
+src/cryptonote_basic/hardfork.cpp	1	block major version	CEN-B1: the major version is the one the height schedule names	delete	hardfork	if (major_version != version_at_height(height))
+src/cryptonote_basic/hardfork.cpp	1	block minor version	CEN-B2: the minor version is reserved; it is not a vote	collapse	hardfork	if (minor_version != CURRENT_BLOCK_MINOR_VERSION)
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the earliest height of a version in the table	delete	hardfork	if (i->version >= version) {
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: a new fork's version must increase	delete	hardfork	if (version <= heights.back().version)
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	if (version == 0)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: a vote is clamped to the newest table entry	delete	hardfork	if (voting_version > max_version)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	CEN-B1: the block's major version against the table's; the vote conjunct is gone	delete	hardfork	return block_version == heights[current_fork_index].version;
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	CEN-B1: the block's major version against the table's; the vote conjunct is gone	delete	hardfork	return block_version == heights[fork_index].version;
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	return db.get_hard_fork_version(height);
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	uint8_t lastv = db.get_hard_fork_version(db.height() - 1);
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	version = db.get_hard_fork_version(height);
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the index walks forward to the stored fork	delete	hardfork	while (current_fork_index + 1 < heights.size() && heights[current_fork_index].version != lastv)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the index walks back to the fork a reorg starts from	delete	hardfork	while (current_fork_index > 0 && heights[current_fork_index].version > start_version) {
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	b.major_version = m_hardfork->get_current_version();
 src/cryptonote_core/blockchain.cpp	2	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
@@ -48,8 +41,6 @@ src/cryptonote_core/blockchain.cpp	2	hard-fork table	always 1 today; the compari
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t ideal_hf_version = get_ideal_hard_fork_version(top_height);
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t major_version = m_hardfork->get_ideal_version(height);
-src/cryptonote_core/blockchain.cpp	1	block minor version	live: CEN-B2, the reserved value, beside the table's CEN-B1 check; the table call becomes the constant and the minor comparison stays as the rule	collapse	hardfork	if (!m_hardfork->check(bl) || bl.minor_version != CURRENT_BLOCK_MINOR_VERSION)
-src/cryptonote_core/blockchain.cpp	1	block minor version	live: CEN-B2, the reserved value, beside the table's CEN-B1 check; the table call becomes the constant and the minor comparison stays as the rule	collapse	hardfork	if (!m_hardfork->check_for_height(b, block_height) || b.minor_version != CURRENT_BLOCK_MINOR_VERSION)
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	if (!seen_future_version && bl.major_version > m_hardfork->get_ideal_version())
 src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (cur_tx.tx.version < 3)
 src/cryptonote_core/blockchain.cpp	1	block major version, from the table	always true at 1: the start-up pop of pre-fork blocks never runs	delete	hardfork	if (ideal_hf_version <= 1 || ideal_hf_version == top_block.major_version)

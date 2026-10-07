@@ -777,7 +777,7 @@ bool gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags::generate(std::vec
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
       test_generator::bf_major_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS+1, HF_VERSION_VIEW_TAGS+1, 0, crypto::hash(), 0, miner_tx);
+      HF_VERSION_VIEW_TAGS+1, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
@@ -816,7 +816,7 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
       test_generator::bf_major_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS, HF_VERSION_VIEW_TAGS, 0, crypto::hash(), 0, miner_tx);
+      HF_VERSION_VIEW_TAGS, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_accepted");

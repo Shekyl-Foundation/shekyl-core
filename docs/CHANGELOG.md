@@ -13,7 +13,10 @@
   takes it from its caller. Ruled 2026-10-06 with the deletion of the
   hard-fork mechanism, superseding the 2026-09-23 ruling that kept the vote
   window (`CONSENSUS_RULE_CENSUS.md` §10 R4).
-- `HardFork::check` compares the major version only. The class, its tables
+- `HardFork::check`, `check_for_height` and `add` share one predicate: the
+  major version is the one the height schedule names, and the minor version
+  is the reserved constant. The vote window, the threshold and the decoder
+  that read a minor of 0 as a vote for 1 are deleted. The class, its tables
   and its RPC surface are deleted in the PR that follows.
 - Blocks mined by earlier builds carried `1` and are invalid under this rule:
   the six captured replay chains are re-captured. Genesis carries `0` and is

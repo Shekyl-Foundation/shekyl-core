@@ -16,14 +16,13 @@
 //! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities, and neither
 //! is a vote or an "at least".
 //!
-//! The C++ reaches the same two answers by different routes. Its major
-//! check is `HardFork::check`, which compares the byte with the hard-fork
-//! table's entry in force; every network's table has one entry, version 1.
-//! Its minor check is a comparison with `CURRENT_BLOCK_MINOR_VERSION`.
-//! Until 2026-10-06 the minor byte was Monero's vote inside that same
-//! `HardFork::check`, where `0` was read as `1` and any value satisfied it,
-//! so the byte was free. `rule_set_tests` holds the C++ defines equal to
-//! the values here; the table's single entry is `hardforks.cpp`'s.
+//! The C++ holds both equalities in `HardFork::accepts_header`, which
+//! `check`, `check_for_height` and `add` all call. The major byte must
+//! equal the version the height schedule names; every network's table has
+//! one entry, version 1. The minor byte must equal
+//! `CURRENT_BLOCK_MINOR_VERSION`. There is no vote, and a minor of `0` is
+//! not read as `1`. `rule_set_tests` holds the C++ defines equal to the
+//! values here; the table's single entry is `hardforks.cpp`'s.
 //!
 //! B7 was the C++'s one-time warning for a `major_version` above the latest
 //! scheduled one, and it never refused. Its operand is a schedule a rule
@@ -38,11 +37,12 @@
 //! `RuleSchedule::rules_at(height)` names, on the main chain and on an
 //! alternative one alike.
 //!
-//! B1, B2 and B7 read the header and the rule set and nothing else, so they
-//! are [`FormRule`]s — the stateless stage's, run in `form` outside the
-//! write transaction (slice 2, Q9: stage membership is view-dependence, not
-//! which slice landed the rule). B5 reads the tip and a root and stays a
-//! [`BlockRule`].
+//! B1 reads the header and the rule set. B2 reads the header only: the
+//! reserved minor byte does not depend on which rule set is in force. B7
+//! reads neither and refuses nothing. All three are [`FormRule`]s — the
+//! stateless stage's, run in `form` outside the write transaction (slice 2,
+//! Q9: stage membership is view-dependence, not which slice landed the
+//! rule). B5 reads the tip and a root and stays a [`BlockRule`].
 
 use shekyl_types::BlockHash;
 use shekyl_wire::block::HEADER_MINOR_VERSION;
@@ -91,7 +91,7 @@ impl FormRule for B2 {
 }
 
 /// CEN-B7: a `major_version` above the latest scheduled version is **not**
-/// a refusal on this row — the C++ (`blockchain.cpp:5431–5441`) logs once
+/// a refusal on this row — the C++ (`blockchain.cpp:5212–5221`) logs once
 /// and continues, and B1 then refuses. Bucket 4, ported as-is: the row's
 /// whole effect is a log line the crate does not have, and its operand
 /// (`get_ideal_version()`, the schedule's last entry) is not a rule's to

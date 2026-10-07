@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "syncobj.h"
 #include "hardforks/hardforks.h"
 #include "cryptonote_basic/cryptonote_basic.h"
@@ -36,6 +38,18 @@ namespace cryptonote
 {
   class BlockchainDB;
 
+  /**
+   * Height schedule for the block major version.
+   *
+   * A header is admitted when its major version is the version this height
+   * names (CEN-B1) and its minor version is the reserved constant (CEN-B2).
+   * The minor byte is not a vote. There is no window and no threshold.
+   * `get_state` is an operator hint from the last scheduled fork's timestamp,
+   * not a consensus input.
+   *
+   * The class and the table itself are removed in the PR named in
+   * `docs/FOLLOWUPS.md` ("Delete the hard-fork mechanism").
+   */
   class HardFork
   {
   public:
@@ -45,229 +59,137 @@ namespace cryptonote
       Ready,
     } State;
 
-    static const uint64_t DEFAULT_ORIGINAL_VERSION_TILL_HEIGHT = 0; // <= actual height
     static const time_t DEFAULT_FORKED_TIME = 31557600; // a year in seconds
     static const time_t DEFAULT_UPDATE_TIME = 31557600 / 2;
-    static const uint64_t DEFAULT_WINDOW_SIZE = 10080; // supermajority window check length - a week
-    static const uint8_t DEFAULT_THRESHOLD_PERCENT = 80;
 
     /**
-     * @brief creates a new HardFork object
-     *
-     * @param original_version the block version for blocks 0 through to the first fork
-     * @param forked_time the time in seconds before thinking we're forked
-     * @param update_time the time in seconds before thinking we need to update
-     * @param window_size the size of the window in blocks to consider for version voting
-     * @param default_threshold_percent the size of the majority in percents
+     * @param original_version the version a height takes when no later table row covers it
+     * @param forked_time seconds after the last scheduled fork before `get_state` reports LikelyForked
+     * @param update_time seconds after the last scheduled fork before `get_state` reports UpdateNeeded
      */
-    HardFork(cryptonote::BlockchainDB &db, uint8_t original_version = 1, uint64_t original_version_till_height = DEFAULT_ORIGINAL_VERSION_TILL_HEIGHT, time_t forked_time = DEFAULT_FORKED_TIME, time_t update_time = DEFAULT_UPDATE_TIME, uint64_t window_size = DEFAULT_WINDOW_SIZE, uint8_t default_threshold_percent = DEFAULT_THRESHOLD_PERCENT);
+    HardFork(cryptonote::BlockchainDB &db, uint8_t original_version = 1, time_t forked_time = DEFAULT_FORKED_TIME, time_t update_time = DEFAULT_UPDATE_TIME);
 
     /**
-     * @brief add a new hardfork height
+     * @brief append one scheduled version
      *
-     * returns true if no error, false otherwise
-     *
-     * @param version the major block version for the fork
-     * @param height The height the hardfork takes effect
-     * @param threshold The threshold of votes needed for this fork (0-100)
-     * @param time Approximate time of the hardfork (seconds since epoch)
-     */
-    bool add_fork(uint8_t version, uint64_t height, uint8_t threshold, time_t time);
-
-    /**
-     * @brief add a new hardfork height
-     *
-     * returns true if no error, false otherwise
-     *
-     * @param version the major block version for the fork
-     * @param height The height the hardfork takes effect
-     * @param time Approximate time of the hardfork (seconds since epoch)
+     * Rows must arrive in increasing version, height and time.
+     * Version 0 is refused. Returns false on a refusal, true when the row is stored.
      */
     bool add_fork(uint8_t version, uint64_t height, time_t time);
 
     /**
-     * @brief initialize the object
+     * @brief finish registration
      *
-     * Must be done after adding all the required hardforks via add above
+     * An empty table receives one placeholder row at `original_version`.
+     * The version at a height is computed from the table, so nothing is read
+     * back from the chain.
      */
     void init();
 
     /**
-     * @brief check whether a new block would be accepted
+     * @brief CEN-B1 and CEN-B2 at the chain height
      *
-     * returns true if the block is accepted, false otherwise
-     *
-     * @param block the new block
-     *
-     * This check is made by add. It is exposed publicly to allow
-     * the caller to inexpensively check whether a block would be
-     * accepted or rejected by its version number. Indeed, if this
-     * check could only be done as part of add, the caller would
-     * either have to add the block to the blockchain first, then
-     * call add, then have to pop the block from the blockchain if
-     * its version did not satisfy the hard fork requirements, or
-     * call add first, then, if the hard fork requirements are met,
-     * add the block to the blockchain, upon which a failure (the
-     * block being invalid, double spending, etc) would cause the
-     * hardfork object to reorganize.
+     * Called before the block is stored, when `db.height()` is the block's height.
      */
     bool check(const cryptonote::block &block) const;
 
     /**
-     * @brief same as check, but for a particular height, rather than the top
+     * @brief CEN-B1 and CEN-B2 at an explicit height
      *
-     * NOTE: this does not play well with voting, and relies on voting to be
-     * disabled (that is, forks happen on the scheduled date, whether or not
-     * enough blocks have voted for the fork).
-     *
-     * returns true if no error, false otherwise
-     *
-     * @param block the new block
-     * @param height which height to check for
+     * The alternative-chain path validates a block that is not the chain tip.
      */
     bool check_for_height(const cryptonote::block &block, uint64_t height) const;
 
     /**
-     * @brief add a new block
+     * @brief record the scheduled version at `height` when the header is admitted
      *
-     * returns true if no error, false otherwise
-     *
-     * @param block the new block
+     * `height` is the block's own height. The store calls this after the block
+     * is written, so `db.height()` may already be one past `height`.
+     * Returns false when the header is not admitted. The version recorded is
+     * the schedule's, which the predicate has just required the major byte to equal.
      */
     bool add(const cryptonote::block &block, uint64_t height);
 
     /**
-     * @brief called when the blockchain is reorganized
-     *
-     * This will rescan the blockchain to determine which hard forks
-     * have been triggered
-     *
-     * returns true if no error, false otherwise
-     *
-     * @param blockchain the blockchain
-     * @param height of the last block kept from the previous blockchain
-     */
-    bool reorganize_from_block_height(uint64_t height);
-    bool reorganize_from_chain_height(uint64_t height);
-
-    /**
-     * @brief called when one or more blocks are popped from the blockchain
-     *
-     * The current fork will be updated by looking up the db,
-     * which is much cheaper than recomputing everything
-     *
-     * @param new_chain_height the height of the chain after popping
-     */
-    void on_block_popped(uint64_t new_chain_height);
-
-    /**
-     * @brief returns current state at the given time
-     *
-     * Based on the approximate time of the last known hard fork,
-     * estimate whether we need to update, or if we're way behind
-     *
-     * @param t the time to consider
+     * @brief operator hint from the last scheduled fork's timestamp
      */
     State get_state(time_t t) const;
     State get_state() const;
 
     /**
-     * @brief returns the hard fork version for the given block height
+     * @brief version recorded for a stored height, or the schedule at the chain height
      *
-     * @param height height of the block to check
+     * `height == db.height()` has no stored row yet and answers
+     * `version_at_height`. A height above the chain is a caller bug and returns 255.
      */
     uint8_t get(uint64_t height) const;
 
     /**
-     * @brief returns the latest "ideal" version
-     *
-     * This is the latest version that's been scheduled
+     * @brief the newest scheduled version
      */
     uint8_t get_ideal_version() const;
 
     /**
-     * @brief returns the "ideal" version for a given height
-     *
-     * @param height height of the block to check
+     * @brief the version the schedule names at `height`
      */
     uint8_t get_ideal_version(uint64_t height) const;
 
     /**
-     * @brief returns the next version
-     *
-     * This is the version which will we fork to next
+     * @brief the next scheduled version at the chain height, or the current one when none follows
      */
     uint8_t get_next_version() const;
 
     /**
-     * @brief returns the current version
+     * @brief the version the schedule names at the chain height
      *
-     * This is the latest version that's past its trigger date and had enough votes
-     * at one point in the past.
+     * This is the version the next block must carry.
      */
     uint8_t get_current_version() const;
 
     /**
-     * @brief returns the earliest block a given version may activate
+     * @brief earliest height at which `version` is scheduled, or the uint64 maximum when it never is
      */
     uint64_t get_earliest_ideal_height_for_version(uint8_t version) const;
 
     /**
-     * @brief returns information about current voting state
+     * @brief schedule facts for the hard_fork_info projection
      *
-     * returns true if the given version is enabled (ie, the current version
-     * is at least the passed version), false otherwise
-     *
-     * @param version the version to check voting for
-     * @param window the number of blocks considered in voting
-     * @param votes number of votes for next version
-     * @param threshold number of votes needed to switch to next version
-     * @param earliest_height earliest height at which the version can take effect
+     * There is no vote. `window`, `votes` and `threshold` are written as 0.
+     * Returns whether the schedule at the chain height has reached `version`.
+     * `voting` is the newest scheduled version. `earliest_height` is
+     * `get_earliest_ideal_height_for_version`.
      */
     bool get_voting_info(uint8_t version, uint32_t &window, uint32_t &votes, uint32_t &threshold, uint64_t &earliest_height, uint8_t &voting) const;
 
-    /**
-     * @brief returns the size of the voting window in blocks
-     */
-    uint64_t get_window_size() const { return window_size; }
-
-    /**
-     * @brief returns info for all known hard forks
-     */
     const std::vector<hardfork_t>& get_hardforks() const { return heights; }
 
   private:
+    /**
+     * @brief version named at `height`
+     *
+     * The caller holds `lock`. Index 0 is not consulted: the walk starts at
+     * the last row and stops before the first, and a height that matches no
+     * later row takes `original_version`. A one-row table therefore names
+     * `original_version` at every height. Shipped networks set both to 1.
+     */
+    uint8_t version_at_height(uint64_t height) const;
 
-    uint8_t get_block_version(uint64_t height) const;
-    bool do_check(uint8_t block_version) const;
-    bool do_check_for_height(uint8_t block_version, uint64_t height) const;
-    int get_voted_fork_index(uint64_t height) const;
-    uint8_t get_effective_version(uint8_t voting_version) const;
-    bool add(uint8_t block_version, uint8_t voting_version, uint64_t height);
-
-    bool rescan_from_block_height(uint64_t height);
-    bool rescan_from_chain_height(uint64_t height);
-
-  private:
+    /**
+     * @brief CEN-B1 and CEN-B2
+     *
+     * The caller holds `lock`.
+     */
+    bool accepts_header(uint8_t major_version, uint8_t minor_version, uint64_t height) const;
 
     BlockchainDB &db;
 
     time_t forked_time;
     time_t update_time;
-    uint64_t window_size;
-    uint8_t default_threshold_percent;
-
     uint8_t original_version;
-    uint64_t original_version_till_height;
 
     std::vector<hardfork_t> heights;
-
-    std::deque<uint8_t> versions; /* rolling window of the last N blocks' versions */
-    unsigned int last_versions[256]; /* count of the block versions in the last N blocks */
-    uint32_t current_fork_index;
 
     mutable epee::critical_section lock;
   };
 
 }  // namespace cryptonote
-

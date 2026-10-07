@@ -340,33 +340,26 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   if (m_hardfork == nullptr)
-  {
-    if (m_nettype ==  FAKECHAIN || m_nettype == STAGENET)
-      m_hardfork = new HardFork(*db, 1, 0);
-    else if (m_nettype == TESTNET)
-      m_hardfork = new HardFork(*db, 1, testnet_hard_fork_version_1_till);
-    else
-      m_hardfork = new HardFork(*db, 1, mainnet_hard_fork_version_1_till);
-  }
+    m_hardfork = new HardFork(*db, 1);
   if (m_nettype == FAKECHAIN)
   {
     for (size_t n = 0; test_options->hard_forks[n].first; ++n)
-      m_hardfork->add_fork(test_options->hard_forks[n].first, test_options->hard_forks[n].second, 0, n + 1);
+      m_hardfork->add_fork(test_options->hard_forks[n].first, test_options->hard_forks[n].second, n + 1);
   }
   else if (m_nettype == TESTNET)
   {
     for (size_t n = 0; n < num_testnet_hard_forks; ++n)
-      m_hardfork->add_fork(testnet_hard_forks[n].version, testnet_hard_forks[n].height, testnet_hard_forks[n].threshold, testnet_hard_forks[n].time);
+      m_hardfork->add_fork(testnet_hard_forks[n].version, testnet_hard_forks[n].height, testnet_hard_forks[n].time);
   }
   else if (m_nettype == STAGENET)
   {
     for (size_t n = 0; n < num_stagenet_hard_forks; ++n)
-      m_hardfork->add_fork(stagenet_hard_forks[n].version, stagenet_hard_forks[n].height, stagenet_hard_forks[n].threshold, stagenet_hard_forks[n].time);
+      m_hardfork->add_fork(stagenet_hard_forks[n].version, stagenet_hard_forks[n].height, stagenet_hard_forks[n].time);
   }
   else
   {
     for (size_t n = 0; n < num_mainnet_hard_forks; ++n)
-      m_hardfork->add_fork(mainnet_hard_forks[n].version, mainnet_hard_forks[n].height, mainnet_hard_forks[n].threshold, mainnet_hard_forks[n].time);
+      m_hardfork->add_fork(mainnet_hard_forks[n].version, mainnet_hard_forks[n].height, mainnet_hard_forks[n].time);
   }
   m_hardfork->init();
 
@@ -467,7 +460,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   {
     m_timestamps_and_difficulties_height = 0;
     m_reset_timestamps_and_difficulties_height = true;
-    m_hardfork->reorganize_from_chain_height(get_current_blockchain_height());
     uint64_t top_block_height;
     crypto::hash top_block_hash = get_tail_id(top_block_height);
     m_tx_pool.on_blockchain_dec(top_block_height, top_block_hash);
@@ -709,9 +701,6 @@ block Blockchain::pop_block_from_blockchain()
     LOG_ERROR("Error popping block from blockchain, throwing!");
     throw;
   }
-
-  // make sure the hard fork object updates its current version
-  m_hardfork->on_block_popped(1);
 
   // return transactions from popped block to the tx_pool
   size_t pruned = 0;
@@ -1105,9 +1094,6 @@ bool Blockchain::rollback_blockchain_switching(std::list<detached_block>& origin
   }
   CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(), "Error updating next cumulative weight limit");
 
-  // make sure the hard fork object updates its current version
-  m_hardfork->reorganize_from_chain_height(rollback_height);
-
   //return back original chain
   for (auto& entry : original_chain)
   {
@@ -1121,8 +1107,6 @@ bool Blockchain::rollback_blockchain_switching(std::list<detached_block>& origin
     bool r = handle_block_to_main_chain(entry.bl, restore_id, bvc, connect);
     CHECK_AND_ASSERT_MES(r && block_added(bvc), false, "PANIC! failed to add (again) block while chain switching during the rollback!");
   }
-
-  m_hardfork->reorganize_from_chain_height(rollback_height);
 
   MINFO("Rollback to height " << rollback_height << " was successful.");
   if (!original_chain.empty())
@@ -1248,8 +1232,6 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
   {
     m_db->remove_alt_block(cryptonote::get_block_hash(bei.bl));
   }
-
-  m_hardfork->reorganize_from_chain_height(split_height);
 
   std::shared_ptr<tools::Notify> reorg_notify = m_reorg_notify;
   if (reorg_notify)
@@ -2105,14 +2087,12 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
-  // this is a cheap test
+  // CEN-B1 and CEN-B2, both inside check_for_height.
   const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
-  // CEN-B1: the major version is the table's at this height. CEN-B2: the
-  // minor version is reserved at one value.
-  if (!m_hardfork->check_for_height(b, block_height) || b.minor_version != CURRENT_BLOCK_MINOR_VERSION)
+  if (!m_hardfork->check_for_height(b, block_height))
   {
     LOG_PRINT_L1("Block with id: " << id << std::endl << "has version " << (unsigned)b.major_version << "." << (unsigned)b.minor_version
-        << " at height " << block_height << ", which is not the version in force with minor version " << CURRENT_BLOCK_MINOR_VERSION);
+        << " at height " << block_height << ", expected " << (unsigned)hf_version << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     return false;
   }
@@ -5240,14 +5220,12 @@ leave:
     MCLOG_RED(level, "global", "**********************************************************************");
   }
 
-  // this is a cheap test
+  // CEN-B1 and CEN-B2, both inside check.
   const uint8_t hf_version = get_current_hard_fork_version();
-  // CEN-B1: the major version is the table's current one. CEN-B2: the minor
-  // version is reserved at one value.
-  if (!m_hardfork->check(bl) || bl.minor_version != CURRENT_BLOCK_MINOR_VERSION)
+  if (!m_hardfork->check(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has version " << (unsigned)bl.major_version << "." << (unsigned)bl.minor_version
-        << ", expected " << (unsigned)hf_version << "." << CURRENT_BLOCK_MINOR_VERSION);
+        << ", expected " << (unsigned)hf_version << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     goto leave;
   }
@@ -5808,20 +5786,17 @@ leave:
   // constant (rule 60; git history has the shape). The burn amount below
   // carries ONLY the fee-burn's destroyed share.
   //
-  // Computed HERE, before m_db->add_block, for two load-bearing reasons:
-  //  - Version operand (F-B1b): the operand is bl.major_version — the block's
-  //    OWN declared version, consensus-bound by m_hardfork->check(bl) above
-  //    (do_check: bl.major_version == the voted current version) before this
-  //    point is reachable. Explicit per-block anchoring per §2.2: no
-  //    dependence on where get_current_version() sits relative to add_block
-  //    (post-add it has advanced to the NEXT block's voted version — the
-  //    original F-B1b bug; pre-add it happens to equal bl.major_version, but
-  //    only via the height+1 advance convention this operand choice retires).
-  //    NOT get_ideal_version(height): that is the static-table lookup and
-  //    ignores the vote threshold, so it can disagree with the version the
-  //    block was validated as. Do NOT reintroduce a get_block_reward call or
-  //    a second version read in this block — verify's base_reward and
-  //    bl.major_version ARE the operands (tripwire-guarded:
+  // Computed HERE, before m_db->add_block, for one load-bearing reason, and
+  // with a version read that must stay absent:
+  //  - The version operand (F-B1b) is retired. compute_emission_split and
+  //    compute_fee_burn take no version. The historical bug read
+  //    get_current_version() after add_block, which names the next block,
+  //    or get_ideal_version, which was a table lookup that ignored the vote.
+  //    The vote is gone, and get_ideal_version now agrees with the check;
+  //    neither read is an operand of this block. Do NOT reintroduce a
+  //    get_block_reward call or either version read here. If a version
+  //    operand ever returns, it is bl.major_version, the byte accepts_header
+  //    already required (tripwire:
   //    scripts/ci/check_archival_reward_gates.sh).
   //  - Write ordering (F-B1a): the accrual amount rides into add_block and is
   //    written before the epoch-close hook fires, so the close of epoch E
