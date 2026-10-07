@@ -115,7 +115,9 @@ jobs:
           # never in /usr/local/bin where it would shadow a distribution's
           # tor. Both paths come from config/tor_pins.json through
           # scripts/release/tor_bundle.py; nothing here restates a version
-          # or a digest.
+          # or a digest. The bundle does not ship zlib (TOR_BUNDLE_DISTRIBUTION.md
+          # §5a); the packages depend on the distribution's zlib so a fresh
+          # install has libz.so.1 before the first launch.
           #
           # stage_tor <gitian-host> <archive-bin-dir> <package-root>
           stage_tor() {
@@ -140,7 +142,10 @@ jobs:
             case "$pkg" in
               *.deb) dpkg-deb -x "$pkg" "$unpacked" ;;
               *.rpm) rpm2cpio "$pkg" > "$unpacked.cpio"
-                     (cd "$unpacked" && cpio -idm --quiet < "$unpacked.cpio")
+                     # rpm member names are absolute. Without this flag GNU cpio
+                     # writes them to the real filesystem and the check either
+                     # fails as the runner or inspects a directory it did not unpack.
+                     (cd "$unpacked" && cpio -idm --quiet --no-absolute-filenames < "$unpacked.cpio")
                      rm -f "$unpacked.cpio" ;;
               *) echo "check_packed_tor: unknown package type: $pkg" >&2; return 1 ;;
             esac
@@ -182,6 +187,7 @@ jobs:
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
               --license "BSD-3-Clause" --architecture amd64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
               --deb-no-default-config-files \
               -C "$STAGE" .
@@ -201,6 +207,7 @@ jobs:
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
               --license "BSD-3-Clause" --architecture x86_64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib \
               -C "$STAGE_RPM" .
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.x86_64.rpm"
 
@@ -229,6 +236,7 @@ jobs:
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
               --license "BSD-3-Clause" --architecture arm64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
               --deb-no-default-config-files \
               -C "$STAGE" .
@@ -248,6 +256,7 @@ jobs:
               --url "https://github.com/Shekyl-Foundation/shekyl-core" \
               --license "BSD-3-Clause" --architecture aarch64 \
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib \
               -C "$STAGE_RPM" .
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.aarch64.rpm"
 
