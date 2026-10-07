@@ -385,6 +385,12 @@ bound `K`.
     `the_managed_launch_never_lengthens_circuit_reuse`).
   - An operator who points the daemon at a Tor of their own must not
     disable `IsolateSOCKSAuth` on its `SocksPort`.
+  - The credentials are derived from the read's nonce, so they exist
+    only between the daemon and its own Tor. A local controller
+    subscribed to that Tor's `STREAM` events can read them; nothing of
+    ours logs them, a nonce does not mark a read as a challenge without
+    the seed, and after the reveal a challenge's nonces are public
+    (`SF-D3`).
 - **Ordering.** The client builds no carrier for `h` until every read of
   `h` has completed or been abandoned. A carrier reveals the seed, and
   the seed exposes that block's remaining reads.

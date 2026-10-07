@@ -299,11 +299,27 @@ configuration.
   the header and present the same pair; so does the retry after a 400,
   which keeps the nonce.
 - **How it is held.** The credentials are a function of the read's nonce
-  (`RequestHeader::socks_credentials`, `shekyl-p-fetch`): a fixed
-  username, and the nonce in hex as the password. A new read has a new
-  nonce and so new credentials; a retried header has the same. They go
-  to the local Tor and no further, and that Tor already carries the
-  request with its nonce.
+  (`RequestHeader::socks_credentials`, `shekyl-p-fetch`): the nonce in
+  hex as the username, and a fixed password. A new read has a new nonce
+  and so new credentials; a retried header has the same. The nonce is
+  the username so that isolation does not depend on which of the two
+  fields a given Tor compares.
+- **Where the credentials can be seen.** They go to the local Tor and no
+  further, and that Tor already carries the request with its nonce. The
+  one other place is that Tor's control port: `STREAM` events carry
+  `SOCKS_USERNAME` and `SOCKS_PASSWORD`, so a local controller subscribed
+  to them sees nonces. That is software on the reader's own machine. A
+  nonce does not mark a read as a challenge without the seed, and after
+  the reveal a challenge's nonces are public. Neither `shekyl-p-fetch`
+  nor the control client logs the fields: `shekyl-p-fetch` has no
+  logging, `SocksUsername` and the control client's `ControlReply` redact
+  themselves in `Debug`, and no production code subscribes to `STREAM`.
+- **Shown against a real Tor.** The stub tests show what the client
+  presents, not what Tor does with it. `shekyl-sp-t3-spike`'s
+  `read_isolation` test reads the client Tor's control port over real
+  rendezvous circuits: two reads of one shard ride different circuits,
+  and a stall retry inside one read stays on its circuit. It is
+  `#[ignore]`d behind the pinned Tor binary.
 - **Only username/password is offered.** A proxy that selects "no
   authentication" would put the read back on a shared circuit without an
   error, so the handshake fails before CONNECT

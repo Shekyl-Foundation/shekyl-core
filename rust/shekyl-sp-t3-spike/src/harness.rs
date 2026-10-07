@@ -99,8 +99,8 @@ use shekyl_tor_control_client::control::onion::{
 };
 use shekyl_tor_control_client::control::{
     ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    EventSink, ManagedTor, Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
-    WaitReadyError,
+    ControlReply, EventSink, ManagedTor, Signal, SocksPort, TorControlClient,
+    TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -238,7 +238,11 @@ impl ManagedInstance {
     /// scheme has a window in which any of the others (or anything else on
     /// the box) can take the port first, failing an otherwise valid W₂ run
     /// nondeterministically.
-    async fn launch(tor_binary: &Path, data_dir: PathBuf) -> Result<Self, ApparatusError> {
+    async fn launch(
+        tor_binary: &Path,
+        data_dir: PathBuf,
+        events: EventSink,
+    ) -> Result<Self, ApparatusError> {
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let verified = shekyl_tor_control_client::binary::discover_and_verify_at(tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
@@ -250,7 +254,7 @@ impl ManagedInstance {
                 disable_network: false,
                 exit_observer: None,
             }),
-            events: EventSink::unsubscribed(),
+            events,
             readiness,
         });
 
@@ -476,6 +480,9 @@ pub struct Apparatus {
     /// `NEWNYM`s the client tor's control port did not answer and that were
     /// retried — an apparatus count, reported apart from every arm.
     newnym_unanswered: AtomicU64,
+    /// The client tor's async control events, until a caller takes them
+    /// ([`Self::observe_client`]).
+    client_events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ControlReply>>>,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
     /// The body length every fetch is checked against — **derived, never
@@ -655,15 +662,24 @@ impl Apparatus {
         // Launch every tor at once: the client's and one per persona.
         let tor_binary = Arc::<Path>::from(tor_binary);
         let mut launches = tokio::task::JoinSet::new();
+        // The client tor's async control events. Nothing arrives until a
+        // caller subscribes with [`Apparatus::observe_client`].
+        let (client_events_tx, client_events_rx) = tokio::sync::mpsc::unbounded_channel();
         {
             let bin = Arc::clone(&tor_binary);
             let dir = data_dir.join("client-tor");
-            launches.spawn(async move { (None, ManagedInstance::launch(&bin, dir).await) });
+            launches.spawn(async move {
+                let sink = EventSink::new(client_events_tx);
+                (None, ManagedInstance::launch(&bin, dir, sink).await)
+            });
         }
         for slot in 0..persona_count {
             let bin = Arc::clone(&tor_binary);
             let dir = data_dir.join(format!("persona-{slot}-tor"));
-            launches.spawn(async move { (Some(slot), ManagedInstance::launch(&bin, dir).await) });
+            launches.spawn(async move {
+                let sink = EventSink::unsubscribed();
+                (Some(slot), ManagedInstance::launch(&bin, dir, sink).await)
+            });
         }
         let mut client_tor = None;
         let mut serving_tors: Vec<Option<ManagedInstance>> =
@@ -756,6 +772,7 @@ impl Apparatus {
             client,
             last_newnym: Mutex::new(None),
             newnym_unanswered: AtomicU64::new(0),
+            client_events: Mutex::new(Some(client_events_rx)),
             personas,
             expected_lens,
         })
@@ -778,6 +795,63 @@ impl Apparatus {
             .ok()
             .and_then(|i| self.expected_lens.get(i))
             .copied()
+    }
+
+    /// Subscribe the client tor's control port to `events` (`SETEVENTS`) and
+    /// take the stream of its async replies.
+    ///
+    /// For the checks that have to see what tor did with a fetch, not what
+    /// the client asked for: which circuit a stream was attached to, and
+    /// whether a descriptor was fetched. One caller per apparatus.
+    ///
+    /// # Errors
+    ///
+    /// [`ApparatusError::Control`] if the events were already taken or the
+    /// control port refuses the subscription.
+    pub async fn observe_client(
+        &self,
+        events: &[&str],
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<ControlReply>, ApparatusError> {
+        let rx = self
+            .client_events
+            .lock()
+            .expect("the events slot is never held across a panic")
+            .take()
+            .ok_or_else(|| ApparatusError::Control("client events already taken".to_owned()))?;
+        self.client_tor
+            .control
+            .ask(Command::SetEvents(
+                events.iter().map(|e| (*e).to_owned()).collect(),
+            ))
+            .await
+            .map_err(|e| ApparatusError::Control(e.to_string()))?;
+        Ok(rx)
+    }
+
+    /// One fetch of `shard_id` from persona `persona_index` under a header
+    /// and timeouts the caller chose, through a client of its own on the
+    /// client tor.
+    ///
+    /// The timed arms mint a header per fetch ([`fetch_via`]). This is for a
+    /// caller that has to hold the header, to send the same one twice the
+    /// way a stall retry does, or to bound a fetch so that it stalls.
+    ///
+    /// # Errors
+    ///
+    /// The client's own verdict.
+    pub async fn fetch_with(
+        &self,
+        persona_index: usize,
+        shard_id: u64,
+        header: &RequestHeader,
+        timeouts: Timeouts,
+    ) -> Result<usize, FetchError> {
+        let client = PFetchClient::with_timeouts(self.client_tor.socks, timeouts);
+        let target = self.personas[persona_index].target(shard_id);
+        client
+            .fetch(&target, header, Arc::new(AcceptAnyContent))
+            .await
+            .map(|shard| shard.body().len())
     }
 
     /// The client tor's SOCKS endpoint — the "daemon's tor zone" every fetch

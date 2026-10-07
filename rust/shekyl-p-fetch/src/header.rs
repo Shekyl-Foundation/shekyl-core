@@ -20,9 +20,9 @@ use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYT
 use shekyl_socks::SocksUsername;
 use shekyl_types::BlockHeight;
 
-/// The SOCKS username every read presents. The password is what tells two
+/// The SOCKS password every read presents. The username is what tells two
 /// reads apart; see [`RequestHeader::socks_credentials`].
-const READ_SOCKS_USERNAME: &[u8] = b"shekyl-fetch";
+const READ_SOCKS_PASSWORD: &[u8] = b"shekyl-fetch";
 
 // The textual carrier (`serving_route`) and the signed layout (`pass_anchor`)
 // are owned by different crates on purpose; this is where they must agree.
@@ -106,7 +106,7 @@ impl RequestHeader {
     }
 
     /// The SOCKS credentials this read's dials present (`SF-D3`, as ruled
-    /// 2026-10-07): a fixed username and the nonce in lowercase hex as the
+    /// 2026-10-07): the nonce in lowercase hex as the username, and a fixed
     /// password.
     ///
     /// Tor's `IsolateSOCKSAuth` gives each distinct pair its own circuit, so
@@ -115,17 +115,22 @@ impl RequestHeader {
     /// presents the header it retries, so it presents the same pair. A retry
     /// with a fresh anchor keeps the nonce, so it does too.
     ///
+    /// The nonce is the username, not the password, so the isolation does
+    /// not depend on which of the two fields a given Tor compares.
+    ///
     /// The pair never leaves this host: SOCKS credentials go to the local
     /// Tor and no further. That Tor already carries the request, nonce
-    /// included, so the password shows it nothing new.
+    /// included. A local controller subscribed to `STREAM` events can read
+    /// the username there; nothing in this crate logs it, and
+    /// [`SocksUsername`] redacts itself in `Debug`.
     pub(crate) fn socks_credentials(&self) -> SocksUsername {
-        let mut password = [0u8; 2 * PASS_NONCE_LEN];
-        for (pair, byte) in password.chunks_exact_mut(2).zip(self.nonce()) {
+        let mut username = [0u8; 2 * PASS_NONCE_LEN];
+        for (pair, byte) in username.chunks_exact_mut(2).zip(self.nonce()) {
             pair[0] = HEX[usize::from(byte >> 4)];
             pair[1] = HEX[usize::from(byte & 0x0f)];
         }
-        SocksUsername::new(READ_SOCKS_USERNAME, &password)
-            .expect("a non-empty username and a 64-byte password are in range")
+        SocksUsername::new(&username, READ_SOCKS_PASSWORD)
+            .expect("a 64-byte username and a short password are in range")
     }
 
     /// The decoded 72-byte wire layout.

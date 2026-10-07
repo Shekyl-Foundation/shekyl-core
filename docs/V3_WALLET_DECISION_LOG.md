@@ -6252,8 +6252,8 @@ and replaced by pointers; what each still owns is the specification's
    against a flooded onion; slower organic bulk reads. `SF-D7`'s
    in-flight cap loses its premise that no fetch builds a circuit.
 
-   **As built:** the credentials are a function of the read's nonce, a
-   fixed username with the nonce in hex as the password, taken from the
+   **As built:** the credentials are a function of the read's nonce, the
+   nonce in hex as the username with a fixed password, taken from the
    header inside the request layer. The ruling said fresh random
    credentials. A nonce is fresh for every read and is random for an
    organic read and pseudo-random for a challenge, and deriving from it
