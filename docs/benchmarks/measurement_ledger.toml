@@ -279,6 +279,7 @@ stale_through = [
   { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
   { through = "b42854193a", note = "A test added to the test module of shekyl-p-fetch client.rs: two requests for one shard differ only in their nonce. No executable fetch or serve code changed." },
   { through = "6068ba31e9", note = "SF-D3 reopened: every read presents its own SOCKS credentials, so Tor builds a rendezvous circuit per read where reads to one persona shared one. The ruling's estimate is 1 to 5 s of circuit setup per read and a higher first-try failure rate; proof of work is paid per read against a flooded onion. Not measured (BA-T31). The serve path is unchanged." },
+  { through = "71b41cb6cf", note = "The read's nonce moves from the SOCKS password to the username, in shekyl-p-fetch header.rs. The same handshake with the two fields exchanged; no cost moved." },
 ]
 
 [[constant]]

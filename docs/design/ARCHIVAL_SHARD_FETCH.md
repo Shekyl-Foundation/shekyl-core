@@ -319,7 +319,10 @@ configuration.
   `read_isolation` test reads the client Tor's control port over real
   rendezvous circuits: two reads of one shard ride different circuits,
   and a stall retry inside one read stays on its circuit. It is
-  `#[ignore]`d behind the pinned Tor binary.
+  `#[ignore]`d behind the pinned Tor binary. Run on 2026-10-07 against
+  Tor 0.4.9.11: both held in every run that reached the comparison, and
+  new credentials caused no second descriptor fetch
+  ([`sfd3_read_isolation_20261007.md`](../benchmarks/sfd3_read_isolation_20261007.md)).
 - **Only username/password is offered.** A proxy that selects "no
   authentication" would put the read back on a shared circuit without an
   error, so the handshake fails before CONNECT

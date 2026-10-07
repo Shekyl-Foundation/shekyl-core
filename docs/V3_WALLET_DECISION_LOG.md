@@ -6258,6 +6258,12 @@ and replaced by pointers; what each still owns is the specification's
    credentials. A nonce is fresh for every read and is random for an
    organic read and pseudo-random for a challenge, and deriving from it
    means a caller cannot give two reads one circuit or one read two.
+
+   **Checked against a real Tor, 2026-10-07** (0.4.9.11, the pinned
+   bundle): a stall retry inside one read stayed on its circuit, a
+   second read of the same shard rode a different one, both rendezvous
+   circuits, and Tor fetched no descriptor for the new credentials
+   (`docs/benchmarks/sfd3_read_isolation_20261007.md`).
 8. **Operator visibility of serving attacks is owed.** The design's
    answer to a sustained flood against a persona's onion is that the
    operator sees it and has months to respond. That holds only if the
