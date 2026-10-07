@@ -13,13 +13,17 @@
 //! A header carries two version bytes, and each has exactly one valid
 //! value. `major_version` is the version the rule set admits
 //! ([`RuleSet::header_major_version`], `1`): CEN-B1. `minor_version` is
-//! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities. There is no
-//! vote, no schedule of future versions and no "at least": the C++ had
-//! those, as Monero's `HardFork::check`, where `minor_version` was a vote
-//! that `0` cast for `1` and any value satisfied, so the byte was free. The
-//! C++ now compares both bytes to its `CURRENT_BLOCK_MAJOR_VERSION` and
-//! `CURRENT_BLOCK_MINOR_VERSION`, which `rule_set_tests` holds equal to the
-//! values here.
+//! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities, and neither
+//! is a vote or an "at least".
+//!
+//! The C++ reaches the same two answers by different routes. Its major
+//! check is `HardFork::check`, which compares the byte with the hard-fork
+//! table's entry in force; every network's table has one entry, version 1.
+//! Its minor check is a comparison with `CURRENT_BLOCK_MINOR_VERSION`.
+//! Until 2026-10-06 the minor byte was Monero's vote inside that same
+//! `HardFork::check`, where `0` was read as `1` and any value satisfied it,
+//! so the byte was free. `rule_set_tests` holds the C++ defines equal to
+//! the values here; the table's single entry is `hardforks.cpp`'s.
 //!
 //! B7 was the C++'s one-time warning for a `major_version` above the latest
 //! scheduled one, and it never refused. Its operand is a schedule a rule

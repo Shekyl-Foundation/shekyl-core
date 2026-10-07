@@ -48,8 +48,8 @@ crates); every `scripts/ci/check_*` gate (41; `check_chain_rules_coverage`
 `check_inland_height_u64` 167 grandfathered and none new). **Outside this
 stamp, by declaration:** CEN-B2 is promoted to bucket 2 on the
 header-version-rule branch (2026-10-06, `minor_version` reserved at 0),
-which moves `check_conformance_coverage` to 126 / 2 / 5 over 133 and
-`cargo test -p shekyl-chain-rules` to 336; the stamp moves with that merge.
+which moves `check_conformance_coverage` to 126 / 2 / 5 over 133; the stamp
+moves with that merge.
 *Superseded
 stamp:* `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
 2026-09-27 — moved by DRS-E3, whose rows changed status (`CTW-`, `CTW-Q`,

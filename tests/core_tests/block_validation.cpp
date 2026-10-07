@@ -78,6 +78,35 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
   return true;
 }
 
+bool gen_block_alt_big_minor_version::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  // Forks from blk_1 while the main tip is blk_2, so it takes
+  // handle_alternative_block. Refused at admission, not parked in the alt
+  // store for promotion to find.
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, miner_account, test_generator::bf_minor_ver, 0, 255);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_block_purged");
+  DO_CALLBACK(events, "check_not_stored_as_alt");
+
+  return true;
+}
+
+bool gen_block_alt_big_minor_version::check_not_stored_as_alt(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_alt_big_minor_version::check_not_stored_as_alt");
+
+  CHECK_EQ(0, c.get_alternative_blocks_count());
+
+  return true;
+}
+
 bool gen_block_ts_below_median_in_bootstrap::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();

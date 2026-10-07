@@ -82,8 +82,9 @@ impl RuleSetId {
 /// rules land. The first is `enforced` — the census rows this rule set
 /// holds a block to, which is also the denominator a verdict's coverage is
 /// measured complete against. The second is `header_major_version` — the
-/// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
-/// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
+/// `BlockHeader.major_version` this rule set admits (CEN-B1), landed with
+/// slice 1. It is not CEN-B2's operand: the header's minor version is
+/// reserved at one value under every rule set. The third is `difficulty` — how
 /// CEN-D4 derives the target — landed with slice 2 and the reason one
 /// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth —
 /// `mined_money_unlock_window` (CEN-F6) — landed with slice 4

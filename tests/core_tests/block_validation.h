@@ -145,6 +145,21 @@ struct gen_block_big_minor_version : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
+// CEN-B2 on the alternative path. gen_block_big_minor_version extends the
+// tip, so it reaches handle_block_to_main_chain alone; the reserved value is
+// checked at alt ADMISSION too, and the two sites are separate lines. Event
+// layout as gen_block_alt_ts_above_ftl: 0 genesis, 1-2 main blocks, 3 the
+// candidate forked from blk_1, so invalid_block_idx == final main height == 3.
+struct gen_block_alt_big_minor_version : public gen_block_verification_base<3>
+{
+  gen_block_alt_big_minor_version()
+  {
+    REGISTER_CALLBACK("check_not_stored_as_alt", gen_block_alt_big_minor_version::check_not_stored_as_alt);
+  }
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_not_stored_as_alt(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+
 // C2-R3-Q2 (CONSENSUS_C2_R3_TIMESTAMPS.md §5): there is no bootstrap
 // carve-out — below SHEKYL_DAA_MTP_WINDOW blocks of history the window is
 // right-padded with the genesis timestamp and the median check runs from
