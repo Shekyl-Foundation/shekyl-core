@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use shekyl_capped_stream::{FrameSender, StreamEnds};
+use shekyl_capped_stream::{InboundEnd, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use shekyl_transport_layer::{
@@ -60,7 +60,7 @@ fn doc_ip() -> Ipv4Addr {
 
 struct Opened {
     id: shekyl_transport_layer::SocketId,
-    inbound: FrameSender,
+    inbound: InboundEnd,
     writer: shekyl_capped_stream::ByteQueue,
     _hold: shekyl_capped_stream::QueueHold,
     session: Option<shekyl_capped_stream::Session>,

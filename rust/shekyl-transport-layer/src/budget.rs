@@ -91,6 +91,20 @@ pub fn monotonic_ms() -> u64 {
         .saturating_add(1)
 }
 
+/// `mark` as unix milliseconds, using the clocks at the call.
+///
+/// Zero stays zero. The stall check does not call this: it compares
+/// monotonic stamps to [`monotonic_ms`].
+#[must_use]
+pub fn unix_ms_of(mark: u64) -> u64 {
+    if mark == 0 {
+        return 0;
+    }
+    let now_m = monotonic_ms();
+    let now_u = unix_ms();
+    now_u.saturating_sub(now_m.saturating_sub(mark))
+}
+
 /// Unix milliseconds. Zero when the clock is before the epoch.
 fn unix_ms() -> u64 {
     SystemTime::now()
@@ -578,16 +592,8 @@ impl LinkBudget {
     /// Zero stays zero. The stall check does not call this.
     #[must_use]
     pub fn activity_unix_ms(&self, conn: u64) -> (u64, u64) {
-        let now_m = monotonic_ms();
-        let now_u = unix_ms();
         let (send, recv) = self.activity_ms(conn);
-        let to_unix = |mark: u64| -> u64 {
-            if mark == 0 {
-                return 0;
-            }
-            now_u.saturating_sub(now_m.saturating_sub(mark))
-        };
-        (to_unix(send), to_unix(recv))
+        (unix_ms_of(send), unix_ms_of(recv))
     }
 
     /// Record that a byte moved. Called after the socket read or write.

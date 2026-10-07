@@ -504,6 +504,7 @@ where
     if admitted.send(published).is_err() {
         return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
     }
+    let inbound_close = inbound.clone();
     let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
     tokio::pin!(read_fut);
     let mut gap_open = watch.is_some();
@@ -517,27 +518,30 @@ where
                 match end {
                     GapEnd::Established => {}
                     GapEnd::Dropped | GapEnd::Closed => {
-                        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                        let cause = CloseCause::new(CloseKind::LocalClose);
+                        inbound_close.close(cause);
+                        return end_connection(hold, &mut writer, cause).await;
                     }
                     GapEnd::Timeout => {
-                        return end_connection(
-                            hold,
-                            &mut writer,
-                            CloseCause::new(CloseKind::LevinHandshakeTimeout),
-                        )
-                        .await;
+                        let cause = CloseCause::new(CloseKind::LevinHandshakeTimeout);
+                        inbound_close.close(cause);
+                        return end_connection(hold, &mut writer, cause).await;
                     }
                 }
             }
             read_cause = &mut read_fut => {
+                inbound_close.close(read_cause);
                 return end_connection(hold, &mut writer, read_cause).await;
             }
             write_cause = &mut writer => {
-                drop(hold);
-                return write_cause
+                let cause = write_cause
                     .ok()
                     .flatten()
                     .unwrap_or(CloseCause::new(CloseKind::LocalClose));
+                inbound_close.close(cause);
+                hold.close_with(cause);
+                drop(hold);
+                return cause;
             }
         }
     }
@@ -548,6 +552,7 @@ async fn end_connection(
     writer: &mut tokio::task::JoinHandle<Option<CloseCause>>,
     cause: CloseCause,
 ) -> CloseCause {
+    hold.close_with(cause);
     drop(hold);
     writer.abort();
     drop(writer.await);
@@ -694,7 +699,7 @@ async fn write_half(
 async fn read_half(
     mut read: OwnedReadHalf,
     mut seam: SeamRecv,
-    inbound: mpsc::Sender<Vec<u8>>,
+    inbound: shekyl_capped_stream::InboundEnd,
     overfull: Arc<Overfull>,
     conn: u64,
 ) -> CloseCause {

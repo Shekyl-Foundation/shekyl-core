@@ -1255,31 +1255,45 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     // publicly implements and the payload handler itself calls it through.
     // Upcasting to that interface is the sanctioned access, not a way around
     // one: it is the same entry point `get_connections()` uses.
+    nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
+      h->rpc->get_p2p();
     // Address, direction, the handshake flag, and admission time come from
-    // the board. Last receive and last send are the byte-path instants.
-    // Height, support flags, and the pull state are claims on the handler
-    // context. The io pool also runs blocking dials, so a post onto that
-    // pool does not land while every worker is inside one. The copy takes
-    // the handler's claim mutex on this thread instead.
+    // the board. Last receive and last send are unix time of the monotonic
+    // byte stamps. Height, support flags, and the pull state are claims:
+    // they take the strand hop. This thread is the operator's
+    // (`spawn_blocking`, and `get_connections` / `sync_info` are
+    // admin-only), so waiting on `then` is not the walk that deadlocks an
+    // io worker on its own post.
     //
-    // The key is the socket id inside the connection uuid
-    // (`seam_connection_id` writes it at bytes 8..15). Matching the uuid
-    // object against a freshly built one is the same bytes; the integer
-    // is what the board row carries.
+    // Two seconds is one missed strand hop. A dial in `idle_worker` occupies
+    // a worker on this same pool, and a claim whose post has not landed is
+    // unknown. That is the recorded defect until the dialer (P2P-3 slice 3)
+    // leaves this pool. A row whose post has not landed leaves
+    // `claims_known` at 0.
+    constexpr auto kOperatorClaimWait = std::chrono::seconds(2);
     struct sync_bits
     {
       uint64_t height = 0;
       uint32_t support_flags = 0;
       uint8_t state = 0;
     };
-    std::map<std::uint64_t, sync_bits> bits;
-    h->rpc->get_p2p().read_operator_claims([&](auto& ctx) {
-      sync_bits row;
-      row.height = ctx.m_remote_blockchain_height;
-      row.support_flags = ctx.support_flags;
-      row.state = static_cast<uint8_t>(ctx.m_state);
-      bits.emplace(shekyl::seam_socket_id(ctx.m_connection_id), row);
-    });
+    auto bits = std::make_shared<std::map<boost::uuids::uuid, sync_bits>>();
+    auto bits_mu = std::make_shared<std::mutex>();
+    auto ready = std::make_shared<std::promise<void>>();
+    endpoint.post_each(
+      [bits, bits_mu](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
+      {
+        sync_bits row;
+        row.height = ctx.m_remote_blockchain_height;
+        row.support_flags = support_flags;
+        row.state = static_cast<uint8_t>(ctx.m_state);
+        std::lock_guard<std::mutex> lock(*bits_mu);
+        (*bits)[ctx.m_connection_id] = row;
+      },
+      [ready]() {
+        ready->set_value();
+      });
+    ready->get_future().wait_for(kOperatorClaimWait);
 
     for (const auto& row : shekyl::seam_board_snapshot())
     {
@@ -1315,8 +1329,9 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
         e.current_speed_down = static_cast<double>(speed_down);
       }
       {
-        const auto found = bits.find(row.id);
-        if (found != bits.end())
+        std::lock_guard<std::mutex> lock(*bits_mu);
+        const auto found = bits->find(id);
+        if (found != bits->end())
         {
           e.height = found->second.height;
           e.support_flags = found->second.support_flags;

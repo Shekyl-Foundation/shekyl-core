@@ -938,4 +938,80 @@ mod tests {
         listener.shutdown();
         drop(engine);
     }
+
+    fn dial_against<F>(gap: Tick, accept: F) -> (CloseCause, Vec<CloseKind>)
+    where
+        F: FnOnce(std::net::TcpStream) + Send + 'static,
+    {
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(harness_budget(), &name("sk-clearnet-cause")).expect("runtime");
+        let recorded = causes();
+        let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel();
+        let port = pool.block_on(async {
+            let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            tokio::spawn(async move {
+                let (sock, _) = listener.accept().await.expect("accept");
+                let sock = sock.into_std().expect("std");
+                std::thread::spawn(move || accept(sock));
+            });
+            port
+        });
+        let dial = super::Dial {
+            address: NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::LOCALHOST,
+                port,
+            },
+            proxy: None,
+            sockets: Sockets::new(),
+            kind: crate::seam::ChannelChoice::Plain,
+            network_id: ID,
+            dial_within: Tick::new(2_000_000_000),
+            proxied_dial_within: Tick::new(2_000_000_000),
+            handshake_within: Tick::new(2_000_000_000),
+            gap_within: Some(gap),
+            tally: Arc::new(super::zero_tally()),
+            on_cause: Arc::clone(&recorded.sink),
+            send_queue_bytes: 65_536,
+            admitted: admitted_tx,
+        };
+        let handle = engine.handle();
+        pool.spawn(super::dial_one(dial, handle));
+        let admitted = pool.block_on(async { admitted_rx.recv().await.expect("admitted") });
+        // Dropping `gap` is a local close. The hub holds it in production.
+        let gap = admitted.gap;
+        let mut session = admitted.session;
+        let cause = pool.block_on(async {
+            while session.recv().await.is_some() {}
+            session.close_cause()
+        });
+        drop(gap);
+        let seen = recorded.seen.lock().expect("causes").clone();
+        pool.shutdown(Duration::from_millis(50));
+        drop(engine);
+        (cause, seen)
+    }
+
+    #[test]
+    fn a_silent_acceptor_is_a_handshake_timeout() {
+        let (cause, seen) = dial_against(Tick::new(200_000_000), |sock| {
+            std::thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        assert!(seen.contains(&CloseKind::LevinHandshakeTimeout));
+        assert!(!seen.contains(&CloseKind::PeerClosed));
+    }
+
+    #[test]
+    fn a_peer_fin_is_peer_closed() {
+        let (cause, seen) = dial_against(Tick::new(5_000_000_000), |sock| {
+            sock.shutdown(std::net::Shutdown::Write).expect("fin");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        assert_eq!(cause.kind(), CloseKind::PeerClosed);
+        assert!(seen.contains(&CloseKind::PeerClosed));
+    }
 }

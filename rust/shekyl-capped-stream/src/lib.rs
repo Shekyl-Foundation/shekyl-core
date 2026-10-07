@@ -30,5 +30,7 @@ pub use copy::{
 };
 pub use gate::{node_gate, LinkGate};
 pub use queue::{ByteQueue, CloseReason, Overfull, PushError};
-pub use session::{FrameSender, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES};
+pub use session::{
+    FrameSender, InboundEnd, QueueHold, SendHalf, Session, StreamEnds, UNREAD_FRAMES,
+};
 pub use shekyl_transport_layer::{monotonic_ms, recv_is_stalled, recv_mark_ms};

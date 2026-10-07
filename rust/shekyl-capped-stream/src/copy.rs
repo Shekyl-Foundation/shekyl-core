@@ -17,10 +17,10 @@ use std::time::Instant;
 
 use shekyl_transport_layer::{CloseCause, CloseKind, LinkDirection, MessageClass};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
 
 use crate::gate::LinkGate;
 use crate::queue::{ByteQueue, Overfull};
+use crate::session::InboundEnd;
 
 /// Write every byte of `bytes`.
 ///
@@ -283,6 +283,7 @@ where
     F: for<'a> FnMut(&'a [u8]) -> Result<Cow<'a, [u8]>, CloseKind>,
 {
     let conn = stall.conn();
+    let stamp = gate.byte_stamp(LinkDirection::Up, conn);
     loop {
         if overfull.tripped() {
             shutdown(write).await;
@@ -344,7 +345,7 @@ where
                         result = write_all_counted(write, &wire[off..end]) => {
                             stall.complete();
                             if result.is_ok() {
-                                gate.touch(LinkDirection::Up, conn);
+                                stamp.store();
                             }
                             if let Err(wrote) = result {
                                 refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
@@ -370,7 +371,7 @@ where
 /// the peer. A tripped cap closes instead of waiting that out.
 pub async fn read_capped<R, F>(
     read: &mut R,
-    inbound: mpsc::Sender<Vec<u8>>,
+    inbound: InboundEnd,
     overfull: &Overfull,
     gate: &LinkGate,
     conn: u64,
@@ -380,14 +381,15 @@ where
     R: AsyncRead + Unpin,
     F: FnMut(&[u8]) -> Result<Vec<Vec<u8>>, CloseKind>,
 {
-    let cause = read_queued(read, inbound, overfull, gate, conn, &mut decode).await;
+    let cause = read_queued(read, &inbound, overfull, gate, conn, &mut decode).await;
+    inbound.close(cause);
     gate.leave(LinkDirection::Down, conn);
     cause
 }
 
 async fn read_queued<R, F>(
     read: &mut R,
-    inbound: mpsc::Sender<Vec<u8>>,
+    inbound: &InboundEnd,
     overfull: &Overfull,
     gate: &LinkGate,
     conn: u64,
@@ -398,6 +400,7 @@ where
     F: FnMut(&[u8]) -> Result<Vec<Vec<u8>>, CloseKind>,
 {
     let mut buf = [0u8; READ_CHUNK_BYTES];
+    let stamp = gate.byte_stamp(LinkDirection::Down, conn);
     loop {
         if overfull.tripped() {
             return CloseCause::new(CloseKind::SendQueueFull);
@@ -424,7 +427,7 @@ where
                 }
                 Ok(n) => {
                     if n > 0 {
-                        gate.touch(LinkDirection::Down, conn);
+                        stamp.store();
                     }
                     n
                 }
@@ -474,7 +477,6 @@ mod tests {
     use super::{process_write_stall, read_capped, write_capped, WriteStall};
     use crate::gate::LinkGate;
     use crate::queue::{ByteQueue, Overfull, PushError};
-    use crate::UNREAD_FRAMES;
 
     struct StuckWrite {
         entered: Arc<AtomicBool>,
@@ -711,7 +713,7 @@ mod tests {
         let flag = Arc::clone(&entered);
         let overfull = Arc::new(Overfull::new());
         let trip = Arc::clone(&overfull);
-        let (inbound, _rx) = tokio::sync::mpsc::channel(UNREAD_FRAMES);
+        let inbound = crate::StreamEnds::open(64).inbound;
         let task = tokio::spawn(async move {
             let mut read = StuckRead { entered: flag };
             let gate = LinkGate::new();

@@ -37,7 +37,6 @@ namespace
     {}
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool session_established() noexcept { return false; }
-    int operator_marker = 0;
     std::optional<std::size_t> get_max_bytes(std::uint32_t, std::uint32_t, std::int32_t* = nullptr) const
     {
       return LEVIN_DEFAULT_MAX_PACKET_SIZE;
@@ -261,28 +260,6 @@ TEST(seam_endpoint, an_unestablished_clearnet_dial_counts_before_the_handshake)
   ASSERT_EQ(after.size(), 1u);
   EXPECT_EQ(after[0].id, id);
   EXPECT_EQ(after[0].established, std::uint8_t{1});
-
-  // `shekyl_rpc_connections` sets `claims_known` when this socket id is
-  // in the handler map. The established row above is that session.
-  int seen = 0;
-  std::uint64_t seen_id = 0;
-  std::uint8_t claims_known = 0;
-  ex.config.read_each_context([&](context& ctx) {
-    seen = ctx.operator_marker;
-    seen_id = shekyl::seam_socket_id(ctx.m_connection_id);
-    if (seen_id == id)
-      claims_known = 1;
-    ctx.operator_marker = 1;
-  });
-  EXPECT_EQ(claims_known, 1);
-  EXPECT_EQ(seen_id, id);
-  EXPECT_EQ(shekyl::seam_connection_id(id), [&] {
-    boost::uuids::uuid got{};
-    ex.config.read_each_context([&](context& ctx) { got = ctx.m_connection_id; });
-    return got;
-  }());
-  ex.config.read_each_context([&](context& ctx) { seen = ctx.operator_marker; });
-  EXPECT_EQ(seen, 1);
 
   shekyl_seam_close(id);
   EXPECT_EQ(shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND), 0u);

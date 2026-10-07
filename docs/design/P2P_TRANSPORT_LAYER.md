@@ -398,6 +398,14 @@ and it does not free the strand. The executor drops the link after
 the post has finished. A walker whose `add_ref` returned true still
 holds a count, so the destroy post has not run.
 
+- **The cause travels with the close (2026-10-07).** The connector
+  closes both session ends with the cause. The seam inbound drive
+  records that cause. `PeerClosed` is the reader's end-of-file and
+  nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
+  that sends FIN is `PeerClosed`. Forgetting the address is
+  `implicates_address` with the connector: a refused dial and a
+  rejected handshake count; a clearnet proxy reply does not; an onion
+  reply counts only for `0x04`, `0x05`, `0xF0`, `0xF1`, and `0xF2`.
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.

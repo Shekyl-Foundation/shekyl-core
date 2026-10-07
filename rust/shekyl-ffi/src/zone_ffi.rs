@@ -252,8 +252,10 @@ async fn recv_admitted<T>(
             Some(value) => Ok(value),
             // The dial task sends the cause and then drops the admission
             // channel. Both are ready together, and this arm is first, so
-            // a closed channel is not itself the cause. The cause is the
-            // one the dial sent. No cause at all is this node.
+            // a closed channel is not itself the cause. Awaiting `fail`
+            // here is bounded by that task: it owns the sender, and the
+            // sender is dropped when the task returns, which is the same
+            // moment the channel closes.
             None => match fail.await {
                 Ok(cause) => Err(cause),
                 Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),

@@ -27,8 +27,6 @@
 // TODO(shekyl-v4): Migrate Levin protocol handler from boost::asio to
 // standalone Asio. The handler sits on i_service_endpoint and moves with LV-3.
 #pragma once
-#include <mutex>
-
 #include <boost/asio/steady_timer.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/unordered_map.hpp>
@@ -119,14 +117,6 @@ public:
   bool request_callback(boost::uuids::uuid connection_id);
   template<class callback_t>
   void collect_context_posts(const callback_t &cb, std::vector<std::function<void()>>& posts);
-  /// Copy each live context on this thread.
-  ///
-  /// The strand posts share the io pool with blocking dials. An operator
-  /// read that waits for those posts sees nothing when every worker is
-  /// inside a dial. This holds the handler's claim mutex instead, which
-  /// `handle_recv` and `post_on_strand` also hold while they write.
-  template<class callback_t>
-  void read_each_context(const callback_t& cb);
   template<class callback_t>
   bool foreach_connection(const callback_t &cb);
   template<class callback_t>
@@ -221,9 +211,6 @@ public:
   net_utils::i_service_endpoint* m_pservice_endpoint; 
   config_type& m_config;
   t_connection_context& m_connection_context;
-  /// Held by the strand while it writes this context, and by the operator
-  /// snapshot while it copies the claim fields.
-  std::mutex m_claim_mu;
   std::atomic<uint64_t> m_max_packet_size;
 
   net_utils::buffer m_cache_in_buffer;
@@ -844,7 +831,6 @@ public:
   boost::uuids::uuid get_connection_id() {return m_connection_context.m_connection_id;}
   //------------------------------------------------------------------------------------------
   t_connection_context& get_context_ref() {return m_connection_context;}
-  std::mutex& claim_mutex() { return m_claim_mu; }
 
   /// Run `fn` on this connection's strand, then release the outer-call
   /// ref `start_outer_call` took. The caller does not wait.
@@ -858,18 +844,12 @@ public:
   {
     if (!m_pservice_endpoint)
     {
-      {
-        std::lock_guard<std::mutex> lock(m_claim_mu);
-        fn(m_connection_context);
-      }
+      fn(m_connection_context);
       finish_outer_call();
       return;
     }
     m_pservice_endpoint->post([this, fn = std::move(fn)] {
-      {
-        std::lock_guard<std::mutex> lock(m_claim_mu);
-        fn(get_context_ref());
-      }
+      fn(get_context_ref());
       finish_outer_call();
     });
   }
@@ -992,28 +972,6 @@ void async_protocol_handler_config<t_connection_context>::collect_context_posts(
         cb(ctx);
       });
     });
-  }
-}
-//------------------------------------------------------------------------------------------
-template<class t_connection_context> template<class callback_t>
-void async_protocol_handler_config<t_connection_context>::read_each_context(const callback_t& cb)
-{
-  std::vector<typename connections_map::mapped_type> conn;
-
-  CRITICAL_REGION_BEGIN(m_connects_lock);
-  conn.reserve(m_connects.size());
-  for (auto &e: m_connects)
-    if (e.second->start_outer_call())
-      conn.push_back(e.second);
-  CRITICAL_REGION_END()
-
-  for (auto &aph: conn)
-  {
-    {
-      std::lock_guard<std::mutex> lock(aph->claim_mutex());
-      cb(aph->get_context_ref());
-    }
-    aph->finish_outer_call();
   }
 }
 //------------------------------------------------------------------------------------------

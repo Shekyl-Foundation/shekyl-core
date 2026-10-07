@@ -6,12 +6,46 @@
 //! One connection's two ends. The session is the caller's. The hold is
 //! the connection task's. Dropping either one closes the queue.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use shekyl_transport_layer::CloseKind;
+use shekyl_transport_layer::{CloseCause, CloseKind};
 use tokio::sync::mpsc;
 
 use crate::queue::{ByteQueue, Overfull, PushError};
+
+/// The sender the connector's reader uses, and the cause that closes it.
+///
+/// [`Self::close`] records the first cause. Dropping every clone ends
+/// [`Session::recv`]. The cause is whatever [`Self::close`] stored.
+/// A drop that never called [`Self::close`] is [`CloseKind::LocalClose`],
+/// not a peer close: [`CloseKind::PeerClosed`] is only the reader's
+/// end-of-file.
+#[derive(Clone)]
+pub struct InboundEnd {
+    tx: mpsc::Sender<Vec<u8>>,
+    cause: Arc<Mutex<Option<CloseCause>>>,
+}
+
+impl InboundEnd {
+    /// Record `cause` if none is recorded yet.
+    pub fn close(&self, cause: CloseCause) {
+        let mut slot = self.cause.lock().expect("inbound cause");
+        if slot.is_none() {
+            *slot = Some(cause);
+        }
+    }
+
+    /// Hand one decoded frame to the session.
+    pub async fn send(&self, frame: Vec<u8>) -> Result<(), mpsc::error::SendError<Vec<u8>>> {
+        self.tx.send(frame).await
+    }
+
+    /// [`Self::send`] for a thread that is not a task. The harness injects
+    /// a frame this way.
+    pub fn blocking_send(&self, frame: Vec<u8>) -> Result<(), mpsc::error::SendError<Vec<u8>>> {
+        self.tx.blocking_send(frame)
+    }
+}
 
 /// The sender the connector's reader uses to hand one frame to the session.
 pub type FrameSender = mpsc::Sender<Vec<u8>>;
@@ -70,6 +104,14 @@ pub struct QueueHold {
     queue: ByteQueue,
 }
 
+impl QueueHold {
+    /// Close the outbound end with the connector's cause. A later drop
+    /// does not replace it.
+    pub fn close_with(&self, cause: CloseCause) {
+        self.queue.close_named(cause);
+    }
+}
+
 impl Drop for QueueHold {
     fn drop(&mut self) {
         self.queue.close();
@@ -80,6 +122,9 @@ impl Drop for QueueHold {
 pub struct Session {
     inbound: mpsc::Receiver<Vec<u8>>,
     queue: ByteQueue,
+    /// The cause [`InboundEnd::close`] stored. Read after [`Self::recv`]
+    /// returns `None`.
+    cause: Arc<Mutex<Option<CloseCause>>>,
 }
 
 impl Drop for Session {
@@ -89,7 +134,8 @@ impl Drop for Session {
 }
 
 impl Session {
-    /// The next frame the connector decoded. `None` means the reader stopped.
+    /// The next frame the connector decoded. `None` means the inbound end
+    /// closed. [`Self::close_cause`] is the cause the connector stored.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
         self.inbound.recv().await
     }
@@ -98,6 +144,19 @@ impl Session {
     #[must_use]
     pub fn recv_blocking(&mut self) -> Option<Vec<u8>> {
         self.inbound.blocking_recv()
+    }
+
+    /// The cause that closed this session.
+    ///
+    /// [`CloseKind::PeerClosed`] only when the connector's reader saw
+    /// end-of-file and stored that cause. A close that stored nothing is
+    /// [`CloseKind::LocalClose`].
+    #[must_use]
+    pub fn close_cause(&self) -> CloseCause {
+        self.cause
+            .lock()
+            .expect("inbound cause")
+            .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose))
     }
 
     /// A send handle that does not close the queue when dropped.
@@ -130,8 +189,9 @@ pub struct StreamEnds {
     pub hold: QueueHold,
     /// The full-queue signal the copy selects on: the queue's own.
     pub overfull: Arc<Overfull>,
-    /// The reader sends decoded frames here.
-    pub inbound: mpsc::Sender<Vec<u8>>,
+    /// The reader sends decoded frames here. [`InboundEnd::close`] names
+    /// why the session ended, before the last sender is dropped.
+    pub inbound: InboundEnd,
 }
 
 impl StreamEnds {
@@ -140,17 +200,19 @@ impl StreamEnds {
     pub fn open(send_queue_bytes: usize) -> Self {
         let queue = ByteQueue::new(send_queue_bytes);
         let overfull = queue.overfull();
-        let (inbound, inbound_rx) = mpsc::channel(UNREAD_FRAMES);
+        let (tx, inbound_rx) = mpsc::channel(UNREAD_FRAMES);
+        let cause = Arc::new(Mutex::new(None));
         let session = Session {
             inbound: inbound_rx,
             queue: queue.clone(),
+            cause: Arc::clone(&cause),
         };
         Self {
             session,
             writer_queue: queue.clone(),
             hold: QueueHold { queue },
             overfull,
-            inbound,
+            inbound: InboundEnd { tx, cause },
         }
     }
 }

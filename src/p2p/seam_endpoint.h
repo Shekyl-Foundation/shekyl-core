@@ -158,12 +158,9 @@ namespace shekyl
 
     bool take_bytes(const std::uint8_t* bytes, std::size_t len)
     {
-      if (!m_handler)
-        return false;
-      std::lock_guard<std::mutex> lock(m_handler->claim_mutex());
       if (len != 0)
         m_context.m_last_recv = time(nullptr);
-      return m_handler->handle_recv(bytes, len);
+      return m_handler && m_handler->handle_recv(bytes, len);
     }
 
     /// `closed` on the strand. Sets the closing bit, cancels invokes, and
@@ -229,10 +226,7 @@ namespace shekyl
       }
       boost::asio::post(m_strand, [self] {
         if (self->m_handler)
-        {
-          std::lock_guard<std::mutex> lock(self->m_handler->claim_mutex());
           self->m_handler->handle_qued_callback();
-        }
         self->release();
       });
       return true;

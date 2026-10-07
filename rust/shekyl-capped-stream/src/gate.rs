@@ -9,16 +9,40 @@
 //! until that decision is a grant. The wait is the connection pausing.
 //! Nothing here closes a connection or drops a byte.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_transport_layer::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
+use shekyl_transport_layer::{
+    monotonic_ms, unix_ms_of, LinkBudget, LinkDirection, MessageClass, Observed, Turn,
+};
 use tokio::sync::Notify;
 
 struct GateInner {
     budget: Mutex<LinkBudget>,
     wake: Notify,
     clock: Mutex<Arc<dyn Fn() -> u64 + Send + Sync>>,
+    /// Per session. The byte path stores into the atomic. Looking the
+    /// atomic up is the only lock, and a copy does it once.
+    send_stamps: Mutex<HashMap<u64, Arc<AtomicU64>>>,
+    recv_stamps: Mutex<HashMap<u64, Arc<AtomicU64>>>,
+}
+
+/// The monotonic millisecond of the last byte on one direction.
+///
+/// [`ByteStamp::store`] does not take the link-budget lock. The grant
+/// and the refund already take that lock; a stamp is not a grant.
+#[derive(Clone)]
+pub struct ByteStamp {
+    ms: Arc<AtomicU64>,
+}
+
+impl ByteStamp {
+    /// The bytes just moved. A grant does not call this.
+    pub fn store(&self) {
+        self.ms.store(monotonic_ms(), Ordering::Relaxed);
+    }
 }
 
 /// One node's budget, shared by every connector's reader and writer.
@@ -38,6 +62,8 @@ impl LinkGate {
                 clock: Mutex::new(Arc::new(move || {
                     u64::try_from(origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
                 })),
+                send_stamps: Mutex::new(HashMap::new()),
+                recv_stamps: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -171,6 +197,10 @@ impl LinkGate {
             .lock()
             .expect("link budget")
             .leave(direction, conn);
+        self.stamp_map(direction)
+            .lock()
+            .expect("byte stamps")
+            .remove(&conn);
         self.inner.wake.notify_waiters();
     }
 
@@ -200,34 +230,45 @@ impl LinkGate {
             .connection(conn)
     }
 
+    /// The atomic for `direction` on `conn`. A copy holds it and stores
+    /// when a byte is read or written. The lookup is once per copy.
+    #[must_use]
+    fn stamp_map(&self, direction: LinkDirection) -> &Mutex<HashMap<u64, Arc<AtomicU64>>> {
+        match direction {
+            LinkDirection::Up => &self.inner.send_stamps,
+            LinkDirection::Down => &self.inner.recv_stamps,
+        }
+    }
+
+    pub fn byte_stamp(&self, direction: LinkDirection, conn: u64) -> ByteStamp {
+        let mut stamps = self.stamp_map(direction).lock().expect("byte stamps");
+        let ms = stamps
+            .entry(conn)
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone();
+        ByteStamp { ms }
+    }
+
     /// Monotonic milliseconds of the last byte, `(send, recv)`.
     /// Zero until that direction has read or written a byte.
     #[must_use]
     pub fn activity(&self, conn: u64) -> (u64, u64) {
-        self.inner
-            .budget
-            .lock()
-            .expect("link budget")
-            .activity_ms(conn)
+        let load = |direction: LinkDirection| {
+            self.stamp_map(direction)
+                .lock()
+                .expect("byte stamps")
+                .get(&conn)
+                .map(|ms| ms.load(Ordering::Relaxed))
+                .unwrap_or(0)
+        };
+        (load(LinkDirection::Up), load(LinkDirection::Down))
     }
 
     /// Unix milliseconds of those instants, for the operator view.
     #[must_use]
     pub fn activity_unix(&self, conn: u64) -> (u64, u64) {
-        self.inner
-            .budget
-            .lock()
-            .expect("link budget")
-            .activity_unix_ms(conn)
-    }
-
-    /// A byte was read or written on `direction`.
-    pub fn touch(&self, direction: LinkDirection, conn: u64) {
-        self.inner
-            .budget
-            .lock()
-            .expect("link budget")
-            .touch(direction, conn);
+        let (send, recv) = self.activity(conn);
+        (unix_ms_of(send), unix_ms_of(recv))
     }
 }
 

@@ -353,6 +353,7 @@ where
         cause
     });
     let gate = node_gate();
+    let inbound_close = inbound.clone();
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
         Ok(vec![chunk.to_vec()])
     });
@@ -367,7 +368,9 @@ where
                 gap_open = false;
                 ignore(owner.deregister());
                 if result.is_err() {
-                    return stop(hold.take(), &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                    let cause = CloseCause::new(CloseKind::LocalClose);
+                    inbound_close.close(cause);
+                    return stop(hold.take(), &mut writer, cause).await;
                 }
                 tracing::info!(
                     conn,
@@ -382,23 +385,27 @@ where
                     Ok(_) => CloseKind::LevinHandshakeTimeout,
                     Err(_) => CloseKind::LocalClose,
                 };
-                return stop(hold.take(), &mut writer, CloseCause::new(kind)).await;
+                let cause = CloseCause::new(kind);
+                inbound_close.close(cause);
+                return stop(hold.take(), &mut writer, cause).await;
             }
             read_cause = &mut read_fut => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
+                inbound_close.close(read_cause);
                 return stop(hold.take(), &mut writer, read_cause).await;
             }
             write_end = &mut writer => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                drop(hold.take());
-                return match write_end {
+                let cause = match write_end {
                     Ok(cause) => cause,
                     Err(_) => CloseCause::new(CloseKind::LocalClose),
                 };
+                inbound_close.close(cause);
+                return stop(hold.take(), &mut writer, cause).await;
             }
         }
     }
@@ -409,6 +416,9 @@ async fn stop(
     writer: &mut tokio::task::JoinHandle<CloseCause>,
     cause: CloseCause,
 ) -> CloseCause {
+    if let Some(hold) = hold.as_ref() {
+        hold.close_with(cause);
+    }
     drop(hold);
     writer.abort();
     drop(writer.await);
