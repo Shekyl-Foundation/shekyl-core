@@ -245,6 +245,27 @@ mod live {
         }
     }
 
+    /// Fetch under `header` until it completes, repeating the header on a
+    /// stall as the caller does, within `SF-D6`'s budget of
+    /// [`STALL_RETRIES`]. `already` is how many stall retries this read has
+    /// used before the call. Returns the retries used in all.
+    ///
+    /// A retry can itself stall on a real network, and so can a first
+    /// attempt. Neither is what this run is asking about.
+    async fn complete(app: &Apparatus, shard: u64, header: &RequestHeader, already: u32) -> u32 {
+        let mut retries = already;
+        loop {
+            match app.fetch_with(0, shard, header, Timeouts::DEFAULT).await {
+                Ok(_) => return retries,
+                Err(FetchError::Stall(stall)) if retries < STALL_RETRIES => {
+                    retries += 1;
+                    println!("a fetch stalled ({stall}); stall retry {retries} of this read");
+                }
+                Err(other) => panic!("a read did not complete within its retries: {other}"),
+            }
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes an onion, network)"]
     async fn each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it() {
@@ -283,21 +304,9 @@ mod live {
         drain(&mut events, &mut after_stall).await;
         let stalled_on = after_stall.the_circuit_of(&username_of(&read_a));
 
-        // Read A, the stall retries: the same header, as `SF-D6` has it, and
-        // its budget of two. A retry can itself stall on a real network; the
-        // caller repeats the header again, and so does this.
+        // Read A, the stall retries: the same header, as `SF-D6` has it.
         let mut during_a = Observed::default();
-        let mut retries = 0;
-        loop {
-            retries += 1;
-            match app.fetch_with(0, shard, &read_a, Timeouts::DEFAULT).await {
-                Ok(_) => break,
-                Err(FetchError::Stall(stall)) if retries < STALL_RETRIES => {
-                    println!("read A: stall retry {retries} stalled ({stall}); retrying");
-                }
-                Err(other) => panic!("read A did not complete in {retries} retries: {other}"),
-            }
-        }
+        let retries = complete(&app, shard, &read_a, 1).await;
         println!("read A: completed on stall retry {retries}");
         drain(&mut events, &mut during_a).await;
         let retried_on = during_a.the_circuit_of(&username_of(&read_a));
@@ -305,16 +314,19 @@ mod live {
         // Read B: a new read of the same shard from the same persona.
         let read_b = fresh_header();
         let mut during_b = Observed::default();
-        app.fetch_with(0, shard, &read_b, Timeouts::DEFAULT)
-            .await
-            .expect("the second read completes");
+        let attempts = complete(&app, shard, &read_b, 0).await + 1;
+        println!("read B: completed on attempt {attempts}");
         drain(&mut events, &mut during_b).await;
         let b_on = during_b.the_circuit_of(&username_of(&read_b));
 
         // Circuit ids are not printed: the control crate keeps them out of
         // every log, and the verdict needs only whether they are equal.
-        let purpose = |seen: &Observed, circuit: CircId| {
-            [&after_stall, seen]
+        // A circuit's purpose is the last one tor reported for it, in
+        // whichever window that fell: tor builds circuits ahead, so a read's
+        // circuit can first appear, under another purpose, while an earlier
+        // read is in progress. Newest window first.
+        let purpose = |circuit: CircId| {
+            [&during_b, &during_a, &after_stall]
                 .iter()
                 .find_map(|o| o.purpose_by_circuit.get(&circuit).cloned())
         };
@@ -325,7 +337,7 @@ mod live {
             } else {
                 "a different"
             },
-            purpose(&during_a, retried_on)
+            purpose(retried_on)
         );
         println!(
             "read B: rode {} circuit as read A (purpose {:?})",
@@ -334,7 +346,7 @@ mod live {
             } else {
                 "a different"
             },
-            purpose(&during_b, b_on)
+            purpose(b_on)
         );
         println!(
             "descriptor fetches tor started: {} during read A's retry, {} during read B",
@@ -350,9 +362,9 @@ mod live {
         // Both were put to use after the subscription, so tor reported the
         // purpose of each; a circuit with none on record is a run that did
         // not see what it compared.
-        for (seen, circuit) in [(&during_a, retried_on), (&during_b, b_on)] {
+        for circuit in [retried_on, b_on] {
             assert_eq!(
-                purpose(seen, circuit).as_deref(),
+                purpose(circuit).as_deref(),
                 Some("HS_CLIENT_REND"),
                 "a read's circuit is not a rendezvous circuit"
             );
