@@ -18,6 +18,14 @@
   is the reserved constant. The vote window, the threshold and the decoder
   that read a minor of 0 as a vote for 1 are deleted. The class, its tables
   and its RPC surface are deleted in the PR that follows.
+- Wire: `hard_fork_info` still answers, and reports `window`, `votes` and
+  `threshold` as `0`. The one reader is the daemon console's
+  `hard_fork_info` command, which prints them as `0/0 votes, threshold 0`.
+  No wallet crate and neither wallet repository calls the method.
+- Mainnet, testnet and stagenet install one table, `hard_fork_schedule`
+  (version 1 at height 1). The three per-network copies were identical and
+  are deleted; regtest and the trace exporter read the same row. Rule 71's
+  allowlist for the table selection is retired with it.
 - Blocks mined by earlier builds carried `1` and are invalid under this rule:
   the six captured replay chains are re-captured. Genesis carries `0` and is
   unchanged. Atomic under `07-consensus-atomic-cutovers`: both validators,
