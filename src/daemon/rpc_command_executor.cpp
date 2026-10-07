@@ -1029,7 +1029,7 @@ bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
 bool t_rpc_command_executor::hard_fork_info(uint8_t version)
 {
   // RK-5b: `hard_fork_info` is served from Rust and renders there. A zero
-  // still means "the fork we would vote in next"; the Rust side names that
+  // still means the next scheduled version; the Rust side names that
   // version in the line rather than labelling it with `voting`.
   return run_rust_console({"hard_fork_info", std::to_string((unsigned)version)});
 }

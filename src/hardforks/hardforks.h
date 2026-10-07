@@ -30,23 +30,22 @@
 
 #include <stdint.h>
 #include <time.h>
+#include <utility>
 
 struct hardfork_t
 {
   uint8_t version;
   uint64_t height;
-  uint8_t threshold;
   time_t time;
-  hardfork_t(uint8_t version, uint64_t height, uint8_t threshold, time_t time): version(version), height(height), threshold(threshold), time(time) {}
+  hardfork_t(uint8_t version, uint64_t height, time_t time): version(version), height(height), time(time) {}
 };
 
-extern const hardfork_t mainnet_hard_forks[];
-extern const uint64_t mainnet_hard_fork_version_1_till;
-extern const size_t num_mainnet_hard_forks;
+// The protocol schedule. Every issued network installs this table.
+// A later major version is a row added here, not a per-network copy.
+extern const hardfork_t hard_fork_schedule[];
+extern const size_t num_hard_fork_schedule;
 
-extern const hardfork_t testnet_hard_forks[];
-extern const uint64_t testnet_hard_fork_version_1_till;
-extern const size_t num_testnet_hard_forks;
-
-extern const hardfork_t stagenet_hard_forks[];
-extern const size_t num_stagenet_hard_forks;
+// Newest scheduled version, active from the schedule's first height.
+// Regtest installs this row. A private copy is how it once disagreed
+// with every issued network about where the staker split starts.
+std::pair<uint8_t, uint64_t> regtest_hard_fork_row();

@@ -477,11 +477,12 @@ impl CurveTreeClient {
     /// then its contents are fixed and come from the table. Otherwise it is
     /// the rightmost chunk at its layer, still open, and its children are the
     /// snapshot's [`Frontier::open_branches`] entry for that layer. Layer 0
-    /// is the exception in the open case: the frontier holds leaf *scalars*
-    /// and a path needs sibling *points*, so the open leaf chunk's identities
-    /// come from a ranged read of its own positions — at most
-    /// `SELENE_CHUNK_WIDTH - 1` rows, the bounded identity tail increment 7
-    /// retires with `entries`.
+    /// is the exception in the open case. The snapshot persists that chunk's
+    /// scalars and [`Frontier::open_branches`] does not return them: it hashes
+    /// them into the parent. The path types take sibling *points*, so the
+    /// identities come from a ranged read of the chunk's own positions — at
+    /// most `SELENE_CHUNK_WIDTH - 1` rows. That read is the open-leaf-chunk
+    /// reader in `CT6_PROVING_STATE.md` §11.11.
     ///
     /// Positions are permanent once assigned, so `position < drained count`
     /// is both "drained at this height" and "every closed chunk over it has
