@@ -6181,4 +6181,36 @@ mechanism text is deleted from the five documents that stated it before
 and replaced by pointers; what each still owns is the specification's
 §15. Index rows for the document and for `SCS-P` / `SCS-F`.
 
+
+**Further rulings, same date, on review of the merged specification.**
+
+1. **`(m, n)` is not re-pinned on the one-attempt figure.** At the
+   feasibility module's calibration the window exceeds the per-archiver
+   false-slash budget (0.689 against `10⁻³` at 4,096 shards). That
+   calibration credits one attempt per read, because failures inside one
+   window cluster. Under the secret draw the witness retries hours later
+   on a fresh circuit, and with three tries the window clears the budget
+   when at most 0.661 of failures are common to all three (`ESR-11`).
+   Loosening the window on the one-attempt figure would weaken detection
+   of pairs that do not serve. Two pieces of work instead: the witness's
+   retry policy is specified as client policy (specification §5), and the
+   correlation of retries at hour-scale spacing is measured (`BA-T31`)
+   and fed to the feasibility module. `(m, n)` stays open until then.
+2. **`SO-D8d`'s integrity layers, in their form under the stored index**
+   (closes `SCS-F11`; specification §9.5). The first layer is "the stored
+   issued-draw index equals a fresh derivation from the kept seeds",
+   checked locally at settlement; a pair mismatch cannot occur, because
+   the pair is derived from `j`. The second, the persisted digest of `D`
+   against a re-walk, and the third, `passes ≤ issued` as a typed halt,
+   carry over.
+3. **Ratified:** the in-flight count stops at `h_open(E)`; the settlement
+   selection's bytes, rejection zone, swap and vectors.
+4. **Accepted:** documents keep describing the attestation path and the
+   `SF-D13` window while that code runs, with the pointer to the
+   specification's §11.1.
+
+**Open from this review.** `SCS-P13`: a retry repeats its draw's nonce
+hours later with a new anchor, which a `P` that remembers nonces can tell
+from an organic read. The remedy on record, not applied, is an attempt
+index in the nonce and one prunable byte per record.
 ---

@@ -3,6 +3,7 @@
 **Status:** OPEN — Round 0 of SO-D8 Slice C, **RULED 2026-10-07**. The
 design is the maintainer's brief of that date (the secret per-block draw)
 and the rulings on the twelve questions this document first posed (§13).
+One question is open: `SCS-P13`, the nonce of a retried read (§13.4).
 Nothing in this document is built.
 
 **Authority.** This is the single specification of the serve-credit
@@ -300,6 +301,18 @@ code path, whether organic or a challenge.
   at its tip minus 720, for every caller.
 - **Timing.** The producer spreads its reads at random over many block
   intervals inside `W₂`. This is client policy, not consensus.
+- **Retries.** A read that fails is tried again, up to three attempts in
+  all: the first and the fetch client's two retries
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D6`). Each
+  retry is made on a fresh circuit, at a random time in what remains of
+  `W₂`, and carries a fresh anchor, because `P` refuses an anchor more
+  than `L` blocks from its own. The record is filed for the first attempt
+  that succeeds. A draw whose third attempt fails, or that runs out of
+  window, is abandoned. This is client policy, not consensus: admission
+  sees one receipt and cannot tell which attempt produced it.
+
+  A retry repeats the draw's nonce, because the nonce is a function of
+  `(seed, h, j)`. What follows from that is `SCS-P13` (§13.4).
 - **Ordering.** The client builds no carrier for `h` until every read of
   `h` has completed or been abandoned. A carrier reveals the seed, and
   the seed exposes that block's remaining reads.
@@ -630,6 +643,32 @@ failure window. This is a precondition (§11), not a consequence: under
 the secret draw, "any pass" would count every pair the draw did not reach
 as a miss.
 
+### 9.5 Settlement integrity
+
+Three local checks at the settlement writer, none on chain
+(`SO-D8d`, [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+§6; their form under the stored index ruled 2026-10-07). A failure of any
+of them is a store-invariant Fault that halts the writer. It is never a
+verdict on a block, never a clamp and never a skipped row.
+
+1. **The index equals a fresh derivation.** The writer re-derives the
+   epoch's issued draws from the kept seeds, each carrier's `h`, the block
+   hashes and `D`, in connect order, and compares the result with the
+   stored issued-draw index: every block's count and every pair's list of
+   `(h, j, h_reveal)`. The pair of a draw is derived from `j`, so a record
+   cannot name a pair its draw did not select; what this check guards is
+   the stored counts.
+2. **`D` equals a re-walk.** A 32-byte digest of `D` is written in the
+   connect batch at `h_open(E)` and undo-logged with it. The writer
+   re-walks `D` from the bond journals and compares. Draws are selected
+   against `D` as of `h_open(E)`, so a `D` that drifted between admission
+   and settlement would change which pair a draw names.
+3. **`passes ≤ issued`**, a typed halt, beneath both.
+
+The re-derivation in check 1 repeats, in one block, the selection hashes
+admission spread over the epoch. Its cost on the floor device is not
+measured ([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T32`).
+
 ---
 
 ## 10. The issued-draw index
@@ -678,7 +717,9 @@ is final.
 Carried with the implementation:
 
 - **Vectors.** The selection KAT of §4.5, the cap vector included; the
-  set-commitment KAT of §7.3; the settlement-selection KAT of §9.3; a test-only replay assertion that a
+  set-commitment KAT of §7.3; the settlement-selection KAT of §9.3; the
+  integrity fixture of §9.5 (an index, and separately a `D`, perturbed
+  between admission and settlement, each halting the writer); a test-only replay assertion that a
   fixture's carried pairs equal the derived ones; and a fixture that two
   constructions of a block yield distinct seeds, witness keys and `0x0C`
   commitments (§4.2), which fails if either secret is ever derived from
@@ -745,16 +786,32 @@ block independently unrevealed with the stated probability.
 - **`(m, n)`.** An honest pair at a 0.30 per-read failure misses an
   observed epoch with probability 0.216 under 2-of-3. At `(11, 13)` the
   false-slash bound over the bond's life is `2.85 × 10⁻⁴` per pair, and
-  `0.689` for an archiver holding the maximum 4,096 shards. The
-  feasibility module's provisional budget is `10⁻³` per archiver, so the
-  window **exceeds** it at that read failure. Neither figure depends on
-  the observation rate, so dropout does not move them; the module already
-  reads the shipped window as exceeding the budget under the rule it
-  models. The `(m, n)` re-pin is open
-  ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
-  §3) and this design does not close it. The observation rate is
-  0.995 / 0.989 / 0.962, so a pair that never serves reaches 11 misses in
-  11.05 / 11.12 / 11.44 epochs.
+  `0.689` for an archiver holding the maximum 4,096 shards, against the
+  feasibility module's provisional `10⁻³` per archiver. Neither figure
+  depends on the observation rate, so dropout does not move them.
+
+  That figure credits **one attempt per read**. The module credits one
+  because failures inside a single window cluster, so a retry there is not
+  an independent try. Under this design a retry comes hours later, on a
+  fresh circuit (§5), and whether tries that far apart fail together is
+  not measured. With three tries, of which a share `ρ` of failures is
+  common to all three:
+
+  | `ρ` | Read failure | Missed observation | Per archiver at 4,096 shards |
+  | --- | --- | --- | --- |
+  | 1.00 (the calibration) | 0.300 | 0.216 | `6.89 × 10⁻¹`, exceeds |
+  | 0.50 | 0.164 | 0.071 | `8.23 × 10⁻⁶`, clears |
+  | 0.25 | 0.095 | 0.025 | `1.07 × 10⁻¹⁰`, clears |
+  | 0.00 (independent) | 0.027 | 0.002 | `1.70 × 10⁻²²`, clears |
+
+  `(11, 13)` clears the budget when `ρ ≤ 0.661` (`ESR-11`, sim plan
+  §5.15). **`(m, n)` stays open and is not re-pinned on the one-attempt
+  figure** (ruled 2026-10-07): loosening the window there would weaken
+  the detection of pairs that do not serve, to solve a problem the
+  retries may already solve. `ρ` at hour-scale spacing is measured first
+  ([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T31`). The
+  observation rate is 0.995 / 0.989 / 0.962, so a pair that never serves
+  reaches 11 misses in 11.05 / 11.12 / 11.44 epochs.
 - **The witness's load is new and unmeasured.** A won block costs its
   producer about 117 to 156 whole-shard reads inside `W₂`. A producer
   with a tenth of the hashrate wins about 50 blocks per window: roughly
@@ -788,6 +845,10 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R6 | A draw is issued only by reveal; an unrevealed block issues nothing |
 | R7 | The seed is revealed whole, with records, within `[h, h + W₂]`; per-draw reveal is forbidden |
 | R8 | `W₂` is the only window. Admission checks no bound on the anchor (`SCS-P7`) |
+| R9 | The in-flight count stops at `h_open(E)` (§4.3). Ratified on review |
+| R10 | The settlement selection as §9.3 states it: candidate bytes, rejection zone, swap, the cap, and the vectors. Ratified on review |
+| R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. Closes `SCS-F11` |
+| R12 | The witness retries a failed read, as client policy (§5). `(m, n)` is not re-pinned on the one-attempt figure; the correlation of retries at hour-scale spacing is measured first (§12) |
 
 ### 13.2 Provisional (rule 21; reopen on the sim or on testnet measurement)
 
@@ -816,6 +877,14 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 
 ---
 
+### 13.4 Open
+
+| # | Question |
+| --- | --- |
+| `SCS-P13` | **The nonce of a retried read.** The nonce is `cSHAKE256(seed ‖ block_hash(h) ‖ j)`, so every attempt at one draw carries the same nonce, and a retry hours later must carry a different anchor (§5). The fetch client already repeats a header when it retries a stall, for every caller, but within seconds and with the same anchor. A `P` that remembers nonces therefore sees a nonce return hours later with a new anchor, which only a challenge does: §5's "indistinguishable from random" holds for a first attempt and not for a retry `P` received before. A `P` could use that to refuse first attempts and serve only returning nonces. Most failures are circuit failures that never reach `P`, and those leak nothing. **The remedy, if one is wanted,** is an attempt index in the nonce: `cSHAKE256(seed ‖ block_hash(h) ‖ j ‖ attempt)`, with `attempt` (one byte, below the retry bound) carried in the record's prunable part so admission can recompute the nonce. That makes the retry bound a consensus constant and adds one prunable byte per record (1,402 → 1,403). Not applied: it changes the record |
+
+---
+
 ## 14. Defects found while grounding
 
 Doc against code, or doc against doc, at the pin. A row says so where the
@@ -833,7 +902,7 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F8` | `ARCHIVAL_CHALLENGE_MECHANISM.md` §2 has the pass record "broadcast as a transaction; any miner may include it". Under R-B the record is filed by the producer of `h` in a carrier that producer signs. **Fixed** there |
 | `SCS-F9` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.6.1 and §7.6.2 distinguished "unpruned validators" from "a pruned node". No such split exists: every daemon prunes (§8). **Fixed:** §7.6.1 is replaced by a pointer here and §7.6.2 says every node verifies at connect |
 | `SCS-F10` | `rust/shekyl-wire/src/transaction.rs:202` calls the pruned-record ceiling a twin of a `cryptonote_config.h` constant. `src/cryptonote_config.h:417-423` says it deliberately has no copy there |
-| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so |
+| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes "the stored index equals a fresh derivation from the kept seeds"; the second and third carry over (§9.5) |
 
 ---
 
@@ -894,6 +963,8 @@ The seed and the witness key have no label: they are fresh randomness.
 | Knock a producer offline | Suppresses observations only; cannot target a `P` |
 | One receipt for two draws | Impossible: the nonce is bound to `(h, j)` |
 | Fingerprint challenge requests | Prevented only by one client code path and identical formats |
+| Remember nonces, refuse first attempts, serve only a nonce that returns | Open: `SCS-P13`. Reaches only reads whose first attempt arrived at `P` |
+| An honest pair misses reads on a bad day and walks toward a slash | Three tries spread across `W₂`; how far that goes depends on how correlated the tries are, which is unmeasured (§12) |
 | Learn mid-epoch that the epoch is settled, then stop serving | Prevented: the three counted draws are selected at close |
 | Read the public draw count to see that challenges have stopped | Prevented: the base rate keeps draws flowing to the end of every epoch |
 | Derive the witness key from a revealed seed and author carriers, or `P` signs its own receipt | Prevented: the seed and the witness key are independent random values (§4.2) |

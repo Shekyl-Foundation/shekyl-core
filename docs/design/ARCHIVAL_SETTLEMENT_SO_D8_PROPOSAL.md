@@ -768,7 +768,7 @@ opens"* and this proposal does not open one.
 
 ## 6. `SO-D8d` RULED 2026-09-16 — three local layers, none of them on chain; amended same day against `dev@5fde3b1ce`
 
-> **Open against the secret draw (`SCS-F11`, 2026-10-07).** The three layers below are stated for a writer that re-derives `issued` by replaying the urn. Under [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §10 `issued` is stored at admission and read at settlement, so layer 1 has no second derivation to compare. Which layers carry over is not ruled; the text below is unchanged until it is.
+> **Form under the secret draw, RULED 2026-10-07 (`SCS-F11` closed).** Three layers stand, as [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.5 states them: (1) the stored issued-draw index equals a fresh derivation from the kept seeds; (2) the persisted digest of `D` equals a re-walk; (3) `passes ≤ issued`. This section owns the reasoning: which direction costs a bond, the Fault disposition, the rejected on-chain digest.
 
 **RULED 2026-09-16; amended 2026-09-16** after examination against
 `dev@5fde3b1ce` (#761, #762, #764 merged). The check is not
@@ -783,51 +783,41 @@ at the site (`SettleError`, this section, the writer caller).
 
 ### 6.1 Which direction costs a bond, and which layer sees it
 
-The fold is absolute-2 on `passes`; `issued` only gates
-`NonObservation` (`issued < 2`). So a wrong `issued` matters in exactly
-two cases, and `passes > issued` sees neither:
+The fold counts passes among three selected draws; `issued` gates
+`NonObservation` (`issued < 3`). So a wrong `issued` matters in two
+cases, and `passes > issued` sees neither:
 
-- **Over-derived** — `issued_true < 2 ≤ issued_derived`, `passes < 2`. A
-  pair that should settle `NonObservation` settles **Missed**, and an
-  archiver who served correctly accumulates a bad observation toward a
-  slash. When `passes ≥ 2` an over-derived `issued` is harmless — the
-  fold returns Served regardless.
-- **Under-derived** — `issued_derived < 2 ≤ issued_true`. A pair that
+- **Over-derived** — `issued_true < 3 ≤ issued_stored`, and the selected
+  draws do not carry two passes. A pair that should settle
+  `NonObservation` settles **Missed**, and an archiver who served
+  correctly accumulates a bad observation toward a slash.
+- **Under-derived** — `issued_stored < 3 ≤ issued_true`. A pair that
   should settle **Missed** settles `NonObservation`: the free-exit
-  direction `SO-D1` exists to close. `passes ≤ 1 ≤ issued_derived`
-  holds, so layer 3 is silent here too.
+  direction `SO-D1` exists to close.
 
-Layer 3 fires only when `passes ≥ issued_derived + 1`, which requires
-records, which layer 1 already covers. **Layer 3 is strictly dominated**
-— retained as a cheap backstop, never as the guard.
+**Layer 3 is strictly dominated** — it fires only when records outnumber
+issued draws — and is retained as a cheap backstop, never as the guard.
 
-Layer 1 compares records to assignments pair-by-pair. An over-derived
-`issued` produces records that *agree* with the writer's `assignment(h)`
-at every `h` a record names; the divergence is in the **count of draws**,
-not in whether any particular `h` was drawn. So **layer 1 structurally
-cannot see the harmful direction.** The security-priority direction —
-both the wrongful slash and the free exit — rests on **layer 2 alone**.
-That is why the amendments in §6.3 are load-bearing, not polish: as
-first recorded, layer 2 had no operand (§6.3, finding 1), and the only
-clause that matters had no working guard.
+Layer 1 recomputes the counts, so it sees both directions for every draw
+whose seed was revealed. It recomputes them against the `D` the writer
+holds at settlement; if that `D` is itself wrong in a way that leaves the
+revealed draws' pairs unchanged, layer 1 is silent. **Layer 2 is the
+guard on `D`**, including for pairs no draw reached.
 
 ### 6.2 Three layers, none on chain
 
-1. **Per-record assignment equality.** For each record the writer reads
-   at `(P, s, E, h)`, verify that the writer's own `assignment(h)` names
-   `(P, s)`. The record is evidence of what admission believed; this
-   compares the two derivations directly rather than a consequence of
-   them. Catches admission-side defects (a membership gate that let a
-   non-member through, a λ that differed between the two doors — §6.5).
-   Streamed: replay `ChallengeUrn::advance_block` against the epoch's
-   records grouped by `h`, `O(97 × 40 B)` resident — **not**
-   `assign_epoch`'s materialised `Vec<Vec<DrawablePair>>` (≈ 39 MB at
-   maturity before overhead; rule 76, the Pi 4 is the floor).
+1. **The index equals a fresh derivation.** The writer re-derives the
+   epoch's issued draws from the kept seeds, each carrier's `h`, the block
+   hashes and `D`, in connect order, and compares with the stored
+   issued-draw index. The stored index is what admission computed; this
+   compares the two directly. The pair of a draw is derived from `j`, so
+   a record cannot name a pair its draw did not select. Streamed by block,
+   never materialised for the epoch (rule 76, the Pi 4 is the floor).
 2. **Local drawable-set digest.** The node digests `D` when it first
    builds it at `h_open(E)`; the writer **re-walks `D` from the journals
    at every slash pass** (§7.4's enumerator, `O(holdings changes since
    h_open)`) and compares. Catches reconstruction drift, including for
-   pairs with **no** records, which layer 1 cannot see. Local only: no
+   pairs no draw reached, which layer 1 cannot see. Local only: no
    wire field, no consensus surface, no validity coupling — the cell is
    written, never read by validation.
 3. **`passes ≤ issued`, FATAL, never clamped** — retained beneath both as
@@ -837,38 +827,20 @@ clause that matters had no working guard.
 
 ### 6.3 Amendments of 2026-09-16 (examination against `dev@5fde3b1ce`)
 
-1. **The digest is persisted — one local 32-byte cell per epoch.** As
-   first recorded the digest had no operand: `SO-D8e` said the cache is
-   never persisted, and on the resident path the writer's `D` *is* the
-   cache's `D` (a digest compared to itself), while on the restart path
-   the original digest was lost with the cache (nothing to compare
-   against). The cell is written **in the connect batch at `h_open(E)`**,
-   so it is undo-logged (SI-6 shape) and therefore reorg-safe for free —
-   a pop below `h_open(E)` removes it with the block, which also closes
-   the reorg-across-`h_open` staleness a local digest otherwise shares
-   with the rejected on-chain one. Not on the wire; never read by any
-   rule. `SO-D8e`'s "never persisted" carries this one carve-out
-   (§7.2). Not an `SO-D3` violation: a checksum of a derivation is not
-   stored state, and it is the only way "compare at settlement" has an
-   operand.
-2. **Layer 2 re-derives at every slash pass — option (b) — and that
-   collapses Q7.** Layer 2 needs two operands: something to compare *to*
-   (the persisted digest) and something to compare (a re-derivation). A
-   resident cache supplies neither. So the re-walk is not a cost bolted
-   on; it is what makes layer 2 exist. Once the writer re-walks at every
-   slash pass, retaining the cache past `h_close(E) + W₂` buys nothing at
-   settlement, which was its whole justification — so **Q7 drops from
-   "retain through the slash deadline" to "drop after `h_close(E) + W₂`"**
-   as a consequence, restoring the pure-function property `SO-D1` §4.2
-   and `SO-D6` rest on (the writer at `h_slash` is a function of chain
-   data, not of what this process happened to keep resident). Layer 1
-   then always replays (1.09 s here; Pi-4 owed), inside connect phase 9
-   once per epoch — off the admission path, on the connect path once
-   per 10,000 blocks. **Conditional on §7.4's churn benchmark.**
-   **Stated fallback (a):** if the backward walk proves too expensive
-   for the floor device inside connect, layer 2 compares only when the
-   cache is non-resident (after a restart) and Q7's retention returns.
-   The benchmark number is the falsifier; do not discover the fallback.
+1. **The digest is persisted — one local 32-byte cell per epoch.** It is
+   written **in the connect batch at `h_open(E)`**, so it is undo-logged
+   (SI-6 shape) and reorg-safe: a pop below `h_open(E)` removes it with
+   the block. Not on the wire; never read by any rule. A checksum of a
+   derivation is not stored state (`SO-D3`), and it is the only way
+   "compare at settlement" has an operand.
+2. **Layer 2 re-derives at every slash pass.** It needs two operands:
+   something to compare *to* (the persisted digest) and something to
+   compare (a re-walk). The writer at `h_slash` is then a function of
+   chain data, not of what this process kept resident (`SO-D1` §4.2,
+   `SO-D6`). Layer 1 re-derives in the same pass, inside connect phase 9
+   once per epoch — off the admission path. **Conditional on §7.4's churn
+   benchmark** for the re-walk and on the floor-device measurement of the
+   re-derivation (`BA-T32`); neither is measured.
 3. **Pin 4 reconciled — same refusal, two dispositions, by call site.**
    §7.4 pin 4's "capability limit, not a defect and not a verdict" is
    right *at the enumerator during ordinary operation*: a below-horizon
@@ -878,7 +850,7 @@ clause that matters had no working guard.
    (§6.4). The call site is what distinguishes them.
 4. **Direction analysis** — §6.1 (the harmful direction is layer 2's
    alone; layer 3 dominated).
-5. **λ is a fourth falsifier class** — §6.5; and a precondition on Q4.
+5. **The count rule is a fourth falsifier class** — §6.5.
 6. **Ground (3) of the on-chain rejection WITHDRAWN** — §6.6.
 7. **Layer 1 streams** — §6.2 item 1.
 
@@ -895,8 +867,7 @@ persisted, reads stay open, armed by `poison().arm(row)`.
 
 **An `SO-D8d` desync is therefore a store-invariant Fault carrying a new
 `SI-` row, minted at Slice C in `STORE_INVARIANT_REGISTER.md` — never a
-`CenRow`, never `InvalidBlock`.** Same posture as the urn's `FeedError`:
-a typed refusal from the fold, the poison latch at the slash-pass caller,
+`CenRow`, never `InvalidBlock`.** A typed refusal from the fold, the poison latch at the slash-pass caller,
 never a panic, never a clamp, never a skip.
 
 **The connect phase-9 nuance, stated so it is not "fixed".** The slash
@@ -918,27 +889,20 @@ arrive as a quiet `continue`.
 Each is a different real defect; name them so a later sweep does not
 read an unreachable check as dead:
 
-- **revert the `SO-D8b` dedup widening** (back to pair-epoch-wide
-  `pass_count > 0`) — layer 1 / layer 3;
+- **revert the per-draw dedup** (back to pair-epoch-wide
+  `pass_count > 0`) — layer 3;
+- **perturb the stored index** so a block's count or a pair's list
+  differs from what the seeds derive — layer 1;
 - **perturb the drawable-set reconstruction** so admission and
-  settlement disagree — layer 2 (and layer 1 if any record's `h` moves);
+  settlement disagree — layer 2 (and layer 1 if a revealed draw's pair
+  moves);
 - **prune a journal above the retention horizon** — fires **upstream of
   the layers**, as §7.4 pin 4's refusal or SI-7 `CellCorrupt { fault:
   Absent }` on the view read, and escalates to the Fault at the slash
   pass (§6.3 item 3);
-- **λ divergence between the two doors** — **RESOLVED 2026-09-17**
-  (`fix/so-q4-pin-lambda`): `assign_epoch` feeds `ChallengeUrn::new`;
-  that constructor reads `CHALLENGES_PER_PAIR_PER_EPOCH`; the
-  explicit-λ constructor is `#[cfg(test)]`. A production module in this
-  crate cannot pass a coverage that disagrees with the settlement
-  threshold. *Records-was:* Q4 named two independent `pub` λ parameters
-  (`assign_epoch`, `ChallengeUrn::new`); a λ that differed between them
-  left the pair set identical so layer 2 passed and only layer 1 fired
-  on replay — a coverage precondition for `SO-D8d`, not only
-  correctness. The first landing made the doors `pub(crate)`, which
-  still left every non-test module in the crate able to pass a
-  divergent λ. Retained as the named falsifier for a `cfg(test)`
-  constructor compiled into production.
+- **a count rule that differs between admission and the re-derivation**
+  (a different horizon, cap or carry) — layer 1. The two must be one
+  function, called from both.
 
 ### 6.6 REJECTED: an on-chain digest of `D` at `h_open(E)`
 
@@ -965,21 +929,23 @@ difference between the two designs is *timing*, which is weak, and
 Withdrawn rather than softened, so the rejection is not re-argued on
 the wrong ground.
 
-**REJECTED, so it is not re-proposed: counting `issued` from records
-instead of deriving it.** `SO-D1` §4.2 refuses it — an absent record
-would read as never-issued, which is the free-exit hole the scheme exists
-to close.
+**REJECTED, so it is not re-proposed: counting `issued` from pass
+records.** `SO-D1` §4.2 refuses it — an absent record would read as
+never-issued, which is the free-exit hole the scheme exists to close.
+Under the secret draw a reveal issues every draw of its block whether or
+not a record follows (specification §9.2), so an absent record is still a
+miss; what issues nothing is an absent reveal.
 
 ### 6.7 Fixture, and what is carried elsewhere
 
 **Fixture.** Not a unit test of `settle_epoch` — that returns the error
-trivially and proves nothing. Seed an admission-side urn from `D` as
-built at `h_open` and a settlement-side urn from a `D` **re-walked from
-divergent journals**, and show the fold refusing through the Fault path.
-That is also the only end-to-end test that Q3's reconstruction and the
-admission path are looking at the same object — and it must run the
-re-derivation, not the resident cache, or it tests nothing (§6.3 item
-2). Lands with Slice C; `attestation.rs`'s existing
+trivially and proves nothing. Two cases, each shown refusing through the
+Fault path: an index perturbed after admission (one block's count, and
+separately one pair's list), and a `D` **re-walked from divergent
+journals**. The second is also the only end-to-end test that Q3's
+reconstruction and the admission path are looking at the same object.
+Both must run the re-derivation, not a value kept resident, or they test
+nothing (§6.3 item 2). Lands with Slice C; `attestation.rs`'s existing
 `MorePassesThanIssued` unit test stays as the layer-3 mapping pin, not
 as this fixture.
 
@@ -994,7 +960,8 @@ PDM — do not mint a `PDM-` id here (rule 94 §6).
 *SUPERSEDED: "`passes > issued` is the check"; "FATAL means reject the
 connecting block"; "the edit that makes it fire is only reverting the
 dedup widening"; on-chain `D`-digest; skip-as-continue; "retain the cache
-through the slash deadline" (Q7, collapsed by §6.3 item 2); "three edits
+through the slash deadline" (Q7); per-record assignment equality against
+an urn replay (layer 1's form until 2026-10-07); "three edits
 make these layers fire" (the pruned-journal edit fires upstream); the
 five-ground rejection (ground 3 withdrawn).*
 
@@ -1835,9 +1802,9 @@ gates until `shekyl-chain-rules` is the live validator.
 | **The draw, admission, the witness, the carrier, `issued`, sizes, what is deleted** | [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4–§11. The writer is `shekyl-archival-retention`'s pure fold; the Rust apply and slash path calls it and writes the rows before the slash fold, per `SO-D7`. No FFI; no C++ loop. |
 | **How `passes` is obtained** | The S-ARCH `archival_serve_credit_pass_count(P,s,E)` read — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Same count, same table, Rust store. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
-| **Settlement integrity (`SO-D8d` RULED, amended 2026-09-16)** | §6: local layers at the Rust slash-pass writer, none on chain; a desync is a store-invariant Fault with a new `SI-` row, never a verdict. The layers are stated for a writer that replays the urn and are open against the stored issued-draw index (§6 note, `SCS-F11`). |
+| **Settlement integrity (`SO-D8d` RULED; form ruled 2026-10-07)** | §6 and specification §9.5: three local layers at the Rust slash-pass writer, none on chain — the stored index against a fresh derivation, the digest of `D` against a re-walk, `passes ≤ issued`. A desync is a store-invariant Fault with a new `SI-` row, never a verdict. |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 17, 18 (`SO-D8d`):** the integrity fixtures of §6.7, in the form §6 takes once `SCS-F11` is ruled. **Vectors** for the draw, the cap and the set commitment, and the `0x0C` commitment fixture: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.5, §7.3. Items 7, 8, 10 and 11 read "drawn at `h`" as the specification's derivation of draw `j` from `h`'s revealed seed. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 13 (§7.6.2 (B)):** carrier — a carrier whose set commitment covers one mutated member is refused whole, naming member `i`'s predicate; the honest members refiled in a later carrier within `W₂` admit. Red edits: measuring the refiled carrier's deadline from the first carrier's `h_incl` instead of `h`; admitting a carrier with zero verified members (the free-weight channel (A) was rejected for); a commitment form under which reordering or re-framing two different sets yields one byte string. **New 20 (§7.6.2):** an `n = 0` carrier is refused as a structural check, before any member predicate runs. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 17, 18 (`SO-D8d`):** the two integrity fixtures of §6.7 — a perturbed index and a `D` re-walked from divergent journals, each halting the writer. **Vectors** for the draw, the cap and the set commitment, and the `0x0C` commitment fixture: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.5, §7.3. Items 7, 8, 10 and 11 read "drawn at `h`" as the specification's derivation of draw `j` from `h`'s revealed seed. |
 | **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
 
 **Sequencing against DRS — SUPERSEDED 2026-09-16 (Q15), amended same
@@ -1919,7 +1886,7 @@ about it.
 | `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound. Transcription of the R-B ratification. First admission-path reader of `CHALLENGE_RESPONSE_BLOCKS`; that FOLLOWUPS row **discharged**. | **RULED 2026-09-16** |
 | `SO-D8b` | Admission checks that the pair was drawn at `h`; dedup is per draw, not per pair-epoch. The form is the specification's §9.1: draw `j` of `h`'s revealed seed, key `(h, j)`. | **RULED 2026-09-16**; public-urn form **SUPERSEDED 2026-10-07** |
 | `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
-| `SO-D8d` | §6: local integrity layers, none on chain; a desync is a store-invariant Fault, never a verdict. Stated for urn replay; which layers carry over to the stored issued-draw index is open (`SCS-F11`). | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`**; form **OPEN 2026-10-07** (`SCS-F11`) |
+| `SO-D8d` | §6: three local integrity layers, none on chain — the stored issued-draw index against a fresh derivation from the kept seeds, the persisted digest of `D` against a re-walk, `passes ≤ issued`. A desync is a store-invariant Fault, never a verdict. | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`**; form **RULED 2026-10-07** |
 | `SO-D8e` | The urn, its replay and its `W₂` assignment ring. Replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10). Owed items that are not the urn's stay in §7.2. | **SUPERSEDED 2026-10-07** |
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
