@@ -461,12 +461,13 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
 // over two depths; the window is I11's, pinned above), absence (an
 // unrecorded hash, a reference the window refuses, a body with no
 // declared depth), and the two holes below the tip (the root, the leaf
-// count the depth is a function of). The mock's tree is **empty** — every
-// recorded height's depth is 0 — so no declared depth is admitted on it,
-// and an anchored emission here is J21's refusal, not its pass. The pass
-// is the driver's: an assembled claim's declared depth is the tree's at
-// its reference (`scenario_emission_tests`), and the context it yields is
-// what the emission's proof rows verify against.
+// count the depth is a function of). These chains plant no tree
+// (`MockChain::push`, never `push_tree`), so every recorded height's depth
+// is 0, no declared depth is admitted, and an anchored emission here is
+// J21's refusal, not its pass. The pass is the driver's: an assembled
+// claim's declared depth is the tree's at its reference
+// (`scenario_emission_tests`), and the context it yields is what the
+// emission's proof rows verify against.
 
 /// `I13::admits`: `[1, depth]`, closed at both ends; nothing is admitted
 /// against an empty tree.

@@ -91,17 +91,29 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// appends at `tip + 1`, so — like the store — the only absence the view can
 /// report is above the tip. Key images are a set.
 ///
-/// Roots are keyed the way the store keys them (S-CHAIN-W SCW-19):
+/// Trees are keyed the way the store keys them (S-CHAIN-W SCW-19):
 /// `root_at(h)` is the tree state **at** `h` — after block `h − 1` connected,
-/// before block `h` drained — so `roots[0]` is the empty tree, the root
-/// pushed *with* block `h` is `roots[h + 1]`, and `root_at(tip + 1)` is
+/// before block `h` drained — so `trees[0]` is the empty tree, the tree
+/// pushed *with* block `h` is `trees[h + 1]`, and `root_at(tip + 1)` is
 /// recorded (the state the next candidate is checked against, CEN-B5) while
-/// `root_at(tip + 2)` is `AboveTip`.
+/// `root_at(tip + 2)` is `AboveTip`. The leaf count is keyed identically and
+/// travels with the root it is a function of ([`PlantedTree`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockChain {
     recorded: Vec<RecordedBlock>,
-    /// `roots[h]` = the tree state at height `h`; `roots.len() == recorded.len() + 1`.
-    roots: Vec<CurveTreeRoot>,
+    /// `trees[h]` = the tree state at height `h`; `trees.len() == recorded.len() + 1`.
+    ///
+    /// The mock is **told** its tree, never derives it: it records no
+    /// outputs, so nothing here grows, and a root or a count is what a
+    /// fixture pushed. A count other than `0` is a planted tree, the way a
+    /// planted key image is a planted spend — a fixture that names one
+    /// ([`push_tree`](Self::push_tree)) declares the tree is not its
+    /// subject; a fixture whose subject *is* the tree's depth uses
+    /// `I13::admits`, and the tree's own witness is a driven chain
+    /// (`scenario_*`). Until 2026-10-07 `leaf_count_at` answered `0` for
+    /// every recorded height whatever root sat there, a tree question the
+    /// mock was never asked to hold; this is the symmetry that replaced it.
+    trees: Vec<PlantedTree>,
     /// `weights[h]` = block `h`'s two recorded weights; `weights.len() ==
     /// recorded.len()`. What the store projects from `block_info` for
     /// CEN-G6's medians (slice 7); [`push`](Self::push) records the
@@ -135,7 +147,7 @@ impl Default for MockChain {
     fn default() -> Self {
         Self {
             recorded: Vec::new(),
-            roots: vec![CurveTreeRoot::EMPTY],
+            trees: vec![PlantedTree::EMPTY],
             weights: Vec::new(),
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
@@ -156,29 +168,70 @@ impl MockChain {
         self
     }
 
-    /// Append a block at `tip + 1` and the tree state **after** it — what
+    /// Append a block at `tip + 1` and the root **after** it — what
     /// `root_at(tip + 2)` will return, and what the header of the block
-    /// after it must carry (CEN-B5). The block's weights are the
+    /// after it must carry (CEN-B5). The leaf count carries over from the
+    /// tree before: the mock records no outputs, so a pushed block grows
+    /// nothing, and a chain built by `push` alone has the empty tree's
+    /// count (`0`) at every height. The block's weights are the
     /// penalty-free zone, both columns; a weights fixture uses
     /// [`push_weighing`](Self::push_weighing).
     pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
-        let zone = RecordedWeights {
-            weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
-            long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-        };
-        self.push_weighing(block, root_after, zone)
+        self.push_weighing(block, root_after, Self::ZONE_WEIGHTS)
     }
 
     /// [`push`](Self::push) with the block's recorded weights named — what
     /// `weights_window` will return for its height.
     pub fn push_weighing(
-        mut self,
+        self,
         block: RecordedBlock,
         root_after: CurveTreeRoot,
         weights: RecordedWeights,
     ) -> Self {
+        let leaf_count = self.trees.last().expect("never empty").leaf_count;
+        let tree_after = PlantedTree {
+            root: root_after,
+            leaf_count,
+        };
+        self.push_recording(block, tree_after, weights)
+    }
+
+    /// [`push`](Self::push) with the tree after the block **planted** —
+    /// its root and its leaf count together, what `root_at(tip + 2)` and
+    /// `leaf_count_at(tip + 2)` (so `depth_at`) will return. A planted
+    /// tree, the register's sense: the mock did not grow it and cannot
+    /// serve its chunks ([`MockView::tree_frontier`]); a fixture plants one
+    /// to put a tree of some depth under a rule whose subject is not the
+    /// tree (CEN-I13's admission is the pure `I13::admits`; the grown
+    /// tree's witness is a driven chain).
+    pub fn push_tree(
+        self,
+        block: RecordedBlock,
+        root_after: CurveTreeRoot,
+        leaf_count_after: u64,
+    ) -> Self {
+        let tree_after = PlantedTree {
+            root: root_after,
+            leaf_count: leaf_count_after,
+        };
+        self.push_recording(block, tree_after, Self::ZONE_WEIGHTS)
+    }
+
+    /// The penalty-free zone in both weight columns — what a block whose
+    /// fixture is not about weights records.
+    const ZONE_WEIGHTS: RecordedWeights = RecordedWeights {
+        weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
+        long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
+    };
+
+    fn push_recording(
+        mut self,
+        block: RecordedBlock,
+        tree_after: PlantedTree,
+        weights: RecordedWeights,
+    ) -> Self {
         self.recorded.push(block);
-        self.roots.push(root_after);
+        self.trees.push(tree_after);
         self.weights.push(weights);
         self
     }
@@ -260,12 +313,31 @@ impl MockChain {
             .map_or(AtHeight::AboveTip, AtHeight::Recorded)
     }
 
-    fn root(&self, height: BlockHeight) -> AtHeight<CurveTreeRoot> {
+    pub(crate) fn tree(&self, height: BlockHeight) -> AtHeight<PlantedTree> {
         usize::try_from(height.to_raw())
             .ok()
-            .and_then(|index| self.roots.get(index))
-            .map_or(AtHeight::AboveTip, |root| AtHeight::Recorded(*root))
+            .and_then(|index| self.trees.get(index))
+            .map_or(AtHeight::AboveTip, |tree| AtHeight::Recorded(*tree))
     }
+}
+
+/// The tree state at one height as the mock holds it: the root and the
+/// leaf count the root is a function of, pushed together
+/// ([`MockChain::push_tree`]) so one cannot be asked what the other was
+/// never told. The store records the same pair per height
+/// (`curve_tree_roots[h]`, `curve_tree_leaf_counts[h]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlantedTree {
+    pub(crate) root: CurveTreeRoot,
+    pub(crate) leaf_count: u64,
+}
+
+impl PlantedTree {
+    /// The empty tree: `CurveTreeRoot::EMPTY` over no leaves.
+    const EMPTY: Self = Self {
+        root: CurveTreeRoot::EMPTY,
+        leaf_count: 0,
+    };
 }
 
 /// A `ChainView<'id>` over a [`MockChain`]. Never faults.
@@ -302,7 +374,10 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     }
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        Ok(self.chain.root(height))
+        Ok(match self.chain.tree(height) {
+            AtHeight::Recorded(tree) => AtHeight::Recorded(tree.root),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
     }
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
@@ -338,22 +413,36 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         Ok(self.chain.transactions.contains(hash))
     }
 
-    /// A mock chain records no outputs, so its tree never grows: the
-    /// frontier is empty, every recorded height's outputs are none and its
-    /// leaf count is zero. Rules that read the tree's operands (F17, I13)
-    /// see an empty tree; the growth derivation appends nothing and the
-    /// verdict carries `root_at(connecting)` forward unchanged.
+    /// The tree at `tip + 1` as the next grow would need it: the leaf
+    /// count the chain was told, over **no chunks** — the mock holds none,
+    /// having grown nothing. For a chain built by `push` alone that is
+    /// `TreeFrontier::EMPTY`, the honest frontier of a chain that records
+    /// no outputs. For a planted tree ([`MockChain::push_tree`]) it is a
+    /// frontier `grow` refuses as `FrontierFault::Shape`, which the drain
+    /// raises as `Corrupt::TreeUnservable`: the view cannot describe the
+    /// tree, which is the truth of a plant, said in the type rather than by
+    /// an empty frontier under a non-zero count. The drain reads this only
+    /// with outputs to append, and the mock's outputs are none.
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-        Ok(TreeFrontier::EMPTY)
+        let tree = self.chain.trees.last().expect("never empty");
+        Ok(TreeFrontier {
+            leaf_count: tree.leaf_count,
+            last_chunks: Vec::new(),
+        })
     }
 
+    /// The leaf count pushed with the root at `height` — `0` for every
+    /// height of a chain built by `push`, the planted count where
+    /// [`MockChain::push_tree`] named one. `depth_at` derives from it.
     fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-        Ok(match self.chain.root(height) {
-            AtHeight::Recorded(_) => AtHeight::Recorded(0),
+        Ok(match self.chain.tree(height) {
+            AtHeight::Recorded(tree) => AtHeight::Recorded(tree.leaf_count),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
 
+    /// None at every recorded height: the mock records no outputs, which
+    /// is why nothing in it grows and the drain appends nothing.
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         Ok(match self.chain.block(height) {
             AtHeight::Recorded(_) => AtHeight::Recorded(BlockOutputs::default()),

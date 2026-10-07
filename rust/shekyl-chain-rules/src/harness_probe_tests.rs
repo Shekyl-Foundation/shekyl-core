@@ -133,6 +133,78 @@ fn push_records_densely_from_zero_and_reads_back_by_height() {
     });
 }
 
+/// The tree is told, never derived: a count pushed with its root is what
+/// `leaf_count_at` and `depth_at` answer at that height, a plain `push`
+/// carries the count before it forward (no outputs, no growth), and the
+/// frontier of a planted tree is one `grow` refuses — the mock holds no
+/// chunks, and says so in the type rather than with an empty frontier
+/// under a non-zero count.
+#[test]
+fn the_tree_travels_with_the_root_it_was_pushed_with() {
+    use crate::tree_growth::{grow, FrontierFault, GrowFault};
+    use shekyl_fcmp::tree::layer_count_for_leaves;
+
+    // Three leaves: one layer-0 chunk under a single root layer.
+    let planted = 3;
+    let chain = MockChain::default()
+        .push(recorded(1_000), root(0xa0))
+        .push_tree(recorded(1_060), root(0xa1), planted)
+        .push(recorded(1_120), root(0xa2));
+    chain.with_view(|view| {
+        // Heights 0 and 1: the empty tree, as a chain built by `push` has.
+        for height in [0, 1] {
+            let height = BlockHeight::from_raw(height);
+            assert_eq!(
+                infallible(view.leaf_count_at(height)),
+                AtHeight::Recorded(0)
+            );
+            assert_eq!(infallible(view.depth_at(height)), AtHeight::Recorded(0));
+        }
+        // Height 2: the planted tree, keyed as its root is (SCW-19).
+        assert_eq!(
+            infallible(view.root_at(BlockHeight::from_raw(2))),
+            AtHeight::Recorded(root(0xa1))
+        );
+        assert_eq!(
+            infallible(view.leaf_count_at(BlockHeight::from_raw(2))),
+            AtHeight::Recorded(planted)
+        );
+        assert_eq!(
+            infallible(view.depth_at(BlockHeight::from_raw(2))),
+            AtHeight::Recorded(layer_count_for_leaves(planted) - 1)
+        );
+        // Height 3: `push` after a plant grows nothing — the count carries.
+        assert_eq!(
+            infallible(view.leaf_count_at(BlockHeight::from_raw(3))),
+            AtHeight::Recorded(planted)
+        );
+        assert_eq!(
+            infallible(view.leaf_count_at(BlockHeight::from_raw(4))),
+            AtHeight::AboveTip
+        );
+        // The frontier names the planted count and no chunks; a grow over
+        // it is the view failing to describe its tree, not a root.
+        let frontier = infallible(view.tree_frontier());
+        assert_eq!(frontier.leaf_count, planted);
+        assert_eq!(
+            grow(
+                &frontier,
+                &[shekyl_types::TreeLeaf::from_bytes(
+                    [0; shekyl_types::TreeLeaf::LEN]
+                )]
+            ),
+            Err(GrowFault::Frontier(FrontierFault::Shape {
+                layers: 0,
+                expected: layer_count_for_leaves(planted),
+            }))
+        );
+    });
+    // A chain that planted nothing has the empty frontier, as before.
+    one_block().with_view(|view| {
+        assert_eq!(infallible(view.tree_frontier()), TreeFrontier::EMPTY);
+    });
+}
+
 #[test]
 fn key_images_are_a_set() {
     let spent = KeyImage::from_bytes([0x5e; 32]);

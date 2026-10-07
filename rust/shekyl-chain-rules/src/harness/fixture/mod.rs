@@ -894,9 +894,9 @@ pub fn header() -> BlockHeader {
 pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
     let tip = chain.tip();
     let connecting = Tip::connecting_height(tip.as_ref());
-    let root = match chain.root(connecting) {
-        AtHeight::Recorded(root) => root,
-        AtHeight::AboveTip => unreachable!("the mock records the root at tip + 1"),
+    let root = match chain.tree(connecting) {
+        AtHeight::Recorded(tree) => tree.root,
+        AtHeight::AboveTip => unreachable!("the mock records the tree at tip + 1"),
     };
     let block = Block {
         header: BlockHeader {
