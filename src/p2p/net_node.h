@@ -578,7 +578,14 @@ namespace nodetool
     virtual std::map<std::string, time_t> get_blocked_hosts();
     //! Subnet to seconds remaining on the monotonic deadline.
     virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets();
-
+    /// The operator snapshot. Copies each handler context on this thread,
+    /// under the claim mutex, instead of posting onto the io pool.
+    template<class F>
+    void read_operator_claims(F&& fn)
+    {
+      for (auto& zone : m_network_zones)
+        zone.second.m_net_server.get_config_object().read_each_context(std::forward<F>(fn));
+    }
 
   private:
     bool islimitup=false;

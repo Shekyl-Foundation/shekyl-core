@@ -1278,7 +1278,8 @@ fn sync_info(src: &Source) -> Result<String, String> {
             "{:<24}  {:<16}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
             p.info.address,
             p.info.state.as_str(),
-            p.info.height
+            p.info
+                .height
                 .map(|height| height.to_string())
                 .unwrap_or_else(|| "unknown".to_owned()),
             p.info.current_download,

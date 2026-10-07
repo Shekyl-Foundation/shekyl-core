@@ -1859,11 +1859,8 @@ skip:
           std::uint64_t send_ms = 0;
           std::uint64_t recv_ms = 0;
           shekyl_link_activity(other->id, &send_ms, &recv_ms);
-          timespec now_ts{};
-          clock_gettime(CLOCK_REALTIME, &now_ts);
-          const std::uint64_t now_ms = static_cast<std::uint64_t>(now_ts.tv_sec) * 1000
-              + static_cast<std::uint64_t>(now_ts.tv_nsec) / 1000000;
-          const std::uint64_t mark = shekyl_recv_mark_ms(recv_ms, other->started * 1000);
+          const std::uint64_t now_ms = shekyl_monotonic_ms();
+          const std::uint64_t mark = shekyl_recv_mark_ms(recv_ms, other->started_mono);
           const double since_s = now_ms >= mark ? static_cast<double>(now_ms - mark) / 1000.0 : 0.0;
           const float last_activity = std::min(static_cast<float>(since_s), dt / 1e6f);
           bool download = last_activity > LAST_ACTIVITY_STALL_THRESHOLD;

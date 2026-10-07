@@ -112,8 +112,10 @@ struct Conn {
     established: bool,
     /// Unix seconds at admission. The operator view reads this. It is not
     /// the timing engine's tick. Last receive and last send are not on
-    /// this row: they are millisecond instants on the byte path.
+    /// this row: they are monotonic millisecond instants on the byte path.
     started_unix: u64,
+    /// The same admission, on the monotonic clock the byte stamps use.
+    started_mono: u64,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -430,6 +432,7 @@ impl Hub {
                 connection,
                 established: false,
                 started_unix: Self::unix_secs(),
+                started_mono: shekyl_transport_layer::monotonic_ms(),
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
@@ -492,6 +495,7 @@ impl Hub {
                     *conn.connection.endpoint(),
                     conn.established,
                     conn.started_unix,
+                    conn.started_mono,
                 )
             })
             .collect();

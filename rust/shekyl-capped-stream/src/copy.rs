@@ -343,6 +343,9 @@ where
                         }
                         result = write_all_counted(write, &wire[off..end]) => {
                             stall.complete();
+                            if result.is_ok() {
+                                gate.touch(LinkDirection::Up, conn);
+                            }
                             if let Err(wrote) = result {
                                 refund_unsent(gate, LinkDirection::Up, conn, grant as u64, wrote);
                                 outbound.release(n);
@@ -419,7 +422,12 @@ where
                     gate.refund(LinkDirection::Down, conn, grant, true);
                     return CloseCause::new(CloseKind::PeerClosed);
                 }
-                Ok(n) => n,
+                Ok(n) => {
+                    if n > 0 {
+                        gate.touch(LinkDirection::Down, conn);
+                    }
+                    n
+                }
                 Err(_) => {
                     gate.refund(LinkDirection::Down, conn, grant, true);
                     return CloseCause::new(CloseKind::IoError);

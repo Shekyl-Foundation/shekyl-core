@@ -38,6 +38,8 @@ pub struct ShekylSeamBoardRow {
     pub _pad_tail: [u8; 2],
     /// Unix seconds at admission.
     pub started: u64,
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    pub started_mono: u64,
 }
 
 const _: () = {
@@ -45,7 +47,8 @@ const _: () = {
     assert!(std::mem::offset_of!(ShekylSeamBoardRow, established) == 8);
     assert!(std::mem::offset_of!(ShekylSeamBoardRow, endpoint) == 16);
     assert!(std::mem::offset_of!(ShekylSeamBoardRow, started) == 88);
-    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 96);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, started_mono) == 96);
+    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 104);
     assert!(SHEKYL_DIRECTION_INBOUND == 0 && SHEKYL_DIRECTION_OUTBOUND == 1);
 };
 
@@ -57,6 +60,7 @@ fn board_row(row: &Row) -> ShekylSeamBoardRow {
         endpoint: observed_c(&row.endpoint()),
         _pad_tail: [0; 2],
         started: row.started_unix(),
+        started_mono: row.started_mono(),
     }
 }
 

@@ -200,8 +200,8 @@ impl LinkGate {
             .connection(conn)
     }
 
-    /// Unix milliseconds of the last granted byte, `(send, recv)`.
-    /// Zero until that direction has moved a byte.
+    /// Monotonic milliseconds of the last byte, `(send, recv)`.
+    /// Zero until that direction has read or written a byte.
     #[must_use]
     pub fn activity(&self, conn: u64) -> (u64, u64) {
         self.inner
@@ -209,6 +209,25 @@ impl LinkGate {
             .lock()
             .expect("link budget")
             .activity_ms(conn)
+    }
+
+    /// Unix milliseconds of those instants, for the operator view.
+    #[must_use]
+    pub fn activity_unix(&self, conn: u64) -> (u64, u64) {
+        self.inner
+            .budget
+            .lock()
+            .expect("link budget")
+            .activity_unix_ms(conn)
+    }
+
+    /// A byte was read or written on `direction`.
+    pub fn touch(&self, direction: LinkDirection, conn: u64) {
+        self.inner
+            .budget
+            .lock()
+            .expect("link budget")
+            .touch(direction, conn);
     }
 }
 

@@ -4409,15 +4409,19 @@ struct shekyl_seam_board_row {
   shekyl_seam_observed endpoint;
   std::uint8_t _pad_tail[2];
   /// Unix seconds at admission. Last receive and last send are not here:
-  /// they are millisecond instants on the byte path
+  /// they are monotonic millisecond instants on the byte path
   /// (`shekyl_link_activity`).
   std::uint64_t started;
+  /// The same admission on that monotonic clock. The stall check uses it
+  /// until a byte arrives. It does not change after admission.
+  std::uint64_t started_mono;
 };
 static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
 static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
 static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
 static_assert(offsetof(shekyl_seam_board_row, started) == 88, "seam board started");
-static_assert(sizeof(shekyl_seam_board_row) == 96, "seam board row");
+static_assert(offsetof(shekyl_seam_board_row, started_mono) == 96, "seam board started_mono");
+static_assert(sizeof(shekyl_seam_board_row) == 104, "seam board row");
 
 /// Rows of `connector` and `direction` on the process hub, handshake or
 /// not. A missing hub, or an index that is not a connector or a direction,
@@ -4554,12 +4558,17 @@ void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint
 /// Bytes per second right now, over the link budget's recent-speed
 /// window, read from the engine's clock. A null pointer is skipped.
 void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
-/// Unix milliseconds of the last granted byte on `id`. Zero until that
-/// direction has moved a byte. A null pointer is skipped. This is the
-/// stall check's clock, not the board.
+/// Monotonic milliseconds of the last byte read or written on `id`.
+/// A grant is not a byte. Zero until that direction has moved one.
+/// A null pointer is skipped. Compare with `shekyl_monotonic_ms`.
 void shekyl_link_activity(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// The same instants as unix milliseconds, for the operator view.
+/// Zero stays zero. The stall check does not call this.
+void shekyl_link_unix_ms(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// Milliseconds on the monotonic clock the byte stamps use.
+std::uint64_t shekyl_monotonic_ms(void);
 /// The stall mark. `recv_ms` of 0 means no byte yet, and the mark is
-/// `started_ms` (admission, in unix milliseconds).
+/// `started_ms` (admission, on the same monotonic clock).
 std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_ms);
 
 /// The 16-byte network id for `nettype`

@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::{node_gate, process_write_stall, recv_mark_ms, Session};
+use shekyl_capped_stream::{monotonic_ms, node_gate, process_write_stall, recv_mark_ms, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
@@ -799,7 +799,9 @@ pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down
     }
 }
 
-/// Unix milliseconds of the last granted byte. Null pointers are skipped.
+/// Monotonic milliseconds of the last byte read or written. A grant is
+/// not a byte. Zero until that direction has moved one. Null pointers
+/// are skipped. The stall check uses this with [`shekyl_monotonic_ms`].
 #[no_mangle]
 pub extern "C" fn shekyl_link_activity(id: u64, last_send_ms: *mut u64, last_recv_ms: *mut u64) {
     let (send, recv) = node_gate().activity(id);
@@ -811,6 +813,27 @@ pub extern "C" fn shekyl_link_activity(id: u64, last_send_ms: *mut u64, last_rec
             *last_recv_ms = recv;
         }
     }
+}
+
+/// The same instants as unix milliseconds, for the operator view.
+/// Zero stays zero. The stall check does not call this.
+#[no_mangle]
+pub extern "C" fn shekyl_link_unix_ms(id: u64, last_send_ms: *mut u64, last_recv_ms: *mut u64) {
+    let (send, recv) = node_gate().activity_unix(id);
+    unsafe {
+        if !last_send_ms.is_null() {
+            *last_send_ms = send;
+        }
+        if !last_recv_ms.is_null() {
+            *last_recv_ms = recv;
+        }
+    }
+}
+
+/// Milliseconds on the monotonic clock the byte stamps use.
+#[no_mangle]
+pub extern "C" fn shekyl_monotonic_ms() -> u64 {
+    monotonic_ms()
 }
 
 /// The stall mark. A receive instant of zero uses admission.

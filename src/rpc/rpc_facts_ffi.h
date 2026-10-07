@@ -343,9 +343,10 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out);
 // One live p2p connection, raw.
 //
 // `started` is unix seconds at admission, from the board. `last_recv` and
-// `last_send` are unix seconds of the last granted byte (`shekyl_link_activity`,
-// milliseconds, divided by 1000), or 0 when that direction has not moved a
-// byte. The counters are absolute totals: the *elapsed* quantities the wire carries are
+// `last_send` are unix seconds of the last byte read or written
+// (`shekyl_link_unix_ms`, milliseconds, divided by 1000), or 0 when that
+// direction has not moved a byte. The stall check uses the monotonic
+// stamps, not these. The counters are absolute totals: the *elapsed* quantities the wire carries are
 // derived in Rust against the single `now` this export reports beside the
 // list. The C++ this replaces read the clock **twice** per connection — once
 // for the idle times and again for the averages — so a connection could

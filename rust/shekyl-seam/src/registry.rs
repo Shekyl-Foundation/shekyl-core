@@ -44,6 +44,10 @@ pub struct Row {
     established: bool,
     /// Unix seconds, taken when the row was admitted.
     started_unix: u64,
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    /// The stall check uses this until a byte arrives. It does not change,
+    /// so a later publish copies the same value.
+    started_mono: u64,
 }
 
 impl Row {
@@ -83,17 +87,25 @@ impl Row {
         self.started_unix
     }
 
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    #[must_use]
+    pub const fn started_mono(self) -> u64 {
+        self.started_mono
+    }
+
     pub(crate) const fn new(
         id: SocketId,
         endpoint: Endpoint,
         established: bool,
         started_unix: u64,
+        started_mono: u64,
     ) -> Self {
         Self {
             id,
             endpoint,
             established,
             started_unix,
+            started_mono,
         }
     }
 }

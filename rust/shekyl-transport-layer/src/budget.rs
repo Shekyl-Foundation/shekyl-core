@@ -17,7 +17,8 @@
 //! only class; the argument is what a later class fills.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::OnceLock;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const NANOS_PER_SEC: u128 = 1_000_000_000;
 
@@ -68,10 +69,26 @@ struct Flow {
     bytes: u64,
     packets: u64,
     pace: Pace,
-    /// Unix milliseconds of the last byte this direction granted.
-    /// Zero until one moves. The stall check and the operator view
-    /// read this. It is not a board field.
+    /// Monotonic milliseconds of the last byte this direction moved.
+    /// Zero until one is read or written. A grant does not set it.
+    /// The stall check reads this. The operator view converts it to
+    /// unix time. It is not a board field.
     last_ms: u64,
+}
+
+/// Milliseconds of a monotonic clock that starts at the first call.
+///
+/// Never zero: zero is the stamp for "no byte yet". Not unix time. An
+/// NTP step does not move it. The C stall check calls the same function
+/// for "now", so the two sides share this epoch.
+#[must_use]
+pub fn monotonic_ms() -> u64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    // One, not zero. Zero is "no byte yet" on the stamp.
+    u64::try_from(origin.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
 }
 
 /// Unix milliseconds. Zero when the clock is before the epoch.
@@ -82,10 +99,10 @@ fn unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The instant a stall check compares, in unix milliseconds.
+/// The instant a stall check compares, in monotonic milliseconds.
 ///
 /// `recv_ms` is the last received byte. Zero means none has arrived, and
-/// the mark is `started_ms`.
+/// the mark is `started_ms` on the same clock.
 #[must_use]
 pub const fn recv_mark_ms(recv_ms: u64, started_ms: u64) -> u64 {
     if recv_ms == 0 {
@@ -347,7 +364,11 @@ impl Lane {
         let flow = self.per.entry(conn).or_default();
         flow.bytes = flow.bytes.saturating_add(n);
         flow.pace.observe(n, now);
-        flow.last_ms = unix_ms();
+    }
+
+    /// A byte was read or written. A grant is not this.
+    fn touch(&mut self, conn: u64) {
+        self.per.entry(conn).or_default().last_ms = monotonic_ms();
     }
 
     /// One message finished. A grant is not a message: a rate-limited
@@ -536,10 +557,10 @@ impl LinkBudget {
         (up, down)
     }
 
-    /// Unix milliseconds of the last granted byte, `(send, recv)`.
+    /// Monotonic milliseconds of the last byte, `(send, recv)`.
     ///
-    /// Zero until that direction has moved a byte. Written beside the
-    /// tally [`Self::speed`] reads, on each granted chunk.
+    /// Zero until that direction has read or written a byte. A grant
+    /// does not move it.
     #[must_use]
     pub fn activity_ms(&self, conn: u64) -> (u64, u64) {
         let send = self.up.per.get(&conn).map(|flow| flow.last_ms).unwrap_or(0);
@@ -550,6 +571,28 @@ impl LinkBudget {
             .map(|flow| flow.last_ms)
             .unwrap_or(0);
         (send, recv)
+    }
+
+    /// The same instants as unix milliseconds, for the operator view.
+    ///
+    /// Zero stays zero. The stall check does not call this.
+    #[must_use]
+    pub fn activity_unix_ms(&self, conn: u64) -> (u64, u64) {
+        let now_m = monotonic_ms();
+        let now_u = unix_ms();
+        let (send, recv) = self.activity_ms(conn);
+        let to_unix = |mark: u64| -> u64 {
+            if mark == 0 {
+                return 0;
+            }
+            now_u.saturating_sub(now_m.saturating_sub(mark))
+        };
+        (to_unix(send), to_unix(recv))
+    }
+
+    /// Record that a byte moved. Called after the socket read or write.
+    pub fn touch(&mut self, direction: LinkDirection, conn: u64) {
+        self.lane_mut(direction).touch(conn);
     }
 
     /// What this connection has moved. Absent means nothing yet.
@@ -574,7 +617,7 @@ impl Default for LinkBudget {
 
 #[cfg(test)]
 mod tests {
-    use super::{recv_is_stalled, unix_ms, LinkBudget, LinkDirection, MessageClass, Turn};
+    use super::{monotonic_ms, recv_is_stalled, LinkBudget, LinkDirection, MessageClass, Turn};
 
     const SEC: u64 = 1_000_000_000;
 
@@ -809,6 +852,12 @@ mod tests {
             budget.take(LinkDirection::Down, conn, MessageClass::Session, 64, 0),
             Turn::Granted(64)
         );
+        assert_eq!(
+            budget.activity_ms(conn),
+            (0, 0),
+            "a grant is not a received byte"
+        );
+        budget.touch(LinkDirection::Down, conn);
         let (_, first) = budget.activity_ms(conn);
         assert!(first > 0, "the first piece stamps the receive instant");
         assert!(
@@ -820,8 +869,9 @@ mod tests {
             budget.take(LinkDirection::Down, conn, MessageClass::Session, 64, 1),
             Turn::Granted(64)
         );
+        budget.touch(LinkDirection::Down, conn);
         let (_, second) = budget.activity_ms(conn);
-        let now = unix_ms();
+        let now = monotonic_ms();
         assert!(second >= first);
         assert!(
             now.saturating_sub(second) < 2_000,
