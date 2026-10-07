@@ -211,6 +211,9 @@ mod live {
     use shekyl_types::BlockHeight;
     use tokio::sync::mpsc::UnboundedReceiver;
 
+    /// `SF-D6`'s stall-retry budget inside one read.
+    const STALL_RETRIES: u32 = 2;
+
     /// The pinned tor binary. Hard-fails rather than skipping, so a lane
     /// that is not set up is loud.
     fn tor_binary() -> std::path::PathBuf {
@@ -280,11 +283,22 @@ mod live {
         drain(&mut events, &mut after_stall).await;
         let stalled_on = after_stall.the_circuit_of(&username_of(&read_a));
 
-        // Read A, the stall retry: the same header, as `SF-D6` has it.
+        // Read A, the stall retries: the same header, as `SF-D6` has it, and
+        // its budget of two. A retry can itself stall on a real network; the
+        // caller repeats the header again, and so does this.
         let mut during_a = Observed::default();
-        app.fetch_with(0, shard, &read_a, Timeouts::DEFAULT)
-            .await
-            .expect("the stall retry completes");
+        let mut retries = 0;
+        loop {
+            retries += 1;
+            match app.fetch_with(0, shard, &read_a, Timeouts::DEFAULT).await {
+                Ok(_) => break,
+                Err(FetchError::Stall(stall)) if retries < STALL_RETRIES => {
+                    println!("read A: stall retry {retries} stalled ({stall}); retrying");
+                }
+                Err(other) => panic!("read A did not complete in {retries} retries: {other}"),
+            }
+        }
+        println!("read A: completed on stall retry {retries}");
         drain(&mut events, &mut during_a).await;
         let retried_on = during_a.the_circuit_of(&username_of(&read_a));
 
