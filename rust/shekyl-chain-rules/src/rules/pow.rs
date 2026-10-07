@@ -216,7 +216,7 @@ impl BlockRule for D1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         if cx.target.is_satisfied_by(cx.formed.pow()) {
             Ok(Ok(()))
         } else {

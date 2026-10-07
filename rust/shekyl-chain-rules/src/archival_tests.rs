@@ -42,7 +42,7 @@ use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_types::archival::BadInterval;
 use shekyl_types::archival::{HeldShard, SlashLogEntry, SlashedHolding};
-use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockCount, SHARD_LENGTH};
 use shekyl_wire::transaction::{
     BondPost, BondPostKind as WireKind, Holdings as WireHoldings, Input,
 };
@@ -381,6 +381,63 @@ fn shard_close_is_the_fold_height_below_the_universe_and_open_at_it() {
             shard_close(&view, ShardId::from_raw(open), &universe).expect("open has no search"),
             ShardClose::Open
         );
+    });
+}
+
+/// Exemption 1. SO-D8 §8.0 input 4's fixture, run on the predicate CEN-J15
+/// bounds a held shard by. On `chain_closing_two_shards` shard 0 closes
+/// at `c = 1`; with `reorg_cap = 2` it is not closed-and-final for
+/// `at < 3` — `at = c` included, the close being the newest block — and
+/// is from `at = 3` on. Shard 2 is open through every height and never
+/// is. Monotone in `at` by the same walk. The predicate reads the fold
+/// alone, so the chain here carries nothing but the fold, and a cap the
+/// close height cannot carry is not final anywhere.
+#[test]
+fn closed_and_final_is_false_through_the_cap_and_true_from_it() {
+    let chain = chain_closing_two_shards();
+    let cap = BlockCount::from_raw(2);
+    chain.with_view(|view| {
+        let judged = |shard: u64, at: u64| {
+            closed_and_final(
+                &view,
+                ShardId::from_raw(shard),
+                BlockHeight::from_raw(at),
+                cap,
+            )
+            .expect("every height here is recorded")
+        };
+        // Shard 0 closed at 1: open at 0, closed-not-final at 1 and 2,
+        // final at 3 and 4.
+        assert_eq!(
+            (0..5).map(|at| judged(0, at)).collect::<Vec<bool>>(),
+            [false, false, false, true, true]
+        );
+        // Shard 1 closed at 3: final at none of the recorded heights.
+        assert_eq!(
+            (0..5).map(|at| judged(1, at)).collect::<Vec<bool>>(),
+            [false; 5]
+        );
+        // Shard 2 never closes.
+        assert_eq!(
+            (0..5).map(|at| judged(2, at)).collect::<Vec<bool>>(),
+            [false; 5]
+        );
+        // Cap zero is "closed": shard 1 is final the block it closes.
+        assert!(closed_and_final(
+            &view,
+            ShardId::from_raw(1),
+            BlockHeight::from_raw(3),
+            BlockCount::from_raw(0),
+        )
+        .expect("recorded"));
+        // A cap the close height cannot carry: not final at any height.
+        assert!(!closed_and_final(
+            &view,
+            ShardId::from_raw(0),
+            BlockHeight::from_raw(4),
+            BlockCount::from_raw(u64::MAX),
+        )
+        .expect("recorded"));
     });
 }
 

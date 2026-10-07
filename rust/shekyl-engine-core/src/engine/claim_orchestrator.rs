@@ -91,7 +91,7 @@ use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
-    StakeEngineHandle,
+    StakeEngineHandle, TxKeyDraw,
 };
 
 /// Why the claim pipeline refused before (or at) the actor hand-off. Every
@@ -373,6 +373,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             operands,
             tree_ctx,
             fee_floor: ctx.fee_floor,
+            tx_key: TxKeyDraw::Fresh,
         })
         .await?)
 }

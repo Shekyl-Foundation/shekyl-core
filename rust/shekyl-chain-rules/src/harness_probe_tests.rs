@@ -7,10 +7,12 @@
 //!
 //! A harness with nothing to test passes vacuously; the probe below is a
 //! *labelled* rule — not an implementation of CEN-J1, whose registry entry
-//! stays `pending` until slice 8 (it wore the CEN-C1 label until slice 2
-//! landed that row, the CEN-E1 label until slice 3 did, the CEN-F1 label
-//! until slice 4 did, and the CEN-G1 label until slice 7 commit 7 did; the
-//! probe moves ahead of the port so it never names a landed rule) — shaped
+//! stays `pending` past slice 8, which scoped the serve-credit successor
+//! rows out (`CHAIN_RULES_SLICE_8.md` §1.2). (It wore the CEN-C1 label
+//! until slice 2 landed that row, the CEN-E1 label until slice 3 did, the
+//! CEN-F1 label until slice 4 did, and the CEN-G1 label until slice 7
+//! commit 7 did; the probe moves ahead of the port so it never names a
+//! landed rule.) Shaped
 //! exactly
 //! like the rules the porting increments
 //! will write, so the mock, the fault channel and the two assertions are

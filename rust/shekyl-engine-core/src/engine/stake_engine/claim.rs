@@ -84,6 +84,29 @@ pub(crate) struct AssembleEmissionClaim {
     /// `assemble_claims` takes its size budget — so the gate is testable
     /// at exact boundaries without scaling the differential fixtures.
     pub fee_floor: u64,
+    /// Where the transaction key comes from — fresh from the OS in every
+    /// production send; a caller-chosen key only in the byte-identity test.
+    pub tx_key: TxKeyDraw,
+}
+
+/// Where [`AssembleEmissionClaim`] draws the transaction key that seeds
+/// the three vouts' KEM encapsulations and the tx pubkey.
+///
+/// The key is the one input to the assembly that is neither derived from
+/// the persona's bundle nor read from the operands, so it is the one thing
+/// two assemblies of the same claim must share before their bytes can be
+/// compared. `shekyl-chain-ingest`'s `emission_assembly` takes its key as
+/// an argument for that reason; this enum is the handler's side of the
+/// same seam. The `Fixed` arm is compiled only under `cfg(test)` — a
+/// shipping build has one arm, and the sole production sender (the claim
+/// orchestrator) passes it.
+pub(crate) enum TxKeyDraw {
+    /// Fresh from the OS CSPRNG (`rand_core::OsRng`).
+    Fresh,
+    /// The caller's key, so a second assembly can draw the same one
+    /// (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3's byte-identity pin).
+    #[cfg(test)]
+    Fixed(Zeroizing<[u8; 32]>),
 }
 
 /// Reply of [`AssembleEmissionClaim`]: the persona-bound wire bytes (minted
@@ -181,8 +204,15 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // ordered reward-commit set is "non-zero wire amounts, in vout
         // order" — exactly the reward vout here, so the auth digest binds
         // one commit.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
+        let tx_key_secret: Zeroizing<[u8; 32]> = match msg.tx_key {
+            TxKeyDraw::Fresh => {
+                let mut drawn = Zeroizing::new([0u8; 32]);
+                rand_core::OsRng.fill_bytes(drawn.as_mut());
+                drawn
+            }
+            #[cfg(test)]
+            TxKeyDraw::Fixed(fixed) => fixed,
+        };
         let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
 
         let mut reward_commit: Option<RewardCommit> = None;

@@ -106,6 +106,14 @@ impl Persona {
         Self { keys }
     }
 
+    /// The whole bundle — what the emission claim's assembly signs and
+    /// scans with (E6 slice 8 row 7, `emission_assembly`), and what
+    /// `scenario_spend::Owner::persona` reads to source the outputs a
+    /// coinbase spend paid it.
+    pub fn keys(&self) -> &ArchivalPKeys {
+        &self.keys
+    }
+
     /// The identity key, canonical bytes — `hybrid_public_key` on every
     /// post, and the bond slot's key on a credit.
     pub fn identity(&self) -> Vec<u8> {

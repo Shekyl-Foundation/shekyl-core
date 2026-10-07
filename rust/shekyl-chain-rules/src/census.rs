@@ -312,8 +312,11 @@ census_rows! {
         // test that observes the outcome byte.
         A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
         A2 implemented(crate::rules::topology::A2),
-        // A3: subsumed by B4's empty-witness arm — never its own rule; the
-        // row closes when B4 lands (Q3).
+        // A3: subsumed by B4's empty-witness arm — never its own rule
+        // (slice 1 Q3); B4 landed with slice 8 row 10, and this row is
+        // judged wherever B4 is. It stays `pending` as a *row* because the
+        // census keeps it as one and the bijection gate counts it; the
+        // rule that decides it is `rules::attestation::B4`.
         A3 pending,
         A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
         // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
@@ -328,7 +331,7 @@ census_rows! {
         B1 implemented(crate::rules::header::B1),
         B2 implemented(crate::rules::header::B2),
         B3 pending,
-        B4 pending,
+        B4 implemented(crate::rules::attestation::B4),
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),
@@ -471,8 +474,16 @@ census_rows! {
         I10 implemented(crate::rules::tx_against::I10),
         I11 implemented(crate::rules::tx_against::I11),
         I12 implemented(crate::rules::tx_against::I12),
+        // I13's predicate and depth read exist (`tx_against::I13`) and run
+        // on the emission under J21 (slice 8 row 9); the row stays pending
+        // until it runs on the spend class, which lands with I15 in the
+        // filler-fixture migration ruled 2026-10-07 (FOLLOWUPS, the I13 /
+        // I15 rows: one PR after #983, 115 fixtures become scenarios).
         I13 pending,
         I14 implemented(crate::rules::tx_inputs::I14),
+        // I15's body exists (`tx_against::I15::verify`) and runs on the
+        // emission's fee inputs as J26 (slice 8 row 9); pending on the
+        // same hold as I13.
         I15 pending,
         I16 implemented(crate::rules::tx_inputs::I16),
         // I17 (slice 6 commit 7): the signing preimage, adopted from the wire's
@@ -496,20 +507,25 @@ census_rows! {
         J12 implemented(crate::rules::tx_inputs::J12),
         J13 implemented(crate::rules::tx_bond::J13),
         J14 implemented(crate::rules::tx_bond::J14),
-        J15 pending,
+        J15 implemented(crate::rules::tx_bond::J15),
         J16 implemented(crate::rules::tx_bond::J16),
         // J17 is bucket 3 (REJECTED, immutable-bond 2026-09-20; slice 8 Q1
         // (a) 2026-10-04). The census keeps the id marked REJECTED; this
         // registry does not. CEN-F12 is the precedent.
         J18 implemented(crate::rules::tx_bond::J18),
-        J19 pending,
-        J20 pending,
-        J21 pending,
-        J22 pending,
-        J23 pending,
-        J24 pending,
-        J25 pending,
-        J26 pending,
+        J19 implemented(crate::rules::tx_emission::J19),
+        J20 implemented(crate::rules::tx_emission::J20),
+        // J21 (slice 8 row 9): the emission's reference context, judged
+        // as one row over I10–I13's reads in `judge_reference`.
+        J21 implemented(crate::rules::tx_against::J21),
+        J22 implemented(crate::rules::tx_emission::J22),
+        // J23, J25 and J26 (slice 8 row 9): the frozen closes gathered per
+        // claimed epoch, the retention verify over them, then I15's body
+        // over the fee inputs, in `judge_emission_claim`.
+        J23 implemented(crate::rules::tx_emission_against::J23),
+        J24 implemented(crate::rules::tx_emission::J24),
+        J25 implemented(crate::rules::tx_emission_against::J25),
+        J26 implemented(crate::rules::tx_emission_against::J26),
         // 4.K Reorg / alternative chains
         K1a pending,
         K1b pending,

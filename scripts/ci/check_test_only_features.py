@@ -204,6 +204,18 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "the production PassKey is the stake actor's ResidentPassKey, and "
     "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
     "every production graph",
+    (
+        "shekyl-chain-ingest",
+        "harness",
+    ): "exposes the scenario driver's emission-claim assembly "
+    "(emission_assembly.rs, E6 slice 8 row 7 / Q3) for one consumer — "
+    "shekyl-engine-core's byte-identity test, which holds the driver's "
+    "assembly and the engine handler's to the same bytes for one shape. "
+    "The feature enables the optional signing/encoding edges (tx-builder, "
+    "crypto-pq, bulletproofs, curve-generators, dalek, zeroize) that the "
+    "crate's [dev-dependencies] already carry for the rest of the driver. "
+    "A driver that shipped would be a second producer (the crate's own "
+    "docs); this row is what keeps it in tests",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -217,7 +229,26 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {}
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
 # category, so that a governed crate's feature table can be exhaustively
 # categorized without forcing every feature into the two special classes.
-PERMANENT: dict[tuple[str, str], str] = {}
+# `shekyl-chain-ingest`'s three (its manifest's own words): the pipeline's
+# actor runtime, the corpus fetcher's RPC client, and the replay CLI — the
+# production surfaces its consumers choose between (`shekyl-ffi` compiles the
+# trace writer alone with `default-features = false`).
+PERMANENT: dict[tuple[str, str], str] = {
+    (
+        "shekyl-chain-ingest",
+        "pipeline",
+    ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
+    "— the one stateful stage is an actor (RD-Q11)",
+    (
+        "shekyl-chain-ingest",
+        "fetch",
+    ): "the corpus fetcher over the daemon RPC contract",
+    (
+        "shekyl-chain-ingest",
+        "replay-cli",
+    ): "the shekyl-chain-replay binary: argument parsing, HTTP transport, "
+    "and the settlement schedule the replay resolves rules from",
+}
 
 # Crates whose feature table must be exhaustively categorized (third limb).
 # Adding a crate here is the declaration that no feature of it may exist
@@ -228,10 +259,13 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # `harness` in CI, the first cross-crate feature declared after the limb
 # landed; `shekyl-p-host` joined 2026-10-07 when the limb fired on
 # `test-signer`, first enabled across a crate boundary by the SH-2
-# serving-task tests in `shekyl-engine-core`).
+# serving-task tests in `shekyl-engine-core`). `shekyl-chain-ingest`
+# joined 2026-10-06 in the commit that declared its own `harness`
+# (TEST_ONLY, one dev enabler); its three production features are the first
+# PERMANENT rows.
 #
-# This set is opt-in — four crates out of a workspace approaching seventy — so
-# exhaustiveness holds *within* governance. The rule for joining: **a crate
+# This set is opt-in — the crates named below, out of a workspace approaching
+# seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
 # joins this set in the commit that first declares a feature another crate
 # enables.** A feature only its own tests or its own `default` turn on does
 # not trigger it; one that crosses a crate boundary does, because that edge
@@ -246,6 +280,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
         "shekyl-p-host",
+        "shekyl-chain-ingest",
     }
 )
 
