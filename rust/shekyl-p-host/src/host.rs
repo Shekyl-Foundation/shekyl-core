@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
+use shekyl_p_serve::{PServeEndpoint, ServeCounterReader, StoreShardProvider};
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -99,9 +99,11 @@ impl fmt::Debug for PersonaServing {
 /// lost sight of something it needs, and passes are being lost to that
 /// rather than to a signer that is down.
 ///
-/// **How an operator sees them.** Read through
-/// [`PersonaServingHost::counters`] by the production serving task
-/// (`engine-core`'s `serving::task`) once per refresh tick, windowed with
+/// **How an operator sees them.** Sampled once per cadence by the
+/// production serving task's health probe (`engine-core`'s
+/// `serving::health`) through the detached
+/// [`PersonaServingHost::counter_reader`] — its own task, so a refresh that
+/// is waiting on the store actor cannot delay the reading — windowed with
 /// [`Self::since`], and mapped onto the operator alarm board by
 /// `shekyl-operator-alarm`'s `serve_health` producer — the `TJ-D` operator
 /// surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` names. A tick in which the key
@@ -129,6 +131,26 @@ pub struct ServeCounters {
 }
 
 impl ServeCounters {
+    /// One reading of the six totals through a detached reader.
+    ///
+    /// The one place the endpoint's getters are gathered into this struct:
+    /// [`PersonaServingHost::counters`] reads through it, and so does a
+    /// probe holding only the [`ServeCounterReader`]. The six loads are
+    /// not one atomic snapshot; each total is monotone and the consumer
+    /// windows them, so a request landing between two loads moves the
+    /// next window rather than this one.
+    #[must_use]
+    pub fn read(reader: &ServeCounterReader) -> Self {
+        Self {
+            served: reader.served_count(),
+            refused: reader.refused_count(),
+            lookup_failures: reader.lookup_failure_count(),
+            sign_failures: reader.sign_failure_count(),
+            late_sign_failures: reader.late_sign_failure_count(),
+            accept_errors: reader.accept_error_count(),
+        }
+    }
+
     /// The movement between an earlier reading and this one, per counter.
     ///
     /// The counters are session totals, so an operator question — "did the
@@ -532,14 +554,19 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// serving path.
     #[must_use]
     pub fn counters(&self) -> ServeCounters {
-        ServeCounters {
-            served: self.endpoint.served_count(),
-            refused: self.endpoint.refused_count(),
-            lookup_failures: self.endpoint.lookup_failure_count(),
-            sign_failures: self.endpoint.sign_failure_count(),
-            late_sign_failures: self.endpoint.late_sign_failure_count(),
-            accept_errors: self.endpoint.accept_error_count(),
-        }
+        ServeCounters::read(self.endpoint.counters())
+    }
+
+    /// The counters' read side, detached from this host.
+    ///
+    /// For a watcher on its own task: the host's [`Self::refresh`] awaits
+    /// the store actor with no timeout, so a reading taken through `&self`
+    /// between refreshes is taken only when a refresh is not in flight. A
+    /// clone of this reader samples whenever its own tick fires. It stays
+    /// readable after [`Self::shutdown`]; the totals just stop moving.
+    #[must_use]
+    pub fn counter_reader(&self) -> ServeCounterReader {
+        self.endpoint.counters().clone()
     }
 
     /// Stop serving: tear the onion down first, then the listener.

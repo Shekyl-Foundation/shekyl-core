@@ -80,7 +80,9 @@
   in a loopback test: the client accepts the pass under the bond identity
   and refuses it under any other key.
 - **Operator alarm board: `ServeHealth`.** A new condition reports, once
-  per refresh tick, whether the host's answers are being answered:
+  per refresh cadence from a probe on its own task (so a refresh wedged on
+  the store actor cannot delay the reading), whether the host's answers
+  are being answered:
   `ServeSigningRefused { pre_flight, late }` when the key refused during
   the tick, `ServeLookupsFailing { failures }` when only lookups (store or
   daemon tip) failed, `ServeListenerFailing { accept_errors }` when only

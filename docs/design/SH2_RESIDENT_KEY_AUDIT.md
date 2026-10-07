@@ -78,9 +78,16 @@ test, not assumed.
 an alarm-board input: a `serve_health` producer in `shekyl-operator-alarm`
 (one pure `apply` over one observation, the shape `serve_set` and
 `tor_posture` set), a `ServeHealth` condition, and the serving task feeding
-it each refresh tick with the tick's *movement* (`ServeCounters::since`, the
+it each cadence with the tick's *movement* (`ServeCounters::since`, the
 one home of the subtraction) rather than the session totals, so a quiet tick
-clears the row. No wallet-RPC wire change: the row names the alarm board,
+clears the row. *Amended at review (2026-10-07):* the reading was first
+taken in the refresh loop after `observe().await`; that await is the host's
+`refresh`, which waits on the store actor with no timeout, so a key that
+began refusing while a refresh was wedged would have reached the board only
+when the refresh did. The reading now runs on its own probe task
+(`serving::health`, the shape the disk probe already had) through the
+host's detached `ServeCounterReader`, and teardown drains the probe before
+disarming the row. No wallet-RPC wire change: the row names the alarm board,
 and the board is an embedder surface, not a method. *Amended at build
 (2026-10-06):* the pre-flight text also named a `ServingHandle::counters()`
 snapshot accessor; it is not built — no production consumer reads it, and

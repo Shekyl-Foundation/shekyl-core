@@ -10,14 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_operator_alarm::disk::{apply as report_disk, DiskObservation};
-use shekyl_operator_alarm::serve_health::{
-    apply as report_health, ServeHealthObservation, TickWindow,
-};
+use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObservation};
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
-    ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeCounters,
+    ServeObligation, ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -25,6 +23,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::disk::{spawn_disk_probe, DISK_HEADROOM_WARN_BYTES};
+use super::health::spawn_health_probe;
 
 use crate::engine::refresh_slot::SlotGuard;
 use crate::engine::stake_timing::{
@@ -378,17 +377,20 @@ async fn run_serving_task<P>(
     // trip to re-derive what the witness already holds.
     report(&alarms, read(&host, bound));
 
-    // TJ-D's operator surface (`SF-D6`): the host's serve counters are
-    // session totals, and the question on the board is "is the key refusing
-    // *now*", so each reading is windowed against the previous one and the
-    // movement is reported. The window starts at zero, so this first read
-    // arms the row with whatever the host has answered since it bound —
-    // usually nothing, and never a refusal silently folded into a baseline.
-    // Reporting now rather than at the first tick closes the same window
-    // as the serve-set read above: a published onion must not sit
-    // `NotServing` for a cadence.
-    let mut health = TickWindow::new();
-    report_health(&alarms, health.observe(host.counters()));
+    // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
+    // per cadence so the board answers "is the key refusing *now*". Own
+    // task, sampling through the host's detached reader rather than through
+    // `&host`: the loop below awaits `refresh` with no timeout, and a key
+    // that starts refusing while a refresh is wedged on the store actor is
+    // exactly the reading this row exists to carry. First reading is
+    // immediate, so a published onion never sits `NotServing` for a cadence.
+    let counters = host.counter_reader();
+    let health = spawn_health_probe(
+        move || ServeCounters::read(&counters),
+        config.refresh_cadence,
+        Arc::clone(&alarms),
+        cancel.clone(),
+    );
 
     // Own task: the probe is not a serve-set reading, and a wedged
     // refresh must not also silence the volume check. First reading is
@@ -415,10 +417,6 @@ async fn run_serving_task<P>(
         }
 
         report(&alarms, observe(&host, bound).await);
-        // This tick's movement over the totals; the window owns the
-        // baseline and `since` the subtraction, so a restart-reset total
-        // reads as no movement.
-        report_health(&alarms, health.observe(host.counters()));
         // Re-read after every refresh so a host whose obligation *arm*
         // changes is not stuck on the start snapshot. The type is the
         // arm, not the size — a growing prefix does not change what we
@@ -429,9 +427,10 @@ async fn run_serving_task<P>(
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
     host.shutdown().await;
     posture.abort();
-    // Drain the probe before disarming: a late measured reading must
+    // Drain both probes before disarming: a late measured reading must
     // not overwrite `NotServing` after the host is gone.
     let _disk = disk.await;
+    let _health = health.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
     // stays live because nothing observed it fixed.

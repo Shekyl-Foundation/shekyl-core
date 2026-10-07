@@ -264,13 +264,15 @@ async fn a_started_host_observes_disk_headroom() {
 /// teardown disarms it. The window — zero baseline, movement between
 /// reads, a quiet tick clearing — is `TickWindow`'s, and its tests in
 /// `shekyl-operator-alarm` drive that sequence through the same
-/// `observe` → `apply` pair this task calls. The listener's loopback
-/// port is not exposed by `ServingHandle` (nothing in production reads
-/// it), so a counted refusal cannot be driven from this level without
-/// adding a test-only accessor; what only this layer can prove is that
-/// the counters are read and the row is kept, which is the `SH-2`
-/// falsifier in `docs/FOLLOWUPS.md`. The counters moving on a real
-/// refusal is `shekyl-p-host/tests/composition.rs`'s.
+/// `observe` → `apply` pair the health probe calls; the probe sampling
+/// on its own tick while nothing else progresses is `serving::health`'s
+/// test. The listener's loopback port is not exposed by `ServingHandle`
+/// (nothing in production reads it), so a counted refusal cannot be
+/// driven from this level without adding a test-only accessor; what only
+/// this layer can prove is that the probe is spawned against the live
+/// host and the row is kept, which is the `SH-2` falsifier in
+/// `docs/FOLLOWUPS.md`. The counters moving on a real refusal is
+/// `shekyl-p-host/tests/composition.rs`'s.
 #[tokio::test]
 async fn a_started_host_watches_its_serve_health() {
     let dir = tempfile::tempdir().expect("tmp");

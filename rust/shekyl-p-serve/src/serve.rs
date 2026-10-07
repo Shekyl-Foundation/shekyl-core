@@ -227,12 +227,82 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct PServeEndpoint {
     addr: SocketAddr,
     accept_task: JoinHandle<()>,
+    counters: ServeCounterReader,
+}
+
+/// The read side of an endpoint's six session totals, detached from the
+/// endpoint.
+///
+/// The accept loop and every connection task increment these; this handle
+/// only reads them. It is `Clone` so a watcher can sample the totals on
+/// its own task without borrowing the [`PServeEndpoint`] — a reader that
+/// had to hold the endpoint (or the host that owns it) could sample only
+/// when that owner was free, and the owner's refresh awaits a store actor
+/// with no timeout. The totals stay readable after the endpoint is
+/// dropped; they simply stop moving.
+///
+/// Aggregate and monotone, like the endpoint's own getters: no
+/// per-request structure, no peer, no timing.
+#[derive(Clone, Debug)]
+pub struct ServeCounterReader {
     served: Arc<AtomicU64>,
     refused: Arc<AtomicU64>,
     lookup_failures: Arc<AtomicU64>,
     sign_failures: Arc<AtomicU64>,
     late_sign_failures: Arc<AtomicU64>,
     accept_errors: Arc<AtomicU64>,
+}
+
+impl ServeCounterReader {
+    fn zeroed() -> Self {
+        Self {
+            served: Arc::new(AtomicU64::new(0)),
+            refused: Arc::new(AtomicU64::new(0)),
+            lookup_failures: Arc::new(AtomicU64::new(0)),
+            sign_failures: Arc::new(AtomicU64::new(0)),
+            late_sign_failures: Arc::new(AtomicU64::new(0)),
+            accept_errors: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Shard responses fully written. See [`PServeEndpoint::served_count`].
+    #[must_use]
+    pub fn served_count(&self) -> u64 {
+        self.served.load(Ordering::Relaxed)
+    }
+
+    /// Connections refused over the cap. See [`PServeEndpoint::refused_count`].
+    #[must_use]
+    pub fn refused_count(&self) -> u64 {
+        self.refused.load(Ordering::Relaxed)
+    }
+
+    /// Store faults while answering. See
+    /// [`PServeEndpoint::lookup_failure_count`].
+    #[must_use]
+    pub fn lookup_failure_count(&self) -> u64 {
+        self.lookup_failures.load(Ordering::Relaxed)
+    }
+
+    /// Key refusals at the pre-flight. See
+    /// [`PServeEndpoint::sign_failure_count`].
+    #[must_use]
+    pub fn sign_failure_count(&self) -> u64 {
+        self.sign_failures.load(Ordering::Relaxed)
+    }
+
+    /// Signer refusals after the body. See
+    /// [`PServeEndpoint::late_sign_failure_count`].
+    #[must_use]
+    pub fn late_sign_failure_count(&self) -> u64 {
+        self.late_sign_failures.load(Ordering::Relaxed)
+    }
+
+    /// `accept` failures. See [`PServeEndpoint::accept_error_count`].
+    #[must_use]
+    pub fn accept_error_count(&self) -> u64 {
+        self.accept_errors.load(Ordering::Relaxed)
+    }
 }
 
 impl PServeEndpoint {
@@ -298,18 +368,13 @@ impl PServeEndpoint {
         signer: Arc<dyn PassSigner>,
     ) -> io::Result<Self> {
         let addr = listener.local_addr()?;
-        let served = Arc::new(AtomicU64::new(0));
-        let refused = Arc::new(AtomicU64::new(0));
-        let lookup_failures = Arc::new(AtomicU64::new(0));
-        let sign_failures = Arc::new(AtomicU64::new(0));
-        let late_sign_failures = Arc::new(AtomicU64::new(0));
-        let accept_errors = Arc::new(AtomicU64::new(0));
-        let served_ctr = Arc::clone(&served);
-        let refused_ctr = Arc::clone(&refused);
-        let failures_ctr = Arc::clone(&lookup_failures);
-        let sign_failures_ctr = Arc::clone(&sign_failures);
-        let late_sign_failures_ctr = Arc::clone(&late_sign_failures);
-        let accept_errors_ctr = Arc::clone(&accept_errors);
+        let counters = ServeCounterReader::zeroed();
+        let served_ctr = Arc::clone(&counters.served);
+        let refused_ctr = Arc::clone(&counters.refused);
+        let failures_ctr = Arc::clone(&counters.lookup_failures);
+        let sign_failures_ctr = Arc::clone(&counters.sign_failures);
+        let late_sign_failures_ctr = Arc::clone(&counters.late_sign_failures);
+        let accept_errors_ctr = Arc::clone(&counters.accept_errors);
         // Bounds concurrency without queueing: an arrival past the cap is
         // closed immediately rather than parked, so the refusal costs one
         // accept and frees the descriptor at once.
@@ -374,13 +439,18 @@ impl PServeEndpoint {
         Ok(Self {
             addr,
             accept_task,
-            served,
-            refused,
-            lookup_failures,
-            sign_failures,
-            late_sign_failures,
-            accept_errors,
+            counters,
         })
+    }
+
+    /// The read side of the counters, detached from this endpoint.
+    ///
+    /// Clone it to sample the totals from a task that does not hold the
+    /// endpoint; the six `*_count` getters below are the same reads, for a
+    /// caller that does.
+    #[must_use]
+    pub fn counters(&self) -> &ServeCounterReader {
+        &self.counters
     }
 
     /// The bound loopback address — the `ADD_ONION` `Port=` target.
@@ -398,7 +468,7 @@ impl PServeEndpoint {
     /// it believes it served; it carries no path, no peer, no timing.
     #[must_use]
     pub fn served_count(&self) -> u64 {
-        self.served.load(Ordering::Relaxed)
+        self.counters.served_count()
     }
 
     /// Connections refused for exceeding [`MAX_INFLIGHT`] — the operator
@@ -406,7 +476,7 @@ impl PServeEndpoint {
     /// W₂-rig derivation.
     #[must_use]
     pub fn refused_count(&self) -> u64 {
-        self.refused.load(Ordering::Relaxed)
+        self.counters.refused_count()
     }
 
     /// Store faults while answering a parsed shard read.
@@ -430,7 +500,7 @@ impl PServeEndpoint {
     /// [`Self::late_sign_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
-        self.lookup_failures.load(Ordering::Relaxed)
+        self.counters.lookup_failure_count()
     }
 
     /// Valid requests for a held shard that the key refused at its
@@ -441,7 +511,7 @@ impl PServeEndpoint {
     /// counter.
     #[must_use]
     pub fn sign_failure_count(&self) -> u64 {
-        self.sign_failures.load(Ordering::Relaxed)
+        self.counters.sign_failure_count()
     }
 
     /// Responses whose whole body went out and whose signer then refused,
@@ -453,7 +523,7 @@ impl PServeEndpoint {
     /// pre-flight says yes to what its signer then refuses.
     #[must_use]
     pub fn late_sign_failure_count(&self) -> u64 {
-        self.late_sign_failures.load(Ordering::Relaxed)
+        self.counters.late_sign_failure_count()
     }
 
     /// `accept` failures. The loop backs off and retries rather than
@@ -464,7 +534,7 @@ impl PServeEndpoint {
     /// it names no peer and no time.
     #[must_use]
     pub fn accept_error_count(&self) -> u64 {
-        self.accept_errors.load(Ordering::Relaxed)
+        self.counters.accept_error_count()
     }
 }
 
