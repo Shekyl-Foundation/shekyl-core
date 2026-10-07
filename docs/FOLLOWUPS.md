@@ -332,6 +332,10 @@ Default. Lands before genesis if it should exist at launch.
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide whether a sweep primitive returns.**
   - Target: pre-genesis
 
+- **No production reader of any operator alarm board, and there are two boards.** Every `OperatorAlarms` producer (`tor_posture`, `cadence`, `serve_set`, `disk`, `serve_health`) writes to a `watch<AlarmBoard>` that nothing outside tests reads: `rg '\.alarms\(\)' rust --type rust` returns only `#[cfg(test)]` sites; wallet-rpc has no alarm method (`wallet_rpc.yaml`) and the CLI and GUI render none. The board is also split: `start_serving_if_staker` (`serving/start.rs`) constructs one for the serving task and `start_cadence` (`cadence/mod.rs`) another for the driver, and `CadenceHandle` exposes only the driver's (`alarms()`) beside the parked host's posture (`serving_posture()`), so even a reader of the driver board would not see `ServeHealth`, `ServeSetIntegrity` or `ServingDiskHeadroom`. Found at #990 review (F3) on the SH-2 `SF-D6` row; SH-2's ruled scope was the board row, not a wire change. Two decisions, both the embedder-surface question OA-1 named ("an embedder should be able to render an alarm"): one board or a composed view across the two, and which surface renders it (a wallet-rpc method is a contract change; the CLI's status line is not). Falsify by a production, non-test caller of `AlarmBoard` reaching a user-facing surface — [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md) §3 leg 2 is where the two lifetimes already meet.
+  - Target: pre-genesis
+  - Owner: [`ENGINE_CADENCE_DRIVER.md`](design/ENGINE_CADENCE_DRIVER.md)
+
 - **Forfeited-claim record does not survive a wallet restart.** The cadence driver's evaluate-and-forfeit (`ENGINE_CADENCE_DRIVER.md` §4) raises `ClaimForfeited` as a session-lifetime alarm; nothing re-detects the forfeit after a restart, so it is the `AlarmLifetime::LatchedRederived` reopening criterion's named third-class candidate — durable acknowledgment state the channel deliberately does not have yet.
   - Target: pre-genesis
 
