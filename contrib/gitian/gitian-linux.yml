@@ -173,10 +173,24 @@ script: |
     # SHA-256 is checked against config/tor_pins.json before it is opened,
     # and each staged file against its own pin. A host with no bundle
     # (riscv64) stages nothing and its archive carries no tor.
+    #
+    # This descriptor does not use errexit — a make failure above has been
+    # non-fatal for the rest of the build. These three are the release gate
+    # for the bundle, so each one's status stops the descriptor on its own.
     TOR_SOURCES=${SOURCES_PATH:-${BUILD_DIR}/tor-sources}
-    python3 ../scripts/release/tor_bundle.py stage --host "${i}" --sources "${TOR_SOURCES}" --dest bin/tor --licenses bin/tor-licenses
-    if [ "$(python3 ../scripts/release/tor_bundle.py disposition --host "${i}")" = "pinned" ]; then
-      python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor
+    if ! python3 ../scripts/release/tor_bundle.py stage --host "${i}" --sources "${TOR_SOURCES}" --dest bin/tor --licenses bin/tor-licenses; then
+      echo "tor bundle: stage failed for ${i}" >&2
+      exit 1
+    fi
+    if ! TOR_DISPOSITION="$(python3 ../scripts/release/tor_bundle.py disposition --host "${i}")"; then
+      echo "tor bundle: disposition failed for ${i}" >&2
+      exit 1
+    fi
+    if [ "${TOR_DISPOSITION}" = "pinned" ]; then
+      if ! python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor; then
+        echo "tor bundle: verify failed for ${i}" >&2
+        exit 1
+      fi
     fi
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
