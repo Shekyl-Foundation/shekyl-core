@@ -258,6 +258,16 @@ path_set = "relay-fluff"
 # --- archival serve and fetch -----------------------------------------
 
 [[path_set]]
+id = "serve-floor-verdict"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+]
+cleared = [
+  { through = "155e85a130", reason = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
+]
+
+[[path_set]]
 id = "archival-serve-fetch"
 spec = [
   "rust/shekyl-p-serve/src",
@@ -710,31 +720,36 @@ status = "unmeasured"
 carrier = "BA-T13 (BA-G6). The ratio is pre-registered; only the LMDB arm has run, and the redb arm waits on a build target (FOLLOWUPS, DRS-BENCH redb arm)."
 path_set = "chain-store-ibd"
 
-# --- BA-Q3: the single-pass serve. Two figures predicted and not yet
-# measured, and one prediction that was measured and did not hold.
+# --- BA-Q3: the single-pass serve. One prediction still open, and two
+# beside the floor measurement that settled each.
+
+# The floor device's serve verdict (BA-T5, 2026-10-07) holds on the frame
+# production serves, a full shard of `W` bytes. It is bound here to the
+# value of `W`: a shard small enough to be buffered whole between the
+# persona and the requester turns every abandoned request into a full
+# serve plus a signature. Change `W` and this row fails until the verdict
+# is re-graded on a new capture.
+[[constant]]
+name = "serve_floor_verdict_frame"
+defined_in = "config/consensus_constants.json"
+needle = '"archival_shard_length_bytes": 3000000'
+measured_by = ["BA-T5"]
+status = "current"
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
+capture_rev = "42233bd135"
+rev_source = "capture header, arm A"
+path_set = "serve-floor-verdict"
 
 [[constant]]
 name = "serve_prehead_work_floor"
 defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
-needle = "| Work before the first byte | under 1 ms | not measured on the floor | open |"
+needle = "| Work before the first byte | under 1 ms | not isolated on the floor; a whole abandoned request is 2.2 ms over one that serves nothing (`BA-T5`, 2026-10-07) | open |"
 measured_by = ["BA-T3", "BA-T5"]
 status = "estimated"
 estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
-basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %; that share of the floor's 67.2 ms median is about 5 microseconds. The gate's store is in memory, so a cold on-disk open is outside the figure and the ceiling stays at 1 ms."
-basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
-carrier = "BA-T3's pre-head cells on CI hold the count flat per PR; BA-T5 on the floor, with an on-disk store, measures the milliseconds."
-path_set = "archival-serve-fetch"
-
-[[constant]]
-name = "serve_throughput_8_inflight_floor"
-defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
-needle = "| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |"
-measured_by = ["BA-T5"]
-status = "estimated"
-estimate = { low = 37.0, high = 60.0, unit = "responses per second" }
-basis = "Run 3's two eight-in-flight blocks on the single-pass tree read 59.6 and 39.7 responses per second. The floor of the band is the two-read arm's 37, taken as a lower bound because the single pass does strictly less work per response; the ceiling is the better block. Two blocks do not say which is typical."
-basis_captures = ["docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"]
-carrier = "BA-T5: a floor run with enough eight-in-flight blocks per arm to say which figure is typical."
+basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %. The floor has so far bounded it from above only: BA-T5's first run put a whole abandoned full-segment request at 2.2 ms of CPU over a request for a shard that is not held, and that figure also holds one chunk read, one chunk hashed and a refused write. An upper bound above the band does not settle the estimate either way."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"]
+carrier = "BA-T5, a block that stops the clock at the head: time the pre-head step alone on the floor device (the bench-internals composition BA-T3 counts), with an on-disk store."
 path_set = "archival-serve-fetch"
 
 [[retired_estimate]]
@@ -745,3 +760,12 @@ capture = "docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"
 capture_rev = "7c9140f297"
 verdict = "falsified"
 note = "Predicted 2026-10-06 as the pre-#954 arm, 24.8 ms, plus one digest pass at its standalone cost, 23.9 ms. Inside the stream the digest costs 43 ms. BA-T3 shows the chunked read-and-fold is 2.2 % above the one-shot digest in instructions, so the other 19 ms is not instruction work in the loop; the on-disk read path, the per-chunk blocking-pool hand-off and cache behaviour are what BA-T5 has to separate."
+
+[[retired_estimate]]
+name = "serve_throughput_8_inflight_floor"
+estimate = { low = 37.0, high = 60.0, unit = "responses per second" }
+measured = 49.7
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
+capture_rev = "42233bd135"
+verdict = "held"
+note = "Median of six eight-in-flight blocks on the floor device with the hash on the executor; the blocks are bimodal, three near 41 and three near 56, which is what run 3's two disagreeing blocks were. With the hash in the blocking-pool hop (bfcf46c092) all six read 52."
