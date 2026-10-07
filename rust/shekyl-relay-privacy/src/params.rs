@@ -192,22 +192,15 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// If a future re-measure extends the instrument below degree 12, this floor
 /// moves with `fluff_return_ms`, not independently of it — which is why it is
 /// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
-pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
-
-/// How many hidden-address outbound connections a restricted node opens.
 ///
-/// The own-edge is one peer drawn uniformly from that pool, once per epoch.
-/// The paper's anonymity graph is 4-regular; a pool smaller than that does
-/// not rotate the way the epoch model assumes, and a pool of one never
-/// rotates. This is not [`MIN_PROVISIONED_OUT_PEERS`]: that floor is the
-/// fluff measurement's degree, and relayed stems draw over every outbound
-/// session rather than over this pool.
-pub const HOP0_OUTBOUND_TARGET: u32 = 4;
-
-const _: () = {
-    assert!(HOP0_OUTBOUND_TARGET == 4);
-    assert!(HOP0_OUTBOUND_TARGET < MIN_PROVISIONED_OUT_PEERS);
-};
+/// It is also the address-hiding outbound target (Rick, 2026-10-07). The
+/// own-edge pool is the outbound sessions whose connector declares
+/// `address_hidden_from_peer`, and that pool is this degree. Dandelion++
+/// §4.3 Algorithm 2 draws its two outbound relays from the node's P2P
+/// outbound edges. "4-regular" is that graph's expected degree (two out
+/// plus about two in), not the pool size. *Records-was:
+/// `HOP0_OUTBOUND_TARGET` = 4.*
+pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
 
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.

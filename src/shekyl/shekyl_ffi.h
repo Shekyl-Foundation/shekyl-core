@@ -3545,11 +3545,6 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
 
-//! Hidden-address outbound connections a restricted node opens. The
-//! own-edge rotates over that pool. Not the fluff floor: relayed stems
-//! draw over every outbound session.
-std::uint32_t shekyl_hop0_outbound_target();
-
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not
 //! opened — and stores the result. Kind 0 is unused, so a zeroed struct is

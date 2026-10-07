@@ -154,6 +154,20 @@ this lane.
      so the first hop is a slot. After hop 0 the draw is uniform over
      every outbound edge. The clearnet route byte is retired with the
      one relay.
+     **UPDATE 2026-10-07 (Rick).** The address-hiding outbound target is
+     `MIN_PROVISIONED_OUT_PEERS` (12), the degree the fluff measurement
+     was taken at. The own-edge is one uniform draw from that pool.
+     Dandelion++ §4.3 Algorithm 2 uses "4-regular" for the anonymity
+     graph's expected degree: two outbound edges plus about two inbound.
+     Those relays are drawn from the node's P2P outbound edges (η = 8
+     in the paper's simulations). `HOP0_OUTBOUND_TARGET` (4) read the
+     degree as the pool size, so the own-edge was drawn from a third of
+     the pool the analysis assumes. *Records-was: a pool of 4.* The
+     chance an attacker holds the whole pool is `p^k`. At `p = 0.3`
+     that is about 0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.
+     The dialer opens 12 onion circuits on the managed Tor. The
+     assignment at `net_node.inl:926` stays until the dialer deletes
+     it; it now reads this floor. Clearnet keeps its own degree.
    - **Embargo.** The stem watch records the connector the stem was
      forwarded on, and the observation window is that connector's
      measured transit, matched on `ConnectorId`: clearnet is

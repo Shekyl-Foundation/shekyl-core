@@ -919,12 +919,12 @@ namespace nodetool
     {
       zone.m_proxy_address = *proxy_endpoint;
       zone.m_connect = &public_connect;
-      // The own-edge pool. The fluff floor does not apply: relayed stems
-      // draw over every outbound session, and `--out-peers` does not set
-      // this cap.
-      const std::uint32_t hop0_out = shekyl_hop0_outbound_target();
-      zone.m_config.m_net_config.max_out_connection_count = hop0_out;
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hop0_out);
+      // Address-hiding outbound target: the measured degree. The dialer
+      // deletes this assignment; it owns outbound targets. `--out-peers`
+      // does not set it.
+      const std::uint32_t hidden_out = shekyl_relay_zone_min_provisioned_out_peers();
+      zone.m_config.m_net_config.max_out_connection_count = hidden_out;
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hidden_out);
       set_max_in_peers(zone, -1);
     }
     m_ephemeral_tor_alive = true;

@@ -7,9 +7,13 @@
 //!
 //! Relayed stems draw over every outbound session. This draw is the other
 //! one: uniform over the hidden-address outbound sessions, and not a
-//! stem-map slot. No cover on Tor by ruling. On a cover-bearing link the
-//! own-edge is a stem slot, drawn by [`super::Relay::plan_relay`] when no
-//! configured connector hides the address, and that slot is the channel.
+//! stem-map slot. The pool's target size is
+//! [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]. A pool of
+//! one still reports `hop-0 edge cannot rotate`. That report does not name
+//! a target of 4. *Records-was: `HOP0_OUTBOUND_TARGET`.* No cover on Tor by
+//! ruling. On a cover-bearing link the own-edge is a stem slot, drawn by
+//! [`super::Relay::plan_relay`] when no configured connector hides the
+//! address, and that slot is the channel.
 
 use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_relay_privacy::stem_map::ConnectionId;
