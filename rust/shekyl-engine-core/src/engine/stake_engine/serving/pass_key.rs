@@ -18,10 +18,19 @@
 //!
 //! Two properties follow from the handle being weak:
 //!
-//! - **The serving role cannot extend the secret's life.** The actor stops
-//!   when the engine drops its last strong `ActorRef`; a live serving task
-//!   holding this key does not keep the persona bundles resident past the
-//!   close that was meant to wipe them.
+//! - **The serving role cannot extend the secret's life past signs already
+//!   in flight.** Each `sign_pass` upgrades the weak handle for the duration
+//!   of one blocking `ask` and drops the strong ref with the reply, so an
+//!   idle key, or one between signs, holds nothing that keeps the actor
+//!   alive: the actor stops when the engine drops its last strong `ActorRef`
+//!   (kameo stops an actor when all strong refs are gone, and `on_stop`
+//!   wipes the bundles). What a sign in progress does hold is a strong ref,
+//!   and a second request that upgrades while the first is still in flight
+//!   extends that window by one more sign. That bound is intrinsic — a
+//!   signature needs the key — and it is also the whole of it: once no
+//!   strong ref exists, no new sign can start, and a request that arrives
+//!   then is refused at pre-flight. The test
+//!   `actor_stop_is_observed_not_prevented` pins the no-in-flight case.
 //! - **`ready` is actor liveness** (Q2). The signing capability can go away
 //!   while the listener is up in exactly one way — the actor fail-stopped
 //!   after a handler panic — and that case is now the shared pre-flight 503
@@ -32,8 +41,11 @@
 //!
 //! In the production close order the question does not arise: the wallet
 //! tenant shuts the serving task down (awaited) before it drops the engine,
-//! so serving life ⊂ actor life. The weak handle makes that true by
-//! construction wherever the order is not controlled.
+//! so serving life ⊂ actor life and no sign can be in flight at the drop.
+//! The weak handle makes the no-in-flight case true by construction wherever
+//! the order is not controlled. An embedder that drops the engine with the
+//! host still listening reopens the in-flight bound as a question: the
+//! answer then is the listener's drain, not a stronger handle.
 
 use std::sync::Arc;
 
