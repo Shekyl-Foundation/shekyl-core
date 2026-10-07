@@ -1103,6 +1103,14 @@ the budget. The two are different measures and the run prints both.
 Neither moves with the observation rate, so the secret draw's dropout
 does not enter them.
 
+`0.689` is not the probability that such an archiver is slashed. It is
+`1 − (1 − p)^4096`, which treats the 4,096 pairs as failing independently.
+One persona serves all its shards from one host and one onion service, so
+their read failures are strongly correlated. Correlation changes the
+shape of the risk more than its size: the chance of at least one false
+slash can be lower than the figure, and when false slashes come they come
+many at once.
+
 The window does not clear the per-archiver budget under this rule at this
 read failure. That is not new with the secret draw: the module's own
 report (`--stage2`) already reads the shipped pin as exceeding it, at
@@ -1160,8 +1168,10 @@ a fresh circuit. Whether tries that far apart fail together is not
 measured. This section does not assume an answer. It prints the window at
 each answer.
 
-**Model.** A read is tried up to three times: the first try and the fetch
-client's two retries. A share `ρ` of single-try failures is common to
+**Model.** The witness reads a draw up to three times, hours apart. Each
+is a whole read by the fetch caller's rule; its stall retries inside one
+window are the ones the calibration declines to credit, and they are not
+credited here. A share `ρ` of single-try failures is common to
 every try of that read, and the rest are independent, so the read fails
 with probability `p · (ρ + (1 − ρ) · p²)`. At `ρ = 1` that is `p`, the
 calibration. At `ρ = 0` it is `p³`. The settlement rule and `(m, n)` are
@@ -1177,13 +1187,25 @@ it has no bar of its own.
 | 0.05 | 0.0406 | 0.00482 | `3.02 × 10⁻²²` | `1.24 × 10⁻¹⁸` | clears |
 | 0.00 | 0.0270 | 0.00215 | `4.14 × 10⁻²⁶` | `1.70 × 10⁻²²` | clears |
 
-**The production `(11, 13)` clears the per-archiver budget when
-`ρ ≤ 0.661`.** That is the number a measurement has to answer: of reads
-whose first try failed, do fewer than about two in three also fail both
-retries taken hours apart? The per-try failure stays at the retained 0.30;
-the measured single-try miss is 0.041 on a typical window and 0.20 on the
-worst day observed, so the table is conservative in `p` and open only in
-`ρ`.
+**The production `(11, 13)` clears the per-archiver budget when a draw
+goes unread after all three tries with probability at most `0.2076`.**
+That boundary assumes no model: the window reads only the probability
+that a draw goes unread, and a measurement reports it directly.
+
+`ρ` is a parameter of the mixture, not something a run observes. What a
+run observes besides the read failure `x` is the first-try failure `p`
+and the conditional rate `c = x / p`: of reads whose first try failed,
+the share whose two later tries also failed. In the model
+`c = ρ + (1 − ρ)·p²`, so independent tries still give `c = p²` (0.09 at
+0.30), not zero. At the retained `p = 0.30` the boundary is `c ≤ 0.692`,
+which is `ρ ≤ 0.661`. A measured `c` is compared with 0.692, or converted
+by `ρ = (c − p²) / (1 − p²)` and compared with 0.661; comparing `c` with
+0.661 would refuse cases that clear.
+
+The per-try failure stays at the retained 0.30; the measured single-try
+miss is 0.041 on a typical window and 0.20 on the worst day observed, so
+the table is conservative in `p`. At a lower measured `p` the boundary on
+`x` does not move and the boundary on `c` rises.
 
 **What this does not say.** `ρ` is unmeasured, so the window's verdict is
 unchanged: it exceeds the budget at the calibration. The two-point mixture
