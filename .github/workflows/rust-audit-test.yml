@@ -495,8 +495,10 @@ jobs:
         # edge's features apply. The package list is the gate's TEST_ONLY
         # table, and the gate holds it so: `check_test_only_features.py`
         # finds this step by name and fails if the `-p` set here is not the
-        # set of TEST_ONLY owners, or if a dev target is built. Add a row
-        # there and a `-p` here in the same commit.
+        # set of TEST_ONLY owners, or if cargo is passed anything but
+        # `--locked`, `--lib` and `-p` (a dev target or a `--features` flag
+        # would put the test feature back on the lib). Add a row there and
+        # a `-p` here in the same commit.
         run: cargo clippy --locked -p shekyl-chain-rules -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust

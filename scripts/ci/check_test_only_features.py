@@ -134,8 +134,13 @@ owners for exactly this. Its package list is a copy of this table, and a copy
 kept in sync by a comment is a check that cannot fail: the fourth owner to
 join the table would go unlinted until someone read the comment. So the gate
 owns the invariant: **the lane's `-p` set must equal the set of TEST_ONLY
-owners**, the step must exist, and it must build `--lib` with no dev target.
-The edit that makes it fail is adding a row here without touching the lane.
+owners**, the step must exist, and cargo's side of its `run:` is a closed
+allow-list — `--locked`, `--lib`, `-p` — because the two ways of putting the
+test feature back on the lib (a dev target, which unifies it; `--features` or
+`--all-features`, which select it) and the one way of leaving production's
+shape (`--no-default-features`) are all just "another flag", and a list of
+known-bad flags misses the next one. The edit that makes it fail is adding a
+row here without touching the lane.
 
 # A limit this file does not close, named
 
@@ -407,8 +412,8 @@ def production_lint_lane(workflow_text: str) -> str | None:
 
 
 def check_production_lint_lane(workflow_text: str, owners: frozenset[str]) -> list[str]:
-    """Fifth limb: the production-shape lint lane exists, builds `--lib` with
-    no dev target, and names exactly the TEST_ONLY owners."""
+    """Fifth limb: the production-shape lint lane exists, passes cargo nothing
+    but `--locked`, `--lib` and `-p`, and names exactly the TEST_ONLY owners."""
     where = f"{WORKFLOW.name} step {PRODUCTION_LINT_STEP!r}"
     run = production_lint_lane(workflow_text)
     if run is None:
@@ -417,14 +422,39 @@ def check_production_lint_lane(workflow_text: str, owners: frozenset[str]) -> li
             f"production shape is linted by that step alone; restore it"
         ]
     failures: list[str] = []
-    if "cargo clippy" not in run or "--lib" not in run or "-D warnings" not in run:
-        failures.append(f"{where}: `run:` is not a `cargo clippy ... --lib ... -D warnings` line: {run!r}")
-    if "--all-targets" in run or "--tests" in run or "--examples" in run or "--benches" in run:
+    # Everything before `--` is cargo's; everything after is clippy's. The
+    # lane's contract is "exactly what production builds", so cargo's side
+    # is a closed allow-list rather than a list of known-bad flags: a dev
+    # target (`--all-targets`, `--tests`) unifies the test feature onto the
+    # lib *indirectly*; `--features x/test-signer` or `--all-features` puts
+    # the same feature on the same lib *directly*; `--no-default-features`
+    # builds a shape production never does. A flag nobody has thought of
+    # yet is red too, which is the point.
+    cargo_side, sep, clippy_side = run.partition(" -- ")
+    tokens = cargo_side.split()
+    if tokens[:2] != ["cargo", "clippy"] or not sep or "-D warnings" not in clippy_side:
+        failures.append(f"{where}: `run:` is not a `cargo clippy <cargo flags> -- -D warnings` line: {run!r}")
+    allowed_flags = {"--locked", "--lib"}
+    stray: list[str] = []
+    i = 2
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "-p" and i + 1 < len(tokens):
+            i += 2
+            continue
+        if tok not in allowed_flags:
+            stray.append(tok)
+        i += 1
+    if "--lib" not in tokens[2:]:
+        failures.append(f"{where}: no `--lib` — without it cargo picks the package's default targets")
+    if stray:
         failures.append(
-            f"{where}: builds a dev target — a dev edge's features then unify onto "
-            f"the lib and the lane lints the same shape the workspace step does"
+            f"{where}: flag(s) outside the lane's closed set {sorted(allowed_flags | {'-p <crate>'})}: "
+            f"{', '.join(stray)} — a dev target unifies the test feature onto the lib, a "
+            f"feature flag selects it directly, and either lints the test shape under a "
+            f"step named for the production one"
         )
-    linted = frozenset(m.group("pkg") for m in _PACKAGE_FLAG_RE.finditer(run))
+    linted = frozenset(m.group("pkg") for m in _PACKAGE_FLAG_RE.finditer(cargo_side))
     missing = sorted(owners - linted)
     extra = sorted(linted - owners)
     if missing:
@@ -922,9 +952,34 @@ def selftest() -> int:
             ["no TEST_ONLY row: c"],
         ),
         (
-            "lane builds a dev target",
+            "lane builds a dev target — the indirect way onto the lib",
             lane("cargo clippy --locked -p a -p b --lib --all-targets -- -D warnings"),
-            ["builds a dev target"],
+            ["outside the lane's closed set", "--all-targets"],
+        ),
+        (
+            "lane turns every feature on — the direct way, no dev target",
+            lane("cargo clippy --locked -p a -p b --lib --all-features -- -D warnings"),
+            ["outside the lane's closed set", "--all-features"],
+        ),
+        (
+            "lane names the test feature itself",
+            lane("cargo clippy --locked -p a -p b --lib --features a/test-signer -- -D warnings"),
+            ["outside the lane's closed set", "--features", "a/test-signer"],
+        ),
+        (
+            "lane drops default features — a shape production never builds",
+            lane("cargo clippy --locked --no-default-features -p a -p b --lib -- -D warnings"),
+            ["outside the lane's closed set", "--no-default-features"],
+        ),
+        (
+            "lane without --lib",
+            lane("cargo clippy --locked -p a -p b -- -D warnings"),
+            ["no `--lib`"],
+        ),
+        (
+            "clippy side without -D warnings",
+            lane("cargo clippy --locked -p a -p b --lib"),
+            ["not a `cargo clippy"],
         ),
         ("step renamed away", lane("cargo clippy -p a -p b --lib -- -D warnings", name="something else"), ["not found"]),
         (
