@@ -597,6 +597,7 @@ stale_through = [
   { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
   { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
+  { through = "7c30a39804", note = "PR #996: the layer-0 comments in frontier.rs, assemble.rs and types.rs, and CT6_PROVING_STATE.md, now say the path API takes points and the circuit tape hashes scalars. No executable code in these paths changed, so no cost moved. Not measured." },
 ]
 
 [[constant]]
