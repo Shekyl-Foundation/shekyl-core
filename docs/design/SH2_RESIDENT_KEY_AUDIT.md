@@ -73,12 +73,18 @@ for a cryptographic fault at sign time. The close order above is pinned by
 test, not assumed.
 
 **Q3 — TJ-D counters surface: included in this PR.** `ServeCounters` become
-an alarm-board input: a `serve_counters` producer in `shekyl-operator-alarm`
+an alarm-board input: a `serve_health` producer in `shekyl-operator-alarm`
 (one pure `apply` over one observation, the shape `serve_set` and
 `tor_posture` set), a `ServeHealth` condition, and the serving task feeding
-it each refresh tick alongside a `ServingHandle::counters()` snapshot. No
-wallet-RPC wire change: the row names the alarm board, and the board is an
-embedder surface, not a method.
+it each refresh tick with the tick's *movement* (`ServeCounters::since`, the
+one home of the subtraction) rather than the session totals, so a quiet tick
+clears the row. No wallet-RPC wire change: the row names the alarm board,
+and the board is an embedder surface, not a method. *Amended at build
+(2026-10-06):* the pre-flight text also named a `ServingHandle::counters()`
+snapshot accessor; it is not built — no production consumer reads it, and
+an accessor with no reader is the bare-symbol grep hit rule 23 forbids. The
+board row is the operator surface; a raw-counter accessor reopens if an
+embedder names a reading the row does not carry.
 
 **Q4 — the proving test lives in `engine-core`'s serving tests** with
 `shekyl-p-fetch` (and `shekyl-p-serve`) as dev-dependencies: an engine-derived

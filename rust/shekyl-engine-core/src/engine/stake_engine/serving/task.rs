@@ -10,11 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_operator_alarm::disk::{apply as report_disk, DiskObservation};
+use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObservation};
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
-    ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeCounters,
+    ServeObligation, ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -330,12 +331,13 @@ async fn run_serving_task<P>(
         config,
         store_fs_path,
     } = setup;
-    // Both conditions are watched from the moment the task exists, so a
-    // wallet sitting in the launch standoff reads "not serving yet"
+    // All three conditions are watched from the moment the task exists, so
+    // a wallet sitting in the launch standoff reads "not serving yet"
     // rather than reading nothing at all — including when start fails
     // or cancel fires before the host is up.
     report(&alarms, ServeSetObservation::NotServing);
     report_disk(&alarms, DiskObservation::NotServing);
+    report_health(&alarms, ServeHealthObservation::NotServing);
 
     let delay = draw_serving_launch_delay(config.launch_window, &mut OsRngGapAdapter);
     tokio::select! {
@@ -374,6 +376,18 @@ async fn run_serving_task<P>(
     // trip to re-derive what the witness already holds.
     report(&alarms, read(&host, bound));
 
+    // TJ-D's operator surface (`SF-D6`): the host's serve counters are
+    // session totals, and the question on the board is "is the key refusing
+    // *now*", so the task windows them tick to tick and reports the
+    // movement. A freshly started host has answered nothing, so the first
+    // report arms the row clean rather than leaving it `NotServing` for a
+    // cadence while the onion is already published.
+    let mut counters_at_last_tick = host.counters();
+    report_health(
+        &alarms,
+        ServeHealthObservation::Tick(ServeCounters::default()),
+    );
+
     // Own task: the probe is not a serve-set reading, and a wedged
     // refresh must not also silence the volume check. First reading is
     // immediate, so the board is not unwatched for a full cadence.
@@ -399,6 +413,14 @@ async fn run_serving_task<P>(
         }
 
         report(&alarms, observe(&host, bound).await);
+        // The window is this tick's movement; `since` is the one home of the
+        // subtraction, so a restart-reset total reads as no movement.
+        let counters_now = host.counters();
+        report_health(
+            &alarms,
+            ServeHealthObservation::Tick(counters_now.since(&counters_at_last_tick)),
+        );
+        counters_at_last_tick = counters_now;
         // Re-read after every refresh so a host whose obligation *arm*
         // changes is not stuck on the start snapshot. The type is the
         // arm, not the size — a growing prefix does not change what we
@@ -417,6 +439,7 @@ async fn run_serving_task<P>(
     // stays live because nothing observed it fixed.
     report(&alarms, ServeSetObservation::NotServing);
     report_disk(&alarms, DiskObservation::NotServing);
+    report_health(&alarms, ServeHealthObservation::NotServing);
     // The posture, by contrast, IS cleared: it is a statement about what is
     // being served, and after teardown nothing is. Leaving the last value
     // would have `staking_info` report a posture for a host that has
@@ -863,6 +886,56 @@ mod lifecycle_tests {
             Some(Arming::Disarmed(DisarmedReason::NotServing)),
             "teardown must disarm the volume check: a host that has \
              stopped is not a healthy disk"
+        );
+    }
+
+    /// TJ-D's operator surface reaches the board: a started host arms
+    /// `ServeHealth` clean (nothing answered yet is nothing refused), and
+    /// teardown disarms it. The refusal/lookup arithmetic is
+    /// `shekyl-operator-alarm`'s (`serve_health::tests`); what only this
+    /// layer can prove is that the counters are read and the row is kept,
+    /// which is the `SH-2` falsifier in `docs/FOLLOWUPS.md`.
+    #[tokio::test]
+    async fn a_started_host_watches_its_serve_health() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let alarms = Arc::new(OperatorAlarms::new());
+        let handle = spawn_serving_task(
+            churning_tor(&dir),
+            serving_identity(),
+            pinner(false),
+            Arc::clone(&alarms),
+            immediate(),
+            store_path(),
+            claim(),
+        );
+
+        let armed = settle_until(&alarms, |b| {
+            b.condition(AlarmCondition::ServeHealth)
+                .map(ConditionState::arming)
+                .is_some_and(|a| a == Arming::Armed)
+        })
+        .await;
+        assert!(
+            armed,
+            "a started host must arm serve health; an absent row renders as \
+             a surface that was never wired"
+        );
+        assert!(
+            alarms
+                .board()
+                .condition(AlarmCondition::ServeHealth)
+                .and_then(ConditionState::live)
+                .is_none(),
+            "a host that has answered nothing has refused nothing"
+        );
+        handle.shutdown().await;
+        assert_eq!(
+            alarms
+                .board()
+                .condition(AlarmCondition::ServeHealth)
+                .map(ConditionState::arming),
+            Some(Arming::Disarmed(DisarmedReason::NotServing)),
+            "teardown must disarm: a stopped host is not a healthy one"
         );
     }
 

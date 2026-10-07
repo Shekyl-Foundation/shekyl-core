@@ -99,15 +99,14 @@ impl fmt::Debug for PersonaServing {
 /// lost sight of something it needs, and passes are being lost to that
 /// rather than to a signer that is down.
 ///
-/// **Distinguishable is not yet surfaced.** These are read through
-/// [`PersonaServingHost::counters`]; today the production serving task
-/// (`engine-core`'s `serving::task`) holds the host privately and publishes
-/// only posture and the serve-set alarms, so the counters reach an operator
-/// only through tests. The reading that puts them on the alarm board is the
-/// operator surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` assigns to `TJ-D`,
-/// carried with the `SH-2` key wiring in `docs/FOLLOWUPS.md` — until it
-/// lands, a nonzero `sign_failures` is a fact the persona knows and nobody
-/// is told.
+/// **How an operator sees them.** Read through
+/// [`PersonaServingHost::counters`] by the production serving task
+/// (`engine-core`'s `serving::task`) once per refresh tick, windowed with
+/// [`Self::since`], and mapped onto the operator alarm board by
+/// `shekyl-operator-alarm`'s `serve_health` producer — the `TJ-D` operator
+/// surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` names. A tick in which the key
+/// refused is an alarm; a tick in which only lookups failed is a different
+/// alarm; a quiet tick clears the row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).
@@ -125,6 +124,30 @@ pub struct ServeCounters {
     pub late_sign_failures: u64,
     /// Accept-loop errors.
     pub accept_errors: u64,
+}
+
+impl ServeCounters {
+    /// The movement between an earlier reading and this one, per counter.
+    ///
+    /// The counters are session totals, so an operator question — "did the
+    /// key refuse anything *this tick*" — is a difference, and this is its
+    /// one home (rule 05): the alarm producer and anything else that windows
+    /// the counters subtract here rather than each re-deriving the
+    /// subtraction. Saturating, because a host restart inside the window
+    /// resets the totals and a negative movement is not a reading.
+    #[must_use]
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            served: self.served.saturating_sub(earlier.served),
+            refused: self.refused.saturating_sub(earlier.refused),
+            lookup_failures: self.lookup_failures.saturating_sub(earlier.lookup_failures),
+            sign_failures: self.sign_failures.saturating_sub(earlier.sign_failures),
+            late_sign_failures: self
+                .late_sign_failures
+                .saturating_sub(earlier.late_sign_failures),
+            accept_errors: self.accept_errors.saturating_sub(earlier.accept_errors),
+        }
+    }
 }
 
 /// Why a serving host could not start.

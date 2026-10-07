@@ -130,6 +130,37 @@ fn lifetime_classification_is_pinned_per_variant() {
          LatchedRederived because nothing re-detects a forfeit after \
          restart — the durable-record third class is the FOLLOWUPS row",
     );
+    assert_eq!(
+        OperatorAlarm::ServeSigningRefused {
+            pre_flight: 1,
+            late: 0,
+        }
+        .lifetime(),
+        AlarmLifetime::Episode,
+        "a per-tick window over the counters: a quiet tick ends it, and the \
+         next tick re-derives it from the counters alone",
+    );
+    assert_eq!(
+        OperatorAlarm::ServeLookupsFailing { failures: 1 }.lifetime(),
+        AlarmLifetime::Episode,
+        "same window; a tick in which every lookup succeeded ends it",
+    );
+}
+
+/// Serve health is its own row, not a serve-set reading: a persona can
+/// hold every bonded shard and still lose every pass.
+#[test]
+fn serve_health_alarms_report_on_their_own_condition() {
+    for alarm in [
+        OperatorAlarm::ServeSigningRefused {
+            pre_flight: 1,
+            late: 1,
+        },
+        OperatorAlarm::ServeLookupsFailing { failures: 1 },
+    ] {
+        assert_eq!(alarm.condition(), AlarmCondition::ServeHealth);
+        assert_ne!(alarm.condition(), AlarmCondition::ServeSetIntegrity);
+    }
 }
 
 /// The serving conditions are one condition row, not four — an operator

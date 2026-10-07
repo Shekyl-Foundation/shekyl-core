@@ -85,6 +85,7 @@
 
 pub mod cadence;
 pub mod disk;
+pub mod serve_health;
 pub mod serve_set;
 pub mod tor_posture;
 
@@ -125,6 +126,19 @@ pub enum AlarmCondition {
     /// do, and applies to a market archiver exactly as much as to a
     /// foundation node (`COMPLETETREE_ACTIVATION.md` Q-2).
     ServingDiskHeadroom,
+    /// Whether the requests this persona's host is answering are being
+    /// answered — the `TJ-D` operator surface over the host's serve counters
+    /// (`ARCHIVAL_SHARD_FETCH.md` `SF-D6`).
+    ///
+    /// Its own condition rather than a [`Self::ServeSetIntegrity`] reading:
+    /// that row is about what the store retains against what the chain
+    /// obligates, and a persona can hold every bonded shard and still lose
+    /// every pass because its key refuses or its tip is unreadable. The
+    /// remedy differs too — a wallet reopen for a stopped signer, the
+    /// daemon's connectivity for a lost tip — and folding them would have an
+    /// operator reading "your serve-set is broken" for a host that cannot
+    /// sign.
+    ServeHealth,
     /// Whether the wallet's view of the chain is advancing.
     ///
     /// The cadence driver's tick base is chain progress
@@ -434,6 +448,35 @@ pub enum OperatorAlarm {
         /// Total value forfeited this session, in atomic units.
         forfeited_atomic: u64,
     },
+    /// The persona's attestation key refused to countersign during the last
+    /// refresh tick, so passes were lost on shards the host *holds*. Passes
+    /// are what the bond is paid for; a host that serves bytes nobody can
+    /// credit is spending its disk for nothing.
+    ///
+    /// The production key is a round-trip into the stake actor, so the usual
+    /// cause is that actor having stopped — `StakeEngineError::
+    /// StakeActorUnavailable`, remedied by a wallet reopen. `pre_flight`
+    /// refusals were decided before any shard byte went out (the requester
+    /// saw a 503); `late` refusals closed a fully-sent shard with the
+    /// refusal trailer, which is the costlier shape and is kept visible.
+    ServeSigningRefused {
+        /// Refusals at the key's pre-flight this tick.
+        pre_flight: u64,
+        /// Refusals after the body was sent this tick.
+        late: u64,
+    },
+    /// Requests this tick that the host could not answer because it could
+    /// not read what it needed: the serving store, or a usable daemon tip
+    /// for the anchor gate (`WSS-24`). Pooled because the requester cannot
+    /// tell them apart either. Lead with the daemon — its process,
+    /// connectivity and sync state — since a tip that has aged out is the
+    /// common cause; a store fault is a disk or a replay. Ranked below
+    /// [`Self::ServeSigningRefused`]: a key that refuses makes the lookup
+    /// moot.
+    ServeLookupsFailing {
+        /// Lookup failures this tick.
+        failures: u64,
+    },
 }
 
 impl OperatorAlarm {
@@ -486,7 +529,12 @@ impl OperatorAlarm {
             // criterion this is the named third-class candidate — durable
             // acknowledgment state, tracked in `docs/FOLLOWUPS.md`
             // ("Forfeited-claim record does not survive a wallet restart").
-            | Self::ClaimForfeited { .. } => AlarmLifetime::Episode,
+            | Self::ClaimForfeited { .. }
+            // Both are per-tick windows over session totals: a tick in which
+            // nothing was refused and nothing failed to look up clears them,
+            // and the next tick re-derives them from the counters alone.
+            | Self::ServeSigningRefused { .. }
+            | Self::ServeLookupsFailing { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -508,6 +556,9 @@ impl OperatorAlarm {
             Self::ChainProgressStalled { .. } => AlarmCondition::ChainProgress,
             Self::EpochUnclaimed { .. } => AlarmCondition::EpochClaim,
             Self::ClaimForfeited { .. } => AlarmCondition::ClaimForfeiture,
+            Self::ServeSigningRefused { .. } | Self::ServeLookupsFailing { .. } => {
+                AlarmCondition::ServeHealth
+            }
         }
     }
 }
