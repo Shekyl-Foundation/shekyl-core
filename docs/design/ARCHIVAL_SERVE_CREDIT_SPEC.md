@@ -81,10 +81,10 @@ This section is the only place the document describes current behaviour.
 | Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10 | `src/cryptonote_core/blockchain.cpp:4702`, `:4714`; `rust/shekyl-chain-rules/src/census.rs:492-494` |
 | Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4760` |
 | Serve-credit vin record | Kept: `p_canonical_id`, `shard_id`, `settlement_epoch`, a 64-byte Ed25519 leg. Pruned: a segment path and a 3,309-byte ML-DSA leg. The signed preimage is over a leaf path | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` |
-| Receipt (`SF-D8` v3) | `P` signs `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ D`, 112 bytes, under `shekyl/archival-attestation-scheme-v3`. Carried on the block-level attestation record, a different record from the vin | `rust/shekyl-archival-retention/src/pass_anchor.rs:64-65`, `:355-372`; `attestation_wire.rs:136-144`; `rust/shekyl-crypto-pq/src/signature.rs:109` |
+| Receipt (`SF-D8` v3) | `P` signs `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ delivery_digest`, 112 bytes, under `shekyl/archival-attestation-scheme-v3`. Carried on the block-level attestation record, a different record from the vin | `rust/shekyl-archival-retention/src/pass_anchor.rs:64-65`, `:355-372`; `attestation_wire.rs:136-144`; `rust/shekyl-crypto-pq/src/signature.rs:109` |
 | Block attestation (CEN-B4) | No Rust rule; the witness is carried unjudged. The C++ path verifies it | `rust/shekyl-chain-rules/src/census.rs:331`; `block.rs:113-115`; `src/cryptonote_core/blockchain.cpp:5089` |
 | Anchor window | `L + 1` hashes for `[h − 720 − L, h − 720]`, keyed on the including block's predecessor. `L = 4`, depth 720 | `rust/shekyl-archival-retention/src/pass_anchor.rs:70`, `:73-74`, `:122-131` |
-| Serving route | Single-pass serve, 400 / 404 / 503, refusal trailer, signature over `D` as the last bytes | [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) |
+| Serving route | Single-pass serve, 400 / 404 / 503, refusal trailer, signature over the delivery digest as the last bytes | [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) |
 | `P`'s serving key | Not wired. The serving task is given `NoResidentKey` | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:247` |
 | Coinbase tag `0x0C` | Does not exist. The highest tx-extra tag is `0x0B`, and the coinbase grammar admits neither | `rust/shekyl-wire/src/tx_extra/mod.rs:79`; `tx_extra/coinbase.rs:57-62` |
 | Witness key, witness seed ring | Not in code | grep for `derive_witness_keypair`, `LABEL_WITNESS`: no hits |
@@ -111,7 +111,8 @@ File names without a directory are under
 | `SEB` | Blocks per epoch | 10,000 | `SETTLEMENT_EPOCH_BLOCKS`, `constants.rs:245` |
 | `h_open(E)`, `h_close(E)` | First and last block of `E` | — | the settlement schedule |
 | `W₂` | Blocks within which a carrier for `h` is admissible | 500 | `CHALLENGE_RESPONSE_BLOCKS`, `constants.rs:180-186` |
-| `D` | The drawable set of `E`: the pairs held at `h_open(E)`, in canonical order. Also its size | — | §4.1 |
+| `D` | The drawable set of `E`: the pairs held at `h_open(E)`, in canonical order. In a formula, `D` is the set's size | — | §4.1 |
+| `delivery_digest` | The 32-byte digest of the response `P` delivered, salted with the nonce. `SF-D8` writes it `D`; this document does not | — | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D8` |
 | `h` | The block whose producer draws | — | — |
 | `h_incl` | The block that includes a carrier | — | — |
 | `j` | Index of a draw within block `h`, from 0 | `u32` | — |
@@ -202,8 +203,11 @@ target(h) = min( D/SEB + u/H ,  3 · 3·D/SEB )
   that challenges have stopped.
 - `u/H` is the top-up. It spreads the visible shortfall over the horizon.
 - **In flight at `h`** is the total draw count of the blocks in
-  `[h − W₂, h − 1]` whose seed is not yet revealed. Blocks whose seed has
-  landed are already in the visible counts and are not subtracted again.
+  `[max(h − W₂, h_open(E)), h − 1]` whose seed is not yet revealed. Blocks
+  whose seed has landed are already in the visible counts and are not
+  subtracted again. The range stops at the epoch's open: a block of
+  `E − 1` drew from `E − 1`'s set, and its reveal cannot reduce `E`'s
+  shortfall.
 - **`H`**: with `r = h − h_open(E)`, `H = max(200, 0.7·SEB − r)` while
   `r < 0.7·SEB`, and `H = max(200, SEB − W₂ − r)` after.
 
@@ -309,8 +313,8 @@ The request header, `P`'s gate and `P`'s serving route are as
 
 ### 6.1 What `P` signs
 
-`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`,
-where `D` is the delivery digest of the response
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`,
+where `delivery_digest` is the digest of the response
 ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D8`). The
 signature claims that `P` delivered these bytes for this request. It does
 not claim `P` stores them.
@@ -318,8 +322,12 @@ not claim `P` stores them.
 ### 6.2 Scheme
 
 - **Algorithm tag.** The canonical signature and key encodings already
-  open with `version(1) ‖ scheme(1) ‖ reserved(2)`. The scheme byte is the
-  algorithm tag. The receipt uses a new value, 3: Ed25519 + FN-DSA-1024.
+  open with a four-byte header: a version byte, a scheme byte, two
+  reserved bytes. The version byte is 1 on a key (`HYBRID_KEY_VERSION`)
+  and 2 on a signature (`HYBRID_SIG_VERSION`, the nested combiner; a
+  version-1 signature is refused at parse —
+  `rust/shekyl-crypto-pq/src/signature.rs:52`, `:66`). The new scheme
+  keeps both values. The scheme byte is the algorithm tag. The receipt uses a new value, 3: Ed25519 + FN-DSA-1024.
   A later change of scheme is a new value and a version bump under
   [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc).
 - **FN-DSA-1024 (level V)**, inside the hybrid structure, for the receipt
@@ -395,7 +403,7 @@ member. The witness refiles the honest members within `W₂`
 | Kept | the input | input tag | 1 |
 | Kept | the input | `j` | varint, ≤ 5 |
 | Prunable | the prunable section | `anchor_height` | 8 |
-| Prunable | the prunable section | `D` | 32 |
+| Prunable | the prunable section | `delivery_digest` | 32 |
 | Prunable | the prunable section | receipt signature | 1,356 |
 
 - **A record names `j` and nothing else about its draw.** `(P, s)` is
@@ -489,7 +497,7 @@ has pruned. It therefore reads only kept data.
 - **Kept:** each carrier's seed and `h`, and each record's `j`. From these
   and the issued-draw index any node recomputes the draws, each pair's
   counted draws, and which have pass records.
-- **Prunable:** the witness key and signature, `P`'s receipts, `D`, the
+- **Prunable:** the witness key and signature, `P`'s receipts, the delivery digests, the
   anchor fields, and with them the input of the set commitment. All are
   checked at connect and never needed again.
 
@@ -523,7 +531,7 @@ verdict naming its census row.
    `anchor_height`, the hash of the block at that height on the
    connecting chain (the alternative chain above the fork point when the
    block is validated there), the derived `shard_id`, and the carried
-   `D`. The anchor block must exist below `h_incl`.
+   `delivery_digest`. The anchor block must exist below `h_incl`.
 7. **Dedup** on `(h, j)`, which is `(P, s, E, h, j)` with the pair and
    epoch derived.
 
@@ -559,16 +567,52 @@ slash pass. It reads kept data and the issued-draw index only.
 3. **Per pair in `D` with at least one such draw**, take them in `(h, j)`
    order.
    - Fewer than 3: **NonObservation**.
-   - Otherwise select 3 of them uniformly without replacement, by a
-     partial Fisher–Yates driven by
-     `cSHAKE256_32("shekyl/archival-settlement-select-v1", b ‖ p_canonical_id ‖ shard_id_le[8] ‖ E_le[8] ‖ k_le[4] ‖ attempt_le[4])`,
-     rejection-sampled.
+   - Otherwise select 3 of them uniformly without replacement, by the
+     partial Fisher–Yates below.
    - 2 or 3 of the selected draws have an admitted record: **Served**.
      Fewer: **Missed**.
 4. **The row** is `outcome ‖ passes ‖ issued`: `passes` is the number of
    selected draws with a record (0 to 3), and `issued` is the count from
    step 2, **saturating at 255**. The list of issued draws is the operand
    of the selection; the byte needs only to say "at least 3".
+
+The selection, for a pair whose counted draws are the list `L` in
+`(h, j)` order, `n = |L| ≥ 3`:
+
+```text
+for k = 0, 1, 2
+    r    = n − k
+    zone = (2^64 − 1) − ((2^64 − 1) mod r)
+    for attempt = 0, 1, …, 255
+        x = cSHAKE256_32("shekyl/archival-settlement-select-v1",
+              b ‖ p_canonical_id[32] ‖ shard_id_le[8] ‖ E_le[8] ‖ k_le[4] ‖ attempt_le[4])
+        v = LE64(x[0..8])
+        if attempt < 255 and v ≥ zone:   continue
+        break
+    swap L[k] and L[k + (v mod r)]
+the three counted draws are L[0], L[1], L[2]
+```
+
+The zone is the rejection of §4.4 and removes the modulo bias; the cap is
+§4.4's, so the loop is total. `n` is the list's length, not the row's
+saturating byte.
+
+Vectors, with `b = 0x33×32`, `p_canonical_id = 0x44×32`, `shard_id = 7`,
+`E = 5`. Each entry is the position in the original `(h, j)` order of
+`L[0]`, `L[1]`, `L[2]` after the three swaps. Every draw is accepted on
+its first attempt.
+
+| `n` | Counted positions |
+| --- | --- |
+| 3 | 2, 0, 1 |
+| 4 | 0, 3, 2 |
+| 5 | 1, 2, 4 |
+| 10 | 6, 3, 8 |
+| 255 | 101, 80, 189 |
+| 1,000 | 896, 786, 146 |
+| 10, with `p_canonical_id = 0x45×32` | 7, 1, 2 |
+| 10, with `shard_id = 8` | 0, 8, 2 |
+| 10, with `b = 0x34×32` | 8, 0, 4 |
 
 Because any issued draw may be one of the three, `P` cannot learn
 mid-epoch that its outcome is settled. Re-rolling the selection costs the
@@ -634,7 +678,7 @@ is final.
 Carried with the implementation:
 
 - **Vectors.** The selection KAT of §4.5, the cap vector included; the
-  set-commitment KAT of §7.3; a test-only replay assertion that a
+  set-commitment KAT of §7.3; the settlement-selection KAT of §9.3; a test-only replay assertion that a
   fixture's carried pairs equal the derived ones; and a fixture that two
   constructions of a block yield distinct seeds, witness keys and `0x0C`
   commitments (§4.2), which fails if either secret is ever derived from
@@ -716,8 +760,10 @@ block independently unrevealed with the stated probability.
   0.30 read failure, which is the 2-of-3 rule's cost and is much larger.
   Neither is priced in currency.
 
-The sim does not model the reads, dropout that is correlated in time or
-selective, or carry-over from the previous epoch.
+The sim does not model the reads, or dropout that is correlated in time
+or selective. It runs one epoch from its open, which is the whole state
+of the count rule: the carry starts at zero and in-flight stops at the
+epoch's open (§4.3), so no epoch's counts depend on the one before.
 
 ---
 
@@ -752,7 +798,7 @@ selective, or carry-over from the previous epoch.
 | `SCS-P2` | "Revealed once" against the weight limit | **Each carrier carries the whole seed** |
 | `SCS-P3` | Re-derivable coinbase key material | **Dropped; Q10 stands.** The seed and the witness key are fresh randomness per block, independent of each other, in memory only. A value derived from the coinbase shared secret is known to the coinbase recipient. A persistent witness secret is rejected. Loss is harmless: NonObservation, never misses |
 | `SCS-P4` | The form of the draw mapping | **Rejection sampling over the static set**, capped at 256 attempts, the cap pinned by a vector (§4.4, §4.5) |
-| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `anchor_height`, `D`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field (§7.2) |
+| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field (§7.2) |
 | `SCS-P6` | Q9 bytes | **Amended:** the commitment covers the seed, `h`, and each record's `j` with its prunable fields (§7.3) |
 | `SCS-P7` | A bound on `anchor_height` | **None.** The lower bound keyed on `h` is implied by the nonce, which contains `block_hash(h)`, and is not checked (§9.1) |
 | `SCS-P8` | `issued` above 255 | **Saturate.** The list of issued draws is the selection's operand |
