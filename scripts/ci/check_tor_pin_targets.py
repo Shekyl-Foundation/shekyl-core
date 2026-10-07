@@ -20,7 +20,11 @@ moves that failure to the pull request.
 
   1. **The pin file's hosts are the gitian descriptors' hosts**, as sets, both
      directions. A descriptor host with no row would fail the release build; a
-     row for a host nothing builds is a pin nobody verifies.
+     row for a host nothing builds is a pin nobody verifies. A host triple must
+     also be the release name of that row's `os` and `arch`: packaging selects
+     a row by the triple and `build.rs` selects one by `os`/`arch`, so a swap
+     of two triples would ship one bundle and accept another. The pin reader
+     refuses that row; this gate runs the reader.
   2. **Every descriptor yields at least one host.** A `HOSTS=` line this script
      cannot find is not "no hosts"; it is this script having gone blind
      (rule 47).

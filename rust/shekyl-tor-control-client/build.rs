@@ -90,27 +90,39 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
         "{context}: a pinned target lists its files"
     );
 
+    // The same comparison the runtime gate uses (`TorPin::names_match`).
+    // Windows folds case; every other platform keeps the bytes, so a Linux
+    // row whose executable differs from its file only by case does not
+    // compile — discovery would look for a name the directory does not have.
+    let fold_case = os == "windows";
     let mut names: Vec<String> = Vec::new();
     let mut files_expr = String::new();
     for file in files {
         let name = checked_file_name(str_field(file, "name", context), context);
         let digest = digest_literal(str_field(file, "sha256", context), context);
-        // Windows treats `VERSION.DLL` and `version.dll` as one name, so two
-        // rows differing only in case would be one file with two digests.
-        let folded = name.to_ascii_lowercase();
+        let identity = if fold_case {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        };
         assert!(
-            !names.contains(&folded),
+            !names.contains(&identity),
             "{context}: file {name:?} is listed twice"
         );
-        names.push(folded);
+        names.push(identity);
         write!(
             files_expr,
             "PinnedFile {{ name: {name:?}, sha256: {digest} }}, "
         )
         .expect("write to String");
     }
+    let executable_identity = if fold_case {
+        executable.to_ascii_lowercase()
+    } else {
+        executable.to_string()
+    };
     assert!(
-        names.contains(&executable.to_ascii_lowercase()),
+        names.contains(&executable_identity),
         "{context}: the executable {executable:?} is not among the pinned files"
     );
 

@@ -51,6 +51,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -107,6 +108,39 @@ def is_plain_name(value):
     )
 
 
+# A gitian host triple is how the release names a target. `os`/`arch` is how
+# `build.rs` names the same target, and packaging selects a row by the host
+# while the binary selects one by os/arch. The suffix is the OS family and
+# the stem is the Cargo arch. darwin's trailing number is a deployment
+# version. android's triple says "linux" because that is the ABI; the row's
+# os is android.
+_HOST_TRIPLES = (
+    (re.compile(r"([A-Za-z0-9_]+)-linux-android\Z"), "android"),
+    (re.compile(r"([A-Za-z0-9_]+)-linux-gnu\Z"), "linux"),
+    (re.compile(r"([A-Za-z0-9_]+)-unknown-freebsd\Z"), "freebsd"),
+    (re.compile(r"([A-Za-z0-9_]+)-w64-mingw32\Z"), "windows"),
+    (re.compile(r"([A-Za-z0-9_]+)-apple-darwin[0-9]+\Z"), "macos"),
+)
+
+
+def release_target(host):
+    """The `(os, arch)` a gitian host triple compiles, or `None` when this
+    reader cannot check the triple."""
+    if not isinstance(host, str):
+        return None
+    for pattern, os_name in _HOST_TRIPLES:
+        match = pattern.match(host)
+        if match:
+            return os_name, match.group(1)
+    return None
+
+
+def file_identity(os_name, name):
+    """The name the loader treats as this file. Windows folds case, which is
+    `TorPin.names_match`; every other platform keeps the bytes."""
+    return name.lower() if os_name == "windows" else name
+
+
 def load_pins(path):
     """Read the pin file and refuse one that is not well formed.
 
@@ -141,6 +175,17 @@ def load_pins(path):
         if row["gitian_host"] in seen_hosts:
             raise Refused(f"{where}: host {row['gitian_host']} is listed twice")
         seen_hosts.add(row["gitian_host"])
+        compiled = release_target(row["gitian_host"])
+        if compiled is None:
+            raise Refused(
+                f"{where}: gitian_host {row['gitian_host']!r} is not a release "
+                "triple this reader knows, so it cannot be checked against os/arch"
+            )
+        if compiled != target:
+            raise Refused(
+                f"{where}: gitian_host {row['gitian_host']!r} is the release triple "
+                f"for {compiled[0]}/{compiled[1]}, not {target[0]}/{target[1]}"
+            )
 
         if row["disposition"] == "unavailable":
             if not isinstance(row.get("reason"), str) or not row["reason"].strip():
@@ -166,10 +211,14 @@ def load_pins(path):
                 raise Refused(f"{where}: {entry.get('name')!r} is not a plain file name")
             if not is_digest(entry.get("sha256")):
                 raise Refused(f"{where}: {entry['name']}: sha256 is 64 lowercase hex characters")
-            names.append(entry["name"].lower())
+            names.append(file_identity(row["os"], entry["name"]))
         if len(set(names)) != len(names):
             raise Refused(f"{where}: a file is listed twice")
-        if not is_plain_name(row.get("executable")) or row["executable"].lower() not in names:
+        executable = row.get("executable")
+        if (
+            not is_plain_name(executable)
+            or file_identity(row["os"], executable) not in names
+        ):
             raise Refused(f"{where}: the executable is not among the pinned files")
         licenses = row.get("licenses")
         if not isinstance(licenses, list) or not licenses:

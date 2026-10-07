@@ -293,6 +293,34 @@ def _(b):
     expect(b.stage(), 1, "is not a plain file name")
 
 
+@case("pin file: linux does not fold the executable onto its file")
+def _(b):
+    b.pins["targets"][0]["executable"] = "TOR"
+    b.write()
+    expect(b.run("disposition", "--host", HOST), 1, "the executable is not among the pinned files")
+
+
+@case("pin file: linux keeps two names that differ only by case")
+def _(b):
+    files = b.pins["targets"][0]["files"]
+    files.append({"name": "TOR", "sha256": files[0]["sha256"]})
+    b.write()
+    expect(b.run("disposition", "--host", HOST), 0, "pinned")
+
+
+@case("pin file: windows folds the executable and refuses a case-only duplicate")
+def _(b):
+    row = b.pins["targets"][0]
+    row["os"] = "windows"
+    row["gitian_host"] = "x86_64-w64-mingw32"
+    row["executable"] = "TOR"
+    b.write()
+    expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 0, "pinned")
+    row["files"].append({"name": "TOR", "sha256": row["files"][0]["sha256"]})
+    b.write()
+    expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 1, "a file is listed twice")
+
+
 # --- check_tor_pin_targets.py ---------------------------------------------
 
 
@@ -440,6 +468,29 @@ def _(tmp):
     pins = base_pins("0" * 64)
     pins["targets"][0]["files"][0]["sha256"] = "not-a-digest"
     expect(targets_tree(tmp, pins=pins), 1, "sha256 is 64 lowercase hex characters")
+
+
+@tcase("targets: swapping two hosts' triples fails")
+def _(tmp):
+    pins = base_pins("0" * 64)
+    pins["targets"][0]["gitian_host"] = "riscv64-linux-gnu"
+    pins["targets"][1]["gitian_host"] = "x86_64-linux-gnu"
+    expect(
+        targets_tree(tmp, pins=pins),
+        1,
+        "gitian_host 'riscv64-linux-gnu' is the release triple for linux/riscv64, not linux/x86_64",
+    )
+
+
+@tcase("targets: an os that the triple does not name fails")
+def _(tmp):
+    pins = base_pins("0" * 64)
+    pins["targets"][0]["os"] = "windows"
+    expect(
+        targets_tree(tmp, pins=pins),
+        1,
+        "gitian_host 'x86_64-linux-gnu' is the release triple for linux/x86_64, not windows/x86_64",
+    )
 
 
 def main():
