@@ -159,7 +159,12 @@ deletes the constant. This slice deletes the assignment at
 The dialer keeps that pool up. `Relay::own_edge` draws uniformly from
 it (`hidden_outbound_ids`). The dialer does not choose the edge. An
 empty pool is the relay's `NoOwnEdge`. The draw stays the relay
-lane's.
+lane's. The relay never sees a per-connector count.
+
+A later connector, I2P included, is one declaration column and that
+connector's crate. `shekyl-relay` does not change. The cells are
+address hiding, cover class, and measured transit. An unassessed
+transit is not a stem edge.
 
 ## Support flags
 
