@@ -26,6 +26,9 @@
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
 //! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
+//! - [`attestation_admission`] — the block-level admission body
+//!   ([`AttestationSet`]: parse, root, countersignatures) the daemon FFI
+//!   and the Rust validator (CEN-B4) both run.
 //! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
@@ -36,6 +39,7 @@
 
 pub mod admission;
 pub mod attestation;
+pub mod attestation_admission;
 pub mod attestation_wire;
 pub mod bond_connect;
 pub mod bond_ct_balance;
@@ -77,6 +81,9 @@ pub use admission::{
 };
 pub use attestation::{
     settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
+};
+pub use attestation_admission::{
+    AttestationRootError, AttestationSet, AttestationSetError, CountersignatureRefusal,
 };
 pub use attestation_wire::{
     attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
