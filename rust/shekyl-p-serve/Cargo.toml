@@ -34,9 +34,10 @@ shekyl-types = { path = "../shekyl-types" }
 [features]
 # Exposes `TestKeySigner` — a `PassSigner` over an ephemeral, non-derived
 # keypair — to this crate's integration tests and to `shekyl-p-fetch`'s
-# loopback conversation test (a *dev* edge; SF-D4 forbids it on the
-# shipped graph). The name announces intent: a non-derived key never
-# reaches a wallet or a bonded persona.
+# conversation test (a *dev* edge; SF-D4 forbids it on the shipped graph).
+# The SOCKS shim that test shares lives in `shekyl-p-loopback`, which does
+# not enable this feature. The name announces intent: a non-derived key
+# never reaches a wallet or a bonded persona.
 test-signer = ["shekyl-crypto-pq/test-utils"]
 # Exposes `serve_one_in_memory`, `prehead_in_memory` and
 # `read_and_fold_in_memory`: the endpoint's own steps composed on the

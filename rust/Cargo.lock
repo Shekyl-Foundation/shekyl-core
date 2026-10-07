@@ -4210,9 +4210,8 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-multisig",
  "shekyl-operator-alarm",
- "shekyl-p-fetch",
  "shekyl-p-host",
- "shekyl-p-serve",
+ "shekyl-p-loopback",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
@@ -4518,6 +4517,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-onion-v3",
+ "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-socks",
  "shekyl-types",
@@ -4536,6 +4536,19 @@ dependencies = [
  "shekyl-tor-control-wallet",
  "shekyl-types",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "shekyl-p-loopback"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
+ "shekyl-curve-tree",
+ "shekyl-p-fetch",
+ "shekyl-p-serve",
+ "shekyl-types",
  "tokio",
 ]
 

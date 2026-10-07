@@ -51,9 +51,12 @@
 //! is the bare 503, before any shard byte is sent. `RefusingKey` is that
 //! key for tests, on the same dev-only edge as `TestKeySigner` (both are
 //! `cfg(any(test, feature = "test-signer"))`, so neither is a link target
-//! in the production docs).
+//! in the production docs). A test that needs this host signer, with the
+//! tip stamped once, calls `signer_at_synced_tip` on that same edge.
+//! `HostSigner` stays `pub(crate)`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_serve::{PassKey, PassSigner, SignRefused, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
@@ -112,6 +115,24 @@ impl HostSigner {
     pub(crate) fn new(tip: Arc<DaemonTipCache>, key: Arc<dyn PassKey>) -> Self {
         Self { tip, key }
     }
+}
+
+/// The host signer over a tip stamped once, at `top_block_height`.
+///
+/// Production stamps [`DaemonTipCache`] from the wallet's daemon and binds
+/// the host. A test about the key uses this so the serve loop still reads
+/// that cache. `max_age` is the caller's: past it the cache answers `None`,
+/// and the serve loop counts that as a lookup failure.
+#[cfg(any(test, feature = "test-signer"))]
+#[must_use]
+pub fn signer_at_synced_tip(
+    key: Arc<dyn PassKey>,
+    top_block_height: BlockHeight,
+    max_age: Duration,
+) -> Arc<dyn PassSigner> {
+    let tip = Arc::new(DaemonTipCache::new(max_age));
+    tip.stamp_synced(top_block_height);
+    Arc::new(HostSigner::new(tip, key))
 }
 
 impl PassKey for HostSigner {
@@ -237,5 +258,14 @@ mod tests {
         assert!(signer
             .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
             .is_err());
+    }
+
+    /// The test constructor stamps the height the gate will read. A second
+    /// height type in front of the key would not.
+    #[test]
+    fn signer_at_synced_tip_reports_the_stamped_height() {
+        let height = BlockHeight::from_raw(10_000);
+        let signer = signer_at_synced_tip(Arc::new(RefusingKey), height, MAX_AGE);
+        assert_eq!(signer.own_height(), Some(height));
     }
 }

@@ -91,4 +91,4 @@ pub use serve_set::{
 };
 pub use shekyl_p_serve::{sign_pass_transcript, PassKey, SignRefused};
 #[cfg(any(test, feature = "test-signer"))]
-pub use signer::RefusingKey;
+pub use signer::{signer_at_synced_tip, RefusingKey};

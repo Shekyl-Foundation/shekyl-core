@@ -223,6 +223,8 @@ impl Message<SignPassTranscript> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
+        // Identity key, live scheme. The receipt key replaces this argument
+        // once that re-key is staged (SH2_RESIDENT_KEY_AUDIT.md §6).
         sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
             .map_err(StakeEngineError::PassCountersign)
     }

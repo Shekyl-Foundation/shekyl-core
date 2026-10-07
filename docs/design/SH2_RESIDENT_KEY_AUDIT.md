@@ -88,12 +88,14 @@ an accessor with no reader is the bare-symbol grep hit rule 23 forbids. The
 board row is the operator surface; a raw-counter accessor reopens if an
 embedder names a reading the row does not carry.
 
-**Q4 — the proving test lives in `engine-core`'s serving tests** with
-`shekyl-p-fetch` (and `shekyl-p-serve`) as dev-dependencies: an engine-derived
-persona key behind a real `PServeEndpoint`, fetched through a loopback SOCKS
-shim by `PFetchClient`, and verified by `verify_pass_transcript` against the
-persona's `bond_id`. The `shekyl-sp-t3-spike` rig was the alternative and
-was not chosen.
+**Q4 — the proving test lives in `engine-core`'s serving tests.** The
+persona key sits behind a real `PServeEndpoint`, fetched by `PFetchClient`
+through one loopback SOCKS shim, `shekyl-p-loopback`, and verified by
+`verify_pass_transcript` against the persona's `bond_id`. The signer is
+`HostSigner` (`signer_at_synced_tip` stamps the daemon tip once). `SF-D4`
+keeps that edge out of both shipped graphs: the crate is a dev-dependency,
+and the wallet names neither `shekyl-p-fetch` nor `shekyl-p-serve`. The
+`shekyl-sp-t3-spike` rig was the alternative and was not chosen.
 
 **Taken without a question, disclosed here:** the key binds to
 `active.p_slot` at start and an unheld slot refuses (`LookaheadExhausted` →
@@ -144,11 +146,14 @@ ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
 ## 5. Part B disciplines
 
 - **B1 / B4** — the proving test is the production call graph end to end
-  (actor → `PassKey` → `PServeEndpoint` → `PFetchClient` → verifier); no
-  shape-only assertion stands in for the signature verifying.
+  (actor → `PassKey` → `HostSigner` → `PServeEndpoint` → `PFetchClient` →
+  verifier). The height is the daemon-tip cache, stamped once for the test.
+  No shape-only assertion stands in for the signature verifying.
 - **B2 / B3** — no `pub` widened for tests: the `PassKey` impl and the
   handle method are `pub(crate)`; the test uses the same `StakeEngineHandle`
-  path production does. `shekyl-p-host`'s two new re-exports have the
+  path production does. `HostSigner` stays `pub(crate)`.
+  `signer_at_synced_tip` is re-exported on the same `test-signer` edge as
+  `RefusingKey`. `shekyl-p-host`'s two production re-exports have the
   production consumer (`engine-core`) in this PR.
 - **B5** — each commit builds and passes `cargo clippy --all-targets
   -D warnings` on its own.
@@ -173,23 +178,25 @@ ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
 
 - **The receipt-key re-key — owed by name, so the proving test does not
   become a false claim.** The Slice C Round 0 ruling (maintainer's brief,
-  2026-10-07; at this writing on `dev` in no document and in no open PR) puts
-  a **separate FN-DSA-1024 receipt key** in the bond record, keeps identity
-  on ML-DSA-65, and algorithm-tags the receipt signature. #990 is correct
-  against its pin — it binds the pass receipt to the bond *identity* key, and
-  `serving/pass_key.rs`'s proving test is literally
+  2026-10-07) puts a **separate FN-DSA-1024 receipt key** in the bond record,
+  keeps identity on ML-DSA-65, and algorithm-tags the receipt signature.
+  PR #993 is that ruling as an open spec. Its own order is that the spec
+  lands before any code, and that the FN-DSA-1024 integration is a later PR.
+  This PR does not mint scheme 3 and does not add a receipt-key type. #990
+  is correct against its pin — it binds the pass receipt to the bond
+  *identity* key, and `serving/pass_key.rs`'s proving test is literally
   `signs_under_the_bond_identity_key` — and will be re-keyed. What survives
   unchanged: in-actor signing, the key never leaving `HeldPersona`,
   `ResidentPassKey`/`ready()`, `RefusingKey`, the `ServeHealth` row, the
-  loopback harness. What changes: `SignPassTranscript` reads
-  `receipt_sign_sk` instead of `hybrid_sign_sk`; the transcript carries the
-  algorithm tag; the bond record carries the receipt public key; the proving
-  test asserts signing under the *receipt* key, with a negative control that
-  an identity-key signature is refused. What gets better: `persona.rs`'s
-  doc comment that "`hybrid_sign_sk` authorises three" things is discharged —
-  the receipt key authorises exactly one. **Order:** the ruling reaches the
-  consolidated serve-credit spec before anything builds against it; the
-  re-key then lands with, or directly after, that spec.
+  loopback harness (`shekyl-p-loopback`). What changes: `SignPassTranscript`
+  reads `receipt_sign_sk` instead of `hybrid_sign_sk`; the transcript carries
+  the algorithm tag; the bond record carries the receipt public key; the
+  proving test asserts signing under the *receipt* key, with a negative
+  control that an identity-key signature is refused. What gets better:
+  `persona.rs`'s doc comment that "`hybrid_sign_sk` authorises three" things
+  is discharged — the receipt key authorises exactly one. **Order:** the
+  spec in #993 lands first; the re-key then lands with, or directly after,
+  the FN-DSA integration that spec sequences as its own PR.
 - ~~`BENCHMARK_ALIGNMENT.md` §S's default ("S, with the pre-flight method")
   stays the maintainer's to rule; this PR supplies the answer §S was waiting
   on.~~ **RULED on `dev` before this PR merged** (maintainer, 2026-10-05;

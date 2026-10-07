@@ -266,12 +266,11 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
 # SH-2's proving test (`serving::round_trip_tests`): the persona's resident
 # pass key behind a real `PServeEndpoint`, fetched by the daemon's real
-# `PFetchClient` through a loopback SOCKS shim, and the countersignature
-# verified against the persona's **bond identity**. Dev-only: `shekyl-p-fetch`
-# must never sit on a wallet production graph (`SF-D4`), and
-# `check_p_fetch_dep_cut.py` follows production edges only.
-shekyl-p-serve = { path = "../shekyl-p-serve" }
-shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+# `PFetchClient`, and the countersignature verified against the persona's
+# **bond identity**. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
+# `SF-D4` forbids the client on a wallet production graph, and
+# `check_p_fetch_dep_cut.py` does not follow this edge.
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 # Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
 # Rust producer builds a block at exactly the consensus weight bound and
 # the C++ daemon judges it (CEN-F14), so the producer crate and the rules
