@@ -78,7 +78,7 @@ TEST(LogicalStateDigestV0, SpentKeySetIsOrderIndependent)
 TEST(LogicalStateDigestV0, MinerOnlyBlockMovesTheChainComponent)
 {
   archival_test::TempLMDB fixture;
-  cryptonote::HardFork hf(fixture.db, 1, 0);
+  cryptonote::HardFork hf(fixture.db);
   hf.init();
   fixture.db.set_hard_fork(&hf);
   const auto before = fixture.db.logical_state_digest_v0();

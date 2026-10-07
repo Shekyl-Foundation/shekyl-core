@@ -36,10 +36,10 @@ same thing.
 
 | Operand | Shekyl's value | What pins it |
 | --- | --- | --- |
-| Block major version | 1 | Every network's hard-fork table holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::check` requires a block's major version to **equal** the table's, so an accepted block's is 1; the template takes its own from the table |
-| Block minor version (the vote) | 0 or more | Inert: a vote is counted against a table with one entry |
+| Block major version | 1 | The hard-fork schedule holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::accepts_header` requires a block's major version to **equal** the schedule's at its height and its minor version to equal 0, so an accepted block's major is 1; the template takes its own from the table |
+| Block minor version | 0 | Reserved (CEN-B2, ruled 2026-10-06). It was Monero's fork vote and any value validated; both validators now refuse every value but 0, and the templates write it |
 | Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly, including where the bound is a local (`min_tx_version`, `max_tx_version`) rather than the literal 3. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
-| A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (a block must equal the current fork, a vote is clamped to the newest entry, the index walks) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |
+| A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (the major version must equal the schedule at the block's height, the minor version must equal the reserved constant) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |
 | Other things named `version` | their own | The LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
 
 The transaction row is the one that needs care. A comparison such as
@@ -69,7 +69,7 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 | `template-fill` | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
 | `tx-version` | 28 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 9 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
 | `cen-f21` | 4 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. Live and consensus: it resolves the height the staker emission share decays from. It collapses to the Rust owner's `EMISSION_SPLIT_EPOCH`, with the `core_tests` fork tables that still disagree with the daemon about it (`docs/FOLLOWUPS.md`) |
-| `hardfork` | 41 | §5 |
+| `hardfork` | 31 | §5 |
 | `none` | 14 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument |
 
 **Executed in the 2026-10-05 sweep.** These comparisons are gone, so they have no row:
@@ -94,6 +94,13 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 
 **RULED 2026-10-06 (Rick):** "delete the fork table - when we need one, we
 will write a fresh one, not try to recycle Monero's."
+
+This supersedes the 2026-09-23 ruling that kept the vote window (census §10
+R4, "activation mechanism KEPT"), confirmed as a supersession the same day.
+The vote window is gone. `HardFork::accepts_header` compares the major
+version with the height schedule and the minor version with the reserved
+constant 0 (CEN-B2); `check`, `check_for_height` and `add` all call it.
+The class and its tables follow.
 
 The rows landing at `hardfork` are the machinery, not gates on a number:
 `HardFork` itself, the comparisons inside it, the wrappers that expose it,

@@ -293,7 +293,7 @@ TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_entry_field_ins
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db, 1, 0);
+  HardFork hf(db);
   hf.init();
   db.set_hard_fork(&hf);
   append_minimal_blocks(db, 3);

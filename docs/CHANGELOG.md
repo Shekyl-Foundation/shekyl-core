@@ -8,6 +8,34 @@
 - Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
+
+### Consensus — the header's minor version is reserved at 0
+
+- A block's `minor_version` must be `0` (CEN-B2). The byte was Monero's
+  hard-fork vote and any value validated, which left a byte in every header
+  for the block's producer to write. Both validators now refuse every other
+  value, and both templates write the constant; the Rust template no longer
+  takes it from its caller. Ruled 2026-10-06 with the deletion of the
+  hard-fork mechanism, superseding the 2026-09-23 ruling that kept the vote
+  window (`CONSENSUS_RULE_CENSUS.md` §10 R4).
+- `HardFork::check`, `check_for_height` and `add` share one predicate: the
+  major version is the one the height schedule names, and the minor version
+  is the reserved constant. The vote window, the threshold and the decoder
+  that read a minor of 0 as a vote for 1 are deleted. The class, its tables
+  and its RPC surface are deleted in the PR that follows.
+- Wire: `hard_fork_info` still answers, and reports `window`, `votes` and
+  `threshold` as `0`. The one reader is the daemon console's
+  `hard_fork_info` command, which prints them as `0/0 votes, threshold 0`.
+  No wallet crate and neither wallet repository calls the method.
+- Mainnet, testnet and stagenet install one table, `hard_fork_schedule`
+  (version 1 at height 1). The three per-network copies were identical and
+  are deleted; regtest and the trace exporter read the same row. Rule 71's
+  allowlist for the table selection is retired with it.
+- Blocks mined by earlier builds carried `1` and are invalid under this rule:
+  the six captured replay chains are re-captured. Genesis carries `0` and is
+  unchanged. Atomic under `07-consensus-atomic-cutovers`: both validators,
+  both templates and the captured chains change together.
+
 - **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours once its failure score passes 10 (the eleventh failed handshake, at one point each), and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
 - Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
 - Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) records a round ruled 2026-10-06 and not yet implemented: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every file in tor's directory and the directory holds nothing else, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.

@@ -838,7 +838,7 @@ pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfo
     object_params(
         params,
         "Wrong parameters, expected an object with optional version (1-255); \
-         omit it to ask about the fork this node would vote in next",
+         omit it to ask about the next scheduled version",
     )
 }
 
