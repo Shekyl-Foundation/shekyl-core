@@ -744,10 +744,17 @@ block independently unrevealed with the stated probability.
   1.40 / 2.63 / 6.21 % short.
 - **`(m, n)`.** An honest pair at a 0.30 per-read failure misses an
   observed epoch with probability 0.216 under 2-of-3. At `(11, 13)` the
-  false-slash bound over the bond's life is `2.85 × 10⁻⁴`. The
-  observation rate is 0.995 / 0.989 / 0.962, so a pair that never serves
-  reaches 11 misses in 11.05 / 11.12 / 11.44 epochs. The window is not
-  what the secret draw strains.
+  false-slash bound over the bond's life is `2.85 × 10⁻⁴` per pair, and
+  `0.689` for an archiver holding the maximum 4,096 shards. The
+  feasibility module's provisional budget is `10⁻³` per archiver, so the
+  window **exceeds** it at that read failure. Neither figure depends on
+  the observation rate, so dropout does not move them; the module already
+  reads the shipped window as exceeding the budget under the rule it
+  models. The `(m, n)` re-pin is open
+  ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
+  §3) and this design does not close it. The observation rate is
+  0.995 / 0.989 / 0.962, so a pair that never serves reaches 11 misses in
+  11.05 / 11.12 / 11.44 epochs.
 - **The witness's load is new and unmeasured.** A won block costs its
   producer about 117 to 156 whole-shard reads inside `W₂`. A producer
   with a tenth of the hashrate wins about 50 blocks per window: roughly
