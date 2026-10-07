@@ -1554,7 +1554,7 @@ wrong was calling them the round.*
 
 | Step | What | Note |
 | --- | --- | --- |
-| **c** | **CLOSED 2026-10-07, code-anchored, outside the unified stamp (`241bc4eb9c`).** The connection registry, including its own count. `rg -n 'for_each_connection\(' src rust tests` returns nothing. `peer_sync_idle_maker` (`net_node.inl:2345`) posts through `foreach_connection` (`levin_protocol_handler_async.h:979`). `rg -n m_current_number_of_ src rust tests` returns nothing. The peers-monitor thread is gone. `node_server::run` (`net_node.inl:1180`) is the net_service loop and does not write peer counts. *Records-was 2026-10-04: the hub lock writes the row. The strand writes the C++ context. Walkers read snapshots. A change is a post. Records-was before that: "the strand is the only writer."* | The `rg` results in this row. *Records-was: the `foreach_connection` race.* |
+| **c** | **CLOSED 2026-10-07, code-anchored, outside the unified stamp (`241bc4eb9c`).** The connection registry, including its own count. `rg -n 'for_each_connection\(' src rust tests` returns nothing. `peer_sync_idle_maker` (`net_node.inl:2345`) posts through `foreach_connection` (`levin_protocol_handler_async.h:1047`). `rg -n m_current_number_of_ src rust tests` returns nothing. The peers-monitor thread is gone. `node_server::run` (`net_node.inl:1180`) is the net_service loop and does not write peer counts. *Records-was 2026-10-04: the hub lock writes the row. The strand writes the C++ context. Walkers read snapshots. A change is a post. Records-was before that: "the strand is the only writer."* | The `rg` results in this row. *Records-was: the `foreach_connection` race.* |
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
 | **b** | The two context walks post onto the connection strand and return. Forget-cause, write-stall samples, and the four handshake gates read the board's `established`. **UPDATE 2026-10-06.** *Records-was: ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle.* | Follows step c. |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
@@ -1644,9 +1644,11 @@ in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 | `peer_sync_idle_maker` | `:2321`, mutable; sets `m_in_timedsync` |
 | `print_connections_container` | `:2801` |
 
-`foreach_connection` hands the callback `get_context_ref()`
-(`levin_protocol_handler_async.h:946`). `for_connection` does the same
-at `:960`. *Records-was: `:939` and `:925`, and before that `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
+`foreach_connection` and `for_connection` hand the callback
+`get_context_ref()` from `outer_call::post_on_strand`
+(`levin_protocol_handler_async.h:881`; a null endpoint uses `:877`).
+The ref is an `outer_call`, released when that post is destroyed.
+*Records-was: `:946` and `:960`, and before that `:939` and `:925`, and before that `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
 `m_connector`, a `ConnectorId`.
 
 **Two Rust session tables already exist. Step c does not add a
