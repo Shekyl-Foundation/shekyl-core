@@ -1,10 +1,11 @@
 # Tor bundle distribution — Tor by default, declined only explicitly, and shipped in every artifact
 
-**Status: RULED 2026-10-06 — ratified as a whole by Rick; nothing is
-implemented yet.** He ratified the rows as they stood at `4ad467800`, with two
-amendments that are folded in below: TB-7's third part became the
-exact-contents rule, and the system-supplied libraries are recorded (§5a). The
-code still behaves as PWD-E7 and DQ-T0.5 describe until the changes in §5 land.
+**Status: RULED 2026-10-06 — ratified as a whole by Rick; §5 step 1 (Linux)
+is implemented, steps 2 to 4 are not.** He ratified the rows as they stood at
+`4ad467800`, with two amendments that are folded in below: TB-7's third part
+became the exact-contents rule, and the system-supplied libraries are recorded
+(§5a). What step 1 landed is listed in §5; until step 4 a node with no usable
+tor still starts, as PWD-E7 ruled, and now says so at warning level.
 Identifier family `TB-1…TB-n` (index row registered at birth per rule 94
 §1). Decision authority: Rick. Rule 26 is cited: this changes a security
 boundary (what the Tor pin proves) and a startup contract.
@@ -155,15 +156,51 @@ Extracted files, by target:
 | `macos-x86_64` | `tor` | `936be37bed7175f1c011543f318e996a9bfe624b8d0ac9968c4304e2751cb2f3` |
 | | `libevent-2.1.7.dylib` | `38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b` |
 
-These are the ruling's evidence, not yet the pin of record. The pin of record is
-whatever `binary.rs` compiles, recorded through `RELEASE_CHECKLIST.md`'s
-"Bundled Tor pin current" procedure when TB-10 lands.
+The two Linux rows are the pin of record since TB-10 landed: they are the
+`linux` rows of `config/tor_pins.json`, which `build.rs` compiles and the
+packaging tool reads, recorded through `RELEASE_CHECKLIST.md`'s "Bundled Tor
+pin current" procedure. The Windows and macOS rows remain the ruling's
+evidence until TB-11 adopts them; those targets are `unavailable` in the pin
+file meanwhile, with that as the stated reason.
 
 ## 5. Order of work
 
 1. **Linux, both architectures, every artifact type:** TB-6 to TB-10 and TB-13,
    with TB-4's type and TB-1's every-boot warning for a declined Tor. Validated by the crate's tests, the `tor-pin-verify`
-   workflow at the new bundle version, and a gitian dry run.
+   workflow at the new bundle version, and a gitian dry run. **LANDED.** Where
+   each row lives:
+   - TB-4, TB-9: `config/tor_pins.json` is the one data file.
+     `rust/shekyl-tor-control-client/build.rs` compiles the build target's row
+     into `binary::CURRENT_DISPOSITION` (`TorDisposition::Pinned` or
+     `Unavailable`) and fails the build for a target with no row.
+     `scripts/ci/check_tor_pin_targets.py` holds the file's hosts equal to the
+     gitian descriptors' hosts. "The set of compiled arms" is read as that:
+     with the row compiled by `build.rs` there are no hand-written `cfg` arms
+     left to compare, so the gate compares against what the release builds.
+   - TB-6: `scripts/release/tor_bundle.py` checks the tarball's digest before
+     opening it and stages only the pinned files. The Linux gitian descriptor
+     stages into `tor/` beside the binaries, with `tor-licenses/` beside that;
+     the package job installs the same files under
+     `/opt/shekyl/<bundle_version>-<bundle_target>/`.
+   - TB-7: `binary::verify_candidate` (exact contents, per-file digests, one
+     canonical directory carried by the witness) and
+     `control::actor::managed_tor_command` (cleared environment, the loader
+     path from the witness). The cleared environment applies on every
+     platform; whether a Windows `tor.exe` starts without `SystemRoot` is
+     TB-11's launch test to establish.
+   - TB-8: `binary::candidate_from` takes no `PATH`.
+   - TB-10: the two Linux rows of §4.
+   - TB-13: `tor-licenses/` in each archive and `/usr/share/doc/shekyl/tor/`
+     in each package: the bundle's licence texts and a `SOURCE.txt` naming
+     the bundle, its digest and signing key, and the `tor` source and its
+     signature.
+   - TB-1: `--no-ephemeral-tor` with no operator-provisioned Tor logs the
+     clearnet-only warning on every boot. A node with no tor found, which has
+     not declined, also warns (it was an info line); that state becomes a
+     refusal in step 4.
+   - Windows, macOS, FreeBSD, riscv64 Linux and Android are `Unavailable`
+     rows with their reasons. For Windows and macOS the reason is that the
+     pin awaits TB-11.
 2. **Windows and macOS:** TB-11, a pin and a launch test for each; and the
    GUI wallet's installers (TB-12), in `shekyl-gui-wallet`.
 3. **FreeBSD:** TB-5's `Unavailable` arm and its user guide.
@@ -219,4 +256,8 @@ that probe as the answer.
   the intent, and TB-12 is what keeps it from reaching a platform that cannot
   satisfy it.
 - **TB-8** removes a path a developer may be using. A developer's own tor is
-  the override tier's job, and it stays.
+  the override tier's job, and it stays — gated like every tier, so on a pinned
+  target it must name the `tor` in a directory holding exactly the pinned
+  files. Pointing it at a full extracted Expert Bundle is refused
+  (`pluggable_transports/` is not pinned); `COMPILING_DEBUGGING_TESTING.md`
+  says how to stage one.
