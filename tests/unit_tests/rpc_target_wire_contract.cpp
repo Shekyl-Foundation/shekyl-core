@@ -105,6 +105,36 @@ TEST(rpc_target_wire_contract, get_info_target)
       << json;
 }
 
+// The gross emitted total has to survive the wire as itself. A dropped
+// KV field, or a field that round-trips as the zero a missing assignment
+// would serialize, is the bug that printed circulating supply as 0.
+//
+// This bites against the serializer. It does NOT run on_get_info: the
+// handler's read is the same store accessor the burn percentage already
+// consumes, and the reply field is that read, not a second copy.
+TEST(rpc_target_wire_contract, get_info_already_generated_coins_round_trips_nonzero)
+{
+  cryptonote::COMMAND_RPC_GET_INFO::response res{};
+  // Not zero, and not equal to total_burned or to target (120). Zero is
+  // what a default-initialized reply emits, so a green test on zero would
+  // not notice the field carrying the wrong quantity.
+  constexpr uint64_t k_generated = 1444065674085133ull;
+  constexpr uint64_t k_burned = 42ull;
+  res.already_generated_coins = k_generated;
+  res.total_burned = k_burned;
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
+  EXPECT_NE(json.find("\"already_generated_coins\": 1444065674085133"), std::string::npos)
+      << json;
+  EXPECT_NE(json.find("\"total_burned\": 42"), std::string::npos) << json;
+
+  cryptonote::COMMAND_RPC_GET_INFO::response back{};
+  ASSERT_TRUE(epee::serialization::load_t_from_json(back, json));
+  EXPECT_EQ(back.already_generated_coins, k_generated);
+  EXPECT_EQ(back.total_burned, k_burned);
+}
+
 // RPC 3.32: calc_pow dropped leftover Cryptonight `major_version`. The
 // get_version v9 fixture only pins the packed constant; this is the gate
 // that turns red if the field is reintroduced. Extra keys stay ignored
