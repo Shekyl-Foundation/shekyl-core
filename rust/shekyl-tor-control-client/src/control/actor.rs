@@ -867,6 +867,10 @@ async fn handshake(
 /// it, so the launch a test inspects is the launch a user gets. Split from
 /// [`spawn_managed_tor`] for exactly that reason: `std::process::Command` has no getter
 /// for "the environment was cleared", so the only honest test spawns through this.
+///
+/// The option names on that command are a closed list
+/// (`the_managed_launch_surface_is_the_typed_options`). A new flag fails there first,
+/// including one that would open non-anonymous serving. There is no second builder.
 fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process::Command {
     // The witness type guarantees this path passed the hash-pin gate and is canonical
     // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
@@ -1426,6 +1430,72 @@ mod tests {
     // The actor's I/O paths (handshake, command correlation, event drain) are
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
+
+    /// Every argument the managed launch passes, in order.
+    fn launch_arguments(disable_network: bool) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let managed = ManagedTor {
+            tor_binary: VerifiedTorBinary::unchecked_for_test(dir.path().join("tor")),
+            data_dir: dir.path().join("data"),
+            socks_port: SocksPort::Auto,
+            disable_network,
+            exit_observer: None,
+        };
+        managed_tor_command(&managed, &dir.path().join("control_port"))
+            .as_std()
+            .get_args()
+            .map(|arg| {
+                let Some(text) = arg.to_str() else {
+                    panic!("a launch argument is not utf-8: {arg:?}");
+                };
+                text.to_owned()
+            })
+            .collect()
+    }
+
+    /// The `--Name` of each name/value pair on the launch.
+    ///
+    /// Every argument is one half of a `--Name` `value` pair. A leftover
+    /// argument, bytes that are not UTF-8, `-f`, `+Option`, and
+    /// `--Name=value` each fail this: none of them is a pair the spawn
+    /// surface uses.
+    fn launch_option_names(disable_network: bool) -> Vec<String> {
+        let args = launch_arguments(disable_network);
+        assert!(
+            args.len().is_multiple_of(2),
+            "an argument is not part of a --Name value pair: {args:?}"
+        );
+        args.chunks(2)
+            .map(|pair| {
+                assert!(
+                    pair[0].starts_with("--") && !pair[0].contains('='),
+                    "an option is not the typed --Name form: {}",
+                    pair[0]
+                );
+                pair[0].clone()
+            })
+            .collect()
+    }
+
+    /// The launch surface is a closed list. A new option fails here first, so
+    /// whoever adds one meets the invariants [`managed_tor_command`] holds shut,
+    /// including non-anonymous serving. The list is the spawn surface. Re-reads
+    /// separate because each presents its own SOCKS credentials.
+    #[test]
+    fn the_managed_launch_surface_is_the_typed_options() {
+        let base = [
+            "--DataDirectory",
+            "--ControlPort",
+            "--ControlPortWriteToFile",
+            "--CookieAuthentication",
+            "--SocksPort",
+            "--Log",
+        ];
+        assert_eq!(launch_option_names(false), base);
+        let mut offline = base.to_vec();
+        offline.push("--DisableNetwork");
+        assert_eq!(launch_option_names(true), offline);
+    }
 
     /// Set in the re-executed copy of this test binary, to the directory the shim
     /// `tor` and its environment dump live in.

@@ -35,8 +35,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # content-verify hole are CPU work that must not sit on the executor thread).
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "time", "sync", "rt"] }
 # SOCKS5h dial into the daemon's tor zone (`SF-D2`, `SF-D3`): the proxy
-# resolves the `.onion`; this crate never resolves anything. Principal:
-# no SOCKS authentication. Persona isolation is `shekyl-p-transport`.
+# resolves the `.onion`; this crate never resolves anything. Each read
+# presents its own SOCKS credentials, so it rides a circuit of its own.
+# Persona isolation is `shekyl-p-transport`.
 shekyl-socks = { path = "../shekyl-socks" }
 # The request nonce. OS entropy, nothing derived.
 getrandom = "0.2"
@@ -44,9 +45,12 @@ getrandom = "0.2"
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
-# Loopback conversation test: a real `PServeEndpoint` behind a SOCKS5
-# shim. Dev-only — SF-D4 forbids this edge on the shipped graph.
+# `TestKeySigner` for the conversation test. The SOCKS shim that test
+# shares with the wallet's proving test is `shekyl-p-loopback`, which does
+# not enable `test-signer`. Dev-only — SF-D4 forbids the serve edge on the
+# shipped graph.
 shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 
 [lints]
 workspace = true

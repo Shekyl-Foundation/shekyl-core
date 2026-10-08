@@ -970,8 +970,11 @@ fn link_encryption_is_the_classical_cell_not_the_anonymity_cell() {
 
 #[test]
 fn cover_class_disagrees_with_the_encryption_cell_on_both_connectors() {
-    assert_eq!(cover_class(ConnectorId::Clearnet), CoverClass::OpenLink);
-    assert_eq!(cover_class(ConnectorId::Tor), CoverClass::Volume);
+    assert_eq!(
+        cover_class(ConnectorId::Clearnet),
+        Some(CoverClass::OpenLink)
+    );
+    assert_eq!(cover_class(ConnectorId::Tor), Some(CoverClass::Volume));
     assert!(link_encrypted(ConnectorId::Tor));
     assert!(!link_encrypted(ConnectorId::Clearnet));
     assert!(any_open_link(&[ConnectorId::Clearnet]));

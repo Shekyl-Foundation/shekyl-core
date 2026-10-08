@@ -8,10 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kameo::actor::{ActorRef, Spawn};
+use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 use kameo::error::SendError;
-use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
@@ -24,7 +25,7 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, SignPassTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -46,6 +47,29 @@ use crate::engine::{Network, ShekylAddress};
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
     pub(crate) actor: ActorRef<StakeEngine>,
+}
+
+/// A non-owning [`StakeEngineHandle`]: reaches the actor while the engine
+/// holds it, and observes — never prevents — the actor's stop. Minted by
+/// [`StakeEngineHandle::downgrade`] for roles whose life must stay inside the
+/// secrets' life (the SH-2 resident pass key), so that no role can keep the
+/// persona bundles resident past the wallet close that was meant to wipe them.
+#[derive(Clone)]
+pub(crate) struct WeakStakeEngineHandle {
+    actor: WeakActorRef<StakeEngine>,
+}
+
+impl WeakStakeEngineHandle {
+    /// Re-acquire a strong handle iff the actor is still alive.
+    ///
+    /// `is_alive` is checked after the upgrade because a `WeakActorRef` can
+    /// upgrade against a mailbox whose task has already stopped (the strong
+    /// count and the mailbox close are separate events); the pair is the only
+    /// test that means "a message sent now will be handled".
+    pub(crate) fn upgrade(&self) -> Option<StakeEngineHandle> {
+        let actor = self.actor.upgrade()?;
+        actor.is_alive().then_some(StakeEngineHandle { actor })
+    }
 }
 
 impl StakeEngineHandle {
@@ -216,6 +240,39 @@ impl StakeEngineHandle {
         self.actor
             .ask(PersonaOnionIdentityOf { p_slot })
             .await
+            .map_err(collapse_send_error)
+    }
+
+    /// A weak reference to the stake actor, for a role that must be able to
+    /// reach the persona's secrets **without keeping them alive** — the
+    /// SH-2 resident pass key. Upgrading yields a handle only while some
+    /// strong owner (the engine) still holds the actor; once the engine is
+    /// gone the secrets went with it and the role observes that, rather than
+    /// having prevented it.
+    pub(crate) fn downgrade(&self) -> WeakStakeEngineHandle {
+        WeakStakeEngineHandle {
+            actor: self.actor.downgrade(),
+        }
+    }
+
+    /// Countersign one SF-D8 pass transcript with the held persona at
+    /// `p_slot`, from a **blocking** context — the SH-2 resident-key handoff
+    /// into `PersonaServingHost`.
+    ///
+    /// `PassKey::sign_pass` is synchronous and runs on the blocking pool
+    /// (`shekyl-p-serve` wraps both key calls in `spawn_blocking`), so this
+    /// parks the calling thread on the actor's reply. It must never be called
+    /// from an async executor thread: `oneshot::Receiver::blocking_recv`
+    /// panics there by design. The signature is the only thing that crosses
+    /// the boundary; see [`SignPassTranscript`] for why the key does not.
+    pub(crate) fn sign_pass_transcript_blocking(
+        &self,
+        p_slot: PSlot,
+        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, StakeEngineError> {
+        self.actor
+            .ask(SignPassTranscript { p_slot, message })
+            .blocking_send()
             .map_err(collapse_send_error)
     }
 

@@ -3,7 +3,10 @@
 ## [Unreleased]
 
 - **Daemon RPC.** `get_info` reports `already_generated_coins`, the gross coins emitted through the tip, in atomic units. Net circulating supply is that figure minus `total_burned`. `CORE_RPC_VERSION` is 3.42. `get_version` is otherwise unchanged.
-
+- **Archival shard fetches ride a Tor circuit per read.** The fetch client now presents SOCKS credentials that belong to one read, so Tor isolates each read on its own rendezvous circuit and a serving persona cannot link a requester's reads by the circuit they arrive on. Stall retries inside a read keep the credentials. Username/password is the only SOCKS method offered. An operator running their own Tor for the daemon must leave `IsolateSOCKSAuth` on (its default). `SF-D3` reopened and ruled 2026-10-07. The measurement rig's warm arm is those back-to-back reads with no `NEWNYM`, each on its own circuit; the 2026-09-16 warm column remains the run that reused one.
+- A test holds the managed Tor's launch arguments as `--Name`/`value` pairs on the one launch command, so a single-dash flag or a `+Option` cannot pass it unseen. The fetch client gains a test that two requests for one shard differ only in their nonce. Re-read separation is the per-read SOCKS credentials; circuit-reuse length is not a second mechanism.
+- Docs: the serve-credit specification states one request machinery for every shard fetch, a fresh nonce for every read (the record carries the read's `attempt`, bounded by a consensus constant of three), and a digest in place of re-derivation for the settlement writer's first integrity check.
+- Docs: the serve-credit specification gains the witness's re-read policy and the settlement writer's three integrity checks; the failure window is left open rather than re-pinned on a one-read figure, with two measurements registered (`BA-T31`, `BA-T32`).
 - **P2P.** A context walk posts onto that connection's strand and returns. `get_connections` and `sync_info` wait up to two seconds for the claim fields, on the admin thread. A claim that has not landed is unknown: `height` and `support_flags` are JSON null, not a height of zero. A dial in `idle_worker` can occupy the io pool those posts share, so unknown during a dial is expected until the dialer (P2P-3 slice 3) moves the dial off that pool. The connector closes the session with the cause, and the seam records that cause. A silent peer is a handshake timeout. A peer that sends FIN is a peer close. A refused connection, a rejected handshake, and an onion SOCKS reply that names the onion make the address undialable. A handshake timeout, a peer close, and a local failure do not. A clearnet proxy reply does not: it is the exit's claim and would suppress the whole host for an hour. The managed Tor SocksPort is `auto ExtendedErrors`, so an introduction timeout is not reported as a missing host. A gap timeout, a close this node chose, and a local proxy or Tor failure leave the address dialable. An attacker who can answer for an onion's responsible directories can still force reply 4, which buys only the short Tor backoff. A direct clearnet connect counts only when the peer refuses the connection. That refusal was being dropped: the admission channel closed in the same instant as the cause, and the opener kept the channel close, which is a local failure and does not forget the address. The opener now keeps the cause the dial sent. Last receive and last send are stamped when the bytes are read or written, on a monotonic clock, and shown to the operator as unix time. They do not rebuild the connection board. An address the node stops dialing is logged with the close cause, the reply, and whether it was recorded. The four pre-handshake request gates read the seam board, and a missing row is not established. A listen after another caller clears the hub installs that hub again. A connector's inbound cap belongs to the zone that set it: shutdown releases it, and a zone that did not set one does not keep the previous cap.
 - Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
@@ -77,8 +80,38 @@
   400 earns one retry of the same `P` with a freshly derived anchor and a
   second is a failed read; a 503 and a refusal trailer are failed reads
   with no retry.
-- A persona bound without a resident key (`NoResidentKey`) answers 503
-  and sends no shard.
+- A persona whose signing key is not available answers 503 and sends no
+  shard.
+
+### Archival serving — the persona signs its own passes (SH-2)
+
+- **Served shards are now countersigned with the persona's bond identity
+  key.** The serving host's key is the persona's resident attestation key
+  (`ResidentPassKey`): the signature is produced inside the stake actor,
+  which already holds that key for the bond's own transactions, so no
+  second copy of the secret exists and the serving role holds only a weak
+  handle to the actor. A wallet whose stake actor has stopped refuses
+  before the first byte (503). The placeholder key that refused every
+  pass is deleted. Verified end to end against the daemon's fetch client
+  in a loopback test: the client accepts the pass under the bond identity
+  and refuses it under any other key.
+- **Operator alarm board: `ServeHealth`.** A new condition reports, once
+  per refresh cadence from a probe on its own task (so a refresh wedged on
+  the store actor cannot delay the reading), whether the host's answers
+  are being answered:
+  `ServeSigningRefused { pre_flight, late }` when the key refused during
+  the tick, `ServeLookupsFailing { failures }` when only lookups (store or
+  daemon tip) failed, `ServeListenerFailing { accept_errors }` when only
+  the loopback listener failed to accept, and a clean armed row when none
+  did. Connections closed over the in-flight cap are load, not an alarm.
+  The first reading is windowed against zero, so a refusal answered before
+  the first read is reported rather than folded into the baseline. The row
+  is disarmed `NotServing` outside the host's life. Previously the serve
+  counters were readable only by tests.
+- **Closing a serving wallet no longer waits on a wedged serve-set
+  refresh.** The refresh loop's actor round trip is now interrupted by
+  shutdown like the tick before it; an abandoned refresh leaves the
+  previous pins in place and the teardown reports `NotServing` as before.
 
 ### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
 

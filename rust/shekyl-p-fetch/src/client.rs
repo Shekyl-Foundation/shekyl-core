@@ -49,9 +49,11 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 ///   `SF-D7` refused (213 MB). Memory does not bind at 8.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a
 ///   single Tor instance whose per-stream throughput, not the client's
-///   parallelism, is the ceiling (`SF-D3`: no per-fetch circuit build).
-///   The (b) judgement that four outstanding transfers keep the stream
-///   busy still holds; eight is that judgement plus the W₂ room.
+///   parallelism, is the ceiling. That judgement was made when fetches
+///   shared circuits. Since 2026-10-07 each read builds a rendezvous
+///   circuit of its own (`SF-D3`), and what that does to the right cap is
+///   not measured (`BA-T31`, `BA-T6`); the constant is unmeasured either
+///   way.
 ///
 /// **Re-derive under `PDM-Q6`'s unit** once the body is a tx-range's and
 /// not a leaf shard's — the memory term changes, the shape does not.
@@ -234,7 +236,7 @@ impl PFetchClient {
             .await
             .expect("in-flight semaphore is never closed");
 
-        let mut stream = self.dial(&target.endpoint).await?;
+        let mut stream = self.dial(&target.endpoint, header).await?;
         let request = request_bytes(target.shard_id, header);
         timeout(self.timeouts.head, stream.write_all(&request))
             .await
@@ -337,18 +339,29 @@ impl PFetchClient {
 
     /// SOCKS5h dial: the proxy receives the `.onion` **name** (ATYP=DOMAIN)
     /// and resolves it. Passing a pre-resolved address here is the DNS
-    /// leak `SF-D3` exists to close; there is no code path that could,
+    /// leak `SF-D2` exists to close; there is no code path that could,
     /// because an onion has no IP to resolve to — but the shape is kept
     /// deliberately so a future non-onion endpoint would not acquire one.
-    async fn dial(&self, endpoint: &ServingEndpoint) -> Result<TcpStream, FetchError> {
+    ///
+    /// The dial presents this read's SOCKS credentials, taken from its
+    /// header, as [`Isolation::Persona`]. Each read is on a circuit of its
+    /// own (`SF-D3`, as ruled 2026-10-07) because the header's nonce is a
+    /// username no other read presents. There is no caller argument for
+    /// the credentials: challenge and organic reads cannot differ here.
+    async fn dial(
+        &self,
+        endpoint: &ServingEndpoint,
+        header: &RequestHeader,
+    ) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
+        let credentials = header.socks_credentials();
         let connect = async {
             let mut stream = TcpStream::connect(self.proxy)
                 .await
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(
                 &mut stream,
-                Isolation::Principal,
+                Isolation::Persona(&credentials),
                 Destination::Name {
                     host: host.as_str(),
                     port: SERVING_VIRTUAL_PORT,
@@ -666,6 +679,39 @@ mod tests {
         assert_eq!(max_body_bytes(), 3385 + 20 + 2 * segment);
         // The figure the round quoted: ~3.33 MB a segment, so ~6.7 MB ceiling.
         assert_eq!(segment, 3_326_976);
+    }
+
+    /// The one-machinery rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.1): the
+    /// request is a function of the shard and the caller's header and of
+    /// nothing else, so a challenge and an organic read of one shard differ
+    /// on the wire only where their nonces do. There is no caller kind to
+    /// pass, which is the rule's other half and is held by the signature.
+    #[test]
+    fn a_request_differs_from_another_only_in_its_nonce() {
+        let anchor = BlockHeight::from_raw(1_000);
+        let organic = RequestHeader::with_nonce([0xa5; 32], anchor, [3; 32]);
+        let challenge = RequestHeader::with_nonce([0x5a; 32], anchor, [3; 32]);
+        let a = request_bytes(7, &organic);
+        let b = request_bytes(7, &challenge);
+        assert_eq!(a.len(), b.len());
+
+        // The nonce leads the header, as 64 lowercase hex characters.
+        let nonce_hex: String = organic.nonce().iter().map(|x| format!("{x:02x}")).collect();
+        let text = String::from_utf8(a.clone()).unwrap();
+        let start = text.find(&nonce_hex).expect("the nonce is on the wire");
+        let nonce_span = start..start + nonce_hex.len();
+
+        let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+        assert!(!differing.is_empty(), "two nonces, one request");
+        assert!(
+            differing.iter().all(|i| nonce_span.contains(i)),
+            "a byte outside the nonce differs: {differing:?} against {nonce_span:?}"
+        );
+        // Every nonce byte differs here, so the whole span is accounted for.
+        assert_eq!(differing.len(), nonce_span.len());
+
+        // The same header is the same request: nothing ambient enters.
+        assert_eq!(a, request_bytes(7, &organic));
     }
 
     #[test]

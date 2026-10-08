@@ -117,6 +117,7 @@
 pub mod countersign;
 pub mod provider;
 pub mod serve;
+pub mod serve_counters;
 
 #[cfg(any(test, feature = "test-signer"))]
 pub use countersign::TestKeySigner;
@@ -131,4 +132,5 @@ pub use serve::{
     PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, REQUEST_HEADER_NAME,
     RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
 };
+pub use serve_counters::ServeCounterReader;
 pub use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
