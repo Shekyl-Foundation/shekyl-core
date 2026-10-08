@@ -257,10 +257,13 @@ namespace cryptonote
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 
-    // Chain-state inputs for economics calculations
-    uint64_t already_generated = 0;
+    // Gross coins emitted through the tip. This field is the burn's supply
+    // operand and the reply's already_generated_coins — one read, not a
+    // local that the reply can forget. Net circulating supply is this minus
+    // total_burned; the reply keeps them separate.
+    res.already_generated_coins = 0;
     if (res.height > 0)
-      already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
+      res.already_generated_coins = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
 
     // Shekyl NG four-component economics fields
     const shekyl::tx_volume_window tx_volume = m_core.get_blockchain_storage().get_tx_volume_window(res.height);
@@ -277,10 +280,10 @@ namespace cryptonote
     res.burn_pct = 0;
     {
       const int32_t st = shekyl_calc_burn_pct_at(
-          tx_volume.tx_count_sum, tx_volume.blocks, already_generated, res.total_burned, &res.burn_pct);
+          tx_volume.tx_count_sum, tx_volume.blocks, res.already_generated_coins, res.total_burned, &res.burn_pct);
       if (st != SHEKYL_ECONOMICS_OK)
         MERROR("get_info: shekyl_calc_burn_pct_at refused (status " << st << "): total_burned "
-            << res.total_burned << " exceeds already_generated " << already_generated);
+            << res.total_burned << " exceeds already_generated " << res.already_generated_coins);
     }
 
     // Component 4: effective staker emission share at current height
@@ -288,7 +291,7 @@ namespace cryptonote
     res.staker_emission_share_effective = shekyl_calc_emission_share(
         res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
-    double emission_pct = (double)already_generated / (double)SHEKYL_EMISSION_CURVE_ASYMPTOTE;
+    double emission_pct = (double)res.already_generated_coins / (double)SHEKYL_EMISSION_CURVE_ASYMPTOTE;
     if (emission_pct < 0.30)
       res.emission_era = "Founding";
     else if (emission_pct < 0.60)
