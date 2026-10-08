@@ -18,6 +18,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
 };
+use shekyl_socks::accept_userpass;
 use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -107,26 +108,11 @@ impl Stub {
 /// the script. What was seen is recorded **before** the script plays, so
 /// a scripted silence still leaves its exchange on the record.
 async fn serve_one(mut s: TcpStream, script: Script, record: Arc<Mutex<Vec<Seen>>>) -> Option<()> {
-    let mut greeting = [0u8; 2];
-    s.read_exact(&mut greeting).await.ok()?;
-    assert_eq!(greeting[0], 5, "SOCKS version");
-    let mut methods = vec![0u8; usize::from(greeting[1])];
-    s.read_exact(&mut methods).await.ok()?;
-    // `SF-D3`: username/password is the only method offered. A client that
-    // also offered no-auth could be put on a shared circuit by the proxy.
-    assert_eq!(methods, [2], "username/password, and nothing else");
-    s.write_all(&[5, 2]).await.ok()?;
-    let mut auth = [0u8; 2];
-    s.read_exact(&mut auth).await.ok()?;
-    assert_eq!(auth[0], 1, "RFC 1929 version");
-    let mut username = vec![0u8; usize::from(auth[1])];
-    s.read_exact(&mut username).await.ok()?;
-    let mut plen = [0u8; 1];
-    s.read_exact(&mut plen).await.ok()?;
-    let mut password = vec![0u8; usize::from(plen[0])];
-    s.read_exact(&mut password).await.ok()?;
-    s.write_all(&[1, 0]).await.ok()?;
-    let credentials = (username, password);
+    // `accept_userpass` refuses every greeting except username/password
+    // alone, which is the offer `SF-D3` requires. The bytes are what this
+    // stub records.
+    let presented = accept_userpass(&mut s).await.ok()?;
+    let credentials = (presented.username().to_vec(), presented.password().to_vec());
 
     let mut request = [0u8; 4];
     s.read_exact(&mut request).await.ok()?;

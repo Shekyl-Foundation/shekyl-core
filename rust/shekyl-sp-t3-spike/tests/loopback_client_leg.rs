@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use shekyl_p_fetch::{FetchTarget, ServingEndpoint};
 use shekyl_p_serve::{PServeEndpoint, PassSigner, ShardBody, TestKeySigner};
+use shekyl_socks::accept_userpass;
 use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
 use shekyl_sp_t3_spike::measure::FailureKind;
@@ -30,8 +31,8 @@ use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// SOCKS5 proxy, taking the username/password the client presents and
-/// accepting any, that forwards every CONNECT to `target`.
+/// SOCKS5 proxy that accepts the username/password the client presents
+/// and forwards every CONNECT to `target`.
 async fn socks_forward(target: SocketAddr) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
     let proxy = listener.local_addr().expect("addr");
@@ -41,20 +42,7 @@ async fn socks_forward(target: SocketAddr) -> SocketAddr {
                 return;
             };
             tokio::spawn(async move {
-                let mut greeting = [0u8; 2];
-                client.read_exact(&mut greeting).await.ok()?;
-                let mut methods = vec![0u8; usize::from(greeting[1])];
-                client.read_exact(&mut methods).await.ok()?;
-                client.write_all(&[5, 2]).await.ok()?;
-                let mut auth = [0u8; 2];
-                client.read_exact(&mut auth).await.ok()?;
-                let mut username = vec![0u8; usize::from(auth[1])];
-                client.read_exact(&mut username).await.ok()?;
-                let mut plen = [0u8; 1];
-                client.read_exact(&mut plen).await.ok()?;
-                let mut password = vec![0u8; usize::from(plen[0])];
-                client.read_exact(&mut password).await.ok()?;
-                client.write_all(&[1, 0]).await.ok()?;
+                accept_userpass(&mut client).await.ok()?;
                 let mut req = [0u8; 4];
                 client.read_exact(&mut req).await.ok()?;
                 // The production client always sends ATYP=DOMAIN with the

@@ -106,17 +106,16 @@ impl RequestHeader {
     }
 
     /// The SOCKS credentials this read's dials present (`SF-D3`, as ruled
-    /// 2026-10-07): the nonce in lowercase hex as the username, and a fixed
-    /// password.
+    /// 2026-10-07): the nonce in lowercase hex as the username, and the
+    /// fixed password [`READ_SOCKS_PASSWORD`].
     ///
-    /// Tor's `IsolateSOCKSAuth` gives each distinct pair its own circuit, so
-    /// a read gets a rendezvous circuit no other read is on, and `P` cannot
-    /// tie two reads together by the circuit they arrive on. A stall retry
-    /// presents the header it retries, so it presents the same pair. A retry
-    /// with a fresh anchor keeps the nonce, so it does too.
-    ///
-    /// The nonce is the username, not the password, so the isolation does
-    /// not depend on which of the two fields a given Tor compares.
+    /// Tor's `IsolateSOCKSAuth` isolates on the pair, so a username no other
+    /// read presents is a pair no other read presents. `P` cannot tie two
+    /// reads together by the circuit they arrive on. The password is the
+    /// same for every read and carries no isolation: a Tor that compared
+    /// only the password would not separate reads. A stall retry presents
+    /// the header it retries, so it presents the same pair. A retry with a
+    /// fresh anchor keeps the nonce, so it does too.
     ///
     /// The pair never leaves this host: SOCKS credentials go to the local
     /// Tor and no further. That Tor already carries the request, nonce

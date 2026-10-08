@@ -54,8 +54,11 @@ impl Observed {
         if let Some(event) = parse_stream_event(reply) {
             // A stream is on circuit 0 until tor attaches it.
             if event.circ_id() != CircId::new(0) {
-                if let Some(username) = quoted_field(line, "SOCKS_USERNAME") {
-                    let seen = self.circuits_by_username.entry(username).or_default();
+                if let Some(username) = event.socks_username() {
+                    let seen = self
+                        .circuits_by_username
+                        .entry(username.to_owned())
+                        .or_default();
                     if seen.last() != Some(&event.circ_id()) {
                         seen.push(event.circ_id());
                     }
@@ -100,14 +103,6 @@ impl Observed {
             None => panic!("tor reported no attached stream for this read, only for others"),
         }
     }
-}
-
-/// `KEY="value"` in a control event line, unescaped only as far as a hex
-/// username needs: the value up to the closing quote.
-fn quoted_field(line: &str, key: &str) -> Option<String> {
-    let start = line.find(&format!("{key}=\""))? + key.len() + 2;
-    let len = line[start..].find('"')?;
-    Some(line[start..start + len].to_owned())
 }
 
 /// `KEY=value` in a control event line, the value up to the next space.

@@ -4828,6 +4828,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-p-fetch",
  "shekyl-p-serve",
+ "shekyl-socks",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",

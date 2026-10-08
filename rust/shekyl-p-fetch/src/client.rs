@@ -339,14 +339,15 @@ impl PFetchClient {
 
     /// SOCKS5h dial: the proxy receives the `.onion` **name** (ATYP=DOMAIN)
     /// and resolves it. Passing a pre-resolved address here is the DNS
-    /// leak `SF-D3` exists to close; there is no code path that could,
+    /// leak `SF-D2` exists to close; there is no code path that could,
     /// because an onion has no IP to resolve to — but the shape is kept
     /// deliberately so a future non-onion endpoint would not acquire one.
     ///
-    /// The dial presents the read's own SOCKS credentials, taken from its
-    /// header, so each read is on a circuit of its own (`SF-D3`, as ruled
-    /// 2026-10-07). There is no caller argument for them: challenge and
-    /// organic reads cannot differ here.
+    /// The dial presents this read's SOCKS credentials, taken from its
+    /// header, as [`Isolation::Persona`]. Each read is on a circuit of its
+    /// own (`SF-D3`, as ruled 2026-10-07) because the header's nonce is a
+    /// username no other read presents. There is no caller argument for
+    /// the credentials: challenge and organic reads cannot differ here.
     async fn dial(
         &self,
         endpoint: &ServingEndpoint,
@@ -360,7 +361,7 @@ impl PFetchClient {
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(
                 &mut stream,
-                Isolation::Read(&credentials),
+                Isolation::Persona(&credentials),
                 Destination::Name {
                     host: host.as_str(),
                     port: SERVING_VIRTUAL_PORT,
