@@ -225,18 +225,19 @@ memory. A harvest that fails uses the connector's cause.
 
 ## Outbound targets
 
-**Working direction 2026-10-07 (Rick). Not a ruling.** The
+**APPROVED 2026-10-08 (Rick).** The simulation plan is
+[`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §95. The
 hidden-address pool and the total outbound degree are lower limits.
 Each is at least `MIN_PROVISIONED_OUT_PEERS` (12,
 `shekyl-relay-privacy/src/params.rs:195`). The total floor is the
 fail-safe's measured range (`fluff_return_ms = 3250` at degree 12).
-The hidden floor is the own-edge capture cost. The operating point
-above those floors, and any ceiling, are not chosen. The simulation
-proposed in
-[`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §95 sets the
-operating point. The ceiling comes from resources.
+The hidden floor is the own-edge capture cost. An own transaction
+rides a stem slot. The operating point above those floors, and any
+ceiling, are not chosen by the approval. `(h, 0)`, Tor-only, is a
+measured case in §95.3 and is not the target. Recommending Tor-only
+waits on §96. The ceiling comes from resources.
 
-Until that simulation is ruled, the target is 12. That is the floor,
+Until a run is ruled, the target is 12. That is the floor,
 kept as the interim, and it is a hard cap in the code the dialer
 takes over. On the relay branch, `net_node.inl:939` assigns
 `shekyl_relay_zone_min_provisioned_out_peers()` to

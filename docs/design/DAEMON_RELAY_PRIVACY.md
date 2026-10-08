@@ -15048,9 +15048,12 @@ not a working posture — not by ruling, but by routing.**
 
 ### 91.2 Design A is adopted
 
-**Tor-only is a supported posture. It is not the default.** Seed hosts run
-dual-network and are knowingly linkable, which costs nothing: long-running
-public infrastructure whose onion is discoverable anyway.
+**Tor-only is a supported posture. It is not the default.**
+**UPDATE 2026-10-08 (Rick): supported is not recommended.**
+Recommending Tor-only is rejected until the six carriers in §96
+close. Seed hosts run dual-network and are knowingly linkable, which
+costs nothing: long-running public infrastructure whose onion is
+discoverable anyway.
 
 > **Disambiguation added 2026-09-01 — this sentence is *not* in tension with the
 > Tor-default ruling, and the distinction is easy to lose.** §6.5 now records
@@ -16636,15 +16639,21 @@ goes red if the model, the message size, or the floor rate drifts the term towar
 the hop — and it already fired once, catching the draft's <0.1 % claim (true only
 on the wrong rate; the honest worst case is 0.96 %).
 
-## 95. Outbound composition — PROPOSAL 2026-10-07, not a ruling
+## 95. Outbound composition — APPROVED 2026-10-08
 
-**Working direction (Rick, 2026-10-07). Not a ruling.** The hidden-address
-pool and the total outbound degree are lower limits. The operating point
-above those limits, and any ceiling, are not chosen here. This section
-proposes the simulation that would set the operating point. The ceiling
-comes from resources and is named when that simulation is ruled. No
-constant is added, and nothing in `shekyl-relay-privacy` is built for
-this section.
+**APPROVED 2026-10-08 (Rick).** This section is the simulation plan.
+The hidden-address pool and the total outbound degree are lower
+limits. The operating point above those limits, and any ceiling, are
+not chosen by this approval. The ceiling comes from resources and is
+named when a run is ruled. No constant is added by the plan.
+
+**RULED 2026-10-08 (Rick).** An own transaction rides a stem slot.
+The origin's own send is always a stem, and each relay forwards with
+probability `1 − q`. That is about `1/q − 1` relayed sends per
+originated transaction. *Records-was, the plan's first draft: the
+own-edge was described as a hidden session pinned for the epoch,
+without saying that send is a stem.* Tor-only is not a recommended
+posture. §96 is the gate.
 
 The floors, which are the hard edges of the sweep:
 
@@ -16744,14 +16753,14 @@ Totals sit around 12–24, and 16 is among them:
 
 | `h` | `c` | total | why it is here |
 | --- | --- | --- | --- |
-| 12 | 0 | 12 | both floors, hidden only |
+| 12 | 0 | 12 | measured case, not a recommendation |
 | 12 | 4 | 16 | hidden at the floor, total 16 |
-| 16 | 0 | 16 | hidden at 16, clearnet absent |
+| 16 | 0 | 16 | measured case, not a recommendation |
 | 12 | 8 | 20 | hidden at the floor, total 20 |
 | 16 | 4 | 20 | both above the floor |
 | 12 | 12 | 24 | hidden at the floor, total 24 |
 | 16 | 8 | 24 | both above the floor |
-| 24 | 0 | 24 | hidden at the top of the range |
+| 24 | 0 | 24 | measured case, not a recommendation |
 
 Onion-publishing fraction `f` at 1, 1/2, 1/4, and 0.1 on each kept
 point. `f = 0.1` is there because the mean hidden inbound is then
@@ -16799,9 +16808,9 @@ baselines. None of them writes `fluff_return_ms`,
    length: about `1/q` stem sends per originated transaction
    (`expected_stem_length`), one of them the origin's, so the
    relayed count per originated transaction is about `1/q - 1`. The
-   own-edge is one hidden session, pinned for the epoch, so every
-   originated send of that epoch goes to that session and to no
-   other. The shares stay as a sub-reading: an originated own-edge
+   own-edge is one stem slot, pinned for the epoch, so every
+   originated send of that epoch goes out on that slot and on no
+   other. The send is a stem. The shares stay as a sub-reading: an originated own-edge
    is hidden with share 1, and a relayed forward drawn from all
    outbound sessions lands on a hidden edge with share about
    `h / (h + c)`. Stem slots are two draws from the whole pool, so
@@ -16859,4 +16868,77 @@ looks different. Fluff return gains that transit. The floors stay
 on the hidden-address pool and on the total, whichever connectors
 fill them. The `(h, c)` grid, the two baselines, and readings 1–5
 are not re-cut into a three-way sweep in this proposal.
+
+### 95.3 (h, 0) — RULED 2026-10-08, a measured case
+
+Every `(h, 0)` point on the grid is a measured case. It is not a
+headline recommendation. Tor-only is that shape: hidden outbound and
+no clearnet. The run that records the numbers is #1004. Its copy of
+this section carries the same ruling over the measurements. Adopting
+an operating point is a later ruling. This approval does not adopt
+one.
+
+## 96. Tor-only posture gate — RULED 2026-10-08, not recommended
+
+**Rejection.** Tor-only is not a recommended posture. The substrate
+is §95 as approved this day: own transactions ride a stem slot, the
+floors are lower limits, and `(h, 0)` is a measured case. §91.2
+already keeps Tor-only off the default. This section is the
+recommendation, which is a separate question. Recommending it now
+would treat a measured corner as a posture.
+
+**Reopening.** Tor-only becomes eligible for a recommendation when
+all six items below are closed. Eligibility is a ruling recorded in
+this section. It is not a silent change of the default, and closing
+one item does not close the gate.
+
+**Re-evaluation.** The ruling that recommends Tor-only, or that
+keeps the rejection, is made here, against the six closed carriers.
+No new identifier family.
+
+Each item is open. Its carrier is the only thing that closes it.
+
+1. **Stem-slot routing.** Own transactions ride a stem slot, as
+   ruled in §95: the origin's own send is always a stem, and each
+   relay forwards with probability `1 − q`. Rejected as a basis for
+   recommending Tor-only until the relay lane confirms that routing.
+   **Carrier:** the relay lane, after #1004 confirms it. **Closes
+   when** #1004 is on `dev` and the landed §95.3 states that the
+   origin's own send is a stem slot under the routing the relay
+   ships. **Re-evaluation:** the relay lane writes that sentence in
+   the landed section. Closing this item does not recommend Tor-only.
+2. **The calibrated `(h, 0)` fail-safe.** The shipped 3250 ms was
+   read on a mixed-degree graph. A hidden-only first passage is not
+   that input. **Carrier:** #1004. **Closes when** #1004 is on `dev`
+   and §95.3 states the `(h, 0)` first passage against 3250 ms,
+   including whether that input moves. Moving the constant still
+   follows §90: `F′` and its dependents move together, in a later
+   change if the calibration says they must. **Re-evaluation:** the
+   sentence in the landed §95.3 is the calibration.
+3. **Onion-candidate flooding defence.** A hidden edge is drawn from
+   publishers an attacker can supply. **Carrier:** P2P-3 slice 1.
+   **Closes when** slice 1 has landed: the C++ peer lists are gone
+   (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and
+   the uniform draw within a connector is the dial source. **Re-evaluation:**
+   the slice 1 brief's completion, recorded on its index row.
+4. **TRC-1.** On Tor, wire-observer resistance is operator relay
+   volume, and that measurement is not finished. **Carrier:**
+   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Closes
+   when** that row's falsifier is met: carried traffic at ordinary
+   operator scale is measured and the row is removed, or the ruling
+   reopens because originated cells stayed distinguishable. **Re-evaluation:**
+   the TRC-1 index row's next dated status.
+5. **Onion inbound capacity against a ceiling.** Reading 5's tail is
+   `h / f` and above, and no inbound ceiling is ruled against it.
+   **Carrier:** the #1004 follow-up ruling. **Closes when** a dated
+   ruling in this document sets the inbound ceiling against that
+   load, or records that no ceiling is added and why. **Re-evaluation:**
+   that ruling, not #1004's measurement by itself.
+6. **The Rust dialer.** Outbound targets are still the C++ cap the
+   dialer brief takes over. **Carrier:** P2P-3 slice 3. **Closes
+   when** the dialer owns outbound targets on `dev` and the brief's
+   deletion `rg` commands for the C++ dial path return nothing.
+   **Re-evaluation:** the slice 3 index row, after the brief's review
+   has closed and the slice has landed. Closing the brief's review
+   is not this item.
 
