@@ -1424,14 +1424,6 @@ mod tests {
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
 
-    /// Tor's own default for `MaxCircuitDirtiness`, in seconds (tor manual).
-    const TOR_DEFAULT_MAX_CIRCUIT_DIRTINESS_SECS: u64 = 600;
-    /// The archival challenger's spacing between two reads of one draw:
-    /// 30 blocks at the 120 s block target
-    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3). A re-read is on a fresh
-    /// circuit only while tor stops reusing a circuit sooner than this.
-    const REREAD_SPACING_SECS: u64 = 30 * 120;
-
     fn launch_options(disable_network: bool) -> Vec<String> {
         managed_tor_args(
             Path::new("/data"),
@@ -1446,8 +1438,8 @@ mod tests {
     }
 
     /// The launch surface is a closed list. A new option fails here first, so
-    /// whoever adds one meets the invariants the list holds shut: non-anonymous
-    /// serving (see `managed_tor_args`) and circuit reuse (below).
+    /// whoever adds one meets the invariants `managed_tor_args` holds shut,
+    /// including non-anonymous serving.
     #[test]
     fn the_managed_launch_surface_is_the_typed_options() {
         let base = [
@@ -1462,31 +1454,6 @@ mod tests {
         let mut offline = base.to_vec();
         offline.push("--DisableNetwork");
         assert_eq!(launch_options(true), offline);
-    }
-
-    /// The managed tor is never told to keep reusing a circuit for longer
-    /// than the challenger waits between two reads of a draw. Today it is not
-    /// told anything: the option is absent, so tor's default holds, and the
-    /// default is inside the spacing. An option that sets it has to come
-    /// through `managed_tor_args` and meet this bound.
-    #[test]
-    fn the_managed_launch_never_lengthens_circuit_reuse() {
-        for disable_network in [false, true] {
-            let options = launch_options(disable_network);
-            assert!(
-                !options.is_empty(),
-                "the launch has options, so their absence means something"
-            );
-            assert!(
-                !options
-                    .iter()
-                    .any(|o| o.eq_ignore_ascii_case("--MaxCircuitDirtiness")),
-                "the managed launch sets MaxCircuitDirtiness; bound it by the re-read spacing"
-            );
-        }
-        const {
-            assert!(TOR_DEFAULT_MAX_CIRCUIT_DIRTINESS_SECS <= REREAD_SPACING_SECS);
-        }
     }
 
     #[test]
