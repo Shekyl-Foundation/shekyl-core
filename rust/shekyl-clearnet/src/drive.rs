@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
-    accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, Overfull,
-    QueueHold, StreamEnds,
+    accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, InboundEnd,
+    Overfull, QueueHold, StreamEnds,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
@@ -228,7 +228,7 @@ where
         return;
     }
     let Some((ip, port)) = socket_of(&address) else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     let dest = SocketAddr::new(ip, port);
@@ -258,8 +258,23 @@ where
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async {
         let dialed = Instant::now();
-        let Ok(mut stream) = TcpStream::connect(target).await else {
-            return Err(CloseCause::new(CloseKind::DialFailed));
+        let mut stream = match TcpStream::connect(target).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                // `target` is the proxy when one is configured, and the peer
+                // when it is not. A closed SOCKS port is this node. On a
+                // direct dial, only the peer's RST names the address.
+                // Network unreachable, address not available, and permission
+                // denied are this node's link.
+                let kind = if proxy.is_some() {
+                    CloseKind::LocalClose
+                } else if err.kind() == std::io::ErrorKind::ConnectionRefused {
+                    CloseKind::DialFailed
+                } else {
+                    CloseKind::LocalClose
+                };
+                return Err(CloseCause::new(kind));
+            }
         };
         if proxy.is_some() {
             match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
@@ -275,7 +290,7 @@ where
                     | SocksError::AuthFailed { .. },
                 ) => {
                     drop(stream.shutdown().await);
-                    return Err(CloseCause::new(CloseKind::DialFailed));
+                    return Err(CloseCause::new(CloseKind::LocalClose));
                 }
             }
         }
@@ -287,7 +302,7 @@ where
         result = wake.as_mut() => {
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::DialFailed,
+                Err(_) => CloseKind::LocalClose,
             };
             Err(CloseCause::new(kind))
         }
@@ -310,7 +325,7 @@ where
             return;
         }
         Err(OpenError::Exhausted) => {
-            finish_before_channel(&mut stream, &on_cause, CloseKind::DialFailed).await;
+            finish_before_channel(&mut stream, &on_cause, CloseKind::LocalClose).await;
             return;
         }
     };
@@ -470,14 +485,18 @@ where
     let (mut writer, recv) = match opened {
         Ok(opened) => opened,
         Err(kind) => {
+            let cause = CloseCause::new(kind);
+            inbound.seal(&hold, cause);
             drop(hold);
-            return CloseCause::new(kind);
+            return cause;
         }
     };
     let (watch, gap_tx) = match arm_gap(&engine, job.gap_within) {
         Ok(Some(armed)) => (Some(armed.watch), Some(armed.established)),
         Ok(None) => (None, None),
-        Err(cause) => return end_connection(hold, &mut writer, cause).await,
+        Err(cause) => {
+            return end_connection(hold, &inbound, WriteJoin::Pending(&mut writer), cause).await;
+        }
     };
     let published = Admitted {
         open: open.clone(),
@@ -487,8 +506,15 @@ where
         gap: gap_tx,
     };
     if admitted.send(published).is_err() {
-        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+        return end_connection(
+            hold,
+            &inbound,
+            WriteJoin::Pending(&mut writer),
+            CloseCause::new(CloseKind::LocalClose),
+        )
+        .await;
     }
+    let inbound_close = inbound.clone();
     let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
     tokio::pin!(read_fut);
     let mut gap_open = watch.is_some();
@@ -502,12 +528,19 @@ where
                 match end {
                     GapEnd::Established => {}
                     GapEnd::Dropped | GapEnd::Closed => {
-                        return end_connection(hold, &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                        return end_connection(
+                            hold,
+                            &inbound_close,
+                            WriteJoin::Pending(&mut writer),
+                            CloseCause::new(CloseKind::LocalClose),
+                        )
+                        .await;
                     }
                     GapEnd::Timeout => {
                         return end_connection(
                             hold,
-                            &mut writer,
+                            &inbound_close,
+                            WriteJoin::Pending(&mut writer),
                             CloseCause::new(CloseKind::LevinHandshakeTimeout),
                         )
                         .await;
@@ -515,27 +548,47 @@ where
                 }
             }
             read_cause = &mut read_fut => {
-                return end_connection(hold, &mut writer, read_cause).await;
+                return end_connection(
+                    hold,
+                    &inbound_close,
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
             }
             write_cause = &mut writer => {
-                drop(hold);
-                return write_cause
+                let cause = write_cause
                     .ok()
                     .flatten()
                     .unwrap_or(CloseCause::new(CloseKind::LocalClose));
+                return end_connection(hold, &inbound_close, WriteJoin::Finished, cause).await;
             }
         }
     }
 }
 
+/// Whether `select` has already polled the writer to completion.
+///
+/// A completed [`tokio::task::JoinHandle`] panics if it is polled again.
+/// [`WriteJoin::Finished`] is that arm. The others still hold a running task.
+enum WriteJoin<'a> {
+    Pending(&'a mut tokio::task::JoinHandle<Option<CloseCause>>),
+    Finished,
+}
+
+/// Seal both ends. Abort the writer only when this select has not joined it.
 async fn end_connection(
     hold: QueueHold,
-    writer: &mut tokio::task::JoinHandle<Option<CloseCause>>,
+    inbound: &InboundEnd,
+    writer: WriteJoin<'_>,
     cause: CloseCause,
 ) -> CloseCause {
+    inbound.seal(&hold, cause);
     drop(hold);
-    writer.abort();
-    drop(writer.await);
+    if let WriteJoin::Pending(writer) = writer {
+        writer.abort();
+        drop(writer.await);
+    }
     cause
 }
 
@@ -658,12 +711,13 @@ async fn write_half(
             SeamSend::Noise(send)
         }
     };
+    let mut stall = shekyl_capped_stream::WriteStall::new(conn);
     let cause = write_capped(
         &mut write,
         &outbound,
         &overfull,
         &node_gate(),
-        conn,
+        &mut stall,
         |plain| {
             seam.encode(plain)
                 .map(Cow::Owned)
@@ -671,13 +725,14 @@ async fn write_half(
         },
     )
     .await;
+    tracing::info!(conn, stall = %stall, "write stall");
     Some(cause)
 }
 
 async fn read_half(
     mut read: OwnedReadHalf,
     mut seam: SeamRecv,
-    inbound: mpsc::Sender<Vec<u8>>,
+    inbound: shekyl_capped_stream::InboundEnd,
     overfull: Arc<Overfull>,
     conn: u64,
 ) -> CloseCause {
@@ -714,5 +769,19 @@ pub fn zero_tally() -> HandshakeTally {
         computed: AtomicU64::new(0),
         skipped: AtomicU64::new(0),
         queued: AtomicU64::new(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_joined_writer_is_not_polled_again() {
+        let ends = StreamEnds::open(8);
+        let mut writer = tokio::spawn(async { Some(CloseCause::new(CloseKind::IoError)) });
+        let joined = (&mut writer).await.ok().flatten().expect("writer cause");
+        let cause = end_connection(ends.hold, &ends.inbound, WriteJoin::Finished, joined).await;
+        assert_eq!(cause.kind(), CloseKind::IoError);
     }
 }

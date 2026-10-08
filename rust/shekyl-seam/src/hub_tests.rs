@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use shekyl_capped_stream::{FrameSender, StreamEnds};
+use shekyl_capped_stream::{InboundEnd, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use shekyl_transport_layer::{
@@ -60,7 +60,7 @@ fn doc_ip() -> Ipv4Addr {
 
 struct Opened {
     id: shekyl_transport_layer::SocketId,
-    inbound: FrameSender,
+    inbound: InboundEnd,
     writer: shekyl_capped_stream::ByteQueue,
     _hold: shekyl_capped_stream::QueueHold,
     session: Option<shekyl_capped_stream::Session>,
@@ -607,12 +607,13 @@ fn reap_forgets_the_row() {
 }
 
 #[test]
-fn connect_without_a_dialer_is_dial_failed() {
+fn connect_without_a_dialer_is_local() {
     let rig = rig();
     let Err(err) = rig.hub.connect(&endpoint(doc_ip(), Direction::Outbound)) else {
         panic!("connect without a dialer admitted a channel");
     };
-    assert_eq!(err.kind(), CloseKind::DialFailed);
+    assert_eq!(err.kind(), CloseKind::LocalClose);
+    assert!(!err.implicates_address(ConnectorId::Clearnet));
 }
 
 #[test]
@@ -691,9 +692,40 @@ fn an_unestablished_outbound_row_still_counts_toward_the_dial_cap() {
         board.count(ConnectorId::Clearnet, Direction::Outbound)
             + board.count(ConnectorId::Tor, Direction::Outbound)
     );
+    let published = rig.hub.publish_count();
     rig.hub.session_established(opened[0].id);
+    assert!(rig.hub.publish_count() > published);
     let after = rig.hub.board();
     assert!(after.get(opened[0].id).expect("row").established());
     assert_eq!(after.count(ConnectorId::Clearnet, Direction::Outbound), 12);
     assert_eq!(after.direction_count(Direction::Outbound), 12);
+}
+
+#[test]
+fn moving_bytes_does_not_republish_the_board() {
+    let rig = rig();
+    assert_eq!(rig.hub.publish_count(), 0);
+    let mut opened = adopt(&rig, Direction::Outbound, 64);
+    service(&rig, true);
+    let opened_at = rig.hub.publish_count();
+    assert_eq!(opened_at, 1);
+    assert!(rig.hub.send(opened.id, b"outbound".to_vec()));
+    assert_eq!(rig.hub.publish_count(), opened_at);
+    let session = opened.session.take().expect("session");
+    let hub = rig.hub.clone();
+    let id = opened.id;
+    let pump = thread::spawn(move || drive_inbound(&hub, id, session));
+    opened
+        .inbound
+        .blocking_send(vec![1, 2, 3, 4])
+        .expect("inject");
+    let start = std::time::Instant::now();
+    while rig.posts.lock().expect("posts").is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(2), "delivery");
+        thread::sleep(Duration::from_millis(5));
+    }
+    service(&rig, true);
+    assert_eq!(rig.hub.publish_count(), opened_at);
+    rig.hub.close(opened.id);
+    pump.join().expect("pump");
 }
