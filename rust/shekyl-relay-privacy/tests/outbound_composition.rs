@@ -493,3 +493,70 @@ fn link_transit_moves_the_first_passage() {
         "clearnet transit 20000 ms must slow the passage ({slow_p90} vs {fast_p90})"
     );
 }
+
+#[test]
+fn a_clearnet_arrival_from_a_hidden_sender_is_relayed() {
+    use shekyl_relay_privacy::conformance::composition::clearnet_arrival_is_relayed;
+    assert!(clearnet_arrival_is_relayed(LinkClass::Clearnet, true));
+    assert!(!clearnet_arrival_is_relayed(LinkClass::Clearnet, false));
+    assert!(!clearnet_arrival_is_relayed(LinkClass::Hidden, true));
+}
+
+#[test]
+fn the_class_aware_estimator_does_not_name_an_exonerated_sender() {
+    use shekyl_relay_privacy::conformance::composition::{simulate_class_aware_first_spy, SpyArm};
+    let mut rng = SplitMix64::new(0xC1_A5);
+    let reading = simulate_class_aware_first_spy(
+        Mix {
+            nodes: 24,
+            hidden_out: 4,
+            clearnet_out: 4,
+            onion_fraction: 1.0,
+        },
+        Routing::HiddenStemSlot,
+        SpyArm::Uniform { p: 0.3 },
+        0,
+        60,
+        &mut rng,
+    );
+    assert_eq!(
+        reading.aware_clearnet_names, 0,
+        "every sender has a hidden session, so a clearnet arrival is not a name"
+    );
+    assert!(reading.aware.named_origin <= reading.blind.named_origin);
+}
+
+#[test]
+fn a_heavy_originator_sits_closer_to_posterior_one() {
+    use shekyl_relay_privacy::conformance::epoch_traffic::simulate_origin_rate_contrast;
+    let mix = Mix {
+        nodes: 24,
+        hidden_out: 4,
+        clearnet_out: 4,
+        onion_fraction: 1.0,
+    };
+    let mut rng = SplitMix64::new(0x4E_47);
+    let contrast = simulate_origin_rate_contrast(mix, Routing::HiddenStemSlot, 8, 10, &mut rng);
+    assert!(
+        contrast.heavy_posterior > contrast.rest_posterior,
+        "heavy {} rest {}",
+        contrast.heavy_posterior,
+        contrast.rest_posterior
+    );
+}
+
+#[test]
+fn uniform_hop0_is_not_confined_to_the_hidden_pool() {
+    let mut rng = SplitMix64::new(0x0F_00);
+    let graph = build_two_class(40, 6, 6, 1.0, &mut rng);
+    let maps = build_node_maps(&graph, Routing::UniformHop0, &mut rng);
+    let clearnet = maps
+        .iter()
+        .filter(|map| {
+            map.local
+                .is_some_and(|edge| edge.class == LinkClass::Clearnet)
+        })
+        .count();
+    assert!(clearnet > 0, "uniform hop 0 never used clearnet");
+    assert!(clearnet < maps.len(), "uniform hop 0 never used hidden");
+}

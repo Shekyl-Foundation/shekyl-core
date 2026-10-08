@@ -181,8 +181,9 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// The per-zone outbound-connection floor the F-7 embargo provisioning
 /// assumes (F-8b, §45).
 ///
-/// `fluff_return_ms = 3250` is the measured p90 first passage at usable
-/// degree **12** (§44). The worst-zone argument is bounded by that measured
+/// `fluff_return_ms = 3250` is the provisional p90 first passage at usable
+/// degree **12** (§44; provisional pending §96 item 2, Rick 2026-10-08).
+/// The worst-zone argument is bounded by that measured
 /// range: below degree 12 the real first passage *exceeds* the provisioned
 /// value and the embargo is under-provisioned in the direction the
 /// `fluff_return_ms` note names as a privacy loss. An operator can reach that
@@ -374,11 +375,19 @@ impl DandelionParams {
             // Shekyl's `P2P_DEFAULT_OUT_PEERS = 12`:
             //
             //   EveryPeer (usable degree ~24)                 ~1250 ms
-            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms  <- binding
+            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms
+            //
+            // **Provisional (Rick, 2026-10-08).** 3250 ms is the transit-free
+            // reading, kept so the system can be built and tested. It is not
+            // an approval that the embargo's input covers a return path with
+            // real per-connector transit. The operational test that replaces
+            // it is `DAEMON_RELAY_PRIVACY.md` §96 item 2. Until that test
+            // moves the input, the value stays, and a composition whose
+            // transit-bearing fluff return exceeds it is not approvable.
             //
             // Production fluff is EveryPeer on every connector (D7 deleted
-            // 2026-10-02). 3250 ms stays the constant: it was measured on the
-            // longer graph and has not been remeasured on the production one.
+            // 2026-10-02). 3250 ms was measured on the longer graph and has
+            // not been remeasured on the production one.
             // Over-estimating F lengthens the embargo, which is the
             // privacy-safe direction. The old 2250 was an EveryPeer
             // measurement at peers = 8. The gap to 3250 is a degree effect:
@@ -387,8 +396,10 @@ impl DandelionParams {
             //
             // One process-wide F for every zone: a fluff wave returns over
             // whatever network the *node* is on, so there is no per-zone F to
-            // pick (§63.2's keeper; restated at §89.2). Set to the WORST zone's
-            // p90. §44.3 prices the over-provisioned zone: this constant's only
+            // pick (§63.2's keeper; restated at §89.2). It was set to the
+            // transit-free longer-graph p90. The provisional note above is
+            // the status of that number. §44.3 prices the over-provisioned
+            // zone: this constant's only
             // production consumer is the embargo derivation, so over-estimating
             // F *lengthens* the embargo — which *reduces* the §6.7 prefix-fire
             // leak and pays only in black-hole recovery latency. Privacy-safe

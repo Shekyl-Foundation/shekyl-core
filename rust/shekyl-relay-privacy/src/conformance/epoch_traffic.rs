@@ -228,14 +228,59 @@ fn fold_sender(running: &mut Running, inbound: usize, originated: u64, relayed: 
     }
 }
 
-fn run_epoch<R: RelayRng + ?Sized>(
+struct EpochScratch<'a> {
+    maps: &'a mut [NodeMap],
+    local_to: &'a [Option<usize>],
+    running: &'a mut Running,
+    own_originated: &'a mut [u64],
+    own_relayed: &'a mut [u64],
+}
+
+fn send_one_stem<R: RelayRng + ?Sized>(
+    graph: &TwoClassGraph,
+    scratch: &mut EpochScratch<'_>,
+    origin: usize,
+    params: &DandelionParams,
+    embargo: &EmbargoTimer,
+    rng: &mut R,
+) {
+    let Some(first) = scratch.maps[origin].local else {
+        return;
+    };
+    scratch.own_originated[origin] += 1;
+    scratch.running.originated_txs += 1;
+    note_class(scratch.running, first.class, true);
+    let extra = walk_stem(params, embargo, rng)
+        .stem_hops()
+        .saturating_sub(1);
+    let mut at = first.to;
+    let mut prev = origin;
+    for _ in 0..extra {
+        let Some(hop) = relay_edge(&mut scratch.maps[at], &graph.initiated[at], prev, rng) else {
+            break;
+        };
+        scratch.running.relayed_forwards += 1;
+        note_class(scratch.running, hop.class, false);
+        if scratch.local_to[at] == Some(hop.to) {
+            scratch.own_relayed[at] += 1;
+        }
+        prev = at;
+        at = hop.to;
+    }
+}
+
+fn run_epoch<R, F>(
     graph: &TwoClassGraph,
     routing: Routing,
     params: &DandelionParams,
     embargo: &EmbargoTimer,
     running: &mut Running,
+    origin_times: F,
     rng: &mut R,
-) {
+) where
+    R: RelayRng + ?Sized,
+    F: Fn(usize) -> u32,
+{
     let n = graph.nodes();
     let mut maps: Vec<NodeMap> = build_node_maps(graph, routing, rng);
     let inbound = inbound_degrees(graph);
@@ -247,28 +292,22 @@ fn run_epoch<R: RelayRng + ?Sized>(
     let mut own_relayed = vec![0_u64; n];
 
     for origin in shuffled(n, rng) {
-        let Some(first) = maps[origin].local else {
-            continue;
-        };
-        own_originated[origin] += 1;
-        running.originated_txs += 1;
-        note_class(running, first.class, true);
-        let extra = walk_stem(params, embargo, rng)
-            .stem_hops()
-            .saturating_sub(1);
-        let mut at = first.to;
-        let mut prev = origin;
-        for _ in 0..extra {
-            let Some(hop) = relay_edge(&mut maps[at], &graph.initiated[at], prev, rng) else {
-                break;
-            };
-            running.relayed_forwards += 1;
-            note_class(running, hop.class, false);
-            if local_to[at] == Some(hop.to) {
-                own_relayed[at] += 1;
-            }
-            prev = at;
-            at = hop.to;
+        let times = origin_times(origin);
+        for _ in 0..times {
+            send_one_stem(
+                graph,
+                &mut EpochScratch {
+                    maps: &mut maps,
+                    local_to: &local_to,
+                    running,
+                    own_originated: &mut own_originated,
+                    own_relayed: &mut own_relayed,
+                },
+                origin,
+                params,
+                embargo,
+                rng,
+            );
         }
     }
 
@@ -311,7 +350,7 @@ pub fn simulate_epoch_traffic<R: RelayRng + ?Sized>(
             mix.onion_fraction,
             rng,
         );
-        run_epoch(&graph, routing, &params, &embargo, &mut running, rng);
+        run_epoch(&graph, routing, &params, &embargo, &mut running, |_| 1, rng);
     }
     running.finish()
 }
@@ -336,9 +375,142 @@ pub fn epoch_traffic_on<R: RelayRng + ?Sized>(
     let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
     let mut running = Running::new();
     for _ in 0..epochs {
-        run_epoch(graph, routing, &params, &embargo, &mut running, rng);
+        run_epoch(graph, routing, &params, &embargo, &mut running, |_| 1, rng);
     }
     running.finish()
+}
+
+/// Own-edge posterior of one heavy originator against the other senders.
+///
+/// A node that originates `heavy_times` stems per epoch, while every other
+/// node originates once, sits closer to posterior 1. That is the Dandelion++
+/// fact: the posterior tracks the originated-to-relayed ratio on that link,
+/// whatever the routing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OriginRateContrast {
+    /// `P(originated | the heavy node's own-edge)`.
+    pub heavy_posterior: f64,
+    /// `P(originated | every other sender's own-edge)`, pooled.
+    pub rest_posterior: f64,
+}
+
+/// Measure [`OriginRateContrast`]. Node 0 is the heavy originator.
+///
+/// # Panics
+///
+/// Panics if `epochs` or `heavy_times` is zero, or the mix has no node 0 edge.
+#[must_use]
+pub fn simulate_origin_rate_contrast<R: RelayRng + ?Sized>(
+    mix: Mix,
+    routing: Routing,
+    heavy_times: u32,
+    epochs: usize,
+    rng: &mut R,
+) -> OriginRateContrast {
+    assert!(
+        epochs > 0 && heavy_times > 0,
+        "need epochs and a heavy rate"
+    );
+    let params = DandelionParams::adopted();
+    let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut heavy = Counts::default();
+    let mut rest = Counts::default();
+    for _ in 0..epochs {
+        let graph = build_two_class(
+            mix.nodes,
+            mix.hidden_out,
+            mix.clearnet_out,
+            mix.onion_fraction,
+            rng,
+        );
+        let mut running = Running::new();
+        let n = graph.nodes();
+        let mut maps = build_node_maps(&graph, routing, rng);
+        let local_to: Vec<Option<usize>> = maps
+            .iter()
+            .map(|node| node.local.map(|edge| edge.to))
+            .collect();
+        let mut own_originated = vec![0_u64; n];
+        let mut own_relayed = vec![0_u64; n];
+        for origin in shuffled(n, rng) {
+            let times = if origin == 0 { heavy_times } else { 1 };
+            for _ in 0..times {
+                send_one_stem(
+                    &graph,
+                    &mut EpochScratch {
+                        maps: &mut maps,
+                        local_to: &local_to,
+                        running: &mut running,
+                        own_originated: &mut own_originated,
+                        own_relayed: &mut own_relayed,
+                    },
+                    origin,
+                    &params,
+                    &embargo,
+                    rng,
+                );
+            }
+        }
+        heavy.originated += own_originated[0];
+        heavy.relayed += own_relayed[0];
+        for node in 1..n {
+            rest.originated += own_originated[node];
+            rest.relayed += own_relayed[node];
+        }
+    }
+    OriginRateContrast {
+        heavy_posterior: heavy.posterior(),
+        rest_posterior: rest.posterior(),
+    }
+}
+
+/// Outbound-only p90 on one composition. Transit is per link class.
+///
+/// The reach matches [`shipped_graph_p90`]: no reciprocal edges. An
+/// unconverged reading is the caller's job, through [`super::converge_p90`].
+#[must_use]
+pub fn composition_outbound_p90<R: RelayRng + ?Sized>(
+    mix: Mix,
+    hidden_ms: u64,
+    clearnet_ms: u64,
+    trials: usize,
+    rng: &mut R,
+) -> u64 {
+    use super::flood::simulate_fluff_return_classed;
+    use crate::schedule::DelayFamily;
+
+    simulate_fluff_return_classed(mix.nodes, 20, DelayFamily::Geometric, trials, rng, |rng| {
+        build_two_class(
+            mix.nodes,
+            mix.hidden_out,
+            mix.clearnet_out,
+            mix.onion_fraction,
+            rng,
+        )
+        .outbound_only_fluff_hops(hidden_ms, clearnet_ms)
+    })
+    .p90_ms
+}
+
+/// The shipped degree-12 graph at one transit, outbound-only, 512 nodes.
+#[must_use]
+pub fn shipped_graph_p90<R: RelayRng + ?Sized>(transit_ms: u64, trials: usize, rng: &mut R) -> u64 {
+    use super::flood::{simulate_fluff_return, FloodParams, FloodReach};
+    use crate::schedule::DelayFamily;
+
+    simulate_fluff_return(
+        FloodParams {
+            peers: 12,
+            nodes: 512,
+            reach: FloodReach::OutboundOnly,
+            transit_ms,
+        },
+        20,
+        DelayFamily::Geometric,
+        trials,
+        rng,
+    )
+    .p90_ms
 }
 
 /// The shipped fluff reference: 512 nodes, outbound-only, transit-free, degree 12.
@@ -349,20 +521,5 @@ pub fn epoch_traffic_on<R: RelayRng + ?Sized>(
 /// is the ratio to that fail-safe input. It is not a new constant.
 #[must_use]
 pub fn shipped_fluff_reference<R: RelayRng + ?Sized>(trials: usize, rng: &mut R) -> u64 {
-    use super::flood::{simulate_fluff_return, FloodParams, FloodReach};
-    use crate::schedule::DelayFamily;
-
-    simulate_fluff_return(
-        FloodParams {
-            peers: 12,
-            nodes: 512,
-            reach: FloodReach::OutboundOnly,
-            transit_ms: 0,
-        },
-        20,
-        DelayFamily::Geometric,
-        trials,
-        rng,
-    )
-    .p90_ms
+    shipped_graph_p90(0, trials, rng)
 }

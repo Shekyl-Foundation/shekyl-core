@@ -96,6 +96,10 @@ pub enum Routing {
     /// The paper's single graph: every session is clearnet, and the
     /// local source is one of the stem slots.
     AllClearnet,
+    /// The paper's rule on a two-class graph: both stem slots are drawn
+    /// from every outbound session, and the local source is one of those
+    /// slots. Hop 0 is not forced onto a hidden session.
+    UniformHop0,
 }
 
 /// One node's stem map for an epoch, and where its own transactions leave.
@@ -147,6 +151,28 @@ impl TwoClassGraph {
         hidden_transit_ms: u64,
         clearnet_transit_ms: u64,
     ) -> Vec<Vec<ClassedHop>> {
+        self.fluff_edges(hidden_transit_ms, clearnet_transit_ms, true)
+    }
+
+    /// [`FloodReach::OutboundOnly`](super::FloodReach) adjacency: no reciprocal.
+    ///
+    /// The calibration holds this reach fixed, including on the shipped
+    /// degree-12 graph, so a cell does not mix reach with transit.
+    #[must_use]
+    pub fn outbound_only_fluff_hops(
+        &self,
+        hidden_transit_ms: u64,
+        clearnet_transit_ms: u64,
+    ) -> Vec<Vec<ClassedHop>> {
+        self.fluff_edges(hidden_transit_ms, clearnet_transit_ms, false)
+    }
+
+    fn fluff_edges(
+        &self,
+        hidden_transit_ms: u64,
+        clearnet_transit_ms: u64,
+        reciprocal: bool,
+    ) -> Vec<Vec<ClassedHop>> {
         let n = self.nodes();
         let mut edges = vec![Vec::new(); n];
         for (from, row) in self.initiated.iter().enumerate() {
@@ -159,13 +185,23 @@ impl TwoClassGraph {
                     to: edge.to,
                     transit_ms,
                 });
-                edges[edge.to].push(ClassedHop {
-                    to: from,
-                    transit_ms,
-                });
+                if reciprocal {
+                    edges[edge.to].push(ClassedHop {
+                        to: from,
+                        transit_ms,
+                    });
+                }
             }
         }
         edges
+    }
+
+    /// Whether this node initiated a hidden session.
+    #[must_use]
+    pub fn has_hidden_outbound(&self, node: usize) -> bool {
+        self.initiated[node]
+            .iter()
+            .any(|edge| edge.class == LinkClass::Hidden)
     }
 }
 
@@ -338,6 +374,7 @@ fn node_map<R: RelayRng + ?Sized>(row: &[OutEdge], routing: Routing, rng: &mut R
             local: pick_edge(rng, &hidden),
         },
         Routing::AllClearnet => paper_map(row, &clear, rng),
+        Routing::UniformHop0 => paper_map(row, &all, rng),
         Routing::HiddenStemSlot => {
             if hidden.is_empty() || hidden.len() == all.len() {
                 let pool = if hidden.is_empty() { &all } else { &hidden };
@@ -568,6 +605,187 @@ pub fn simulate_stem_first_spy<R: RelayRng + ?Sized>(
         } else {
             observed as f64 / pinned as f64
         },
+    }
+}
+
+/// A clearnet arrival from a sender that also has a hidden session is relayed.
+///
+/// Under [`Routing::HiddenStemSlot`] that sender's own transactions leave on
+/// the hidden slot, so the clearnet edge exonerates them. It does not name
+/// them as the origin, and it does not mark them clearnet-only.
+#[must_use]
+pub fn clearnet_arrival_is_relayed(class: LinkClass, sender_has_hidden: bool) -> bool {
+    class == LinkClass::Clearnet && sender_has_hidden
+}
+
+/// One estimator's identifications of the origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OriginIdentification {
+    /// Trials that pinned a first hop.
+    pub pinned: usize,
+    /// Trials in which the estimator named a predecessor.
+    pub named: usize,
+    /// Trials in which the named predecessor is the origin.
+    pub named_origin: usize,
+    /// `named_origin / named`.
+    pub precision: f64,
+    /// `named_origin / pinned`.
+    pub recall: f64,
+}
+
+/// Class-blind and class-aware first spy, plus the clearnet-only mark.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClassAwareFirstSpy {
+    /// The predecessor of the first spy, whatever the edge class.
+    pub blind: OriginIdentification,
+    /// Skips a spy whose incoming edge [`clearnet_arrival_is_relayed`].
+    pub aware: OriginIdentification,
+    /// Clearnet deliveries on the originated stems.
+    pub clearnet_arrivals: u64,
+    /// Those whose sender initiated no hidden session.
+    pub clearnet_sender_clearnet_only: u64,
+    /// Aware names that arrived on a clearnet edge. Under `HiddenStemSlot`
+    /// these senders are the clearnet-only ones.
+    pub aware_clearnet_names: u64,
+    /// Of those names, how many senders really had no hidden session.
+    pub aware_clearnet_names_clearnet_only: u64,
+}
+
+fn ratio(num: usize, den: usize) -> f64 {
+    if den == 0 {
+        0.0
+    } else {
+        num as f64 / den as f64
+    }
+}
+
+fn hop_class(landing: &StemLanding, arrival: usize) -> LinkClass {
+    if arrival == 1 {
+        landing
+            .own_edge
+            .expect("a pinned path has a first-hop class")
+    } else {
+        landing.relayed[arrival - 2].0
+    }
+}
+
+/// First-spy precision and recall with and without the link class.
+///
+/// The class-aware estimator does not name a predecessor reached by a
+/// clearnet edge when that predecessor has a hidden session. The paper's
+/// uniform hop 0 is [`Routing::UniformHop0`]: the comparison is whether
+/// the class helps only once hop 0 is confined to the hidden slot.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero or `p` is outside `(0, 1]`.
+#[must_use]
+pub fn simulate_class_aware_first_spy<R: RelayRng + ?Sized>(
+    mix: Mix,
+    routing: Routing,
+    arm: SpyArm,
+    clearnet_only_nodes: usize,
+    trials: usize,
+    rng: &mut R,
+) -> ClassAwareFirstSpy {
+    assert!(trials > 0, "need at least one trial");
+    let p = match arm {
+        SpyArm::Uniform { p } | SpyArm::OnionBiased { p } => p,
+    };
+    assert!(p > 0.0 && p <= 1.0, "spy fraction must be in (0, 1]");
+    let params = DandelionParams::adopted();
+    let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut pinned = 0_usize;
+    let mut blind_named = 0_usize;
+    let mut blind_correct = 0_usize;
+    let mut aware_named = 0_usize;
+    let mut aware_correct = 0_usize;
+    let mut clearnet_arrivals = 0_u64;
+    let mut clearnet_only = 0_u64;
+    let mut aware_clearnet_names = 0_u64;
+    let mut aware_clearnet_only = 0_u64;
+    for _ in 0..trials {
+        let mut graph = build_two_class(
+            mix.nodes,
+            mix.hidden_out,
+            mix.clearnet_out,
+            mix.onion_fraction,
+            rng,
+        );
+        let clearnet_only_n = clearnet_only_nodes.min(graph.nodes());
+        for row in graph.initiated.iter_mut().take(clearnet_only_n) {
+            row.retain(|edge| edge.class != LinkClass::Hidden);
+        }
+        let origin = if clearnet_only_n == 0 {
+            0
+        } else {
+            usize_from(bounded_uniform_len(rng, graph.nodes()))
+        };
+        let landing = land_originated_stem(&graph, origin, routing, &params, &embargo, rng);
+        if landing.own_edge.is_none() {
+            continue;
+        }
+        pinned += 1;
+        let mut blind: Option<usize> = None;
+        let mut aware: Option<usize> = None;
+        for (i, &node) in landing.path.iter().enumerate().skip(1) {
+            let sender = landing.path[i - 1];
+            let class = hop_class(&landing, i);
+            let hidden = graph.has_hidden_outbound(sender);
+            if class == LinkClass::Clearnet {
+                clearnet_arrivals += 1;
+                if !hidden {
+                    clearnet_only += 1;
+                }
+            }
+            if !is_spy(arm, graph.publishes[node], rng) {
+                continue;
+            }
+            if blind.is_none() {
+                blind = Some(sender);
+            }
+            if aware.is_none() && !clearnet_arrival_is_relayed(class, hidden) {
+                aware = Some(sender);
+                if class == LinkClass::Clearnet {
+                    aware_clearnet_names += 1;
+                    if !hidden {
+                        aware_clearnet_only += 1;
+                    }
+                }
+            }
+        }
+        if let Some(sender) = blind {
+            blind_named += 1;
+            if sender == origin {
+                blind_correct += 1;
+            }
+        }
+        if let Some(sender) = aware {
+            aware_named += 1;
+            if sender == origin {
+                aware_correct += 1;
+            }
+        }
+    }
+    ClassAwareFirstSpy {
+        blind: OriginIdentification {
+            pinned,
+            named: blind_named,
+            named_origin: blind_correct,
+            precision: ratio(blind_correct, blind_named),
+            recall: ratio(blind_correct, pinned),
+        },
+        aware: OriginIdentification {
+            pinned,
+            named: aware_named,
+            named_origin: aware_correct,
+            precision: ratio(aware_correct, aware_named),
+            recall: ratio(aware_correct, pinned),
+        },
+        clearnet_arrivals,
+        clearnet_sender_clearnet_only: clearnet_only,
+        aware_clearnet_names,
+        aware_clearnet_names_clearnet_only: aware_clearnet_only,
     }
 }
 

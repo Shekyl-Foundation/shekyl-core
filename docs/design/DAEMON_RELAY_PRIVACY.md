@@ -16807,6 +16807,19 @@ to move together.
 **RULED 2026-10-08 (Rick).** Every `(h, 0)` point, including `(12, 0)`,
 is a measured case. It is not a headline recommendation. Tor-only is
 that shape, and it is not a recommended posture. The gate is §96.
+No operating point is chosen. The interim composition is hidden 12
+and clearnet 12. Clearnet's configured default is already
+`P2P_DEFAULT_OUT_PEERS` (12). The Tor zone's cap in the binary is
+still `HOP0_OUTBOUND_TARGET` (4); this interim does not move it.
+The `(12, 4)` proposal is withdrawn. A total of 16 was an
+illustration, not a candidate.
+
+**Acceptance.** A point is approvable only when its fluff return,
+measured with real per-connector transit, does not exceed the input
+the embargo uses. `fluff_return_ms = 3250` is provisional pending
+the operational test in §96 item 2, so the system can be built and
+tested. It is not that approval.
+
 The origin's own send is a stem slot under `HiddenStemSlot`, the
 routing the relay lane is to ship: one slot drawn from the hidden
 pool, the other from the remaining outbound sessions, and the local
@@ -16855,41 +16868,77 @@ is originated, on either routing. The unit test strips inbound to one
 node and reads posterior 1. At `h ≥ 12` and `f = 1` the grid had no
 such sender.
 
-Own-edge capture is unchanged: `P(the pin is a spy)` is `p_h`, and
-`p_h^h` at `h = 12` is negligible. First-spy precision still does not
-move with the mix. The first hop is the pin.
+A sender that originates much more than it relays sits closer to
+posterior 1 on any routing, as in Dandelion++. One node originating
+eight stems an epoch, and the others once, read 0.97 on its own-edge
+against 0.49 for the rest (`HiddenStemSlot`, `h = c = 12`).
 
-**Fluff, calibrated.** The reference is the shipped graph through this
-instrument: 512 nodes, outbound-only, transit-free, degree 12, 24
-trials, seed `0xF7_000C`. It read 3250 ms, equal to `fluff_return_ms`.
-Composition p90s are 128-node `EveryPeer` with hidden transit 1625 ms
-and clearnet transit 50 ms, converged within 250 ms. Ratios to that
-reference: `(12, 0)` 7375 ms, 2.27×, exceeds; `(16, 0)` 6375 ms,
-1.96×, exceeds; `(12, 4)` 4050 ms, 1.25×, exceeds; `(16, 4)` 3975 ms,
-1.22×, exceeds; `(12, 12)` 1550 ms, 0.48×, does not. The constant
-does not move. These graphs carry Tor transit, which §91 already
-puts above the transit-free input, and §90 still requires `F′` and
-its dependents to move together. §96 item 2's calibration is this
-paragraph: `(h, 0)` exceeds the fail-safe input; the input stays.
+**2×2, 512 nodes, `OutboundOnly` in every cell.** Transit-free against
+per-connector transit (hidden 1625 ms, clearnet 50 ms). The shipped
+degree-12 graph, same seed and 24 trials that reproduce 3250 ms at
+transit 0, reads 12125 ms with Tor transit on every edge. Four seeds
+at 16 trials did not agree within 250 ms; their readings were 12000,
+12125, 12000 and 12500. Every one exceeds 3250. The provisional input
+omits Tor transit on the return path. That is a §90 question for
+every node with Tor sessions today: `F′` and its dependents move
+together, and this change does not move them.
 
-At `f = 1`, hidden inbound mean is `h` (12 at `h = 12`, max 22). At
-the stress `f = 0.1` and `h = 12` the mean is 120 and every publisher
-exceeds 64. That tail is not the normal published-onion fraction.
+*Records-was, 128-node `EveryPeer` with mixed transit: `(12, 0)`
+7375 ms, `(12, 4)` 4050 ms, `(12, 12)` 1550 ms.* Those cells mixed
+reach with transit. The sweep below holds reach at `OutboundOnly`.
 
-**Proposed point. `(h, 0)` is not it.** `(12, 0)` is the measured
-hidden-only case §96 refuses to recommend. Under `HiddenStemSlot` its
-own-edge posterior matches `(12, 4)` (0.54 against 0.56): clearnet
-edges do not buy cover once the local source is a stem slot. They do
-change the fluff ratio, from 2.27× to 1.25×, and both still exceed
-3250 ms. `(12, 12)` is the point that does not exceed, and its
-hidden-class posterior is 0.30. The proposal stays `(h, c) = (12, 4)`,
-total 16, as the smallest clearnet step, not as a cover improvement
-and not as a new fail-safe. Confidence is high on the posterior
-comparison. Confidence is lower on the millisecond ratios, which are
-not the 512-node transit-free graph. A third connector (I2P) is not
-modelled. It would add a transit and an inbound pool. The local
-source would remain the hidden stem slot, so it would not change that
-posterior.
+**Sweep. Nothing is chosen.** `h` at 12, 14 and 16; `c` from 0 to 16
+in steps of 2. Posterior is `HiddenStemSlot`, 40 nodes, 6 epochs,
+`f = 1`. Own-edge posterior sat between 0.50 and 0.61. Hidden-class
+posterior rose with `c`, about 0.21 at `c = 0` and about 0.30–0.34
+at `c = 16`. A cell whose seeds did not agree within 250 ms at 16
+trials is refused, not given a ratio. Of the per-connector cells that
+converged, these exceed 3250: `(12, 8)` 5400, `(12, 12)` 3750,
+`(14, 6)` 6275, `(14, 8)` 5275, `(14, 10)` 4500, `(14, 12)` 3850,
+`(16, 0)` 10500, `(16, 4)` 7225, `(16, 6)` 6125. These converged at
+or under 3250 and are still not chosen: `(14, 14)` 3075, `(14, 16)`
+2850, `(16, 16)` 2900. The interim `(12, 12)` is in the exceeding
+list.
+
+Resource cost of a point, expectation not a draw. Tor circuits the
+node opens: `h`. Outbound sockets: `h + c`. Hidden inbound per
+published onion: `h / f`, so `h` at `f = 1`, `2h` at `0.5`, `4h` at
+`0.25`, `10h` at `0.1`. At `f = 0.1` and `h = 12` one graph of 400
+nodes had mean 120, p90 130, max 134. `f = 1` is the normal case.
+
+**Class-aware first spy.** A clearnet arrival from a sender that has
+a hidden session is certainly relayed, so the estimator does not name
+that sender as the origin. On `h = 12`, `c = 8`, 32 nodes, 200 trials.
+Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.41 and recall
+0.23, aware precision 0.49 and recall 0.23. At `p_h` from `p = 0.30`,
+blind precision 0.66 and recall 0.58, aware precision 0.70 and the
+same recall. The gain is precision: false names on clearnet edges are
+dropped, and the true origin's hop is hidden so the correct names
+stay. Under the paper's uniform hop 0 the same estimator loses:
+precision 0.32 to 0.25 at `p = 0.20`, and 0.64 to 0.46 at the enriched
+share, because hop 0 can be clearnet and the rule then exonerates the
+origin. `HiddenStemSlot` makes a clearnet arrival exonerating rather
+than identifying. The attack on the origin moves to the onion
+candidate share, which is why §96 item 3 carries this routing's cost.
+
+Separately, eight of 32 nodes initiate no hidden session. Of 570
+clearnet arrivals, 264 had a clearnet-only sender. A clearnet arrival
+by itself marks its sender clearnet-only less than half the time,
+because relays use clearnet too. The aware estimator named 43
+clearnet predecessors as the origin, and all 43 were clearnet-only.
+
+**Cross-connector linkage, not built.** Hypothesis: a spy holding
+both a Tor session and a clearnet session to one node can link that
+node's circuit to its IP from which fluff copy arrives first. The
+transit gap is 1625 − 50 = 1575 ms. The per-peer flush is a geometric
+draw with mean 5 s, so one pair's order is often the flush, not the
+connector. The hypothesis is that many fluffs still beat that noise.
+It is falsified when a pairing of the two arrival streams does no
+better than the unpaired chance rate, at the number of fluffs one
+epoch actually delivers. No estimator is in this change.
+
+A third connector (I2P) is not modelled. It would add a transit and
+an inbound pool. The local source would remain the hidden stem slot.
 
 ## 96. Tor-only posture gate — RULED 2026-10-08, not recommended
 
@@ -16920,16 +16969,31 @@ Each item is open. Its carrier is the only thing that closes it.
    origin's own send is a stem slot under the routing the relay
    ships. **Re-evaluation:** the relay lane writes that sentence in
    the landed section. Closing this item does not recommend Tor-only.
-2. **The calibrated `(h, 0)` fail-safe.** The shipped 3250 ms was
-   read on a mixed-degree graph. A hidden-only first passage is not
-   that input. **Carrier:** #1004. **Closes when** #1004 is on `dev`
-   and §95.3 states the `(h, 0)` first passage against 3250 ms,
-   including whether that input moves. Moving the constant still
-   follows §90: `F′` and its dependents move together, in a later
-   change if the calibration says they must. **Re-evaluation:** the
-   sentence in the landed §95.3 is the calibration.
+2. **The operational replacement for the provisional 3250 ms.**
+   The simulation in §95.3 is not this closure: it shows the
+   transit-free input is short once Tor transit is on the return
+   path, and it does not move the constant. **What is measured:** the
+   p90 first passage of a fluff flood back to the originating node,
+   on the running testnet, timed at the peers that receive it. One
+   arm is a node whose return path crosses Tor. One arm is a clearnet
+   peer of that node. The flush delay stays the production draw; the
+   test does not subtract a modelled transit. **Where:** a testnet
+   node that publishes an onion, and one clearnet peer it is connected
+   to. Not a host under a quiet claim. **What moves the input:** if
+   the measured Tor-return p90 exceeds 3250 ms, the provisional value
+   is short and `F′` moves with its dependents in one later change
+   (§90). If that p90 is at or under 3250 ms, the value stays for
+   that path. A simulated cell under 3250 does not confirm it.
+   **Carrier:** this item. **Closes when** that measurement is
+   recorded here with the two p90s and the input has either moved
+   under §90 or been confirmed for the Tor return. **Re-evaluation:**
+   the dated record of those two p90s.
 3. **Onion-candidate flooding defence.** A hidden edge is drawn from
-   publishers an attacker can supply. **Carrier:** P2P-3 slice 1.
+   publishers an attacker can supply. `HiddenStemSlot` moves the
+   first-spy attack onto that share: a clearnet arrival exonerates
+   a sender who also has a hidden session, so the origin is sought
+   among onion candidates (§95.3). This item carries that cost.
+   **Carrier:** P2P-3 slice 1.
    **Closes when** slice 1 has landed: the C++ peer lists are gone
    (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and
    the uniform draw within a connector is the dial source. **Re-evaluation:**
