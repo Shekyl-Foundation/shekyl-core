@@ -105,6 +105,7 @@
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-pass-delivery-digest-v1	rust/shekyl-archival-retention/src/pass_anchor.rs	PASS_DELIVERY_DIGEST_CUSTOMIZATION	shekyl-live		2026-10-04: digest of the response P delivered, salted by the request's nonce — cSHAKE256(label, nonce ‖ framed)[..32]; the last term of the attestation countersignature transcript and a carried field of the pass record
+1	shekyl/archival-shard-view-hash-v1	rust/shekyl-archival-retention/src/shard_view_hash.rs	SHARD_VIEW_HASH_CUSTOMIZATION	shekyl-live		2026-10-08 (SV-D1): the visualization's seed for a W-byte shard — cSHAKE256(label, shard_id_le ‖ per tx: txid ‖ len ‖ prunable ‖ len ‖ pqc_auths)[..32] over the archival bytes themselves, so it requires the pruned components; not a verification digest, never a skeleton row, never on the serving wire
 1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-claim-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_CLAIM_CUSTOMIZATION	shekyl-live
 1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live

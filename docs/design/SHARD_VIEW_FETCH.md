@@ -87,12 +87,17 @@ view_hash(k) = cSHAKE256(
 - **Domain separation** per rule 30: a new cSHAKE256 customization string,
   registered in `shekyl-crypto-pq`'s domain registry with the other
   `shekyl/…-v1` strings.
-- **One home** (rule 05): `shekyl_types::archival::ShardViewHasher`, a
-  streaming fold (`begin(ShardId)`, `fold_tx(txid, prunable, pqc_auths)`,
-  `finish() -> ShardViewHash`), beside `shard_of`. The fetch client folds it
-  in the same pass that verifies (`SV-D8`); a local holder folds it over its
-  own store; the Python fake chain in `shekyl-dev/visualization` mirrors the
-  same fold over its synthetic component bytes so recipe pins stay shared.
+- **One home** (rules 05 and 18): the word `ShardViewHash` is a
+  `shekyl-types` newtype beside the other 32-byte names; the computation
+  is `shekyl_archival_retention::ShardViewHasher`, a streaming fold
+  (`begin(ShardId)`, `fold_tx(ArchivalTx { txid, prunable, pqc_auths })`,
+  `finish() -> ShardViewHash`) in the crate that owns the other archival
+  cSHAKE labels, with `shard_view_hash(..)` as that hasher run once. The
+  fetch client folds it in the same pass that verifies (`SV-D8`); a local
+  holder folds it over its own store; the Python fake chain in
+  `shekyl-dev/visualization` mirrors the same fold over its synthetic
+  component bytes so recipe pins stay shared. The known answer
+  (`known_answer_v1`, shard 7, two transactions) is pinned on both sides.
 - **Falsifiers.** A store with the archival bytes discarded returns a typed
   refusal, never a hash; the KAT vector pins the fold over a two-transaction
   fixture; flipping one archival byte that leaves every skeleton row intact

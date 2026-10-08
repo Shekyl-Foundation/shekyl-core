@@ -36,7 +36,7 @@ transcribed and **re-verified at source 2026-08-14** (crate manifests +
 | ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
 | SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
 | Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
-| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 33 domains) | RustCrypto audited lineage |
+| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 34 domains) | RustCrypto audited lineage |
 | Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
 | SHA-512, Blake2b512 | `sha2` / `blake2 0.10` | HKDF backbone (mech 2); Blake2b DSTs incl. `DOMAIN_PQC_LEAF` (mech 4) | Same |
 | Bulletproof+ / FCMP++ curve stack | Vendored, manifest-gated (`check_vendored_crypto_manifest.sh`, 59 files) | Range proofs; membership + SAL | **The known non-PQ surface — see §4** |
@@ -142,11 +142,13 @@ and 2026-09-13 refreshes had moved without editing the row below. The
 `shekyl/archival-pass-delivery-digest-v1` (`SF-D8`'s delivery digest),
 re-versions the attestation signing-scheme domain to `-v3` (a rename, not a
 count change), and recounts every row of the table from the TSV, so each
-equals its `PRODUCTION_PINS` entry (live + frozen).
+equals its `PRODUCTION_PINS` entry (live + frozen). The 2026-10-08 refresh
+adds one mechanism-1 customization, `shekyl/archival-shard-view-hash-v1`
+(`SV-D1`'s view hash of a `W`-byte shard, over its archival bytes).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 33 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 34 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 39 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |

@@ -284,7 +284,13 @@ count_pattern() {
 # (shekyl/archival-pass-delivery-digest-v1, the nonce-salted digest of the
 # response P delivered). `pass_delivery_digest` is that hasher run once, and
 # the tests call those two; none adds a site.
-MECH1_EXPECTED=59
+# SV-D1 (2026-10-08): 59 -> 61. One production site in
+# rust/shekyl-archival-retention/src/shard_view_hash.rs -- `ShardViewHasher::begin`
+# (shekyl/archival-shard-view-hash-v1, the visualization's seed over a
+# W-byte shard's archival bytes) -- plus one inline #[cfg(test)] site: the
+# fold-equals-one-shot test rebuilds the documented preimage with
+# `cshake256_32` under the same label.
+MECH1_EXPECTED=61
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

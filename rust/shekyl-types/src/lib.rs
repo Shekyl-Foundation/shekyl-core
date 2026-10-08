@@ -663,6 +663,26 @@ hash32! {
 }
 
 hash32! {
+    /// The **view hash** of a closed archival shard — the visualization's
+    /// seed (`V3_SHARD_VISUALIZATION.md`), ruled `SV-D1`
+    /// (`SHARD_VIEW_FETCH.md`): a cSHAKE256 fold over the shard's archival
+    /// bytes — every in-domain transaction's prunable region and
+    /// `pqc_auths`, in storage order — so a node that discarded the body
+    /// cannot produce it.
+    ///
+    /// A *name* for a value `shekyl-archival-retention` computes
+    /// (`ShardViewHasher`); this crate holds the word. Distinct from
+    /// [`PrunableHash`] and [`PqcAuthHash`] (the per-transaction
+    /// verification digests, retained on every node and folded into the
+    /// [`TxHash`]) — a view hash is per shard, never a skeleton row, never
+    /// consensus, and never carried on the serving wire. Distinct from
+    /// [`CurveTreeRoot`] (the retired leaf-segment root `R_k` this value
+    /// replaces on the `request_archival_shard` wire). Public; full-hex
+    /// `Debug`.
+    ShardViewHash
+}
+
+hash32! {
     /// The block-header **attestation root** (archival credit-wire witness
     /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
     ///
