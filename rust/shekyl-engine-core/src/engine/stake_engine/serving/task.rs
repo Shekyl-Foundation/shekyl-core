@@ -380,9 +380,10 @@ async fn run_serving_task<P>(
     // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
     // per cadence so the board answers "is the key refusing *now*". Own
     // task, sampling through the host's detached reader rather than through
-    // `&host`: the loop below awaits `refresh` with no timeout, and a key
-    // that starts refusing while a refresh is wedged on the store actor is
-    // exactly the reading this row exists to carry. First reading is
+    // `&host`: the loop below awaits `refresh` for as long as the store
+    // actor takes (only `cancel` interrupts it), and a key that starts
+    // refusing while a refresh is wedged on that actor is exactly the
+    // reading this row exists to carry. First reading is
     // immediate, so a published onion never sits `NotServing` for a cadence.
     let counters = host.counter_reader();
     let health = spawn_health_probe(
@@ -416,7 +417,19 @@ async fn run_serving_task<P>(
             _ = ticker.tick() => {}
         }
 
-        report(&alarms, observe(&host, bound).await);
+        // The refresh is an actor round trip with no timeout, so it stays
+        // under `cancel` too: a refresh wedged on the store actor must not
+        // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
+        // safe — `PersonaServingHost::refresh` swaps the witness only after
+        // the pin returns, so an abandoned attempt leaves the previous pins
+        // in place, and the teardown below reports `NotServing` over
+        // whatever this tick would have said.
+        let observation = tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            observation = observe(&host, bound) => observation,
+        };
+        report(&alarms, observation);
         // Re-read after every refresh so a host whose obligation *arm*
         // changes is not stuck on the start snapshot. The type is the
         // arm, not the size — a growing prefix does not change what we

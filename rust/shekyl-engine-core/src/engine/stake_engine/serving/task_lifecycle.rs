@@ -50,6 +50,26 @@ fn pinner(fail: bool) -> EmptySetPinner {
     }
 }
 
+/// A pinner that answers the start pin and then never answers again — a
+/// store actor that has wedged after the host came up.
+struct WedgingPinner {
+    inner: EmptySetPinner,
+    answered_start: std::sync::atomic::AtomicBool,
+}
+
+impl ServeSetPinner for WedgingPinner {
+    async fn pin_serve_set(&self) -> Result<HostPinReport, String> {
+        if self
+            .answered_start
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            std::future::pending().await
+        } else {
+            self.inner.pin_serve_set().await
+        }
+    }
+}
+
 /// A tor config whose binary cannot pass the hash gate. `start` returns as
 /// soon as the supervisor is spawned (it does not await readiness), so this
 /// drives a *successful* host start without a real tor.
@@ -212,6 +232,63 @@ async fn the_posture_snapshot_tracks_the_host_and_clears_on_shutdown() {
         "teardown must clear the posture: a snapshot left at its last \
          value would have `staking_info` report a posture for a host \
          that has stopped"
+    );
+}
+
+/// **Shutdown does not wait on a wedged refresh.** The refresh is an actor
+/// round trip with no timeout; if it sat outside the cancel `select!`, a
+/// store actor that stopped answering would hold `ServingHandle::shutdown`
+/// open for as long as it stayed wedged — tor still published, the wallet
+/// unable to close. The pinner here answers the start pin and then never
+/// again, so the first refresh tick is pending inside the actor round trip
+/// when shutdown is requested.
+#[tokio::test]
+async fn shutdown_completes_while_a_refresh_is_wedged_on_the_actor() {
+    const CADENCE: Duration = Duration::from_millis(10);
+    let dir = tempfile::tempdir().expect("tmp");
+    let alarms = Arc::new(OperatorAlarms::new());
+    let wedging = WedgingPinner {
+        inner: pinner(false),
+        answered_start: std::sync::atomic::AtomicBool::new(false),
+    };
+    let handle = spawn_serving_task(
+        churning_tor(&dir),
+        serving_identity(),
+        wedging,
+        Arc::clone(&alarms),
+        ServingConfig {
+            refresh_cadence: CADENCE,
+            ..immediate()
+        },
+        store_path(),
+        claim(),
+    );
+
+    // Started: the posture is published only after the start pin answered.
+    let mut started = false;
+    for _ in 0..200 {
+        if handle.posture().is_some() {
+            started = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        started,
+        "the host never came up; the test cannot reach a refresh"
+    );
+    // Several cadences on: the refresh tick has fired and is parked in the
+    // pinner that will not answer.
+    tokio::time::sleep(CADENCE * 5).await;
+
+    let after_shutdown = handle.posture.clone();
+    tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+        .await
+        .expect("shutdown must not wait on a refresh the store actor will never answer");
+    assert_eq!(
+        *after_shutdown.borrow(),
+        None,
+        "teardown ran to the end: the posture is cleared after the host is gone"
     );
 }
 

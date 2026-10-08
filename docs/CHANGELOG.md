@@ -92,6 +92,10 @@
   the first read is reported rather than folded into the baseline. The row
   is disarmed `NotServing` outside the host's life. Previously the serve
   counters were readable only by tests.
+- **Closing a serving wallet no longer waits on a wedged serve-set
+  refresh.** The refresh loop's actor round trip is now interrupted by
+  shutdown like the tick before it; an abandoned refresh leaves the
+  previous pins in place and the teardown reports `NotServing` as before.
 
 ### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
 

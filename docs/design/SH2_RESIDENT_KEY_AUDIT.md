@@ -87,7 +87,12 @@ began refusing while a refresh was wedged would have reached the board only
 when the refresh did. The reading now runs on its own probe task
 (`serving::health`, the shape the disk probe already had) through the
 host's detached `ServeCounterReader`, and teardown drains the probe before
-disarming the row. No wallet-RPC wire change: the row names the alarm board,
+disarming the row. The same review put the refresh itself under the task's
+cancel `select!`: a refresh wedged on the actor had held
+`ServingHandle::shutdown` open, and now shutdown drops the attempt (the
+previous pins stay, the swap never ran) and proceeds to teardown — pinned by
+`shutdown_completes_while_a_refresh_is_wedged_on_the_actor`. No wallet-RPC
+wire change: the row names the alarm board,
 and the board is an embedder surface, not a method. *Amended at build
 (2026-10-06):* the pre-flight text also named a `ServingHandle::counters()`
 snapshot accessor; it is not built — no production consumer reads it, and

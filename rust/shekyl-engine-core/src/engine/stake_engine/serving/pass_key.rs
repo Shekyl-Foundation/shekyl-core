@@ -60,10 +60,13 @@ use crate::engine::stake_engine::types::{PSlot, StakeEngineError};
 /// The serving role's view of the active persona's bond identity key.
 ///
 /// Constructed once per serving start by `start_serving_if_staker`, bound to
-/// the slot that was active at that moment. There is no production re-key
-/// path (`activate_persona` has no production caller), so a slot that stops
-/// being held while the host runs is a wallet close, and the key observes it
-/// as a refusal.
+/// the slot that was active at that moment. That slot stays held for the
+/// host's lifetime: the retire sweep never wipes the active persona
+/// (`RetireOutcome::SkippedActive`, pinned by
+/// `retire_skips_the_active_persona`), and there is no production re-key
+/// path that would move `active` off it (`activate_persona` has no
+/// production caller). So a slot that stops being held while the host runs
+/// is a wallet close, and the key observes it as a refusal.
 pub(crate) struct ResidentPassKey {
     stake: WeakStakeEngineHandle,
     p_slot: PSlot,
