@@ -9,12 +9,14 @@
 
 use shekyl_relay_privacy::conformance::composition::{
     build_node_maps, build_two_class, composition_fluff_p90, hidden_inbound_load,
-    simulate_own_edge_capture, LinkClass, Mix, Routing,
+    land_originated_stem, simulate_own_edge_capture, LinkClass, Mix, Routing,
 };
 use shekyl_relay_privacy::conformance::epoch_traffic::{
     epoch_traffic_on, shipped_fluff_reference, simulate_epoch_traffic,
 };
 use shekyl_relay_privacy::conformance::{converge_p90, ConvergenceBudget, ConvergenceRefusal};
+use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
 use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_relay_privacy::SplitMix64;
 
@@ -243,6 +245,58 @@ fn pool_capture_tracks_the_closed_form_and_epochs_raise_it() {
         "a window of epochs is a higher capture chance than one pin: ever {} pin {}",
         cap.ever_across_epochs,
         cap.pin_is_spy
+    );
+}
+
+#[test]
+fn zero_churn_leaves_the_pin_and_the_window_counts_that_pin() {
+    let mut rng = SplitMix64::new(0xCA_91);
+    let still = simulate_own_edge_capture(4, 0.5, 4, 0, 300, &mut rng);
+    assert!(
+        (still.frozen_after_churn - still.pin_is_spy).abs() < 1e-12,
+        "zero churn moved the pin: frozen {} pin {}",
+        still.frozen_after_churn,
+        still.pin_is_spy
+    );
+    let mut rng = SplitMix64::new(0xCA_92);
+    let one = simulate_own_edge_capture(3, 0.5, 1, 2, 2_000, &mut rng);
+    assert!(
+        (one.ever_across_epochs - one.pin_is_spy).abs() < 1e-12,
+        "a one-epoch window counted the fallback: ever {} pin {}",
+        one.ever_across_epochs,
+        one.pin_is_spy
+    );
+}
+
+#[test]
+fn an_originated_stem_stops_when_it_revisits_a_node() {
+    let mut rng = SplitMix64::new(0xC1_C1);
+    let params = DandelionParams::adopted();
+    let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut covered = false;
+    for _ in 0..80 {
+        let graph = build_two_class(3, 1, 1, 1.0, &mut rng);
+        let landing = land_originated_stem(
+            &graph,
+            0,
+            Routing::HiddenStemSlot,
+            &params,
+            &embargo,
+            &mut rng,
+        );
+        let mut seen = vec![false; graph.nodes()];
+        for node in &landing.path {
+            assert!(!seen[*node], "stem continued through node {node}");
+            seen[*node] = true;
+        }
+        assert!(landing.path.len() <= graph.nodes());
+        if landing.path.len() == graph.nodes() {
+            covered = true;
+        }
+    }
+    assert!(
+        covered,
+        "no trial walked far enough to meet the cycle bound"
     );
 }
 

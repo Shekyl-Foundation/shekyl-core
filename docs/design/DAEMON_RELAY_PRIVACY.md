@@ -16945,27 +16945,30 @@ nodes had mean 120, p90 130, max 134. `f = 1` is the normal case.
 **Class-aware first spy.** A clearnet arrival from a sender that has
 a hidden session is certainly relayed, so the estimator does not name
 that sender as the origin. On `h = 12`, `c = 8`, 32 nodes, 200 trials.
-Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.29 and recall
-0.15, aware precision 0.38 and the same recall. At `p_h` from
-`p = 0.30`, blind precision 0.65 and recall 0.56, aware precision
-0.70 and the same recall. The gain is precision: false names on
+Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.42 and recall
+0.21, aware precision 0.53 and the same recall. At `p_h` from
+`p = 0.30`, blind precision 0.69 and recall 0.59, aware precision
+0.76 and the same recall. The gain is precision: false names on
 clearnet edges are dropped, and the true origin's hop is hidden so
 the correct names stay. Under the paper's uniform hop 0 the same
-estimator loses: precision 0.37 to 0.30 at `p = 0.20` (recall 0.20
-to 0.12), and 0.72 to 0.49 at the enriched share (recall 0.63 to
-0.37), because hop 0 can be clearnet and the rule then exonerates
+estimator loses: precision 0.39 to 0.31 at `p = 0.20` (recall 0.17
+to 0.09), and 0.70 to 0.45 at the enriched share (recall 0.61 to
+0.32), because hop 0 can be clearnet and the rule then exonerates
 the origin. `HiddenStemSlot` makes a clearnet arrival exonerating
 rather than identifying. The attack on the origin moves to the onion
 candidate share, which is why §96 item 3 carries this routing's cost.
 Spy labels are drawn once per node per trial, and the origin is not
-a spy.
+a spy. The stem stops when it returns to a node that already
+forwarded it: the live pool switches that duplicate to fluff.
+*Records-was:* a walk that continued past the revisit read blind
+precision 0.29 and aware precision 0.38 at `p = 0.20`.
 
-Separately, eight of 32 nodes initiate no hidden session. Of 606
-clearnet arrivals, 273 had a clearnet-only sender. A clearnet arrival
+Separately, eight of 32 nodes initiate no hidden session. Of 420
+clearnet arrivals, 199 had a clearnet-only sender. A clearnet arrival
 by itself marks its sender clearnet-only less than half the time,
-because relays use clearnet too. The aware estimator named 30
-clearnet predecessors as the origin, and all 30 were clearnet-only.
-The 30-of-30 is the class of the node named, which follows from the
+because relays use clearnet too. The aware estimator named 32
+clearnet predecessors as the origin, and all 32 were clearnet-only.
+The 32-of-32 is the class of the node named, which follows from the
 routing rule; it is not precision against clearnet-only origins, and
 that is unmeasured. That measurement is its own `FOLLOWUPS.md` line.
 

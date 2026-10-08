@@ -474,10 +474,22 @@ pub fn land_originated_stem<R: RelayRng + ?Sized>(
     let mut relayed = Vec::with_capacity(extra);
     let mut at = own.to;
     let mut prev = origin;
+    // A node forwards this stem once. The live pool switches a stem
+    // duplicate to fluff, and the epoch tally stops at the same revisit.
+    // Continuing would count spies the stem phase does not reach.
+    let mut forwarded = vec![false; graph.nodes()];
+    forwarded[origin] = true;
     for _ in 0..extra {
+        if forwarded[at] {
+            break;
+        }
+        forwarded[at] = true;
         let Some(hop) = relay_edge(&mut maps[at], &graph.initiated[at], prev, rng) else {
             break;
         };
+        if forwarded[hop.to] {
+            break;
+        }
         relayed.push((hop.class, hop.to));
         prev = at;
         at = hop.to;
@@ -822,7 +834,9 @@ pub struct OwnEdgeCapture {
     pub pin_is_spy: f64,
     /// Fraction of epochs in which the frozen walk after churn still sat on a spy.
     pub frozen_after_churn: f64,
-    /// Fraction of windows in which any epoch's pin was a spy.
+    /// Fraction of windows in which any epoch's initial pin was a spy.
+    /// The post-churn fallback is [`Self::frozen_after_churn`] and is not
+    /// folded into this chance.
     pub ever_across_epochs: f64,
 }
 
@@ -832,6 +846,7 @@ pub struct OwnEdgeCapture {
 /// epoch, `churns` peers are dropped, the dropped one first being the pin,
 /// and the map is updated from the survivors plus a refill peer that is a
 /// spy with probability `p_h`. The frozen pin does not move onto that refill.
+/// `churns == 0` leaves the pin in place and does not refill.
 ///
 /// # Panics
 ///
@@ -871,40 +886,44 @@ pub fn simulate_own_edge_capture<R: RelayRng + ?Sized>(
             let pin_spy = spies[pin_node];
             if pin_spy {
                 pin_hits += 1;
+                ever = true;
             }
-            // Drop `churns` peers, the pin first. Update refills from whoever
-            // remains. The source's next stem_for walks the frozen set.
-            let mut live: Vec<ConnectionId> = ids.clone();
-            live.retain(|id| *id != pin);
-            for _ in 1..churns {
-                if live.is_empty() {
-                    break;
+            let frozen_spy = if churns == 0 {
+                let after = map.stem_for(None, rng);
+                after.is_some_and(|id| node_of(id) == pin_node) && pin_spy
+            } else {
+                // Drop `churns` peers, the pin first. Update refills from
+                // whoever remains. The source's next stem_for walks the
+                // frozen set.
+                let mut live: Vec<ConnectionId> = ids.clone();
+                live.retain(|id| *id != pin);
+                for _ in 1..churns {
+                    if live.is_empty() {
+                        break;
+                    }
+                    let drop = usize_from(bounded_uniform_len(rng, live.len()));
+                    live.swap_remove(drop);
                 }
-                let drop = usize_from(bounded_uniform_len(rng, live.len()));
-                live.swap_remove(drop);
-            }
-            // The refill always joins the live set. It is a spy with
-            // probability p_h, and it is not in the frozen set, so the
-            // source's next stem must not be that peer.
-            let refill = peer_id(hidden_out);
-            let refill_spy = bernoulli_p(rng, p_h);
-            live.push(refill);
-            let _change = map.update(live, rng);
-            let after = map.stem_for(None, rng);
-            assert_ne!(
-                after,
-                Some(refill),
-                "the frozen walk took the refill (spy {refill_spy})"
-            );
-            let frozen_spy = after.is_some_and(|id| {
-                let n = node_of(id);
-                n < hidden_out && spies[n]
-            });
+                // The refill always joins the live set. It is a spy with
+                // probability p_h, and it is not in the frozen set, so the
+                // source's next stem must not be that peer.
+                let refill = peer_id(hidden_out);
+                let refill_spy = bernoulli_p(rng, p_h);
+                live.push(refill);
+                let _change = map.update(live, rng);
+                let after = map.stem_for(None, rng);
+                assert_ne!(
+                    after,
+                    Some(refill),
+                    "the frozen walk took the refill (spy {refill_spy})"
+                );
+                after.is_some_and(|id| {
+                    let n = node_of(id);
+                    n < hidden_out && spies[n]
+                })
+            };
             if frozen_spy {
                 frozen_hits += 1;
-            }
-            if pin_spy || frozen_spy {
-                ever = true;
             }
         }
         if ever {
