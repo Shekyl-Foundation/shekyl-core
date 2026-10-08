@@ -216,7 +216,18 @@ freeze-row `R_k` is consensus metadata, not a body, and is not a local
 shortcut around fetch. Answering from bytes this node already holds
 (staker set, or a prior view-cache) is still this scheduler, not a second
 protocol. The HTTP request names only the shard; the destination is whom
-the scheduler named, not a caller tag on the wire.
+the scheduler named, not a caller tag on the wire. **UPDATE 2026-10-08
+(`SV-D1`, `SV-D2` RULED; [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md)):**
+the view caller's answer is built from the body this fetch verified — its
+`shard_hash` is a cSHAKE256 fold over the archival bytes (prunable regions
+and `pqc_auths`) folded by the verifying pass itself, one transaction
+resident (`SV-D8`), so a node without the body cannot answer and a
+skeleton-only answer is rejected for the view. The response's `shard_hash`
+*was* `R_k` (the retired partition's root) until this update; the fold is
+the definition for `W`-byte shards. A closed shard's aggregate is cached
+keyed on its close height and that block's hash; the open tip shard is a
+typed refusal (`SV-D5`). The view caller lands with the Sub-PR 2 scheduler
+(§9.1 row), not before it.
 
 Reopen if a storage-only pruned-daemon path is shown to exercise the
 serve endpoint end to end without a fetch client. (Also if `EU-D1` or

@@ -190,8 +190,17 @@ Candidate derived properties, with their ruling-A dispositions
 (*Parameter admissibility* below; the original draft called all of
 these "public", which the sweep found untrue of the real chain):
 
-- Shard hash (256 bits, uniformly distributed) — **admitted**
-- Block count in shard — **admitted**
+- Shard hash (256 bits, uniformly distributed) — **admitted**; **defined
+  2026-10-08 (`SV-D1` RULED,
+  [`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md))** as a
+  cSHAKE256 fold over the shard's archival bytes (each in-domain
+  transaction's prunable region and `pqc_auths`, in storage order). It
+  requires the pruned components to compute — a node holding only skeleton
+  rows cannot produce it — and is distinct from the per-transaction
+  verification digests a challenge checks. *Was:* the frozen curve-tree
+  sub-root `R_k` of the retired leaf-segment partition.
+- Block count in shard — **admitted** (`SV-D4`: the span `[h_first, h_last]`
+  of the shard's `tx_id` range; a boundary block counts in both neighbours)
 - Transaction count (aggregate) — **admitted**
 - Time range (first block timestamp to last block timestamp) — **admitted**
 - Output count (new outputs in the shard's block range) — **admitted**
@@ -225,6 +234,15 @@ derived while walking the list. It is the design-review checkpoint from
 > no key, no wallet state, no holder-specific privilege — so that a
 > rendering publishes nothing about the shard that holding the shard
 > does not.**
+
+**Re-keyed 2026-10-08 (`SV-D7` PROPOSED,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)):** under
+`SHT-Q2` a holder holds the **archival good** — prunable regions and
+`pqc_auths` — not blocks; block headers, coinbases and timestamps are
+skeleton rows every node holds. Read "the shard's serialized blocks" as
+*held archival bytes plus the skeleton every node holds*. The intent is
+unchanged; the four admitted features stay admitted; the shard hash's
+input is the archival good only (`SV-D1`).
 
 Two clarifications that do work:
 
@@ -1264,7 +1282,11 @@ result, and re-renders only if the shard content changes (reorg).
 
 Cache invalidation: keyed on (shard_id, shard_content_hash, and the
 crate's exported `RENDER_REVISION`). The content hash changes on a
-reorg; the revision changes when the pixel derivation itself changes
+reorg (the daemon's aggregate cache is keyed on the shard's
+`close_height` and that block's hash, and an **open** tip shard is
+refused rather than rendered — `SV-D5`,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)); the
+revision changes when the pixel derivation itself changes
 pre-freeze (review #617: a cache keyed without it can serve a stale
 PNG alongside a recipe the current code would not produce). Once a
 spec version freezes, a revision bump within it is a defect.
