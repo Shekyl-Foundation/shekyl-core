@@ -482,6 +482,27 @@ jobs:
         run: |
           cargo clippy --locked -p shekyl-levin --no-default-features --all-targets -- -D warnings
           cargo test --locked -p shekyl-levin --no-default-features
+      - name: "cargo clippy: test-only features off, as production builds them (lib only)"
+        working-directory: rust
+        # The crates `check_test_only_features.py` governs each carry a
+        # feature that exists only on a dev edge. The workspace-wide clippy
+        # above unifies features across every target it builds, so a
+        # dev-edge feature is *on* in that run and the production shape of
+        # these crates is never linted: an import or helper that only the
+        # gated item uses is unused in production and invisible above
+        # (#990 review: `std::time::Duration` in shekyl-p-host/src/signer.rs).
+        # `--lib` with no `--all-targets` builds no dev target, so no dev
+        # edge's features apply. The package list is the TEST_ONLY table in
+        # `check_test_only_features.py`. `check_production_lint_lane.py`
+        # (the grep-gates job, which has PyYAML; this container does not)
+        # parses this step and fails if the `-p` set here is not the set of
+        # TEST_ONLY owners, if cargo is passed anything but `--locked`,
+        # `--lib` and `-p` (a dev target or a `--features` flag would put
+        # the test feature back on the lib), if clippy is passed anything
+        # but `-D warnings`, or if this step carries any key but `name`,
+        # `working-directory`, `run`. Add a row there and a `-p` here in
+        # the same commit.
+        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

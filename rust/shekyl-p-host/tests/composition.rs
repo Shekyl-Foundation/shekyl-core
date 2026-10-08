@@ -31,9 +31,9 @@ use shekyl_curve_tree::{
     LEAF_BYTES,
 };
 use shekyl_p_host::{
-    DaemonTipCache, HostError, NoResidentKey, PassKey, PersonaServing, PersonaServingHost,
-    PinError, PinReport, PinnedServeSet, ReportedSet, ServeCounters, ServeObligation,
-    ServeSetPinner, Staleness, StalenessBound,
+    DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
+    PinnedServeSet, RefusingKey, ReportedSet, ServeCounters, ServeObligation, ServeSetPinner,
+    Staleness, StalenessBound,
 };
 use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
 use shekyl_tor_control_wallet::service::{
@@ -649,7 +649,7 @@ async fn shutdown_stops_the_listener() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
         },
         &pinner,
@@ -723,7 +723,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
         },
         &pinner,
@@ -1117,7 +1117,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
         },
         &pinner,
@@ -1227,7 +1227,7 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
         },
         DeadPinner,
@@ -1294,7 +1294,7 @@ async fn host_staleness_uses_the_live_witness() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
         },
         &pinner,

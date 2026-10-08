@@ -1862,6 +1862,39 @@ reviewable by reading it. A second consumer, a test-support constructor that
 escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
 the decode all re-open this item at its full weight.
 
+**UPDATE 2026-10-06 (SH-2 resident-key pre-flight,
+[`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §4) — the hazard
+moved one type outward and is NOT discharged.** `ServeSet::from_connected_record`
+no longer exists; `ServeSet` is sealed (`pub(crate)` constructors, minted only
+by `PinnedServeSet::acquire`). What `acquire` consumes is `ReportedSet`
+(`shekyl-p-host/src/serve_set/report.rs`), a public enum any `ServeSetPinner`
+implementation may construct as a literal — so the fabrication path is now
+"a different pinner", injected at the one `spawn_serving_task` call site. The
+criterion above applies to `ReportedSet` verbatim. The SH-2 resident-key PR
+does not build the seal (a provenance-sealing change across three crates is a
+separate validation surface, rule 19); whether it lands as a following PR or
+is re-ruled against the reopen criterion is the maintainer's, put to them with
+that record.
+
+**RULED 2026-10-07 — re-ruled against the reopen criterion; the three-crate
+seal is NOT built.** Positioned: the only code that can fabricate a
+`ReportedSet` is code inside the operator's own wallet process, so the
+"attacker" is the operator against themselves. A fabricated set cannot make
+`P` serve bytes it does not hold, and a pass for a shard outside `P`'s bond
+is refused **on chain** by `J9` (`CEN-J9`, the derived leaf index against
+the bond record) — the chain is authoritative over `P`'s own report. A wrong
+set can only make `P` fail its own challenges. Production construction is
+one pinner (`engine/stake_engine/serve_set_source.rs`), reviewable by
+reading it, which is what the reopen criterion asks. **The ruling names its
+dependency: it stands on `J9` landing with SO-D8 Slice C.** Until then
+nothing reaches settlement (`set_archival_settlement` has no production
+caller, `FOLLOWUPS.md` CEN-L8 row), so nothing is exposed in the interval.
+The reopen criterion above is unchanged: a second production pinner, a
+test-support constructor that escapes `#[cfg(test)]`, or an FFI surface that
+accepts a reported set from outside the process each re-open this item at
+full weight. Record: [`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md)
+§4.
+
 **4. A new load-bearing invariant, in the same class as the vanguards
 one: a serving host must never rebind its listener.** `WalletTorControl`
 republishes the onion on every incarnation from one `OnionServiceSpec`

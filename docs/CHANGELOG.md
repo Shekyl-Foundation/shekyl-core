@@ -75,8 +75,38 @@
   400 earns one retry of the same `P` with a freshly derived anchor and a
   second is a failed read; a 503 and a refusal trailer are failed reads
   with no retry.
-- A persona bound without a resident key (`NoResidentKey`) answers 503
-  and sends no shard.
+- A persona whose signing key is not available answers 503 and sends no
+  shard.
+
+### Archival serving — the persona signs its own passes (SH-2)
+
+- **Served shards are now countersigned with the persona's bond identity
+  key.** The serving host's key is the persona's resident attestation key
+  (`ResidentPassKey`): the signature is produced inside the stake actor,
+  which already holds that key for the bond's own transactions, so no
+  second copy of the secret exists and the serving role holds only a weak
+  handle to the actor. A wallet whose stake actor has stopped refuses
+  before the first byte (503). The placeholder key that refused every
+  pass is deleted. Verified end to end against the daemon's fetch client
+  in a loopback test: the client accepts the pass under the bond identity
+  and refuses it under any other key.
+- **Operator alarm board: `ServeHealth`.** A new condition reports, once
+  per refresh cadence from a probe on its own task (so a refresh wedged on
+  the store actor cannot delay the reading), whether the host's answers
+  are being answered:
+  `ServeSigningRefused { pre_flight, late }` when the key refused during
+  the tick, `ServeLookupsFailing { failures }` when only lookups (store or
+  daemon tip) failed, `ServeListenerFailing { accept_errors }` when only
+  the loopback listener failed to accept, and a clean armed row when none
+  did. Connections closed over the in-flight cap are load, not an alarm.
+  The first reading is windowed against zero, so a refusal answered before
+  the first read is reported rather than folded into the baseline. The row
+  is disarmed `NotServing` outside the host's life. Previously the serve
+  counters were readable only by tests.
+- **Closing a serving wallet no longer waits on a wedged serve-set
+  refresh.** The refresh loop's actor round trip is now interrupted by
+  shutdown like the tick before it; an abandoned refresh leaves the
+  previous pins in place and the teardown reports `NotServing` as before.
 
 ### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
 
