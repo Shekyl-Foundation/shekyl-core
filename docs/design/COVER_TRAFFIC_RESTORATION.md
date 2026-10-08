@@ -916,9 +916,12 @@ ruling is already on the record. Everything below says **encrypted zone**.
 
 #### The embargo cannot be per-node, and the carrier moves `hop` by ~9×
 
-`shekyl_dandelionpp_embargo_draw_seconds(zone)` takes a zone and nothing else,
-so every node on an encrypted zone draws from one distribution. An operator
-switch would put two populations on that one constant:
+*Records-was:* `shekyl_dandelionpp_embargo_draw_seconds(zone)` took a zone
+and nothing else. The live draw is
+`shekyl_dandelionpp_embargo_draw_seconds_for_connector`, one distribution
+per connector's measured transit, so every node on that connector still
+draws from one distribution. An operator switch would put two populations
+on that one constant:
 
 | population | `hop` | embargo (α = 0.90, τ = 250) |
 | --- | --- | --- |

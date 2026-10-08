@@ -242,8 +242,6 @@ impl StemGraph {
     }
 }
 
-pub use crate::zone::RelayZone;
-
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
 /// Every derived quantity is a method, never a stored field: a caller cannot
@@ -408,10 +406,11 @@ impl DandelionParams {
     /// re-deriving its shape with our verification cost lands on the same
     /// milliseconds. So the cutover from `inherited()` moved **provenance,
     /// not behaviour on clearnet**: the clearnet embargo stays 190 s.
-    /// (Anonymity zones take a longer hop — see [`Self::adopted_for`]. The
-    /// wallet failed-send wait is a separate interim at the *worst* zone's
-    /// quantile, currently 2297 s — `ADOPTED_PROPAGATION_TIMEOUT_SECS` —
-    /// and is a deletion target per §89.6.)
+    /// (A longer measured transit takes a longer hop — see
+    /// [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is the
+    /// longest measured transit's quantile, currently 2297 s —
+    /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
+    /// §89.6.)
     ///
     /// Every other field carries its own already-recorded disposition:
     /// `fluff_return_ms` is F-7's measurement (worst-zone p90 at degree 12),
@@ -430,7 +429,7 @@ impl DandelionParams {
     ///
     /// # Modal shape — an interim the doc prices
     ///
-    /// Per-zone embargo timers still use the **modal shape** (1 input, genesis
+    /// Embargo timers still use the **modal shape** (1 input, genesis
     /// tree) for each zone's hop. §83.1 prices the choice: the modal embargo
     /// is effectively constant across the whole depth range (~3 s of drift),
     /// while the tail rows are where per-shape derivation pays. Per-shape
@@ -444,77 +443,7 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        Self::adopted_for(RelayZone::Public)
-    }
-
-    /// How many *distinct* adopted parameter sets exist across all zones.
-    ///
-    /// Only `time_between_hop_ms` varies by zone, and it takes exactly two
-    /// values — the clearnet transit assumption and the anonymity one — so the
-    /// four `RelayZone`s partition into two classes. Callers that cache a built
-    /// artefact per parameter set size on this rather than on the zone count:
-    /// the process-wide embargo tables are ~443 KB each, and one table per zone
-    /// would build and hold three byte-identical anonymity copies for the life
-    /// of the daemon, on a floor rule 76 pins at a Raspberry Pi 4.
-    pub const ADOPTED_CLASSES: usize = 2;
-
-    /// Transit assumption per adopted class, in class order.
-    const TRANSIT_BY_CLASS: [f64; Self::ADOPTED_CLASSES] = [
-        crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
-        crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-    ];
-
-    /// One representative zone per adopted class, in class order.
-    ///
-    /// Lets a caller build exactly one artefact per class without naming the
-    /// partition a second time. `zone_classes_partition_the_parameter_sets`
-    /// pins that these are in class order and that every zone agrees with its
-    /// representative.
-    pub const CLASS_REPRESENTATIVES: [RelayZone; Self::ADOPTED_CLASSES] =
-        [RelayZone::Public, RelayZone::Tor];
-
-    /// Which of [`Self::ADOPTED_CLASSES`] parameter sets `zone` draws.
-    ///
-    /// The single owner of the zone→parameters partition: [`Self::adopted_for`]
-    /// is defined in terms of it, so a cache indexed by this value cannot fall
-    /// out of step with the parameters it caches. Adding a third class is one
-    /// edit here plus two compile-visible array lengths.
-    #[must_use]
-    pub const fn adopted_class(zone: RelayZone) -> usize {
-        if zone.is_clearnet() {
-            0
-        } else {
-            1
-        }
-    }
-
-    /// The adopted parameter set **for one relay zone** (§89.2).
-    ///
-    /// §89 ruled the embargo per-zone rather than one global provisioned at
-    /// the worst zone. F-7's precedent does not transfer, by §63.2's keeper:
-    /// `fluff_return_ms` crosses transports because a fluff wave returns over
-    /// whatever network the node is on, so there is no per-zone value to pick;
-    /// `time_between_hop_ms` cannot cross, because the stem it spaces only
-    /// ever runs on one transport — and §59's coherence guarantees that, since
-    /// a transaction entering the anonymity zone's stem stays there until it
-    /// fluffs. The quantity is well-defined per zone in a way `F` is not.
-    ///
-    /// Only `time_between_hop_ms` varies. `fluff_return_ms` stays the single
-    /// worst-zone value F-7 measured — correctly, for the reason just given —
-    /// and `q`, the epoch pair and the graph are network-wide constants
-    /// (verified: `relay_zone_params` carries stems and epoch only, and
-    /// nothing zone-parameterises the fluff probability).
-    ///
-    /// # `Invalid` takes the longest embargo, not the shortest
-    ///
-    /// Out-of-domain FFI bytes and unknown-origin cases resolve to
-    /// [`RelayZone::Invalid`], which is provisioned as the anonymity hop.
-    /// Under-estimating shortens the embargo (privacy-losing); the cost of
-    /// the longer wait is recovery latency only.
-    #[must_use]
-    pub fn adopted_for(zone: RelayZone) -> Self {
-        let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
-        Self::adopted_for_transit_ms(transit)
+        Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS)
     }
 
     /// The adopted parameter set for one measured transit term.
@@ -861,91 +790,34 @@ mod tests {
     }
 
     #[test]
-    fn the_clearnet_zone_is_unmoved_by_going_per_zone() {
-        // §89.2 changes what the anonymity zones get. It must change nothing
-        // on clearnet, which carries the overwhelming majority of traffic —
-        // if this moves, per-zone provisioning has become the global-at-worst-
-        // zone posture §89.2 rejected, wearing a different shape.
+    fn the_clearnet_transit_is_the_adopted_set() {
         assert_eq!(
             DandelionParams::adopted(),
-            DandelionParams::adopted_for(RelayZone::Public),
-            "adopted() must remain exactly the clearnet set"
+            DandelionParams::adopted_for_transit_ms(
+                crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
+            ),
+            "adopted() is the clearnet transit assumption"
         );
         assert_eq!(
-            DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms,
+            DandelionParams::adopted().time_between_hop_ms,
             175,
             "the clearnet hop moved off its §88 value"
         );
     }
 
     #[test]
-    fn the_anonymity_zones_take_the_longer_interim_hop() {
-        let anon = DandelionParams::adopted_for(RelayZone::Tor);
-        // §63.2's own worst case — "ten times clearnet latency" — reproduced
-        // as verification floor + the labelled rendezvous assumption.
+    fn the_longer_transit_takes_the_longer_hop() {
+        let anon = DandelionParams::adopted_for_transit_ms(
+            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+        );
+        // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
+        // input is that connector's measured transit.
         assert_eq!(anon.time_between_hop_ms, 1_750);
         assert!(
             anon.time_between_hop_ms > DandelionParams::adopted().time_between_hop_ms,
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \
              relays where clearnet is one direct connection. If this ever \
              inverts, the interim has been edited to the privacy-losing side"
-        );
-    }
-
-    #[test]
-    fn an_unknown_origin_takes_the_longer_embargo_not_the_shorter() {
-        // Invalid/out-of-domain must be the longer hop — under-estimating
-        // shortens the embargo (§65, §66).
-        assert_eq!(
-            DandelionParams::adopted_for(RelayZone::Invalid).time_between_hop_ms,
-            DandelionParams::adopted_for(RelayZone::Tor).time_between_hop_ms,
-            "an unknown origin must be provisioned as the worst case it could be"
-        );
-        assert!(!RelayZone::Invalid.is_clearnet());
-    }
-
-    /// The class partition is the single owner of "which zones share a
-    /// parameter set", and a cache sized on it must be able to trust three
-    /// things: the representatives are in class order, every zone agrees with
-    /// its own representative, and the classes are genuinely distinct.
-    ///
-    /// Without the last one a collapsed partition (both representatives
-    /// clearnet, say) would still satisfy the first two and quietly hand every
-    /// anonymity zone the clearnet embargo — the §89.2 regression this
-    /// partition exists to make impossible.
-    #[test]
-    fn zone_classes_partition_the_parameter_sets() {
-        for (class, zone) in DandelionParams::CLASS_REPRESENTATIVES.iter().enumerate() {
-            assert_eq!(
-                DandelionParams::adopted_class(*zone),
-                class,
-                "representatives must be listed in class order"
-            );
-        }
-
-        for zone in [RelayZone::Invalid, RelayZone::Public, RelayZone::Tor] {
-            let representative =
-                DandelionParams::CLASS_REPRESENTATIVES[DandelionParams::adopted_class(zone)];
-            assert_eq!(
-                DandelionParams::adopted_for(zone).time_between_hop_ms,
-                DandelionParams::adopted_for(representative).time_between_hop_ms,
-                "{zone:?} must draw exactly its class representative's parameters, \
-                 or a per-class cache hands it the wrong embargo"
-            );
-        }
-
-        let hops: Vec<_> = DandelionParams::CLASS_REPRESENTATIVES
-            .iter()
-            .map(|zone| DandelionParams::adopted_for(*zone).time_between_hop_ms)
-            .collect();
-        assert_eq!(
-            hops.len(),
-            DandelionParams::ADOPTED_CLASSES,
-            "one representative per class"
-        );
-        assert!(
-            hops[0] < hops[1],
-            "the classes must stay distinct and clearnet-first: {hops:?}"
         );
     }
 

@@ -1376,7 +1376,7 @@ declaration, not a new set of branches.
 | Observed identity of an inbound peer | the socket address | "this zone, no address" | not assessed |
 | Deadline inputs (D9) | measured per connector | measured per connector | when a connector exists |
 | Rendezvous arrival priced by onion-service proof-of-work | not applicable — clearnet has no rendezvous | enabled by default (D10). Residual: streams inside an established circuit, bounded by `MaxStreams`. Flood resistance is **not assessed** until the Tor flood test | not assessed |
-| Measured transit, milliseconds. The relay's embargo. Not assessed means the relay does not stem on that connector | 50 (`ADOPTED_TRANSIT_ASSUMPTION_MS`) | 1 625 (`ANON_ZONE_TRANSIT_ASSUMPTION_MS`) | not assessed |
+| Measured transit, milliseconds. The relay's embargo, read by `shekyl_dandelionpp_embargo_draw_seconds_for_connector`. *Records-was 2026-10-07:* `shekyl_dandelionpp_embargo_draw_seconds(zone)`. Not assessed means the relay does not stem on that connector | 50 (`ADOPTED_TRANSIT_ASSUMPTION_MS`) | 1 625 (`ANON_ZONE_TRANSIT_ASSUMPTION_MS`) | not assessed |
 | Cover class. The relay's ruling, recorded on the column. Owned by `TOR_COVER_POSTURE.md`. Not a wire property | substitution envelope (open link) | volume cover, unmeasured, pending TRC-1 | not assessed |
 
 **Consequences.**

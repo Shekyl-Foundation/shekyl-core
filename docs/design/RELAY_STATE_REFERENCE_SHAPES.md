@@ -284,9 +284,9 @@ decoder refuse rather than default. `AtHeight<T>` and `AtIndex<T>`
 (`store/read.rs:81` — an empty chain is a value, not `UINT64_MAX`),
 `CurveTreeState::EMPTY` written by the seal (`codec/curve.rs:144` — absence
 is SI-7, never a default), `Option<RMarket>` where the C++ returned `0`
-(`DRS_E1_SARCH.md` SAR-8), `RelayZone::from_ffi_u8` provisioning an
-out-of-range byte as the *worst* case rather than masking it to clearnet
-(`shekyl-relay-privacy/src/zone.rs:68`), and the sentinel removal in
+(`DRS_E1_SARCH.md` SAR-8), an unknown connector byte drawing the longest
+measured transit rather than the shortest
+(`rust/shekyl-ffi/src/dandelionpp_ffi.rs`, `embargo_for_connector`), and the sentinel removal in
 `stem_map` are all the same move. (The review named `TreeAfter`,
 `SegmentAvailability` and `Tip::Empty`; none exists on this tree by those
 names, so the list above is the verified one.)

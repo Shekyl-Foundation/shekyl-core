@@ -3789,15 +3789,16 @@ holds per-epoch, per-connection state; the embargo distribution is node-local
 process-wide `OnceLock` (the tables are immutable once built) and the same
 `OsRng` the map FFI uses:
 
-> **Signature updated 2026-08-08 (§89.2).** The draw takes a zone byte, and the
-> `OnceLock` holds one timer per *parameter class* rather than one for the
-> process — `DandelionParams::adopted_class` owns that partition. This row is
+> **Signature updated 2026-10-07.** The zone-byte draw is deleted. The live
+> draw is the forwarded connector's measured transit. *Records-was
+> 2026-08-08 (§89.2):* the draw took a zone byte and
+> `DandelionParams::adopted_class` partitioned the timers. This row is
 > the live inventory for the seam; §64.4's "takes no arguments" is the
 > superseded state.
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds(zone: u8) -> u64` |
+| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
 | `tx_propagation_timeout` in `wallet2` (the deleted `wallet2.cpp`) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
@@ -14113,13 +14114,19 @@ Recomputed at `q = 20` — the anon zone's value, verified unchanged:
 The decision stands. What changes is that it arrives with a bill §64 had not
 priced, because §63.2's margin was computed on the posture being retired.
 
-### 89.2 The embargo is per-zone — SUPERSEDED 2026-10-01
+### 89.2 The embargo is per-zone — SUPERSEDED 2026-10-01; the zone-keyed export is records-was 2026-10-07
 
+> **Records-was 2026-10-07.** `shekyl_dandelionpp_embargo_draw_seconds(zone)`
+> is deleted, with `RelayZone`, `adopted_for(RelayZone)`, `adopted_class`
+> and `CLASS_REPRESENTATIVES`. The live draw is
+> `shekyl_dandelionpp_embargo_draw_seconds_for_connector`
+> (`tx_pool.cpp:1277`), from the forwarded connector's measured transit.
+>
 > **SUPERSEDED 2026-10-01.** The premise that a stem stays on the zone
 > it arrived on is reversed. One relay draws after hop 0 over every
-> outbound edge, and the embargo reads the class of the edge that stem
-> was forwarded on (relay-lane acceptance, criterion 4). The argument
-> below is the record of the ruling it replaced.
+> outbound edge, and the embargo reads the measured transit of the edge
+> that stem was forwarded on. The argument below is the record of the
+> ruling it replaced.
 
 > **Two amendments from §89.8, neither retracting the decision.** (a) The
 > well-definedness argument below leans on coherence keeping a stem on one
@@ -14129,8 +14136,9 @@ priced, because §63.2's margin was computed on the posture being retired.
 > hop. Current liveness of that premise is the checklist at §89.8.4, not
 > restated here. (b) The mechanism is landed. Whether it draws on i2p/tor is
 > the same checklist. Clearnet draws through it on every stem. The back-out of
-> the persisted zone field stands and is reconfirmed by §89.8.3 — and by the
-> draw site itself, which already takes `zone` as a parameter.
+> the persisted zone field stands and is reconfirmed by §89.8.3.
+> *Records-was 2026-10-07:* the draw site took `zone`. It takes the
+> connector.
 
 The tempting move is F-7's: provision one global at the worst zone, as
 `fluff_return_ms = 3250` already does. **It does not apply here, by this arc's
@@ -14698,7 +14706,9 @@ unbounded wait turned a red assertion into a CI job timeout with no test named.
 >    field on the finding that the txpool does not need to remember the zone,
 >    only to be told it. That holds at the embargo draw: `set_relayed` takes
 >    `zone` beside `tx_relay` and calls
->    `shekyl_dandelionpp_embargo_draw_seconds(zone)`; every
+>    `shekyl_dandelionpp_embargo_draw_seconds(zone)` (*records-was
+>    2026-10-07; the live call is
+>    `shekyl_dandelionpp_embargo_draw_seconds_for_connector`*); every
 >    `on_transactions_relayed` site has `zone_->nzone` in scope. Q12-D2
 >    reconfirmed it. Missing-only-the-draw is the cheapest outcome that was
 >    worth checking, and it is the state of the *input*.

@@ -3242,22 +3242,6 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 // needed here, derive it in the crate and export it, so the number and its
 // reason cannot drift apart again.
 
-/// One embargo duration in seconds, drawn from the adopted memoryless
-/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
-/// geometric support includes 0 and the table is not clamped at the boundary,
-/// so what ships is what was derived and tested. A zero draw does not mean "fire
-/// this instant" — deadlines are whole seconds, so it resolves to the earliest
-/// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
-/// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
-/// embargo is the privacy-losing direction at every draw value including zero.
-///
-/// \param zone The embargo-class byte, not a connector index. 1 is the
-/// clearnet-class window. 3 is the anonymity-class window. 0 and any other
-/// byte take the longest window: a corrupt byte costs recovery latency
-/// rather than embargo length. (Masking would send 5 to the shortest.)
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
-
 /// Not a connector index. The connector embargo draws the longest measured
 /// transit for this byte. A stem-tally row uses the same byte when the
 /// observation recorded no connector.
@@ -3279,10 +3263,10 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds_for_connector(uint8_t connector
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
 ///
-/// Deliberately takes no zone, though the draw above does: this is a wallet
-/// decision, and the wallet cannot know which zone its transaction took. It
-/// gets the worst zone's wait. The whole export is a deletion target — see
-/// DAEMON_RELAY_PRIVACY.md §89.6.
+/// Deliberately takes no connector: the wallet cannot know which connector
+/// carried the transaction, so it gets the longest measured transit's wait.
+/// *Records-was:* the worst `RelayZone`. The whole export is a deletion
+/// target — see DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 /// How long an ORIGIN waits before re-broadcasting its own still-unseen
