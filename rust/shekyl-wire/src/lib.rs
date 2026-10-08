@@ -53,6 +53,7 @@
 //! post-renumber bytes.
 
 pub mod block;
+pub mod shard_frame;
 pub mod transaction;
 pub mod tx_extra;
 pub mod varint;
@@ -68,7 +69,8 @@ pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
 pub use block::{Block, BlockHeader};
 pub use transaction::{
-    carries_archival_good, empty_region_prunable_hash, prunable_hash_of, BondPost, BondPostKind,
-    BpPlus, Ct, CtBase, FullTransaction, Holdings, Input, Output, PqcAuth, PqcSigningPreimage,
-    Prunable, PrunedError, Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments,
+    carries_archival_good, empty_region_prunable_hash, pqc_auth_hash_of, prunable_hash_of,
+    BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input, Output, PqcAuth,
+    PqcSigningPreimage, Prunable, PrunedError, Transaction, TxPrefix, TxSegments, TxidParts,
+    TxidSegments,
 };
