@@ -105,9 +105,9 @@ use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
-use crate::scenario_spend::Spender;
 use crate::source::{IngestEvent, Injection, ServeCredit};
 use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
+use shekyl_harness_spender::Spender;
 
 /// The settlement epoch open at `height` under the genesis rule set — the
 /// epoch a join at `height` records and a credit at `height` is keyed by.
@@ -238,7 +238,10 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
 /// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
-    let connecting = first_spending_height();
+    // Two spends in one block, of coinbases 0 and 1: the block connects
+    // where the later of the two is mature, one past coinbase 0's first
+    // spending height.
+    let connecting = first_spending_height() + BlockCount::ONE;
     let mut scenario = Scenario::open("scenario-archival-g10");
     let mined = scenario
         .mine(ChainCount::from_next_height(connecting).to_raw())

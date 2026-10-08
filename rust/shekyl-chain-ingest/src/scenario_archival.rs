@@ -13,7 +13,7 @@
 //! `AssembleBond` / `AssembleRelease` call, so the vin carries the identity
 //! key, the derived `P_canonical_id`, the floor-priced total and the
 //! genesis-frozen term side); the transaction around it
-//! ([`Spender::spend_coinbase_posting`](crate::scenario_spend::Spender::spend_coinbase_posting):
+//! ([`Spender::spend_coinbase_posting`](shekyl_harness_spender::Spender::spend_coinbase_posting):
 //! funding spend, two confidential outputs, `sign_transaction_with_terms`
 //! with the post's term on its side, the bond slot last in `pqc_auths` and
 //! signed by the named key — the identity key for a credit, `bond_spend_sk`
@@ -43,50 +43,16 @@ use shekyl_archival_retention::{
 use shekyl_chain_rules::harness::fixture::PRUNED_PASS_RECORD;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
-};
+use shekyl_harness_spender::PostedBond;
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::archival::{BondRecord, Holdings};
-use shekyl_types::{PCanonicalId, SigningPayloadHash};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::{BondPost, TxPrefix};
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction};
 
 /// The driver's persona master seed. Any 64 bytes; fixed so the personas
 /// (and their canonical ids) are the same in every run.
 const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
-
-/// A bond post riding a spend: the prefix input, the cleartext term on the
-/// side the kind fixes, and the key that signs the bond `pqc_auths` slot.
-///
-/// The term is two `Option`s, not one signed amount, for the reason the
-/// production assembler gives: swapping the sides balances a different
-/// transaction than the one being built.
-pub struct PostedBond<'a> {
-    /// The `Input::BondPost` as it goes on the wire.
-    pub input: Input,
-    /// A debit — released collateral entering as a **source** (Release).
-    pub debit: Option<InputTerm>,
-    /// A credit — the bond leaving as a **sink** (JoinMarket).
-    pub credit: Option<OutputTerm>,
-    /// The public key occupying the bond slot (the last `pqc_auths` entry).
-    pub slot_pk: Vec<u8>,
-    /// The key that signs the slot: the identity key for a credit,
-    /// `bond_spend_sk` for a debit.
-    slot_sk: &'a HybridSecretKey,
-}
-
-impl PostedBond<'_> {
-    /// The bond slot's signature over its phase-1 payload hash — the
-    /// production assembler's `sign_bond_slot`, verbatim.
-    pub fn sign_slot(&self, payload: &SigningPayloadHash) -> Vec<u8> {
-        HybridEd25519MlDsa
-            .sign(self.slot_sk, SCHEME_DOMAIN_PQC_AUTH_TX, payload.as_bytes())
-            .expect("the persona's key signs")
-            .to_canonical_bytes()
-            .expect("a hybrid signature encodes")
-    }
-}
 
 /// An archival persona: the keys a wallet derives for slot `p_slot`.
 pub struct Persona {
@@ -108,8 +74,8 @@ impl Persona {
 
     /// The whole bundle — what the emission claim's assembly signs and
     /// scans with (E6 slice 8 row 7, `emission_assembly`), and what
-    /// `scenario_spend::Owner::persona` reads to source the outputs a
-    /// coinbase spend paid it.
+    /// `shekyl_harness_spender::Owner::persona` reads to source the
+    /// outputs a coinbase spend paid it.
     pub fn keys(&self) -> &ArchivalPKeys {
         &self.keys
     }
@@ -146,13 +112,13 @@ impl Persona {
     pub fn join(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> PostedBond<'_> {
         let built = build_join_market_vin(self.keys.bond_post_keys(), holdings, endpoint)
             .expect("the production constructor builds the join");
-        PostedBond {
-            input: bond_post_input(built.vin()),
-            debit: None,
-            credit: Some(built.credit_term()),
-            slot_pk: built.vin().hybrid_public_key.clone(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
+        PostedBond::signed_by(
+            bond_post_input(built.vin()),
+            None,
+            Some(built.credit_term()),
+            built.vin().hybrid_public_key.clone(),
+            &self.keys.hybrid_sign_sk,
+        )
     }
 
     /// A Release of `record_bonded_total`, through the production
@@ -161,13 +127,13 @@ impl Persona {
     pub fn release(&self, record_bonded_total: u64) -> PostedBond<'_> {
         let built = build_release_vin(self.keys.bond_post_keys(), record_bonded_total)
             .expect("the production constructor builds the release");
-        PostedBond {
-            input: bond_post_input(built.vin()),
-            debit: Some(built.debit_term()),
-            credit: None,
-            slot_pk: self.bond_spend(),
-            slot_sk: &self.keys.bond_spend_sk,
-        }
+        PostedBond::signed_by(
+            bond_post_input(built.vin()),
+            Some(built.debit_term()),
+            None,
+            self.bond_spend(),
+            &self.keys.bond_spend_sk,
+        )
     }
 
     /// The Reinstate vin for `record` — the shape
@@ -203,13 +169,13 @@ impl Persona {
     /// arm's key (gate-4 §9.11), as the C++ `apply_archival_reinstate`'s
     /// authorizer.
     pub fn reinstate(&self, record: &BondRecord) -> PostedBond<'_> {
-        PostedBond {
-            input: bond_post_input(&self.reinstate_vin(record)),
-            debit: None,
-            credit: None,
-            slot_pk: self.identity(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
+        PostedBond::signed_by(
+            bond_post_input(&self.reinstate_vin(record)),
+            None,
+            None,
+            self.identity(),
+            &self.keys.hybrid_sign_sk,
+        )
     }
 
     /// A Release `BondPost` with the production constructor's fields, for
@@ -239,13 +205,13 @@ impl Persona {
             .then(|| OutputTerm::new(shekyl_units::AtomicUnits::from_raw(post.bond_credit)));
         let debit = (post.bond_debit != 0)
             .then(|| InputTerm::new(shekyl_units::AtomicUnits::from_raw(post.bond_debit)));
-        PostedBond {
-            input: Input::BondPost(Box::new(post)),
+        PostedBond::signed_by(
+            Input::BondPost(Box::new(post)),
             debit,
             credit,
-            slot_pk: self.identity(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
+            self.identity(),
+            &self.keys.hybrid_sign_sk,
+        )
     }
 
     /// A JoinMarket `BondPost` with the production constructor's fields,

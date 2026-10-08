@@ -3850,10 +3850,11 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
- "shekyl-curve-tree",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-harness-spender",
+ "shekyl-harness-wallet",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4440,6 +4441,23 @@ dependencies = [
  "shekyl-wire",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-harness-spender"
+version = "3.1.0"
+dependencies = [
+ "shekyl-bulletproofs",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-curve-generators",
+ "shekyl-curve-tree",
+ "shekyl-fcmp",
+ "shekyl-harness-wallet",
+ "shekyl-tx-builder",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
 ]
 
 [[package]]

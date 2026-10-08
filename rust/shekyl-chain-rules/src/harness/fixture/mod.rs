@@ -23,6 +23,7 @@ use super::price;
 use super::*;
 use crate::verdict::TxSlot;
 
+pub use crate::rules::tx_against::newest_admissible_reference;
 pub use price::{priced, priced_at, repriced};
 pub use shekyl_harness_wallet::coinbase::{paid, Paid};
 pub use shekyl_harness_wallet::MinerWallet;
@@ -468,17 +469,6 @@ pub fn referencing(mut tx: Transaction, reference: BlockHash) -> Transaction {
         *reference_block = reference;
     }
     tx
-}
-
-/// The newest reference CEN-I11 admits for a spend listed in the block
-/// that connects at `connecting`: the block `REFERENCE_BLOCK_MIN_AGE`
-/// below it (`ref_height ≤ chain_height − MIN_AGE`, `blockchain.cpp:4121`,
-/// with `chain_height` the connecting height). `None` when the chain is
-/// too young to carry a spend at all — the first block that can list
-/// one is height `MIN_AGE`, referencing genesis.
-#[must_use]
-pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeight> {
-    connecting.checked_sub_count(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE)
 }
 
 /// Whether a row reads `tx`'s `referenceBlock` as a chain fact.

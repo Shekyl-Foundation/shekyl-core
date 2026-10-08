@@ -80,8 +80,8 @@ fn output(recipient: &Recipient, height: u64, amount: u64) -> OutputData {
 ///
 /// # Panics
 ///
-/// See [`output`]; and the grammar constructor refuses nothing a
-/// one-output composition hands it.
+/// As `output` (the private composer); and the grammar constructor
+/// refuses nothing a one-output composition hands it.
 #[must_use]
 pub fn paying(recipient: &Recipient, height: u64, unlock_time: u64, amount: u64) -> Transaction {
     let od = output(recipient, height, amount);

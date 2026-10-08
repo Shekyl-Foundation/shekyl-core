@@ -213,6 +213,7 @@ members = [
     # under the rules crate's no-store belt, so nothing of the curve tree
     # or redb is in its closure — the spending half is a sibling crate.
     "shekyl-harness-wallet",
+    "shekyl-harness-spender",
 
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code

@@ -3,47 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A real spend for the scenario driver (DRS-E3 commit 7,
-//! `DRS_E3_CURVE_WRITER.md` §2.3, §6 row 7) — the object CEN-I15 and
-//! CEN-H19's verification half wait for (FOLLOWUPS: *"blocked on the
-//! scenario driver being able to produce a spend"*).
-//!
-//! A membership proof is valid only against the tree it was made in, so
-//! the spend needs a path through the tree the **store** grew. This module
-//! takes it from the **wallet-side** tree instead — `shekyl_curve_tree`'s
-//! `CurveTreeClient`, the proving store DRS-D3c owns — fed the same blocks
-//! the scenario mined, in order. That is deliberate, and it is the second
-//! oracle this increment lands: the daemon-side writer (`grow.rs`, this PR)
-//! and the wallet-side client are two Rust producers of one tree over one
-//! sequence of blocks, and [`Spender::root_at`] against the store's
-//! `root_at` holds them equal at every height a test asks (§2.5). If the
-//! path were assembled from the store's own rows the spend would prove
-//! nothing about the wallet side; if the client's tree diverged from the
-//! store's, the spend would not verify against the header's root — CEN-I15
-//! is exactly the rule that would refuse it, which is the point of
-//! building the object here rather than a fixture (slice 6 §5.3).
-//!
-//! What is real: the miner's keys and the coinbase the template paid them
-//! (`0x06` KEM ciphertext, `0x07` leaf entry), recovered by the production
-//! scanner (`recover_combined_ss`, `scan_output`, `compute_output_key_image`);
-//! the path (`assemble_path`); the signature (`sign_transaction`,
-//! `sign_pqc_auths`); the wire bytes (`encode_final_tx`). Nothing is a
-//! filler point or a conforming blob.
-//!
-//! E6 slice 8 row 7 widened the recipient and the owner. A spend can pay a
-//! [`Recipient`] other than the miner — a persona's base address — and the
-//! tree can be told to watch ([`Spender::own`]) for listed outputs so that,
-//! once a block carrying them is pushed, [`Spender::owned_input`] sources
-//! them for any [`Owner`] holding the matching secrets. That is what the
-//! driver's emission claim spends: a backing output and a fee output paid
-//! to the persona by an earlier spend of the miner's coinbase.
+//! The wallet-side tree over a chain of mined blocks and the spends it
+//! sources — the crate's body; the crate docs carry the argument for why
+//! the tree is the wallet's and not the store's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_block_template::MinerKeys;
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_chain_rules::harness::fixture::newest_admissible_reference;
-use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_chain_rules::newest_admissible_reference;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, scan_output, OutputData,
@@ -67,77 +34,8 @@ use shekyl_wire::tx_extra::{
 };
 use shekyl_wire::{Ct, Transaction};
 
-use crate::scenario::{Mined, MinerWallet};
-use crate::scenario_archival::PostedBond;
-
-/// Whom a spend pays: the three public keys `construct_output` addresses
-/// an output to.
-pub struct Recipient {
-    /// The Edwards spend public key (`B`).
-    pub spend_public: [u8; 32],
-    /// X25519 half of the hybrid KEM target.
-    pub x25519_pk: [u8; 32],
-    /// ML-KEM-768 encapsulation key.
-    pub ml_kem_ek: Vec<u8>,
-}
-
-impl Recipient {
-    /// The miner — what the template pays, and what the coinbase spends
-    /// paid before row 7.
-    pub fn miner(keys: &MinerKeys) -> Self {
-        Self {
-            spend_public: keys.spend_public,
-            x25519_pk: keys.x25519_pk,
-            ml_kem_ek: keys.ml_kem_ek.clone(),
-        }
-    }
-
-    /// A persona's base address — where its backing and fee outputs live
-    /// (`ARCHIVAL_BOND_CONSTRUCTION.md`: funded by a plain payment to `P`).
-    pub fn persona(keys: &ArchivalPKeys) -> Self {
-        Self {
-            spend_public: *keys.spend_pk.as_canonical_bytes(),
-            x25519_pk: keys.x25519_pk,
-            ml_kem_ek: keys.ml_kem_ek.to_vec(),
-        }
-    }
-}
-
-/// What a wallet needs to recognise and spend an output paid to it: the
-/// scanner's two decapsulation secrets, and the spend pair.
-pub struct Owner<'a> {
-    /// The X25519 decapsulation scalar (the view secret).
-    pub x25519_sk: &'a [u8; 32],
-    /// The ML-KEM-768 decapsulation key.
-    pub ml_kem_dk: &'a [u8],
-    /// The Edwards spend public key the output was addressed to.
-    pub spend_public: &'a [u8; 32],
-    /// The Edwards spend secret `b`; `x = ho + b` is the one-time secret.
-    pub spend_secret: &'a [u8; 32],
-}
-
-impl Owner<'_> {
-    /// The miner's wallet.
-    pub fn miner(wallet: &MinerWallet) -> Owner<'_> {
-        Owner {
-            x25519_sk: &wallet.kem_secret.x25519,
-            ml_kem_dk: &wallet.kem_secret.ml_kem,
-            spend_public: &wallet.keys.spend_public,
-            spend_secret: &wallet.spend_secret,
-        }
-    }
-
-    /// A persona, over the same secrets the engine's
-    /// `derive_p_source_secrets_bundle` reads.
-    pub fn persona(keys: &ArchivalPKeys) -> Owner<'_> {
-        Owner {
-            x25519_sk: keys.view_sk.as_canonical_bytes(),
-            ml_kem_dk: keys.ml_kem_dk.as_canonical_bytes(),
-            spend_public: keys.spend_pk.as_canonical_bytes(),
-            spend_secret: keys.spend_sk.as_canonical_bytes(),
-        }
-    }
-}
+use crate::bond::PostedBond;
+use crate::{MinedBlock, MinerWallet, Owner, Recipient};
 
 /// An output sourced for spending: the signer's input, its key image, and
 /// the tree context the path was assembled in.
@@ -158,8 +56,8 @@ struct Located {
     gindex: u64,
 }
 
-/// The wallet-side tree over a scenario's mined blocks, and the facts a
-/// spend of one of its coinbases needs (module docs).
+/// The wallet-side tree over a chain's mined blocks, and the facts a
+/// spend of one of its coinbases needs (crate docs).
 pub struct Spender {
     client: CurveTreeClient,
     /// `hashes[h]` — block `h`'s identity (the reference block's).
@@ -180,7 +78,8 @@ pub struct Spender {
 
 impl Spender {
     /// The tree after every block of `mined`, in order, from genesis.
-    pub fn over(mined: &[Mined]) -> Self {
+    #[must_use]
+    pub fn over<B: MinedBlock>(mined: &[B]) -> Self {
         let mut spender = Self {
             client: CurveTreeClient::new(),
             hashes: Vec::new(),
@@ -208,18 +107,18 @@ impl Spender {
     /// Feed the next mined block to the wallet-side tree, exactly as the
     /// engine's ingest would: the miner transaction first, then the listed
     /// bodies, each with its `0x07` leaf field.
-    pub fn push(&mut self, mined: &Mined) {
-        let height = mined.height.to_raw();
+    pub fn push<B: MinedBlock>(&mut self, mined: &B) {
+        let height = mined.height().to_raw();
         assert_eq!(
             height,
             self.hashes.len() as u64,
             "blocks are pushed consecutively from genesis"
         );
-        let block = &mined.template.block;
+        let miner_transaction = mined.miner_transaction();
         let mut leaf_blobs: Vec<Vec<u8>> = Vec::new();
         let mut raw: Vec<Vec<RawOutput>> = Vec::new();
-        let txs: Vec<&Transaction> = std::iter::once(&block.miner_transaction)
-            .chain(mined.template.transactions.iter())
+        let txs: Vec<&Transaction> = std::iter::once(miner_transaction)
+            .chain(mined.listed().iter())
             .collect();
         for tx in &txs {
             let fields = parse(&tx.prefix.extra).expect("a mined transaction's extra parses");
@@ -263,9 +162,7 @@ impl Spender {
         // named alongside it, at its own dense index.
         let mut owned = vec![(
             Gindex::from_raw(self.next),
-            shekyl_curve_tree::OneTimePubkey::from_bytes(
-                block.miner_transaction.prefix.outputs[0].key,
-            ),
+            shekyl_curve_tree::OneTimePubkey::from_bytes(miner_transaction.prefix.outputs[0].key),
         )];
         let mut gindex = self.next;
         for tx in &txs {
@@ -304,12 +201,13 @@ impl Spender {
             .iter()
             .map(|tx| tx.prefix.outputs.len() as u64)
             .sum::<u64>();
-        self.hashes.push(mined.hash);
-        self.coinbases.push(block.miner_transaction.clone());
+        self.hashes.push(mined.hash());
+        self.coinbases.push(miner_transaction.clone());
     }
 
     /// The wallet-side tree's root going into `height` — the state the
     /// header at `height` commits to, keyed as the store's `root_at` is.
+    #[must_use]
     pub fn root_at(&self, height: BlockHeight) -> CurveTreeRoot {
         self.client
             .root_at(shekyl_curve_tree::BlockHeight::from_raw(height.to_raw()))
@@ -320,6 +218,7 @@ impl Spender {
     /// at `connecting`, paying `fee` and the rest back to the miner in two
     /// outputs. Anchored at the newest admissible reference (CEN-I11),
     /// whose root is the wallet-side tree's at that height.
+    #[must_use]
     pub fn spend_coinbase(
         &self,
         wallet: &MinerWallet,
@@ -331,7 +230,7 @@ impl Spender {
     }
 
     /// [`Self::spend_coinbase`] with an archival bond post riding it
-    /// (DRS-E4 commit 4; `scenario_archival`): the post is the prefix's one
+    /// (DRS-E4 commit 4; the ingest's `scenario_archival`): the post is the prefix's one
     /// extra input, its term sits on the side its kind fixes — a credit is a
     /// sink the outputs shrink by, a debit a source they grow by — and the
     /// bond slot is the last `pqc_auths` entry, signed by the key the post
@@ -339,6 +238,7 @@ impl Spender {
     /// That is `shekyl-engine-core`'s `bond_post_assemble` shape; with no
     /// post the bytes are [`Self::spend_coinbase`]'s exactly (the `_with_*`
     /// builders are the plain ones with empty extras).
+    #[must_use]
     pub fn spend_coinbase_posting(
         &self,
         wallet: &MinerWallet,
@@ -347,14 +247,7 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
-        self.spend_coinbase_to(
-            wallet,
-            height,
-            connecting,
-            fee,
-            bond,
-            &Recipient::miner(&wallet.keys),
-        )
+        self.spend_coinbase_to(wallet, height, connecting, fee, bond, wallet.recipient())
     }
 
     /// Source an output for spending: the scanner's recovery of what `tx`'s
@@ -472,6 +365,7 @@ impl Spender {
     /// Source a watched output ([`Self::own`]) that a pushed block has
     /// listed, for `owner`, anchored for a spend connecting at
     /// `connecting`. Panics if no pushed block listed `output_key`.
+    #[must_use]
     pub fn owned_input(
         &self,
         owner: &Owner<'_>,
@@ -496,6 +390,7 @@ impl Spender {
     /// recipient's keys, each with its own KEM ciphertext and leaf entry,
     /// so a persona can be funded by a coinbase spend and later source
     /// them through [`Self::owned_input`].
+    #[must_use]
     pub fn spend_coinbase_to(
         &self,
         wallet: &MinerWallet,
@@ -674,7 +569,7 @@ impl Spender {
 
         // Self-check through the consensus verifier against the wallet-side
         // root at the reference height — CEN-I15's exact operation — so the
-        // object handed to the driver is known sound before any rule judges
+        // object handed to the caller is known sound before any rule judges
         // it. A test then holds this root equal to the store's at the same
         // height (`Spender::root_at` vs `RootAt`), which is what makes the
         // proof valid against the header the block will carry.
@@ -694,7 +589,7 @@ impl Spender {
         .expect("verify runs");
         assert!(
             verified,
-            "the driver's spend verifies against the wallet-side root at the reference height"
+            "the spend verifies against the wallet-side root at the reference height"
         );
         Transaction::from_bytes(&bytes).expect("the encoder's bytes parse as a transaction")
     }

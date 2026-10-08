@@ -284,6 +284,23 @@ impl Rule for I11 {
     const ROW: CenRow = CenRow::I11;
 }
 
+/// The newest reference CEN-I11 admits for a spend listed in the block
+/// that connects at `connecting`: the block [`REFERENCE_BLOCK_MIN_AGE`]
+/// below it (`ref_height ≤ chain_height − MIN_AGE`, `blockchain.cpp:4121`,
+/// with `chain_height` the connecting height). `None` when the chain is
+/// too young to carry a spend at all — the first block that can list one
+/// is height `MIN_AGE`, referencing genesis.
+///
+/// The one home of this subtraction (rule 05): [`I11::window`] refuses by
+/// it, and every producer that anchors a spend — the rules harness's
+/// fixtures, the store's, the harness spender — asks it rather than
+/// re-deriving `connecting − MIN_AGE`, so no producer can anchor a spend
+/// differently from the rule that judges it.
+#[must_use]
+pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeight> {
+    connecting.checked_sub_count(REFERENCE_BLOCK_MIN_AGE)
+}
+
 impl I11 {
     /// The window as a pure predicate over the two heights — the boundary
     /// arithmetic, with nothing read: `Ok(())` when `ref_height` is
@@ -292,7 +309,7 @@ impl I11 {
     /// function (rule 50's first job); the rows operating are witnessed by
     /// the driver.
     pub(crate) fn window(connecting: BlockHeight, ref_height: BlockHeight) -> Result<(), ()> {
-        let Some(newest) = connecting.checked_sub_count(REFERENCE_BLOCK_MIN_AGE) else {
+        let Some(newest) = newest_admissible_reference(connecting) else {
             return Err(());
         };
         if ref_height > newest {

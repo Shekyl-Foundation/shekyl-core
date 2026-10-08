@@ -4,8 +4,10 @@
 // BSD-3-Clause
 
 //! The harness's wallet side: the deterministic miner every fixture
-//! coinbase pays, the recipients a scenario pays, and a coinbase composed
-//! as that wallet will scan it.
+//! coinbase pays, the recipients a scenario pays and the owners who
+//! recover what they were paid, and a coinbase composed as that wallet
+//! will scan it. The spending half — the tree walk, the prover, the
+//! signer — is `shekyl-harness-spender`, which depends on this crate.
 //!
 //! # Why a crate, and why this one is wallet-side only
 //!
@@ -54,6 +56,7 @@ use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::account::ml_kem_keypair_from_d_z;
+use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::kem::{HybridKemSecretKey, SeedDerivation};
 use zeroize::Zeroizing;
 
@@ -72,6 +75,58 @@ pub struct Recipient {
     pub x25519_pk: [u8; 32],
     /// ML-KEM-768 encapsulation key.
     pub ml_kem_ek: Vec<u8>,
+}
+
+impl Recipient {
+    /// A persona's base address — where its backing and fee outputs live
+    /// (`ARCHIVAL_BOND_CONSTRUCTION.md`: funded by a plain payment to `P`).
+    #[must_use]
+    pub fn persona(keys: &ArchivalPKeys) -> Self {
+        Self {
+            spend_public: *keys.spend_pk.as_canonical_bytes(),
+            x25519_pk: keys.x25519_pk,
+            ml_kem_ek: keys.ml_kem_ek.to_vec(),
+        }
+    }
+}
+
+/// What a wallet needs to recognise and spend an output paid to it: the
+/// scanner's two decapsulation secrets, and the spend pair. Borrowed, so
+/// the secrets stay where their owner wipes them.
+pub struct Owner<'a> {
+    /// The X25519 decapsulation scalar (the view secret).
+    pub x25519_sk: &'a [u8; 32],
+    /// The ML-KEM-768 decapsulation key.
+    pub ml_kem_dk: &'a [u8],
+    /// The Edwards spend public key the output was addressed to.
+    pub spend_public: &'a [u8; 32],
+    /// The Edwards spend secret `b`; `x = ho + b` is the one-time secret.
+    pub spend_secret: &'a [u8; 32],
+}
+
+impl Owner<'_> {
+    /// A miner's wallet.
+    #[must_use]
+    pub fn miner(wallet: &MinerWallet) -> Owner<'_> {
+        Owner {
+            x25519_sk: &wallet.kem_secret.x25519,
+            ml_kem_dk: &wallet.kem_secret.ml_kem,
+            spend_public: &wallet.recipient.spend_public,
+            spend_secret: &wallet.spend_secret,
+        }
+    }
+
+    /// A persona, over the same secrets the engine's
+    /// `derive_p_source_secrets_bundle` reads.
+    #[must_use]
+    pub fn persona(keys: &ArchivalPKeys) -> Owner<'_> {
+        Owner {
+            x25519_sk: keys.view_sk.as_canonical_bytes(),
+            ml_kem_dk: keys.ml_kem_dk.as_canonical_bytes(),
+            spend_public: keys.spend_pk.as_canonical_bytes(),
+            spend_secret: keys.spend_sk.as_canonical_bytes(),
+        }
+    }
 }
 
 /// A miner's wallet, secrets included: the Edwards spend pair and the

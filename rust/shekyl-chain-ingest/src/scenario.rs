@@ -47,8 +47,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use curve25519_dalek::edwards::EdwardsPoint;
-use curve25519_dalek::scalar::Scalar;
 use kameo::actor::{ActorRef, Spawn};
 use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
@@ -59,8 +57,8 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
-use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
 use shekyl_economics::EconomicParams;
+use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
@@ -164,6 +162,24 @@ pub struct Mined {
     pub archival: ArchivalDelta,
 }
 
+impl shekyl_harness_spender::MinedBlock for Mined {
+    fn height(&self) -> BlockHeight {
+        self.height
+    }
+
+    fn hash(&self) -> BlockHash {
+        self.hash
+    }
+
+    fn miner_transaction(&self) -> &Transaction {
+        &self.template.block.miner_transaction
+    }
+
+    fn listed(&self) -> &[Transaction] {
+        &self.template.transactions
+    }
+}
+
 /// Why a scripted step did not land. Refusals are data (the scenario asked
 /// for a block the chain refuses, which some scenarios do on purpose);
 /// faults are the stack's.
@@ -187,13 +203,20 @@ impl std::fmt::Display for StepOutcome {
     }
 }
 
-/// The driver. Owns the connector (and through it the store), the miner's
-/// keys and the clock.
+/// The driver. Owns the connector (and through it the store) and the
+/// clock; every block it mines pays the harness miner.
 pub struct Scenario<P> {
     path: PathBuf,
     connector: ActorRef<Connector>,
     substrate: Clocked<P>,
-    wallet: MinerWallet,
+    /// The harness miner (`shekyl-harness-wallet`): the one wallet the
+    /// rules fixture, the store's tests and this driver all pay, so a
+    /// spend the spender builds over any of their chains is of an output
+    /// the same secrets recover.
+    wallet: &'static MinerWallet,
+    /// The template's view of the miner, built once from the wallet's
+    /// public half.
+    miner: MinerKeys,
     params: EconomicParams,
     rules: ChainRules,
     next_tx_secret: u64,
@@ -256,7 +279,15 @@ where
             path,
             connector,
             substrate: Clocked::new(pow),
-            wallet: MinerWallet::deterministic(),
+            wallet: MinerWallet::harness(),
+            miner: {
+                let recipient = MinerWallet::harness().recipient();
+                MinerKeys {
+                    spend_public: recipient.spend_public,
+                    x25519_pk: recipient.x25519_pk,
+                    ml_kem_ek: recipient.ml_kem_ek.clone(),
+                }
+            },
             params: EconomicParams::default(),
             rules,
             next_tx_secret: 1,
@@ -269,8 +300,8 @@ where
     }
 
     /// The miner every block of this scenario pays, secrets included.
-    pub const fn wallet(&self) -> &MinerWallet {
-        &self.wallet
+    pub const fn wallet(&self) -> &'static MinerWallet {
+        self.wallet
     }
 
     /// What the chain is now, as the producer reads it.
@@ -456,7 +487,7 @@ where
                 emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &self.params,
-            miner: &self.wallet.keys,
+            miner: &self.miner,
             tx_key_secret,
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
             listed,
@@ -470,39 +501,6 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
     match e {
         kameo::error::SendError::HandlerError(fault) => fault,
         other => panic!("connector mailbox: {other}"),
-    }
-}
-
-/// The scenario's miner, secrets included: a fixed Edwards spend key and a
-/// hybrid KEM keypair drawn per scenario (the library offers no seeded
-/// generation). Every template in one scenario pays this miner, and the
-/// spend the scenario can build (`scenario_spend`) spends what it was paid
-/// — which is why the secrets are kept rather than dropped at the keys.
-pub struct MinerWallet {
-    /// The Edwards spend secret `b`; `spend_public = b·G`.
-    pub spend_secret: Zeroizing<[u8; 32]>,
-    /// The hybrid KEM decapsulation keys the coinbase's `0x06` field was
-    /// encapsulated to.
-    pub kem_secret: HybridKemSecretKey,
-    /// What the template is handed.
-    pub keys: MinerKeys,
-}
-
-impl MinerWallet {
-    fn deterministic() -> Self {
-        let k = Scalar::from_bytes_mod_order([0x5c; 32]);
-        let (pk, sk) = HybridX25519MlKem
-            .keypair_generate()
-            .expect("hybrid KEM keypair generation");
-        Self {
-            spend_secret: Zeroizing::new(k.to_bytes()),
-            kem_secret: sk,
-            keys: MinerKeys {
-                spend_public: EdwardsPoint::mul_base(&k).compress().to_bytes(),
-                x25519_pk: pk.x25519,
-                ml_kem_ek: pk.ml_kem,
-            },
-        }
     }
 }
 

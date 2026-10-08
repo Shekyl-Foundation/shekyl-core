@@ -28,7 +28,7 @@ use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
     mine_to,
 };
-use crate::scenario_spend::Spender;
+use shekyl_harness_spender::Spender;
 
 /// The settlement epoch open at `height` under the levered schedule the
 /// join mines.

@@ -40,8 +40,8 @@ use shekyl_wire::Transaction;
 
 use crate::archival_driver::{first_spending_height, FEE};
 use crate::scenario::{FreeHash, Mined, Scenario};
-use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
+use shekyl_harness_spender::Spender;
 
 /// The levered settlement epoch, in blocks. The production epoch (10,000
 /// blocks) never prices a shard inside what a test mines; under this one
@@ -79,7 +79,7 @@ pub fn levered_schedule() -> SettlementSchedule {
 pub const SPENDS_PER_BLOCK: usize = 16;
 
 /// Blocks after a coinbase's height before it may be spent: the unlock
-/// window, the spendable age and one more — [`first_spending_height`]
+/// window, one, and the reference age — [`first_spending_height`]
 /// measured from coinbase 0.
 pub fn maturity() -> u64 {
     first_spending_height().to_raw()

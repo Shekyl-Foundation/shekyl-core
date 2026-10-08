@@ -30,11 +30,12 @@
 //!
 //! The engine derives its spend inputs from `PFundingOutputRecord`s through
 //! `derive_spend_parts`; the driver derives its own from its wallet-side
-//! tree through the production scanner (`scenario_spend`). Both end in a
-//! [`SpendInput`], and that is where this function begins: `SpendInput`s
-//! in, wire bytes out. Everything from the signable hash to the final
-//! encoding is one definition on both sides, with the transaction key
-//! passed in rather than drawn, so the byte test can hold the two equal.
+//! tree through the production scanner (`shekyl-harness-spender`). Both
+//! end in a [`SpendInput`], and that is where this function begins:
+//! `SpendInput`s in, wire bytes out. Everything from the signable hash to
+//! the final encoding is one definition on both sides, with the
+//! transaction key passed in rather than drawn, so the byte test can hold
+//! the two equal.
 //!
 //! Panics are the instrument's failure mode (`expect`), as the driver's
 //! spend's are. Self-verification is the caller's: the scenario verifies

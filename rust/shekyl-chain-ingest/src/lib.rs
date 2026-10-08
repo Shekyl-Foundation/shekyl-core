@@ -146,8 +146,6 @@ mod scenario_join_tests;
 /// finality and price. Live lane.
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_shard;
-#[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario_spend;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]

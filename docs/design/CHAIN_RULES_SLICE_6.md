@@ -812,9 +812,15 @@ where it lives and how it is driven:
 
 #### 5.3.3 The driver — landed (2026-09-24), and the third gap
 
-`shekyl-chain-ingest/src/scenario.rs` (test-only in ingest for now; a
-`scenario` TEST_ONLY feature lands with the first cross-crate consumer,
-the store's fixture migration). `Scenario::open(name)` → `mine(n)`,
+`shekyl-chain-ingest/src/scenario.rs` (test-only in ingest. UPDATE
+2026-10-07: the store's fixture migration does **not** take a `scenario`
+TEST_ONLY feature — the store cannot dev-depend on the ingest, which
+depends on the store. The spend producer the migration needs was
+extracted instead: `shekyl-harness-spender` (`Spender`, `PostedBond`,
+`first_spending_height`), wallet-side only over `shekyl-harness-wallet`,
+which the store and the ingest both dev-depend on; `Scenario` stays in
+ingest and implements the spender's `MinedBlock`). `Scenario::open(name)`
+→ `mine(n)`,
 `mine_listing(txs)` (a refusal is data), `rewind_to(h)`, `facts()`,
 `close()`. Each block: ask the connector what the chain is → price a
 coinbase with `shekyl-block-template` → `form` under a driver-owned clock
