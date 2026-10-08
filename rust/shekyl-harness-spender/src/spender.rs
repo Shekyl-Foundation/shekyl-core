@@ -400,17 +400,89 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
     ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(sourced, connecting, fee, bond, recipient)
+    }
+
+    /// A spend of several blocks' coinbases in **one** transaction, listed
+    /// in the block connecting at `connecting`, paying `fee` and the rest
+    /// back to the miner in two outputs — the multi-input shape, up to the
+    /// prover's `shekyl_fcmp::MAX_INPUTS` (CEN-I4's cap). Each input
+    /// carries its own `pqc_auths` slot, so the body's archival length
+    /// grows by a hybrid key and signature per input; this is how a
+    /// fixture chain reaches an archival length with bytes every landed
+    /// rule verifies, rather than by padding a region none does.
+    ///
+    /// Yields the body and the coinbase heights **in the body's input
+    /// order** — the inputs are sorted by key image (CEN-I5), not listed
+    /// as asked — so a caller pairing each input's key image with the
+    /// coinbase it spends reads the pairing here rather than deriving it.
+    #[must_use]
+    pub fn spend_coinbases(
+        &self,
+        wallet: &MinerWallet,
+        heights: &[BlockHeight],
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> (Transaction, Vec<BlockHeight>) {
+        assert!(!heights.is_empty(), "a spend has an input");
+        let mut sourced: Vec<(BlockHeight, Sourced)> = heights
+            .iter()
+            .map(|&height| (height, self.source_coinbase(wallet, height, connecting)))
+            .collect();
+        sourced.sort_by(|a, b| b.1.key_image.as_bytes().cmp(a.1.key_image.as_bytes()));
+        let (heights, sourced): (Vec<BlockHeight>, Vec<Sourced>) = sourced.into_iter().unzip();
+        let tx = Self::spend_sourced(sourced, connecting, fee, None, wallet.recipient());
+        (tx, heights)
+    }
+
+    /// Block `height`'s coinbase sourced for the miner, for a spend
+    /// connecting at `connecting`.
+    fn source_coinbase(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+    ) -> Sourced {
         let coinbase = &self.coinbases[usize::try_from(height.to_raw()).expect("small")];
         let gindex = self.first_gid[usize::try_from(height.to_raw()).expect("small")];
-        let Sourced {
-            input: spend_input,
-            key_image,
-            tree,
-        } = self.source(&Owner::miner(wallet), coinbase, 0, gindex, connecting);
-        let amount = spend_input.amount.to_raw();
+        self.source(&Owner::miner(wallet), coinbase, 0, gindex, connecting)
+    }
+
+    /// The spend of `sourced` — one or more inputs, every path assembled
+    /// against the same reference — paying `fee` to the chain and the rest
+    /// to `recipient` in two outputs, with `bond` riding it if given. The
+    /// body every `spend_*` builder hands out.
+    fn spend_sourced(
+        mut sourced: Vec<Sourced>,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+        recipient: &Recipient,
+    ) -> Transaction {
+        // Inputs in strict-descending key-image order (CEN-I5), as the
+        // engine's `sign_bridge` orders them before signing; the prefix
+        // hash, the signer's inputs and the pseudo-outs all follow it.
+        sourced.sort_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
+        let tree = sourced[0].tree.clone();
+        assert!(
+            sourced
+                .iter()
+                .all(|s| s.tree.reference_block == tree.reference_block
+                    && s.tree.tree_root == tree.tree_root
+                    && s.tree.tree_depth == tree.tree_depth),
+            "every input's path is assembled against the one reference"
+        );
+        let spend_inputs: Vec<SpendInput> = sourced.iter().map(|s| s.input.clone()).collect();
+        let key_images: Vec<shekyl_types::KeyImage> = sourced.iter().map(|s| s.key_image).collect();
+        let amount: u64 = spend_inputs
+            .iter()
+            .map(|i| i.amount.to_raw())
+            .try_fold(0u64, u64::checked_add)
+            .expect("the inputs' amounts sum");
 
         // Two outputs to the recipient, each with its own KEM and leaf.
-        // The balance the signer proves: `amount + debit = outputs + fee +
+        // The balance the signer proves: `Σ amount + debit = outputs + fee +
         // credit` (`shekyl_ct_balance::verify_ct_balance`, CEN-H21's
         // equation), so what the outputs carry is what is left after the
         // fee and the post's term.
@@ -433,12 +505,13 @@ impl Spender {
         // in one block to one recipient derived identical output keys —
         // the same seed, the same keys, the same indices — and a block
         // listing both carried a duplicate output, not two bodies. The
-        // spent output's key image is the spend's own identity, so it is
-        // mixed in.
+        // spent outputs' key images are the spend's own identity, so the
+        // first (the largest, after the CEN-I5 sort — no two spends share
+        // one) is mixed in.
         let tx_secret = {
             let mut s = [0u8; 32];
             s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
-            s[8..].copy_from_slice(&key_image.as_bytes()[8..]);
+            s[8..].copy_from_slice(&key_images[0].as_bytes()[8..]);
             s
         };
         let pay = |amount: u64, index: u64| -> OutputData {
@@ -491,8 +564,9 @@ impl Spender {
             bond.map(|b| vec![b.input.clone()]).unwrap_or_default();
         let extra_input_terms: Vec<InputTerm> = bond.and_then(|b| b.debit).into_iter().collect();
         let extra_output_terms: Vec<OutputTerm> = bond.and_then(|b| b.credit).into_iter().collect();
+        let key_image_bytes: Vec<[u8; 32]> = key_images.iter().map(|k| *k.as_bytes()).collect();
         let tx_prefix_hash = tx_prefix_hash_from_parts_with_extra(
-            &[*key_image.as_bytes()],
+            &key_image_bytes,
             &extra_inputs,
             &output_keys,
             &[0, 0],
@@ -502,7 +576,7 @@ impl Spender {
         .expect("the prefix hashes");
         let signed = sign_transaction_with_terms(
             tx_prefix_hash,
-            std::slice::from_ref(&spend_input),
+            &spend_inputs,
             &outputs,
             AtomicUnits::from_raw(fee),
             &extra_input_terms,
@@ -514,15 +588,22 @@ impl Spender {
         // hash over the assembled body with the public key in place (CEN-I17
         // / I18) — so the body is encoded once with the key and an empty
         // signature, hashed, signed, and encoded again with the signature.
-        let combined64: &[u8; 64] = spend_input.combined_ss[..]
-            .try_into()
-            .expect("a 64-byte combined shared secret");
-        let revealed_pk = derive_pqc_public_key(combined64, 0).expect("hybrid pk");
+        // One revealed key per input, each derived from its own output's
+        // shared secret at its own index (the signer's derivation).
+        let revealed_pks: Vec<Vec<u8>> = spend_inputs
+            .iter()
+            .map(|input| {
+                let combined64: &[u8; 64] = input.combined_ss[..]
+                    .try_into()
+                    .expect("a 64-byte combined shared secret");
+                derive_pqc_public_key(combined64, input.output_index).expect("hybrid pk")
+            })
+            .collect();
         let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
             .expect("the signer's Bulletproof+ blob reads back");
         let wire = |pqc_auths: Vec<shekyl_tx_builder::PqcAuth>| -> WireEncodeInput {
             WireEncodeInput {
-                key_images: vec![*key_image.as_bytes()],
+                key_images: key_image_bytes.clone(),
                 extra_inputs: extra_inputs.clone(),
                 output_keys: output_keys.to_vec(),
                 output_amounts: vec![0, 0],
@@ -547,29 +628,29 @@ impl Spender {
             signature: Vec::new(),
             public_key,
         };
-        let mut slots = vec![empty(revealed_pk.clone())];
+        let n_spend = spend_inputs.len();
+        let mut slots: Vec<shekyl_tx_builder::PqcAuth> =
+            revealed_pks.iter().cloned().map(empty).collect();
         if let Some(b) = bond {
             slots.push(empty(b.slot_pk.clone()));
         }
         let payloads = phase1_payload_hashes(&wire(slots)).expect("the unsigned body hashes");
         assert_eq!(
             payloads.len(),
-            1 + usize::from(bond.is_some()),
+            n_spend + usize::from(bond.is_some()),
             "one payload per input"
         );
-        // Phase 2: the spend's slot through the production signer; the bond
+        // Phase 2: the spends' slots through the production signer; the bond
         // slot by the persona's key over its own payload (I17 / I18 hold
         // each to its input's preimage).
-        let mut pqc_auths =
-            sign_pqc_auths(&payloads[..1], std::slice::from_ref(&spend_input)).expect("PQC auths");
-        assert_eq!(
-            pqc_auths[0].public_key, revealed_pk,
-            "the key the payload bound"
-        );
+        let mut pqc_auths = sign_pqc_auths(&payloads[..n_spend], &spend_inputs).expect("PQC auths");
+        for (auth, pk) in pqc_auths.iter().zip(&revealed_pks) {
+            assert_eq!(&auth.public_key, pk, "the key the payload bound");
+        }
         if let Some(b) = bond {
             pqc_auths.push(shekyl_tx_builder::PqcAuth {
                 auth_version: 1,
-                signature: b.sign_slot(&payloads[1]),
+                signature: b.sign_slot(&payloads[n_spend]),
                 public_key: b.slot_pk.clone(),
             });
         }
@@ -582,15 +663,19 @@ impl Spender {
         // it. A test then holds this root equal to the store's at the same
         // height (`Spender::root_at` vs `RootAt`), which is what makes the
         // proof valid against the header the block will carry.
+        let pqc_scalars: Vec<PqcKeyScalar> = revealed_pks
+            .iter()
+            .map(|pk| PqcKeyScalar::from_pqc_public_key(pk))
+            .collect();
         let verified = proof::verify(
             &ShekylFcmpProof {
                 data: signed.fcmp_proof.clone(),
-                num_inputs: 1,
+                num_inputs: u32::try_from(n_spend).expect("under the prover's cap"),
                 tree_depth: signed.tree_depth,
             },
-            &[key_image],
+            &key_images,
             &signed.pseudo_outs,
-            &[PqcKeyScalar::from_pqc_public_key(&revealed_pk)],
+            &pqc_scalars,
             tree.tree_root.as_bytes(),
             signed.tree_depth,
             tx_prefix_hash.to_bytes(),

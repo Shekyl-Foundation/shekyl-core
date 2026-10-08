@@ -616,6 +616,44 @@ impl Grown {
         self.spend_posting(coinbase, fee, None)
     }
 
+    /// One real spend of the `n` lowest matured coinbases no block spent
+    /// and no spend built for this block took — the multi-input shape
+    /// ([`Spender::spend_coinbases`]), each input its own `pqc_auths`
+    /// slot, so a body's archival length grows by a hybrid key and
+    /// signature per input. This is how a chain reaches a shard boundary
+    /// with bytes every landed rule verifies; the prune tests' padded
+    /// serve-credit records are the cheap stand-in, and the `#[ignore]`d
+    /// nightly twin in `prune_tests` is this method's caller. Not
+    /// memoised: its chains are not shared across tests. Panics when fewer
+    /// than `n` have matured.
+    pub(super) fn spend_many(&mut self, n: usize, fee: u64) -> Transaction {
+        let coinbases: Vec<u64> = self
+            .matured()
+            .into_iter()
+            .filter(|h| !self.building.values().any(|b| b == h))
+            .take(n)
+            .collect();
+        assert_eq!(
+            coinbases.len(),
+            n,
+            "{n} coinbases have matured unspent for height {}",
+            self.height()
+        );
+        let heights: Vec<BlockHeight> = coinbases
+            .iter()
+            .map(|&c| BlockHeight::from_raw(c))
+            .collect();
+        // The spender yields the coinbases in the body's input order
+        // (sorted by key image, CEN-I5), the order `key_images` reads.
+        let (tx, in_input_order) =
+            self.spender
+                .spend_coinbases(MinerWallet::harness(), &heights, self.height(), fee);
+        for (image, coinbase) in key_images(&tx).into_iter().zip(in_input_order) {
+            self.building.insert(image, coinbase.to_raw());
+        }
+        tx
+    }
+
     /// [`Self::spend_of`] with a bond post riding the spend
     /// ([`Spender::spend_coinbase_posting`]): the post is the prefix's one
     /// extra input and its term moves the outputs — a join's bond is a

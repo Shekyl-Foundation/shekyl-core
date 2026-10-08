@@ -760,6 +760,159 @@ fn not(discarded: &[bool]) -> Vec<bool> {
     discarded.iter().map(|d| !d).collect()
 }
 
+/// The boundary test above with every archival byte a real spend: the
+/// padded serve-credit records are the unit lane's stand-in for a shard's
+/// bytes (slice 6 row 8 ruling, a1), and this is the deletion-correctness
+/// test that gets valid bytes instead (a3) — the same discard set, undo
+/// floor, body states and pqc-region outcome, read off a chain of
+/// `MAX_INPUTS`-input spends ([`Grown::spend_many`]) run through both
+/// boundaries that name shard 0 (`close_epoch + 2` and `+ 3`).
+///
+/// `#[ignore]`d: proving fifty-four 8-input spends is minutes — 140 s in
+/// release, 714 s in debug on the measuring box — not a unit test's budget. **The lane that runs it is `.github/workflows/nightly.yml`,
+/// job `store-ignored`, on the 03:00 UTC daily schedule**, which lists the
+/// crate's ignored set and refuses to pass unless this test's name is in
+/// it (rule 47). An `#[ignore]`d test no scheduled lane invokes is a
+/// deleted test with a comment on it; that lane exists because the
+/// crate's two `#[ignore]`d benches had none, and `slash_scan_bench`'s
+/// default persona count overran epoch 0 with nobody running it to see.
+///
+/// The a1 arithmetic, asserted rather than restated: a shard closes in at
+/// least `⌈W / max_tx_weight⌉` bodies, since no body is heavier than H3's
+/// bound — **21** at `W = 3 000 000`, `max_tx_weight() = 149 400`, each
+/// needing its own (P, shard, E) triple under G7. Not 3: the 1 053 185-byte
+/// per-record ceiling is a decode bound, and a body of that size fails H3.
+#[test]
+#[ignore = "54 real 8-input spends to a shard boundary: ~140 s release, ~12 min debug; the nightly lane (nightly.yml `store-ignored`, 03:00 UTC daily) runs it"]
+fn the_boundary_batch_discards_closed_shards_on_real_spends() {
+    use std::time::Instant;
+
+    let path = tmp("prune-boundary-real");
+    let store =
+        ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
+    let inputs = shekyl_fcmp::MAX_INPUTS;
+    let w = SHARD_LENGTH.to_raw();
+    let fewest_bodies = w.div_ceil(u64::try_from(fixture::max_tx_weight()).expect("fits"));
+    assert_eq!(
+        fewest_bodies, 21,
+        "⌈W / max_tx_weight⌉ at the pinned constants"
+    );
+
+    let mut grown = Grown::new();
+    let mut lens: Vec<Vec<u64>> = Vec::new();
+    let mut spends: Vec<Transaction> = Vec::new();
+    let mut close: Option<u64> = None;
+    let mut boundaries: Vec<(u64, Vec<u64>, u64)> = Vec::new();
+    let started = Instant::now();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        loop {
+            let h = grown.height().to_raw();
+            if close.is_some_and(|c| h > (c / SEB + 3) * SEB) {
+                break;
+            }
+            // As many spends as the matured coinbases allow until shard 0
+            // closes; coinbase-only blocks from there to the second boundary
+            // that names it.
+            let mut txs = Vec::new();
+            while close.is_none() && grown.matured().len() >= inputs * (txs.len() + 1) {
+                let tx = grown.spend_many(inputs, 1_000);
+                assert!(
+                    tx.weight() <= fixture::max_tx_weight(),
+                    "an {inputs}-input spend sits under H3's bound"
+                );
+                txs.push(tx);
+                let total: u64 = lens.iter().flatten().sum::<u64>()
+                    + txs.iter().map(|t| t.archival_len().to_raw()).sum::<u64>();
+                if total >= w {
+                    close = Some(h);
+                }
+            }
+            lens.push(txs.iter().map(|t| t.archival_len().to_raw()).collect());
+            let root = batch_root_going_into(&view, h)?;
+            let mut cand = candidate_over(root, h, grown.tip(), txs.clone());
+            if h == 0 {
+                endow_genesis(&mut cand);
+            }
+            let judged = judge_under(&view, cand, &RULES)?;
+            grown.record(judged.block().block(), &txs);
+            spends.extend(txs);
+            let connected = batch.connect(judged, RULES)?;
+            if let Some(pruned) = connected.pruned {
+                boundaries.push((h, pruned.shards().collect(), pruned.undo_floor.to_raw()));
+            }
+        }
+        Ok(())
+    });
+    out.expect("connects");
+    let model = Model { lens };
+    let close = close.expect("shard 0 closed");
+    let tip = grown.height().to_raw() - 1;
+    eprintln!(
+        "prune-boundary-real: {} spends of {inputs} inputs (first archival_len {}, weight {}) \
+         closed shard 0 at h={close}; ran to h={tip} through the boundaries at {:?} in {:?}",
+        spends.len(),
+        spends[0].archival_len().to_raw(),
+        spends[0].weight(),
+        boundaries.iter().map(|b| b.0).collect::<Vec<_>>(),
+        started.elapsed()
+    );
+
+    // The model's close height is the store's, and the chain used at least
+    // the fewest bodies any chain can.
+    assert_eq!(model.close_height(0), Some(close));
+    assert!(spends.len() >= usize::try_from(fewest_bodies).expect("fits"));
+    assert_eq!(model.close_height(1), None, "shard 1 never closed");
+
+    // Every boundary from epoch 2 on ran, each discarding what the calendar
+    // names — nothing until `close_epoch + 2`, shard 0 at `+ 2` and `+ 3` —
+    // and each retiring undo rows to `boundary − RETENTION`.
+    let close_epoch = close / SEB;
+    let expected: Vec<(u64, Vec<u64>, u64)> = (2..=close_epoch + 3)
+        .map(|e| (e * SEB, model.discards_at(SEB, e), e * SEB - RETENTION))
+        .collect();
+    assert_eq!(boundaries, expected);
+    assert_eq!(
+        boundaries.iter().filter(|b| b.1 == [0]).count(),
+        2,
+        "two boundaries named shard 0"
+    );
+
+    // Shard 0's bodies are gone — every spend, and every coinbase starting
+    // below `W` — and the coinbases from `W` on are held; the hash rows
+    // stand.
+    assert_eq!(body_states(&store), not(&model.discarded(SEB, tip)));
+    let ids_0 = model.ids_of(0);
+    assert!(ids_0.contains(&0), "genesis's coinbase opens shard 0");
+    assert!(
+        ids_0.end < u64::try_from(model.shard_of_id().len()).expect("fits"),
+        "shard 1 has ids"
+    );
+    assert_eq!(prunable_state(&store, ids_0.end - 1), Some(false));
+    assert_eq!(prunable_state(&store, ids_0.end), Some(true));
+    {
+        let snap = store.begin_read().expect("read");
+        for spend in [&spends[0], spends.last().expect("a spend")] {
+            let record = snap
+                .tx_record(&spend.hash())
+                .expect("read")
+                .expect("recorded");
+            assert_eq!(record.pqc_auths, Some(PqcAuths::Discarded));
+            assert!(record.pqc_auth_hash.is_some(), "the hash row is permanent");
+            assert_eq!(record.archival_len.to_raw(), spend.archival_len().to_raw());
+        }
+    }
+
+    // The undo journal keeps exactly `[floor, tip]`.
+    let floor = (close_epoch + 3) * SEB - RETENTION;
+    assert_eq!(undo_floor_cell(&store), Some(floor));
+    let rows = undo_rows(&store);
+    assert_eq!((rows.first(), rows.last()), (Some(&floor), Some(&tip)));
+    assert_eq!(rows.len(), usize::try_from(RETENTION + 1).expect("fits"));
+    assert!(store.connect_state().is_live());
+    cleanup(&path);
+}
+
 #[test]
 fn epochs_zero_and_one_run_no_batch() {
     let path = tmp("prune-early");

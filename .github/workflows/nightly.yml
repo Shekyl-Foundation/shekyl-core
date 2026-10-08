@@ -70,3 +70,116 @@ jobs:
           list=$(cargo test --locked --release -p shekyl-timing-engine --lib -- --list)
           printf '%s\n' "$list" | grep -qx 'model::random_ops_match_a_scanned_reference: test'
           cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture
+
+  store-ignored:
+    # The chain store's `#[ignore]`d set: the shard-boundary deletion test
+    # over real multi-input spends (`prune_tests::
+    # the_boundary_batch_discards_closed_shards_on_real_spends`, minutes of
+    # proving — the unit lane runs its padded-record twin) and the two
+    # benches (`weights_read_bench`, `slash_scan_bench`). This job is the
+    # lane that invokes them: an `#[ignore]`d test no scheduled lane runs is
+    # a deleted test with a comment on it, and before this job none ran the
+    # store's: `slash_scan_bench`'s default persona count overran epoch 0,
+    # and `weights_read_bench`'s block was refused by CEN-B4 and then CEN-F18
+    # — two rows that landed after the bench was written — for as long as
+    # nobody ran them (both found and fixed on PR #1003). The bench figures
+    # a shared runner prints decide nothing (rule 76: the floor device does);
+    # what the lane asserts is that every ignored test still builds a chain
+    # its own constants admit, and that the boundary test's deletions match
+    # the calendar. Budget: the weights bench at its 100 000-block default
+    # is about half an hour in release on a workstation, the boundary test
+    # 140 s, the slash bench 25 s, plus the release build.
+    #
+    # Same matrix and same caveat as above: the schedule runs main's copy of
+    # this file over both branches, so the `main` leg is red until the
+    # release that carries the test (and threads onto one tracking issue
+    # until then); `workflow_dispatch` with ref=dev runs the newer config.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # For the on-failure step: a red must reach a human.
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-store-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-store-ignored-${{ matrix.branch }}-
+
+      - name: Run the chain store's ignored set
+        working-directory: rust
+        # Rule 47: the lane asserts its subject is in the set before running
+        # it — a renamed or un-ignored boundary test fails here, not by
+        # passing an empty run. The benches run at their defaults: a default
+        # that builds a chain the constants refuse is exactly what this lane
+        # exists to see.
+        run: |
+          set -eu
+          list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
+          printf '%s\n' "$list" | grep -qx 'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends: test'
+          printf '%s\n' "$list" | grep -c ': test$'
+          START=$(date +%s)
+          cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture 2>&1
+          END=$(date +%s)
+          echo "::notice::Chain store ignored set completed on ${{ matrix.branch }} in $((END - START))s (budget 120m)"
+
+      - name: notify on red
+        # A nightly tier without a route to a human "joins a silence"
+        # (`run_live_daemon_gates.sh` header, PR #660): the lane exists
+        # because unrun ignored tests rotted unreported, and a red nobody
+        # reads is the same silence one hop later. Same step as
+        # nightly-live-daemon-slow.yml's: open a tracking issue, or comment
+        # on the open one so repeats thread.
+        if: failure()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = `nightly chain-store ignored set RED (${{ matrix.branch }})`;
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              'Branch: ${{ matrix.branch }}',
+              'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
+              'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
+            ].join('\n');
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on freshly created
+            // issues, which would fork the thread on back-to-back nightly reds.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
