@@ -16642,9 +16642,11 @@ on the wrong rate; the honest worst case is 0.96 %).
 The hidden-address pool and the total outbound degree are lower
 limits. The operating point above those limits, and any ceiling, are
 not chosen by this approval. The ceiling comes from resources and is
-named when a run is ruled. No constant is added. The instrument is
-`conformance::composition`, behind the `conformance` feature. The
-default build does not contain it. No production constant moves.
+named when a run is ruled. No constant is added. The instruments are
+`conformance::composition` and `conformance::epoch_traffic`, behind the
+`conformance` feature. The default build does not contain them. No
+production constant moves, and `own_edge()` stays until the relay lane
+takes the stem-slot ruling.
 
 The floors, which are the hard edges of the sweep:
 
@@ -16765,16 +16767,15 @@ constant.
    origin. Recall is the fraction of trials a spy observes at all.
    Both arms: spies at `p` everywhere, and spies at the higher share
    among onion candidates. The uniform `simulate_diffusion_first_spy`
-   reading is the control, not the result. The result needs the
-   two-class graph this crate does not build yet: each node initiates
-   `h` hidden edges and `c` clearnet edges.
-2. **Originated-versus-relayed skew on hidden edges.** An originated
-   own-edge is drawn from the hidden pool, so its hidden share is 1.
-   A relayed forward drawn uniformly from all outbound sessions lands
-   on a hidden edge with share about `h / (h + c)`. The simulation
-   reports both shares. The approximation is the thing being checked:
-   stem slots are two draws from the whole pool, and that draw can
-   depart from `h / (h + c)`.
+   reading is the control, not the result. The result is the two-class
+   graph: each node initiates `h` hidden edges and `c` clearnet edges.
+2. **Originated-versus-relayed skew on the sender's own link.** The
+   attacker's count is every stem that sender puts on the link during
+   the epoch: its originated transactions, and the stems it relays onto
+   the same peer. `h / (h + c)` is how a relay drawn from all outbound
+   sessions would spread. It is not the posterior. A single-transaction
+   walk that counts a relay only when the path revisits the pin is not
+   the posterior either. The epoch tally is §95.3.
 3. **Full own-edge pool capture.** At the onion-candidate spy share
    `p_h` (not `q`: `q` is the fluff probability), the chance every
    hidden session is a spy is `p_h^h`. Report that number, and check
@@ -16806,80 +16807,89 @@ to move together.
 **RULED 2026-10-08 (Rick).** Every `(h, 0)` point, including `(12, 0)`,
 is a measured case. It is not a headline recommendation. Tor-only is
 that shape, and it is not a recommended posture. The gate is §96.
-An own transaction rides a stem slot: the origin's
-own send is always a stem, and each relay forwards with probability
-`1 − q`.
+The origin's own send is a stem slot under `HiddenStemSlot`, the
+routing the relay lane is to ship: one slot drawn from the hidden
+pool, the other from the remaining outbound sessions, and the local
+source mapped to the hidden slot. When every outbound session is
+hidden, both slots are the paper's draw and the local source is an
+ordinary stem-map pin. Relays still forward with probability `1 − q`.
+`own_edge()` is not that routing. This change does not delete it.
 
-The six additions on the hand-off are what this run measured. `p_h` is
-the onion-candidate spy share. The posterior is
-`P(originated | the arrival)`, with relayed forwards taken from
-`walk_stem` (mean about 4 at `q = 20%`) and the own send on one stem
-slot, pinned for the epoch by `StemMap`. A clearnet arrival of an
-originated stem is impossible under `HiddenOwnEdge`, so that posterior
-is 0. The share `h / (h + c)` is how relayed forwards spread. It
-understates the posterior at the pinned slot, which receives every
-originated stem.
+**Epoch tally, 2026-10-08.** Every node originates once per epoch.
+Each node keeps a `StemMap` for that epoch, and stems walk with
+`walk_stem`. The posterior is deliveries on a directed edge:
+originated sends plus relayed sends onto that same peer. 48 nodes,
+20 epochs, `f = 1`. `f ≈ 1` is the normal case: a node publishes a
+per-boot onion and accepts Tor inbound (`add_ephemeral_tor_zone`,
+PWD-E7). `f = 0.1`–`0.5` are opt-out and failure stress, not the
+operating point.
 
-Baselines, 300 trials, 32 nodes. The split (originated on hidden,
-relayed on clearnet) gives hidden posterior 1 and clearnet posterior 0:
-ProxyMark's certainty, so the two-class instrument can still see it.
-The all-clearnet graph (the paper's setting, `c = 16`) gives clearnet
-posterior 0.21 and own-edge posterior 0.91. One class cannot separate
-them.
+*Records-was, the 2026-10-07 single-path instrument: all-clearnet
+own-edge posterior 0.91, and `HiddenOwnEdge` 0.92–0.94.* That count
+credited a relay only when one transaction's path revisited the pin.
+The epoch tally is the attacker's view.
 
-Shekyl routing (`HiddenOwnEdge`), 600 trials, 48 nodes, `f = 1`.
-Relayed per originated sat between 3.7 and 4.2. Own-edge posterior sat
-between 0.92 and 0.94 at every kept `(h, c)`. Clearnet posterior was 0
-everywhere. The class-conditional hidden posterior rose as clearnet
-was added, because fewer relays land on hidden edges: 0.21 at
-`(12, 0)`, 0.24 at `(12, 4)`, 0.32 at `(12, 12)`. First-spy precision
-on the originated stem did not move with the mix. The first hop is the
-pin. At spy fraction 0.20, precision was 0.35–0.40 and recall about
-0.53. At `p_h` from `p = 0.30` on publishers (`min(1, 2p) = 0.60`),
-precision was about 0.66–0.69 and recall about 0.89.
+`HiddenStemSlot` own-edge posterior sat at 0.52–0.56 at every kept
+point, including the measured case `(12, 0)` at 0.54 (0.85 relayed
+stems per originated send; 0.36 of those edges carried any relay).
+`(12, 4)` was 0.56. Clearnet posterior was 0: the local source stays
+on the hidden slot. The hidden-class posterior rose with clearnet,
+0.20 at `(12, 0)` and 0.30 at `(12, 12)`, because fewer relays land
+on hidden edges.
 
-Own-edge capture, 400 windows of 8 epochs, 3 churns, frozen walk after
-`StemMap::update` (the refill does not become the pin). `P(every hidden
-session is a spy)` matched `p_h^h` and is already negligible at `h = 12`
-(`1e-12` at `p_h = 0.1`). `P(the pin is a spy)` is `p_h` itself, so
-raising `h` does not move it: 0.09 at 0.1, 0.19 at 0.2, 0.30 at 0.3, for
-both `h = 12` and `h = 16`. Across the 8 epochs the attacker held the
-pin at least once with probability 0.76 at `p_h = 0.1`, `h = 12`, and
-0.96 at `p_h = 0.2`.
+`HiddenOwnEdge`, today's separate draw, is the residual of ProxyMark's
+root cause. The own-edge is not a stem slot, so most epochs it carries
+no relayed traffic. At `(12, 0)` the posterior was 0.73 and 0.12 of
+edges carried a relay. With clearnet added it sat at 0.80–0.88, and
+the carrying fraction fell to 0.05–0.08. The link looks originated
+because nothing else is scheduled onto it.
 
-Hidden inbound, one graph of 400 nodes. The mean is `h / f`. At
-`f = 0.1` and `h = 12` the mean is 120, the p90 is 136, and every
-publisher exceeds 64. The default `--in-peers` is unset, so this is not
-a protocol refusal. It is the load a small onion pool takes. `f = 1`,
-`h = 12` has mean 12 and max 22.
+The split baseline still reproduces ProxyMark's certainty: hidden
+posterior 1, clearnet posterior 0, own-edge posterior 1. The
+all-clearnet baseline, the paper's graph, gives own-edge posterior
+0.55 and clearnet posterior 0.18. The 0.91 figure does not survive
+the epoch tally.
 
-Fluff p90, 128 nodes, `EveryPeer`, hidden transit 1625 ms, clearnet
-transit 50 ms, four seeds, converged within 250 ms
-(`outbound_composition_grid`). This is not the 512-node `OutboundOnly`
-graph the shipped 3250 ms was read from, so it is a direction, not a
-new fail-safe input. `(12, 0)` read 7375 ms, `(12, 4)` 4050 ms,
-`(16, 4)` 3975 ms, `(12, 12)` 1550 ms. Clearnet edges pull the passage
-down because those hops pay 50 ms.
+A sender with inbound degree 0 relays nothing, so every stem it sends
+is originated, on either routing. The unit test strips inbound to one
+node and reads posterior 1. At `h ≥ 12` and `f = 1` the grid had no
+such sender.
 
-**The run's proposed point. Not adopted.** `(h, 0)` is the measured
-hidden-only case above, not this proposal. The run proposes
-`(h, c) = (12, 4)`, total 16. `h` stays
-on the floor: another hidden session does not change the chance the
-pinned peer is a spy, and it multiplies onion inbound by `h / f`.
-`c = 4` is the smallest clearnet step in the grid. It brings the
-128-node passage from 7375 ms to 4050 ms, next to the shipped 3250 ms
-without claiming to replace it, and it leaves the hidden-class
-posterior at 0.24 rather than the 0.32 of `(12, 12)`. Confidence is
-high on the pin and the posteriors (they repeat across the grid and
-the pin probability is `p_h`). Confidence is lower on the millisecond
-levels (128 nodes, not the graph 3250 was measured on). The point
-moves if originated stems are allowed onto clearnet, which would make
-a clearnet arrival no longer certainly relayed, or if the fraction of
-nodes that publish an onion is near 0.1 and an inbound ceiling below
-`h / f` is adopted. A third connector (I2P) is not modelled. It would
-be another class with its own transit and its own inbound pool. It
-would not change `P(the pin is a spy)` unless the own-edge were drawn
-from the union of the anonymity connectors.
+Own-edge capture is unchanged: `P(the pin is a spy)` is `p_h`, and
+`p_h^h` at `h = 12` is negligible. First-spy precision still does not
+move with the mix. The first hop is the pin.
+
+**Fluff, calibrated.** The reference is the shipped graph through this
+instrument: 512 nodes, outbound-only, transit-free, degree 12, 24
+trials, seed `0xF7_000C`. It read 3250 ms, equal to `fluff_return_ms`.
+Composition p90s are 128-node `EveryPeer` with hidden transit 1625 ms
+and clearnet transit 50 ms, converged within 250 ms. Ratios to that
+reference: `(12, 0)` 7375 ms, 2.27×, exceeds; `(16, 0)` 6375 ms,
+1.96×, exceeds; `(12, 4)` 4050 ms, 1.25×, exceeds; `(16, 4)` 3975 ms,
+1.22×, exceeds; `(12, 12)` 1550 ms, 0.48×, does not. The constant
+does not move. These graphs carry Tor transit, which §91 already
+puts above the transit-free input, and §90 still requires `F′` and
+its dependents to move together. §96 item 2's calibration is this
+paragraph: `(h, 0)` exceeds the fail-safe input; the input stays.
+
+At `f = 1`, hidden inbound mean is `h` (12 at `h = 12`, max 22). At
+the stress `f = 0.1` and `h = 12` the mean is 120 and every publisher
+exceeds 64. That tail is not the normal published-onion fraction.
+
+**Proposed point. `(h, 0)` is not it.** `(12, 0)` is the measured
+hidden-only case §96 refuses to recommend. Under `HiddenStemSlot` its
+own-edge posterior matches `(12, 4)` (0.54 against 0.56): clearnet
+edges do not buy cover once the local source is a stem slot. They do
+change the fluff ratio, from 2.27× to 1.25×, and both still exceed
+3250 ms. `(12, 12)` is the point that does not exceed, and its
+hidden-class posterior is 0.30. The proposal stays `(h, c) = (12, 4)`,
+total 16, as the smallest clearnet step, not as a cover improvement
+and not as a new fail-safe. Confidence is high on the posterior
+comparison. Confidence is lower on the millisecond ratios, which are
+not the 512-node transit-free graph. A third connector (I2P) is not
+modelled. It would add a transit and an inbound pool. The local
+source would remain the hidden stem slot, so it would not change that
+posterior.
 
 ## 96. Tor-only posture gate — RULED 2026-10-08, not recommended
 

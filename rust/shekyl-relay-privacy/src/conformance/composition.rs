@@ -12,8 +12,9 @@
 //! shortest path. Agreement across seeds is [`super::converge_p90`], the
 //! same refusal as [`super::converged_fluff_return_mixed`]. Stem length is
 //! [`super::walk_stem`]. Which peer carries the stem is
-//! [`crate::stem_map::StemMap`]: the local source pins inside the hidden
-//! pool, and a relay pins inside the pool its routing rule names.
+//! [`crate::stem_map::StemMap`]. [`Routing::HiddenStemSlot`] puts the local
+//! source on a stem slot, so that slot also carries relayed traffic.
+//! [`Routing::HiddenOwnEdge`] draws the local source outside the map.
 //!
 //! `p_h` is the spy share among onion-publishing nodes. It is not the
 //! fluff probability. The fluff probability stays `q` on
@@ -78,14 +79,33 @@ pub struct Mix {
 /// Where an originated stem is allowed to sit, and where a relay sits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Routing {
-    /// Shekyl's working direction: the epoch's own-edge is one hidden
-    /// session. Relays draw from every initiated outbound session.
+    /// Today's production draw. The epoch's own-edge is one hidden
+    /// session, chosen outside the stem map. Relays draw from every
+    /// initiated outbound session. The own-edge carries relayed traffic
+    /// only when it happens to be one of the two stem slots.
     HiddenOwnEdge,
+    /// Ruled 2026-10-08. One stem slot is drawn from the hidden pool,
+    /// the other from every other outbound session, and the local source
+    /// maps to the hidden slot. Inbound sources map as [`StemMap`] does.
+    /// When every outbound session is hidden, both slots are that draw
+    /// and the local source is an ordinary stem-map pin: the paper's rule.
+    HiddenStemSlot,
     /// Monero's split: own transactions on hidden only, relays on
     /// clearnet only. The two-class instrument's certainty check.
     Split,
-    /// The paper's single graph: every session is clearnet.
+    /// The paper's single graph: every session is clearnet, and the
+    /// local source is one of the stem slots.
     AllClearnet,
+}
+
+/// One node's stem map for an epoch, and where its own transactions leave.
+#[derive(Debug)]
+pub struct NodeMap {
+    /// Stem slots and the inbound-source pins.
+    pub map: StemMap,
+    /// The peer this node's originated stems use. `None` when the routing
+    /// has no legal first hop.
+    pub local: Option<OutEdge>,
 }
 
 /// One node's initiated sessions, plus who publishes an onion.
@@ -254,18 +274,6 @@ fn node_of(id: ConnectionId) -> usize {
     usize_from(u64::from_le_bytes(buf))
 }
 
-/// Relayed stem forwards in one [`walk_stem`]: every armed hop except the
-/// origin's. At fluff probability 20% the mean is 4.
-fn relayed_forwards<R: RelayRng + ?Sized>(
-    params: &DandelionParams,
-    embargo: &EmbargoTimer,
-    rng: &mut R,
-) -> usize {
-    walk_stem(params, embargo, rng)
-        .stem_hops()
-        .saturating_sub(1)
-}
-
 fn edges_of(row: &[OutEdge], class: Option<LinkClass>) -> Vec<OutEdge> {
     row.iter()
         .copied()
@@ -276,20 +284,117 @@ fn edges_of(row: &[OutEdge], class: Option<LinkClass>) -> Vec<OutEdge> {
         .collect()
 }
 
-/// Pin one stem peer with [`StemMap`], among `pool`.
-///
-/// Width is the shipped stem count (2) when the pool is large enough, and
-/// the pool's length otherwise. The local source is `None`.
-fn pin_stem<R: RelayRng + ?Sized>(pool: &[OutEdge], rng: &mut R) -> Option<OutEdge> {
-    if pool.is_empty() {
+fn map_over<R: RelayRng + ?Sized>(edges: &[OutEdge], rng: &mut R) -> StemMap {
+    if edges.is_empty() {
+        return StemMap::empty();
+    }
+    let ids: Vec<ConnectionId> = edges.iter().map(|e| peer_id(e.to)).collect();
+    let width = StemGraph::QuasiFourRegular.stem_count().min(ids.len());
+    StemMap::new(ids, width, rng)
+}
+
+fn pick_edge<R: RelayRng + ?Sized>(rng: &mut R, edges: &[OutEdge]) -> Option<OutEdge> {
+    if edges.is_empty() {
         return None;
     }
-    let width = StemGraph::QuasiFourRegular.stem_count().min(pool.len());
-    let ids: Vec<ConnectionId> = pool.iter().map(|e| peer_id(e.to)).collect();
-    let mut map = StemMap::new(ids, width, rng);
-    let chosen = map.stem_for(None, rng)?;
-    let to = node_of(chosen);
-    pool.iter().copied().find(|e| e.to == to)
+    let index = usize_from(bounded_uniform_len(rng, edges.len()));
+    Some(edges[index])
+}
+
+fn edge_to(row: &[OutEdge], to: usize) -> Option<OutEdge> {
+    row.iter().copied().find(|edge| edge.to == to)
+}
+
+/// Build each node's epoch map.
+///
+/// [`Routing::HiddenStemSlot`] with a mixed pool draws one slot from the
+/// hidden sessions and one from the rest, then pins the local source on
+/// the hidden slot. When every outbound session is hidden, the map is the
+/// ordinary two-slot draw and the local source is [`StemMap::stem_for`]
+/// of `None`. [`Routing::HiddenOwnEdge`] leaves that pin outside the map.
+pub fn build_node_maps<R: RelayRng + ?Sized>(
+    graph: &TwoClassGraph,
+    routing: Routing,
+    rng: &mut R,
+) -> Vec<NodeMap> {
+    graph
+        .initiated
+        .iter()
+        .map(|row| node_map(row, routing, rng))
+        .collect()
+}
+
+fn node_map<R: RelayRng + ?Sized>(row: &[OutEdge], routing: Routing, rng: &mut R) -> NodeMap {
+    let hidden = edges_of(row, Some(LinkClass::Hidden));
+    let clear = edges_of(row, Some(LinkClass::Clearnet));
+    let all = edges_of(row, None);
+    match routing {
+        Routing::HiddenOwnEdge => NodeMap {
+            map: map_over(&all, rng),
+            local: pick_edge(rng, &hidden),
+        },
+        Routing::Split => NodeMap {
+            map: map_over(&clear, rng),
+            local: pick_edge(rng, &hidden),
+        },
+        Routing::AllClearnet => paper_map(row, &clear, rng),
+        Routing::HiddenStemSlot => {
+            if hidden.is_empty() || hidden.len() == all.len() {
+                let pool = if hidden.is_empty() { &all } else { &hidden };
+                paper_map(row, pool, rng)
+            } else {
+                mixed_hidden_slot(row, &hidden, rng)
+            }
+        }
+    }
+}
+
+/// The paper's rule: two slots from `pool`, local source pinned by the map.
+fn paper_map<R: RelayRng + ?Sized>(row: &[OutEdge], pool: &[OutEdge], rng: &mut R) -> NodeMap {
+    let mut map = map_over(pool, rng);
+    let local = map
+        .stem_for(None, rng)
+        .and_then(|id| edge_to(row, node_of(id)));
+    NodeMap { map, local }
+}
+
+/// One hidden slot, one other outbound slot, local source on the hidden slot.
+fn mixed_hidden_slot<R: RelayRng + ?Sized>(
+    row: &[OutEdge],
+    hidden: &[OutEdge],
+    rng: &mut R,
+) -> NodeMap {
+    let local_edge = pick_edge(rng, hidden).expect("the hidden pool was non-empty");
+    let rest: Vec<ConnectionId> = row
+        .iter()
+        .filter(|edge| edge.to != local_edge.to)
+        .map(|edge| peer_id(edge.to))
+        .collect();
+    let mut slots = vec![peer_id(local_edge.to)];
+    if !rest.is_empty() {
+        let index = usize_from(bounded_uniform_len(rng, rest.len()));
+        slots.push(rest[index]);
+    }
+    let width = slots.len();
+    let mut map = StemMap::new(slots, width, rng);
+    let hidden_id = peer_id(local_edge.to);
+    let pinned = map.stem_for_among(None, &[hidden_id], rng);
+    debug_assert_eq!(pinned, Some(hidden_id));
+    NodeMap {
+        map,
+        local: Some(local_edge),
+    }
+}
+
+/// Relay `source`'s stem through this node's map, onto one of its outbound edges.
+pub(crate) fn relay_edge<R: RelayRng + ?Sized>(
+    state: &mut NodeMap,
+    row: &[OutEdge],
+    source: usize,
+    rng: &mut R,
+) -> Option<OutEdge> {
+    let id = state.map.stem_for(Some(peer_id(source)), rng)?;
+    edge_to(row, node_of(id))
 }
 
 /// Where one originated transaction's stem hops landed.
@@ -305,11 +410,10 @@ pub struct StemLanding {
 
 /// Walk one originated stem on `graph` starting at `origin`.
 ///
-/// The own-edge is one [`StemMap`] pin in the pool [`Routing`] allows for
-/// originated traffic. Each relay is a fresh pin, in the pool the routing
-/// allows for relays, at the node that received the previous hop. Stem
-/// length is [`walk_stem`], so the fluff coin is the parameter set's `q`
-/// and not a second geometric.
+/// The maps are this one transaction's: relays pin on first use, and no
+/// other node's originated traffic shares them. The attacker's count of
+/// an epoch is [`super::epoch_traffic`], which keeps the maps and walks
+/// every node. Stem length is [`walk_stem`].
 pub fn land_originated_stem<R: RelayRng + ?Sized>(
     graph: &TwoClassGraph,
     origin: usize,
@@ -318,14 +422,11 @@ pub fn land_originated_stem<R: RelayRng + ?Sized>(
     embargo: &EmbargoTimer,
     rng: &mut R,
 ) -> StemLanding {
-    let forwards = relayed_forwards(params, embargo, rng);
-    let own_pool = match routing {
-        Routing::HiddenOwnEdge | Routing::Split => {
-            edges_of(&graph.initiated[origin], Some(LinkClass::Hidden))
-        }
-        Routing::AllClearnet => edges_of(&graph.initiated[origin], Some(LinkClass::Clearnet)),
-    };
-    let Some(own) = pin_stem(&own_pool, rng) else {
+    let extra = walk_stem(params, embargo, rng)
+        .stem_hops()
+        .saturating_sub(1);
+    let mut maps = build_node_maps(graph, routing, rng);
+    let Some(own) = maps[origin].local else {
         return StemLanding {
             own_edge: None,
             relayed: Vec::new(),
@@ -333,19 +434,15 @@ pub fn land_originated_stem<R: RelayRng + ?Sized>(
         };
     };
     let mut path = vec![origin, own.to];
-    let mut relayed = Vec::with_capacity(forwards);
+    let mut relayed = Vec::with_capacity(extra);
     let mut at = own.to;
-    for _ in 0..forwards {
-        let pool = match routing {
-            Routing::HiddenOwnEdge => edges_of(&graph.initiated[at], None),
-            Routing::Split | Routing::AllClearnet => {
-                edges_of(&graph.initiated[at], Some(LinkClass::Clearnet))
-            }
-        };
-        let Some(hop) = pin_stem(&pool, rng) else {
+    let mut prev = origin;
+    for _ in 0..extra {
+        let Some(hop) = relay_edge(&mut maps[at], &graph.initiated[at], prev, rng) else {
             break;
         };
         relayed.push((hop.class, hop.to));
+        prev = at;
         at = hop.to;
         path.push(at);
     }
@@ -353,119 +450,6 @@ pub fn land_originated_stem<R: RelayRng + ?Sized>(
         own_edge: Some(own.class),
         relayed,
         path,
-    }
-}
-
-/// Posterior that a stem arrival on a class was originated, not relayed.
-///
-/// Counts are deliveries. One originated delivery per trial that pinned,
-/// plus one delivery per relayed forward. `hidden_share` is `h / (h + c)`,
-/// which is not this posterior: originated mass sits on the own-edge.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClassPosterior {
-    /// Mean relayed forwards per originated stem, from [`walk_stem`].
-    pub relayed_per_originated: f64,
-    /// `h / (h + c)`.
-    pub hidden_share: f64,
-    /// `P(originated | arrival on a hidden edge)`, over every hidden delivery.
-    pub posterior_hidden: f64,
-    /// `P(originated | arrival on the pinned own-edge)`.
-    ///
-    /// That peer receives every originated stem for the epoch. `h / (h + c)`
-    /// understates this: the share is how relayed forwards spread, and the
-    /// originated mass is not spread.
-    pub posterior_own_edge: f64,
-    /// `P(originated | arrival on a clearnet edge)`. 0 when no clearnet arrival.
-    pub posterior_clearnet: f64,
-    /// Originated deliveries on hidden edges.
-    pub hidden_originated: u64,
-    /// Relayed deliveries on hidden edges.
-    pub hidden_relayed: u64,
-    /// Originated deliveries on clearnet edges.
-    pub clearnet_originated: u64,
-    /// Relayed deliveries on clearnet edges.
-    pub clearnet_relayed: u64,
-}
-
-fn posterior(originated: u64, relayed: u64) -> f64 {
-    let total = originated + relayed;
-    if total == 0 {
-        0.0
-    } else {
-        originated as f64 / total as f64
-    }
-}
-
-/// Measure [`ClassPosterior`] on fresh graphs.
-///
-/// # Panics
-///
-/// Panics if `trials` is zero.
-#[must_use]
-pub fn simulate_class_posterior<R: RelayRng + ?Sized>(
-    mix: Mix,
-    routing: Routing,
-    trials: usize,
-    rng: &mut R,
-) -> ClassPosterior {
-    assert!(trials > 0, "need at least one trial");
-    let params = DandelionParams::adopted();
-    let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
-    let mut hidden_originated = 0_u64;
-    let mut hidden_relayed = 0_u64;
-    let mut clearnet_originated = 0_u64;
-    let mut clearnet_relayed = 0_u64;
-    let mut own_relayed = 0_u64;
-    let mut relayed_total = 0_u64;
-    let mut originated_total = 0_u64;
-    for _ in 0..trials {
-        let graph = build_two_class(
-            mix.nodes,
-            mix.hidden_out,
-            mix.clearnet_out,
-            mix.onion_fraction,
-            rng,
-        );
-        let landing = land_originated_stem(&graph, 0, routing, &params, &embargo, rng);
-        let Some(own) = landing.own_edge else {
-            continue;
-        };
-        let own_peer = landing.path.get(1).copied();
-        originated_total += 1;
-        match own {
-            LinkClass::Hidden => hidden_originated += 1,
-            LinkClass::Clearnet => clearnet_originated += 1,
-        }
-        for (class, to) in &landing.relayed {
-            relayed_total += 1;
-            if Some(*to) == own_peer {
-                own_relayed += 1;
-            }
-            match class {
-                LinkClass::Hidden => hidden_relayed += 1,
-                LinkClass::Clearnet => clearnet_relayed += 1,
-            }
-        }
-    }
-    let graph_share = if mix.hidden_out + mix.clearnet_out == 0 {
-        0.0
-    } else {
-        mix.hidden_out as f64 / (mix.hidden_out + mix.clearnet_out) as f64
-    };
-    ClassPosterior {
-        relayed_per_originated: if originated_total == 0 {
-            0.0
-        } else {
-            relayed_total as f64 / originated_total as f64
-        },
-        hidden_share: graph_share,
-        posterior_hidden: posterior(hidden_originated, hidden_relayed),
-        posterior_own_edge: posterior(originated_total, own_relayed),
-        posterior_clearnet: posterior(clearnet_originated, clearnet_relayed),
-        hidden_originated,
-        hidden_relayed,
-        clearnet_originated,
-        clearnet_relayed,
     }
 }
 

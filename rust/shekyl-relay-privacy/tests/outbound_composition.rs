@@ -8,10 +8,14 @@
 //! unconverged one is a refusal.
 
 use shekyl_relay_privacy::conformance::composition::{
-    build_two_class, composition_fluff_p90, hidden_inbound_load, simulate_class_posterior,
+    build_node_maps, build_two_class, composition_fluff_p90, hidden_inbound_load,
     simulate_own_edge_capture, LinkClass, Mix, Routing,
 };
+use shekyl_relay_privacy::conformance::epoch_traffic::{
+    epoch_traffic_on, shipped_fluff_reference, simulate_epoch_traffic,
+};
 use shekyl_relay_privacy::conformance::{converge_p90, ConvergenceBudget, ConvergenceRefusal};
+use shekyl_relay_privacy::stem_map::ConnectionId;
 use shekyl_relay_privacy::SplitMix64;
 
 #[test]
@@ -50,22 +54,29 @@ fn every_node_initiates_its_hidden_and_clearnet_degree() {
 
 #[test]
 fn a_split_graph_is_certain_and_a_clearnet_arrival_is_relayed() {
+    let mix = Mix {
+        nodes: 24,
+        hidden_out: 4,
+        clearnet_out: 4,
+        onion_fraction: 1.0,
+    };
     let mut rng = SplitMix64::new(0x5B_11);
-    let split = simulate_class_posterior(
-        Mix {
-            nodes: 24,
-            hidden_out: 4,
-            clearnet_out: 4,
-            onion_fraction: 1.0,
-        },
-        Routing::Split,
-        400,
-        &mut rng,
+    let split = simulate_epoch_traffic(mix, Routing::Split, 8, &mut rng);
+    assert!(
+        (split.posterior_hidden - 1.0).abs() < 1e-12,
+        "split hidden posterior {}",
+        split.posterior_hidden
     );
-    assert_eq!(split.clearnet_originated, 0);
-    assert_eq!(split.hidden_relayed, 0);
-    assert!((split.posterior_hidden - 1.0).abs() < 1e-12);
-    assert!(split.posterior_clearnet.abs() < 1e-12);
+    assert!(
+        split.posterior_clearnet.abs() < 1e-12,
+        "split clearnet posterior {}",
+        split.posterior_clearnet
+    );
+    assert!(
+        (split.posterior_own_edge - 1.0).abs() < 1e-12,
+        "the split own-edge carries no relay, posterior {}",
+        split.posterior_own_edge
+    );
     assert!(
         split.relayed_per_originated > 2.0 && split.relayed_per_originated < 8.0,
         "walk_stem at q=20% should relay about 4 times, got {}",
@@ -73,48 +84,147 @@ fn a_split_graph_is_certain_and_a_clearnet_arrival_is_relayed() {
     );
 
     let mut rng = SplitMix64::new(0x5B_12);
-    let mixed = simulate_class_posterior(
-        Mix {
-            nodes: 24,
-            hidden_out: 4,
-            clearnet_out: 4,
-            onion_fraction: 1.0,
-        },
-        Routing::HiddenOwnEdge,
-        400,
-        &mut rng,
-    );
-    assert_eq!(
-        mixed.clearnet_originated, 0,
-        "the own-edge is hidden, so a clearnet arrival is relayed"
-    );
-    assert!(mixed.posterior_clearnet.abs() < 1e-12);
+    let mixed = simulate_epoch_traffic(mix, Routing::HiddenOwnEdge, 8, &mut rng);
     assert!(
-        mixed.posterior_own_edge > mixed.hidden_share + 0.05,
-        "the pinned peer's posterior ({}) is above the share ({})",
-        mixed.posterior_own_edge,
-        mixed.hidden_share
+        mixed.posterior_clearnet.abs() < 1e-12,
+        "originated stems stay off clearnet, posterior {}",
+        mixed.posterior_clearnet
     );
 }
 
 #[test]
-fn an_all_clearnet_graph_puts_originated_traffic_on_clearnet() {
+fn an_all_clearnet_graph_shares_the_stem_slot_with_relays() {
     let mut rng = SplitMix64::new(0xC1_EA);
-    let paper = simulate_class_posterior(
+    let paper = simulate_epoch_traffic(
         Mix {
-            nodes: 24,
+            nodes: 32,
             hidden_out: 0,
             clearnet_out: 8,
             onion_fraction: 1.0,
         },
         Routing::AllClearnet,
-        200,
+        12,
         &mut rng,
     );
-    assert_eq!(paper.hidden_originated, 0);
-    assert_eq!(paper.hidden_relayed, 0);
-    assert!(paper.posterior_clearnet > 0.0);
-    assert!(paper.posterior_clearnet < 1.0);
+    assert!(
+        paper.posterior_hidden.abs() < 1e-12,
+        "no hidden deliveries, posterior {}",
+        paper.posterior_hidden
+    );
+    assert!(
+        paper.posterior_own_edge < 0.6,
+        "the paper's own-edge is a stem slot, so the posterior is not the \
+         single-path 0.91, got {}",
+        paper.posterior_own_edge
+    );
+    assert!(
+        paper.posterior_own_edge > 0.05,
+        "originated traffic is still on the slot, got {}",
+        paper.posterior_own_edge
+    );
+    assert!(
+        paper.own_edge_relayed_per_originated > 0.4,
+        "relays share the slot ({:.3} per originated, carrying {:.3}); a single-path \
+         revisit count stays near 0.1",
+        paper.own_edge_relayed_per_originated,
+        paper.own_edges_carrying_relayed
+    );
+}
+
+#[test]
+fn hidden_stem_slot_carries_relayed_traffic_the_separate_draw_does_not() {
+    let mix = Mix {
+        nodes: 32,
+        hidden_out: 6,
+        clearnet_out: 6,
+        onion_fraction: 1.0,
+    };
+    let mut rng = SplitMix64::new(0x57_E1);
+    let slot = simulate_epoch_traffic(mix, Routing::HiddenStemSlot, 16, &mut rng);
+    let mut rng = SplitMix64::new(0x57_E2);
+    let own = simulate_epoch_traffic(mix, Routing::HiddenOwnEdge, 16, &mut rng);
+    assert!(
+        slot.own_edge_relayed_per_originated > own.own_edge_relayed_per_originated,
+        "stem slot own={:.3} rel/orig={:.3} carrying={:.3}; separate own={:.3} rel/orig={:.3} carrying={:.3}",
+        slot.posterior_own_edge,
+        slot.own_edge_relayed_per_originated,
+        slot.own_edges_carrying_relayed,
+        own.posterior_own_edge,
+        own.own_edge_relayed_per_originated,
+        own.own_edges_carrying_relayed
+    );
+    assert!(
+        own.own_edges_carrying_relayed < 0.45,
+        "a separate own-edge coincides with a stem slot about 2/(h+c) of the time, fraction {}",
+        own.own_edges_carrying_relayed
+    );
+    assert!(
+        slot.own_edge_relayed_per_originated > own.own_edge_relayed_per_originated * 2.0,
+        "stem slot relays {} per originated, separate draw {}",
+        slot.own_edge_relayed_per_originated,
+        own.own_edge_relayed_per_originated
+    );
+}
+
+#[test]
+fn the_local_source_of_a_hidden_stem_slot_occupies_that_slot() {
+    let mut rng = SplitMix64::new(0x51_07);
+    let graph = build_two_class(30, 6, 6, 1.0, &mut rng);
+    let maps = build_node_maps(&graph, Routing::HiddenStemSlot, &mut rng);
+    for (node, map) in maps.iter().enumerate() {
+        let local = map.local.expect("mixed graph has a hidden first hop");
+        assert_eq!(local.class, LinkClass::Hidden, "node {node}");
+        let id = peer_bytes(local.to);
+        assert!(
+            map.map.slots().contains(&Some(id)),
+            "node {node} local peer is not a stem slot"
+        );
+    }
+    let mut rng = SplitMix64::new(0x51_08);
+    let graph = build_two_class(30, 6, 6, 1.0, &mut rng);
+    let maps = build_node_maps(&graph, Routing::HiddenOwnEdge, &mut rng);
+    let mut on_slot = 0_usize;
+    for map in &maps {
+        let local = map.local.expect("hidden pool is non-empty");
+        if map.map.slots().contains(&Some(peer_bytes(local.to))) {
+            on_slot += 1;
+        }
+    }
+    assert!(
+        on_slot * 2 < maps.len(),
+        "the separate draw landed on a stem slot {on_slot}/{}, which is HiddenStemSlot",
+        maps.len()
+    );
+}
+
+#[test]
+fn a_dial_only_sender_relays_nothing_on_either_routing() {
+    let mut rng = SplitMix64::new(0xD1_A1);
+    let mut graph = build_two_class(20, 4, 2, 1.0, &mut rng);
+    for row in &mut graph.initiated {
+        row.retain(|edge| edge.to != 0);
+    }
+    for routing in [Routing::HiddenStemSlot, Routing::HiddenOwnEdge] {
+        let mut rng = SplitMix64::new(0xD1_A2);
+        let traffic = epoch_traffic_on(&graph, routing, 4, &mut rng);
+        assert!(
+            traffic.dial_only_senders >= 4,
+            "{routing:?} dial-only senders {}",
+            traffic.dial_only_senders
+        );
+        assert_eq!(
+            traffic.dial_only_relayed, 0,
+            "{routing:?} a node with no inbound relays nothing"
+        );
+        assert!(traffic.dial_only_originated >= 4);
+        assert!((traffic.posterior_dial_only - 1.0).abs() < 1e-12);
+    }
+}
+
+fn peer_bytes(node: usize) -> ConnectionId {
+    let mut bytes = [0_u8; 16];
+    bytes[..8].copy_from_slice(&(node as u64).to_le_bytes());
+    ConnectionId::from_bytes(bytes)
 }
 
 #[test]
@@ -178,6 +288,7 @@ fn outbound_composition_grid() {
         converged_composition_fluff, simulate_stem_first_spy, LinkTransit, SpyArm,
     };
     use shekyl_relay_privacy::conformance::transit_for;
+    use shekyl_relay_privacy::params::DandelionParams;
     use shekyl_relay_privacy::schedule::DelayFamily;
     use shekyl_relay_privacy::MeasuredConnector;
 
@@ -194,6 +305,7 @@ fn outbound_composition_grid() {
     let hidden_ms = transit_for(MeasuredConnector::Tor);
     let clear_ms = transit_for(MeasuredConnector::Clearnet);
     println!("transit hidden {hidden_ms} clearnet {clear_ms}");
+    println!("f = 1 is the normal case (per-boot onion). Epochs below use it.");
     for (h, c) in points {
         let mix = Mix {
             nodes: 48,
@@ -201,37 +313,56 @@ fn outbound_composition_grid() {
             clearnet_out: c,
             onion_fraction: 1.0,
         };
-        let mut rng = SplitMix64::new(0x5950_0000 + (h as u64) * 16 + c as u64);
-        let post = simulate_class_posterior(mix, Routing::HiddenOwnEdge, 600, &mut rng);
-        println!(
-            "POST h={h} c={c} share={:.3} own={:.3} hid={:.3} clr={:.3} relayed={:.2}",
-            post.hidden_share,
-            post.posterior_own_edge,
-            post.posterior_hidden,
-            post.posterior_clearnet,
-            post.relayed_per_originated
-        );
-        let mut rng = SplitMix64::new(0x5910);
-        let spy = simulate_stem_first_spy(
-            mix,
-            Routing::HiddenOwnEdge,
-            SpyArm::Uniform { p: 0.2 },
-            400,
-            &mut rng,
-        );
-        let mut rng = SplitMix64::new(0x5930);
-        let spy30 = simulate_stem_first_spy(
-            mix,
-            Routing::HiddenOwnEdge,
-            SpyArm::OnionBiased { p: 0.3 },
-            400,
-            &mut rng,
-        );
-        println!(
-            "SPY h={h} c={c} p20 prec={:.3} rec={:.3} | p_h(0.3) prec={:.3} rec={:.3}",
-            spy.precision, spy.recall, spy30.precision, spy30.recall
-        );
+        for routing in [Routing::HiddenStemSlot, Routing::HiddenOwnEdge] {
+            let mut rng = SplitMix64::new(0x5950_0000 + (h as u64) * 16 + c as u64);
+            let post = simulate_epoch_traffic(mix, routing, 20, &mut rng);
+            let headline = if (h, c) == (12, 0) { " HEADLINE" } else { "" };
+            println!(
+                "EPOCH {routing:?}{headline} h={h} c={c} own={:.3} inbound={:.3} hid={:.3} clr={:.3} \
+                 relayed_on_own={:.2} carrying={:.2} dial0={} dial_post={:.3}",
+                post.posterior_own_edge,
+                post.posterior_own_edge_with_inbound,
+                post.posterior_hidden,
+                post.posterior_clearnet,
+                post.own_edge_relayed_per_originated,
+                post.own_edges_carrying_relayed,
+                post.dial_only_senders,
+                post.posterior_dial_only
+            );
+            let busy = post
+                .by_inbound
+                .iter()
+                .max_by_key(|bin| bin.senders)
+                .expect("a degree bin");
+            println!(
+                "  degree {} senders {} posterior {:.3} (orig {} rel {})",
+                busy.inbound, busy.senders, busy.posterior, busy.originated, busy.relayed
+            );
+        }
+        for routing in [Routing::HiddenStemSlot, Routing::HiddenOwnEdge] {
+            let mut rng = SplitMix64::new(0x5910);
+            let spy =
+                simulate_stem_first_spy(mix, routing, SpyArm::Uniform { p: 0.2 }, 200, &mut rng);
+            let mut rng = SplitMix64::new(0x5930);
+            let spy30 = simulate_stem_first_spy(
+                mix,
+                routing,
+                SpyArm::OnionBiased { p: 0.3 },
+                200,
+                &mut rng,
+            );
+            println!(
+                "SPY {routing:?} h={h} c={c} p20 prec={:.3} rec={:.3} | p_h(0.3) prec={:.3} rec={:.3}",
+                spy.precision, spy.recall, spy30.precision, spy30.recall
+            );
+        }
     }
+    let mut reference_rng = SplitMix64::new(0xF7_000C);
+    let reference = shipped_fluff_reference(24, &mut reference_rng);
+    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms);
+    println!(
+        "FLUFF reference outbound-only transit-free degree 12 nodes 512 trials 24 p90={reference} shipped={shipped}"
+    );
     let budget = ConvergenceBudget {
         start_trials: 8,
         max_trials: 32,
@@ -258,13 +389,24 @@ fn outbound_composition_grid() {
             SplitMix64::new,
         );
         match reading {
-            Ok(v) => println!(
-                "FLUFF h={h} c={c} p90={} spread={} trials={}",
-                v.p90_ms, v.spread_ms, v.trials_per_seed
-            ),
+            Ok(v) => {
+                let ratio_milli = v.p90_ms.saturating_mul(1000) / reference;
+                println!(
+                    "FLUFF h={h} c={c} p90={} ratio={}.{:03} exceeds_fail_safe={} spread={} trials={}",
+                    v.p90_ms,
+                    ratio_milli / 1000,
+                    ratio_milli % 1000,
+                    v.p90_ms > reference,
+                    v.spread_ms,
+                    v.trials_per_seed
+                );
+            }
             Err(e) => println!("FLUFF h={h} c={c} REFUSED {e}"),
         }
     }
+    println!(
+        "IN rows at f < 1 are opt-out and failure stress, not the normal published-onion fraction"
+    );
     for (i, f) in [1.0_f64, 0.5, 0.25, 0.1].into_iter().enumerate() {
         for h in [12, 16, 24] {
             let mut rng = SplitMix64::new(0x1B00 + (h as u64) * 10 + i as u64);
@@ -305,36 +447,36 @@ fn outbound_composition_grid() {
         );
     }
     let mut rng = SplitMix64::new(0x5B_11);
-    let split = simulate_class_posterior(
+    let split = simulate_epoch_traffic(
         Mix {
-            nodes: 32,
+            nodes: 36,
             hidden_out: 12,
             clearnet_out: 4,
             onion_fraction: 1.0,
         },
         Routing::Split,
-        300,
+        8,
         &mut rng,
     );
     println!(
-        "BASE split own={} hid={} clr={}",
+        "BASE split own={:.3} hid={:.3} clr={:.3}",
         split.posterior_own_edge, split.posterior_hidden, split.posterior_clearnet
     );
     let mut rng = SplitMix64::new(0xC1);
-    let paper = simulate_class_posterior(
+    let paper = simulate_epoch_traffic(
         Mix {
-            nodes: 32,
+            nodes: 36,
             hidden_out: 0,
             clearnet_out: 16,
             onion_fraction: 1.0,
         },
         Routing::AllClearnet,
-        300,
+        12,
         &mut rng,
     );
     println!(
-        "BASE clearnet own={} clr={}",
-        paper.posterior_own_edge, paper.posterior_clearnet
+        "BASE clearnet own={:.3} clr={:.3} carrying={:.3}",
+        paper.posterior_own_edge, paper.posterior_clearnet, paper.own_edges_carrying_relayed
     );
 }
 

@@ -14,6 +14,7 @@
 //! - [`stem`] — stem walk + propagation / preemption / black-hole
 //! - [`flood`] — fluff-return first-passage + diffusion first-spy
 //! - [`transport`] — fluff-reach supernode observation + passive leak
+//! - [`epoch_traffic`] — one epoch of originated and relayed stems on the two-class graph
 //! - [`selection`] — two-slot occupancy, epoch layering, ε-greedy
 //! - [`reshape`] — origin exposure, δ increment, recovery latency
 //!
@@ -28,6 +29,7 @@
 
 pub mod analysis;
 pub mod composition;
+pub mod epoch_traffic;
 pub mod flood;
 pub mod grade;
 pub mod linkage;
