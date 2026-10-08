@@ -265,6 +265,8 @@ spec = [
 ]
 cleared = [
   { through = "155e85a130", reason = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
+  { through = "01aa01fd31", reason = "SH-2 (PR #990): a doc comment on PServeEndpoint::bind in serve.rs, which no longer names the deleted NoResidentKey. No code changed; the verdict's arms are untouched." },
+  { through = "9cb164d28e", reason = "SH-2 (PR #990): the six serve counters become one clonable ServeCounterReader the endpoint owns; the accept loop increments the same atomics and the getters delegate. The verdict is over what an abandoned request costs the serve path, and no read, hash, sign or socket operation on that path is added, removed or reordered; the counter stores it already made are the same stores." },
 ]
 
 [[path_set]]
@@ -291,6 +293,7 @@ stale_through = [
   { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
   { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
   { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
+  { through = "9cb164d28e", note = "SH-2 (PR #990): the six serve counters in serve.rs move from loose Arc<AtomicU64> locals into one clonable ServeCounterReader the endpoint owns and hands out; the accept loop increments the same atomics it did, and the endpoint's count getters delegate to the reader. Reads of the counters happen on the serving task's health probe, off this path. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path; not measured." },
 ]
 
 [[constant]]
