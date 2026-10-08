@@ -35,8 +35,8 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementE
 use shekyl_wire::{Input, Transaction};
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, candidate_over, connect_chain, credited, formed_under,
-    judge_under, priced, FIRST_SPEND_HEIGHT,
+    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, formed_under,
+    judge_under, priced, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
@@ -75,11 +75,29 @@ const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
     }
 }
 
-/// A sixteen-block settlement epoch, so a chain a few blocks past the first
-/// admissible spend height closes an epoch with a record and a credit in
-/// it: the join at height 5 is in epoch 0, block 15 closes that, and
-/// block 31 closes epoch 1 — the first the persona may be credited for.
-const SHORT_SEB: u64 = 16;
+/// A settlement epoch just long enough to hold the first admissible spend
+/// height, so a chain a few blocks past it closes an epoch with a record
+/// and a credit in it: the join sits at [`FIRST_SPEND_HEIGHT`], in epoch
+/// 0 — the premise the harness credit is built on (`serve_credit_only`
+/// credits epoch 1, "every fixture join is in epoch 0") — and
+/// [`CLOSING_HEIGHT`] closes epoch 1, the first the persona may be
+/// credited for (CEN-J5). Before the spend height was derived from
+/// coinbase maturity it sat at 5 and this epoch was sixteen blocks.
+const SHORT_SEB: u64 = FIRST_SPEND_HEIGHT + 14;
+/// The epoch the join is listed in: epoch 0, by the epoch's length.
+const JOIN_EPOCH: u64 = FIRST_SPEND_HEIGHT / SHORT_SEB;
+const _: () = assert!(
+    JOIN_EPOCH == 0,
+    "the harness credit is for a join in epoch 0"
+);
+/// The first epoch the persona may serve: not the join's own (CEN-J5).
+const CREDIT_EPOCH: u64 = JOIN_EPOCH + 1;
+/// The credit is listed in its epoch's third block — inside the epoch and
+/// past its seal block (what CEN-J7 will require; E6 slice C).
+const CREDIT_HEIGHT: u64 = CREDIT_EPOCH * SHORT_SEB + 2;
+/// The credited epoch's last block, the one that closes it.
+const CLOSING_HEIGHT: u64 = (CREDIT_EPOCH + 1) * SHORT_SEB - 1;
+const _: () = assert!(FIRST_SPEND_HEIGHT < CREDIT_HEIGHT && CREDIT_HEIGHT < CLOSING_HEIGHT);
 const SHORT_RETENTION: u64 = 8;
 const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 4));
 
@@ -257,15 +275,15 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
 
 // ------------------------------------------------------------- phase 9c
 
-/// On a sixteen-block schedule block 31 closes epoch 1 — the first epoch
-/// the persona who joined at height 5, in epoch 0, may serve (CEN-J5), and
-/// so the first close with a credit in it: the credit for epoch 1 is
-/// listed at height 18, inside the epoch and past its seal block (what
-/// CEN-J7 will require; E6 slice C). The close's `r_market` (the credited
+/// On the `SHORT` schedule `CLOSING_HEIGHT` closes `CREDIT_EPOCH` —
+/// the first epoch the persona who joined at `FIRST_SPEND_HEIGHT`, in
+/// `JOIN_EPOCH`, may serve (CEN-J5), and so the first close with a credit
+/// in it: the credit for that epoch is listed at `CREDIT_HEIGHT`, inside
+/// the epoch and past its seal block. The close's `r_market` (the credited
 /// shard), `Σwork` and `budget` land as the verdict computed them, and the
 /// accruing row is **removed** rather than left as a second copy of the
-/// budget. The pop restores the accruing row to the block-30 post-image
-/// and clears the three close rows; the re-connect closes again,
+/// budget. The pop restores the accruing row to the post-image of the
+/// block below the close and clears the three close rows; the re-connect closes again,
 /// identically. *Records-was:* until E6 slice 8 row 3 this closed epoch 0
 /// at block 15 over a credit for epoch 0 listed beside its join — a credit
 /// the C++ refuses twice over (no record before the block, CEN-J4; the
@@ -281,23 +299,32 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     let p = persona(P);
     let [join, credit] = credited(12, P);
     connect_one(&store, &mut hashes, vec![join], SHORT);
-    const CREDIT_HEIGHT: u64 = SHORT_SEB + 2;
-    const CLOSING_HEIGHT: u64 = 2 * SHORT_SEB - 1;
     for _ in (FIRST_SPEND_HEIGHT + 1)..CREDIT_HEIGHT {
         connect_empty(&store, &mut hashes, SHORT);
     }
-    assert_eq!(hashes.len(), 18, "the next block is 18, the credit's");
+    assert_eq!(
+        hashes.len() as u64,
+        CREDIT_HEIGHT,
+        "the next block is {CREDIT_HEIGHT}, the credit's"
+    );
     connect_one(&store, &mut hashes, vec![credit], SHORT);
-    let mut accrued_through_30 = None;
+    let mut accrued_before_close = None;
     for _ in (CREDIT_HEIGHT + 1)..CLOSING_HEIGHT {
-        accrued_through_30 = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
+        accrued_before_close = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
     }
-    let accrued_through_30 = accrued_through_30.expect("blocks 19..=30 connected");
-    assert_eq!(hashes.len(), 31, "the next block is 31, the closing one");
+    let accrued_before_close =
+        accrued_before_close.expect("the blocks between the credit and the close connected");
+    assert_eq!(
+        hashes.len() as u64,
+        CLOSING_HEIGHT,
+        "the next block is {CLOSING_HEIGHT}, the closing one"
+    );
 
     let closing = connect_one(&store, &mut hashes, Vec::new(), SHORT);
-    let close = closing.close().expect("block 31 closes epoch 1");
-    assert_eq!(close.epoch(), epoch(1));
+    let close = closing
+        .close()
+        .unwrap_or_else(|| panic!("block {CLOSING_HEIGHT} closes epoch {CREDIT_EPOCH}"));
+    assert_eq!(close.epoch(), epoch(CREDIT_EPOCH));
     assert_eq!(
         closing.accrual().total,
         close.budget(),
@@ -310,16 +337,22 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     );
 
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(1)).expect("read"), Some(close.budget()));
     assert_eq!(
-        snap.sigma_work(epoch(1)).expect("read"),
+        snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
+        Some(close.budget())
+    );
+    assert_eq!(
+        snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
         Some(close.sigma_work())
     );
     for (s, r) in &r_market {
-        assert_eq!(snap.r_market(*s, epoch(1)).expect("read"), Some(*r));
+        assert_eq!(
+            snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"),
+            Some(*r)
+        );
     }
     assert_eq!(
-        snap.budget_accruing(epoch(1)).expect("read"),
+        snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
         None,
         "ARW-Q3: the accruing row is removed at the close"
     );
@@ -331,15 +364,15 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
 
     pop(&store);
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(1)).expect("read"), None);
-    assert_eq!(snap.sigma_work(epoch(1)).expect("read"), None);
+    assert_eq!(snap.budget(epoch(CREDIT_EPOCH)).expect("read"), None);
+    assert_eq!(snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"), None);
     for (s, _) in &r_market {
-        assert_eq!(snap.r_market(*s, epoch(1)).expect("read"), None);
+        assert_eq!(snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"), None);
     }
     assert_eq!(
-        snap.budget_accruing(epoch(1)).expect("read"),
-        Some(accrued_through_30),
-        "the pop puts the block-30 accrual back"
+        snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
+        Some(accrued_before_close),
+        "the pop puts the accrual of the block below the close back"
     );
     drop(snap);
 
@@ -347,12 +380,18 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     let again = connect_one(&store, &mut hashes, Vec::new(), SHORT);
     assert_eq!(again, closing, "the same block, the same verdict");
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(1)).expect("read"), Some(close.budget()));
     assert_eq!(
-        snap.sigma_work(epoch(1)).expect("read"),
+        snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
+        Some(close.budget())
+    );
+    assert_eq!(
+        snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
         Some(close.sigma_work())
     );
-    assert_eq!(snap.budget_accruing(epoch(1)).expect("read"), None);
+    assert_eq!(
+        snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
+        None
+    );
     drop(snap);
     drop(store);
     cleanup(&path);
@@ -559,11 +598,8 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
     let p = persona(P);
     let [join, credit] = credited(13, P);
-    let listing: Vec<Vec<Transaction>> = (0..FIRST_SPEND_HEIGHT)
-        .map(|_| Vec::new())
-        .chain(core::iter::once(vec![join]))
-        .collect();
-    let hashes = connect_chain(&store, &listing);
+    let listing = spendable_prefix(vec![vec![body(join)]]);
+    let hashes = connect_chain(&store, &listing).hashes;
     assert_eq!(
         hashes.len(),
         usize::try_from(FIRST_SPEND_HEIGHT + 1).expect("fits")

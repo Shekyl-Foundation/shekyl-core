@@ -28,7 +28,7 @@ use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
     anchor, batch_root_going_into, candidate, candidate_over, credited, judge_under,
-    root_going_into, spend,
+    root_going_into,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
@@ -567,7 +567,11 @@ fn the_hook_is_idempotent_across_a_boundary_reorg() {
     assert_eq!(out.map(|p| p.height.to_raw()), Ok(300));
     b.forget(1);
     // A different block at 300: the spend makes its hash differ.
-    let again = b.connect(&store, 300, 300, |_| vec![spend(3, 2)]).remove(0);
+    let again = b
+        .connect(&store, 300, 300, |_| {
+            vec![fixture::spend(fixture::point(3), 2)]
+        })
+        .remove(0);
     let pruned = again.pruned.expect("the boundary fires again");
     assert_eq!(pruned.shards(), 0..1, "the same D(3), already empty");
     assert_eq!(pruned.undo_floor, BlockHeight::from_raw(250), "monotone");

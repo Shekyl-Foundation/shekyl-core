@@ -49,10 +49,11 @@ use shekyl_chain_rules::{
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
 };
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
-    candidate, judge, priced, spend, spend_at, FixtureSubstrate, FIRST_SPEND_HEIGHT,
+    batch_root_going_into, candidate, candidate_over, endow_genesis, grown_over, judge, priced,
+    root_going_into, FixtureSubstrate, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -196,7 +197,16 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
         // and the block the store connected are one object.
         let derived: Result<_, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
-            let cand = priced(&view, candidate(h, previous, Vec::new()))?;
+            // Carrying the root the store recorded going into `h` (CEN-B5;
+            // the tree grows once the unlock window has elapsed).
+            let root = batch_root_going_into(&view, h)?;
+            let mut cand = candidate_over(root, h, previous, Vec::new());
+            if h == 0 {
+                // Genesis stands as built (CEN-F11); endowed so its
+                // coinbase is one the spend shapes below can spend.
+                endow_genesis(&mut cand);
+            }
+            let cand = priced(&view, cand)?;
             let valid = judge(&view, cand.clone())?;
             let derived = (
                 cand,
@@ -262,16 +272,24 @@ fn both(
 
 /// The shapes every landed view-bound rule can refuse or pass, each built
 /// on a chain of `len` blocks. Names are the row each shape exercises.
-fn shapes(len: u64, blocks: &[Candidate], mock: &MockChain) -> Vec<(&'static str, Candidate, Env)> {
+fn shapes(
+    len: u64,
+    blocks: &[Candidate],
+    store: &ChainStore,
+    mock: &MockChain,
+) -> Vec<(&'static str, Candidate, Env)> {
     let tip = blocks
         .last()
         .map(|b| b.block.hash())
         .unwrap_or(BlockHash::NULL);
+    // The root a header at `len` must carry is the store's going into
+    // `len` (CEN-B5); the mock is held to the same root by the comparison.
+    let root = root_going_into(store, len);
     // Priced over the **mock** (CEN-F18's coinbase): the store's view then
     // judges a coinbase the mock priced, so the reads F17/F18 depend on —
     // the accumulator, the burned fold, the leaf count, the medians — are
     // reconciled by this comparison too, not only by the reads below.
-    let well_formed = fixture::repriced(mock, candidate(len, tip, Vec::new()));
+    let well_formed = fixture::repriced(mock, candidate_over(root, len, tip, Vec::new()));
     let mut out = vec![("well-formed", well_formed.clone(), Env::FIXTURE)];
 
     // A2: previous is not the tip.
@@ -311,27 +329,37 @@ fn shapes(len: u64, blocks: &[Candidate], mock: &MockChain) -> Vec<(&'static str
     out.push(("B1 major version", bad_major, Env::FIXTURE));
 
     // I10–I12 (slice 6 commit 5), once the chain is old enough to list a
-    // spend: an anchored spend — the reference found by `height_of` on
-    // both views, measured by I11, its root read by I12 — passes on both;
-    // a spend whose reference no chain holds is refused by I10 on both.
-    // `height_of` is the read this file exists to reconcile here, not the
-    // rows' operation on a chain (the ingest's driver holds that).
+    // spend: a real spend of genesis's coinbase, built over the chain both
+    // views hold — the reference found by `height_of` on both views,
+    // measured by I11, its root read by I12 — passes on both; the same
+    // spend re-anchored to a block no chain holds is refused by I10 on
+    // both. `height_of` is the read this file exists to reconcile here,
+    // not the rows' operation on a chain (the ingest's driver holds that).
     if len >= FIRST_SPEND_HEIGHT {
-        let hashes: Vec<BlockHash> = blocks.iter().map(|b| b.block.hash()).collect();
+        let mut grown = grown_over(blocks.iter().map(|b| (&b.block, b.transactions.as_slice())));
+        assert_eq!(
+            grown.height(),
+            BlockHeight::from_raw(len),
+            "one record per connected block"
+        );
+        let the_spend = grown.spend(0);
         let listing = |body: Transaction| {
             let mut with_body = well_formed.clone();
             with_body.block.transaction_hashes = vec![body.hash()];
             with_body.transactions = vec![body];
             with_body
         };
-        out.push((
-            "I10–I12 anchored spend",
-            listing(spend_at(&hashes, len, 9, 2)),
-            Env::FIXTURE,
-        ));
+        let mut unrecorded = the_spend.clone();
+        match &mut unrecorded.ct {
+            Ct::Fcmp {
+                reference_block, ..
+            } => *reference_block = fixture::UNRECORDED_REFERENCE,
+            Ct::Null(_) => panic!("a spend's ct is Fcmp"),
+        }
+        out.push(("I10–I12 anchored spend", listing(the_spend), Env::FIXTURE));
         out.push((
             "I10 unrecorded reference",
-            listing(spend(9, 2)),
+            listing(unrecorded),
             Env::FIXTURE,
         ));
     }
@@ -341,9 +369,11 @@ fn shapes(len: u64, blocks: &[Candidate], mock: &MockChain) -> Vec<(&'static str
 #[test]
 fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
     // Genesis admission (no window, null seed), a one-block chain (block 0
-    // pads the MTP window; the seed is block 0), and twelve blocks (a full
-    // MTP window; C3 pads nothing).
-    for len in [0u64, 1, 12] {
+    // pads the MTP window; the seed is block 0), twelve blocks (a full MTP
+    // window; C3 pads nothing), and the first chain that may list a spend
+    // (the spend shapes run; the tree has grown, so B5 and I12 read a
+    // non-empty root on both views).
+    for len in [0u64, 1, 12, FIRST_SPEND_HEIGHT] {
         let (store, path, mock, blocks) = twin_chains(len);
         let genesis = blocks
             .first()
@@ -351,7 +381,7 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
             .unwrap_or(BlockHash::NULL);
         let seed = seed_for(len, genesis);
         let mut checked = 0;
-        for (name, cand, env) in shapes(len, &blocks, &mock) {
+        for (name, cand, env) in shapes(len, &blocks, &store, &mock) {
             let (real, mocked) = both(&store, &mock, cand, &env, seed);
             // `Valid` carries the row list, so a drift in *which* rows ran
             // fails here even when the verdict matches.
@@ -380,7 +410,9 @@ fn every_landed_rule_judges_identically_over_batch_view_and_the_mock() {
             }
             checked += 1;
         }
-        let expected = if len >= FIRST_SPEND_HEIGHT { 9 } else { 7 };
+        // Seven shapes on every chain; the two spend shapes once a spend
+        // can be listed.
+        let expected = if len >= FIRST_SPEND_HEIGHT { 7 + 2 } else { 7 };
         assert_eq!(checked, expected, "every shape ran at len {len}");
         drop(store);
         cleanup(&path);

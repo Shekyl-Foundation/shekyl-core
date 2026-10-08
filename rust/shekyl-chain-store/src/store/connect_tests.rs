@@ -20,9 +20,10 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    anchor, at, candidate, connect_chain, connect_chain_burning, connect_genesis,
-    connect_genesis_judged, connect_with_image_planted_under_the_token, credited, judge, priced_on,
-    spend, spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
+    batch_root_going_into, body, candidate, candidate_over, connect_chain, connect_chain_burning,
+    connect_genesis, connect_genesis_judged, connect_with_image_planted_under_the_token, credited,
+    judge, key_images, prefix_to, priced_on, spend, spend_paying, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -301,28 +302,42 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // before the first admissible spend height, so the pair is a
     // coinbase-only block and, on it, the first block that may list a spend.
     let s = FIRST_SPEND_HEIGHT;
-    let below = connect_chain(&store, &vec![Vec::new(); at(s - 1)]);
+    let mut grown = connect_chain(&store, &prefix_to(BlockHeight::from_raw(s - 1), Vec::new()));
     // Priced against the committed chain so its identity — the parent the
-    // spend block names — is the block that connects (CEN-F18).
-    let g = priced_on(&store, candidate(s - 1, below[at(s - 2)], Vec::new()));
+    // spend block names — is the block that connects (CEN-F18); recorded
+    // on the chain as priced, so the spend below is built for height `s`
+    // over the tree the pair continues.
+    let g = priced_on(&store, grown.next(&store, &[]));
     let g_hash = g.block.hash();
-    let mut hashes = below.clone();
-    hashes.push(g_hash);
-    let b1 = candidate(s, g_hash, vec![spend_at(&hashes, s, 9, 2)]);
-    let spend_hash = b1.transactions[0].hash();
+    grown.record(&g.block, &[]);
+    // The spend of genesis's coinbase, the one matured for `s`. Its block's
+    // root is the one going into `s` — `g`'s root after, known to the batch
+    // once `g` has connected — so the candidate is built inside the batch.
+    let the_spend = grown.spend(0);
+    let spend_hash = the_spend.hash();
+    let [spent_image] = key_images(&the_spend)[..] else {
+        panic!("one input");
+    };
 
-    let out: Result<(Connected, Connected, BlockHash), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let c0 = batch.connect(judge(&view, g)?, RuleSet::GENESIS)?;
-        // The spend block is validated against a view that already holds
-        // its parent and connected in the same batch; its coinbase is
-        // priced against that view, so its identity is the verdict's.
-        let judged = judge(&view, b1)?;
-        let b1_hash = judged.block().hash();
-        let c1 = batch.connect(judged, RuleSet::GENESIS)?;
-        Ok((c0, c1, b1_hash))
-    });
-    let (c0, c1, b1_hash) = out.expect("both connect");
+    let out: Result<(Connected, Connected, BlockHash, (usize, usize)), TestErr> =
+        store.write(|batch| {
+            let view = batch.chain_view();
+            let c0 = batch.connect(judge(&view, g)?, RuleSet::GENESIS)?;
+            // The spend block is validated against a view that already holds
+            // its parent and connected in the same batch; its coinbase is
+            // priced against that view, so its identity is the verdict's.
+            let root = batch_root_going_into(&view, s)?;
+            let judged = judge(
+                &view,
+                candidate_over(root, s, g_hash, vec![the_spend.clone()]),
+            )?;
+            let b1_hash = judged.block().hash();
+            let drain = judged.block().drain().expect("a coinbase matured at s");
+            let drained = (drain.drained().len(), drain.growth().layer_writes.len());
+            let c1 = batch.connect(judged, RuleSet::GENESIS)?;
+            Ok((c0, c1, b1_hash, drained))
+        });
+    let (c0, c1, b1_hash, (drained_leaves, layer_writes)) = out.expect("both connect");
     assert_eq!(c0.height, BlockHeight::from_raw(s - 1));
     assert_eq!(c1.height, BlockHeight::from_raw(s));
     // the spend block: miner tx 7 (tx_indices, txs_pruned, txs_prunable,
@@ -332,10 +347,16 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
     // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
-    // 5) = 27. Nothing has matured at this height, so the tree tables write
-    // no row; nothing burned (no fee, no volume), so no burn row and no
-    // fold pre-image.
-    assert_eq!(c1.journaled, 27);
+    // 5) = 27, plus the drain: `s` is past the unlock window, so block
+    // `s − W`'s coinbase matures here — one leaf (its leaf row and the two
+    // position-map rows, `grow.rs` 3a), the chunk it lands in and the root
+    // chunk over it (the tree's `s − W` leaves fit one chunk: two layer
+    // writes, 3b) and the summary (3c). Nothing burned (no fee, no
+    // volume), so no burn row and no fold pre-image.
+    assert_eq!(drained_leaves, 1, "block s − W's coinbase alone");
+    assert_eq!(layer_writes, 2, "a one-chunk tree: its chunk and the root");
+    let drain_rows = 3 * drained_leaves + layer_writes + 1;
+    assert_eq!(c1.journaled, 27 + drain_rows);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.
@@ -349,7 +370,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert!(
         snap.open_table(SPENT_KEYS)
             .expect("t")
-            .get(LmdbHashKey::from_bytes(fixture::point(9)))
+            .get(LmdbHashKey::from_bytes(spent_image))
             .expect("g")
             .is_some(),
         "the spend's key image is recorded"
@@ -427,10 +448,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // fixture rather than pinned as a length. (Until E6 slice 5 the fixture
     // was the storage-pruned form and this row was empty; CEN-H19 refuses
     // that form at consensus.)
-    let expected_prunable = spend_at(&hashes, s, 9, 2)
-        .write_segments()
-        .expect("segments")
-        .prunable;
+    let expected_prunable = the_spend.write_segments().expect("segments").prunable;
     assert!(!expected_prunable.is_empty());
     assert_eq!(
         snap.open_table(TXS_PRUNABLE)
@@ -453,7 +471,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     // burns (the burn is the verdict's, CEN-F17). Snapshot every table's
     // row count and total_burned after it.
     let s = FIRST_SPEND_HEIGHT;
-    let (hashes, burns) = connect_chain_burning(&store, &spendable_prefix(&[vec![spend(11, 2)]]));
+    let (mut grown, burns) = connect_chain_burning(&store, &spendable_prefix(vec![vec![spend()]]));
     assert!(
         burns.iter().all(|b| *b == AtomicUnits::ZERO),
         "nothing burned yet: no fee paid"
@@ -487,12 +505,10 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     // image spent.
     assert_eq!(before, (s + 1, s + 2, s + 3, s + 1, 1, None));
 
+    // A spend of the coinbase matured for `next` (block 1's), paying a
+    // one-coin fee out of it, over the committed chain.
     let fee = 1_000_000_000;
-    let b1 = candidate(
-        next,
-        hashes[at(s)],
-        vec![anchor(&hashes, next, spend_paying(9, 2, fee))],
-    );
+    let b1 = grown.next(&store, &[spend_paying(fee)]);
     let out: Result<AtomicUnits, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, b1)?;
@@ -718,8 +734,10 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
     let path = tmp("connect-ki");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let s = FIRST_SPEND_HEIGHT;
-    let hashes = connect_chain(&store, &spendable_prefix(&[]));
-    let b1 = candidate(s, hashes[at(s - 1)], vec![spend_at(&hashes, s, 9, 2)]);
+    let mut grown = connect_chain(&store, &spendable_prefix(Vec::new()));
+    // The first spend (of genesis's coinbase), judged against a view with
+    // its image fresh; the fixture plants the image under the token.
+    let b1 = grown.next(&store, &[spend()]);
     let out = connect_with_image_planted_under_the_token(&store, b1);
     expect_row(&out, StoreInvariant::KeyImageNotFresh);
     let snap = store.begin_read().expect("read");
@@ -756,11 +774,10 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     // CEN-J4, read off the view before the block), and the join spends —
     // so the join sits at the first spend height, as the SI-1 belt's
     // block does, and the credit one above it.
-    let s = FIRST_SPEND_HEIGHT + 1;
     let [join, dup] = credited(9, [0x77; 32]);
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![join]]));
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![body(join)]]));
     let dup_hash = dup.hash();
-    let b1 = candidate(s, hashes[at(s - 1)], vec![dup]);
+    let b1 = grown.next(&store, &[body(dup)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, b1)?;

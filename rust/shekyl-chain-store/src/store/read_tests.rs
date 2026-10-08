@@ -12,14 +12,14 @@
 //! returns, the writer **still `Live`**: a read never arms the halt
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
-use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{AtHeight, RuleSet};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain, connect_chain_burning, judge, root_going_into, spend, spend_at,
-    spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, connect_chain_anchored, connect_chain_burning, height_maturing,
+    judge, key_images, prefix_to, root_going_into, spend, spend_paying, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
@@ -93,7 +93,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
 fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
     let path = tmp("read-tip-recorded");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let hashes = connect_chain(&store, &spendable_prefix(vec![vec![spend()]])).hashes;
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip");
     assert_eq!(
@@ -113,7 +113,7 @@ fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
 fn height_of_is_some_for_a_recorded_hash_and_none_otherwise() {
     let path = tmp("read-height-of");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![], vec![]]);
+    let hashes = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
     let snap = store.begin_read().expect("read");
     for (i, hash) in hashes.iter().enumerate() {
         assert_eq!(snap.height_of(hash).expect("read"), Some(h(i as u64)));
@@ -134,7 +134,7 @@ fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
     let path = tmp("read-block-info");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // The spend at the first admissible height, then one more block.
-    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)], vec![]]));
+    connect_chain(&store, &spendable_prefix(vec![vec![spend()], vec![]]));
     let tip = FIRST_SPEND_HEIGHT + 1;
     let snap = store.begin_read().expect("read");
     for height in 0..=tip {
@@ -285,7 +285,7 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
 fn block_returns_the_body_verified_against_the_recorded_identity() {
     let path = tmp("read-block");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let hashes = connect_chain(&store, &spendable_prefix(vec![vec![spend()]])).hashes;
     let spend_block = FIRST_SPEND_HEIGHT;
     let snap = store.begin_read().expect("read");
     let AtHeight::Recorded(body) = snap.block(h(spend_block)).expect("read") else {
@@ -360,7 +360,7 @@ fn a_rewritten_blob_is_si7_on_block_and_blocks_but_block_blob_still_hands_out_th
 fn blocks_range_clamps_at_the_tip_and_yields_the_last_height_of_a_half_open_range() {
     let path = tmp("read-blocks-range");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &[vec![], vec![], vec![], vec![]]);
+    let hashes = connect_chain(&store, &[vec![], vec![], vec![], vec![]]).hashes;
     let snap = store.begin_read().expect("read");
     // `start..start + count` yields `count` rows, the last one included —
     // the inclusive-`h2` port hazard (SCR-20).
@@ -439,7 +439,7 @@ fn connect_burning(store: &ChainStore) -> (u64, Vec<AtomicUnits>) {
     let s = FIRST_SPEND_HEIGHT;
     let (_, burns) = connect_chain_burning(
         store,
-        &spendable_prefix(&[vec![spend(10, 2)], vec![spend_paying(9, 2, 1_000_000_000)]]),
+        &spendable_prefix(vec![vec![spend()], vec![spend_paying(1_000_000_000)]]),
     );
     (s + 1, burns)
 }
@@ -519,13 +519,17 @@ fn total_burned_is_the_sum_connect_folded() {
 fn the_fold_reads_return_exactly_what_connect_wrote() {
     let path = tmp("read-fold-reads");
     let store = ChainStore::create(&path, EPOCH).expect("create");
+    // A block listing two spends needs two coinbases matured for it, so
+    // the first listed block sits at `height_maturing(2)`; the block after
+    // it finds the third.
+    let first = height_maturing(2);
     connect_chain(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]]),
+        &prefix_to(first, vec![vec![spend(), spend()], vec![spend()]]),
     );
-    let first = FIRST_SPEND_HEIGHT;
+    let first = first.to_raw();
     let snap = store.begin_read().expect("read");
-    // No listed transaction below the first spend block; two there, three
+    // No listed transaction below the first listed block; two there, three
     // one block on.
     for height in 0..first {
         assert_eq!(
@@ -581,25 +585,27 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     // DRS-E3, which no fixture computes from the height.
     let path = tmp("read-digest-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(
+    let (grown, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
+        &spendable_prefix(vec![vec![spend()], vec![spend()]]),
     );
+    let hashes = grown.hashes;
     let tip = FIRST_SPEND_HEIGHT + 1;
     let live_root = root_going_into(&store, tip + 1);
     let snap = store.begin_read().expect("read");
+    // The spent images are read off the two spends as the chain connected
+    // them (one per spend block), not literals that would follow the code.
+    let spent: Vec<[u8; 32]> = connected.iter().flatten().flat_map(key_images).collect();
+    assert_eq!(spent.len(), 2, "one spend per spend block");
     let by_hand = {
         let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
-        // The spent images are the fixtures' by name (`spend(9, _)`,
-        // `spend(10, _)`), not literals that would follow the code.
-        let spent = [fixture::point(9), fixture::point(10)];
         crate::digest_v0::digest_v0(&blocks, &spent, live_root.as_bytes())
     };
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
     let swapped = crate::digest_v0::digest_v0(
         &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
-        &[fixture::point(10), fixture::point(9)],
+        &[spent[1], spent[0]],
         live_root.as_bytes(),
     );
     assert_eq!(by_hand, swapped);
@@ -613,23 +619,17 @@ fn the_digest_moves_when_any_family_moves() {
     // chain's digest is not the new one.
     let path = tmp("read-digest-moves");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let hashes = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![spend()]]));
     let before = store
         .begin_read()
         .expect("read")
         .logical_state_digest_v0()
         .expect("digest");
-    let tip = store
-        .begin_read()
-        .expect("read")
-        .tip()
-        .expect("tip")
-        .recorded
-        .expect("blocks connected");
-    let next = FIRST_SPEND_HEIGHT + 1;
+    // The next block, spending the coinbase that matured for it (block
+    // 1's), over the committed chain.
+    let cand = grown.next(&store, &[spend()]);
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let cand = candidate(next, tip.hash, vec![spend_at(&hashes, next, 11, 2)]);
         batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?;
         Ok(())
     });

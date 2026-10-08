@@ -11,8 +11,14 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
 use shekyl_units::AtomicUnits;
 
+use shekyl_chain_rules::harness::fixture;
+use shekyl_chain_rules::Candidate;
+use shekyl_harness_spender::MinerWallet;
+use shekyl_harness_wallet::coinbase::repay;
+
 use super::connect_fixtures::{
-    at, candidate, connect_chain, judge, spend, spend_at, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, candidate, candidate_over, connect_chain, judge, root_going_into, spend, spendable_prefix,
+    FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -35,9 +41,13 @@ fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
 }
 
 /// A block off the main chain at `height`, distinguished by its listed
-/// transaction, and its bytes.
+/// transaction, and its bytes. An alt row holds bytes the store never
+/// judges (§11.2: the alt surface is not chain state), so the listed body
+/// is the harness's spend-shaped filler — a named key image, no proof —
+/// not a spend built against a tree; nothing here reads it as one.
 fn side_block(height: u64, previous: BlockHash, key_image: usize) -> (BlockHash, Vec<u8>) {
-    let cand = candidate(height, previous, vec![spend(key_image, 2)]);
+    let filler = fixture::spend(fixture::point(key_image), 2);
+    let cand = candidate(height, previous, vec![filler]);
     (cand.block.hash(), cand.block.serialize())
 }
 
@@ -62,7 +72,7 @@ fn hash_at(store: &ChainStore, height: u64) -> Option<BlockHash> {
 fn insert_read_enumerate_remove_and_drop() {
     let path = tmp("alt-ops");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![], vec![]]);
+    let main = connect_chain(&store, &[vec![], vec![]]).hashes;
     let (a, a_bytes) = side_block(1, main[0], 3);
     let (b, b_bytes) = side_block(2, a, 4);
     let witness = vec![0xA5; 40];
@@ -145,7 +155,7 @@ fn insert_read_enumerate_remove_and_drop() {
 fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let path = tmp("alt-refusals");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![]]);
+    let main = connect_chain(&store, &[vec![]]).hashes;
     let (a, a_bytes) = side_block(1, main[0], 5);
 
     let out: Result<(), TestErr> =
@@ -262,7 +272,7 @@ fn a_row_that_does_not_decode_is_si7_on_both_readers() {
 fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
     let path = tmp("alt-key-mismatch");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![]]);
+    let main = connect_chain(&store, &[vec![]]).hashes;
     let (a, a_bytes) = side_block(1, main[0], 7);
     let wrong = BlockHash::from_bytes([0xBD; 32]);
     assert_ne!(wrong, a);
@@ -326,14 +336,27 @@ fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
 fn a_switch_is_one_transaction_or_none_of_it() {
     let path = tmp("alt-switch");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // Main chain: the spendable prefix, then a spend block `s` and a spend
-    // block `top` on it. A competing block `top'` on `s` is held as an alt.
+    // Main chain: the spendable prefix, a coinbase-only block `s`, and a
+    // spend block `top` on it. A competing block `top'` on `s` is held as
+    // an alt. At `top` two coinbases have matured (blocks 0 and 1's,
+    // `height_maturing(2) = top`): the main top spends block 0's, its
+    // competitor block 1's — two spends, two bodies, one parent.
     let s = FIRST_SPEND_HEIGHT;
     let top = s + 1;
-    let main = connect_chain(
-        &store,
-        &spendable_prefix(&[vec![spend(9, 2)], vec![spend(10, 2)]]),
-    );
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![Vec::new()]));
+    let main = grown.hashes.clone();
+    // Both spends are built for `top` over the chain through `s`. The
+    // competitor's is built first and named, so the main top's `spend()`
+    // takes the other matured coinbase.
+    let alt_spend = grown.spend_of(1, 0);
+    let main_cand = grown.next(&store, &[spend()]);
+    let main_txs = main_cand.transactions.clone();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        batch.connect(judge(&view, main_cand)?, RuleSet::GENESIS)?;
+        Ok(())
+    });
+    out.expect("the main top connects");
     // The main top's bytes **as connected** — its coinbase priced by the
     // connect (CEN-F18), so the demoted block's bytes are the recorded ones.
     let main_top = {
@@ -343,16 +366,33 @@ fn a_switch_is_one_transaction_or_none_of_it() {
             shekyl_chain_rules::AtHeight::AboveTip => panic!("top is connected"),
         }
     };
+    let main_top_hash = main_top.hash();
     let main_top_bytes = main_top.serialize();
     // The competitor is priced by construction: it shares the main top's
     // parent state (the accumulator, the burned fold, the windows, the leaf
     // count at `top`) and its one listed body has the main top's weight and
-    // fee, so F18 owes both coinbases the same amount — the connected
-    // block's. Its identity is needed before the switch (it is held as an
-    // alt), so it cannot wait for the batch that prices it.
-    let mut alt_cand = candidate(top, main[at(s)], vec![spend_at(&main, top, 11, 2)]);
-    alt_cand.block.miner_transaction.prefix.outputs[0].amount =
-        main_top.miner_transaction.prefix.outputs[0].amount;
+    // fee (one input, two outputs, no fee: the same shape of spend), so F18
+    // owes both coinbases the same amount — the connected block's, written
+    // here with the wallet's `repay` as the pricer writes it. Its identity
+    // is needed before the switch (it is held as an alt), so it cannot
+    // wait for the batch that prices it.
+    let mut alt_cand = candidate_over(
+        root_going_into(&store, top),
+        top,
+        main[at(s)],
+        vec![alt_spend],
+    );
+    let main_top_pays = fixture::paid(&main_top.miner_transaction)
+        .expect("the connected coinbase is one the wallet reads")
+        .amount;
+    assert!(
+        repay(
+            &mut alt_cand.block.miner_transaction,
+            MinerWallet::harness().recipient(),
+            main_top_pays,
+        ),
+        "the fixture's coinbase is one `repay` prices"
+    );
     let alt_top = alt_cand.block.hash();
     let alt_witness = vec![0x5A; 40];
     let out: Result<(), TestErr> = store.write(|batch| {
@@ -370,7 +410,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let promoted = batch.alt_block(&alt_top)?.expect("top' is held");
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(top));
-        batch.insert_alt_block(&main[at(top)], &alt(top, &main_top_bytes, None))?;
+        batch.insert_alt_block(&main_top_hash, &alt(top, &main_top_bytes, None))?;
         batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
         batch.remove_alt_block(&alt_top)?;
         Ok(promoted.attestation_witness().expect("witness").to_vec())
@@ -385,7 +425,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     {
         let snap = store.begin_read().expect("read");
         assert!(
-            snap.has_alt_block(&main[at(top)]).expect("has"),
+            snap.has_alt_block(&main_top_hash).expect("has"),
             "the demoted block is an alt block"
         );
         assert!(
@@ -400,14 +440,13 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let view = batch.chain_view();
         batch.pop()?;
         batch.insert_alt_block(&alt_top, &alt(top, &alt_cand.block.serialize(), None))?;
+        // The main top, re-promoted: the block as recorded and the body it
+        // listed (pricing the priced coinbase again writes the same amount).
         batch.connect(
-            judge(
-                &view,
-                candidate(top, main[at(s)], vec![spend_at(&main, top, 10, 2)]),
-            )?,
+            judge(&view, Candidate::new(main_top.clone(), main_txs.clone()))?,
             RuleSet::GENESIS,
         )?;
-        batch.remove_alt_block(&main[at(top)])?;
+        batch.remove_alt_block(&main_top_hash)?;
         // A refusal on a hash never held aborts the whole switch.
         batch.remove_alt_block(&main[0])?;
         Ok(())
@@ -422,7 +461,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     assert_eq!(hash_at(&store, top), Some(alt_top), "the pop did not land");
     let snap = store.begin_read().expect("read");
     assert!(
-        snap.has_alt_block(&main[at(top)]).expect("has"),
+        snap.has_alt_block(&main_top_hash).expect("has"),
         "the remove did not land"
     );
     assert!(
@@ -444,7 +483,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
 fn an_alt_block_with_a_witness_moves_no_digest() {
     let path = tmp("alt-digest-boundary");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let main = connect_chain(&store, &spendable_prefix(vec![vec![spend()]])).hashes;
     let before = store
         .begin_read()
         .expect("read")

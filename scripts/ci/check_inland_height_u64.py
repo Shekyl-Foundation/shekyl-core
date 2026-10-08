@@ -126,8 +126,12 @@ SCOPE = (
 # local `first_spending_height() -> u64` moved to `archival_driver` as
 # `BlockHeight`); 161 at slice 6 row 6 (2026-10-07: the pipeline reorg
 # test's hand-built fork, and its `fork_spend` closure, replaced by
-# `reorg` over real spends — the site is gone, not typed).
-GRANDFATHER_CEILING = 161
+# `reorg` over real spends — the site is gone, not typed); 160 at slice 6
+# row 6, store conversion (2026-10-07: `connect_fixtures::spendable_prefix`
+# became `prefix_to(BlockHeight, …)`, and the fixture surface it grew —
+# `height_maturing`, `Grown::height` / `images_at` / `block` — was typed at
+# birth rather than recorded).
+GRANDFATHER_CEILING = 160
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

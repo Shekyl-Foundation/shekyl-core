@@ -28,7 +28,7 @@ const FIRST_CHECKPOINT: u64 = 1;
 fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
     let store = ChainStore::create(path, EPOCH).expect("unanchored create");
     let listed = vec![Vec::new(); blocks];
-    let hashes = connect_chain(&store, &listed);
+    let hashes = connect_chain(&store, &listed).hashes;
     assert_eq!(hashes.len(), blocks, "every listed block connected");
     hashes
 }
