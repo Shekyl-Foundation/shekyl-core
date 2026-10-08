@@ -102,10 +102,12 @@ is written. The implementation does not invent those numbers.
 **The tree matches the citations that the first line will rely on.**
 Fifty-six `file:line` citations in this document fall inside their
 files at this pin. Re-read, and still the values the design states:
-`P2P_DEFAULT_CONNECTION_TIMEOUT` is 5,000 at `cryptonote_config.h:189`;
-the 5 s at `:193` is `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, and the
-general invoke at `:192` is 2 minutes — D9 already refuses to copy
-either into a transport deadline. `NEW_CONNECTION_TIMEOUT_LOCAL` is
+`P2P_DEFAULT_CONNECTION_TIMEOUT` is 5,000 at `cryptonote_config.h:195`;
+`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` is 5,000 at `:199`, and the
+general invoke at `:198` is 2 minutes — D9 already refuses to copy
+either into a transport deadline. `:193` is
+`P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250). *Records-was: those three
+timeouts were cited at `:189`, `:193`, and `:192`.* `NEW_CONNECTION_TIMEOUT_LOCAL` is
 1,200,000 with the comment still saying "2 minutes"
 (`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
 and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
@@ -762,9 +764,9 @@ constant at `:1001-1004`. `is_local` is RFC 1918 (`local_ip.h:41-62`).
 A peer in that class holds the socket for 20 minutes before any Levin
 session exists, then has a 30-minute idle timer. D14 refuses that split.
 
-`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:189` is
+`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:195` is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
-`:193` is also 5,000 ms. The 10-second figure and the 5-second figure
+`:199` is also 5,000 ms. The 10-second figure and the 5-second figure
 are different clocks. D9 re-derives both; neither number is adopted as
 a connector deadline.
 
@@ -926,7 +928,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
 | Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |
-| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, `cryptonote_config.h:199`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
 | Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
 | Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |

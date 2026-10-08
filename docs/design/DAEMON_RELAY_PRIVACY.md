@@ -163,11 +163,14 @@ this lane.
      in the paper's simulations). `HOP0_OUTBOUND_TARGET` (4) read the
      degree as the pool size, so the own-edge was drawn from a third of
      the pool the analysis assumes. *Records-was: a pool of 4.* The
-     chance an attacker holds the whole pool is `p^k`. At `p = 0.3`
-     that is about 0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.
+     chance an attacker holds the whole pool is `p_h^h`, as the dialer
+     brief records it. *Records-was: `p^k`. At `p = 0.3` that is about
+     0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.*
      The dialer opens 12 onion circuits on the managed Tor. The
-     assignment at `net_node.inl:926` stays until the dialer deletes
-     it; it now reads this floor. Clearnet keeps its own degree.
+     assignment at `net_node.inl:984` stays until the dialer deletes
+     it; it reads `shekyl_relay_zone_min_provisioned_out_peers()`.
+     *Records-was: the assignment was cited at `:926`.* Clearnet keeps
+     its own degree.
      The graph is connector-agnostic. Measured transit and cover class
      are declaration cells. The relay reads them through
      `declaration(connector.column())`, as it already reads
@@ -16781,77 +16784,18 @@ refill, and the one-draw `p_h^h` is that reading's reference.
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
 moves the embargo hop against transit and is not this sweep.
 
-### 95.2 The proposal grid — SUPERSEDED by the §95.3 sweep
+### 95.2 The proposal grid — records-was
 
-Points for review, not crate constants. A point is dropped when `h < 12`
-or `h + c < 12`. The report shows those drops, so the edge is visible.
-Totals in this proposal sat around 12–24. Sixteen was one illustration,
-not a chosen total. §95.3 is the sweep that was run: `h` at 12, 14
-and 16, `c` from 0 to 16 in steps of 2, traffic at `f = 1`. Fractions
-below 1 are the inbound stress only. First spy was run at `p = 0.20`
-and at `p_h` from `p = 0.30`, not at 0.05 or 0.10.
+SUPERSEDED by the §95.3 sweep. The grid that used to sit here listed
+`(h, c)` points for review, including totals of 16. Sixteen was an
+illustration in that grid. It is not a candidate and not a sizing
+input. The sweep that was run is §95.3: `h` at 12, 14 and 16, `c` from
+0 to 16 in steps of 2.
 
-| `h` | `c` | total | why it was proposed — not the §95.3 run |
-| --- | --- | --- | --- |
-| 12 | 0 | 12 | both floors, hidden only — proposal, not the run |
-| 12 | 4 | 16 | hidden at the floor, total 16 — proposal, not the run |
-| 16 | 0 | 16 | hidden at 16, clearnet absent — proposal, not the run |
-| 12 | 8 | 20 | hidden at the floor, total 20 — proposal, not the run |
-| 16 | 4 | 20 | both above the floor — proposal, not the run |
-| 12 | 12 | 24 | hidden at the floor, total 24 — proposal, not the run |
-| 16 | 8 | 24 | both above the floor — proposal, not the run |
-| 24 | 0 | 24 | hidden at the top of the range — proposal, not the run |
-
-Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
-Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
-first-spy test already runs. A second arm sets the spy share among
-onion-publishing nodes to twice `p`, capped at 1, and leaves every
-other node at `p`.
-
-Five readings, each compared across that grid. None of them writes
-`fluff_return_ms`, `MIN_PROVISIONED_OUT_PEERS`, or a new outbound
-constant.
-
-1. **First-spy precision and recall, originated transactions.** One
-   trial is one transaction this node originates. Precision is the
-   fraction of observed trials whose first spy's predecessor is the
-   origin. Recall is the fraction of trials a spy observes at all.
-   Both arms: spies at `p` everywhere, and spies at the higher share
-   among onion candidates. The uniform `simulate_diffusion_first_spy`
-   reading is the control, not the result. The result is the two-class
-   graph: each node initiates `h` hidden edges and `c` clearnet edges.
-2. **Originated-versus-relayed skew on the sender's own link.** The
-   attacker's count is every stem that sender puts on the link during
-   the epoch: its originated transactions, and the stems it relays onto
-   the same peer. `h / (h + c)` is how a relay drawn from all outbound
-   sessions would spread. It is not the posterior. A single-transaction
-   walk that counts a relay only when the path revisits the pin is not
-   the posterior either. The epoch tally is §95.3.
-3. **Full own-edge pool capture.** At the onion-candidate spy share
-   `p_h` (not `q`: `q` is the fluff probability), the chance every
-   hidden session is a spy is `p_h^h`. Report that number, and check
-   it by drawing the pool. `simulate_two_slot_occupancy` stays the
-   stem-slot residual at its own `D_out`. This proposal leaves `STEMS`
-   and the §12.6 table where they are.
-4. **Fluff return at the mixed composition, against 3250 ms.** p90
-   first passage on the two-class graph, `EveryPeer`, hidden edges at
-   the anonymity transit and clearnet edges at the clearnet transit,
-   taken through `converged_fluff_return_mixed`'s budget so a single
-   seed cannot become a level. The comparison is the shipped 3250 ms
-   fail-safe input. The reading does not replace that constant.
-   `simulate_fluff_return_mixed` cannot produce it: one `transit_ms`
-   covers every edge.
-5. **Hidden inbound load per published onion.** If each node opens `h`
-   hidden edges uniformly among the `f` fraction that publish, the
-   mean inbound degree of a published onion is `h / f`. Report that
-   mean. A uniform draw checks it. No new load constant.
-
-What a ruled result would be allowed to choose is the operating point:
-one `(h, c)` on or above the floors. It would not choose the ceiling,
-and it would not move `fluff_return_ms` inside the same change. A
-reading that wants a new fail-safe input is a later re-derivation,
-named as such, because §90 already requires `F′` and its dependents
-to move together.
+A ruled result may choose one `(h, c)` on or above the floors (`h` at
+least 12, and `h + c` at least 12). It does not choose the ceiling, and
+it does not move `fluff_return_ms` in the same change. §90 requires
+`F′` and its dependents to move together.
 
 ### 95.3 The sweep, run 2026-10-07 — (h, 0) is a measured case, RULED 2026-10-08
 
@@ -16860,10 +16804,12 @@ is a measured case. It is not a headline recommendation. Tor-only is
 that shape, and it is not a recommended posture. The gate is §96.
 No operating point is chosen. The interim composition is hidden 12
 and clearnet 12. Clearnet's configured default is already
-`P2P_DEFAULT_OUT_PEERS` (12). The Tor zone's cap in the binary is
-still `HOP0_OUTBOUND_TARGET` (4); this interim does not move it.
-The `(12, 4)` proposal is withdrawn. A total of 16 was an
-illustration, not a candidate.
+`P2P_DEFAULT_OUT_PEERS` (12). The hidden cap in the binary is
+`MIN_PROVISIONED_OUT_PEERS`, assigned at `net_node.inl:984`.
+*Records-was: this paragraph said the Tor cap was still
+`HOP0_OUTBOUND_TARGET` (4).* The `(12, 4)` proposal is withdrawn.
+A total of 16 was an illustration in the §95.2 grid, and that grid
+is records-was.
 
 **Acceptance.** A point is approvable only when its fluff return,
 measured with real per-connector transit, does not exceed the input
@@ -16979,10 +16925,10 @@ Separately, eight of 32 nodes initiate no hidden session. Of 606
 clearnet arrivals, 273 had a clearnet-only sender. A clearnet arrival
 by itself marks its sender clearnet-only less than half the time,
 because relays use clearnet too. The aware estimator named 30
-clearnet predecessors as the origin, and all 30 were clearnet-only.
-The 30-of-30 is the class of the node named, which follows from the
-routing rule; it is not precision against clearnet-only origins, and
-that is unmeasured.
+clearnet predecessors as the origin, and every one of those 30 was
+clearnet-only. That count is the class of the node named, which
+follows from the routing rule; it is not precision against
+clearnet-only origins, and that is unmeasured.
 
 **Cross-connector linkage, not built.** Hypothesis: a spy holding
 both a Tor session and a clearnet session to one node can link that
