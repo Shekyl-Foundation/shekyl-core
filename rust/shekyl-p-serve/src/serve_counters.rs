@@ -12,9 +12,9 @@
 //! [`ServeCounterReader`] is the public read side. The endpoint stores one
 //! and [`PServeEndpoint::counters`](crate::PServeEndpoint::counters) hands
 //! it to a watcher; the endpoint's `*_count` getters forward here.
-//! [`ServeCounterWriter`] is crate-private and increment-only. The accept
-//! loop holds one and clones it into each connection task. A caller outside
-//! this crate can sample a total and cannot move one.
+//! The other handle is crate-private and increment-only: the accept loop
+//! holds it and clones it into each connection task. A caller outside this
+//! crate can sample a total and cannot move one.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
