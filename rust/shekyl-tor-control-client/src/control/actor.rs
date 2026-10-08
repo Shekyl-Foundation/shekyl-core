@@ -455,20 +455,27 @@ pub enum TorLaunch {
 /// `disable_network`), not a bare integer with a magic zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocksPort {
-    /// `SocksPort auto`: tor picks a free port; the caller discovers it post-Ready
-    /// via `GETINFO net/listeners/socks`. The production (§3c supervisor) choice —
-    /// immune to restart re-bind races by construction.
+    /// `SocksPort auto ExtendedErrors`: tor picks a free port; the caller
+    /// discovers it post-Ready via `GETINFO net/listeners/socks`. The
+    /// production choice — immune to restart re-bind races by construction.
+    /// `ExtendedErrors` is fixed on the value so an introduction timeout
+    /// is not reported as a missing host.
     Auto,
     /// A caller-chosen fixed port — harnesses and bring-your-own-layout setups.
     Fixed(u16),
 }
 
 impl SocksPort {
-    /// The `--SocksPort` command-line value.
-    fn as_arg(self) -> String {
+    /// The `--SocksPort` value.
+    ///
+    /// `ExtendedErrors` is part of the value, not a separate flag. Tor
+    /// 0.4.9.11 leaves it off (`port_cfg_new`), and without it an
+    /// introduction timeout and a missing descriptor are both reply 4.
+    /// The flag changes only the reply byte our own Tor sends us.
+    pub fn as_arg(self) -> String {
         match self {
-            Self::Auto => "auto".to_owned(),
-            Self::Fixed(port) => port.to_string(),
+            Self::Auto => "auto ExtendedErrors".to_owned(),
+            Self::Fixed(port) => format!("{port} ExtendedErrors"),
         }
     }
 }
@@ -1522,6 +1529,19 @@ mod tests {
 ///
 /// This holds the **fast path** (offline `tor` under `DisableNetwork 1`):
 /// handshake + command correlation + read loop, no circuits. The bootstrapped
+/// Covers the `--SocksPort` value `spawn_managed_tor` passes. Does not
+/// launch Tor.
+#[cfg(test)]
+mod socks_port_arg {
+    use super::SocksPort;
+
+    #[test]
+    fn the_launch_argument_carries_extended_errors() {
+        assert_eq!(SocksPort::Auto.as_arg(), "auto ExtendedErrors");
+        assert_eq!(SocksPort::Fixed(9050).as_arg(), "9050 ExtendedErrors");
+    }
+}
+
 /// `STREAM`/CircID measurement (DQ-T0.4) needs a `DisableNetwork 0` instance with
 /// network egress and lands next.
 #[cfg(test)]

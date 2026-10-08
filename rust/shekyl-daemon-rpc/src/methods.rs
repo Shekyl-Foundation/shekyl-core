@@ -1231,18 +1231,22 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
         send_count: c.send_count,
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: ConnectionState::from(c.state),
+        state: if c.claims_known {
+            ConnectionState::from(c.state)
+        } else {
+            ConnectionState::Unknown
+        },
         live_time,
         avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
         avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
-        support_flags: c.support_flags,
+        support_flags: c.claims_known.then_some(c.support_flags),
         // `hex::encode` is lowercase and undashed, which is exactly what
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
-        height: c.height,
+        height: c.claims_known.then_some(c.height),
         address_type: c.address_type,
     }
 }
@@ -3011,6 +3015,7 @@ pub(crate) mod tests {
             support_flags: 3,
             port: 18080,
             state: 3,
+            claims_known: true,
             address_type: ADDRESS_TYPE_IPV4,
             incoming: true,
             localhost: false,
@@ -3055,9 +3060,37 @@ pub(crate) mod tests {
         // Zero-padded to 16, as `peerid_to_string` pads.
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
         assert_eq!(c.state, ConnectionState::Normal);
+        assert_eq!(c.height, Some(1_234_567));
+        assert_eq!(c.support_flags, Some(3));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
+    }
+
+    /// A claim that has not landed is unknown. Zero height and a real state
+    /// would read as a peer that had answered.
+    #[test]
+    fn an_unknown_claim_is_null_height_and_unknown_state() {
+        let mut raw = connection_facts();
+        raw.claims_known = false;
+        raw.height = 1_234_567;
+        raw.support_flags = 3;
+        raw.state = 3;
+        let facts = FakeP2p {
+            connections: Ok(ConnectionsSnapshot {
+                now: 1600,
+                connections: vec![raw],
+            }),
+            ..FakeP2p::default()
+        };
+        let c = &get_connections(&facts).expect("connections").connections[0];
+        assert_eq!(c.state, ConnectionState::Unknown);
+        assert_eq!(c.height, None);
+        assert_eq!(c.support_flags, None);
+        let json = serde_json::to_value(c).expect("json");
+        assert!(json["height"].is_null());
+        assert!(json["support_flags"].is_null());
+        assert_eq!(json["state"], "unknown");
     }
 
     /// A connection younger than a second divides by zero in the naive form.

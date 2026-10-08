@@ -302,9 +302,12 @@ p2p dials, `shekyl-rpc-transport`, and `shekyl-p-fetch` pass
 `shekyl-p-transport`, which still dials through ureq. Moving that HTTP
 client onto `shekyl-socks` is a FOLLOWUPS row. The handshake keeps the
 proxy's reply byte, which `ProxyRefused` carries. A refusal is
-`ProxyRefused` with that byte. `ExtendedErrors` on the operator's
-`SocksPort` is what makes Tor's extended codes appear. That belongs in
-the operator docs. The initiator handshake runs on the blocking pool
+`ProxyRefused` with that byte. The managed `SocksPort` value is
+`auto ExtendedErrors` (a fixed part of the typed value, not an operator
+flag): Tor 0.4.9.11 leaves the flag off, and without it an introduction
+timeout and a missing descriptor are both reply 4. The flag changes
+only the reply byte our own Tor sends us. A clearnet proxy reply never
+forgets the host. The initiator handshake runs on the blocking pool
 under the same engine owner, armed when the socket exists.
 
 The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
@@ -395,6 +398,14 @@ and it does not free the strand. The executor drops the link after
 the post has finished. A walker whose `add_ref` returned true still
 holds a count, so the destroy post has not run.
 
+- **The cause travels with the close (2026-10-07).** The connector
+  closes both session ends with the cause. The seam inbound drive
+  records that cause. `PeerClosed` is the reader's end-of-file and
+  nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
+  that sends FIN is `PeerClosed`. Forgetting the address is
+  `implicates_address` with the connector: a refused dial and a
+  rejected handshake count; a clearnet proxy reply does not; an onion
+  reply counts only for `0x04`, `0x05`, `0xF0`, `0xF1`, and `0xF2`.
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.

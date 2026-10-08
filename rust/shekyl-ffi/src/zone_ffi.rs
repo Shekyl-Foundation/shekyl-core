@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::{node_gate, Session};
+use shekyl_capped_stream::{node_gate, process_write_stall, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
@@ -121,12 +121,12 @@ impl Dial for ZoneDial {
                 direction,
             } => {
                 if *direction != Direction::Outbound {
-                    return Err(CloseCause::new(CloseKind::DialFailed));
+                    return Err(CloseCause::new(CloseKind::LocalClose));
                 }
                 self.dial_clearnet(*ip, *port)
             }
             Endpoint::Tor { key, port } => self.dial_tor(key, *port),
-            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::DialFailed)),
+            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::LocalClose)),
         }
     }
 }
@@ -144,7 +144,7 @@ impl ZoneDial {
                 tally: Arc::clone(&ready.tally),
                 proxy: ready.proxy,
             })
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = match ip {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
@@ -193,7 +193,7 @@ impl ZoneDial {
             .tor_proxy
             .lock()
             .expect("tor proxy")
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),
             port,
@@ -248,10 +248,22 @@ async fn recv_admitted<T>(
     tokio::pin!(fail);
     tokio::select! {
         biased;
-        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::DialFailed)),
+        admitted = rx.recv() => match admitted {
+            Some(value) => Ok(value),
+            // The dial task sends the cause and then drops the admission
+            // channel. Both are ready together, and this arm is first, so
+            // a closed channel is not itself the cause. Awaiting `fail`
+            // here is bounded by that task: it owns the sender, and the
+            // sender is dropped when the task returns, which is the same
+            // moment the channel closes.
+            None => match fail.await {
+                Ok(cause) => Err(cause),
+                Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
+            },
+        },
         result = &mut fail => match result {
             Ok(cause) => Err(cause),
-            Err(_) => Err(CloseCause::new(CloseKind::DialFailed)),
+            Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
         },
     }
 }
@@ -686,6 +698,20 @@ pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32
     0
 }
 
+/// Drop the operator inbound cap for one connector. Later accepts are
+/// bounded only by the process ceiling.
+///
+/// `connector` is the FFI connector word ([`connector_from_index`]).
+/// Returns 0, or -1 when `connector` is not one.
+#[no_mangle]
+pub extern "C" fn shekyl_zone_clear_connector_cap(connector: u32) -> i32 {
+    let Some(connector) = connector_from_index(connector) else {
+        return -1;
+    };
+    process_sockets().set_zone_cap(connector, None);
+    0
+}
+
 /// The handshake finished. The row's gap sender fires, which disarms the
 /// connector's deadline. An unknown id has nothing to disarm.
 #[no_mangle]
@@ -699,125 +725,38 @@ pub extern "C" fn shekyl_zone_session_established(id: u64) {
     hub.session_established(id);
 }
 
-const KIB: u64 = 1024;
-
-fn store_rate(kbps: i64, set: impl Fn(Option<u64>)) {
-    if kbps < 0 {
-        set(None);
-    } else {
-        let kbps = u64::try_from(kbps).unwrap_or(0);
-        set(Some(kbps.saturating_mul(KIB)));
-    }
-}
-
-fn load_rate(rate: Option<u64>) -> i64 {
-    match rate {
-        None => -1,
-        Some(bytes) => i64::try_from(bytes / KIB).unwrap_or(i64::MAX),
-    }
-}
-
-/// `kbps` negative removes the up bucket. Zero or positive is KiB/s.
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_up(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_up(rate));
-}
-
-/// `kbps` negative removes the down bucket. Zero or positive is KiB/s.
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_down(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_down(rate));
-}
-
-/// The up rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_up() -> i64 {
-    load_rate(node_gate().rate_up())
-}
-
-/// The down rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_down() -> i64 {
-    load_rate(node_gate().rate_down())
-}
-
-/// Bytes and packets the budget has moved. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_totals(
-    bytes_down: *mut u64,
-    packets_down: *mut u64,
-    bytes_up: *mut u64,
-    packets_up: *mut u64,
-) {
-    let observed = node_gate().totals();
-    unsafe {
-        if !bytes_down.is_null() {
-            *bytes_down = observed.bytes_down;
-        }
-        if !packets_down.is_null() {
-            *packets_down = observed.packets_down;
-        }
-        if !bytes_up.is_null() {
-            *bytes_up = observed.bytes_up;
-        }
-        if !packets_up.is_null() {
-            *packets_up = observed.packets_up;
-        }
-    }
-}
-
-/// Bytes per second on this connection, from the engine's clock, over
-/// the link budget's recent-speed window. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_speed(
-    id: u64,
-    bytes_per_sec_up: *mut u64,
-    bytes_per_sec_down: *mut u64,
-) {
-    let (up, down) = node_gate().speed(id);
-    unsafe {
-        if !bytes_per_sec_up.is_null() {
-            *bytes_per_sec_up = up;
-        }
-        if !bytes_per_sec_down.is_null() {
-            *bytes_per_sec_down = down;
-        }
-    }
-}
-
-/// Bytes this connection has moved. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down: *mut u64) {
-    let observed = node_gate().connection(id);
-    unsafe {
-        if !bytes_up.is_null() {
-            *bytes_up = observed.bytes_up;
-        }
-        if !bytes_down.is_null() {
-            *bytes_down = observed.bytes_down;
-        }
-    }
-}
-
 /// Stop the transport runtime. Called from outside one of its tasks.
 ///
 /// D6's order: the engine takes no new deadline, the transport's tasks
-/// are cancelled, then the engine thread is joined.
+/// are cancelled, then the engine thread is joined. Each writer folds its
+/// stall when its task is dropped, including a write still in flight, so
+/// the process total is read after the pool has stopped. Nothing else in
+/// the daemon reads it.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
     let host = HOST.lock().expect("zone host").take();
-    let Some(host) = host else {
-        return;
-    };
-    let engine = host.engine_service.lock().expect("engine").take();
-    if let Some(engine) = engine.as_ref() {
-        engine.close();
+    if let Some(host) = host {
+        let engine = host.engine_service.lock().expect("engine").take();
+        if let Some(engine) = engine.as_ref() {
+            engine.close();
+        }
+        let pool = host.pool.lock().expect("pool").take();
+        if let Some(pool) = pool {
+            pool.shutdown(host.shutdown_timeout);
+        }
+        drop(engine);
     }
-    let pool = host.pool.lock().expect("pool").take();
-    if let Some(pool) = pool {
-        pool.shutdown(host.shutdown_timeout);
-    }
-    drop(engine);
+    let stall = process_write_stall();
+    tracing::info!(
+        closes = stall.closes,
+        max_ns = stall.max_ns,
+        in_flight_at_close = stall.in_flight_at_close,
+        in_flight_max_ns = stall.in_flight_at_close_max_ns,
+        "process write stall"
+    );
+    // The connector caps are this zone's. The socket table outlives the
+    // pool, so they are released only after its tasks have stopped.
+    process_sockets().clear_zone_caps();
 }
 
 #[cfg(test)]
@@ -914,5 +853,22 @@ mod tests {
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
         }
+    }
+
+    #[test]
+    fn a_closed_admission_keeps_the_dial_cause() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let (tx, rx) = mpsc::unbounded_channel::<u8>();
+            let (fail_tx, fail_rx) = oneshot::channel();
+            fail_tx
+                .send(CloseCause::new(CloseKind::DialFailed))
+                .expect("cause");
+            drop(tx);
+            let err = recv_admitted(rx, fail_rx).await.expect_err("dial failed");
+            assert_eq!(err.kind(), CloseKind::DialFailed);
+        });
     }
 }

@@ -74,6 +74,24 @@ namespace shekyl
     return id;
   }
 
+  inline std::uint64_t seam_socket_id(const boost::uuids::uuid& id)
+  {
+    std::uint64_t socket_id = 0;
+    std::memcpy(&socket_id, id.data + 8, sizeof(socket_id));
+    return socket_id;
+  }
+
+  /// The board's handshake flag for this session.
+  ///
+  /// `1` has finished. A row that has not, a missing row, and a missing
+  /// hub are not established. A closing session whose row is already gone
+  /// does not fall through to `m_state`: that state is the sync driver's,
+  /// and reading it here would admit a peer the seam does not hold.
+  inline bool seam_handshake_established(const boost::uuids::uuid& id)
+  {
+    return shekyl_seam_session_established(seam_socket_id(id)) == 1;
+  }
+
   inline epee::net_utils::network_address seam_network_address(const shekyl_seam_observed& obs)
   {
     using epee::net_utils::ipv4_network_address;

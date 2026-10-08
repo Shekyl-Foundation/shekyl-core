@@ -40,6 +40,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 
 #include "gtest/gtest.h"
@@ -54,6 +55,10 @@ namespace
 {
   struct test_levin_connection_context : public epee::net_utils::connection_context_base
   {
+    explicit test_levin_connection_context(boost::uuids::uuid id = {})
+      : connection_context_base(id, {}, false, false)
+    {}
+
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool session_established() noexcept { return true; }
     std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
@@ -139,9 +144,15 @@ namespace
 
   class test_connection : public epee::net_utils::i_service_endpoint
   {
+    // Declared before the handler so the handler's context reference
+    // outlives the handler. The handler destructor reads that context.
+    boost::asio::io_context& m_io_service;
+    test_levin_connection_context m_context;
+
   public:
-    test_connection(boost::asio::io_context& io_service, test_levin_protocol_handler_config& protocol_config)
+    test_connection(boost::asio::io_context& io_service, test_levin_protocol_handler_config& protocol_config, boost::uuids::uuid id = {})
       : m_io_service(io_service)
+      , m_context(id)
       , m_protocol_handler(this, protocol_config, m_context)
       , m_send_return(true)
     {
@@ -183,9 +194,6 @@ namespace
     test_levin_protocol_handler m_protocol_handler;
 
   private:
-    boost::asio::io_context& m_io_service;
-    test_levin_connection_context m_context;
-
     unit_test::call_counter m_send_counter;
     boost::mutex m_mutex;
 
@@ -217,9 +225,9 @@ namespace
     }
 
   protected:
-    test_connection_ptr create_connection(bool start = true)
+    test_connection_ptr create_connection(bool start = true, boost::uuids::uuid id = {})
     {
-      test_connection_ptr conn(new test_connection(m_io_service, m_handler_config));
+      test_connection_ptr conn(new test_connection(m_io_service, m_handler_config, id));
       if (start)
       {
         conn->start();
@@ -777,6 +785,87 @@ namespace
       });
     }
   };
+
+  /// A leaked ref makes `~async_protocol_handler` sleep out its stall.
+  /// Record the count, release a leftover this test could have taken,
+  /// then assert. The assertion is the check. The release keeps a red
+  /// run from waiting that stall out. A wrapped counter is larger than
+  /// `held_by_this_test` and is left for the assertion.
+  void expect_outer_calls_released(test_connection& conn, std::uint32_t held_by_this_test)
+  {
+    const std::uint32_t left = conn.m_protocol_handler.m_wait_count.load();
+    if (left != 0 && left <= held_by_this_test)
+    {
+      for (std::uint32_t i = 0; i < left; ++i)
+        conn.m_protocol_handler.finish_outer_call();
+    }
+    EXPECT_EQ(left, 0u);
+  }
+
+  TEST_F(async_protocol_handler_test, foreach_holds_the_outer_call_until_the_callback_returns)
+  {
+    test_connection_ptr conn = create_connection();
+    int ran = 0;
+    std::optional<std::uint32_t> during;
+    ASSERT_TRUE(m_handler_config.foreach_connection([&](test_levin_connection_context&) {
+      ++ran;
+      during = conn->m_protocol_handler.m_wait_count.load();
+    }));
+    EXPECT_EQ(ran, 1);
+    ASSERT_TRUE(during.has_value());
+    EXPECT_EQ(*during, 1u);
+    expect_outer_calls_released(*conn, 1);
+  }
+
+  TEST_F(async_protocol_handler_test, throwing_foreach_releases_every_outer_call)
+  {
+    boost::uuids::random_generator ids;
+    test_connection_ptr first = create_connection(true, ids());
+    test_connection_ptr second = create_connection(true, ids());
+    ASSERT_EQ(m_handler_config.get_connections_count(), 2u);
+    int ran = 0;
+    EXPECT_THROW(
+      m_handler_config.foreach_connection([&](test_levin_connection_context&) {
+        ++ran;
+        throw std::runtime_error("walk");
+      }),
+      std::runtime_error);
+    EXPECT_EQ(ran, 1);
+    expect_outer_calls_released(*first, 1);
+    expect_outer_calls_released(*second, 1);
+  }
+
+  TEST_F(async_protocol_handler_test, discarded_context_posts_release_the_outer_call)
+  {
+    boost::uuids::random_generator ids;
+    test_connection_ptr first = create_connection(true, ids());
+    test_connection_ptr second = create_connection(true, ids());
+    int ran = 0;
+    {
+      std::vector<std::function<void()>> posts;
+      m_handler_config.collect_context_posts([&](test_levin_connection_context&) {
+        ++ran;
+      }, posts);
+      EXPECT_EQ(posts.size(), 2u);
+      EXPECT_EQ(first->m_protocol_handler.m_wait_count.load(), 1u);
+      EXPECT_EQ(second->m_protocol_handler.m_wait_count.load(), 1u);
+    }
+    EXPECT_EQ(ran, 0);
+    expect_outer_calls_released(*first, 1);
+    expect_outer_calls_released(*second, 1);
+  }
+
+  TEST_F(async_protocol_handler_test, throwing_for_connection_releases_the_outer_call)
+  {
+    test_connection_ptr conn = create_connection();
+    const boost::uuids::uuid id = conn->m_protocol_handler.get_connection_id();
+    EXPECT_THROW(
+      m_handler_config.for_connection(id, [&](test_levin_connection_context&) {
+        throw std::runtime_error("one");
+      }),
+      std::runtime_error);
+    expect_outer_calls_released(*conn, 1);
+  }
 }
 
 TEST(epee_levin_protocol_handler_async, timer_fired_then_close_delivers_destroyed_before_the_handler_dies)
