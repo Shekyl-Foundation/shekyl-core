@@ -675,8 +675,8 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
         ))
         .expect("every step of the sequence passes over the planted tree");
         assert_eq!(
-            context.map(|c| (c.ref_height, c.tree_depth)),
-            Some((BlockHeight::from_raw(1), 1)),
+            (context.ref_height, context.tree_depth),
+            (BlockHeight::from_raw(1), 1),
             "the context is yielded: the reference at height 1, depth 1"
         );
         assert_refused(

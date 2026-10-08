@@ -612,14 +612,14 @@ struct ReferenceRows {
     /// recorded where derived; its missing record is `Corrupt`.
     anchor: CenRow,
     /// The declared depth is admitted against the depth at it
-    /// ([`I13::admits`] over [`I13::depth_at_reference`]). `None` is the
-    /// step staged off for the class: the sequence stops after the anchor
-    /// and yields no context. Every class that runs the sequence names a
-    /// row here since 2026-10-08 (the spend's was `None` until CEN-I13
-    /// landed on it, see [`I12`]), so no live constant stages the step
-    /// off; the flip changed verdicts and nothing else, and collapsing
-    /// the `Option` is the shape change it did not make.
-    depth: Option<CenRow>,
+    /// ([`I13::admits`] over [`I13::depth_at_reference`]). Every class
+    /// that runs the sequence runs this step. *Records-was:* an
+    /// `Option<CenRow>` whose `None` staged the step off for the class —
+    /// the sequence stopped after the anchor and yielded no context — and
+    /// the spend's was `None` until CEN-I13 landed on it (2026-10-08, see
+    /// [`I12`]). The flip changed verdicts and nothing else; the `Option`
+    /// collapsed in its own commit once no live constant named `None`.
+    depth: CenRow,
 }
 
 impl ReferenceRows {
@@ -634,13 +634,14 @@ impl ReferenceRows {
 /// The regular spend's attribution: I10, I11, I12 and I13, each step its
 /// own row. *Records-was:* `depth: None` until 2026-10-08 — I13 staged
 /// off the spend class through the filler-fixture era (see [`I12`]); the
-/// flip was this one cell and the I15 verify in [`judge_reference`]'s
-/// spend arm, and nothing else.
+/// flip was this one cell (`None` → `Some(I13::ROW)`, the `Option` since
+/// collapsed) and the I15 verify in [`judge_reference`]'s spend arm, and
+/// nothing else.
 const SPEND_REFERENCE: ReferenceRows = ReferenceRows {
     lookup: I10::ROW,
     window: I11::ROW,
     anchor: I12::ROW,
-    depth: Some(I13::ROW),
+    depth: I13::ROW,
 };
 
 /// Every row [`judge_reference`]'s spend arm can record — the four steps
@@ -656,7 +657,7 @@ const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
     lookup: J21::ROW,
     window: J21::ROW,
     anchor: J21::ROW,
-    depth: Some(J21::ROW),
+    depth: J21::ROW,
 };
 
 /// The bond post's attribution: every step is CEN-J27's, and so is the
@@ -667,7 +668,7 @@ const BOND_POST_REFERENCE: ReferenceRows = ReferenceRows {
     lookup: J27::ROW,
     window: J27::ROW,
     anchor: J27::ROW,
-    depth: Some(J27::ROW),
+    depth: J27::ROW,
 };
 
 /// A refusal at the step under `row`, after `passed` steps of `rows` have
@@ -699,14 +700,16 @@ fn refuse_step(
 /// it; the per-height reads classify a missing record as
 /// [`Corrupt::HoleBelowTip`], never a verdict.
 ///
-/// Yields the [`ReferenceContext`] when the depth step ran, `None` when
-/// `rows` stages it off — the anchor then derived, recorded and dropped.
+/// Yields the [`ReferenceContext`] every step passed over. *Records-was:*
+/// `Option<ReferenceContext>`, `None` when `rows` staged the depth step
+/// off — the anchor then derived, recorded and dropped; no constant has
+/// staged it off since the spend's CEN-I13 landed (2026-10-08).
 fn reference_context<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
     rows: ReferenceRows,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<Option<ReferenceContext>>, ViewRead<V::Fault>> {
+) -> Result<Verdict<ReferenceContext>, ViewRead<V::Fault>> {
     let Some(ref_height) = I10::lookup(cx, view).map_err(ViewRead::View)? else {
         return Ok(Err(refuse_step(cx, rows, 0, rows.lookup, coverage)));
     };
@@ -716,43 +719,31 @@ fn reference_context<'id, V: ChainView<'id>>(
     }
     // The declared depth, before the per-height reads: a storage-pruned
     // body is refused under the depth row rather than judged over a
-    // missing field. Not read where the step is staged off.
-    let declared = match rows.depth {
-        None => None,
-        Some(row) => match &cx.tx.ct {
-            Ct::Fcmp {
-                prunable: Some(prunable),
-                ..
-            } => Some((row, prunable.tree_depth)),
-            _ => return Ok(Err(refuse_step(cx, rows, 2, row, coverage))),
-        },
+    // missing field.
+    let declared = match &cx.tx.ct {
+        Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } => prunable.tree_depth,
+        _ => return Ok(Err(refuse_step(cx, rows, 2, rows.depth, coverage))),
     };
     let anchor = I12::anchor(ref_height, view)?;
-    let Some((row, declared)) = declared else {
-        // Staged off: the anchor is derived, recorded and dropped here,
-        // beside the derivation. No class arm names this since the spend's
-        // CEN-I13 landed (2026-10-08); the arm is the staging's shape.
-        for step in rows.steps() {
-            coverage.insert(step);
-        }
-        return Ok(Ok(None));
-    };
     let depth = I13::depth_at_reference(ref_height, view)?;
     // Admitted into `[1, depth]`, so it fits the verifier's `u8`; a
     // declared depth the `u8` does not hold is outside the range.
     let tree_depth = match u8::try_from(declared) {
         Ok(fits) if I13::admits(declared, depth) => fits,
-        _ => return Ok(Err(refuse_step(cx, rows, 3, row, coverage))),
+        _ => return Ok(Err(refuse_step(cx, rows, 3, rows.depth, coverage))),
     };
     for step in rows.steps() {
         coverage.insert(step);
     }
-    coverage.insert(row);
-    Ok(Ok(Some(ReferenceContext {
+    coverage.insert(rows.depth);
+    Ok(Ok(ReferenceContext {
         ref_height,
         anchor,
         tree_depth,
-    })))
+    }))
 }
 
 /// The reference rows, dispatched on the transaction's class: CEN-I10,
@@ -790,14 +781,14 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
                 // The C++'s order: the root at the reference and the depth
                 // against it (`blockchain.cpp:4088`, `:4098`), then
                 // `shekyl_fcmp_verify` over them (`:4157`).
-                Ok(Some(reference)) => {
+                Ok(reference) => {
                     if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
                         return Ok(Err(InvalidBlock::new(I15::ROW, cx.locus())));
                     }
                     coverage.insert(I15::ROW);
                     Ok(Ok(Some(reference)))
                 }
-                other => Ok(other),
+                Err(refused) => Ok(Err(refused)),
             }
         }
         TxClass::Emission { .. } => {
@@ -805,7 +796,7 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
                 coverage.insert(row);
             }
             coverage.insert(J27::ROW);
-            reference_context(cx, view, EMISSION_REFERENCE, coverage)
+            Ok(reference_context(cx, view, EMISSION_REFERENCE, coverage)?.map(Some))
         }
         TxClass::BondPost { .. } => {
             for row in SPEND_ARM_ROWS {
@@ -820,14 +811,14 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
             // then `shekyl_fcmp_verify` over them (`:3713`).
             let mut steps = *coverage;
             match reference_context(cx, view, BOND_POST_REFERENCE, &mut steps)? {
-                Ok(Some(reference)) => {
+                Ok(reference) => {
                     if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
                         return Ok(Err(InvalidBlock::new(J27::ROW, cx.locus())));
                     }
                     coverage.union(&steps);
                     Ok(Ok(Some(reference)))
                 }
-                other => Ok(other),
+                Err(refused) => Ok(Err(refused)),
             }
         }
         TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => {
