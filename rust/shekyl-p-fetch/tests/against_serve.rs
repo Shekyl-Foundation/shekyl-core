@@ -6,144 +6,45 @@
 //! The two HTTP stacks speaking to each other.
 //!
 //! `shekyl-p-fetch` cannot depend on `shekyl-p-serve` on the shipped graph
-//! (`SF-D4`). This is a *dev* edge: a SOCKS5h shim in front of a real
-//! `PServeEndpoint`, so a mismatch in envelope layout, header set, or
-//! request grammar fails here instead of in the field.
+//! (`SF-D4`). This is a *dev* edge: `shekyl-p-loopback`'s SOCKS5 shim in
+//! front of a real `PServeEndpoint`, so a mismatch in envelope layout,
+//! header set, or request grammar fails here instead of in the field.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
-use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
-use shekyl_p_fetch::{
-    ContentRefused, ContentVerify, FetchError, FetchTarget, NextMove, PFetchClient, RequestHeader,
-    ServingEndpoint, Timeouts,
+use shekyl_curve_tree::ServedFrameHeader;
+use shekyl_p_fetch::{FetchError, NextMove, PFetchClient, Timeouts};
+use shekyl_p_loopback::{
+    endpoint_and_client, fetch_target, one_leaf, request_header, AcceptAny, PServeEndpoint,
+    FIXTURE_SHARD_ID,
 };
 use shekyl_p_serve::{
-    PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused,
-    TestKeySigner, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PassKey, PassSigner, SignRefused, TestKeySigner, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
-use shekyl_socks::accept_userpass;
 use shekyl_types::BlockHeight;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 
-const SHARD: u64 = 3;
 const OWN_HEIGHT: u64 = 10_000;
 const ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 
-struct Fixture {
-    shards: HashMap<u64, Arc<[u8]>>,
-}
-
-impl ShardProvider for Fixture {
-    fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        Ok(self
-            .shards
-            .get(&shard_id)
-            .cloned()
-            .and_then(ShardBody::flat))
+/// Bounds for an ephemeral signer. The sign is local, so the body window
+/// is the short one. The resident-key proving test waits on the stake
+/// actor and uses a wider body window.
+fn ephemeral_timeouts() -> Timeouts {
+    Timeouts {
+        dial: Duration::from_millis(500),
+        head: Duration::from_millis(1_000),
+        body_stall: Duration::from_millis(1_000),
+        body_total: Duration::from_millis(2_000),
     }
 }
 
-struct Accepting;
-
-impl ContentVerify for Accepting {
-    fn verify(&self, _shard_id: u64, _body: &[u8]) -> Result<(), ContentRefused> {
-        Ok(())
-    }
-}
-
-/// SOCKS5 proxy that accepts the username/password the client presents
-/// and CONNECTs by forwarding to `target` regardless
-/// of the named destination — the client still has to send ATYP=DOMAIN and
-/// the onion name; this shim is the loopback stand-in for the daemon's
-/// tor-zone SOCKS, not a second resolver.
-async fn socks_forward(target: SocketAddr) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
-    let proxy = listener.local_addr().expect("addr");
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut client, _)) = listener.accept().await else {
-                return;
-            };
-            tokio::spawn(async move {
-                accept_userpass(&mut client).await.ok()?;
-                let mut req = [0u8; 4];
-                client.read_exact(&mut req).await.ok()?;
-                match req[3] {
-                    3 => {
-                        let mut len = [0u8; 1];
-                        client.read_exact(&mut len).await.ok()?;
-                        let mut name = vec![0u8; usize::from(len[0])];
-                        client.read_exact(&mut name).await.ok()?;
-                    }
-                    1 => {
-                        let mut addr = [0u8; 4];
-                        client.read_exact(&mut addr).await.ok()?;
-                    }
-                    4 => {
-                        let mut addr = [0u8; 16];
-                        client.read_exact(&mut addr).await.ok()?;
-                    }
-                    _ => return None,
-                }
-                let mut port = [0u8; 2];
-                client.read_exact(&mut port).await.ok()?;
-                client
-                    .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
-                    .await
-                    .ok()?;
-                let mut upstream = TcpStream::connect(target).await.ok()?;
-                tokio::io::copy_bidirectional(&mut client, &mut upstream)
-                    .await
-                    .ok()?;
-                Some(())
-            });
-        }
-    });
-    proxy
-}
-
-fn payload() -> Vec<u8> {
-    (0..LEAF_BYTES)
-        .map(|i| u8::try_from(i % 251).expect("modulus"))
-        .collect()
-}
-
-/// A real endpoint holding [`SHARD`] behind `signer`, and a client aimed at
-/// it through the shim.
+/// A real endpoint holding [`FIXTURE_SHARD_ID`] behind `signer`, and a
+/// client aimed at it through the shim.
 async fn stacks(signer: Arc<dyn PassSigner>) -> (PServeEndpoint, PFetchClient) {
-    let provider = Arc::new(Fixture {
-        shards: HashMap::from([(SHARD, Arc::from(payload().into_boxed_slice()))]),
-    });
-    let ep = PServeEndpoint::bind(provider, signer).await.expect("bind");
-    let proxy = socks_forward(ep.addr()).await;
-    let client = PFetchClient::with_timeouts(
-        proxy,
-        Timeouts {
-            dial: Duration::from_millis(500),
-            head: Duration::from_millis(1_000),
-            body_stall: Duration::from_millis(1_000),
-            body_total: Duration::from_millis(2_000),
-        },
-    );
-    (ep, client)
-}
-
-fn target(verifying_key: HybridPublicKey, shard_id: u64) -> FetchTarget {
-    FetchTarget {
-        endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
-        verifying_key,
-        shard_id,
-    }
-}
-
-fn header_at(anchor: u64) -> RequestHeader {
-    RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(anchor), [0x5a; 32])
+    endpoint_and_client(FIXTURE_SHARD_ID, one_leaf(), signer, ephemeral_timeouts()).await
 }
 
 #[tokio::test]
@@ -153,20 +54,20 @@ async fn fetch_client_accepts_a_real_served_body() {
     let (_ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
     let shard = client
         .fetch(
-            &target(public, SHARD),
-            &header_at(ANCHOR),
-            Arc::new(Accepting),
+            &fetch_target(public, FIXTURE_SHARD_ID),
+            &request_header(BlockHeight::from_raw(ANCHOR)),
+            Arc::new(AcceptAny),
         )
         .await
         .expect("the two stacks speak the same contract");
-    assert_eq!(shard.shard_id(), SHARD);
+    assert_eq!(shard.shard_id(), FIXTURE_SHARD_ID);
     // Envelope already stripped; remaining bytes are RF-D4 then the
     // segment. The transport crate does not parse the frame — this test
     // does, so a swapped envelope/frame order fails here.
     let mut rest = shard.body();
     let frame = ServedFrameHeader::read(&mut rest).expect("RF-D4 frame ahead of the envelope");
     assert_eq!(frame.leaf_count(), 1);
-    assert_eq!(rest, payload().as_slice());
+    assert_eq!(rest, one_leaf().as_ref());
 }
 
 #[tokio::test]
@@ -179,12 +80,12 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     let public: HybridPublicKey = signer.public_key().clone();
     let (ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
 
-    for shard in [SHARD, SHARD + 1] {
+    for shard in [FIXTURE_SHARD_ID, FIXTURE_SHARD_ID + 1] {
         let err = client
             .fetch(
-                &target(public.clone(), shard),
-                &header_at(OWN_HEIGHT),
-                Arc::new(Accepting),
+                &fetch_target(public.clone(), shard),
+                &request_header(BlockHeight::from_raw(OWN_HEIGHT)),
+                Arc::new(AcceptAny),
             )
             .await
             .expect_err("an anchor at the tip is outside the gate");
@@ -195,9 +96,9 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 
     let err = client
         .fetch(
-            &target(public.clone(), SHARD + 1),
-            &header_at(ANCHOR),
-            Arc::new(Accepting),
+            &fetch_target(public.clone(), FIXTURE_SHARD_ID + 1),
+            &request_header(BlockHeight::from_raw(ANCHOR)),
+            Arc::new(AcceptAny),
         )
         .await
         .expect_err("not held");
@@ -207,9 +108,9 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     // The retry the 400 earns: same `P`, a fresh in-gate anchor.
     client
         .fetch(
-            &target(public, SHARD),
-            &header_at(ANCHOR),
-            Arc::new(Accepting),
+            &fetch_target(public, FIXTURE_SHARD_ID),
+            &request_header(BlockHeight::from_raw(ANCHOR)),
+            Arc::new(AcceptAny),
         )
         .await
         .expect("a fresh anchor inside the gate is served");
@@ -275,9 +176,9 @@ async fn a_persona_with_no_key_is_unavailable_and_sends_no_shard() {
     let (ep, client) = stacks(Arc::new(Keyless)).await;
     let err = client
         .fetch(
-            &target(any_key(), SHARD),
-            &header_at(ANCHOR),
-            Arc::new(Accepting),
+            &fetch_target(any_key(), FIXTURE_SHARD_ID),
+            &request_header(BlockHeight::from_raw(ANCHOR)),
+            Arc::new(AcceptAny),
         )
         .await
         .expect_err("no key");
@@ -296,9 +197,9 @@ async fn a_signer_that_fails_after_the_body_is_a_failed_read() {
     let (ep, client) = stacks(Arc::new(RefusesLate)).await;
     let err = client
         .fetch(
-            &target(any_key(), SHARD),
-            &header_at(ANCHOR),
-            Arc::new(Accepting),
+            &fetch_target(any_key(), FIXTURE_SHARD_ID),
+            &request_header(BlockHeight::from_raw(ANCHOR)),
+            Arc::new(AcceptAny),
         )
         .await
         .expect_err("no signature");

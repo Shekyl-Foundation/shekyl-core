@@ -54,7 +54,7 @@
 //! holds whatever the timing, since it is accounting and not a race.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -71,6 +71,7 @@ use super::{
 };
 use crate::countersign::{PassKey, PassSigner, SignRefused, TestKeySigner};
 use crate::provider::{ProviderError, ShardBody, ShardProvider};
+use crate::serve_counters::ServeCounterReader;
 
 /// Shard 0, in memory, counting how often it is opened and how many
 /// chunks of it are then yielded.
@@ -222,16 +223,6 @@ impl AsyncWrite for Requester {
     }
 }
 
-/// The endpoint's counters, as a test holds them when it drives `resolve`
-/// and `write_response` directly.
-#[derive(Default)]
-struct Counted {
-    served: AtomicU64,
-    lookup_failures: AtomicU64,
-    sign_failures: AtomicU64,
-    late_sign_failures: AtomicU64,
-}
-
 /// Bytes of a 200 that precede the first body chunk: the head and the
 /// `RF-D4` frame header, for a body of `leaves_in_body`.
 fn bytes_ahead_of_the_body(leaves_in_body: usize) -> usize {
@@ -245,7 +236,7 @@ fn bytes_ahead_of_the_body(leaves_in_body: usize) -> usize {
 async fn serve_to_a_requester_that_accepts(
     chunks_in_body: usize,
     body_bytes_accepted: usize,
-) -> (usize, usize, Counted) {
+) -> (usize, usize, ServeCounterReader) {
     let leaves_in_body = chunks_in_body * WRITE_CHUNK_BYTES / LEAF_BYTES;
     assert_eq!(
         leaves_in_body * LEAF_BYTES,
@@ -254,14 +245,14 @@ async fn serve_to_a_requester_that_accepts(
     );
     let provider = CountingProvider::new(leaves(leaves_in_body, 0x33));
     let signer = CountingSigner::new();
-    let counters = Counted::default();
+    let counters = ServeCounterReader::zeroed();
+    let writer = counters.writer();
 
     let resolved = resolve(
         good_get_shard_0().as_bytes(),
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
         Arc::clone(&signer) as Arc<dyn PassSigner>,
-        &counters.lookup_failures,
-        &counters.sign_failures,
+        &writer,
     )
     .await;
     assert!(
@@ -276,9 +267,7 @@ async fn serve_to_a_requester_that_accepts(
         &mut requester,
         resolved,
         Arc::clone(&signer) as Arc<dyn PassSigner>,
-        &counters.served,
-        &counters.lookup_failures,
-        &counters.late_sign_failures,
+        &writer,
     )
     .await;
     assert!(outcome.is_err(), "the refused write ends the response");
@@ -298,13 +287,12 @@ async fn nothing_that_scales_with_the_shard_happens_before_the_head() {
     for leaves_in_body in [1, leaves_per_segment()] {
         let provider = CountingProvider::new(leaves(leaves_in_body, 0x21));
         let signer = CountingSigner::new();
-        let counters = Counted::default();
+        let writer = ServeCounterReader::zeroed().writer();
         let resolved = resolve(
             good_get_shard_0().as_bytes(),
             Arc::clone(&provider) as Arc<dyn ShardProvider>,
             Arc::clone(&signer) as Arc<dyn PassSigner>,
-            &counters.lookup_failures,
-            &counters.sign_failures,
+            &writer,
         )
         .await;
         assert!(matches!(resolved, Resolved::Held(_)));
@@ -332,10 +320,10 @@ async fn a_requester_that_takes_only_the_head_costs_one_chunk_read_and_no_signat
         "one chunk read ahead of the write that was refused"
     );
     assert_eq!(asked_to_sign, 0, "nothing is signed");
-    assert_eq!(counters.served.load(Ordering::Relaxed), 0);
-    assert_eq!(counters.late_sign_failures.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.served_count(), 0);
+    assert_eq!(counters.late_sign_failure_count(), 0);
     assert_eq!(
-        counters.lookup_failures.load(Ordering::Relaxed),
+        counters.lookup_failure_count(),
         0,
         "a requester that left is not a store fault"
     );
@@ -350,8 +338,8 @@ async fn a_requester_that_takes_half_the_body_costs_half_the_reads_and_no_signat
         serve_to_a_requester_that_accepts(8, 4 * WRITE_CHUNK_BYTES).await;
     assert_eq!(reads, 5, "four chunks delivered and one refused, of eight");
     assert_eq!(asked_to_sign, 0, "half a body is not signed for");
-    assert_eq!(counters.served.load(Ordering::Relaxed), 0);
-    assert_eq!(counters.late_sign_failures.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.served_count(), 0);
+    assert_eq!(counters.late_sign_failure_count(), 0);
 }
 
 #[tokio::test]

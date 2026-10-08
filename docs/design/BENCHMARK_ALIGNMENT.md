@@ -543,12 +543,12 @@ into the same flat salted digest; then signs and appends the signature.
 *The prerequisite: can the key be absent while the store serves?* Read at
 the pin:
 
-- **Today it always is.** Production binds a placeholder key that refuses
-  every transcript
-  (`rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:246`).
-  Every servable request is read and hashed in full, then answered 404
-  (`rust/shekyl-p-host/src/signer.rs:68`). The pre-flight would retire that
-  work as well.
+- ~~**Today it always is.** Production binds a placeholder key that refuses
+  every transcript.~~ **SUPERSEDED 2026-10-06 (SH-2):** production binds
+  the persona's resident key (`ResidentPassKey`,
+  `rust/shekyl-engine-core/src/engine/stake_engine/serving/pass_key.rs`);
+  the placeholder is deleted. The pre-flight is still what turns a stopped
+  actor into a 503 before the read.
 - **The design intends residency for as long as the host serves**
   (`docs/design/ARCHIVAL_SHARD_FETCH.md:945`), and the key bundles are
   derived when the wallet opens and held for the session
@@ -557,11 +557,20 @@ the pin:
 - **The contract still allows absence at sign time**: "key not resident,
   signer offline, or a host-side policy refusal"
   (`rust/shekyl-p-serve/src/countersign.rs:74`). Whether the signing
-  capability can go away while the listener stays up is the unwired
-  remainder of `SH-2`, and no document settles it.
+  capability can go away while the listener stays up was the unwired
+  remainder of `SH-2`. **Settled 2026-10-06**
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §3 Q2): the
+  serving task's life is a subset of the stake actor's by *teardown
+  order* (`tasks.shutdown()` before `drop(engine)`, pinned by test), and
+  the key holds a **weak** actor handle, so the one case the order cannot
+  cover — the actor fail-stopping under a live listener — is observed by
+  `PassKey::ready` as a refusal, not prevented. The capability can go
+  away; when it does, the pre-flight is what answers 503 before the read.
 
-So the pre-flight is mandatory under S unless `SH-2` makes the serving
-task's life a subset of the key's by construction.
+So the pre-flight is mandatory under S: `SH-2` made the serving task's
+life a subset of the key's by construction for the ordinary path, and
+chose observe-not-prevent for the fail-stop, which is exactly the case
+the pre-flight exists for.
 
 *What S is expected to buy.* The floor runs (BA-G1) put the cost #954 added
 at 78 ms per response, of which the digest is 23.9 ms per pass, twice: 48
