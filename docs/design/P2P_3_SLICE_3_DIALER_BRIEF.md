@@ -225,33 +225,50 @@ memory. A harvest that fails uses the connector's cause.
 
 ## Outbound targets
 
-Clearnet's target is the cap `set_max_out_peers` writes
-(`net_node.inl:2909`; the `--out-peers` call is `:621`). The default is `shekyl_p2p_default_out_peers`,
-which is `P2P_DEFAULT_OUT_PEERS` (12). The floor is
-`MIN_PROVISIONED_OUT_PEERS` (12,
-`shekyl-relay-privacy/src/params.rs:195`). `--out-peers` is that cap.
-A cap of 0 stays legal. Clearnet is not folded into the hidden target.
-The fluff measurement was taken at degree 12, and sharing one cap of
-12 across both connectors would move that degree.
+**Working direction 2026-10-07 (Rick). Not a ruling.** The
+hidden-address pool and the total outbound degree are lower limits.
+Each is at least `MIN_PROVISIONED_OUT_PEERS` (12,
+`shekyl-relay-privacy/src/params.rs:195`). The total floor is the
+fail-safe's measured range (`fluff_return_ms = 3250` at degree 12).
+The hidden floor is the own-edge capture cost. The operating point
+above those floors, and any ceiling, are not chosen. The simulation
+proposed in
+[`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §95 sets the
+operating point. The ceiling comes from resources.
 
-**UPDATE 2026-10-07 (Rick).** The address-hiding outbound target is
-`MIN_PROVISIONED_OUT_PEERS`. The own-edge pool is the outbound
-sessions whose connector declares `address_hidden_from_peer`. That is
-a property of the connector. *Records-was: Tor's target is
-`HOP0_OUTBOUND_TARGET` (4, `params.rs:205`), and `net_node.inl:939`
-writes it onto the ephemeral Tor zone with
-`shekyl_hop0_outbound_target`.* The 4 read the paper's 4-regular
-anonymity graph (Dandelion++ §4.3, Algorithm 2: two outbound edges
-plus about two inbound) as the size of the pool the relays are drawn
-from. The paper draws those edges from the node's P2P outbound edges
-(η = 8 in the simulations; ours is the measured 12). The relay lane
-deletes the constant. This slice deletes the assignment at
-`net_node.inl:939`, because the dialer owns outbound targets.
+Until that simulation is ruled, the target is 12. That is the floor,
+kept as the interim, and it is a hard cap in the code the dialer
+takes over. On the relay branch, `net_node.inl:939` assigns
+`shekyl_relay_zone_min_provisioned_out_peers()` to
+`max_out_connection_count`. This slice deletes that assignment and
+keeps the target at 12. It does not open more than 12 hidden sessions
+before the operating point is chosen.
 
-The dialer keeps that pool up. `Relay::own_edge` draws uniformly from
-it (`hidden_outbound_ids`). The dialer does not choose the edge. An
-empty pool is the relay's `NoOwnEdge`. The draw stays the relay
-lane's. The relay never sees a per-connector count.
+*Records-was, earlier the same day: the address-hiding outbound
+target is exactly `MIN_PROVISIONED_OUT_PEERS`.* *Records-was before
+that: Tor's target is `HOP0_OUTBOUND_TARGET` (4, `params.rs:205`),
+and at this brief's pin `d93074d1c4` `net_node.inl:939` still writes
+it with `shekyl_hop0_outbound_target`.* The 4 read the paper's
+4-regular anonymity graph (Dandelion++ §4.3, Algorithm 2: two
+outbound edges plus about two inbound) as the size of the pool the
+relays are drawn from. The paper draws those edges from the node's
+P2P outbound edges (η = 8 in the simulations; the measured degree is
+12). The relay lane deletes the constant.
+
+The own-edge pool is the outbound sessions whose connector declares
+`address_hidden_from_peer`. That is a property of the connector. The
+dialer keeps that pool up to the interim target. `Relay::own_edge`
+draws uniformly from it (`hidden_outbound_ids`). The dialer does not
+choose the edge. An empty pool is the relay's `NoOwnEdge`. The draw
+stays the relay lane's. The relay never sees a per-connector count.
+
+Clearnet's cap is what `set_max_out_peers` writes
+(`net_node.inl:2909`; the `--out-peers` call is `:621`). The default
+is `shekyl_p2p_default_out_peers`, which is `P2P_DEFAULT_OUT_PEERS`
+(12). A cap of 0 stays legal. A positive cap below the floor is
+still refused by that setter. Clearnet is not folded into the hidden
+target. Sharing one cap of 12 across both connectors would move the
+degree the fail-safe was measured at.
 
 A later connector, I2P included, is a declaration column, that
 connector's measured transit added in `verify_cost`
@@ -349,13 +366,15 @@ holds every session in the pool is `p^k`. At `p = 0.3` that is about
 means every own-edge, every epoch, is the attacker's: they see the
 first hop of every transaction this node originates, and rotation
 protects nothing. Hidden addressing keeps the IP off that hop. It
-does not keep the transactions from linking to one origin. The target
-of 12 is the pool the stem draw already assumes. The cost is 12 onion
-circuits on the managed Tor, where the old target opened 4. The
-in-flight dial bound limits how fast they open. Total outbound is
-clearnet plus hidden, and stems are drawn over all of them. A hidden
-degree above the measured floor moves away from that floor. The floor
-is a minimum.
+does not keep the transactions from linking to one origin.
+Compositions above a pool of 12 are the §95 sweep, including total
+16. Until that sweep is ruled, the pool the dialer keeps is 12,
+which is also the hard cap the relay branch writes at
+`net_node.inl:939`. The cost at that interim is 12 onion circuits
+on the managed Tor, where the old target opened 4. The in-flight
+dial bound limits how fast they open. Total outbound is clearnet
+plus hidden, and stems are drawn over all of them. Both the hidden
+pool and that total are lower limits.
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a
 timed-sync payload are gray entries. They become dials only through

@@ -16636,3 +16636,168 @@ goes red if the model, the message size, or the floor rate drifts the term towar
 the hop — and it already fired once, catching the draft's <0.1 % claim (true only
 on the wrong rate; the honest worst case is 0.96 %).
 
+## 95. Outbound composition — PROPOSAL 2026-10-07, not a ruling
+
+**Working direction (Rick, 2026-10-07). Not a ruling.** The hidden-address
+pool and the total outbound degree are lower limits. The operating point
+above those limits, and any ceiling, are not chosen here. This section
+proposes the simulation that would set the operating point. The ceiling
+comes from resources and is named when that simulation is ruled. No
+constant is added, and nothing in `shekyl-relay-privacy` is built for
+this section.
+
+The floors, which are the hard edges of the sweep:
+
+- Total outbound `h + c` is at least `MIN_PROVISIONED_OUT_PEERS` (12,
+  `params.rs`). That is the fail-safe's measured range: `fluff_return_ms
+  = 3250` is the p90 first passage at degree 12, and below that degree
+  the passage exceeds the provisioned value.
+- Hidden outbound `h` is at least the same 12. That is the own-edge
+  capture cost: the chance an attacker holds every hidden session is
+  the onion-candidate spy share raised to `h`.
+
+`h` is the hidden-address outbound count. `c` is the clearnet outbound
+count. In this section `f` is the fraction of nodes that publish an
+onion, and `p` is the network-wide spy fraction. Those letters already
+mean other things nearby: the first-spy test prints its spy fraction as
+`f`, and §12.6's `f` is the network adversary fraction. The letters
+here are the sweep's.
+
+Until the simulation is ruled, the dialer keeps a target of 12. That
+number is the floor, carried as the interim. The hard cap is the
+assignment on the relay branch, which is not merged: `net_node.inl:939`
+sets `max_out_connection_count` from
+`shekyl_relay_zone_min_provisioned_out_peers()` (12). At the dialer
+brief's pin `d93074d1c4` that same line is still
+`shekyl_hop0_outbound_target` (4). The dialer deletes the assignment
+and keeps 12 until this simulation is ruled
+([`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md)).
+
+### 95.1 Instruments that already exist
+
+Read on `dev` at `7f7109dc7e`. Each one answers a different question.
+None of them takes a hidden count and a clearnet count as two link
+classes.
+
+**Flood and convergence.** `simulate_fluff_return` and
+`simulate_fluff_return_mixed` (`rust/shekyl-relay-privacy/src/conformance/flood.rs`)
+report mean, p50, and p90 first passage. The mixed form takes a
+per-node out-degree vector and one `transit_ms`. It does not take
+hidden edges at one transit and clearnet edges at another.
+`converged_fluff_return_mixed` re-runs independent seeds and refuses a
+reading they do not agree on (`tests/flood_convergence.rs`). Those
+tests pin the refusal, not the value 3250. The shipped topology in
+that file is `OutboundOnly`, 512 nodes, degree 12, Tor transit.
+`f7_directed.rs` compares `EveryPeer` with `OutboundOnly` at 8, 12, and
+16 peers and asserts the directed arm is slower; it does not assert
+the level. `flood_transit_reconciliation.rs` records that the shipped
+3250 ms is the transit-less reading, and that adding transit moves the
+level without reordering the degree argument. `d9_floor_locality.rs`
+asks whether a below-floor node harms itself or the network; the
+builder still cannot thin the edges pointed at one node. Production
+fluff is `EveryPeer` on every connector. The 3250 ms figure stays the
+fail-safe input because the directed graph is the longer one and has
+not been remeasured.
+
+**First-spy precision.** `simulate_diffusion_first_spy` walks one
+uniform graph at one degree and one transit. Spies are a Bernoulli
+draw on every node except the source. It reports precision
+(predecessor is the source, among floods a spy observed), the observed
+count, and the mean hop count. It does not report recall, and it does
+not raise the spy share among onion-publishing nodes. The test
+`first_spy_precision_rises_with_spy_fraction`
+(`tests/propagation_measurement/adversary.rs`) runs 512 nodes, 8
+peers, `EveryPeer`, clearnet transit, at spy fractions 0.05, 0.10, and
+0.20, and asserts precision rises. `simulate_transport_observation`
+(`conformance/transport.rs`) is the other first-spy reading: a
+supernode that dials inbound and is dialed by none. Its
+`observed_fraction` is how often that supernode sees the fluff, and
+its `first_spy_precision` is attribution on those inbound edges. The
+test in `tests/propagation_measurement/transport.rs` asserts that
+precision rises with the dial fraction. Neither instrument separates
+originated traffic from relayed traffic, and neither biases the spy
+share toward onion candidates.
+
+**W3 / ProxyMark slot occupancy.** `simulate_two_slot_occupancy`
+(`conformance/selection.rs`) is `P(both outbound stem slots
+adversarial)` at an outbound share `g` and a pool `D_out`. The §12.6
+table is that function at `D_out = 12`. It measures `W3(g)` and does
+not bound `g`. It is one draw; churn is
+`simulate_induced_churn_exposure` (`InducedChurnExposure`), which is
+higher under a refill. ProxyMark is the attack named in §6.9 and
+§12.6. There is no separate ProxyMark simulator. This occupancy is the
+two stem slots drawn from the whole outbound pool. It is not
+`P(every hidden session is a spy)`, which is the own-edge capture
+quantity below. `simulate_epsilon_greedy_selection` is the §12.11
+selection reading and is not this sweep. `tests/hop_sensitivity.rs`
+moves the embargo hop against transit and is not this sweep.
+
+### 95.2 The sweep this proposal would run
+
+Points for review, not crate constants. A point is dropped when `h < 12`
+or `h + c < 12`. The report shows those drops, so the edge is visible.
+Totals sit around 12–24, and 16 is among them:
+
+| `h` | `c` | total | why it is here |
+| --- | --- | --- | --- |
+| 12 | 0 | 12 | both floors, hidden only |
+| 12 | 4 | 16 | hidden at the floor, total 16 |
+| 16 | 0 | 16 | hidden at 16, clearnet absent |
+| 12 | 8 | 20 | hidden at the floor, total 20 |
+| 16 | 4 | 20 | both above the floor |
+| 12 | 12 | 24 | hidden at the floor, total 24 |
+| 16 | 8 | 24 | both above the floor |
+| 24 | 0 | 24 | hidden at the top of the range |
+
+Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
+Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
+first-spy test already runs. A second arm sets the spy share among
+onion-publishing nodes to twice `p`, capped at 1, and leaves every
+other node at `p`.
+
+Five readings, each compared across that grid. None of them writes
+`fluff_return_ms`, `MIN_PROVISIONED_OUT_PEERS`, or a new outbound
+constant.
+
+1. **First-spy precision and recall, originated transactions.** One
+   trial is one transaction this node originates. Precision is the
+   fraction of observed trials whose first spy's predecessor is the
+   origin. Recall is the fraction of trials a spy observes at all.
+   Both arms: spies at `p` everywhere, and spies at the higher share
+   among onion candidates. The uniform `simulate_diffusion_first_spy`
+   reading is the control, not the result. The result needs the
+   two-class graph this crate does not build yet: each node initiates
+   `h` hidden edges and `c` clearnet edges.
+2. **Originated-versus-relayed skew on hidden edges.** An originated
+   own-edge is drawn from the hidden pool, so its hidden share is 1.
+   A relayed forward drawn uniformly from all outbound sessions lands
+   on a hidden edge with share about `h / (h + c)`. The simulation
+   reports both shares. The approximation is the thing being checked:
+   stem slots are two draws from the whole pool, and that draw can
+   depart from `h / (h + c)`.
+3. **Full own-edge pool capture.** At the onion-candidate spy share
+   `q`, the chance every hidden session is a spy is `q^h`. Report
+   that number, and check it by drawing the pool.
+   `simulate_two_slot_occupancy` stays the stem-slot residual at its
+   own `D_out`. This proposal leaves `STEMS` and the §12.6 table
+   where they are.
+4. **Fluff return at the mixed composition, against 3250 ms.** p90
+   first passage on the two-class graph, `EveryPeer`, hidden edges at
+   the anonymity transit and clearnet edges at the clearnet transit,
+   taken through `converged_fluff_return_mixed`'s budget so a single
+   seed cannot become a level. The comparison is the shipped 3250 ms
+   fail-safe input. The reading does not replace that constant.
+   `simulate_fluff_return_mixed` cannot produce it: one `transit_ms`
+   covers every edge.
+5. **Hidden inbound load per published onion.** If each node opens `h`
+   hidden edges uniformly among the `f` fraction that publish, the
+   mean inbound degree of a published onion is `h / f`. Report that
+   mean. A uniform draw checks it. No new load constant.
+
+What a ruled result would be allowed to choose is the operating point:
+one `(h, c)` on or above the floors. It would not choose the ceiling,
+and it would not move `fluff_return_ms` inside the same change. A
+reading that wants a new fail-safe input is a later re-derivation,
+named as such, because §90 already requires `F′` and its dependents
+to move together.
+
