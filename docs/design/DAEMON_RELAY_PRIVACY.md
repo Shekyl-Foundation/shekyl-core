@@ -163,11 +163,14 @@ this lane.
      in the paper's simulations). `HOP0_OUTBOUND_TARGET` (4) read the
      degree as the pool size, so the own-edge was drawn from a third of
      the pool the analysis assumes. *Records-was: a pool of 4.* The
-     chance an attacker holds the whole pool is `p^k`. At `p = 0.3`
-     that is about 0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.
+     chance an attacker holds the whole pool is `p_h^h`, as the dialer
+     brief records it. *Records-was: `p^k`. At `p = 0.3` that is about
+     0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`.*
      The dialer opens 12 onion circuits on the managed Tor. The
-     assignment at `net_node.inl:926` stays until the dialer deletes
-     it; it now reads this floor. Clearnet keeps its own degree.
+     assignment at `net_node.inl:984` stays until the dialer deletes
+     it; it reads `shekyl_relay_zone_min_provisioned_out_peers()`.
+     *Records-was: the assignment was cited at `:926`.* Clearnet keeps
+     its own degree.
      The graph is connector-agnostic. Measured transit and cover class
      are declaration cells. The relay reads them through
      `declaration(connector.column())`, as it already reads
@@ -15085,9 +15088,12 @@ not a working posture — not by ruling, but by routing.**
 
 ### 91.2 Design A is adopted
 
-**Tor-only is a supported posture. It is not the default.** Seed hosts run
-dual-network and are knowingly linkable, which costs nothing: long-running
-public infrastructure whose onion is discoverable anyway.
+**Tor-only is a supported posture. It is not the default.**
+**UPDATE 2026-10-08 (Rick): supported is not recommended.**
+Recommending Tor-only is rejected until the six carriers in §96
+close. Seed hosts run dual-network and are knowingly linkable, which
+costs nothing: long-running public infrastructure whose onion is
+discoverable anyway.
 
 > **Disambiguation added 2026-09-01 — this sentence is *not* in tension with the
 > Tor-default ruling, and the distinction is easy to lose.** §6.5 now records
@@ -16701,8 +16707,8 @@ The floors, which are the hard edges of the sweep:
   = 3250` is the p90 first passage at degree 12, and below that degree
   the passage exceeds the provisioned value.
 - Hidden outbound `h` is at least the same 12. That is the own-edge
-  capture cost: the chance an attacker holds every hidden session is
-  the onion-candidate spy share raised to `h`.
+  capture cost. One draw of the pool is `p_h` raised to `h`. Reading 3
+  measures the same capture over epochs, with churn and refill.
 
 `h` is the hidden-address outbound count. `c` is the clearnet outbound
 count. `f` is the fraction of nodes that publish an onion. `p` is the
@@ -16715,15 +16721,16 @@ first-spy test prints its spy fraction as `f`, and §12.6's `f` is the
 network adversary fraction. The letters here are the sweep's.
 
 Until the simulation is ruled, the dialer keeps a target of 12. That
-number is the floor, carried as the interim. The hard cap in this tree
+number is the floor, carried as the interim. The hard cap on `dev`
 is `src/p2p/net_node.inl` lines 984–985: `hidden_out` is
 `shekyl_relay_zone_min_provisioned_out_peers()` (12), and
-`max_out_connection_count` is that `hidden_out`. The dialer brief for
-P2P-3 slice 3 is not in this tree; it deletes the assignment and keeps
-12 until an operating point is ruled. *Records-was: the cap was
-described as an unmerged relay branch at `net_node.inl:939`, and at pin
-`d93074d1c4` that assignment was `shekyl_hop0_outbound_target` (4).
-Line 939 is the ephemeral-Tor error path.*
+`max_out_connection_count` is that `hidden_out`. The dialer deletes
+the assignment and keeps 12 until this simulation is ruled
+([`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md)).
+*Records-was: the cap was described as an unmerged relay branch at
+`net_node.inl:939`, and at pin `d93074d1c4` that assignment was
+`shekyl_hop0_outbound_target` (4). Line 939 is the ephemeral-Tor
+error path.*
 
 ### 95.1 Instruments that already exist
 
@@ -16778,9 +16785,10 @@ not bound `g`. It is one draw; churn is
 `simulate_induced_churn_exposure` (`InducedChurnExposure`), which is
 higher under a refill. ProxyMark is the attack named in §6.9 and
 §12.6. There is no separate ProxyMark simulator. This occupancy is the
-two stem slots drawn from the whole outbound pool. It is not
-`P(every hidden session is a spy)`, which is the own-edge capture
-quantity below. `simulate_epsilon_greedy_selection` is the §12.11
+two stem slots drawn from the whole outbound pool. Reading 3's
+capture is the hidden pool over epochs, using this churn instrument's
+refill, and the one-draw `p_h^h` is that reading's reference.
+`simulate_epsilon_greedy_selection` is the §12.11
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
 moves the embargo hop against transit and is not this sweep.
 
@@ -16864,9 +16872,10 @@ that shape, and it is not a recommended posture. The gate is §96.
 No operating point is chosen. The interim composition is hidden 12
 and clearnet 12. Clearnet's configured default is already
 `P2P_DEFAULT_OUT_PEERS` (12). The address-hiding outbound target is
-already `MIN_PROVISIONED_OUT_PEERS` (12). *Records-was: the Tor zone's
-cap was `HOP0_OUTBOUND_TARGET` (4).* This measurement does not move
-either constant.
+already `MIN_PROVISIONED_OUT_PEERS` (12), assigned at
+`net_node.inl:984–985`. *Records-was: the Tor zone's cap was
+`HOP0_OUTBOUND_TARGET` (4).* This measurement does not move either
+constant.
 The `(12, 4)` proposal is withdrawn. A total of 16 was an
 illustration, not a candidate.
 

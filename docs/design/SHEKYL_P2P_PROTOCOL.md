@@ -1330,12 +1330,19 @@ the gray path, and that is the evidence this reroute costs nothing.** *(The
 writer and must add the per-host bound with it. What follows describes only the
 existing promotion path, and is not a claim that the gray path needs no
 change.)*
-`gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
-at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
-white via `set_peer_just_seen` only if that outbound handshake succeeds —
-evicting it from gray if it fails. So an inbound peer keeps its whole route to
-white-list membership; **only the free pass is removed**, and it is replaced by
-the verification every other candidate already passes.
+`gray_peerlist_housekeeping` (`net_node.inl:3336`, interval
+`net_node.h:756`, at `f317d979c4`) draws a random gray peer, dials it
+with `just_take_peerlist`, closes, and on success writes white at
+`:3363`. On failure it evicts from gray. *Records-was: this sentence
+cited `net_node.inl:3108-3138` and `net_node.h:621`.* That probe is
+what the C++ does until the dialer deletes the function. The settled
+door is slice 1: a uniform gray draw, then `SessionAccepted` on a
+session this node keeps, or `Confirmed` when outbound is already at
+target and the session is closed. The draw is an arm of the fill. It
+is not a harvest, and it is not this 60 s clock. So an inbound peer
+keeps its whole route to white-list membership; **only the free pass
+is removed**, and it is replaced by the verification every other
+candidate already passes.
 
 **Under the final ruling the peer is not verified at all when it enters gray** —
 PWD-B10 deletes the back-ping, so its advertised port stands unchecked until
@@ -1362,8 +1369,11 @@ random draw per zone per 60 s — not open-ended." **The cadence bounds how ofte
 large.** `get_random_gray_peer` selects uniformly at random from the gray list,
 so for a list of `G` entries the wait for any particular entry is geometric with
 `p = 1/G`: **expected `G` draws, i.e. `G` minutes — about 83 hours at the
-`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.** And
-`gray_peerlist_housekeeping` can skip a cycle entirely: it returns early when
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.**
+*Records-was for the settled loop: that wait is the C++ probe, one
+draw per 60 s.* The dialer deletes the interval. Residence time is
+re-derived against the fill before it is quoted as the settled figure.
+The C++ probe can also skip a cycle entirely: it returns early when
 `m_offline` or when `m_exclusive_peers` is non-empty, and `continue`s per zone
 when the payload handler needs new sync connections or the zone has no
 connector. **Producer-side latency is therefore unbounded, and is conceded as
@@ -1619,21 +1629,29 @@ eclipse resistance — do not let churn rotate this node onto an adversary's
 peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
 at the **selection** site, in what refills the freed slot.
 
-**And the refill order for this case is gray-first, not white-first.**
-`connections_maker` branches on the **total** outgoing count, not the white
-count: below the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it
-tries white then gray, but **at or above that target it tries gray then white**.
-A single churn drop from a full outbound set leaves the count above the target,
-so the freed slot normally draws from **gray** — the list fed by gossip and by
-`--add-peer`, and the one an adversary can populate cheaply. An earlier draft of
-this paragraph said "white first, then gray", which is the branch that does
-*not* apply to the case the paragraph is about, and it understated the exposure
-it was routing.
+**And the refill order for this case, in the C++ that is still running,
+is gray-first above the 70% share.** `connections_maker` branches on the
+**total** outgoing count, not the white count: below the
+`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it tries white
+then gray, but **at or above that target it tries gray then white**. A
+single churn drop from a full outbound set leaves the count above the
+target, so the freed slot normally draws from **gray** — the list fed by
+gossip and by `--add-peer`, and the one an adversary can populate cheaply.
+An earlier draft of this paragraph said "white first, then gray", which is
+the branch that does not apply to the case the paragraph is about, and it
+understated the exposure it was routing.
+
+That 70% schedule is what the binary does until P2P-3 slice 3 deletes
+`connections_maker`. The settled loop is the dialer brief: exclusive, then
+clearnet priority, then harvest, then `draw_white` up to the connector's
+outbound target, then `draw_gray` only while white is under the refill
+line. *Records-was: the gray-first order above 70% was the input PWD-I4
+and PWD-B9 would derive against.*
 
 Whether an adversary can bias that draw is the `g` bound, owned by
-**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled — and the
-gray-first order is an input those rounds need, since it is the adversary-
-populated list that fills a churned slot.
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled. PWD-I4
+derives against the dialer loop. The adversary-populated list is still
+gray.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
