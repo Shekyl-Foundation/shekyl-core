@@ -16900,13 +16900,14 @@ Each item is open. Its carrier is the only thing that closes it.
 
 1. **Stem-slot routing.** Own transactions ride a stem slot, as
    ruled in §95: the origin's own send is always a stem, and each
-   relay forwards with probability `1 − q`. Rejected as a basis for
-   recommending Tor-only until the relay lane confirms that routing.
-   **Carrier:** the relay lane, after #1004 confirms it. **Closes
-   when** #1004 is on `dev` and the landed §95.3 states that the
-   origin's own send is a stem slot under the routing the relay
-   ships. **Re-evaluation:** the relay lane writes that sentence in
-   the landed section. Closing this item does not recommend Tor-only.
+   relay forwards with probability `1 − q`. #1004 (`a4987e8e`)
+   confirmed the posterior. The relay draws it in
+   `Relay::install_epoch_stems`: one slot from the hidden-address
+   sessions, the other from the remaining outbound sessions, and the
+   local source mapped to the hidden slot. **Carrier:** that function.
+   **Closes when** `install_epoch_stems` is on `dev`. **Re-evaluation:**
+   the hop-0 paragraph of the acceptance criterion, which states the
+   draw. Closing this item does not recommend Tor-only.
 2. **The calibrated `(h, 0)` fail-safe.** The shipped 3250 ms was
    read on a mixed-degree graph. A hidden-only first passage is not
    that input. **Carrier:** #1004. **Closes when** #1004 is on `dev`
