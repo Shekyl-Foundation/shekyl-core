@@ -6210,6 +6210,15 @@ and replaced by pointers; what each still owns is the specification's
    pair mismatch cannot occur, because the pair is derived from `j`. The second, the persisted digest of `D`
    against a re-walk, and the third, `passes ≤ issued` as a typed halt,
    carry over.
+
+   **Review, same date.** The sentence above records the hash as taken
+   during the walk that selects the counted draws. The living
+   specification (§9.5) and the proposal (§6.2) were corrected the same
+   day: settlement hashes every issued draw the stored index holds,
+   including a draw the selection then drops because the pair no longer
+   held the shard. Hashing only the counted draws would disagree with
+   the admission digest on an honest node after a mid-epoch slash or
+   release. `BA-T32` already says hash each issued draw, then select.
 3. **Ratified:** the in-flight count stops at `h_open(E)`; the settlement
    selection's bytes, rejection zone, swap and vectors.
 4. **Accepted:** documents keep describing the attestation path and the
@@ -6264,6 +6273,16 @@ and replaced by pointers; what each still owns is the specification's
    second read of the same shard rode a different one, both rendezvous
    circuits, and Tor fetched no descriptor for the new credentials
    (`docs/benchmarks/sfd3_read_isolation_20261007.md`).
+
+   **Review, same date.** The `MaxCircuitDirtiness` test named above was
+   removed. It restated the spacing theory this ruling superseded: it
+   rejected the option at every value, and two reads with different
+   credentials do not share a circuit at any reuse length. The managed
+   launch stays a closed list of typed options
+   (`the_managed_launch_surface_is_the_typed_options`). That list is the
+   spawn surface, not a second isolation mechanism. The dial uses
+   `Isolation::Persona`; the per-read property is the header's
+   credentials, not a second SOCKS variant.
 8. **Operator visibility of serving attacks is owed.** The design's
    answer to a sustained flood against a persona's onion is that the
    operator sees it and has months to respond. That holds only if the

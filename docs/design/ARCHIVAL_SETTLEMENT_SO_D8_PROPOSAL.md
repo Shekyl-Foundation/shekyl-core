@@ -818,8 +818,11 @@ digest and the list would agree. A wrong `D` is the way that happens, and
 1. **The index equals its digest.** At admission, as each seed's draws
    are issued, every `(P, s, h, j)` is folded into a per-epoch running
    digest kept as revertible consensus state. At settlement the writer
-   hashes the stored index during the walk that selects the counted
-   draws, and compares. The pair of a draw is derived from `j`, so a
+   hashes every draw the stored index holds, including a draw the
+   selection then drops because the pair no longer held the shard, and
+   compares. Hashing only the counted draws would disagree with the
+   digest on an honest node after a mid-epoch slash or release. The pair
+   of a draw is derived from `j`, so a
    record cannot name a pair its draw did not select. Nothing is
    re-derived at settlement (ruled 2026-10-07); the construction is the
    specification's §10.
@@ -847,8 +850,9 @@ digest and the list would agree. A wrong `D` is the way that happens, and
    something to compare *to* (the persisted digest) and something to
    compare (a re-walk). The writer at `h_slash` is then a function of
    chain data, not of what this process kept resident (`SO-D1` §4.2,
-   `SO-D6`). Layer 1 has both of its operands in the store and adds one
-   hash per issued draw to a walk the selection already makes.
+   `SO-D6`). Layer 1 has both of its operands in the store and hashes
+   every stored issued draw. The selection then filters that index; the
+   hash is not limited to the draws it keeps.
    **Conditional on §7.4's churn benchmark** for the re-walk and on the
    floor-device time of the settlement walk (`BA-T32`); neither is
    measured.

@@ -375,14 +375,12 @@ bound `K`.
   that shard, and `P` cannot tie a producer's reads to each other by the
   circuit they come in on.
   - The 30-block spacing is scheduling only. It is no longer what makes
-    the circuit fresh.
+    the circuit fresh. Circuit reuse length is not a second mechanism:
+    two reads present different credentials, so they do not share a
+    circuit at any `MaxCircuitDirtiness`.
   - A new circuit shares this daemon's entry guard with the last one, so
     the reads of a draw are still not fully independent tries. How far
     from independent is what `BA-T31` measures (§12).
-  - Defence in depth: the daemon's managed Tor is never configured with a
-    `MaxCircuitDirtiness` above the re-read spacing
-    (`shekyl-tor-control-client`,
-    `the_managed_launch_never_lengthens_circuit_reuse`).
   - An operator who points the daemon at a Tor of their own must not
     disable `IsolateSOCKSAuth` on its `SocksPort`.
   - The credentials are derived from the read's nonce, so they exist
@@ -738,10 +736,13 @@ verdict on a block, never a clamp and never a skipped row.
 
 1. **The index equals its digest.** As each seed's draws are issued, at
    admission, every `(P, s, h, j)` is folded into a running digest for
-   the epoch (§10). At settlement the writer hashes the stored index
-   during the walk that selects the counted draws, and compares. A stored
-   list that lost, gained or changed a draw after admission does not
-   reproduce the digest. The pair of a draw is derived from `j`, so a
+   the epoch (§10). At settlement the writer hashes every draw the stored
+   index holds — the same draws admission folded, including a draw the
+   selection then drops because the pair no longer held the shard — and
+   compares. Hashing only the counted draws of §9.3 would disagree with
+   the digest on an honest node after a mid-epoch slash or release. A
+   stored list that lost, gained or changed a draw after admission does
+   not reproduce the digest. The pair of a draw is derived from `j`, so a
    record cannot name a pair its draw did not select; what this guards is
    the stored lists the selection reads.
 2. **`D` equals a re-walk.** A 32-byte digest of `D` is written in the
@@ -752,7 +753,8 @@ verdict on a block, never a clamp and never a skipped row.
 3. **`passes ≤ issued`**, a typed halt, beneath both.
 
 Nothing is re-derived at settlement. Check 1 costs one hash per issued
-draw inside a walk the selection already makes; that walk's time on the
+draw over the stored index. The selection reads that index and then keeps
+a subset; the hash covers the index, not the subset. The walk's time on the
 floor device is not measured
 ([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T32`). The digest
 does not cover the per-block counts, which admission reads and settlement
@@ -978,11 +980,11 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R8 | `W₂` is the only window. Admission checks no bound on the anchor (`SCS-P7`) |
 | R9 | The in-flight count stops at `h_open(E)` (§4.3). Ratified on review |
 | R10 | The settlement selection as §9.3 states it: candidate bytes, rejection zone, swap, the cap, and the vectors. Ratified on review |
-| R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. The first is a running digest folded at admission and checked during the settlement walk; nothing is re-derived at settlement. Closes `SCS-F11` |
+| R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. The first is a running digest folded at admission and checked against every stored issued draw, not only the draws the selection keeps; nothing is re-derived at settlement. Closes `SCS-F11` |
 | R12 | The witness reads a draw again when a read ends stall-class, as its own policy above `SF-D6` (§5.3). `(m, n)` is not re-pinned on the one-read figure; the unread share at hour-scale spacing is measured first (§12) |
 | R13 | **One request machinery** for every shard fetch: one entry point, a caller-built header, one outcome type, no challenge-only path in the request layer (§5.1) |
 | R14 | **A fresh nonce for every read**, for every caller; a challenge's is bound to `(h, j, attempt)`. The record carries `attempt` as one prunable byte and admission refuses `attempt ≥ K`, `K = 3` (`SCS-P13`) |
-| R15 | **A fresh circuit per read, by SOCKS credentials**, for every caller: `SF-D3` reopened under rule 21 and ruled (§5.3). The spacing is scheduling only; the managed Tor's `MaxCircuitDirtiness` test stays as defence in depth |
+| R15 | **A fresh circuit per read, by SOCKS credentials**, for every caller: `SF-D3` reopened under rule 21 and ruled (§5.3). The spacing is scheduling only |
 
 ### 13.2 Provisional (rule 21; reopen on the sim or on testnet measurement)
 
@@ -1037,7 +1039,7 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F8` | `ARCHIVAL_CHALLENGE_MECHANISM.md` §2 has the pass record "broadcast as a transaction; any miner may include it". Under R-B the record is filed by the producer of `h` in a carrier that producer signs. **Fixed** there |
 | `SCS-F9` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.6.1 and §7.6.2 distinguished "unpruned validators" from "a pruned node". No such split exists: every daemon prunes (§8). **Fixed:** §7.6.1 is replaced by a pointer here and §7.6.2 says every node verifies at connect |
 | `SCS-F10` | `rust/shekyl-wire/src/transaction.rs:202` calls the pruned-record ceiling a twin of a `cryptonote_config.h` constant. `src/cryptonote_config.h:417-423` says it deliberately has no copy there |
-| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes a running digest folded at admission and checked during the settlement walk; the second and third carry over (§9.5) |
+| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes a running digest folded at admission and checked against every stored issued draw, including a draw the selection then drops; the second and third carry over (§9.5). §6.2 of the proposal states the same check |
 
 ---
 

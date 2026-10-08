@@ -323,10 +323,13 @@ configuration.
   Tor 0.4.9.11: both held in every run that reached the comparison, and
   new credentials caused no second descriptor fetch
   ([`sfd3_read_isolation_20261007.md`](../benchmarks/sfd3_read_isolation_20261007.md)).
-- **Only username/password is offered.** A proxy that selects "no
-  authentication" would put the read back on a shared circuit without an
-  error, so the handshake fails before CONNECT
-  (`shekyl-socks`, `Isolation::Read`).
+- **Only username/password is offered.** The dial uses
+  `Isolation::Persona` (`shekyl-socks`). That variant offers method
+  `0x02` and nothing else, so a proxy that selects "no authentication"
+  fails the handshake before CONNECT instead of putting the read on a
+  shared circuit. The bytes are the read's, from
+  `RequestHeader::socks_credentials`. The variant is the handshake, not
+  a second one: a per-read circuit is which bytes the header derives.
 - **Tests.** Two reads of one shard present different credentials; the
   retries inside one read present the same
   (`shekyl-p-fetch`, `client_tests.rs`).
