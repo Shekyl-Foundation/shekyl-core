@@ -39,9 +39,10 @@
 //! # Cold vs warm on a no-isolation client
 //!
 //! §6.2 asks for circuit setup to be inside the timed path unless a warm circuit
-//! is defensible, and for both to be reported. With the production client there
-//! is no per-fetch SOCKS username to vary, so the arms come from what a real
-//! daemon's tor does over time rather than from an isolation key:
+//! is defensible, and for both to be reported. The production client mints a
+//! header per fetch and presents that nonce as the SOCKS username, so Tor's
+//! `IsolateSOCKSAuth` puts every fetch on its own rendezvous circuit. The arms
+//! are what the client tor does around that circuit:
 //!
 //! - **Cold** — [`Apparatus::rotate_client_circuits`] sends `SIGNAL NEWNYM` to
 //!   the **client** tor before the fetch. Tor marks every client circuit dirty
@@ -57,9 +58,15 @@
 //!   harness spaces its signals itself; that wait is *outside* the timed path.
 //!   A signal the control port does not answer is retried, not timed through
 //!   and not fatal ([`Apparatus::rotate_client_circuits_retrying`]).
-//! - **Warm** — no signal between fetches to the same persona, so the client
-//!   tor reuses its rendezvous circuit and only the stream cost is paid. This
-//!   is the organic fill scheduler's steady state against one `P`.
+//! - **Warm** — no signal between fetches to the same persona. The rendezvous
+//!   circuit is still a new one: the username is, and `IsolateSOCKSAuth` will
+//!   not attach this fetch to a circuit another username built. What the
+//!   missing signal leaves standing is the client tor's cached onion state.
+//!   Whether that cache answers the next username is `BA-T31`'s observation,
+//!   reported by the isolation run and not assumed here. This is the organic
+//!   fill scheduler's steady state against one `P`: a circuit per read. The
+//!   2026-09-16 warm column measured the earlier client, which presented no
+//!   per-fetch credentials and reused the circuit.
 //! - **Concurrent** — `n` cold fetches to `n` personas at once through the one
 //!   client tor: the client-side circuit-churn question `SF-D7` names as the
 //!   upper bound on `N`. One [`PFetchClient`] **per persona** here, so the
@@ -1041,10 +1048,12 @@ impl Apparatus {
     /// Time one fetch of shard `0` from `persona_index` through the client tor.
     ///
     /// The clock starts before the header is minted and stops after the
-    /// countersignature verifies, so on a cold client (after
+    /// countersignature verifies. On a cold client (after
     /// [`Self::rotate_client_circuits`]) descriptor fetch, intro, and
-    /// rendezvous are inside the timed path (§6.2), and on a warm one only
-    /// the stream is. Success means the verified body was exactly
+    /// rendezvous are inside the timed path (§6.2). On a warm one the client
+    /// tor is not signalled, and the fetch still builds its own rendezvous
+    /// circuit, because the minted nonce is a SOCKS username no other fetch
+    /// presents. Success means the verified body was exactly
     /// [`Self::expected_body_len`] bytes. A complete exchange of the wrong
     /// length is [`FailureKind::Refused`] (the apparatus served the wrong
     /// shard); a stream that broke mid-body is [`FailureKind::Truncated`].

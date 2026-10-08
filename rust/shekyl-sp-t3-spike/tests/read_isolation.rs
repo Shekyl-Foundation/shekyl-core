@@ -84,25 +84,37 @@ impl Observed {
         }
     }
 
-    /// The one circuit every stream under `username` was attached to.
+    /// The circuits tor attached to streams that presented `username`, in the
+    /// order it reported the attachments. The same circuit reported again is
+    /// one attachment.
     ///
     /// # Panics
     ///
-    /// If tor reported none, or more than one: either is an answer the
-    /// caller did not ask for, named with what was seen.
-    fn the_circuit_of(&self, username: &str) -> CircId {
-        match self.circuits_by_username.get(username).map(Vec::as_slice) {
-            Some([one]) => *one,
-            Some(several) => panic!("one read rode {} circuits: {several:?}", several.len()),
+    /// If tor reported no attachment for `username`. A missing observation is
+    /// not an empty set a caller could read as isolation. More than one
+    /// circuit is an answer, not a panic: a read whose circuit Tor replaces
+    /// is still that read.
+    fn circuits_of(&self, username: &str) -> &[CircId] {
+        match self.circuits_by_username.get(username) {
+            Some(circuits) if !circuits.is_empty() => circuits.as_slice(),
             // Which of the two it was says where to look: a tor that reports
             // no credentials on any stream, or a read that never attached.
             // Nothing about the streams themselves goes into the message.
             None if self.circuits_by_username.is_empty() => {
                 panic!("tor reported no attached stream for this read, or for any other")
             }
-            None => panic!("tor reported no attached stream for this read, only for others"),
+            _ => panic!("tor reported no attached stream for this read, only for others"),
         }
     }
+}
+
+/// No circuit of `read` is a circuit of `other`.
+///
+/// A read that rode two circuits because Tor replaced the first is isolated
+/// from another read exactly when the other rode neither. Sharing either one
+/// is the isolation failure.
+fn isolated(read: &[CircId], other: &[CircId]) -> bool {
+    other.iter().all(|circuit| !read.contains(circuit))
 }
 
 /// `KEY=value` in a control event line, the value up to the next space.
@@ -139,8 +151,8 @@ mod reading {
             "650 STREAM 7 SUCCEEDED 12 abc.onion:80 SOCKS_USERNAME=\"aa\" SOCKS_PASSWORD=\"p\"\r\n",
             "650 STREAM 9 SUCCEEDED 15 abc.onion:80 SOCKS_USERNAME=\"bb\" SOCKS_PASSWORD=\"p\"\r\n",
         ]);
-        assert_eq!(o.the_circuit_of("aa"), CircId::new(12));
-        assert_eq!(o.the_circuit_of("bb"), CircId::new(15));
+        assert_eq!(o.circuits_of("aa"), &[CircId::new(12)]);
+        assert_eq!(o.circuits_of("bb"), &[CircId::new(15)]);
     }
 
     #[test]
@@ -149,17 +161,25 @@ mod reading {
             "650 STREAM 7 SUCCEEDED 12 abc.onion:80 SOCKS_USERNAME=\"aa\"\r\n",
             "650 STREAM 8 SUCCEEDED 12 abc.onion:80 SOCKS_USERNAME=\"aa\"\r\n",
         ]);
-        assert_eq!(o.the_circuit_of("aa"), CircId::new(12));
+        assert_eq!(o.circuits_of("aa"), &[CircId::new(12)]);
     }
 
     #[test]
-    #[should_panic(expected = "one read rode 2 circuits")]
-    fn two_circuits_under_one_username_is_not_read_as_one() {
+    fn two_circuits_under_one_username_are_kept_in_order() {
+        // A replacement under the same credentials is still this read. The
+        // fold keeps both attachments; isolation is decided across reads.
         let o = observed(&[
             "650 STREAM 7 SUCCEEDED 12 abc.onion:80 SOCKS_USERNAME=\"aa\"\r\n",
             "650 STREAM 8 SUCCEEDED 13 abc.onion:80 SOCKS_USERNAME=\"aa\"\r\n",
         ]);
-        let _ = o.the_circuit_of("aa");
+        assert_eq!(o.circuits_of("aa"), &[CircId::new(12), CircId::new(13)]);
+    }
+
+    #[test]
+    fn isolation_holds_across_a_replacement_and_fails_when_a_circuit_is_shared() {
+        let read_a = [CircId::new(12), CircId::new(13)];
+        assert!(isolated(&read_a, &[CircId::new(20)]));
+        assert!(!isolated(&read_a, &[CircId::new(13)]));
     }
 
     #[test]
@@ -169,7 +189,7 @@ mod reading {
         // the read is then not found, and the run fails rather than passing
         // on an empty comparison.
         let o = observed(&["650 STREAM 7 SUCCEEDED 12 abc.onion:80\r\n"]);
-        let _ = o.the_circuit_of("aa");
+        let _ = o.circuits_of("aa");
     }
 
     #[test]
@@ -199,7 +219,7 @@ mod reading {
 
 /// The live run. Everything that waits on a socket or a network is here.
 mod live {
-    use super::Observed;
+    use super::{isolated, Observed};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -264,9 +284,15 @@ mod live {
         }
     }
 
+    /// Two reads of one shard ride no circuit in common.
+    ///
+    /// The first read stalls and retries on the same header. A replacement
+    /// circuit under those credentials is printed and does not fail the run.
+    /// The run fails when a circuit one read rode is a circuit the other
+    /// rode, or when a circuit's purpose is not the rendezvous.
     #[tokio::test]
     #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes an onion, network)"]
-    async fn each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it() {
+    async fn reads_ride_disjoint_rendezvous_circuits() {
         let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
         let dir = tempfile::tempdir().expect("tempdir");
         let app = Apparatus::bring_up(
@@ -300,14 +326,15 @@ mod live {
         );
         let mut after_stall = Observed::default();
         drain(&mut events, &mut after_stall).await;
-        let stalled_on = after_stall.the_circuit_of(&username_of(&read_a));
+        let username_a = username_of(&read_a);
+        let stalled_on = after_stall.circuits_of(&username_a);
 
         // Read A, the stall retries: the same header, as `SF-D6` has it.
         let mut during_a = Observed::default();
         let retries = complete(&app, shard, &read_a, 1).await;
         println!("read A: completed on stall retry {retries}");
         drain(&mut events, &mut during_a).await;
-        let retried_on = during_a.the_circuit_of(&username_of(&read_a));
+        let retried_on = during_a.circuits_of(&username_a);
 
         // Read B: a new read of the same shard from the same persona.
         let read_b = fresh_header();
@@ -315,10 +342,10 @@ mod live {
         let attempts = complete(&app, shard, &read_b, 0).await + 1;
         println!("read B: completed on attempt {attempts}");
         drain(&mut events, &mut during_b).await;
-        let b_on = during_b.the_circuit_of(&username_of(&read_b));
+        let b_on = during_b.circuits_of(&username_of(&read_b));
 
         // Circuit ids are not printed: the control crate keeps them out of
-        // every log, and the verdict needs only whether they are equal.
+        // every log, and the verdict needs only whether the reads share one.
         // A circuit's purpose is the last one tor reported for it, in
         // whichever window that fell: tor builds circuits ahead, so a read's
         // circuit can first appear, under another purpose, while an earlier
@@ -328,39 +355,41 @@ mod live {
                 .iter()
                 .find_map(|o| o.purpose_by_circuit.get(&circuit).cloned())
         };
+        // Same credentials keep the retry in this read's isolation domain.
+        // They do not promise the circuit id. A replacement is Tor retiring
+        // a circuit, and it is reported on its own so it is not read as the
+        // two reads sharing one.
+        let retry_replaced = retried_on
+            .iter()
+            .any(|circuit| !stalled_on.contains(circuit));
         println!(
-            "read A: the stall retry rode {} circuit as the stalled attempt (purpose {:?})",
-            if stalled_on == retried_on {
-                "the same"
+            "read A: the stall retry {} (purpose {:?})",
+            if retry_replaced {
+                "built a replacement circuit under the same credentials"
             } else {
-                "a different"
+                "rode a circuit the stalled attempt already used"
             },
-            purpose(retried_on)
+            purpose(retried_on[retried_on.len() - 1])
         );
+        let mut read_a_circuits = Vec::with_capacity(stalled_on.len() + retried_on.len());
+        read_a_circuits.extend_from_slice(stalled_on);
+        read_a_circuits.extend_from_slice(retried_on);
+        let shared = !isolated(&read_a_circuits, b_on);
         println!(
-            "read B: rode {} circuit as read A (purpose {:?})",
-            if b_on == retried_on {
-                "the same"
-            } else {
-                "a different"
-            },
-            purpose(b_on)
+            "read B: {} a circuit with read A (purpose {:?})",
+            if shared { "shared" } else { "did not share" },
+            purpose(b_on[b_on.len() - 1])
         );
         println!(
             "descriptor fetches tor started: {} during read A's retry, {} during read B",
             during_a.descriptor_requests, during_b.descriptor_requests
         );
 
-        assert_eq!(
-            stalled_on, retried_on,
-            "a stall retry inside one read left its circuit"
-        );
-        assert_ne!(retried_on, b_on, "two reads shared one circuit");
-        // The circuits compared are the ones the reads rode to the onion.
-        // Both were put to use after the subscription, so tor reported the
-        // purpose of each; a circuit with none on record is a run that did
-        // not see what it compared.
-        for circuit in [retried_on, b_on] {
+        assert!(!shared, "two reads shared a circuit");
+        // Every circuit either read rode to the onion. Each was put to use
+        // after the subscription, so tor reported its purpose; a circuit
+        // with none on record is a run that did not see what it compared.
+        for circuit in read_a_circuits.iter().chain(b_on.iter()).copied() {
             assert_eq!(
                 purpose(circuit).as_deref(),
                 Some("HS_CLIENT_REND"),

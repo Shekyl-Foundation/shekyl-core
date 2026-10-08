@@ -165,7 +165,7 @@ inherited as "the client waits."
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs` — `LEAF_BYTES`; `shekyl_fcmp::tree::leaves_per_segment()` (re-exported there) | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
 | Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2` (RULED): reuse is the **daemon zone's** SOCKS, never the serving persona's |
-| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:1979–2009` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
+| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:2007–2037` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
 
 ## 4. Already closed — do not re-litigate
 
@@ -1597,7 +1597,7 @@ Named attacker objectives this round's rulings are evaluated against:
    (`onion_service.rs:146–148` defaults on; `control/onion.rs:272–292`
    throttles the rendezvous-request queue, not egress, and the body
    transfer is symmetric under flow control;
-   `control/actor.rs:1979–2009` live `ADD_ONION` with PoW). Recollection is
+   `control/actor.rs:2007–2037` live `ADD_ONION` with PoW). Recollection is
    grounded in [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md)
    SPIKE-F-15/17/18, not general Tor lore. Once a rendezvous is
    established, a whole-shard GET is ~3.33 MB. Over Tor the response
@@ -1829,6 +1829,12 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   Soak p99 86 s still < 120 s — does not walk the candidate back,
   still not fetch-plus-retry. `archival_attestation_anchor_lag_blocks`
   stays 4. No further tests required for (c).
+
+  **Amendment 2026-10-07.** That warm column is the run as made: the
+  client then presented no per-fetch SOCKS credentials, so the circuit
+  was reused. The rig now mints a nonce per fetch and presents it as
+  the SOCKS username, and the warm arm's label says a circuit per read
+  with no `NEWNYM`. A re-run is not this column.
 
 The round doc stays in `docs/design/` while `L` is PROVISIONAL and
 Sub-PR 2 / SH-2 remain (the "archive when (c) lands" criterion

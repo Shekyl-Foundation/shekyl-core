@@ -1431,7 +1431,8 @@ mod tests {
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
 
-    fn launch_option_names(disable_network: bool) -> Vec<String> {
+    /// Every argument the managed launch passes, in order.
+    fn launch_arguments(disable_network: bool) -> Vec<String> {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = ManagedTor {
             tor_binary: VerifiedTorBinary::unchecked_for_test(dir.path().join("tor")),
@@ -1443,9 +1444,36 @@ mod tests {
         managed_tor_command(&managed, &dir.path().join("control_port"))
             .as_std()
             .get_args()
-            .filter_map(|arg| arg.to_str())
-            .filter(|arg| arg.starts_with("--"))
-            .map(str::to_owned)
+            .map(|arg| {
+                let Some(text) = arg.to_str() else {
+                    panic!("a launch argument is not utf-8: {arg:?}");
+                };
+                text.to_owned()
+            })
+            .collect()
+    }
+
+    /// The `--Name` of each name/value pair on the launch.
+    ///
+    /// Every argument is one half of a `--Name` `value` pair. A leftover
+    /// argument, bytes that are not UTF-8, `-f`, `+Option`, and
+    /// `--Name=value` each fail this: none of them is a pair the spawn
+    /// surface uses.
+    fn launch_option_names(disable_network: bool) -> Vec<String> {
+        let args = launch_arguments(disable_network);
+        assert!(
+            args.len().is_multiple_of(2),
+            "an argument is not part of a --Name value pair: {args:?}"
+        );
+        args.chunks(2)
+            .map(|pair| {
+                assert!(
+                    pair[0].starts_with("--") && !pair[0].contains('='),
+                    "an option is not the typed --Name form: {}",
+                    pair[0]
+                );
+                pair[0].clone()
+            })
             .collect()
     }
 

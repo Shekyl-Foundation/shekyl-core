@@ -63,7 +63,11 @@ build per read. `BA-T31` measures it.
 - **The test:** `read_isolation` in `shekyl-sp-t3-spike`
   (`each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it`),
   built on a development box as a static binary and copied to the node.
-  Runs 6 to 8 are the committed test at `ddef0527f5`.
+  Runs 6 to 8 are the committed test at `ddef0527f5`. Review, same date:
+  the test is now `reads_ride_disjoint_rendezvous_circuits`. A replacement
+  circuit under the stall retry's own credentials is reported and does not
+  fail the run. Those runs passed while the test still required the retry
+  to keep the stalled attempt's circuit id.
 - **The apparatus:** two managed Tor processes on one node, one serving
   one persona's onion and one the client's, with the production serving
   endpoint and the production fetch client between them over the public
