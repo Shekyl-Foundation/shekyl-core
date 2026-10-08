@@ -3,11 +3,26 @@
 ## [Unreleased]
 
 - **Consensus validator (Rust): every spend's FCMP++ proof is now verified, and a bond post's funding spend is judged like a spend.** `shekyl-chain-rules` runs CEN-I13 (the declared tree depth is the tree's at the reference height) and CEN-I15 (the membership proof verifies over the reference's anchor, the inputs' key images and the PQC-bound prefix) on the Spend class, and the new CEN-J27 runs the same reference sequence and proof verification over a bond post's funding inputs — which the Rust validator had not judged at all (CEN-H21's recorded finding; the C++ did, `blockchain.cpp:3654`). Until now the Rust validator ran I13's predicate and I15's body only under an emission claim (CEN-J21/J26); a regular spend carrying a wrong depth or a proof not made in this chain's tree was admitted by it and refused only by the C++ daemon. Registry `implemented 116 → 119`, validator-enforced `151 → 152` (`CONSENSUS_RULE_CENSUS.md` §4.I, §4.J; `CHAIN_RULES_SLICE_6.md` §5 rows 6, 8). Test substrate: the store's, ingest's and rules crate's filler-spend and fixture-join tests now run over chains the harness spender grew, with real proofs; `shekyl-harness-spender` gains `Persona` (the archival persona and its bond posts).
-
+- **Daemon RPC.** `get_info` reports `already_generated_coins`, the gross coins emitted through the tip, in atomic units. Net circulating supply is that figure minus `total_burned`. `CORE_RPC_VERSION` is 3.42. `get_version` is otherwise unchanged.
+- **Archival shard fetches ride a Tor circuit per read.** The fetch client now presents SOCKS credentials that belong to one read, so Tor isolates each read on its own rendezvous circuit and a serving persona cannot link a requester's reads by the circuit they arrive on. Stall retries inside a read keep the credentials. Username/password is the only SOCKS method offered. An operator running their own Tor for the daemon must leave `IsolateSOCKSAuth` on (its default). `SF-D3` reopened and ruled 2026-10-07. The measurement rig's warm arm is those back-to-back reads with no `NEWNYM`, each on its own circuit; the 2026-09-16 warm column remains the run that reused one.
+- A test holds the managed Tor's launch arguments as `--Name`/`value` pairs on the one launch command, so a single-dash flag or a `+Option` cannot pass it unseen. The fetch client gains a test that two requests for one shard differ only in their nonce. Re-read separation is the per-read SOCKS credentials; circuit-reuse length is not a second mechanism.
+- Docs: the serve-credit specification states one request machinery for every shard fetch, a fresh nonce for every read (the record carries the read's `attempt`, bounded by a consensus constant of three), and a digest in place of re-derivation for the settlement writer's first integrity check.
+- Docs: the serve-credit specification gains the witness's re-read policy and the settlement writer's three integrity checks; the failure window is left open rather than re-pinned on a one-read figure, with two measurements registered (`BA-T31`, `BA-T32`).
+- **P2P.** A context walk posts onto that connection's strand and returns. `get_connections` and `sync_info` wait up to two seconds for the claim fields, on the admin thread. A claim that has not landed is unknown: `height` and `support_flags` are JSON null, not a height of zero. A dial in `idle_worker` can occupy the io pool those posts share, so unknown during a dial is expected until the dialer (P2P-3 slice 3) moves the dial off that pool. The connector closes the session with the cause, and the seam records that cause. A silent peer is a handshake timeout. A peer that sends FIN is a peer close. A refused connection, a rejected handshake, and an onion SOCKS reply that names the onion make the address undialable. A handshake timeout, a peer close, and a local failure do not. A clearnet proxy reply does not: it is the exit's claim and would suppress the whole host for an hour. The managed Tor SocksPort is `auto ExtendedErrors`, so an introduction timeout is not reported as a missing host. A gap timeout, a close this node chose, and a local proxy or Tor failure leave the address dialable. An attacker who can answer for an onion's responsible directories can still force reply 4, which buys only the short Tor backoff. A direct clearnet connect counts only when the peer refuses the connection. That refusal was being dropped: the admission channel closed in the same instant as the cause, and the opener kept the channel close, which is a local failure and does not forget the address. The opener now keeps the cause the dial sent. Last receive and last send are stamped when the bytes are read or written, on a monotonic clock, and shown to the operator as unix time. They do not rebuild the connection board. An address the node stops dialing is logged with the close cause, the reply, and whether it was recorded. The four pre-handshake request gates read the seam board, and a missing row is not established. A listen after another caller clears the hub installs that hub again. A connector's inbound cap belongs to the zone that set it: shutdown releases it, and a zone that did not set one does not keep the previous cap.
 - Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
 - **Archival serving: a shard's bytes are hashed on the blocking pool, not on an executor thread.** `shekyl-p-serve` read each chunk on the blocking pool and then folded it into the delivery digest back on the async executor, tens of milliseconds of software Keccak per full segment on the floor device, holding a worker thread away from other connections. The read and the per-chunk fold are now one blocking-pool step (`read_and_fold`), and the digest's `absorb` is private to its module, so the fold cannot be separated from the read again. Starting the digest over the frame header and finalizing it stay on the connection's task: a fixed few Keccak permutations whatever the shard's size. No wire, status or ordering change.
 - **Benchmarks: first floor run of `BA-T5`, asking whether the Pi 4 can serve archival shards** (`docs/benchmarks/ba_t5_serve_floor_device_20261007.md`), with pass lines registered before the run and a testnet daemon resident. On the frames production serves, which are full segments, all four lines hold with wide margin: an abandoned request costs 3.9 ms of CPU against 5; 41 to 56 full segments per second at eight in flight against 0.5; executor wake lateness p99 57 ms against 100; one hour at the honest rate at 51 °C with 6.5 GB of memory free. One line failed as registered, against a one-leaf frame production cannot serve (8.4 ms: a body that fits the socket buffer is signed for whether or not it is read); it is recorded as a projection. The run also shows the hash on the executor is what made throughput bimodal and wake lateness 57 ms; with the hash on the blocking pool (#995) lateness is 5.6 ms.
+- **Linux release artifacts carry Tor, and the daemon checks the whole bundle before it runs it** (`TOR_BUNDLE_DISTRIBUTION.md` `TB-1`, `TB-4`, `TB-6` to `TB-10`, `TB-13`). Until now no artifact shipped tor, so an installed node ran clearnet-only and said so only at info level.
+  - **Packaging.** The x86_64 and aarch64 Linux archives hold the pinned Tor Expert Bundle in `tor/` beside the binaries, with its licence texts and a source pointer in `tor-licenses/`. The `.deb` and `.rpm` install it under `/opt/shekyl/<bundle>-<target>/`. Only `tor` and the three libraries it loads are shipped. The riscv64 archive carries no tor: there is no bundle for it.
+  - **Pin moved to tor 0.4.9.13**: Expert Bundle 15.0.24 on x86_64, 16.0a13 (alpha line) on aarch64. The pins live in one file, `config/tor_pins.json`, compiled into the binary and read by the packaging tool `scripts/release/tor_bundle.py`.
+  - **What the daemon and wallet check at every launch changed.** The pin covered the `tor` file. It now covers every file in tor's directory, and the directory must hold nothing else: an extra file, a subdirectory or a symlink there is a refusal. The managed tor starts with an empty environment plus `LD_LIBRARY_PATH` set to that directory, so it loads the bundle's libevent and OpenSSL and nothing from a shell's `LD_PRELOAD`.
+  - **Operators who staged tor by hand must restage.** The bundle is looked for in `tor/tor` beside the executable (it was `tor` beside it), then `/opt/shekyl/<bundle>-<target>/tor`. A `tor` on `PATH` is no longer used. `SHEKYL_TOR_BINARY` still overrides the location, and is checked the same way: pointing it at a full extracted Expert Bundle is refused, because that directory holds `pluggable_transports/`. `scripts/release/tor_bundle.py stage` produces a directory that passes (`COMPILING_DEBUGGING_TESTING.md`).
+  - **`--no-ephemeral-tor` is the way to decline Tor, and a node that declined says so at every start**, at warning level, with what it costs. A node that finds no tor without having declined also warns now; that case will refuse to start in a later release.
+  - **Windows, macOS, FreeBSD, riscv64 Linux and Android have no managed tor.** Each is recorded as unavailable with its reason, the daemon says so at start, and a build target with no record does not compile. Windows and macOS follow once each has a launch test.
+  - `tor-pin-verify` reads the pin file, so it has no version input to go stale, and runs on both Linux architectures.
+  - The `.deb` and `.rpm` declare `BSD-3-Clause AND GPL-3.0-only AND Apache-2.0`: Shekyl's licence, the packaged tor's, and its OpenSSL's.
+  - The gitian workflow takes a `package_dry_run` input that runs the package job on a dispatch without publishing.
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
 
 ### Consensus — the header's minor version is reserved at 0
@@ -66,8 +81,38 @@
   400 earns one retry of the same `P` with a freshly derived anchor and a
   second is a failed read; a 503 and a refusal trailer are failed reads
   with no retry.
-- A persona bound without a resident key (`NoResidentKey`) answers 503
-  and sends no shard.
+- A persona whose signing key is not available answers 503 and sends no
+  shard.
+
+### Archival serving — the persona signs its own passes (SH-2)
+
+- **Served shards are now countersigned with the persona's bond identity
+  key.** The serving host's key is the persona's resident attestation key
+  (`ResidentPassKey`): the signature is produced inside the stake actor,
+  which already holds that key for the bond's own transactions, so no
+  second copy of the secret exists and the serving role holds only a weak
+  handle to the actor. A wallet whose stake actor has stopped refuses
+  before the first byte (503). The placeholder key that refused every
+  pass is deleted. Verified end to end against the daemon's fetch client
+  in a loopback test: the client accepts the pass under the bond identity
+  and refuses it under any other key.
+- **Operator alarm board: `ServeHealth`.** A new condition reports, once
+  per refresh cadence from a probe on its own task (so a refresh wedged on
+  the store actor cannot delay the reading), whether the host's answers
+  are being answered:
+  `ServeSigningRefused { pre_flight, late }` when the key refused during
+  the tick, `ServeLookupsFailing { failures }` when only lookups (store or
+  daemon tip) failed, `ServeListenerFailing { accept_errors }` when only
+  the loopback listener failed to accept, and a clean armed row when none
+  did. Connections closed over the in-flight cap are load, not an alarm.
+  The first reading is windowed against zero, so a refusal answered before
+  the first read is reported rather than folded into the baseline. The row
+  is disarmed `NotServing` outside the host's life. Previously the serve
+  counters were readable only by tests.
+- **Closing a serving wallet no longer waits on a wedged serve-set
+  refresh.** The refresh loop's actor round trip is now interrupted by
+  shutdown like the tick before it; an abandoned refresh leaves the
+  previous pins in place and the teardown reports `NotServing` as before.
 
 ### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
 

@@ -1,6 +1,7 @@
 # Tor cover posture — relay contribution, not a protocol carrier
 
-**Status: LIVING CONTRACT.** RULED 2026-09-04, recorded 2026-09-12. Identifier
+**Status: LIVING CONTRACT.** RULED 2026-09-04, recorded 2026-09-12.
+UPDATE 2026-10-08: own transactions ride a stem slot (§1). Identifier
 family `TRC-1…TRC-n` (index row registered at birth per rule 94 §1). Decision
 authority: Rick. This document records a decision that was reached in design
 conversation and never written; the ruling is not new, its record is.
@@ -38,11 +39,30 @@ Three consequences follow immediately:
   The own-edge draws uniformly over the hidden-address outbound sessions.
   Both re-draw per epoch. A hidden-address pool of one is a degraded state
   the node reports (`hop-0 edge cannot rotate`), not a configuration it
-  accepts quietly. The managed Tor zone opens `HOP0_OUTBOUND_TARGET` (4)
-  outbound connections so that pool has the paper's degree to rotate over.
-  `--out-peers` does not change that cap. A live own-edge is not
+  accepts quietly. **UPDATE 2026-10-07:** that pool's target is
+  `MIN_PROVISIONED_OUT_PEERS` (12). The warning is a pool of one, and it
+  does not name a target. *Records-was: the managed Tor zone opens
+  `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
+  paper's degree to rotate over.*
+  `--out-peers` does not change the address-hiding target. A live own-edge is not
   re-pointed; a dead one is replaced from the peers still up. No cover
   on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
+  Tor's cover class is `Volume`. That ruling is unmeasured, pending TRC-1.
+  *Records-was as of 2026-10-08: this bullet is what the code does today.
+  The ruling below removes the separate draw.*
+- **UPDATE 2026-10-08 (Rick). Own transactions ride a stem slot.** A node's
+  originated transactions take one of its Dandelion++ stem slots, which also
+  carries relayed traffic, per Dandelion++ §4 ("along the same outbound edge
+  in the anonymity graph"). When the node has hidden-address sessions, one
+  stem slot is drawn uniformly from them, the other uniformly from all
+  outbound except that one, and the local source maps to the hidden slot.
+  Inbound sources map as the stem map does. When every outbound session is
+  hidden, this is the paper's rule unchanged. `own_edge()` as a separate
+  draw sends originated traffic on a link that carries no relayed traffic,
+  which is ProxyMark's root cause
+  (`DAEMON_RELAY_PRIVACY.md` §95.3). The confirming measurement is that
+  section. The relay lane's deletion of `own_edge()` waits on review of
+  the run; it is not in the measurement change.
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.

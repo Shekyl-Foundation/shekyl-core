@@ -26,7 +26,6 @@
 use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
-use shekyl_relay_privacy::zone::RelayZone;
 use shekyl_tx_weight::{
     predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
@@ -242,11 +241,11 @@ fn every_verify_cell_carries_its_shapes_real_message_size() {
 /// The substitution-cover ceiling is the open-link count, and the peak is
 /// derived.
 ///
-/// `CEILING_ZONES` is not [`RelayZone::is_encrypted`]. Tor is encrypted and
-/// takes no envelope. `shekyl-relay` asserts the constant equals its
-/// open-link walk; this crate cannot import `ConnectorId`, so the number
-/// is pinned here. Equating the two would bill Tor and omit clearnet the
-/// day those counts diverge.
+/// `CEILING_ZONES` is the open-link count, not a count of encrypted
+/// networks. Tor is encrypted and takes no envelope. `shekyl-relay`
+/// asserts the constant equals its open-link walk; this crate cannot
+/// import `ConnectorId`, so the number is pinned here. Equating the two
+/// would bill Tor and omit clearnet the day those counts diverge.
 ///
 /// What edit reds this: a second open link moves the count off 1. The peak
 /// pin moves with it. The compile-time ceiling assert fires when the
@@ -258,11 +257,6 @@ fn the_ceiling_counts_open_links_and_states_its_peak() {
         1,
         "clearnet — a new open link is a ceiling change"
     );
-    assert!(
-        RelayZone::ALL.iter().any(|zone| zone.is_encrypted()),
-        "Tor stays encrypted; that predicate is not this count"
-    );
-
     // The peak is an UPPER BOUND, so it rounds up. Asserted against today's
     // sustained rate scaled by mean/min, rather than a re-derivation of the
     // same division the constant performs, because the defect this replaces

@@ -181,33 +181,26 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// The per-zone outbound-connection floor the F-7 embargo provisioning
 /// assumes (F-8b, §45).
 ///
-/// `fluff_return_ms = 3250` is the measured p90 first passage at usable
-/// degree **12** (§44). The worst-zone argument is bounded by that measured
-/// range: below degree 12 the real first passage *exceeds* the provisioned
-/// value and the embargo is under-provisioned in the direction the
-/// `fluff_return_ms` note names as a privacy loss. An operator can reach that
+/// `fluff_return_ms = 3250` is the provisional p90 first passage at usable
+/// degree **12** (§44; provisional pending §96 item 2, Rick 2026-10-08).
+/// Below degree 12 the transit-free first passage *exceeds* that
+/// provisional value, and the embargo is under-provisioned in the direction
+/// the `fluff_return_ms` note names as a privacy loss. An operator can reach that
 /// region with `--tx-proxy <zone>,<addr>,N` for `N < 12`, so the C++ argument
 /// parser refuses such counts, consuming this constant through
 /// `shekyl_relay_zone_min_provisioned_out_peers` — one owner, no C++ mirror.
 /// If a future re-measure extends the instrument below degree 12, this floor
 /// moves with `fluff_return_ms`, not independently of it — which is why it is
 /// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
-pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
-
-/// How many hidden-address outbound connections a restricted node opens.
 ///
-/// The own-edge is one peer drawn uniformly from that pool, once per epoch.
-/// The paper's anonymity graph is 4-regular; a pool smaller than that does
-/// not rotate the way the epoch model assumes, and a pool of one never
-/// rotates. This is not [`MIN_PROVISIONED_OUT_PEERS`]: that floor is the
-/// fluff measurement's degree, and relayed stems draw over every outbound
-/// session rather than over this pool.
-pub const HOP0_OUTBOUND_TARGET: u32 = 4;
-
-const _: () = {
-    assert!(HOP0_OUTBOUND_TARGET == 4);
-    assert!(HOP0_OUTBOUND_TARGET < MIN_PROVISIONED_OUT_PEERS);
-};
+/// It is also the address-hiding outbound target (Rick, 2026-10-07). The
+/// own-edge pool is the outbound sessions whose connector declares
+/// `address_hidden_from_peer`, and that pool is this degree. Dandelion++
+/// §4.3 Algorithm 2 draws its two outbound relays from the node's P2P
+/// outbound edges. "4-regular" is that graph's expected degree (two out
+/// plus about two in), not the pool size. *Records-was:
+/// `HOP0_OUTBOUND_TARGET` = 4.*
+pub const MIN_PROVISIONED_OUT_PEERS: u32 = 12;
 
 /// The stem-graph shape, which fixes how many outbound peers carry stem
 /// traffic in an epoch — i.e. the stem graph's out-degree.
@@ -248,8 +241,6 @@ impl StemGraph {
         }
     }
 }
-
-pub use crate::zone::RelayZone;
 
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
@@ -368,17 +359,26 @@ impl DandelionParams {
             epoch_jitter_secs: 30,
             // CRYPTONOTE_DANDELIONPP_FLUFF_PROBABILITY = 20, out of 100.
             fluff_probability_pct: 20,
-            // **Provisioned at the worst zone, not at one measurement —
-            // F-7 (§26, §40, §44).** Measured p90 first-passage, memoryless
+            // **Transit-free provisional p90 — F-7 (§26, §40, §44).**
+            // *Records-was:* provisioned as the worst zone, not as one
+            // measurement. Measured p90 first-passage, memoryless
             // fluff flood (`simulate_fluff_return`), by deployed fluff rule at
             // Shekyl's `P2P_DEFAULT_OUT_PEERS = 12`:
             //
             //   EveryPeer (usable degree ~24)                 ~1250 ms
-            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms  <- binding
+            //   retired D7 OutboundOnly (degree 12 exact)     ~3250 ms
+            //
+            // **Provisional (Rick, 2026-10-08).** 3250 ms is the transit-free
+            // reading, kept so the system can be built and tested. It is not
+            // an approval that the embargo's input covers a return path with
+            // real per-connector transit. The operational test that replaces
+            // it is `DAEMON_RELAY_PRIVACY.md` §96 item 2. Until that test
+            // moves the input, the value stays, and a composition whose
+            // transit-bearing fluff return exceeds it is not approvable.
             //
             // Production fluff is EveryPeer on every connector (D7 deleted
-            // 2026-10-02). 3250 ms stays the constant: it was measured on the
-            // longer graph and has not been remeasured on the production one.
+            // 2026-10-02). 3250 ms was measured on the longer graph and has
+            // not been remeasured on the production one.
             // Over-estimating F lengthens the embargo, which is the
             // privacy-safe direction. The old 2250 was an EveryPeer
             // measurement at peers = 8. The gap to 3250 is a degree effect:
@@ -387,8 +387,10 @@ impl DandelionParams {
             //
             // One process-wide F for every zone: a fluff wave returns over
             // whatever network the *node* is on, so there is no per-zone F to
-            // pick (§63.2's keeper; restated at §89.2). Set to the WORST zone's
-            // p90. §44.3 prices the over-provisioned zone: this constant's only
+            // pick (§63.2's keeper; restated at §89.2). It was set to the
+            // transit-free longer-graph p90. The provisional note above is
+            // the status of that number. §44.3 prices the over-provisioned
+            // zone: this constant's only
             // production consumer is the embargo derivation, so over-estimating
             // F *lengthens* the embargo — which *reduces* the §6.7 prefix-fire
             // leak and pays only in black-hole recovery latency. Privacy-safe
@@ -415,13 +417,15 @@ impl DandelionParams {
     /// re-deriving its shape with our verification cost lands on the same
     /// milliseconds. So the cutover from `inherited()` moved **provenance,
     /// not behaviour on clearnet**: the clearnet embargo stays 190 s.
-    /// (Anonymity zones take a longer hop — see [`Self::adopted_for`]. The
-    /// wallet failed-send wait is a separate interim at the *worst* zone's
-    /// quantile, currently 2297 s — `ADOPTED_PROPAGATION_TIMEOUT_SECS` —
-    /// and is a deletion target per §89.6.)
+    /// (A longer measured transit takes a longer hop — see
+    /// [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is the
+    /// longest measured transit's quantile, currently 2297 s —
+    /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
+    /// §89.6.)
     ///
     /// Every other field carries its own already-recorded disposition:
-    /// `fluff_return_ms` is F-7's measurement (worst-zone p90 at degree 12),
+    /// `fluff_return_ms` is F-7's transit-free p90 at degree 12, provisional
+    /// pending the operational test in `DAEMON_RELAY_PRIVACY.md` §96 item 2,
     /// `fluff_probability_pct` is D-6's retained `q = 20 %`, the epoch pair
     /// and graph are the inherited values with their §21 ledger entries.
     ///
@@ -437,7 +441,7 @@ impl DandelionParams {
     ///
     /// # Modal shape — an interim the doc prices
     ///
-    /// Per-zone embargo timers still use the **modal shape** (1 input, genesis
+    /// Embargo timers still use the **modal shape** (1 input, genesis
     /// tree) for each zone's hop. §83.1 prices the choice: the modal embargo
     /// is effectively constant across the whole depth range (~3 s of drift),
     /// while the tail rows are where per-shape derivation pays. Per-shape
@@ -451,77 +455,7 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        Self::adopted_for(RelayZone::Public)
-    }
-
-    /// How many *distinct* adopted parameter sets exist across all zones.
-    ///
-    /// Only `time_between_hop_ms` varies by zone, and it takes exactly two
-    /// values — the clearnet transit assumption and the anonymity one — so the
-    /// four `RelayZone`s partition into two classes. Callers that cache a built
-    /// artefact per parameter set size on this rather than on the zone count:
-    /// the process-wide embargo tables are ~443 KB each, and one table per zone
-    /// would build and hold three byte-identical anonymity copies for the life
-    /// of the daemon, on a floor rule 76 pins at a Raspberry Pi 4.
-    pub const ADOPTED_CLASSES: usize = 2;
-
-    /// Transit assumption per adopted class, in class order.
-    const TRANSIT_BY_CLASS: [f64; Self::ADOPTED_CLASSES] = [
-        crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
-        crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-    ];
-
-    /// One representative zone per adopted class, in class order.
-    ///
-    /// Lets a caller build exactly one artefact per class without naming the
-    /// partition a second time. `zone_classes_partition_the_parameter_sets`
-    /// pins that these are in class order and that every zone agrees with its
-    /// representative.
-    pub const CLASS_REPRESENTATIVES: [RelayZone; Self::ADOPTED_CLASSES] =
-        [RelayZone::Public, RelayZone::Tor];
-
-    /// Which of [`Self::ADOPTED_CLASSES`] parameter sets `zone` draws.
-    ///
-    /// The single owner of the zone→parameters partition: [`Self::adopted_for`]
-    /// is defined in terms of it, so a cache indexed by this value cannot fall
-    /// out of step with the parameters it caches. Adding a third class is one
-    /// edit here plus two compile-visible array lengths.
-    #[must_use]
-    pub const fn adopted_class(zone: RelayZone) -> usize {
-        if zone.is_clearnet() {
-            0
-        } else {
-            1
-        }
-    }
-
-    /// The adopted parameter set **for one relay zone** (§89.2).
-    ///
-    /// §89 ruled the embargo per-zone rather than one global provisioned at
-    /// the worst zone. F-7's precedent does not transfer, by §63.2's keeper:
-    /// `fluff_return_ms` crosses transports because a fluff wave returns over
-    /// whatever network the node is on, so there is no per-zone value to pick;
-    /// `time_between_hop_ms` cannot cross, because the stem it spaces only
-    /// ever runs on one transport — and §59's coherence guarantees that, since
-    /// a transaction entering the anonymity zone's stem stays there until it
-    /// fluffs. The quantity is well-defined per zone in a way `F` is not.
-    ///
-    /// Only `time_between_hop_ms` varies. `fluff_return_ms` stays the single
-    /// worst-zone value F-7 measured — correctly, for the reason just given —
-    /// and `q`, the epoch pair and the graph are network-wide constants
-    /// (verified: `relay_zone_params` carries stems and epoch only, and
-    /// nothing zone-parameterises the fluff probability).
-    ///
-    /// # `Invalid` takes the longest embargo, not the shortest
-    ///
-    /// Out-of-domain FFI bytes and unknown-origin cases resolve to
-    /// [`RelayZone::Invalid`], which is provisioned as the anonymity hop.
-    /// Under-estimating shortens the embargo (privacy-losing); the cost of
-    /// the longer wait is recovery latency only.
-    #[must_use]
-    pub fn adopted_for(zone: RelayZone) -> Self {
-        let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
-        Self::adopted_for_transit_ms(transit)
+        Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS)
     }
 
     /// The adopted parameter set for one measured transit term.
@@ -868,91 +802,34 @@ mod tests {
     }
 
     #[test]
-    fn the_clearnet_zone_is_unmoved_by_going_per_zone() {
-        // §89.2 changes what the anonymity zones get. It must change nothing
-        // on clearnet, which carries the overwhelming majority of traffic —
-        // if this moves, per-zone provisioning has become the global-at-worst-
-        // zone posture §89.2 rejected, wearing a different shape.
+    fn the_clearnet_transit_is_the_adopted_set() {
         assert_eq!(
             DandelionParams::adopted(),
-            DandelionParams::adopted_for(RelayZone::Public),
-            "adopted() must remain exactly the clearnet set"
+            DandelionParams::adopted_for_transit_ms(
+                crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
+            ),
+            "adopted() is the clearnet transit assumption"
         );
         assert_eq!(
-            DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms,
+            DandelionParams::adopted().time_between_hop_ms,
             175,
             "the clearnet hop moved off its §88 value"
         );
     }
 
     #[test]
-    fn the_anonymity_zones_take_the_longer_interim_hop() {
-        let anon = DandelionParams::adopted_for(RelayZone::Tor);
-        // §63.2's own worst case — "ten times clearnet latency" — reproduced
-        // as verification floor + the labelled rendezvous assumption.
+    fn the_longer_transit_takes_the_longer_hop() {
+        let anon = DandelionParams::adopted_for_transit_ms(
+            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+        );
+        // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
+        // input is that connector's measured transit.
         assert_eq!(anon.time_between_hop_ms, 1_750);
         assert!(
             anon.time_between_hop_ms > DandelionParams::adopted().time_between_hop_ms,
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \
              relays where clearnet is one direct connection. If this ever \
              inverts, the interim has been edited to the privacy-losing side"
-        );
-    }
-
-    #[test]
-    fn an_unknown_origin_takes_the_longer_embargo_not_the_shorter() {
-        // Invalid/out-of-domain must be the longer hop — under-estimating
-        // shortens the embargo (§65, §66).
-        assert_eq!(
-            DandelionParams::adopted_for(RelayZone::Invalid).time_between_hop_ms,
-            DandelionParams::adopted_for(RelayZone::Tor).time_between_hop_ms,
-            "an unknown origin must be provisioned as the worst case it could be"
-        );
-        assert!(!RelayZone::Invalid.is_clearnet());
-    }
-
-    /// The class partition is the single owner of "which zones share a
-    /// parameter set", and a cache sized on it must be able to trust three
-    /// things: the representatives are in class order, every zone agrees with
-    /// its own representative, and the classes are genuinely distinct.
-    ///
-    /// Without the last one a collapsed partition (both representatives
-    /// clearnet, say) would still satisfy the first two and quietly hand every
-    /// anonymity zone the clearnet embargo — the §89.2 regression this
-    /// partition exists to make impossible.
-    #[test]
-    fn zone_classes_partition_the_parameter_sets() {
-        for (class, zone) in DandelionParams::CLASS_REPRESENTATIVES.iter().enumerate() {
-            assert_eq!(
-                DandelionParams::adopted_class(*zone),
-                class,
-                "representatives must be listed in class order"
-            );
-        }
-
-        for zone in [RelayZone::Invalid, RelayZone::Public, RelayZone::Tor] {
-            let representative =
-                DandelionParams::CLASS_REPRESENTATIVES[DandelionParams::adopted_class(zone)];
-            assert_eq!(
-                DandelionParams::adopted_for(zone).time_between_hop_ms,
-                DandelionParams::adopted_for(representative).time_between_hop_ms,
-                "{zone:?} must draw exactly its class representative's parameters, \
-                 or a per-class cache hands it the wrong embargo"
-            );
-        }
-
-        let hops: Vec<_> = DandelionParams::CLASS_REPRESENTATIVES
-            .iter()
-            .map(|zone| DandelionParams::adopted_for(*zone).time_between_hop_ms)
-            .collect();
-        assert_eq!(
-            hops.len(),
-            DandelionParams::ADOPTED_CLASSES,
-            "one representative per class"
-        );
-        assert!(
-            hops[0] < hops[1],
-            "the classes must stay distinct and clearnet-first: {hops:?}"
         );
     }
 

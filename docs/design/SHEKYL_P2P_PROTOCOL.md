@@ -156,7 +156,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
@@ -953,7 +953,7 @@ review.
   retired for cause**: no identifier is strictly stronger than an identifier
   pinned to a constant. **`DAEMON_RELAY_PRIVACY.md` §91.4's unlinkability
   composition names the sentinel as one of three composed decisions**, and
-  `rust/shekyl-relay/src/zone/mod.rs:190-199` builds a load-bearing argument on
+  `rust/shekyl-relay/src/graph/mod.rs:190-199` builds a load-bearing argument on
   it. **Both must be re-grounded on "no identifier on the wire" rather than left
   citing a retired mechanism** — the composition gets stronger, but the text
   that states it becomes false.
@@ -1330,12 +1330,19 @@ the gray path, and that is the evidence this reroute costs nothing.** *(The
 writer and must add the per-host bound with it. What follows describes only the
 existing promotion path, and is not a claim that the gray path needs no
 change.)*
-`gray_peerlist_housekeeping` (`net_node.inl:3108-3138`, `once_a_time_seconds<60>`
-at `net_node.h:621`) draws a random gray peer, **dials it**, and promotes to
-white via `set_peer_just_seen` only if that outbound handshake succeeds —
-evicting it from gray if it fails. So an inbound peer keeps its whole route to
-white-list membership; **only the free pass is removed**, and it is replaced by
-the verification every other candidate already passes.
+`gray_peerlist_housekeeping` (`net_node.inl:3336`, interval
+`net_node.h:756`, at `f317d979c4`) draws a random gray peer, dials it
+with `just_take_peerlist`, closes, and on success writes white at
+`:3363`. On failure it evicts from gray. *Records-was: this sentence
+cited `net_node.inl:3108-3138` and `net_node.h:621`.* That probe is
+what the C++ does until the dialer deletes the function. The settled
+door is slice 1: a uniform gray draw, then `SessionAccepted` on a
+session this node keeps, or `Confirmed` when outbound is already at
+target and the session is closed. The draw is an arm of the fill. It
+is not a harvest, and it is not this 60 s clock. So an inbound peer
+keeps its whole route to white-list membership; **only the free pass
+is removed**, and it is replaced by the verification every other
+candidate already passes.
 
 **Under the final ruling the peer is not verified at all when it enters gray** —
 PWD-B10 deletes the back-ping, so its advertised port stands unchecked until
@@ -1362,8 +1369,11 @@ random draw per zone per 60 s — not open-ended." **The cadence bounds how ofte
 large.** `get_random_gray_peer` selects uniformly at random from the gray list,
 so for a list of `G` entries the wait for any particular entry is geometric with
 `p = 1/G`: **expected `G` draws, i.e. `G` minutes — about 83 hours at the
-`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.** And
-`gray_peerlist_housekeeping` can skip a cycle entirely: it returns early when
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` of 5,000 — with no upper bound at all.**
+*Records-was for the settled loop: that wait is the C++ probe, one
+draw per 60 s.* The dialer deletes the interval. Residence time is
+re-derived against the fill before it is quoted as the settled figure.
+The C++ probe can also skip a cycle entirely: it returns early when
 `m_offline` or when `m_exclusive_peers` is non-empty, and `continue`s per zone
 when the payload handler needs new sync connections or the zone has no
 connector. **Producer-side latency is therefore unbounded, and is conceded as
@@ -1619,21 +1629,29 @@ eclipse resistance — do not let churn rotate this node onto an adversary's
 peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
 at the **selection** site, in what refills the freed slot.
 
-**And the refill order for this case is gray-first, not white-first.**
-`connections_maker` branches on the **total** outgoing count, not the white
-count: below the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it
-tries white then gray, but **at or above that target it tries gray then white**.
-A single churn drop from a full outbound set leaves the count above the target,
-so the freed slot normally draws from **gray** — the list fed by gossip and by
-`--add-peer`, and the one an adversary can populate cheaply. An earlier draft of
-this paragraph said "white first, then gray", which is the branch that does
-*not* apply to the case the paragraph is about, and it understated the exposure
-it was routing.
+**And the refill order for this case, in the C++ that is still running,
+is gray-first above the 70% share.** `connections_maker` branches on the
+**total** outgoing count, not the white count: below the
+`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it tries white
+then gray, but **at or above that target it tries gray then white**. A
+single churn drop from a full outbound set leaves the count above the
+target, so the freed slot normally draws from **gray** — the list fed by
+gossip and by `--add-peer`, and the one an adversary can populate cheaply.
+An earlier draft of this paragraph said "white first, then gray", which is
+the branch that does not apply to the case the paragraph is about, and it
+understated the exposure it was routing.
+
+That 70% schedule is what the binary does until P2P-3 slice 3 deletes
+`connections_maker`. The settled loop is the dialer brief: exclusive, then
+clearnet priority, then harvest, then `draw_white` up to the connector's
+outbound target, then `draw_gray` only while white is under the refill
+line. *Records-was: the gray-first order above 70% was the input PWD-I4
+and PWD-B9 would derive against.*
 
 Whether an adversary can bias that draw is the `g` bound, owned by
-**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled — and the
-gray-first order is an input those rounds need, since it is the adversary-
-populated list that fills a churned slot.
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled. PWD-I4
+derives against the dialer loop. The adversary-populated list is still
+gray.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
@@ -4245,7 +4263,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `Zone::queue_fluff` appends every transaction to each peer's queue and
 > `flush_fluff` releases the whole accumulated batch —
 > `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
-> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> (`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`) — and the receive
 > side checks no cardinality either. **So 2002's cap has no derivation input,
 > and until one exists 2002 is not bounded below 2004.** *An earlier version of
 > this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
@@ -4399,7 +4417,7 @@ field must express the largest value the command table can produce, and
 > idle makers** and false of the tree: the relay layer draws fluff delays from
 > `FluffScheduler::memoryless()` — deliberately memoryless rather than the
 > inherited Poisson, which was the F-4 defect — and jitters the noise cadence
-> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/graph/mod.rs:315-320`,
 > `:235`). **So this round is not introducing randomised timing to a tree that
 > has none; it is asking why one layer has it and the layer above does not.**
 
@@ -4411,7 +4429,7 @@ an owner if no row names it (rule 22).
 `Zone::queue_fluff` appends **every** transaction to each peer's queue, and
 `flush_fluff` releases the whole accumulation — `std::mem::take(&mut
 peer.queued)` — with no cardinality or byte cap
-(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`). The receive side
 checks no cardinality either.
 
 > **Why no census row covers it, which is a finding about the instrument.**
@@ -4430,7 +4448,7 @@ checks no cardinality either.
 
 **Bounding the release does not bound the queue, and the ruling has to say
 both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
-(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`rust/shekyl-relay/src/graph/mod.rs:846`) and `flush_fluff` empties it
 (`:868`), with **no bound at either end**. If transactions arrive faster than
 one capped batch per flush interval, the remainder simply accumulates — **once
 per destination peer** — so a release-side cap alone converts the flooder's
@@ -4666,7 +4684,7 @@ deadlines, drawn independently**.
 > wake must leave every other entry untouched, because re-drawing on a foreign
 > wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
 > effective interval short** — "a privacy defect no count assertion and no
-> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/graph/mod.rs:231-236`).
 > **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
 > only when that connection's own sync fires.
 

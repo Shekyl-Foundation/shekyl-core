@@ -17,7 +17,12 @@ use shekyl_archival_retention::pass_anchor::{
     PassRequestHeader, PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYTES};
+use shekyl_socks::SocksUsername;
 use shekyl_types::BlockHeight;
+
+/// The SOCKS password every read presents. The username is what tells two
+/// reads apart; see [`RequestHeader::socks_credentials`].
+const READ_SOCKS_PASSWORD: &[u8] = b"shekyl-fetch";
 
 // The textual carrier (`serving_route`) and the signed layout (`pass_anchor`)
 // are owned by different crates on purpose; this is where they must agree.
@@ -38,6 +43,12 @@ const _: () = assert!(REQUEST_HEADER_BYTES == PASS_REQUEST_HEADER_LEN);
 /// **Stall retries of the same `P` reuse the same header** (`SF-D6`): the
 /// value is a plain `Copy`, so the caller holds it across attempts rather
 /// than minting a nonce per dial.
+///
+/// **The nonce is the read.** A new read carries a new nonce, for every
+/// caller, and everything that must be one-per-read hangs off it: `P`'s
+/// transcript, and the SOCKS credentials the dial presents
+/// ([`Self::socks_credentials`]). A caller cannot give two reads one circuit
+/// or one read two, because it never chooses the credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestHeader(PassRequestHeader);
 
@@ -94,6 +105,33 @@ impl RequestHeader {
         self.0.anchor_hash()
     }
 
+    /// The SOCKS credentials this read's dials present (`SF-D3`, as ruled
+    /// 2026-10-07): the nonce in lowercase hex as the username, and the
+    /// fixed password [`READ_SOCKS_PASSWORD`].
+    ///
+    /// Tor's `IsolateSOCKSAuth` isolates on the pair, so a username no other
+    /// read presents is a pair no other read presents. `P` cannot tie two
+    /// reads together by the circuit they arrive on. The password is the
+    /// same for every read and carries no isolation: a Tor that compared
+    /// only the password would not separate reads. A stall retry presents
+    /// the header it retries, so it presents the same pair. A retry with a
+    /// fresh anchor keeps the nonce, so it does too.
+    ///
+    /// The pair never leaves this host: SOCKS credentials go to the local
+    /// Tor and no further. That Tor already carries the request, nonce
+    /// included. A local controller subscribed to `STREAM` events can read
+    /// the username there; nothing in this crate logs it, and
+    /// [`SocksUsername`] redacts itself in `Debug`.
+    pub(crate) fn socks_credentials(&self) -> SocksUsername {
+        let mut username = [0u8; 2 * PASS_NONCE_LEN];
+        for (pair, byte) in username.chunks_exact_mut(2).zip(self.nonce()) {
+            pair[0] = HEX[usize::from(byte >> 4)];
+            pair[1] = HEX[usize::from(byte & 0x0f)];
+        }
+        SocksUsername::new(&username, READ_SOCKS_PASSWORD)
+            .expect("a 64-byte username and a short password are in range")
+    }
+
     /// The decoded 72-byte wire layout.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
@@ -117,6 +155,8 @@ impl RequestHeader {
         self.0.transcript(shard_id, delivery_digest)
     }
 }
+
+const HEX: &[u8; 16] = b"0123456789abcdef";
 
 impl From<PassRequestHeader> for RequestHeader {
     fn from(inner: PassRequestHeader) -> Self {

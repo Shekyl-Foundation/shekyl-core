@@ -16,7 +16,7 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # and the `PassSigner` seam this crate's `HostSigner` fills.
 shekyl-p-serve = { path = "../shekyl-p-serve" }
 # `HybridSignature` is the `PassKey` return type (the trait lives in
-# `shekyl-p-serve`; this crate names the type only in `NoResidentKey`).
+# `shekyl-p-serve`; this crate names the type in `HostSigner` and `RefusingKey`).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Inland daemon-tip cache is ordinal `BlockHeight` (WSS-24 top-block).
 shekyl-types = { path = "../shekyl-types" }

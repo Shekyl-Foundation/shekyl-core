@@ -36,6 +36,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <memory>
 
 #include "levin_base.h"
 #include "levin_compression.h"
@@ -116,9 +117,13 @@ public:
   bool update_connection_context(const t_connection_context& contxt);
   bool request_callback(boost::uuids::uuid connection_id);
   template<class callback_t>
+  void collect_context_posts(const callback_t &cb, std::vector<std::function<void()>>& posts);
+  template<class callback_t>
   bool foreach_connection(const callback_t &cb);
   template<class callback_t>
   bool for_connection(const boost::uuids::uuid &connection_id, const callback_t &cb);
+  /// The id is in this registry. Does not post and does not take a ref.
+  bool has_connection(const boost::uuids::uuid& connection_id);
   size_t get_connections_count();
   size_t get_out_connections_count();
   size_t get_in_connections_count();
@@ -827,6 +832,89 @@ public:
   boost::uuids::uuid get_connection_id() {return m_connection_context.m_connection_id;}
   //------------------------------------------------------------------------------------------
   t_connection_context& get_context_ref() {return m_connection_context;}
+
+  /// One `start_outer_call` ref. The last owner releases it.
+  ///
+  /// The walk used to finish that ref with a scope-exit guard, so a
+  /// throw could not leave `m_wait_count` raised. A strand post outlives
+  /// the caller, and a collected post may be destroyed without running.
+  /// `std::shared_ptr` is the owner because the post is a copyable
+  /// `std::function`. Destruction releases the ref after the callback
+  /// returns, while the callback unwinds, or when the post is dropped
+  /// unrun. The constructor is private: only `adopt_outer_call` mints
+  /// one, and only after `start_outer_call` has succeeded.
+  class outer_call : public std::enable_shared_from_this<outer_call>
+  {
+  public:
+    ~outer_call()
+    {
+      if (!m_handler)
+        return;
+      async_protocol_handler* handler = m_handler;
+      m_handler = nullptr;
+      try { handler->finish_outer_call(); }
+      catch (...) {}
+    }
+
+    outer_call(const outer_call&) = delete;
+    outer_call& operator=(const outer_call&) = delete;
+
+    /// Run `fn` on this connection's strand. The caller does not wait.
+    ///
+    /// Production `seam_link` is the endpoint, so this posts and the
+    /// posted function keeps this owner. A null endpoint runs `fn` on
+    /// the caller. Either way the owner, not this function, releases
+    /// the ref.
+    void post_on_strand(std::function<void(t_connection_context&)> fn)
+    {
+      // `this->` is required. `outer_call` is nested in a class template,
+      // so the `enable_shared_from_this` base is dependent and an
+      // unqualified `shared_from_this` is not found by two-phase lookup.
+      std::shared_ptr<outer_call> self = this->shared_from_this();
+      async_protocol_handler* handler = m_handler;
+      if (!handler->m_pservice_endpoint)
+      {
+        fn(handler->get_context_ref());
+        return;
+      }
+      handler->m_pservice_endpoint->post([self, fn = std::move(fn)] {
+        fn(self->m_handler->get_context_ref());
+      });
+    }
+
+  private:
+    friend class async_protocol_handler;
+
+    /// The constructor is private. `mint` is how `adopt_outer_call`
+    /// allocates the owner; `std::make_shared` would need a public
+    /// constructor.
+    static std::shared_ptr<outer_call> mint(async_protocol_handler* handler)
+    {
+      return std::shared_ptr<outer_call>(new outer_call(handler));
+    }
+
+    explicit outer_call(async_protocol_handler* handler) noexcept
+      : m_handler(handler)
+    {}
+
+    async_protocol_handler* m_handler;
+  };
+
+  /// Take ownership of the ref `start_outer_call` just acquired.
+  /// Allocation failure releases that ref and rethrows: the constructor
+  /// is private, so this cannot use `make_shared`.
+  std::shared_ptr<outer_call> adopt_outer_call()
+  {
+    try
+    {
+      return outer_call::mint(this);
+    }
+    catch (...)
+    {
+      finish_outer_call();
+      throw;
+    }
+  }
 };
 //------------------------------------------------------------------------------------------
 template<class t_connection_context>
@@ -926,26 +1014,42 @@ int async_protocol_handler_config<t_connection_context>::invoke_async(int comman
 }
 //------------------------------------------------------------------------------------------
 template<class t_connection_context> template<class callback_t>
-bool async_protocol_handler_config<t_connection_context>::foreach_connection(const callback_t &cb)
+void async_protocol_handler_config<t_connection_context>::collect_context_posts(const callback_t &cb, std::vector<std::function<void()>>& posts)
 {
-  std::vector<typename connections_map::mapped_type> conn;
-
-  auto scope_exit_handler = misc_utils::create_scope_leave_handler([&conn]{
-    for (auto &aph: conn)
-      aph->finish_outer_call();
-  });
+  using handler_t = async_protocol_handler<t_connection_context>;
+  std::vector<std::shared_ptr<typename handler_t::outer_call>> holds;
 
   CRITICAL_REGION_BEGIN(m_connects_lock);
-  conn.reserve(m_connects.size());
+  holds.reserve(m_connects.size());
   for (auto &e: m_connects)
-    if (e.second->start_outer_call())
-      conn.push_back(e.second);
+  {
+    if (!e.second->start_outer_call())
+      continue;
+    holds.push_back(e.second->adopt_outer_call());
+  }
   CRITICAL_REGION_END()
 
-  for (auto &aph: conn)
-    if (!cb(aph->get_context_ref()))
-      return false;
-
+  // The closure posts. It does not run the callback, so the caller can
+  // publish a countdown before any strand enters `get_context_ref`.
+  // Dropping an unrun closure releases that connection's ref.
+  posts.reserve(posts.size() + holds.size());
+  for (auto &hold: holds)
+  {
+    posts.push_back([hold, cb] {
+      hold->post_on_strand([cb](t_connection_context& ctx) {
+        cb(ctx);
+      });
+    });
+  }
+}
+//------------------------------------------------------------------------------------------
+template<class t_connection_context> template<class callback_t>
+bool async_protocol_handler_config<t_connection_context>::foreach_connection(const callback_t &cb)
+{
+  std::vector<std::function<void()>> posts;
+  collect_context_posts(cb, posts);
+  for (auto& post: posts)
+    post();
   return true;
 }
 //------------------------------------------------------------------------------------------
@@ -955,11 +1059,21 @@ bool async_protocol_handler_config<t_connection_context>::for_connection(const b
   async_protocol_handler<t_connection_context>* aph = nullptr;
   if (find_and_lock_connection(connection_id, aph) != LEVIN_OK)
     return false;
-  auto scope_exit_handler = misc_utils::create_scope_leave_handler(
-    boost::bind(&async_protocol_handler<t_connection_context>::finish_outer_call, aph));
-  if(!cb(aph->get_context_ref()))
-    return false;
+  // Found. The callback does not report absence: the caller is not
+  // waiting, and only this return says the id was queued. `hold`
+  // releases the ref if this post throws before the strand owns it.
+  auto hold = aph->adopt_outer_call();
+  hold->post_on_strand([cb](t_connection_context& ctx) {
+    cb(ctx);
+  });
   return true;
+}
+//------------------------------------------------------------------------------------------
+template<class t_connection_context>
+bool async_protocol_handler_config<t_connection_context>::has_connection(const boost::uuids::uuid& connection_id)
+{
+  CRITICAL_REGION_LOCAL(m_connects_lock);
+  return find_connection(connection_id) != nullptr;
 }
 //------------------------------------------------------------------------------------------
 template<class t_connection_context>

@@ -225,6 +225,18 @@ jobs:
       - name: Run FOLLOWUPS owner gate selftest
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
+
+      - name: Relay production code does not name a connector
+        # shekyl-relay reads declaration cells. ConnectorId::Clearnet and
+        # ConnectorId::Tor may appear only in its test modules. The
+        # selftest proves a production hit fails and an empty subject fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_relay_connector_agnostic.py
+
+      - name: Relay connector gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_relay_connector_agnostic.py --selftest
+
       - name: Check FOLLOWUPS row prose ends a sentence
         # Every row's prose (heading + continuation) must end a sentence or
         # a reference. Closes the class the 2026-08-28 compression opened:

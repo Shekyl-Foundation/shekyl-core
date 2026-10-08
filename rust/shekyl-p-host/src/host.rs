@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
+use shekyl_p_serve::{PServeEndpoint, ServeCounterReader, StoreShardProvider};
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -44,8 +44,9 @@ pub struct PersonaServing {
     /// chooses it (see [`OnionServiceSpec`]).
     pub max_streams: u16,
     /// The persona's attestation signing key for the `SF-D8` pass
-    /// countersignature — [`NoResidentKey`](crate::NoResidentKey) until the resident key is
-    /// wired (SH-2).
+    /// countersignature. In production this is the engine's resident pass
+    /// key: a round-trip into the stake actor that holds the secret, which
+    /// never crosses into this crate (`SF-D13`).
     pub key: Arc<dyn PassKey>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
@@ -76,11 +77,11 @@ impl fmt::Debug for PersonaServing {
 /// The counters split them into two buckets, in aggregate, and no finer:
 /// `lookup_failures` is "this persona could not read what it needed" (the
 /// store or the tip, pooled), and `sign_failures` is "the shard was held
-/// and the key refused its pre-flight" — no key resident, decided before
-/// any shard byte is read. A persona started with
-/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
-/// ordinary miss — a shard the persona simply does not hold — is the
-/// deliberate 404 and moves neither counter.
+/// and the key refused its pre-flight" — the actor holding the secret is
+/// gone, decided before any shard byte is read. A persona whose key says no
+/// to everything accrues only the latter. An ordinary miss — a shard the
+/// persona simply does not hold — is the deliberate 404 and moves neither
+/// counter.
 ///
 /// `late_sign_failures` is not a 503 at all: the pre-flight said yes, the
 /// whole shard went out, and the signer then refused, so the response
@@ -98,15 +99,18 @@ impl fmt::Debug for PersonaServing {
 /// lost sight of something it needs, and passes are being lost to that
 /// rather than to a signer that is down.
 ///
-/// **Distinguishable is not yet surfaced.** These are read through
-/// [`PersonaServingHost::counters`]; today the production serving task
-/// (`engine-core`'s `serving::task`) holds the host privately and publishes
-/// only posture and the serve-set alarms, so the counters reach an operator
-/// only through tests. The reading that puts them on the alarm board is the
-/// operator surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` assigns to `TJ-D`,
-/// carried with the `SH-2` key wiring in `docs/FOLLOWUPS.md` — until it
-/// lands, a nonzero `sign_failures` is a fact the persona knows and nobody
-/// is told.
+/// **How an operator sees them.** Sampled once per cadence by the
+/// production serving task's health probe (`engine-core`'s
+/// `serving::health`) through the detached
+/// [`PersonaServingHost::counter_reader`] — its own task, so a refresh that
+/// is waiting on the store actor cannot delay the reading — windowed with
+/// [`Self::since`], and mapped onto the operator alarm board by
+/// `shekyl-operator-alarm`'s `serve_health` producer — the `TJ-D` operator
+/// surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` names. A tick in which the key
+/// refused is an alarm; a tick in which only lookups failed is a different
+/// alarm; a tick in which only the listener failed to accept is a third; a
+/// quiet tick clears the row. `refused` is load, not a fault, and is not on
+/// the board.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).
@@ -124,6 +128,50 @@ pub struct ServeCounters {
     pub late_sign_failures: u64,
     /// Accept-loop errors.
     pub accept_errors: u64,
+}
+
+impl ServeCounters {
+    /// One reading of the six totals through a detached reader.
+    ///
+    /// The one place the endpoint's getters are gathered into this struct:
+    /// [`PersonaServingHost::counters`] reads through it, and so does a
+    /// probe holding only the [`ServeCounterReader`]. The six loads are
+    /// not one atomic snapshot; each total is monotone and the consumer
+    /// windows them, so a request landing between two loads moves the
+    /// next window rather than this one.
+    #[must_use]
+    pub fn read(reader: &ServeCounterReader) -> Self {
+        Self {
+            served: reader.served_count(),
+            refused: reader.refused_count(),
+            lookup_failures: reader.lookup_failure_count(),
+            sign_failures: reader.sign_failure_count(),
+            late_sign_failures: reader.late_sign_failure_count(),
+            accept_errors: reader.accept_error_count(),
+        }
+    }
+
+    /// The movement between an earlier reading and this one, per counter.
+    ///
+    /// The counters are session totals, so an operator question — "did the
+    /// key refuse anything *this tick*" — is a difference, and this is its
+    /// one home (rule 05): the alarm producer and anything else that windows
+    /// the counters subtract here rather than each re-deriving the
+    /// subtraction. Saturating, because a host restart inside the window
+    /// resets the totals and a negative movement is not a reading.
+    #[must_use]
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            served: self.served.saturating_sub(earlier.served),
+            refused: self.refused.saturating_sub(earlier.refused),
+            lookup_failures: self.lookup_failures.saturating_sub(earlier.lookup_failures),
+            sign_failures: self.sign_failures.saturating_sub(earlier.sign_failures),
+            late_sign_failures: self
+                .late_sign_failures
+                .saturating_sub(earlier.late_sign_failures),
+            accept_errors: self.accept_errors.saturating_sub(earlier.accept_errors),
+        }
+    }
 }
 
 /// Why a serving host could not start.
@@ -506,14 +554,19 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// serving path.
     #[must_use]
     pub fn counters(&self) -> ServeCounters {
-        ServeCounters {
-            served: self.endpoint.served_count(),
-            refused: self.endpoint.refused_count(),
-            lookup_failures: self.endpoint.lookup_failure_count(),
-            sign_failures: self.endpoint.sign_failure_count(),
-            late_sign_failures: self.endpoint.late_sign_failure_count(),
-            accept_errors: self.endpoint.accept_error_count(),
-        }
+        ServeCounters::read(self.endpoint.counters())
+    }
+
+    /// The counters' read side, detached from this host.
+    ///
+    /// For a watcher on its own task: the host's [`Self::refresh`] awaits
+    /// the store actor with no timeout, so a reading taken through `&self`
+    /// between refreshes is taken only when a refresh is not in flight. A
+    /// clone of this reader samples whenever its own tick fires. It stays
+    /// readable after [`Self::shutdown`]; the totals just stop moving.
+    #[must_use]
+    pub fn counter_reader(&self) -> ServeCounterReader {
+        self.endpoint.counters().clone()
     }
 
     /// Stop serving: tear the onion down first, then the listener.

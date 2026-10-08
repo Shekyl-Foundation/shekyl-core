@@ -18,6 +18,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
 };
+use shekyl_socks::accept_userpass;
 use shekyl_types::BlockHeight;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -42,6 +43,8 @@ struct Seen {
     port: u16,
     /// The HTTP request head, verbatim.
     request: String,
+    /// The SOCKS username and password the dial presented.
+    credentials: (Vec<u8>, Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -101,17 +104,15 @@ impl Stub {
     }
 }
 
-/// SOCKS5 no-auth greeting, CONNECT with the destination recorded, then
+/// SOCKS5 username/password greeting, CONNECT with the destination recorded, then
 /// the script. What was seen is recorded **before** the script plays, so
 /// a scripted silence still leaves its exchange on the record.
 async fn serve_one(mut s: TcpStream, script: Script, record: Arc<Mutex<Vec<Seen>>>) -> Option<()> {
-    let mut greeting = [0u8; 2];
-    s.read_exact(&mut greeting).await.ok()?;
-    assert_eq!(greeting[0], 5, "SOCKS version");
-    let mut methods = vec![0u8; usize::from(greeting[1])];
-    s.read_exact(&mut methods).await.ok()?;
-    assert!(methods.contains(&0), "no-auth must be offered");
-    s.write_all(&[5, 0]).await.ok()?;
+    // `accept_userpass` refuses every greeting except username/password
+    // alone, which is the offer `SF-D3` requires. The bytes are what this
+    // stub records.
+    let presented = accept_userpass(&mut s).await.ok()?;
+    let credentials = (presented.username().to_vec(), presented.password().to_vec());
 
     let mut request = [0u8; 4];
     s.read_exact(&mut request).await.ok()?;
@@ -144,6 +145,7 @@ async fn serve_one(mut s: TcpStream, script: Script, record: Arc<Mutex<Vec<Seen>
             domain,
             port,
             request: String::new(),
+            credentials,
         });
         return Some(());
     }
@@ -163,6 +165,7 @@ async fn serve_one(mut s: TcpStream, script: Script, record: Arc<Mutex<Vec<Seen>
         domain,
         port,
         request: String::from_utf8(head).expect("request is text"),
+        credentials,
     });
 
     match script {
@@ -836,6 +839,51 @@ async fn garbage_with_a_valid_signature_appended_is_refused() {
     .await;
     assert!(matches!(out, Err(FetchError::BadCountersignature)));
     assert!(hole.shown().is_empty());
+}
+
+// ------------------------------------------------- SF-D3: a circuit per read
+
+/// What one fetch under `header` presented to the proxy.
+async fn credentials_of(header: &RequestHeader, keys: &Keys) -> (Vec<u8>, Vec<u8>) {
+    let stub = Stub::start(Script::CloseBeforeHead).await;
+    let client = PFetchClient::with_timeouts(stub.proxy, fast());
+    // The stub closes after the handshake, so the fetch ends as a stall:
+    // the dial itself went through, credentials and all.
+    let out = client.fetch(&target(keys), header, Hole::accepting()).await;
+    assert!(matches!(stall(out), Stall::ClosedBeforeHead));
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let [seen] = <[Seen; 1]>::try_from(stub.seen()).expect("one dial");
+    seen.credentials
+}
+
+#[tokio::test]
+async fn two_reads_of_one_shard_present_different_credentials() {
+    let keys = keys();
+    let anchor = BlockHeight::from_raw(9_000);
+    let first = RequestHeader::fresh(anchor, [0x5a; 32]).expect("entropy");
+    let second = RequestHeader::fresh(anchor, [0x5a; 32]).expect("entropy");
+    let a = credentials_of(&first, &keys).await;
+    let b = credentials_of(&second, &keys).await;
+    assert_ne!(a, b, "two reads on one circuit");
+    // Both are a pair Tor isolates on: neither half is empty.
+    for (username, password) in [&a, &b] {
+        assert!(!username.is_empty() && !password.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn the_retries_inside_one_read_present_the_same_credentials() {
+    let keys = keys();
+    let read = header();
+    // A stall retry repeats the header (`SF-D6`).
+    let first = credentials_of(&read, &keys).await;
+    let stall_retry = credentials_of(&read, &keys).await;
+    assert_eq!(first, stall_retry);
+    // The retry after a 400 takes a fresh anchor and keeps the nonce.
+    let reanchored =
+        RequestHeader::with_nonce(*read.nonce(), BlockHeight::from_raw(9_003), [0x77; 32]);
+    assert_ne!(reanchored, read);
+    assert_eq!(credentials_of(&reanchored, &keys).await, first);
 }
 
 // ----------------------------------------------------------------- SF-D6: stall

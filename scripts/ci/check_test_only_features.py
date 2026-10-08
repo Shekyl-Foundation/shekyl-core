@@ -122,6 +122,24 @@ the reason) and share the governance FOLLOWUPS row; the third,
 `extern "C"` in the production header, so categorizing the feature changes
 nothing and the fix is the structural gate that row already names.
 
+# The production-shape lint lane lives next door
+
+A test-only feature is on in CI's workspace clippy (the dev edge that enables
+it is one of the `--all-targets` it builds, and features unify) and off in
+production, so the owner's production shape is never built by that step. An
+import or helper that only the gated item uses is unused in production and
+invisible (#990: `std::time::Duration` in `shekyl-p-host/src/signer.rs`).
+`rust-audit-test.yml` carries a `--lib`-only clippy step over the TEST_ONLY
+owners for exactly this, and its `-p` set has to equal this table.
+
+That equality is not a limb of this file. This file reads `cargo metadata`;
+the step is workflow YAML, and reading it wants PyYAML, which the rust-audit
+container does not install. `check_production_lint_lane.py` grades the step
+from the grep-gates job (the job that already has the parser) and imports
+`TEST_ONLY` from here, so the owner set stays one registry and this file does
+not grow a second instrument. Add a row here and a `-p` on that step in the
+same commit.
+
 # A limit this file does not close, named
 
 The gate reads the manifest. It can see that a feature is declared, owned and
@@ -167,6 +185,17 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "the pinned point table); this limb is what keeps that edge off every "
     "normal consumer — the crate's production surface only verifies, "
     "through shekyl-ct-balance, and never derives",
+    (
+        "shekyl-p-host",
+        "test-signer",
+    ): "arms shekyl-p-serve's ephemeral TestKeySigner as a PassKey, so a host "
+    "under test can be bound with a key whose public half the test holds "
+    "(and, since SH-2, exposes RefusingKey — the always-refusing PassKey the "
+    "serving-task lifecycle tests bind in place of the persona's resident "
+    "key). Enabled from shekyl-engine-core's [dev-dependencies] edge only; "
+    "the production PassKey is the stake actor's ResidentPassKey, and "
+    "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
+    "every production graph",
     (
         "shekyl-chain-ingest",
         "harness",
@@ -216,10 +245,13 @@ PERMANENT: dict[tuple[str, str], str] = {
 # Crates whose feature table must be exhaustively categorized (third limb).
 # Adding a crate here is the declaration that no feature of it may exist
 # uncategorized; every listed crate is clean at registration
-# (`shekyl-chain-store` declares none; `shekyl-tor-control-client` and
-# `shekyl-chain-rules` declare only their TEST_ONLY row — the latter joined
-# 2026-09-19 when the fourth limb fired on `harness` in CI, the first
-# cross-crate feature declared after the limb landed). `shekyl-chain-ingest`
+# (`shekyl-chain-store` declares none; `shekyl-tor-control-client`,
+# `shekyl-chain-rules` and `shekyl-p-host` declare only their TEST_ONLY row —
+# `shekyl-chain-rules` joined 2026-09-19 when the fourth limb fired on
+# `harness` in CI, the first cross-crate feature declared after the limb
+# landed; `shekyl-p-host` joined 2026-10-07 when the limb fired on
+# `test-signer`, first enabled across a crate boundary by the SH-2
+# serving-task tests in `shekyl-engine-core`). `shekyl-chain-ingest`
 # joined 2026-10-06 in the commit that declared its own `harness`
 # (TEST_ONLY, one dev enabler); its three production features are the first
 # PERMANENT rows.
@@ -239,6 +271,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-store",
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
+        "shekyl-p-host",
         "shekyl-chain-ingest",
     }
 )
@@ -844,6 +877,7 @@ def selftest() -> int:
         for needle in want:
             if not any(needle in f for f in got):
                 bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
+
     if bad:
         print("consumer-owned feature selftest FAILED:\n", file=sys.stderr)
         for b in bad:

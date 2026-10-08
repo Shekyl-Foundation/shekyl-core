@@ -1,0 +1,37 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-p-loopback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dev-only loopback between PServeEndpoint and PFetchClient. SF-D4 keeps this edge out of both shipped graphs."
+publish = false
+
+[dependencies]
+# Header field widths (`PASS_NONCE_LEN`, `PASS_ANCHOR_HASH_LEN`). The
+# fixture header is the same layout the two ends sign.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `HybridPublicKey` on `fetch_target`. No `test-utils`: this crate does
+# not mint keys.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `one_leaf` is one `LEAF_BYTES` payload, the frame's unit.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The client half. A normal edge here is safe because nothing shipped
+# depends on this crate (`check_p_fetch_dep_cut.py` follows shipped edges).
+shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+# The server half. No `test-signer`: the caller brings the `PassSigner`.
+shekyl-p-serve = { path = "../shekyl-p-serve" }
+# The greeting `Isolation::Persona` sends. The shim is its other half.
+shekyl-socks = { path = "../shekyl-socks" }
+# `request_header` takes an ordinal `BlockHeight`.
+shekyl-types = { path = "../shekyl-types" }
+tokio = { version = "1", default-features = false, features = ["net", "io-util", "rt"] }
+
+[lints]
+workspace = true
