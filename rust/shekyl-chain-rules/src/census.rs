@@ -474,17 +474,17 @@ census_rows! {
         I10 implemented(crate::rules::tx_against::I10),
         I11 implemented(crate::rules::tx_against::I11),
         I12 implemented(crate::rules::tx_against::I12),
-        // I13's predicate and depth read exist (`tx_against::I13`) and run
-        // on the emission under J21 (slice 8 row 9); the row stays pending
-        // until it runs on the spend class, which lands with I15 in the
-        // filler-fixture migration ruled 2026-10-07 (FOLLOWUPS, the I13 /
-        // I15 rows: one PR after #983, 115 fixtures become scenarios).
-        I13 pending,
+        // I13 (slice 6 row 6, the flip of 2026-10-08): the depth step of the
+        // spend's reference sequence, run by `tx_against::judge_reference`
+        // under this row; the same step runs on the emission under J21
+        // (slice 8 row 9). Pending from slice 6 commit 5 until the
+        // filler-fixture migration ruled 2026-10-07 made the spends real.
+        I13 implemented(crate::rules::tx_against::I13),
         I14 implemented(crate::rules::tx_inputs::I14),
-        // I15's body exists (`tx_against::I15::verify`) and runs on the
-        // emission's fee inputs as J26 (slice 8 row 9); pending on the
-        // same hold as I13.
-        I15 pending,
+        // I15 (slice 6 row 6, the same flip): the FCMP++ verify over every
+        // `ToKey` input of a spend, after the reference sequence yields its
+        // context; the same body runs on the emission's fee inputs as J26.
+        I15 implemented(crate::rules::tx_against::I15),
         I16 implemented(crate::rules::tx_inputs::I16),
         // I17 (slice 6 commit 7): the signing preimage, adopted from the wire's
         // one derivation (Q7 (c)) and recorded where `tx_against` derives it.

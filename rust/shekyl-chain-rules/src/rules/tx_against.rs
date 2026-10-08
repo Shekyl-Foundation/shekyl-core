@@ -343,17 +343,17 @@ impl I11 {
 /// [`ViewRead`]: the first view-bound row to read a per-height record.
 ///
 /// The anchor's consumer on a **spend** is CEN-I15's proof verification,
-/// which does not run on the spend class yet: turning it on refuses every
-/// filler-proof spend fixture the store's and ingest's tests still run
-/// `validate` over — the migration the FOLLOWUPS I13 row owns (RULED
-/// 2026-10-07: the fixtures become scenarios, the flip lands with the last
-/// conversion). Until it lands [`SPEND_REFERENCE`] stages the depth step
-/// off, and the spend's anchor is derived, recorded and dropped — staged
-/// with its consumer named, so the derivation and its fault
-/// classification are reviewed here, where the operand is defined. On an
-/// **emission** the same read is CEN-J21's step, and its anchor is
-/// consumed: [`judge_reference`] yields it in the [`ReferenceContext`]
-/// the emission's proof rows (CEN-J25, CEN-J26) verify against.
+/// run by [`judge_reference`]'s spend arm over the [`ReferenceContext`]
+/// this step and I13's yield. *Records-was:* until 2026-10-08 that
+/// consumer was staged off — turning it on refused every filler-proof
+/// spend fixture the store's and ingest's tests ran `validate` over — and
+/// [`SPEND_REFERENCE`] staged the depth step off with it, the anchor
+/// derived, recorded and dropped beside this definition (RULED
+/// 2026-10-07: the fixtures became scenarios, the flip landed with the
+/// last conversion; `CHAIN_RULES_SLICE_6.md` §5 row 6). On an **emission**
+/// the same read is CEN-J21's step, and its anchor is consumed the same
+/// way: the emission's proof rows (CEN-J25, CEN-J26) verify against the
+/// yielded context.
 pub(crate) struct I12;
 
 impl Rule for I12 {
@@ -394,10 +394,9 @@ impl I12 {
 /// row does.
 ///
 /// The depth step of [`reference_context`], refusing under the class
-/// arm's row ([`ReferenceRows::depth`]). Not yet run on the spend class
-/// (the same fixture migration that holds CEN-I15 — see [`I12`];
-/// [`SPEND_REFERENCE`] stages the step off); run on the emission as part
-/// of CEN-J21, which is the row that refuses there.
+/// arm's row ([`ReferenceRows::depth`]): this row on a spend
+/// ([`SPEND_REFERENCE`]; on the spend class since 2026-10-08, see
+/// [`I12`]), CEN-J21 on an emission, which is the row that refuses there.
 pub(crate) struct I13;
 
 impl Rule for I13 {
@@ -451,8 +450,10 @@ impl I13 {
 /// (H21, H22) has already required that, and this row refuses it again
 /// rather than verify an empty subset against a proof.
 ///
-/// Not yet run on the spend class (the fixture migration that holds I13
-/// — see [`I12`]); run on the emission's fee inputs as CEN-J26.
+/// Run on the spend class by [`judge_reference`]'s spend arm over
+/// [`to_key_slots`], once the reference sequence has yielded its context
+/// (on the spend class since 2026-10-08, see [`I12`]); run on the
+/// emission's fee inputs as CEN-J26.
 pub(crate) struct I15;
 
 impl Rule for I15 {
@@ -568,7 +569,11 @@ struct ReferenceRows {
     /// The declared depth is admitted against the depth at it
     /// ([`I13::admits`] over [`I13::depth_at_reference`]). `None` is the
     /// step staged off for the class: the sequence stops after the anchor
-    /// and yields no context.
+    /// and yields no context. Both classes that run the sequence name a
+    /// row here since 2026-10-08 (the spend's was `None` until CEN-I13
+    /// landed on it, see [`I12`]), so no live constant stages the step
+    /// off; the flip changed verdicts and nothing else, and collapsing
+    /// the `Option` is the shape change it did not make.
     depth: Option<CenRow>,
 }
 
@@ -581,14 +586,25 @@ impl ReferenceRows {
     }
 }
 
-/// The regular spend's attribution: I10, I11 and I12, with I13 staged
-/// off — the flip is `Some(I13::ROW)` here and nothing else (see [`I12`]).
+/// The regular spend's attribution: I10, I11, I12 and I13, each step its
+/// own row. *Records-was:* `depth: None` until 2026-10-08 — I13 staged
+/// off the spend class through the filler-fixture era (see [`I12`]); the
+/// flip was this one cell and the I15 verify in [`judge_reference`]'s
+/// spend arm, and nothing else.
 const SPEND_REFERENCE: ReferenceRows = ReferenceRows {
     lookup: I10::ROW,
     window: I11::ROW,
     anchor: I12::ROW,
-    depth: None,
+    depth: Some(I13::ROW),
 };
+
+/// Every row [`judge_reference`]'s spend arm can record — the four steps
+/// of [`SPEND_REFERENCE`] and I15 over the context they yield — which the
+/// other arms record **vacuous**, as [`run_tx_against`](crate::rules::run_tx_against)
+/// records an out-of-scope kind, so G9's mint sees each evaluated at every
+/// slot. Before the flip this was `SPEND_REFERENCE.steps()`: the depth
+/// step and I15 were pending and the mint did not ask for them.
+const SPEND_ARM_ROWS: [CenRow; 5] = [I10::ROW, I11::ROW, I12::ROW, I13::ROW, I15::ROW];
 
 /// The emission's attribution: every step is CEN-J21's.
 const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
@@ -657,8 +673,9 @@ fn reference_context<'id, V: ChainView<'id>>(
     };
     let anchor = I12::anchor(ref_height, view)?;
     let Some((row, declared)) = declared else {
-        // Staged off: the anchor is in flight for CEN-I15 on this class.
-        // Dropping it here, beside the derivation, is the staging.
+        // Staged off: the anchor is derived, recorded and dropped here,
+        // beside the derivation. No class arm names this since the spend's
+        // CEN-I13 landed (2026-10-08); the arm is the staging's shape.
         for step in rows.steps() {
             coverage.insert(step);
         }
@@ -683,22 +700,24 @@ fn reference_context<'id, V: ChainView<'id>>(
 }
 
 /// The reference rows, dispatched on the transaction's class: CEN-I10,
-/// CEN-I11 and CEN-I12 on a spend (I13 staged off, see [`I12`]); CEN-J21
-/// on an emission; vacuous on every other class.
+/// CEN-I11, CEN-I12 and CEN-I13 on a spend, then CEN-I15's verify over
+/// the context they yield; CEN-J21 on an emission; vacuous on every other
+/// class.
 ///
 /// The dispatch is explicit so that no gate decides which arm a class
 /// reaches: the emission reaches J21 because it is an emission, and the
-/// spend's arm can widen (to the inputs that are `ToKey`, to the bond
-/// post's funding spends under its own row) without touching the
-/// emission's. Each arm records the other arms' rows vacuous first, as
-/// [`run_tx_against`](crate::rules::run_tx_against) records an
-/// out-of-scope kind, then runs [`reference_context`] under its own
-/// attribution. On a spend the anchor is in flight for CEN-I15 (derived
-/// so a missing root is classified with the operand, dropped beside that
-/// derivation) and the arm yields `None`; on an emission the whole
-/// context is J21's and is yielded, for CEN-J25's backing proof and
-/// CEN-J26's fee-input proof. A class with no reference to look up
-/// records everything vacuous and yields `None`.
+/// spend's arm can widen (to the bond post's funding spends under its own
+/// row) without touching the emission's. Each arm records the other arms'
+/// rows vacuous first, as [`run_tx_against`](crate::rules::run_tx_against)
+/// records an out-of-scope kind, then runs [`reference_context`] under
+/// its own attribution. On a spend the yielded context is I15's operand
+/// — the proof verified over every `ToKey` input ([`to_key_slots`]), the
+/// row recorded on success and refusing at the transaction — and the arm
+/// yields it on; on an emission the whole context is J21's and is
+/// yielded, for CEN-J25's backing proof and CEN-J26's fee-input proof. A
+/// class with no reference to look up records everything vacuous and
+/// yields `None`. *Records-was:* until 2026-10-08 the spend arm ran
+/// I10–I12 alone and yielded `None` (see [`I12`]).
 pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
@@ -707,16 +726,28 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     match cx.class {
         TxClass::Spend { .. } => {
             coverage.insert(J21::ROW);
-            reference_context(cx, view, SPEND_REFERENCE, coverage)
+            match reference_context(cx, view, SPEND_REFERENCE, coverage)? {
+                // The C++'s order: the root at the reference and the depth
+                // against it (`blockchain.cpp:4088`, `:4098`), then
+                // `shekyl_fcmp_verify` over them (`:4157`).
+                Ok(Some(reference)) => {
+                    if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
+                        return Ok(Err(InvalidBlock::new(I15::ROW, cx.locus())));
+                    }
+                    coverage.insert(I15::ROW);
+                    Ok(Ok(Some(reference)))
+                }
+                other => Ok(other),
+            }
         }
         TxClass::Emission { .. } => {
-            for row in SPEND_REFERENCE.steps() {
+            for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             reference_context(cx, view, EMISSION_REFERENCE, coverage)
         }
         TxClass::Coinbase | TxClass::ServeCreditOnly { .. } | TxClass::BondPost { .. } => {
-            for row in SPEND_REFERENCE.steps() {
+            for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             coverage.insert(J21::ROW);

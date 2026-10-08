@@ -184,7 +184,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I10,
             CenRow::I11,
             CenRow::I12,
+            // Slice 6 row 6 (2026-10-08): the depth step and the proof over
+            // the reference context, on the spend class.
+            CenRow::I13,
             CenRow::I14,
+            CenRow::I15,
             CenRow::I16,
             CenRow::I17,
             CenRow::I18,

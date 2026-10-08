@@ -132,11 +132,15 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I9,
                 // Slice 6 commit 5: the regular-spend reference rows — the
                 // reference recorded (I10), in the window (I11), the anchor
-                // read at its height (I12, a definition).
+                // read at its height (I12, a definition). Slice 6 row 6
+                // (2026-10-08): the declared depth against the tree at the
+                // reference (I13) and the proof over that context (I15).
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
                 CenRow::I14,
+                CenRow::I15,
                 CenRow::I16,
                 // Slice 6 commit 7: the signing preimage, a definition
                 // recorded where the hashes are derived.
@@ -312,8 +316,9 @@ fn tx_entry_points_record_the_landed_rows() {
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
-    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
-    // regular-spend reference rows), I17 and I18 (the signing preimage and
+    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I13 and I15
+    // (the regular-spend reference rows and the proof over the context
+    // they yield), I17 and I18 (the signing preimage and
     // the signatures over it, of which a coinbase has none), J4–J6 (the
     // bond state behind a serve-credit vin, of which a coinbase has none),
     // J13–J16 and J18 (the bond post against its record and the join's
@@ -332,6 +337,8 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
+                CenRow::I15,
                 CenRow::I17,
                 CenRow::I18,
                 CenRow::J4,

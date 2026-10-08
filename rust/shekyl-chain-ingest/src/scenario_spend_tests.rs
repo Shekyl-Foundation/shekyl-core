@@ -14,7 +14,7 @@
 //! witnesses that crate's tests point at, by name: the rows a connected
 //! spend records (`Mined::judged_by`), the listed body as the block
 //! weight's addend (`Mined::weights`), CEN-L1 across two slots, and the
-//! two per-slot refusals at `Listed(1)` — CEN-I18 on a moved body and
+//! two per-slot refusals at `Listed(1)` — CEN-I15 on a moved body and
 //! CEN-I7 on a respend — that only a passing `Listed(0)` makes reachable.
 //! What moved from the rules crate is the witness, not the row.
 //!
@@ -39,17 +39,20 @@ const AT: u64 = FIRST_SPEND_HEIGHT + 1;
 
 /// The rows a block of real spends is judged under beyond the coinbase-only
 /// set (`scenario_tests::JUDGES_EVERY_BLOCK`): the listed form's H4, the
-/// per-slot sequence `tx_against` runs on a spend (I7, I10–I12, I17, I18),
-/// the chain-arm G1 before the slot loop and L1 after it. The rows I13 and
-/// I15 join when the spend class's depth step and anchor turn on
-/// (`CHAIN_RULES_SLICE_6.md` §5 row 6; the flip commit adds them here).
-const JUDGES_A_SPENDING_BLOCK: [CenRow; 9] = [
+/// per-slot sequence `tx_against` runs on a spend (I7, I10–I13, I15, I17,
+/// I18), the chain-arm G1 before the slot loop and L1 after it. I13 and
+/// I15 are the rows the flip of `CHAIN_RULES_SLICE_6.md` §5 row 6 turned
+/// on (2026-10-08): a real spend's declared depth admitted at its
+/// reference, and its membership proof verified there.
+const JUDGES_A_SPENDING_BLOCK: [CenRow; 11] = [
     CenRow::H4,
     CenRow::G1,
     CenRow::I7,
     CenRow::I10,
     CenRow::I11,
     CenRow::I12,
+    CenRow::I13,
+    CenRow::I15,
     CenRow::I17,
     CenRow::I18,
     CenRow::L1,
@@ -137,22 +140,26 @@ async fn l1_refuses_a_twin_spend_listed_behind_the_first() {
 /// `tx_against` sequence that binds the prefix refuses at `Listed(1)`: a
 /// per-transaction row behind a passing body is seen before the
 /// block-level row, the C++'s order (`add_spent_key` is the last check).
-/// Today that row is I18, at input 0 — the signature no longer covers its
-/// message. When CEN-I15 runs on the spend class (slice 6 row 6's flip,
-/// this PR) the membership proof binds the prefix earlier in the sequence
-/// and the refusal is I15's, at the transaction; the signature's own
-/// binding stays witnessed on the signature sequence in the rules crate.
-/// The mutation family's `ForgedSignature` flips the signature and leaves
+/// That row is CEN-I15, at the transaction: the membership proof is
+/// verified over the prefix hash (`FCMP_PLUS_PLUS.md` §7 step 4), so a
+/// moved prefix fails the proof before the signature sequence is reached.
+/// *Records-was:* until the flip (slice 6 row 6, 2026-10-08) I15 was
+/// staged off the spend class and the refusing row was I18 at input 0 —
+/// the signature no longer covering its message. The signature's own
+/// binding stays witnessed on the signature sequence in the rules crate;
+/// the mutation family's `ForgedSignature` flips the signature and leaves
 /// the body.
 #[tokio::test]
 async fn a_moved_body_listed_behind_its_twin_is_refused_per_slot_before_l1_can() {
-    let (mut scenario, _mined, a, _b) = matured("spend-moved-i18").await;
+    let (mut scenario, _mined, a, _b) = matured("spend-moved-i15").await;
     let mut moved = a.clone();
     moved.prefix.unlock_time += 1;
     refused_at(
         scenario.mine_listing(vec![a, moved]).await,
-        CenRow::I18,
-        SECOND_SLOT_FIRST_INPUT,
+        CenRow::I15,
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
     );
     scenario.close().await;
 }

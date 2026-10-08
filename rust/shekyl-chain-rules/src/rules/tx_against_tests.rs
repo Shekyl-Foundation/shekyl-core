@@ -247,7 +247,7 @@ fn i7_propagates_a_view_fault() {
 // and record L1; a second transaction over the first's key image (a twin
 // at another fee: a different body, the same image, each admissible alone)
 // is refused L1 at `Listed(1)`, input 0; and a second transaction that
-// fails a per-transaction row (its signature no longer over its body: I18)
+// fails a per-transaction row (its prefix moved under its proof: I15)
 // is refused on that row at `Listed(1)`, not on L1 — the C++'s
 // `add_spent_key` is the last check too. Until slice 6 row 6 the three were
 // here, over fixtures; what moved is the witness, not the row.
