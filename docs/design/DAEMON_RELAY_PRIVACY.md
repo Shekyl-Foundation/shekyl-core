@@ -16934,7 +16934,7 @@ because relays use clearnet too. The aware estimator named 30
 clearnet predecessors as the origin, and all 30 were clearnet-only.
 The 30-of-30 is the class of the node named, which follows from the
 routing rule; it is not precision against clearnet-only origins, and
-that is unmeasured.
+that is unmeasured. That measurement is its own `FOLLOWUPS.md` line.
 
 **Cross-connector linkage, not built.** Hypothesis: a spy holding
 both a Tor session and a clearnet session to one node can link that
@@ -16995,17 +16995,14 @@ Each item is open. Its carrier is the only thing that closes it.
    that path. A simulated cell under 3250 does not confirm it.
    **Carrier:** this item. **Closes when** that measurement is
    recorded here with the two p90s and the input has either moved
-   under §90 or been confirmed for the Tor return.    **Re-evaluation:**
-   the dated record of those two p90s. **Deferred to the next
-   relay-privacy round, not this item's closure.** Re-deriving
-   `fluff_return_ms` with Tor transit on the return path and
-   production `EveryPeer` reach, and measuring estimator precision
-   for clearnet-only origins as a function of the clearnet-only
-   fraction against the paper's all-clearnet baseline, are not
-   started here. Blocked on the Rust cutover — falsify by a
-   converged 512-node `EveryPeer` per-connector reading, which
-   reopens that round. 3250 stays provisional pending the
-   operational test above. The one-liner is in `FOLLOWUPS.md`.
+   under §90 or been confirmed for the Tor return. **Re-evaluation:**
+   the dated record of those two p90s. **Deferred on this item, not
+   its closure.** Re-deriving `fluff_return_ms` with Tor transit on
+   the return path and production `EveryPeer` reach waits for the
+   next relay-privacy round. Blocked on the Rust cutover — falsify
+   by a converged 512-node `EveryPeer` per-connector reading, which
+   reopens that round. 3250 stays provisional pending the operational
+   test above. The one-liner is in `FOLLOWUPS.md`.
 3. **Onion-candidate flooding defence.** A hidden edge is drawn from
    publishers an attacker can supply. `HiddenStemSlot` moves the
    first-spy attack onto that share: a clearnet arrival exonerates

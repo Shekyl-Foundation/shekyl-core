@@ -11,7 +11,11 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **Re-derive `fluff_return_ms` with Tor transit on production `EveryPeer`, and measure clearnet-only origin precision against the all-clearnet baseline.** Both wait for the next relay-privacy round. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading (`DAEMON_RELAY_PRIVACY.md` §96 item 2). 3250 stays provisional pending the operational test named there.
+- **Re-derive `fluff_return_ms` with Tor transit on production `EveryPeer`.** It waits for the next relay-privacy round, on the item that already carries replacing 3250. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading (`DAEMON_RELAY_PRIVACY.md` §96 item 2). 3250 stays provisional pending the operational test named there.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
+- **Measure estimator precision for clearnet-only origins, as a function of the clearnet-only fraction, against the paper's all-clearnet baseline.** The 30-of-30 in `DAEMON_RELAY_PRIVACY.md` §95.3 is the class of the node named, not this precision. It waits for the next relay-privacy round. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
