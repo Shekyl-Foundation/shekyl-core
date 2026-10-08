@@ -43,7 +43,9 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.41: `inject_archival_serve_credit` (regtest
+/// `CORE_RPC_VERSION_MINOR`. 3.42: `get_info` reports
+/// `already_generated_coins`, the gross coins emitted through the tip.
+/// `get_version` gains nothing. 3.41: `inject_archival_serve_credit` (regtest
 /// only) returns its receipt — `height`, the tip's block **index** the row
 /// was keyed at, read under the lock with the write; the chain-vector
 /// capture replays the injection as a corpus event at exactly that height
@@ -104,8 +106,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// coinbase-nonce bound; 3.38 the per-connector socket counts and the
 /// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
 /// `get_version` and `sync_info` stop encoding synchronization as
-/// `target_height = 0`; 3.41 the injector's `height` receipt.
-pub const CORE_RPC_VERSION_MINOR: u32 = 41;
+/// `target_height = 0`; 3.41 the injector's `height` receipt; 3.42
+/// `get_info.already_generated_coins`.
+pub const CORE_RPC_VERSION_MINOR: u32 = 42;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -510,10 +513,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_649);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 41);
+        assert_eq!(CORE_RPC_VERSION, 196_650);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 42);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 41);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 42);
     }
 
     #[test]

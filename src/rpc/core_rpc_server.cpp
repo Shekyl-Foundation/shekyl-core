@@ -257,10 +257,14 @@ namespace cryptonote
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 
-    // Chain-state inputs for economics calculations
+    // Chain-state inputs for economics calculations. The same total is a
+    // reply field: a reader that only saw burn_pct and total_burned was
+    // printing circulating supply as 0, because this value never left the
+    // function.
     uint64_t already_generated = 0;
     if (res.height > 0)
       already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
+    res.already_generated_coins = already_generated;
 
     // Shekyl NG four-component economics fields
     const shekyl::tx_volume_window tx_volume = m_core.get_blockchain_storage().get_tx_volume_window(res.height);

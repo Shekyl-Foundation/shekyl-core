@@ -258,7 +258,11 @@ namespace cryptonote
       bool following_degraded;
       bool restricted;
 
-      // Shekyl NG four-component economics fields
+      // Shekyl NG four-component economics fields.
+      // Gross coins emitted through the tip (atomic). Net circulating supply
+      // is this minus total_burned; the reply keeps them separate so a reader
+      // does not have to undo the subtraction.
+      uint64_t already_generated_coins;
       uint64_t release_multiplier;
       uint64_t burn_pct;
       uint64_t total_burned;
@@ -308,6 +312,7 @@ namespace cryptonote
         KV_SERIALIZE(synchronized)
         KV_SERIALIZE(following_degraded)
         KV_SERIALIZE(restricted)
+        KV_SERIALIZE(already_generated_coins)
         KV_SERIALIZE(release_multiplier)
         KV_SERIALIZE(burn_pct)
         KV_SERIALIZE(total_burned)
