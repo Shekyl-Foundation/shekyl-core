@@ -129,6 +129,15 @@ Each wake, for one connector, takes the first arm that applies.
    full. It stops once white is at the refill line. It is the same
    wake, not a second clock.
 
+The next wake can run while a dial is still in flight. Until
+`Hub::adopt`, that address is not an outbound session and a `Keep`
+row does not yet exist, so the arms above would not see it. The
+dialer keeps a pending attempt from the moment `dial_channel`
+returns until every `DialOutcome`. A pending attempt's address and
+host are not candidates. A pending `Keep` counts toward the outbound
+target. A pending `Confirm` or `Harvest` does not. The set is empty
+after the outcome, including failure before adopt.
+
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
 `cryptonote_config.h:200`). Below that share of the cap it tries white
@@ -171,11 +180,17 @@ established delivery. A well-formed harvest peerlist is `HarvestDone`,
 and the session is closed.
 
 On a well-formed response whose aim is `Keep` or `Confirm`, the owner
-adopts, then queues one `Post::Deliver`. That delivery is the first
-strand post after `Post::Established`, ahead of any later frame. It
-carries the response's support flags, including zero, and the peer's
-sync payload. The strand is the first reader of those two. The owner
-does not call `process_payload_sync_data`.
+adopts, then posts one handshake result. That post is not
+`Post::Deliver`. `Post::Deliver` is one whole Levin message
+(`hub.rs:48`) and the adapter feeds those bytes to `handle_recv`. A
+handshake response arriving that way has no invoke handler on the
+new strand and is the "no active invoke" close. The handshake owner
+already decoded the response on the channel. The result post carries
+the support flags, including zero, and the sync payload, and the
+strand reads those fields. It does not parse them as a Levin
+response. The post is the first strand post after `Post::Established`,
+ahead of any later frame. The owner does not call
+`process_payload_sync_data`.
 
 In that one strand turn, before any later frame, the strand accepts or
 refuses. On accept, `Keep` sets the session-established flag, flips
@@ -208,8 +223,10 @@ post-handshake race in the known-defect section.
 outbound-handshake role.*
 
 Test: no frame after the handshake reaches the strand before that
-`Post::Deliver`. With a refused payload, the relay registry never
-holds the session.
+handshake result. With a refused payload, the relay registry never
+holds the session. A second wake while a `Keep` dial has not yet
+adopted does not dial that address or its host, and does not open
+another `Keep` that would put the target over when both adopt.
 
 ---
 
@@ -398,7 +415,7 @@ confirm the strand accepts is `Confirmed`. It is not `HarvestDone`.
 ## Support flags
 
 The handshake response carries `support_flags`. That value, including
-zero, is what the `Post::Deliver` hands the strand.
+zero, is what the handshake result hands the strand.
 `try_get_support_flags` (`net_node.inl:1435`, defined at `:2677`) asks
 again when the field is zero. The field is optional on the wire
 (`KV_SERIALIZE_OPT`, default 0), and the second invoke is how an
@@ -564,7 +581,7 @@ dial on the 2-worker io pool can leave `get_connections` with claims
 unknown. After: the same dial leaves every io worker free, and the
 claim post lands.
 
-The `Post::Deliver` test above. `PayloadRefused` leaves the address
+The handshake-result test above. `PayloadRefused` leaves the address
 off white and still on gray when it was an outstanding draw. A
 harvest of anyone outside the Foundation fleet leaves white
 unchanged. `HarvestDone` for one of the six hosts writes white.
