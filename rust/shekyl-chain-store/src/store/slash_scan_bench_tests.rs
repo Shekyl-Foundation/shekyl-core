@@ -183,8 +183,8 @@ fn slot(i: u64) -> u32 {
 
 /// The height the `i`-th persona's join connects at: one per block from
 /// the first spending height, in slot order.
-const fn join_height(i: u64) -> u64 {
-    FIRST_SPEND_HEIGHT + i
+const fn join_height(i: u64) -> BlockHeight {
+    BlockHeight::from_raw(FIRST_SPEND_HEIGHT + i)
 }
 
 /// The credits' settlement epoch for the persona at `slot`: the first a
@@ -195,7 +195,7 @@ const fn join_height(i: u64) -> u64 {
 fn credit_epoch(slot: u64) -> u64 {
     RULES
         .settlement_schedule()
-        .epoch_at_height(join_height(slot))
+        .epoch_at_height(join_height(slot).to_raw())
         + 1
 }
 
@@ -265,7 +265,7 @@ fn listing(h: u64, personas: u64) -> Vec<Listed> {
 /// The heights carrying padding credits, ascending — the ServeCredit rows
 /// the snapshot carries are one per `(persona, height)`.
 fn credit_heights(personas: u64) -> impl Iterator<Item = u64> {
-    let first = join_height(personas);
+    let first = join_height(personas).to_raw();
     first..first + CREDIT_BLOCKS
 }
 
@@ -366,8 +366,9 @@ impl SlashedChain {
             h = end;
         }
         let shard_closed = shard_closed.expect("the credits close shard 0");
+        let credits_from = join_height(personas).to_raw();
         assert!(
-            (join_height(personas)..join_height(personas) + CREDIT_BLOCKS).contains(&shard_closed)
+            (credits_from..credits_from + CREDIT_BLOCKS).contains(&shard_closed)
                 && shard_closed < SEB,
             "shard 0 closes inside the credit blocks, inside epoch 0: {shard_closed}"
         );
