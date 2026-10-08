@@ -291,6 +291,49 @@ Currently 80 tests are enabled and passing (including the re-enabled
 `gen_block_reward` test whose reward verification was rewritten to use
 Shekyl's four-component economics formula).
 
+## Running a source build with Tor
+
+A release archive carries the pinned Tor bundle in `tor/` beside the
+binaries. A source build does not, so a `shekyld` you compiled starts
+clearnet-only and warns that no Tor was found. To give it one, stage the
+pinned bundle into the build's `bin/tor/`:
+
+```bash
+# x86_64 Linux; use aarch64-linux-gnu on an arm64 host.
+python3 scripts/release/tor_bundle.py stage --host x86_64-linux-gnu \
+  --sources ~/.cache/shekyl-tor --dest build/bin/tor --licenses build/bin/tor-licenses
+```
+
+`stage` downloads the tarball named in `config/tor_pins.json` if
+`--sources` does not hold it, refuses it unless its SHA-256 is the pinned
+one, and extracts only the files the pin lists. The daemon then finds
+`tor/tor` beside itself.
+
+`SHEKYL_TOR_BINARY=/path/to/tor` overrides where the daemon looks. It does
+not relax what it checks. The path must name the `tor` inside a directory
+that holds **exactly** the pinned files:
+
+- **Pointing it at a full extracted Expert Bundle is refused.** That
+  directory also holds `pluggable_transports/`, and the daemon refuses a
+  tor directory with anything in it that is not pinned. The loader is
+  pointed at that directory, so anything in it could be loaded. Stage the
+  bundle as above and point the variable at the staged `tor`.
+- A distribution's `tor` (`/usr/bin/tor`) is refused: it is a different
+  build and its directory is not the bundle.
+- There is no `PATH` lookup.
+
+The managed tor is started with an empty environment plus, on Linux,
+`LD_LIBRARY_PATH` set to its own directory. A variable exported in your
+shell does not reach it.
+
+To run without Tor on purpose, pass `--no-ephemeral-tor`. The lifecycle
+tests take any tor through `SHEKYL_TEST_TOR_BINARY`, which bypasses the pin
+and exists only in test builds.
+
+On Windows, macOS and FreeBSD there is no managed tor yet
+(`docs/design/TOR_BUNDLE_DISTRIBUTION.md` §5): the daemon says so at start,
+and you attach your own with `--tx-proxy` and `--anonymous-inbound`.
+
 ## Seed node build (lean daemon)
 
 `make release-seed` builds only the daemon (`shekyld`) with `ARCH=x86-64`

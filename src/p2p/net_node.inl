@@ -853,17 +853,33 @@ namespace nodetool
     // anonymity zone, so a start failure must leave NO tor zone in the map.
     if (m_offline || m_nettype == cryptonote::FAKECHAIN)
       return;
+    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
+    const bool zone_was_present = preexisting != m_network_zones.end();
     if (command_line::get_arg(vm, arg_no_ephemeral_tor))
     {
-      MINFO("Ephemeral Tor inbound disabled by --" << arg_no_ephemeral_tor.name);
+      // TB-1: declining Tor is a supported choice, and a node that made it
+      // says so on every boot at a level that is read. An operator who
+      // attached a Tor of their own has not declined Tor, only the managed one.
+      //
+      // These lines go to the "global" category on purpose. This file's own
+      // category, net.p2p, is filtered to errors by the default log settings,
+      // so a warning written there is one nobody sees -- which is how a node
+      // came to run clearnet-only without its operator knowing.
+      if (zone_was_present)
+        MINFO("Managed Tor disabled by --" << arg_no_ephemeral_tor.name
+            << "; the operator-provisioned Tor configuration is in use");
+      else
+        MCWARNING("global", "Tor is declined (--" << arg_no_ephemeral_tor.name << "): this node is clearnet-only. "
+            "Its address is visible to its peers, and its own transactions are relayed over clearnet "
+            "with no onion route. The clearnet link is encrypted only where --"
+            << arg_clearnet_transport_encrypt.name << " is set on both ends. "
+            "Remove the flag to run with Tor");
       return;
     }
     // --anonymous-inbound already owns the onion. --tx-proxy does not: it
     // names the SOCKS address dials use, and the per-boot onion still publishes.
     // A tor zone that exists only because a named onion was parsed is the same
     // case — the managed Tor has not started yet, so it is not operator SOCKS.
-    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
-    const bool zone_was_present = preexisting != m_network_zones.end();
     if (zone_was_present && !preexisting->second.m_bind_ip.empty())
     {
       MINFO("Operator inbound onion (--" << arg_anonymous_inbound.name
@@ -886,13 +902,42 @@ namespace nodetool
       MINFO("Pinned tor binary found; publishing ephemeral overlay inbound (PWD-E7)");
       break;
     case SHEKYL_DAEMON_TOR_NO_BINARY:
-      MINFO("No tor binary found; overlay (.onion) inbound disabled for this boot. Install the pinned "
-          "tor bundle beside the daemon, stage it under /opt/shekyl/<version>-<target>/, or set "
-          "SHEKYL_TOR_BINARY to enable the default ephemeral posture");
+      // Not declined, and not present: the state TB-1 says a node is not
+      // quietly in. It is a warning until the refusal (TB-2) lands.
+      // `--tx-proxy` already installed a SOCKS dial, and this return leaves
+      // that zone in place, so outbound is that proxy. Calling the node
+      // clearnet-only would be false.
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "No Tor bundle was found, so there is no per-boot onion for inbound. "
+            "Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it) to publish inbound as well");
+      else
+        MCWARNING("global", "No Tor was found, so this node is clearnet-only for this boot although Tor was not "
+            "declined. Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it), or pass --"
+            << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     case SHEKYL_DAEMON_TOR_BAD_BINARY:
-      MWARNING("A tor binary was found but is unusable for the ephemeral overlay posture: " << error_msg
-          << ". Overlay inbound disabled for this boot");
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion for this boot");
+      else
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". This node is clearnet-only for this boot");
+      return;
+    case SHEKYL_DAEMON_TOR_UNAVAILABLE:
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "). Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion until you pass --" << arg_anonymous_inbound.name
+            << " with an onion of your own");
+      else
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "), so this node is clearnet-only unless you attach a Tor of your own: run tor, then pass --"
+            << arg_tx_proxy.name << " for outbound and --" << arg_anonymous_inbound.name
+            << " for inbound. Pass --" << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     default:
       MERROR("Ephemeral tor start failed (" << error_msg
@@ -953,7 +998,7 @@ namespace nodetool
         service_id, sizeof (service_id), error_msg, sizeof (error_msg));
     if (publish_rc != SHEKYL_DAEMON_TOR_OK)
     {
-      MWARNING("Ephemeral onion publish failed (" << error_msg
+      MCWARNING("global", "Ephemeral onion publish failed (" << error_msg
           << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
       return;
     }
@@ -969,6 +1014,9 @@ namespace nodetool
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port
         << " -> 127.0.0.1:" << local_port << " (new address every boot; SOCKS " << socks_addr << ")");
+    // The address stays in net.p2p, which the default log settings filter. That
+    // Tor is up is said where an operator reads it, without the address.
+    MGINFO("Tor is up: the managed tor is running and overlay inbound is published on a per-boot onion address");
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

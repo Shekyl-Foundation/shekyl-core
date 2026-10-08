@@ -335,10 +335,11 @@ pub fn is_degraded(policy: &SupervisorPolicy, class: FailureClass, attempt: u32)
 #[derive(Debug, Clone)]
 pub enum TorBinarySource {
     /// The ambient production path: `binary::discover_and_verify()` (env
-    /// override → beside the wallet → `PATH`), hash-gated.
+    /// override → `tor/` beside the wallet → the `/opt/shekyl` system
+    /// directory), pin-gated.
     Discover,
     /// A caller-supplied path (the wallet's settings file):
-    /// `binary::discover_and_verify_at`, hash-gated.
+    /// `binary::discover_and_verify_at`, pin-gated.
     At(PathBuf),
     /// **Test-only bypass** of the gate (lifecycle tests injecting an arbitrary
     /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`,
@@ -1063,7 +1064,7 @@ mod tests {
     #[test]
     fn classify_maps_binary_to_trust_everything_else_transient() {
         assert_eq!(
-            classify(&ServiceFailure::Binary(TorBinaryError::Unpinned)),
+            classify(&ServiceFailure::Binary(TorBinaryError::NotFound)),
             FailureClass::Trust
         );
         assert_eq!(
@@ -1111,8 +1112,10 @@ mod tests {
     #[tokio::test]
     async fn trust_failure_degrades_loudly_and_retries_forever() {
         let dir = tempfile::tempdir().unwrap();
-        // A real file that can never match CURRENT_PIN: the gate itself
-        // produces the HashMismatch (no mocks).
+        // A real file the gate can never pass: on a pinned target its
+        // directory is not the pinned bundle, and on any other target there
+        // is no managed tor at all. The gate itself produces the refusal (no
+        // mocks).
         let bogus = dir.path().join("not-tor");
         std::fs::write(&bogus, b"definitely not the pinned tor").unwrap();
         #[cfg(unix)]
@@ -1146,7 +1149,8 @@ mod tests {
                             matches!(
                                 last,
                                 ServiceFailure::Binary(
-                                    TorBinaryError::HashMismatch { .. } | TorBinaryError::Unpinned
+                                    TorBinaryError::UnexpectedEntry { .. }
+                                        | TorBinaryError::Unavailable { .. }
                                 )
                             ),
                             "degraded must carry the gate's verdict, got {last:?}"
@@ -1195,15 +1199,64 @@ mod live_tests {
     use super::*;
     use crate::test_support::tor_binary;
 
-    /// Await a posture state matching `pred`, panicking after `secs`. The value
-    /// is cloned from the SAME borrow the predicate checked — a second borrow
-    /// could observe a newer state that no longer matches.
+    /// Wait for a `Ready` posture, and say **why** if it does not come.
+    ///
+    /// Reaching `Ready` needs the real Tor network, and from a CI runner that
+    /// sometimes takes longer than the wait. The lane that runs these tests
+    /// retries a step once when every failure in it is a bootstrap timeout
+    /// (`scripts/ci/run_live_tor_tests.sh`), so the test has to be the one to
+    /// say which kind of failure it saw: it holds the posture, and a script
+    /// matching on the wait's label would be guessing. The posture at the
+    /// deadline decides. Still `Connecting` means tor is up and has not
+    /// finished bootstrapping, and the panic says "did not bootstrap", the
+    /// phrase the lane retries on. Any other posture — never spawned, died,
+    /// restarting, degraded — is the supervisor's doing and is reported as
+    /// that, with the posture, and is not retried.
+    async fn await_ready<F: Fn(&TorPosture) -> bool>(
+        rx: &mut watch::Receiver<TorPosture>,
+        secs: u64,
+        what: &str,
+        pred: F,
+    ) -> TorPosture {
+        await_until(rx, secs, what, pred, |at_deadline| match at_deadline {
+            TorPosture::Connecting { progress } => format!(
+                "tor did not bootstrap: still connecting at {progress}% after {secs}s, \
+                 awaiting {what}"
+            ),
+            other => format!("timed out awaiting {what}; posture was {other:?}"),
+        })
+        .await
+    }
+
+    /// Wait for any other posture. A timeout here is never the network's: these
+    /// are the transitions the supervisor itself is responsible for.
     async fn await_posture<F: Fn(&TorPosture) -> bool>(
         rx: &mut watch::Receiver<TorPosture>,
         secs: u64,
         what: &str,
         pred: F,
     ) -> TorPosture {
+        await_until(rx, secs, what, pred, |_| {
+            format!("timed out awaiting {what}")
+        })
+        .await
+    }
+
+    /// The wait both helpers share. The value returned is cloned from the SAME
+    /// borrow the predicate checked — a second borrow could observe a newer
+    /// state that no longer matches — and it is that same value `on_timeout`
+    /// is given, so the panic describes the state that failed the predicate.
+    async fn await_until<F, M>(
+        rx: &mut watch::Receiver<TorPosture>,
+        secs: u64,
+        what: &str,
+        pred: F,
+        on_timeout: M,
+    ) -> TorPosture
+    where
+        F: Fn(&TorPosture) -> bool,
+        M: Fn(&TorPosture) -> String,
+    {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         loop {
             let current = rx.borrow_and_update().clone();
@@ -1212,7 +1265,7 @@ mod live_tests {
             }
             tokio::select! {
                 changed = rx.changed() => { changed.unwrap_or_else(|_| panic!("supervisor died awaiting {what}")); }
-                () = tokio::time::sleep_until(deadline) => panic!("timed out awaiting {what}"),
+                () = tokio::time::sleep_until(deadline) => panic!("{}", on_timeout(&current)),
             }
         }
     }
@@ -1251,7 +1304,7 @@ mod live_tests {
         let mut posture = service.posture();
 
         // First life: bootstrap → Ready with a discovered SocksPort-auto addr.
-        let first = await_posture(&mut posture, 120, "first Ready", |p| {
+        let first = await_ready(&mut posture, 120, "first Ready", |p| {
             matches!(p, TorPosture::Ready { .. })
         })
         .await;
@@ -1291,7 +1344,7 @@ mod live_tests {
         })
         .await;
         // ...and reach Ready again (a fresh incarnation, fresh endpoint).
-        let second = await_posture(&mut posture, 120, "second Ready", |p| {
+        let second = await_ready(&mut posture, 120, "second Ready", |p| {
             matches!(p, TorPosture::Ready { .. })
         })
         .await;
@@ -1356,7 +1409,7 @@ mod live_tests {
 
         // First life: Ready is only published after the onion published at
         // `expected` (a mismatch or rejection would fail the incarnation).
-        await_posture(&mut posture, 120, "first Ready (onion published)", |p| {
+        await_ready(&mut posture, 120, "first Ready (onion published)", |p| {
             matches!(p, TorPosture::Ready { .. })
         })
         .await;
@@ -1375,7 +1428,7 @@ mod live_tests {
         })
         .await;
         // Second Ready ⇒ the onion republished on the second incarnation.
-        await_posture(&mut posture, 120, "second Ready (onion republished)", |p| {
+        await_ready(&mut posture, 120, "second Ready (onion republished)", |p| {
             matches!(p, TorPosture::Ready { .. })
         })
         .await;
@@ -1415,7 +1468,7 @@ mod live_tests {
         let mut posture = service.posture();
 
         // First Ready: a clean launch is not a recovery.
-        let first = await_posture(&mut posture, 120, "first Ready", |p| {
+        let first = await_ready(&mut posture, 120, "first Ready", |p| {
             matches!(p, TorPosture::Ready { .. })
         })
         .await;
@@ -1448,7 +1501,7 @@ mod live_tests {
         .await;
 
         // The next incarnation is usable, but the episode is still open.
-        await_posture(&mut posture, 120, "Ready{recovering:true}", |p| {
+        await_ready(&mut posture, 120, "Ready{recovering:true}", |p| {
             matches!(
                 p,
                 TorPosture::Ready {
