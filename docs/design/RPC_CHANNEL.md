@@ -536,12 +536,29 @@ client never reaches the wrong network's node.
   the client holds a handle, as it does for the wallet. The recorded session
   id lets the client report the other-session case without dialling (§4.5).
   Three refinements from the Windows lane's measurements (RT-P8):
-  - **The rendezvous file and its directory carry a no-read-up mandatory
-    label.** Windows' default integrity policy forbids writing up, not
+  - **The rendezvous file carries a no-read-up mandatory label, set at
+    creation.** Windows' default integrity policy forbids writing up, not
     reading up, so without it a same-user low-integrity process can read
     the current name and, after the daemon exits, claim it. The client's
     integrity floor still refuses that squatter (measured), but the label
-    removes the path rather than relying on the refusal.
+    removes the path rather than relying on the refusal. **The label must be
+    in the `SECURITY_ATTRIBUTES` passed to `CreateFileW`** —
+    `S:(ML;;NR;;;ME)`; `NR` alone suffices (measured: a low-integrity read is
+    refused). The two obvious alternatives **silently fail**: a file that
+    inherits from a directory labelled `(OI)(CI)` Medium `NR` carries only
+    `(I)(NW)`, and `icacls /setintegritylevel Medium:NR` exits 0 while
+    applying only `NW` — in both cases a low-integrity read succeeds while
+    the file visibly carries a Medium label (measured). So the check that
+    guards this reads back the label's **policy bits** and asserts `NR`;
+    "a mandatory label is present" passes on the broken file and cannot
+    fail. The home is `shekyl-win-sec`'s `create_owner_only_file`
+    ([`file.rs:86`](../../rust/shekyl-win-sec/src/file.rs)), which WP-D8
+    left unlabelled because the read-up question for files was not that
+    slice's (`file.rs:20-21`); it is answered now.
+  - **The directory carries its own no-read-up label** as well: a
+    low-integrity process cannot open it, so it cannot enumerate the
+    rendezvous (measured). The directory's label is not relied on to
+    protect the file.
   - **Clean exit deletes the rendezvous before closing the pipe**, so the
     name is never free while a rendezvous still points at it.
   - **Start-up dials an existing rendezvous through the peer check** before
@@ -630,10 +647,50 @@ construction) instead of loopback TCP.
   sessions of one user — needs a Server edition; the §4.5 other-session
   row rests on it. *Reopen:* the first Server-edition deployment, or any
   report of a same-user second session reaching the pipe.
-- **Still to run:** RT-P8 items (1), and (4)–(7).
+- **Rendezvous label (§7.1):** a label set at `CreateFileW` refuses a
+  low-integrity read; an inherited label and an `icacls`-applied label both
+  carry `NW` only and admit it, while appearing as a Medium label.
+- **Item 4 — Windows callers today:** the Windows build produces only
+  `shekyld.exe` and `shekyl-mdb-copy.exe`; the wallet stack is linked into
+  the GUI (`src-tauri` path-depends on `shekyl-engine-core`,
+  `shekyl-rpc-client`, `shekyl-scanner`; its embedded engine builds its
+  daemon client from the same address). Three consumers, one leg: the GUI's
+  own daemon RPC (including mining control), the GUI's embedded engine, and
+  `shekyld <command>` — all same-user, all on the owner-only pipe. Nothing
+  on Windows uses the channel in run-as-me mode. When WP-W5 ships
+  `shekyl-cli` and `shekyl-wallet-rpc` on Windows (`BuildRust.cmake:390-414`
+  gates them today), they join as same-user callers; the design does not
+  change.
+- **Item 5 — partly:** the restricted service-SID type is in production use
+  for network-listening services (9 of 334 on the box, including the
+  firewall's; `NetTcpPortSharing` is the closest precedent: listening,
+  restricted, one privilege). All run as LocalService; the **virtual-account
+  half is unrun** (needs elevation).
+- **Item 6 — partly, and the default is wrong for RT-16:** a fresh
+  `%ProgramData%` subdirectory inherits `BUILTIN\Users` write, so the
+  installer must break inheritance explicitly. `NT SERVICE\shekyld` does
+  not resolve before the service exists, so the service is registered
+  first and the directory created after. Any unelevated user can pre-create
+  `%ProgramData%\<name>`, and as its owner keeps the right to rewrite its
+  DACL — so re-asserting the ACL on an existing directory is not enough.
+  **The installer never adopts an existing path:** one it did not create
+  in this run is moved aside, reported, and replaced by a fresh directory
+  owned by Administrators with the asserted ACL (proposed; the ownership
+  point is design reasoning, not measured). The real service ACL is unrun
+  (needs elevation).
+- **Not runnable yet:** item 1 is blocked on RT-W10 — no rendezvous exists
+  in the tree, and the lane declined to substitute a model and report it as
+  item 1; item 7 is unimplemented.
 
 ## 10. Open questions
 
+- **Finding for the Windows wallet lane (not ruled here).** The same
+  `create_owner_only_file` writes the **exported seed file** (WP-D8) with
+  no mandatory label. The wallet pipe already refuses low-integrity
+  callers, so a same-user low-integrity process is inside that threat model
+  — yet under the default policy it can read an exported seed. One policy
+  for the one function (`NR` at creation for every caller) is the obvious
+  fix; it is the wallet lane's to rule, with WP-D8 reopened.
 - **RT-O6 — length concealment.** The path observer sees request and
   response sizes and timing; for a syncing wallet those track block sizes.
   In scope for the channel, or accepted and named?
