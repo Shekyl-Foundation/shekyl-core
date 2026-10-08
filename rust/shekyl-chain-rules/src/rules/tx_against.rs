@@ -560,7 +560,7 @@ impl Rule for J21 {
 /// kind) against that anchor at `tree_depth + 1` layers and the prefix
 /// hash (`blockchain.cpp:3654–3733`, the bond arm: the lookup `:3654`, the
 /// window `:3661–3673`, the root at the reference `:3677`, the depth
-/// `:3678–3684`, the scalars `:3700`, `shekyl_fcmp_verify` `:3713`). The
+/// `:3678–3684`, the scalars `:3702`, `shekyl_fcmp_verify` `:3713`). The
 /// C++ refuses each failure under the bond arm's own messages; the census
 /// keys them all to this row. Refuses at the transaction.
 ///
