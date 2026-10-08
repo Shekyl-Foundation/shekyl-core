@@ -106,20 +106,28 @@ Each wake, for one connector, takes the first arm that applies.
    Clearnet, once, after every seed has failed, adds
    `get_ip_seed_nodes` (`:2084`) and walks those the same way. The
    C++ `break` after `connect_to_seed`'s dial is `:2073`.
-3. **`draw_white`.** The connector is under its outbound target and
-   white has a candidate. The draw re-contacts. It is not a promotion.
-   The aim is `Keep`.
+3. **`draw_white`.** The connector is under its outbound target, and
+   white has an address that is not already an outbound session on
+   that connector and that passes the candidate filter. The draw is
+   uniform among those addresses. It re-contacts a white peer this
+   node is not already connected to. It is not a promotion. The aim
+   is `Keep`. An address already held is not a candidate. A wake
+   does not spend itself rejecting one.
 4. **`draw_gray`.** Slice 1 reports white under the refill line, the
-   connector is still under its outbound target, and this wake did not
-   take a white candidate. The aim is `Keep`. `SessionAccepted` moves
-   that outstanding gray draw to white, and the session stays.
-5. **`confirm_gray`.** Outbound is already at that target, so arm 4
-   cannot run, and slice 1 still reports white under the refill line.
-   One gray draw. The aim is `Confirm`. The strand must accept the
-   payload. The session is then closed, the relay is not flipped, and
-   `Confirmed` writes white. This is how white reaches the diversity
-   floor while every slot is full. It stops once white is at the
-   refill line. It is the same wake, not a second clock.
+   connector is still under its outbound target, and arm 3 did not
+   apply. The aim is `Keep`. `SessionAccepted` moves that outstanding
+   gray draw to white, and the session stays.
+5. **`confirm_gray`.** The outbound target counts `Keep` rows only,
+   including a `Keep` row still `Arming`, so arm 4 cannot run, and
+   slice 1 still reports white under the refill line. One gray draw.
+   The aim is `Confirm`. Adopting it inserts a row. That row does not
+   count toward the target, is not refused because the target is
+   already met, and is not a reason to close a `Keep` row. The strand
+   must accept the payload. The session is then closed in that turn,
+   the relay is not flipped, and `Confirmed` writes white. This is
+   how white reaches the diversity floor while every `Keep` slot is
+   full. It stops once white is at the refill line. It is the same
+   wake, not a second clock.
 
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
@@ -174,7 +182,9 @@ refuses. On accept, `Keep` sets the session-established flag, flips
 the relay registry (`shekyl_relay_zone_on_session_established`), and
 the dialer emits `SessionAccepted`. `Confirm` does not flip the relay
 and does not leave the row: the owner closes in that turn and emits
-`Confirmed`. A confirm dial is never a stem edge. On refuse, either
+`Confirmed`. A confirm dial is never a stem edge. The outbound target
+is the count of `Keep` rows on that connector. A `Confirm` row is
+outside that count for the turn it exists. On refuse, either
 aim closes the session and the dialer emits `PayloadRefused`. Nothing
 enters the relay's peer set before the payload is accepted, and a
 confirm dial does not enter it after.
@@ -559,8 +569,13 @@ off white and still on gray when it was an outstanding draw. A
 harvest of anyone outside the Foundation fleet leaves white
 unchanged. `HarvestDone` for one of the six hosts writes white.
 `Confirmed` of an outstanding gray draw writes white, leaves no
-session, and never appears in the relay registry. `SessionAccepted`
-of that draw writes white and the session stays.
+session, and never appears in the relay registry. That dial, started
+while `Keep` rows are already at the target, leaves the `Keep` count
+unchanged: no `Keep` peer is closed to make room, and the adopt is
+not refused for being at the target. `SessionAccepted` of that draw
+writes white and the session stays. When every white address is
+already an outbound session and white is under the refill line, the
+next wake is `draw_gray`, not another dial of a live white peer.
 
 The deletion section is the gate. Each before-command hits the sites
 it names. Each after-command does what its row says, including the
