@@ -1729,6 +1729,10 @@ found each waiting on the other (`SCV-1`).
 - **The genesis gate** (`SCV-Q5`, recorded on `DEL-008`): no genesis, and
   no `DEL-008` cutover, until Slice C's admission rows are `implemented` in
   `census.rs` and J8–J10 are retired.
+- **The draw's gate** (`SO-D10d`, ruled 2026-10-08): the secret draw does
+  not go live until accrual reads the settlement row. No Rust consensus
+  pays on any pass while it slashes on rows
+  ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §14.5).
 
 **2. Round 0 — four inputs, ruled before anything is built.** Ownership does
 not wait on them; building does.

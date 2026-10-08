@@ -1215,6 +1215,35 @@ them and depends on how the tries are spaced, which the model does not
 represent. A persona that is down for the whole of `W₂` fails all three
 tries at any `ρ`, and that is a miss the window is meant to count.
 
+### 5.16 ESR-12 — settlement timing, posed (2026-10-08). Not run
+
+Posed by the maintainer with the settlement writer's rulings
+([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §14.5).
+Nothing here is modelled yet; this is the question and what a run has to
+report. The model, the bar and the predictions are written before the code,
+as for ESR-11.
+
+**The question.** Does settling epoch `E` at `h_close(E) + W₂ + 1`, where
+it is settled today at `(E+2)·SEB − 1`, change anything that matters?
+
+Settlement needs every reveal for `E` to be in, and that is true at
+`h_close(E) + W₂`. The full-epoch delay is inherited from the beacon's
+resolution window of one epoch.
+
+**To measure, under both timings:**
+
+- the time from serving to a claimable reward;
+- the time to slash for a pair that does not serve;
+- the exposure of an honest archiver to a slash during an outage that
+  straddles the epoch boundary;
+- the interaction with `MAX_CLAIM_AGE_W`, with the grace coupling
+  (`SLASH_GRACE_EPOCHS · SEB ≥ W₂`), and with the wallet's claim arithmetic.
+
+**What it can change.** It does not block the settlement writer, which is
+built on the current timing. If the run shows a material gain, the result
+comes back as a re-pin: slash timing and the grace coupling re-derived. It
+does not come back as a move of the pass.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
