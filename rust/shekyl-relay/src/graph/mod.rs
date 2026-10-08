@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
@@ -28,8 +28,8 @@ use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
 use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
-pub use shekyl_transport_layer::ConnectorId;
-use shekyl_transport_layer::{declaration, Assessment, NativeEncryption, YesNo};
+use shekyl_transport_layer::{declaration, Assessment, Declaration, NativeEncryption, YesNo};
+pub use shekyl_transport_layer::{ConnectorId, CoverClass};
 use shekyl_types::relay::RelayMethod;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
@@ -37,7 +37,7 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 mod cover;
 mod own_edge;
 
-pub use cover::{any_open_link, cover_class, measured_transit_ms, CoverClass};
+pub use cover::{any_open_link, cover_class, measured_transit_ms};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -46,11 +46,6 @@ pub use cover::{any_open_link, cover_class, measured_transit_ms, CoverClass};
 /// into one of these once; per-peer queues hold cheap handles. Sorting and
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
-
-const _: () = {
-    assert!(ConnectorId::Clearnet.index() == 0);
-    assert!(ConnectorId::Tor.index() == 1);
-};
 
 /// The longest measured connector transit, in milliseconds.
 ///
@@ -68,13 +63,49 @@ pub fn longest_measured_transit() -> f64 {
         .expect("a connector with a measured transit")
 }
 
+/// One embargo table per assessed transit, for the life of the process.
+///
+/// The table is a pure function of that cell's milliseconds. Building it
+/// walks a geometric mass until the tail cutoff, and the stem path asks
+/// the question once per peer per decision. The first ask for a transit
+/// builds the table; every later ask clones the [`Arc`].
+type EmbargoTables = Mutex<Vec<(u32, Arc<EmbargoTimer>)>>;
+
+fn embargo_tables() -> &'static EmbargoTables {
+    static TABLES: OnceLock<EmbargoTables> = OnceLock::new();
+    TABLES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// The observation window for `declaration`, when its transit cell is assessed.
+fn embargo_timer(declaration: &Declaration) -> Option<Arc<EmbargoTimer>> {
+    let Assessment::Assessed(ms) = declaration.measured_transit_ms() else {
+        return None;
+    };
+    let tables = embargo_tables();
+    let mut guard = tables
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == ms) {
+        return Some(Arc::clone(timer));
+    }
+    let timer = Arc::new(EmbargoTimer::adopted(
+        &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(f64::from(ms)),
+    ));
+    guard.push((ms, Arc::clone(&timer)));
+    Some(timer)
+}
+
+fn hides_address(declaration: &Declaration) -> bool {
+    declaration.address_hidden_from_peer() == Assessment::Assessed(YesNo::Yes)
+}
+
 /// This connector's declaration says the peer does not learn this node's address.
 ///
 /// The cell is the connector's description. A connector that has not assessed
 /// the cell is not eligible.
 #[must_use]
 pub fn address_hidden_from_peer(connector: ConnectorId) -> bool {
-    declaration(connector.column()).address_hidden_from_peer() == Assessment::Assessed(YesNo::Yes)
+    hides_address(&declaration(connector.column()))
 }
 
 /// True when any configured connector declares that the peer does not learn
@@ -141,8 +172,11 @@ pub struct PeerFluff {
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
     pub direction: PeerDirection,
-    /// The connector that carried this session.
+    /// The connector that carried this session. A partition key. Behaviour
+    /// reads [`Self::declaration`], not this identity.
     pub connector: ConnectorId,
+    /// The declaration copied when the session was admitted.
+    declaration: Declaration,
 }
 
 impl PeerFluff {
@@ -151,6 +185,7 @@ impl PeerFluff {
             queued: Vec::new(),
             direction,
             connector,
+            declaration: declaration(connector.column()),
         }
     }
 }
@@ -418,12 +453,6 @@ pub struct Relay {
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
-    /// One observation window per connector index, drawn when a stem is
-    /// forwarded on that connector. `None` is a connector with no measured
-    /// transit; its sessions are not stem candidates. Each timer is a pure
-    /// function of that connector's transit term and does not change for the
-    /// life of the relay.
-    embargo: Vec<Option<EmbargoTimer>>,
 }
 
 impl Relay {
@@ -493,18 +522,8 @@ impl Relay {
         } else {
             NoiseSchedule::Off
         };
-        // One embargo timer per measured connector. The draw at stem time
-        // reads the successor's connector, not the relay-wide parameter set.
-        let embargo = ConnectorId::ALL
-            .iter()
-            .map(|connector| {
-                measured_transit_ms(*connector)
-                    .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
-            })
-            .collect();
         Ok(Self {
             stem_watch: StemWatch::default(),
-            embargo,
             contexts: BTreeMap::new(),
             // Built at full width with no peers rather than `StemMap::empty()`,
             // so `update_stems` can grow into it. An empty map has no slots to
@@ -551,9 +570,12 @@ impl Relay {
     /// volume cover: no envelope, including when the peer also occupies a
     /// stem slot. A session that is gone is not a destination.
     pub(crate) fn noise_destination(&self, peer: ConnectionId) -> bool {
-        self.contexts
-            .get(&peer)
-            .is_some_and(|session| matches!(cover_class(session.connector), CoverClass::OpenLink))
+        self.contexts.get(&peer).is_some_and(|session| {
+            matches!(
+                session.declaration.cover_class(),
+                Assessment::Assessed(CoverClass::OpenLink)
+            )
+        })
     }
 
     /// Whether this zone runs noise channels.
@@ -618,38 +640,26 @@ impl Relay {
         now: Millis,
         rng: &mut R,
     ) {
-        let Some(connector) = self.contexts.get(&successor).map(|peer| peer.connector) else {
+        let Some(peer) = self.contexts.get(&successor) else {
             return;
         };
-        let Some(deadline) = self.embargo_deadline(connector, now, rng) else {
+        let connector = peer.connector;
+        let Some(timer) = embargo_timer(&peer.declaration) else {
             return;
         };
+        let deadline = timer.deadline(now, rng);
         for tx in txs {
             self.stem_watch
                 .stemmed(*tx, successor, source, connector, deadline);
         }
     }
 
-    fn embargo_deadline<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        now: Millis,
-        rng: &mut R,
-    ) -> Option<Millis> {
-        self.embargo
-            .get(connector.index())
-            .and_then(|timer| timer.as_ref())
-            .map(|timer| timer.deadline(now, rng))
-    }
-
     /// Mean of the embargo drawn for `connector`, when that connector has a
     /// measured transit.
     #[cfg(test)]
     pub fn embargo_mean_secs(&self, connector: ConnectorId) -> Option<u32> {
-        self.embargo
-            .get(connector.index())
-            .and_then(|timer| timer.as_ref())
-            .map(EmbargoTimer::mean_secs)
+        let _ = self;
+        embargo_timer(&declaration(connector.column())).map(|timer| timer.mean_secs())
     }
 
     /// The connector recorded for a still-pending stem.
@@ -770,9 +780,14 @@ impl Relay {
     }
 
     /// Outbound, and the connector has a measured transit. An unmeasured
-    /// connector is not a stem candidate.
+    /// connector is not a stem candidate. The cell is the question; the
+    /// embargo table is built when a stem is recorded, not while listing.
     fn stem_candidate(peer: &PeerFluff) -> bool {
-        peer.direction == PeerDirection::Outbound && measured_transit_ms(peer.connector).is_some()
+        peer.direction == PeerDirection::Outbound
+            && matches!(
+                peer.declaration.measured_transit_ms(),
+                Assessment::Assessed(_)
+            )
     }
 
     /// Established outbound sessions. Inbound peers are not stem candidates.
@@ -1221,6 +1236,29 @@ impl Relay {
             plan,
         }
     }
+
+    /// Admit a session whose declaration is not its connector's column.
+    ///
+    /// The guard's third column. Production admission copies
+    /// [`declaration`]`(connector.column())`.
+    #[cfg(test)]
+    pub fn admit_synthetic(
+        &mut self,
+        id: ConnectionId,
+        direction: PeerDirection,
+        connector: ConnectorId,
+        column: Declaration,
+    ) {
+        self.contexts.insert(
+            id,
+            PeerFluff {
+                queued: Vec::new(),
+                direction,
+                connector,
+                declaration: column,
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1228,4 +1266,25 @@ mod edge;
 #[cfg(test)]
 mod stem_draw;
 #[cfg(test)]
+mod synthetic;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod embargo_cache {
+    use std::sync::Arc;
+
+    use super::{declaration, embargo_timer};
+    use shekyl_transport_layer::ConnectorId;
+
+    #[test]
+    fn one_table_per_assessed_transit() {
+        let clearnet = declaration(ConnectorId::Clearnet.column());
+        let first = embargo_timer(&clearnet).expect("clearnet transit is assessed");
+        let second = embargo_timer(&clearnet).expect("clearnet transit is assessed");
+        assert!(Arc::ptr_eq(&first, &second));
+        let hidden = declaration(ConnectorId::Tor.column());
+        let tor = embargo_timer(&hidden).expect("tor transit is assessed");
+        assert!(!Arc::ptr_eq(&first, &tor));
+    }
+}

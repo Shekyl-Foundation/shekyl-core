@@ -467,10 +467,10 @@ pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
 /// Row names for the flood instrument.
 ///
 /// Not a connector identity. The privacy crate stays dependency-free, so it
-/// does not import `ConnectorId`, and these variants are not that enum's
-/// indexes. Production transit is `shekyl-relay`'s match on `ConnectorId`.
-/// A new measurement is a variant here; it does not by itself make a
-/// connector stemmable.
+/// does not import `ConnectorId`. These variants name flood-instrument rows.
+/// Production transit is the D7 declaration's measured-transit cell, which
+/// is these constants. A new measurement is a variant here; it does not by
+/// itself make a connector stemmable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MeasuredConnector {
     /// [`ADOPTED_TRANSIT_ASSUMPTION_MS`].

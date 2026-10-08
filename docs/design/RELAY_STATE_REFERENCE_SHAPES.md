@@ -95,7 +95,7 @@ misplaced.
 **The audit, at source (`DRS_E1_SPOOL.md` SPL-17).** The Zone holds
 per-**connection** and per-**epoch** state and returns a plan per call; it
 holds **no per-transaction** relay fact and its own doc refuses to
-(`shekyl-relay/src/zone/mod.rs:594–597`: *"retaining a per-transaction outcome
+(`shekyl-relay/src/graph/mod.rs:594–597`: *"retaining a per-transaction outcome
 for a consumer to poll would put a second copy of a fact the txpool already
 owns beside the txpool"*). `EmbargoTimer` owns the **distribution**; the pool
 stamps the drawn **deadline** (`tx_pool.cpp:1298`). `StemWatch` holds a
@@ -185,7 +185,7 @@ that says *fluff*.
   reaches `Fluff` but its own.*
 - `None` stays a legal, unreachable, non-relayable member with a one-line
   reason at the variant — it survives because the enum is byte-pinned at the
-  FFI seam (`shekyl-relay/src/zone/mod.rs:122–128`), not because it guards
+  FFI seam (`shekyl-relay/src/graph/mod.rs:122–128`), not because it guards
   anything, and a mechanical cleanup that deleted it would shift every
   discriminant under that pin. It is not a field of the pool record (§3).
 
@@ -284,9 +284,9 @@ decoder refuse rather than default. `AtHeight<T>` and `AtIndex<T>`
 (`store/read.rs:81` — an empty chain is a value, not `UINT64_MAX`),
 `CurveTreeState::EMPTY` written by the seal (`codec/curve.rs:144` — absence
 is SI-7, never a default), `Option<RMarket>` where the C++ returned `0`
-(`DRS_E1_SARCH.md` SAR-8), `RelayZone::from_ffi_u8` provisioning an
-out-of-range byte as the *worst* case rather than masking it to clearnet
-(`shekyl-relay-privacy/src/zone.rs:68`), and the sentinel removal in
+(`DRS_E1_SARCH.md` SAR-8), an unknown connector byte drawing the longest
+measured transit rather than the shortest
+(`rust/shekyl-ffi/src/dandelionpp_ffi.rs`, `embargo_for_connector`), and the sentinel removal in
 `stem_map` are all the same move. (The review named `TreeAfter`,
 `SegmentAvailability` and `Tip::Empty`; none exists on this tree by those
 names, so the list above is the verified one.)

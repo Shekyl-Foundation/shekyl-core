@@ -4976,6 +4976,7 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
+ "shekyl-relay-privacy",
  "shekyl-timing-engine",
 ]
 
