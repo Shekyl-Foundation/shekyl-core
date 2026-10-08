@@ -91,31 +91,26 @@ impl TxShape {
         }
     }
 
-    /// Whether the shape's view-bound stage reads **bond state** — a
-    /// persona's record on the view the block is judged against (CEN-J4,
-    /// then J5 and J6 over it). `MockChain` holds no records by policy
-    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2), so the
-    /// sanity gate judges such a shape through `tx_form` only: its
-    /// `validate` witness is a driven chain that posted the bond
-    /// (`shekyl-chain-ingest`'s driver), the one place that record can
-    /// honestly exist.
+    /// The slots at which the shape is a valid transaction — **under
+    /// `tx_form`**, the stateless half. The coinbase is valid at the miner
+    /// slot only; every other shape at the pool's slot and listed first.
     ///
-    /// *Records-was:* until E6 slice 8 row 3 this was `precedents()`, which
-    /// listed the persona's [`join_market`] in the **same block** ahead of
-    /// the credit — a premise the rule refuted: the C++ reads the record
-    /// before the block (`check_tx_inputs` before `add_block`), so a
-    /// same-block join opens nothing the credit can be judged against, and
-    /// J4 says so. The archival fold's in-block sequencing had admitted it.
-    pub const fn reads_bond_state(self) -> bool {
-        match self {
-            Self::Coinbase | Self::Listed | Self::JoinMarket => false,
-            Self::ServeCreditOnly => true,
-        }
-    }
-
-    /// The slots at which the shape is a valid transaction. The coinbase
-    /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed first.
+    /// No listed shape is judged valid through `validate` on a `MockChain`,
+    /// and none can be: the spend carries a named key image and no
+    /// membership proof (CEN-I13/I15 refuse it on any view; slice 6 row 6),
+    /// the join's funding spend is that same fixture, and the serve credit
+    /// reads a persona record the mock holds none of by policy
+    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2). Each shape's
+    /// `validate` witness is a driven chain in `shekyl-chain-ingest`, the
+    /// one place the thing it needs can honestly exist.
+    ///
+    /// *Records-was:* until slice 6 row 6 a `reads_bond_state()` singled
+    /// the serve credit out as the one `tx_form`-only shape; before E6
+    /// slice 8 row 3 that was `precedents()`, which listed the persona's
+    /// [`join_market`] in the **same block** ahead of the credit — a
+    /// premise the rule refuted: the C++ reads the record before the block
+    /// (`check_tx_inputs` before `add_block`), so a same-block join opens
+    /// nothing the credit can be judged against, and J4 says so.
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],

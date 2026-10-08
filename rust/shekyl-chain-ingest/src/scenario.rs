@@ -53,7 +53,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
-    RuleSet, Substrate, EMISSION_SPLIT_EPOCH,
+    RuleSet, Substrate, Weights, EMISSION_SPLIT_EPOCH,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -156,6 +156,11 @@ pub struct Mined {
     pub judged_by: Vec<CenRow>,
     /// The emission the verdict priced the block at (`Applied::emission`).
     pub emission: PaidEmission,
+    /// The weight, long-term weight and medians the verdict derived for the
+    /// block (`Applied::weights`; CEN-G6/G6b). The witness that a listed
+    /// body's weight is the block's addend, which a `MockChain` block
+    /// cannot carry once the body has to be a real spend (slice 6 row 6).
+    pub weights: Weights,
     /// What the verdict derived the block does to the archival state
     /// (`Applied::archival`). The witness the archival scenarios read,
     /// because the store does not write it until the E4 writer lands.
@@ -379,6 +384,7 @@ where
             .filter(|row| applied.exercised.contains(row.as_str()))
             .collect();
         let (_, emission) = applied.emission[0];
+        let (_, weights) = applied.weights[0];
         let (_, archival) = applied
             .archival
             .into_iter()
@@ -390,6 +396,7 @@ where
             template,
             judged_by,
             emission,
+            weights,
             archival,
         })
     }

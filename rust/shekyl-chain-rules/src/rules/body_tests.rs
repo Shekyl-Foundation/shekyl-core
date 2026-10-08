@@ -224,18 +224,15 @@ fn cen_g1_refuses_a_relisted_spend_before_i7_can() {
     // where the recorded one has two, so a different identity) is not on
     // the chain — G1 passes it — and I7 refuses at the input, as before G1
     // existed. The two rows share a trigger and are told apart by this.
-    let respent = candidate_on(
-        &chain,
-        vec![
-            listed_on(&chain, point_at(41)),
-            anchored_on(&chain, spend(point_at(40), 3)),
-        ],
-    );
+    // Listed alone: I7 is the first view-bound row in the slot's sequence,
+    // and a fixture listed ahead of it would be refused at CEN-I13 (slice 6
+    // row 6) before this slot was reached.
+    let respent = candidate_on(&chain, vec![anchored_on(&chain, spend(point_at(40), 3))]);
     assert_refused(
         judge_on(&chain, respent),
         CenRow::I7,
         Locus::Input {
-            slot: TxSlot::Listed(1),
+            slot: TxSlot::Listed(0),
             input: 0,
         },
     );

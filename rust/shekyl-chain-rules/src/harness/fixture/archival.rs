@@ -274,9 +274,9 @@ pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
 /// (CEN-J4; L7 at the fold and SI-15 at the store are the belts beneath),
 /// which a [`join_market`] for `p` writes only once its own block has
 /// connected — so over a chain holding no record (every `MockChain`) this
-/// body is for `tx_form`, not for `validate`
-/// ([`TxShape::reads_bond_state`]); its `validate` witness is a driven
-/// chain that posted the join a block earlier.
+/// body is for `tx_form`, not for `validate` ([`TxShape::valid_at`]); its
+/// `validate` witness is a driven chain that posted the join a block
+/// earlier.
 pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
     Transaction {
         prefix: TxPrefix {

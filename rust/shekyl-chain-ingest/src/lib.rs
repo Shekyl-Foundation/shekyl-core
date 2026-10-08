@@ -146,6 +146,12 @@ mod scenario_join_tests;
 /// finality and price. Live lane.
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_shard;
+/// Slice 6 row 6 (`CHAIN_RULES_SLICE_6.md` §5): real spends through the
+/// stack — the acceptances and the refusals behind an accepted body that
+/// the rules crate's fixtures cannot witness once CEN-I13 runs on the
+/// spend class. Default lane.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_spend_tests;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]

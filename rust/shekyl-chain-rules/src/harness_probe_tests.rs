@@ -19,7 +19,7 @@
 //! each shown to bite before the first real rule leans on them. The
 //! `should_panic` cases are what make this file's green mean something.
 
-use super::fixture::{candidate, candidate_on, listed_on, point, recorded, root, spendable_chain};
+use super::fixture::{candidate, candidate_on, recorded, root, spendable_chain};
 use super::*;
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
@@ -216,15 +216,15 @@ fn key_images_are_a_set() {
     });
 }
 
+/// The candidate is coinbase-only: the one well-formed block a `MockChain`
+/// can hold, since a fixture spend is refused at CEN-I13 on any view
+/// (slice 6 row 6; `fixture_sanity_tests`).
 #[test]
 fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         let valid = judged(validate(
-            formed_on(
-                &chain,
-                candidate_on(&chain, vec![listed_on(&chain, point(9))]),
-            ),
+            formed_on(&chain, candidate_on(&chain, Vec::new())),
             &view,
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,

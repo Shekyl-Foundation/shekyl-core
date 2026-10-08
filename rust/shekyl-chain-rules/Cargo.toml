@@ -117,6 +117,14 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # the crate's own `H`, and this dependency contributes `k·G` and the sum.
 # Already a workspace dependency (ct-balance pins the same major).
 curve25519-dalek = "4"
+# The fixture coinbase's owner (`fixture::coinbase`, `harness/price.rs`),
+# in the same two shapes as `curve25519-dalek` above: optional under the
+# `harness` feature for the feature's consumers, unconditional here so the
+# crate's own `cargo test -p shekyl-chain-rules` resolves it. The
+# workspace-wide run unifies the feature through the store's dev-edge, which
+# is how this crate's tests built with the first shape alone and why the
+# `-p` run did not (slice 6 row 6, found at commit 9 of the conversion).
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # The wallet side's lock windows (`DEFAULT_LOCK_WINDOW`, `COINBASE_LOCK_WINDOW`),
 # held equal to `RuleSet`'s maturity pair in test so the daemon's tree
 # insertion and the wallet's eligibility height cannot drift (DRS-E3
