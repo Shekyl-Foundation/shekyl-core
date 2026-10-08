@@ -16636,14 +16636,13 @@ goes red if the model, the message size, or the floor rate drifts the term towar
 the hop — and it already fired once, catching the draft's <0.1 % claim (true only
 on the wrong rate; the honest worst case is 0.96 %).
 
-## 95. Outbound composition — PROPOSAL 2026-10-07, not a ruling
+## 95. Outbound composition — APPROVED 2026-10-08
 
-**Working direction (Rick, 2026-10-07). Not a ruling.** The hidden-address
-pool and the total outbound degree are lower limits. The operating point
-above those limits, and any ceiling, are not chosen here. This section
-proposes the simulation that would set the operating point. The ceiling
-comes from resources and is named when that simulation is ruled. No
-constant is added. The instrument is
+**APPROVED 2026-10-08 (Rick).** This section is the simulation plan.
+The hidden-address pool and the total outbound degree are lower
+limits. The operating point above those limits, and any ceiling, are
+not chosen by this approval. The ceiling comes from resources and is
+named when a run is ruled. No constant is added. The instrument is
 `conformance::composition`, behind the `conformance` feature. The
 default build does not contain it. No production constant moves.
 
@@ -16802,16 +16801,24 @@ reading that wants a new fail-safe input is a later re-derivation,
 named as such, because §90 already requires `F′` and its dependents
 to move together.
 
-### 95.3 The sweep, run 2026-10-07 — not a ruling
+### 95.3 The sweep, run 2026-10-07 — (h, 0) is a measured case, RULED 2026-10-08
+
+**RULED 2026-10-08 (Rick).** Every `(h, 0)` point, including `(12, 0)`,
+is a measured case. It is not a headline recommendation. Tor-only is
+that shape, and it is not a recommended posture. The gate is §96.
+An own transaction rides a stem slot: the origin's
+own send is always a stem, and each relay forwards with probability
+`1 − q`.
 
 The six additions on the hand-off are what this run measured. `p_h` is
 the onion-candidate spy share. The posterior is
 `P(originated | the arrival)`, with relayed forwards taken from
-`walk_stem` (mean about 4 at `q = 20%`) and the own-edge pinned for the
-epoch by `StemMap`. A clearnet arrival of an originated stem is
-impossible under `HiddenOwnEdge`, so that posterior is 0. The share
-`h / (h + c)` is how relayed forwards spread. It understates the
-posterior at the pinned peer, who receives every originated stem.
+`walk_stem` (mean about 4 at `q = 20%`) and the own send on one stem
+slot, pinned for the epoch by `StemMap`. A clearnet arrival of an
+originated stem is impossible under `HiddenOwnEdge`, so that posterior
+is 0. The share `h / (h + c)` is how relayed forwards spread. It
+understates the posterior at the pinned slot, which receives every
+originated stem.
 
 Baselines, 300 trials, 32 nodes. The split (originated on hidden,
 relayed on clearnet) gives hidden posterior 1 and clearnet posterior 0:
@@ -16854,7 +16861,9 @@ new fail-safe input. `(12, 0)` read 7375 ms, `(12, 4)` 4050 ms,
 `(16, 4)` 3975 ms, `(12, 12)` 1550 ms. Clearnet edges pull the passage
 down because those hops pay 50 ms.
 
-**Recommendation.** Operate at `(h, c) = (12, 4)`, total 16. `h` stays
+**The run's proposed point. Not adopted.** `(h, 0)` is the measured
+hidden-only case above, not this proposal. The run proposes
+`(h, c) = (12, 4)`, total 16. `h` stays
 on the floor: another hidden session does not change the chance the
 pinned peer is a spy, and it multiplies onion inbound by `h / f`.
 `c = 4` is the smallest clearnet step in the grid. It brings the
@@ -16871,4 +16880,68 @@ nodes that publish an onion is near 0.1 and an inbound ceiling below
 be another class with its own transit and its own inbound pool. It
 would not change `P(the pin is a spy)` unless the own-edge were drawn
 from the union of the anonymity connectors.
+
+## 96. Tor-only posture gate — RULED 2026-10-08, not recommended
+
+**Rejection.** Tor-only is not a recommended posture. The substrate
+is §95 as approved this day: own transactions ride a stem slot, the
+floors are lower limits, and `(h, 0)` is a measured case. §91.2
+already keeps Tor-only off the default. This section is the
+recommendation, which is a separate question. Recommending it now
+would treat a measured corner as a posture.
+
+**Reopening.** Tor-only becomes eligible for a recommendation when
+all six items below are closed. Eligibility is a ruling recorded in
+this section. It is not a silent change of the default, and closing
+one item does not close the gate.
+
+**Re-evaluation.** The ruling that recommends Tor-only, or that
+keeps the rejection, is made here, against the six closed carriers.
+No new identifier family.
+
+Each item is open. Its carrier is the only thing that closes it.
+
+1. **Stem-slot routing.** Own transactions ride a stem slot, as
+   ruled in §95: the origin's own send is always a stem, and each
+   relay forwards with probability `1 − q`. Rejected as a basis for
+   recommending Tor-only until the relay lane confirms that routing.
+   **Carrier:** the relay lane, after #1004 confirms it. **Closes
+   when** #1004 is on `dev` and the landed §95.3 states that the
+   origin's own send is a stem slot under the routing the relay
+   ships. **Re-evaluation:** the relay lane writes that sentence in
+   the landed section. Closing this item does not recommend Tor-only.
+2. **The calibrated `(h, 0)` fail-safe.** The shipped 3250 ms was
+   read on a mixed-degree graph. A hidden-only first passage is not
+   that input. **Carrier:** #1004. **Closes when** #1004 is on `dev`
+   and §95.3 states the `(h, 0)` first passage against 3250 ms,
+   including whether that input moves. Moving the constant still
+   follows §90: `F′` and its dependents move together, in a later
+   change if the calibration says they must. **Re-evaluation:** the
+   sentence in the landed §95.3 is the calibration.
+3. **Onion-candidate flooding defence.** A hidden edge is drawn from
+   publishers an attacker can supply. **Carrier:** P2P-3 slice 1.
+   **Closes when** slice 1 has landed: the C++ peer lists are gone
+   (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and
+   the uniform draw within a connector is the dial source. **Re-evaluation:**
+   the slice 1 brief's completion, recorded on its index row.
+4. **TRC-1.** On Tor, wire-observer resistance is operator relay
+   volume, and that measurement is not finished. **Carrier:**
+   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Closes
+   when** that row's falsifier is met: carried traffic at ordinary
+   operator scale is measured and the row is removed, or the ruling
+   reopens because originated cells stayed distinguishable. **Re-evaluation:**
+   the TRC-1 index row's next dated status.
+5. **Onion inbound capacity against a ceiling.** Reading 5's tail is
+   `h / f` and above, and no inbound ceiling is ruled against it.
+   **Carrier:** the #1004 follow-up ruling. **Closes when** a dated
+   ruling in this document sets the inbound ceiling against that
+   load, or records that no ceiling is added and why. **Re-evaluation:**
+   that ruling, not #1004's measurement by itself.
+6. **The Rust dialer.** Outbound targets are still the C++ cap the
+   dialer brief takes over. **Carrier:** P2P-3 slice 3. **Closes
+   when** the dialer owns outbound targets on `dev` and the brief's
+   deletion `rg` commands for the C++ dial path return nothing.
+   **Re-evaluation:** the slice 3 index row, after the brief's review
+   has closed and the slice has landed. Closing the brief's review
+   is not this item.
 
