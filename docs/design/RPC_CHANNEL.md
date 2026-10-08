@@ -185,7 +185,9 @@ must not meet errors merely from connecting). A client is configured with
 exactly one target — **"this computer"** (the default) or an explicit node
 address — and connects to that target or reports why it cannot. It never
 falls back from one leg or node to another. "This computer" resolves to the
-single local daemon, which RT-16 guarantees is unique, through that
+single local daemon — the **default instance**, which RT-16 guarantees is
+unique (a deliberately named second instance is reached only by naming it,
+§7.1) — through that
 daemon's **rendezvous** (§7.1): a per-user rendezvous for a run-as-me
 daemon (the socket or pipe), a machine-wide one for a service (its loopback
 channel address and public bundle). There is never a choice between two
@@ -238,6 +240,13 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 
 *Consequences.*
 
+- **The mode is declared, never inferred** (proposed). On Unix a unit
+  running the daemon under its dedicated user and that same user starting
+  it by hand are indistinguishable from inside the process, so the daemon
+  cannot work out which leg to serve. Service mode is selected by an
+  explicit switch that the installed unit or service registration passes;
+  without it the daemon is run-as-me. A daemon never guesses its mode from
+  its account, its data directory, or its parent.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   ([`removed_flags.cpp:74-78`](../../src/common/removed_flags.cpp)); none of
@@ -251,6 +260,13 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   Tor's data and key directories — Tor
   runs as the service's child under the same account, with the
   `TOR_BUNDLE_DISTRIBUTION.md` launch rules unchanged.
+- **The Windows installer's order is fixed by measurement** (§9.1, item 6):
+  register the service first, because its account name does not resolve
+  until it exists; then create the data home **fresh** — never adopt a
+  path the installer did not create in this run, since any unelevated user
+  can pre-create it and keep the right to rewrite its ACL; then break
+  inheritance and assert the ACL, because a new `%ProgramData%`
+  subdirectory inherits write access for every user.
 - **Switching modes** moves or re-syncs the chain data; the uniform pruning
   posture keeps a re-sync bounded.
 - **The two modes do not run side by side** on one installation (proposed):
@@ -259,7 +275,9 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   (§4.5). The service installer refuses while a run-as-me daemon is
   running, and the run-as-me daemon refuses to start while the service is
   installed and running — the daemon knowing its own installation, not
-  judging the operator's network.
+  judging the operator's network. The refusal covers the **default
+  instance** only: a named instance (§7.1) is a deliberate second node
+  with its own rendezvous, and it starts beside either mode.
 
 ---
 
@@ -342,7 +360,10 @@ sender — bundle or not — makes the daemon do two operations with its
 **long-term** keys on attacker-chosen input:
 
 1. X25519 with the static key against an attacker-chosen `e`
-   (`x25519-dalek`, constant-time by construction).
+   (`x25519-dalek`, constant-time by construction). A low-order `e` gives
+   an all-zero result; it is refused and never mixed, as the P2P handshake
+   already does (`noise.rs:504`, `low_order_x25519_does_not_mix`). The same
+   refusal applies to `se` in message 3, where the key is also long-term.
 2. **ML-KEM-768 decapsulation with the static decapsulation key against an
    attacker-chosen ciphertext.** A timing difference here is a remote
    oracle on the long-term key (KyberSlash was exactly this class, in
@@ -409,7 +430,8 @@ internals); the log may be specific.
 | Target "this computer", no rendezvous for this user or the machine on this network | "No Shekyl node is running on this computer for NETWORK." If a rendezvous exists for another network: "A node is running for OTHER_NETWORK." | — |
 | Rendezvous present, nothing listening (the daemon stopped without cleaning up) | "The Shekyl node on this computer is not running (it stopped unexpectedly). Start it again." The stale rendezvous is reported, not treated as a fault | The next start replaces it |
 | A daemon was just started and has not published its rendezvous yet | Nothing — the client waits for the publication (an event, not a poll that fails), bounded by the daemon's startup; on expiry: "The node did not finish starting. Its log records why." | Startup progress |
-| Starting a daemon while one is already running for this user and network | (Daemon, at start) "A Shekyl node is already running for you on NETWORK." Refuses to start | Same line, with the existing node's start time |
+| Starting a daemon while one is already running for this user and network | (Daemon, at start) "A Shekyl node is already running for you on NETWORK. To run a second one beside it, give it a name." Refuses to start | Same line, with the existing node's start time |
+| Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
 | Windows: the daemon runs for this user in **another logon session** (the pipe admits its own session only) | "Your Shekyl node is running in another sign-in session and can only be reached from there." Known from the rendezvous before dialling | — |
 | Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" |
@@ -458,6 +480,17 @@ R0 RT-7 stands: generated material only, never typed from memory.
   mid-session downgrade). The enrolled set is daemon state changed only
   through these commands — there is no file to edit behind the daemon's
   back and no reload signal to forget.
+- **Recovering a lost console key** (proposed; service mode). Enrolment
+  runs only over the channel, so an operator who loses the console key and
+  holds no other admin-ceiling key has no way back in through it. The way
+  back is offline and local: with the service **stopped**, an administrator
+  runs a reset command that generates a new console key, replaces the old
+  console enrolment with it, and writes the new private half under the same
+  ACL. It refuses while the daemon is running, touches no other enrolment,
+  and is logged at the next start. This is a command that changes daemon
+  state, not a file edited by hand, so the rule above stands. Who may run
+  it is who may write the service's data home — an OS permission the
+  operator already manages.
 - **Daemon key rotation** re-enrols every client, by construction.
 
 ---
@@ -521,9 +554,19 @@ nettype name (rule 71), so daemons of different networks coexist and a
 client never reaches the wrong network's node.
 
 - **Unix, run-as-me:** the socket itself, at a fixed name inside a `0700`
-  per-user, per-network directory under the user's runtime directory. The
-  directory is the containment (R0 §1.1 item 1); nobody else can place an
-  object at that name, so no random component is needed.
+  per-user, per-network directory. The directory is the containment (R0
+  §1.1 item 1); nobody else can place an object at that name, so no random
+  component is needed. **The directory lives under the user's persistent
+  state home, not the session runtime directory** (proposed). The runtime
+  directory is absent under `sudo -u`, cron and most containers, and it is
+  removed when the user's last session ends — so a daemon kept alive in a
+  terminal multiplexer would lose its socket while still running, and
+  every client would report a node that is not there. A persistent
+  directory means a socket file can outlive a crashed daemon; the start-up
+  dial below handles that the same way on both platforms. A Unix socket
+  path has a short fixed limit (about 100 bytes), so a path that would
+  exceed it is refused at start with the path and the limit named, never
+  truncated.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
   rendezvous file in a per-user, per-network directory under
@@ -581,6 +624,22 @@ client never reaches the wrong network's node.
   service's data home, readable by users, naming the loopback channel
   address and the daemon's public bundle. A same-user socket or pipe is
   never served by a service.
+- **Named instances** (proposed). The rendezvous above is the **default
+  instance**: one per user and network, or one per machine and network for
+  a service, and the only thing "this computer" resolves to. A daemon
+  started with an explicit instance name publishes its rendezvous under
+  that name instead and is reached only by a client told the same name. It
+  never answers for "this computer" and is never chosen by a client that
+  did not ask for it, so RT-15's single target holds. Reason: test and
+  measurement runs start a second daemon of the same network beside an
+  installed one, as one user, and without a named form the start-up
+  refusal (§4.5) would stop them. The name is the operator's label, not a
+  nettype; the network id still keys the path (rule 71).
+- **Start-up dial on Unix.** The Windows start-up rule above applies here
+  unchanged: before publishing, dial an existing socket — it answers, so
+  another daemon is running, refuse and say so; nothing listens, so it is
+  stale, replace it; it fails the owner check, report it. A bare
+  "address in use" cannot tell a live daemon from a leftover file.
 
 ---
 
@@ -646,7 +705,11 @@ construction) instead of loopback TCP.
   reconsidered (rejected, §12). (b) Separation between two interactive
   sessions of one user — needs a Server edition; the §4.5 other-session
   row rests on it. *Reopen:* the first Server-edition deployment, or any
-  report of a same-user second session reaching the pipe.
+  report of a same-user second session reaching the pipe. (c) **Item 2 as
+  written** — another *user's* pipe under a guessed name — for the same
+  reason as (a). What was measured is the nearer case, a same-user
+  low-integrity squatter, reported above; the different-user squatter is
+  unrun, and §7.1's random name is what the design relies on against it.
 - **Rendezvous label (§7.1):** a label set at `CreateFileW` refuses a
   low-integrity read; an inherited label and an `icacls`-applied label both
   carry `NW` only and admit it, while appearing as a Medium label.
@@ -715,7 +778,12 @@ construction) instead of loopback TCP.
   Either way, `get_connections` is the node's live peer set, and a public
   site that displays it publishes the node's connections; that decision
   should be taken explicitly, not inherited from whichever grant the
-  consumer lands in.
+  consumer lands in. **The least grant's content is decided here too**, and
+  RT-15's plaintext-loopback case depends on it: today's restricted surface
+  reports the peer and connection counts as zero
+  (`core_rpc_server.cpp:213-232`), so a co-located status page reading
+  "network status" at the least grant gets chain facts and no peer facts
+  unless this item says otherwise.
 
 ---
 
@@ -734,7 +802,9 @@ construction) instead of loopback TCP.
   re-scoped to the least-grant loopback listener and their parsing moves
   out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7).
 - `bind.rs`'s refusal text and its two tests that assert the onion remedy.
-- `ctl_client.rs`'s plaintext loopback-TCP path (moves to the channel with the console key, RT-15).
+- `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves
+  to the owner-only socket or pipe for a run-as-me daemon, and to the
+  channel with the console key for a service (RT-15, §5).
 - Shipped Windows guidance that points operators at Task Scheduler
   (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced
   by RT-16's two run modes (the scheduled task is rejected, §12).
@@ -798,4 +868,4 @@ construction) instead of loopback TCP.
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet` | RT-W9 |
 | RT-W13 | §11 sweep | lands with RT-W10 |
-| RT-W14 | Service mode (RT-16): console key, enrol at install, machine-wide rendezvous; Windows service under a virtual account and its installer step; Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8 |
+| RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8 |
