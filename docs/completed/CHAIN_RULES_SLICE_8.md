@@ -9,7 +9,7 @@ held `pending` on the Spend class for a ruling, §5 row 9), `4.J 19 / 25`,
 the signal fired, row 6's corpus leg the cause the estimate did not
 name. **Open residue lives in FOLLOWUPS, not here** (the I13/I15 flip
 and the bond post's funding-spend judgement, owner
-[`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md) §5 rows
+[`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5 rows
 6/8; the attestation-record producer, owner
 [`ARCHIVAL_CREDIT_WIRE.md`](../design/ARCHIVAL_CREDIT_WIRE.md)). Do not
 implement from this file; the living contracts are
@@ -401,7 +401,7 @@ between the pure module `engine/emission_claim.rs` and the `StakeEngine`
 handler that adds the membership-only proof and the dual auth — the driver
 needs the latter half, which no builder crate exposes today; Q3); a
 witness-supplying path for B4; and the per-row perturbations.
-[`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md) §5.3.3 and
+[`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5.3.3 and
 [`CHAIN_RULES_SLICE_7.md`](CHAIN_RULES_SLICE_7.md) §5.1 row 2
 both measured the first attempt at anything the driver has never done at
 **one commit each**; slice 7's estimate missed

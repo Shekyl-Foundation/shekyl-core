@@ -944,8 +944,14 @@ bond post's funding half) in `judge_reference`, PR #1003, 2026-10-08 —
 from 2026-10-06 with their Spend-class rows `pending` until the flip;
 H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
-applies, a pass is not coverage) until slice 6 lands the BP+ verification
-and switches the call to `run_tx`; H24 is bucket 3 — no registry row. Its
+applies, a pass is not coverage) until **H19-verify** lands the BP+
+verification as a `validate` fold over a driven block listing two spends
+(slice 6 Q9, the one-bad-proof-among-good fixture) and switches the call to
+`run_tx` — **owned, since slice 6 closed as record 2026-10-08 with the row
+still deferred, by this section and the FOLLOWUPS row *CEN-H19's
+verification half…*, which carries the falsifier** (the deferral's record
+is `CHAIN_RULES_SLICE_6.md` §5 row 8, `docs/completed/`); H24 is bucket 3
+— no registry row. Its
 falsifier asserts the residue predicate and that `tx_form` still accepts
 the offsets fixture, indexed from the census cell. The crypto rows call
 the bodies the C++ already marshals to (`shekyl-ct-balance`,
