@@ -444,9 +444,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cold_summary = summarize(&cold);
 
     // --- Arm 2: warm. Back-to-back fetches to one persona with no signal in
-    // between, so the client tor reuses its rendezvous circuit and only the
-    // stream cost is paid — the organic fill scheduler's steady state against
-    // one `P`, and the optimistic case.
+    // between. Each fetch mints a nonce and presents it as the SOCKS username,
+    // so the rendezvous circuit is a new one (`IsolateSOCKSAuth`). The missing
+    // signal is what leaves the client tor's cached onion state standing;
+    // whether that cache serves the next username is not assumed (`BA-T31`).
+    // This is the organic fill scheduler's steady state against one `P`.
+    // The 2026-09-16 warm column measured circuit reuse, before per-read
+    // credentials, and a re-run of that label would record a different arm.
     let mut warm = Vec::new();
     for i in 0..warm_n {
         warm.push(app.timed_fetch(0).await);
@@ -455,7 +459,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     out.append(0, "warm", &warm);
-    report("warm (reused circuit), single stream", &warm);
+    report("warm (no NEWNYM, circuit per read), single stream", &warm);
 
     // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
     // `width` cold fetches to `width` distinct personas at once through the

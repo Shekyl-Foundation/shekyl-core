@@ -27,6 +27,8 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # The server half. No `test-signer`: the caller brings the `PassSigner`.
 shekyl-p-serve = { path = "../shekyl-p-serve" }
+# The greeting `Isolation::Persona` sends. The shim is its other half.
+shekyl-socks = { path = "../shekyl-socks" }
 # `request_header` takes an ordinal `BlockHeight`.
 shekyl-types = { path = "../shekyl-types" }
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "rt"] }

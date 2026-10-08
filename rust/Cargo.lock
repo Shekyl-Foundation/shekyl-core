@@ -4549,6 +4549,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-fetch",
  "shekyl-p-serve",
+ "shekyl-socks",
  "shekyl-types",
  "tokio",
 ]
@@ -4843,6 +4844,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-p-fetch",
  "shekyl-p-serve",
+ "shekyl-socks",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",

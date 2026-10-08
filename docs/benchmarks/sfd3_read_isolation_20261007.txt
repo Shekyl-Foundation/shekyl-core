@@ -1,0 +1,145 @@
+===== run 1 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_VANGUARDS"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+
+thread 'live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it' (134039) panicked at shekyl-sp-t3-spike/tests/read_isolation.rs:327:17:
+assertion `left == right` failed: a read's circuit is not a rendezvous
+  left: "HS_VANGUARDS"
+ right: "HS_CLIENT_REND"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... FAILED
+
+failures:
+
+failures:
+    live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 158.75s
+
+exit=101
+
+===== run 2 =====
+
+running 1 test
+
+thread 'live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it' (134424) panicked at shekyl-sp-t3-spike/tests/read_isolation.rs:287:14:
+the stall retry completes: Stall(Dial("proxy refused CONNECT, reply 0x01"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... FAILED
+
+failures:
+
+failures:
+    live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 49.75s
+
+exit=101
+
+===== run 3 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: completed on stall retry 1
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_VANGUARDS"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+
+thread 'live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it' (134800) panicked at shekyl-sp-t3-spike/tests/read_isolation.rs:354:13:
+assertion `left == right` failed: a read's circuit is not a rendezvous circuit
+  left: Some("HS_VANGUARDS")
+ right: Some("HS_CLIENT_REND")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... FAILED
+
+failures:
+
+failures:
+    live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 273.66s
+
+exit=101
+
+===== run 4 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: completed on stall retry 1
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_CLIENT_REND"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 211.39s
+
+exit=0
+
+===== run 5 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: completed on stall retry 1
+
+thread 'live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it' (135257) panicked at shekyl-sp-t3-spike/tests/read_isolation.rs:310:14:
+the second read completes: Stall(BodyTimeout)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... FAILED
+
+failures:
+
+failures:
+    live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 214.87s
+
+exit=101
+
+===== run 6 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: completed on stall retry 1
+read B: completed on attempt 1
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_CLIENT_REND"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 83.94s
+
+exit=0
+
+===== run 7 =====
+
+running 1 test
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it has been running for over 60 seconds
+read A: completed on stall retry 1
+read B: completed on attempt 1
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_CLIENT_REND"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 122.14s
+
+exit=0
+
+===== run 8 =====
+
+running 1 test
+read A: completed on stall retry 1
+read B: completed on attempt 1
+read A: the stall retry rode the same circuit as the stalled attempt (purpose Some("HS_CLIENT_REND"))
+read B: rode a different circuit as read A (purpose Some("HS_CLIENT_REND"))
+descriptor fetches tor started: 0 during read A's retry, 0 during read B
+test live::each_read_rides_its_own_rendezvous_circuit_and_a_stall_retry_stays_on_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 45.96s
+
+exit=0
+
