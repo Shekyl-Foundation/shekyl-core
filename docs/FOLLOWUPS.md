@@ -15,7 +15,7 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
-- **Measure estimator precision for clearnet-only origins, as a function of the clearnet-only fraction, against the paper's all-clearnet baseline.** The 32-of-32 in `DAEMON_RELAY_PRIVACY.md` §95.3 is the class of the node named, not this precision. It waits for the next relay-privacy round. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading.
+- **Measure estimator precision for clearnet-only origins, as a function of the clearnet-only fraction, against the paper's all-clearnet baseline.** The aware estimator's names in `DAEMON_RELAY_PRIVACY.md` §95.3 are the class of the node named, not this precision. It waits for the next relay-privacy round. Blocked on the Rust cutover — falsify by a recorded sweep of that precision against the clearnet-only fraction, compared with the all-clearnet baseline, in §95.3.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 

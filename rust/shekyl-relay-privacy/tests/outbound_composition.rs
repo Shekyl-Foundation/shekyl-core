@@ -8,13 +8,14 @@
 //! unconverged one is a refusal.
 
 use shekyl_relay_privacy::conformance::composition::{
-    build_node_maps, build_two_class, composition_fluff_p90, hidden_inbound_load,
-    land_originated_stem, simulate_own_edge_capture, LinkClass, Mix, Routing,
+    build_node_maps, build_two_class, clearnet_arrival_is_relayed, graph_fluff_p90,
+    hidden_inbound_load, simulate_own_edge_capture, walk_originated, LinkClass, LinkTransit, Mix,
+    Routing, StemRelayBudget,
 };
-use shekyl_relay_privacy::conformance::epoch_traffic::{
-    epoch_traffic_on, shipped_fluff_reference, simulate_epoch_traffic,
+use shekyl_relay_privacy::conformance::epoch_traffic::{epoch_traffic_on, simulate_epoch_traffic};
+use shekyl_relay_privacy::conformance::{
+    converge_p90, ConvergenceBudget, ConvergenceRefusal, FloodReach,
 };
-use shekyl_relay_privacy::conformance::{converge_p90, ConvergenceBudget, ConvergenceRefusal};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
 use shekyl_relay_privacy::stem_map::ConnectionId;
@@ -23,7 +24,7 @@ use shekyl_relay_privacy::SplitMix64;
 #[test]
 fn every_node_initiates_its_hidden_and_clearnet_degree() {
     let mut rng = SplitMix64::new(0xC0_11);
-    let graph = build_two_class(32, 4, 3, 1.0, &mut rng);
+    let graph = build_two_class(Mix::new(32, 4, 3, 1.0), &mut rng);
     for (node, row) in graph.initiated.iter().enumerate() {
         let hidden = row.iter().filter(|e| e.class == LinkClass::Hidden).count();
         let clear = row
@@ -38,7 +39,7 @@ fn every_node_initiates_its_hidden_and_clearnet_degree() {
         tos.dedup();
         assert_eq!(tos.len(), row.len(), "node {node} repeated a peer");
     }
-    let hops = graph.fluff_hops(1, 2);
+    let hops = graph.fluff_hops(1, 2, FloodReach::EveryPeer);
     for (from, row) in graph.initiated.iter().enumerate() {
         for edge in row {
             assert!(
@@ -52,16 +53,18 @@ fn every_node_initiates_its_hidden_and_clearnet_degree() {
             );
         }
     }
+    let outbound = graph.fluff_hops(1, 2, FloodReach::OutboundOnly);
+    let initiated: usize = graph.initiated.iter().map(Vec::len).sum();
+    let directed: usize = outbound.iter().map(Vec::len).sum();
+    assert_eq!(
+        directed, initiated,
+        "outbound-only fluff is the initiated edges"
+    );
 }
 
 #[test]
 fn a_split_graph_is_certain_and_a_clearnet_arrival_is_relayed() {
-    let mix = Mix {
-        nodes: 24,
-        hidden_out: 4,
-        clearnet_out: 4,
-        onion_fraction: 1.0,
-    };
+    let mix = Mix::new(24, 4, 4, 1.0);
     let mut rng = SplitMix64::new(0x5B_11);
     let split = simulate_epoch_traffic(mix, Routing::Split, 8, &mut rng);
     assert!(
@@ -97,17 +100,7 @@ fn a_split_graph_is_certain_and_a_clearnet_arrival_is_relayed() {
 #[test]
 fn an_all_clearnet_graph_shares_the_stem_slot_with_relays() {
     let mut rng = SplitMix64::new(0xC1_EA);
-    let paper = simulate_epoch_traffic(
-        Mix {
-            nodes: 32,
-            hidden_out: 0,
-            clearnet_out: 8,
-            onion_fraction: 1.0,
-        },
-        Routing::AllClearnet,
-        12,
-        &mut rng,
-    );
+    let paper = simulate_epoch_traffic(Mix::new(32, 0, 8, 1.0), Routing::AllClearnet, 12, &mut rng);
     assert!(
         paper.posterior_hidden.abs() < 1e-12,
         "no hidden deliveries, posterior {}",
@@ -135,12 +128,7 @@ fn an_all_clearnet_graph_shares_the_stem_slot_with_relays() {
 
 #[test]
 fn hidden_stem_slot_carries_relayed_traffic_the_separate_draw_does_not() {
-    let mix = Mix {
-        nodes: 32,
-        hidden_out: 6,
-        clearnet_out: 6,
-        onion_fraction: 1.0,
-    };
+    let mix = Mix::new(32, 6, 6, 1.0);
     let mut rng = SplitMix64::new(0x57_E1);
     let slot = simulate_epoch_traffic(mix, Routing::HiddenStemSlot, 16, &mut rng);
     let mut rng = SplitMix64::new(0x57_E2);
@@ -171,7 +159,7 @@ fn hidden_stem_slot_carries_relayed_traffic_the_separate_draw_does_not() {
 #[test]
 fn the_local_source_of_a_hidden_stem_slot_occupies_that_slot() {
     let mut rng = SplitMix64::new(0x51_07);
-    let graph = build_two_class(30, 6, 6, 1.0, &mut rng);
+    let graph = build_two_class(Mix::new(30, 6, 6, 1.0), &mut rng);
     let maps = build_node_maps(&graph, Routing::HiddenStemSlot, &mut rng);
     for (node, map) in maps.iter().enumerate() {
         let local = map.local.expect("mixed graph has a hidden first hop");
@@ -183,7 +171,7 @@ fn the_local_source_of_a_hidden_stem_slot_occupies_that_slot() {
         );
     }
     let mut rng = SplitMix64::new(0x51_08);
-    let graph = build_two_class(30, 6, 6, 1.0, &mut rng);
+    let graph = build_two_class(Mix::new(30, 6, 6, 1.0), &mut rng);
     let maps = build_node_maps(&graph, Routing::HiddenOwnEdge, &mut rng);
     let mut on_slot = 0_usize;
     for map in &maps {
@@ -202,7 +190,7 @@ fn the_local_source_of_a_hidden_stem_slot_occupies_that_slot() {
 #[test]
 fn a_dial_only_sender_relays_nothing_on_either_routing() {
     let mut rng = SplitMix64::new(0xD1_A1);
-    let mut graph = build_two_class(20, 4, 2, 1.0, &mut rng);
+    let mut graph = build_two_class(Mix::new(20, 4, 2, 1.0), &mut rng);
     for row in &mut graph.initiated {
         row.retain(|edge| edge.to != 0);
     }
@@ -275,15 +263,10 @@ fn an_originated_stem_stops_when_it_revisits_a_node() {
     let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
     let mut covered = false;
     for _ in 0..80 {
-        let graph = build_two_class(3, 1, 1, 1.0, &mut rng);
-        let landing = land_originated_stem(
-            &graph,
-            0,
-            Routing::HiddenStemSlot,
-            &params,
-            &embargo,
-            &mut rng,
-        );
+        let graph = build_two_class(Mix::new(3, 1, 1, 1.0), &mut rng);
+        let mut maps = build_node_maps(&graph, Routing::HiddenStemSlot, &mut rng);
+        let budget = StemRelayBudget::from_walk(&params, &embargo, &mut rng);
+        let landing = walk_originated(&graph, &mut maps, 0, budget, &mut rng);
         let mut seen = vec![false; graph.nodes()];
         for node in &landing.path {
             assert!(!seen[*node], "stem continued through node {node}");
@@ -303,7 +286,7 @@ fn an_originated_stem_stops_when_it_revisits_a_node() {
 #[test]
 fn publisher_inbound_mean_tracks_h_over_f() {
     let mut rng = SplitMix64::new(0x1B_0A);
-    let graph = build_two_class(400, 12, 0, 0.25, &mut rng);
+    let graph = build_two_class(Mix::new(400, 12, 0, 0.25), &mut rng);
     let load = hidden_inbound_load(&graph);
     let expect = 12.0 / 0.25;
     assert!(
@@ -336,15 +319,9 @@ fn a_seed_spread_is_refused_rather_than_reported() {
 }
 
 #[test]
-#[ignore = "the §95 grid; run locally, do not put a level into CI"]
+#[ignore = "local composition dump; the ruled sweep is outbound_calibration_grid"]
 fn outbound_composition_grid() {
-    use shekyl_relay_privacy::conformance::composition::{
-        converged_composition_fluff, simulate_stem_first_spy, LinkTransit, SpyArm,
-    };
-    use shekyl_relay_privacy::conformance::transit_for;
-    use shekyl_relay_privacy::params::DandelionParams;
-    use shekyl_relay_privacy::schedule::DelayFamily;
-    use shekyl_relay_privacy::MeasuredConnector;
+    use shekyl_relay_privacy::conformance::composition::{simulate_stem_first_spy, SpyArm};
 
     let points = [
         (12, 0),
@@ -356,17 +333,12 @@ fn outbound_composition_grid() {
         (16, 8),
         (24, 0),
     ];
-    let hidden_ms = transit_for(MeasuredConnector::Tor);
-    let clear_ms = transit_for(MeasuredConnector::Clearnet);
-    println!("transit hidden {hidden_ms} clearnet {clear_ms}");
-    println!("f = 1 is the normal case (per-boot onion). Epochs below use it.");
+    println!(
+        "local dump only. The ruled fluff sweep is outbound_calibration_grid \
+         (OutboundOnly, 512 nodes). f = 1 is the normal case."
+    );
     for (h, c) in points {
-        let mix = Mix {
-            nodes: 48,
-            hidden_out: h,
-            clearnet_out: c,
-            onion_fraction: 1.0,
-        };
+        let mix = Mix::new(48, h, c, 1.0);
         for routing in [Routing::HiddenStemSlot, Routing::HiddenOwnEdge] {
             let mut rng = SplitMix64::new(0x5950_0000 + (h as u64) * 16 + c as u64);
             let post = simulate_epoch_traffic(mix, routing, 20, &mut rng);
@@ -396,12 +368,13 @@ fn outbound_composition_grid() {
         for routing in [Routing::HiddenStemSlot, Routing::HiddenOwnEdge] {
             let mut rng = SplitMix64::new(0x5910);
             let spy =
-                simulate_stem_first_spy(mix, routing, SpyArm::Uniform { p: 0.2 }, 200, &mut rng);
+                simulate_stem_first_spy(mix, routing, SpyArm::Uniform { p: 0.2 }, 0, 200, &mut rng);
             let mut rng = SplitMix64::new(0x5930);
             let spy30 = simulate_stem_first_spy(
                 mix,
                 routing,
                 SpyArm::OnionBiased { p: 0.3 },
+                0,
                 200,
                 &mut rng,
             );
@@ -411,60 +384,13 @@ fn outbound_composition_grid() {
             );
         }
     }
-    let mut reference_rng = SplitMix64::new(0xF7_000C);
-    let reference = shipped_fluff_reference(24, &mut reference_rng);
-    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms);
-    println!(
-        "FLUFF reference outbound-only transit-free degree 12 nodes 512 trials 24 p90={reference} shipped={shipped}"
-    );
-    let budget = ConvergenceBudget {
-        start_trials: 8,
-        max_trials: 32,
-        tolerance_ms: 250,
-    };
-    let seeds = [0xF1_u64, 0xF2, 0xF3, 0xF4];
-    for (h, c) in [(12, 0), (12, 4), (16, 0), (16, 4), (12, 12)] {
-        let mix = Mix {
-            nodes: 128,
-            hidden_out: h,
-            clearnet_out: c,
-            onion_fraction: 1.0,
-        };
-        let reading = converged_composition_fluff(
-            mix,
-            LinkTransit {
-                hidden_ms,
-                clearnet_ms: clear_ms,
-            },
-            20,
-            DelayFamily::Geometric,
-            &seeds,
-            budget,
-            SplitMix64::new,
-        );
-        match reading {
-            Ok(v) => {
-                let ratio_milli = v.p90_ms.saturating_mul(1000) / reference;
-                println!(
-                    "FLUFF h={h} c={c} p90={} ratio={}.{:03} exceeds_fail_safe={} spread={} trials={}",
-                    v.p90_ms,
-                    ratio_milli / 1000,
-                    ratio_milli % 1000,
-                    v.p90_ms > reference,
-                    v.spread_ms,
-                    v.trials_per_seed
-                );
-            }
-            Err(e) => println!("FLUFF h={h} c={c} REFUSED {e}"),
-        }
-    }
     println!(
         "IN rows at f < 1 are opt-out and failure stress, not the normal published-onion fraction"
     );
     for (i, f) in [1.0_f64, 0.5, 0.25, 0.1].into_iter().enumerate() {
         for h in [12, 16, 24] {
             let mut rng = SplitMix64::new(0x1B00 + (h as u64) * 10 + i as u64);
-            let graph = build_two_class(400, h, 0, f, &mut rng);
+            let graph = build_two_class(Mix::new(400, h, 0, f), &mut rng);
             let load = hidden_inbound_load(&graph);
             println!(
                 "IN f={f} h={h} mean={:.1} p50={} p90={} max={} >12={:.2} >24={:.2} >64={:.2}",
@@ -501,33 +427,14 @@ fn outbound_composition_grid() {
         );
     }
     let mut rng = SplitMix64::new(0x5B_11);
-    let split = simulate_epoch_traffic(
-        Mix {
-            nodes: 36,
-            hidden_out: 12,
-            clearnet_out: 4,
-            onion_fraction: 1.0,
-        },
-        Routing::Split,
-        8,
-        &mut rng,
-    );
+    let split = simulate_epoch_traffic(Mix::new(36, 12, 4, 1.0), Routing::Split, 8, &mut rng);
     println!(
         "BASE split own={:.3} hid={:.3} clr={:.3}",
         split.posterior_own_edge, split.posterior_hidden, split.posterior_clearnet
     );
     let mut rng = SplitMix64::new(0xC1);
-    let paper = simulate_epoch_traffic(
-        Mix {
-            nodes: 36,
-            hidden_out: 0,
-            clearnet_out: 16,
-            onion_fraction: 1.0,
-        },
-        Routing::AllClearnet,
-        12,
-        &mut rng,
-    );
+    let paper =
+        simulate_epoch_traffic(Mix::new(36, 0, 16, 1.0), Routing::AllClearnet, 12, &mut rng);
     println!(
         "BASE clearnet own={:.3} clr={:.3} carrying={:.3}",
         paper.posterior_own_edge, paper.posterior_clearnet, paper.own_edges_carrying_relayed
@@ -538,10 +445,28 @@ fn outbound_composition_grid() {
 fn link_transit_moves_the_first_passage() {
     let mut fast = SplitMix64::new(0x77_A0);
     let mut slow = SplitMix64::new(0x77_A0);
-    let hidden = build_two_class(20, 4, 0, 1.0, &mut fast);
-    let clear = build_two_class(20, 0, 4, 1.0, &mut slow);
-    let fast_p90 = composition_fluff_p90(&hidden, 0, 0, 8, &mut SplitMix64::new(1));
-    let slow_p90 = composition_fluff_p90(&clear, 0, 20_000, 8, &mut SplitMix64::new(1));
+    let hidden = build_two_class(Mix::new(20, 4, 0, 1.0), &mut fast);
+    let clear = build_two_class(Mix::new(20, 0, 4, 1.0), &mut slow);
+    let fast_p90 = graph_fluff_p90(
+        &hidden,
+        LinkTransit {
+            hidden_ms: 0,
+            clearnet_ms: 0,
+        },
+        FloodReach::EveryPeer,
+        8,
+        &mut SplitMix64::new(1),
+    );
+    let slow_p90 = graph_fluff_p90(
+        &clear,
+        LinkTransit {
+            hidden_ms: 0,
+            clearnet_ms: 20_000,
+        },
+        FloodReach::EveryPeer,
+        8,
+        &mut SplitMix64::new(1),
+    );
     assert!(
         slow_p90 > fast_p90,
         "clearnet transit 20000 ms must slow the passage ({slow_p90} vs {fast_p90})"
@@ -550,7 +475,6 @@ fn link_transit_moves_the_first_passage() {
 
 #[test]
 fn a_clearnet_arrival_from_a_hidden_sender_is_relayed() {
-    use shekyl_relay_privacy::conformance::composition::clearnet_arrival_is_relayed;
     assert!(clearnet_arrival_is_relayed(LinkClass::Clearnet, true));
     assert!(!clearnet_arrival_is_relayed(LinkClass::Clearnet, false));
     assert!(!clearnet_arrival_is_relayed(LinkClass::Hidden, true));
@@ -561,34 +485,22 @@ fn the_class_aware_estimator_does_not_name_an_exonerated_sender() {
     use shekyl_relay_privacy::conformance::composition::{simulate_class_aware_first_spy, SpyArm};
     let mut rng = SplitMix64::new(0xC1_A5);
     let reading = simulate_class_aware_first_spy(
-        Mix {
-            nodes: 24,
-            hidden_out: 4,
-            clearnet_out: 4,
-            onion_fraction: 1.0,
-        },
+        Mix::new(24, 4, 4, 1.0),
         Routing::HiddenStemSlot,
         SpyArm::Uniform { p: 0.3 },
         0,
         60,
         &mut rng,
     );
-    assert_eq!(
-        reading.aware_clearnet_names, 0,
-        "every sender has a hidden session, so a clearnet arrival is not a name"
-    );
+    assert!(reading.aware.named <= reading.blind.named);
+    assert!(reading.aware.precision.is_finite());
     assert!(reading.aware.named_origin <= reading.blind.named_origin);
 }
 
 #[test]
 fn a_heavy_originator_sits_closer_to_posterior_one() {
     use shekyl_relay_privacy::conformance::epoch_traffic::simulate_origin_rate_contrast;
-    let mix = Mix {
-        nodes: 24,
-        hidden_out: 4,
-        clearnet_out: 4,
-        onion_fraction: 1.0,
-    };
+    let mix = Mix::new(24, 4, 4, 1.0);
     let mut rng = SplitMix64::new(0x4E_47);
     let contrast = simulate_origin_rate_contrast(mix, Routing::HiddenStemSlot, 8, 10, &mut rng);
     assert!(
@@ -602,12 +514,7 @@ fn a_heavy_originator_sits_closer_to_posterior_one() {
 #[test]
 fn class_aware_precision_rises_only_when_the_first_hop_is_hidden() {
     use shekyl_relay_privacy::conformance::composition::{simulate_class_aware_first_spy, SpyArm};
-    let mix = Mix {
-        nodes: 32,
-        hidden_out: 12,
-        clearnet_out: 8,
-        onion_fraction: 1.0,
-    };
+    let mix = Mix::new(32, 12, 8, 1.0);
     let mut rng = SplitMix64::new(0x5A10);
     let hidden = simulate_class_aware_first_spy(
         mix,
@@ -632,31 +539,12 @@ fn class_aware_precision_rises_only_when_the_first_hop_is_hidden() {
         paper.aware.named_origin * paper.blind.named < paper.blind.named_origin * paper.aware.named,
         "uniform hop 0 can be clearnet, so exonerating it drops the origin"
     );
-    let mut rng = SplitMix64::new(0x5A11);
-    let marked = simulate_class_aware_first_spy(
-        Mix {
-            nodes: 32,
-            hidden_out: 8,
-            clearnet_out: 8,
-            onion_fraction: 1.0,
-        },
-        Routing::HiddenStemSlot,
-        SpyArm::Uniform { p: 0.2 },
-        8,
-        200,
-        &mut rng,
-    );
-    assert_eq!(
-        marked.aware_clearnet_names,
-        marked.aware_clearnet_names_clearnet_only
-    );
-    assert!(marked.clearnet_sender_clearnet_only < marked.clearnet_arrivals);
 }
 
 #[test]
 fn uniform_hop0_is_not_confined_to_the_hidden_pool() {
     let mut rng = SplitMix64::new(0x0F_00);
-    let graph = build_two_class(40, 6, 6, 1.0, &mut rng);
+    let graph = build_two_class(Mix::new(40, 6, 6, 1.0), &mut rng);
     let maps = build_node_maps(&graph, Routing::UniformHop0, &mut rng);
     let clearnet = maps
         .iter()
@@ -667,4 +555,73 @@ fn uniform_hop0_is_not_confined_to_the_hidden_pool() {
         .count();
     assert!(clearnet > 0, "uniform hop 0 never used clearnet");
     assert!(clearnet < maps.len(), "uniform hop 0 never used hidden");
+}
+
+#[test]
+fn clearnet_only_nodes_initiate_no_hidden_session() {
+    let mut rng = SplitMix64::new(0xC0_12);
+    let clearnet_only = 8;
+    let graph = build_two_class(
+        Mix::new(32, 4, 3, 1.0).with_clearnet_only(clearnet_only),
+        &mut rng,
+    );
+    for (node, row) in graph.initiated.iter().enumerate() {
+        let hidden = row.iter().filter(|e| e.class == LinkClass::Hidden).count();
+        let clear = row
+            .iter()
+            .filter(|e| e.class == LinkClass::Clearnet)
+            .count();
+        assert_eq!(clear, 3, "node {node}");
+        if node < clearnet_only {
+            assert_eq!(hidden, 0, "node {node}");
+            assert!(!graph.has_hidden_outbound(node));
+        } else {
+            assert_eq!(hidden, 4, "node {node}");
+            assert!(graph.has_hidden_outbound(node));
+        }
+    }
+}
+
+#[test]
+fn a_clearnet_relay_from_a_hidden_sender_is_not_an_origin_mark() {
+    let mix = Mix::new(32, 8, 8, 1.0).with_clearnet_only(8);
+    let mut rng = SplitMix64::new(0x5A11);
+    let params = DandelionParams::adopted();
+    let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
+    let mut saw_hidden_sender = false;
+    for _ in 0..80 {
+        let graph = build_two_class(mix, &mut rng);
+        let budget = StemRelayBudget::from_walk(&params, &embargo, &mut rng);
+        let mut maps = build_node_maps(&graph, Routing::HiddenStemSlot, &mut rng);
+        let stem = walk_originated(&graph, &mut maps, 0, budget, &mut rng);
+        for (hop_index, hop) in stem.relayed.iter().enumerate() {
+            let sender = stem.path[hop_index + 1];
+            let hidden = graph.has_hidden_outbound(sender);
+            if hop.class == LinkClass::Clearnet && hidden {
+                assert!(clearnet_arrival_is_relayed(hop.class, hidden));
+                saw_hidden_sender = true;
+            }
+            if !hidden {
+                assert!(!clearnet_arrival_is_relayed(hop.class, hidden));
+            }
+        }
+    }
+    assert!(
+        saw_hidden_sender,
+        "no clearnet relay from a sender that still has a hidden session"
+    );
+}
+
+#[test]
+#[should_panic(expected = "no legal own-edge")]
+fn origin_rate_contrast_refuses_a_node_with_no_own_edge() {
+    use shekyl_relay_privacy::conformance::epoch_traffic::simulate_origin_rate_contrast;
+    let mut rng = SplitMix64::new(1);
+    let _contrast = simulate_origin_rate_contrast(
+        Mix::new(8, 0, 4, 1.0),
+        Routing::HiddenOwnEdge,
+        4,
+        1,
+        &mut rng,
+    );
 }

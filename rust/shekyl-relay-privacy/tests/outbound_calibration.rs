@@ -7,14 +7,16 @@
 //! unconverged cell is a refusal.
 
 use shekyl_relay_privacy::conformance::composition::{
-    hidden_inbound_load, simulate_class_aware_first_spy, Mix, Routing, SpyArm,
+    converged_composition_fluff, hidden_inbound_load, shipped_fluff_reference, shipped_graph_p90,
+    simulate_class_aware_first_spy, CompositionFluff, LinkTransit, Mix, Routing, SpyArm,
 };
 use shekyl_relay_privacy::conformance::epoch_traffic::{
-    composition_outbound_p90, shipped_graph_p90, simulate_epoch_traffic,
-    simulate_origin_rate_contrast,
+    simulate_epoch_traffic, simulate_origin_rate_contrast,
 };
-use shekyl_relay_privacy::conformance::{converge_p90, transit_for, ConvergenceBudget};
+use shekyl_relay_privacy::conformance::{converge_p90, transit_for, ConvergenceBudget, FloodReach};
+use shekyl_relay_privacy::params::inherited::FLUFF_AVERAGE_IN_QUARTER_SECS;
 use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::schedule::DelayFamily;
 use shekyl_relay_privacy::MeasuredConnector;
 use shekyl_relay_privacy::SplitMix64;
 
@@ -28,9 +30,9 @@ fn outbound_calibration_grid() {
     println!("per-connector transit hidden {tor} clearnet {clear}");
 
     let mut rng = SplitMix64::new(0xF7_000C);
-    let provenance_free = shipped_graph_p90(0, 24, &mut rng);
+    let provenance_free = shipped_fluff_reference(24, &mut rng);
     let mut rng = SplitMix64::new(0xF7_000C);
-    let provenance_tor = shipped_graph_p90(tor, 24, &mut rng);
+    let provenance_tor = shipped_graph_p90(tor, FloodReach::OutboundOnly, 24, &mut rng);
     println!(
         "SHIPPED provenance seed 0xF7_000C trials 24 transit-free {provenance_free} with-tor {provenance_tor} exceeds {}",
         provenance_tor > provisional
@@ -45,7 +47,7 @@ fn outbound_calibration_grid() {
     for (label, transit) in [("transit-free", 0_u64), ("tor-transit", tor)] {
         let reading = converge_p90(&seeds, budget, |seed, trials| {
             let mut rng = SplitMix64::new(seed);
-            shipped_graph_p90(transit, trials, &mut rng)
+            shipped_graph_p90(transit, FloodReach::OutboundOnly, trials, &mut rng)
         });
         match reading {
             Ok(v) => println!(
@@ -61,22 +63,28 @@ fn outbound_calibration_grid() {
 
     for h in [12_usize, 14, 16] {
         for c in (0..=16).step_by(2) {
-            let mix = Mix {
-                nodes: 512,
-                hidden_out: h,
-                clearnet_out: c,
-                onion_fraction: 1.0,
-            };
+            let mix = Mix::new(512, h, c, 1.0);
             let mut free_p90 = None;
             let mut link_p90 = None;
             for (label, hidden_ms, clear_ms, slot) in [
                 ("transit-free", 0_u64, 0_u64, &mut free_p90),
                 ("per-connector", tor, clear, &mut link_p90),
             ] {
-                let reading = converge_p90(&seeds, budget, |seed, trials| {
-                    let mut rng = SplitMix64::new(seed ^ (h as u64) << 16 ^ (c as u64) << 8);
-                    composition_outbound_p90(mix, hidden_ms, clear_ms, trials, &mut rng)
-                });
+                let reading = converged_composition_fluff(
+                    CompositionFluff {
+                        mix,
+                        transit: LinkTransit {
+                            hidden_ms,
+                            clearnet_ms: clear_ms,
+                        },
+                        reach: FloodReach::OutboundOnly,
+                    },
+                    FLUFF_AVERAGE_IN_QUARTER_SECS,
+                    DelayFamily::Geometric,
+                    &seeds,
+                    budget,
+                    |seed| SplitMix64::new(seed ^ (h as u64) << 16 ^ (c as u64) << 8),
+                );
                 match reading {
                     Ok(v) => {
                         *slot = Some(v.p90_ms);
@@ -92,12 +100,7 @@ fn outbound_calibration_grid() {
             let approvable = link_p90.is_some_and(|p90| p90 <= provisional);
             let mut rng = SplitMix64::new(0xE0C4 + (h as u64) * 20 + c as u64);
             let post = simulate_epoch_traffic(
-                Mix {
-                    nodes: 40,
-                    hidden_out: h,
-                    clearnet_out: c,
-                    onion_fraction: 1.0,
-                },
+                Mix::new(40, h, c, 1.0),
                 Routing::HiddenStemSlot,
                 6,
                 &mut rng,
@@ -126,12 +129,7 @@ fn outbound_calibration_grid() {
         );
     }
 
-    let spy_mix = Mix {
-        nodes: 32,
-        hidden_out: 12,
-        clearnet_out: 8,
-        onion_fraction: 1.0,
-    };
+    let spy_mix = Mix::new(32, 12, 8, 1.0);
     for routing in [Routing::HiddenStemSlot, Routing::UniformHop0] {
         for (label, arm) in [
             ("p20", SpyArm::Uniform { p: 0.2 }),
@@ -140,47 +138,28 @@ fn outbound_calibration_grid() {
             let mut rng = SplitMix64::new(0x5A10);
             let spy = simulate_class_aware_first_spy(spy_mix, routing, arm, 0, 200, &mut rng);
             println!(
-                "SPY {routing:?} {label} blind prec={:.3} rec={:.3} aware prec={:.3} rec={:.3} \
-                 clearnet_arrivals={} clearnet_only_senders={}",
-                spy.blind.precision,
-                spy.blind.recall,
-                spy.aware.precision,
-                spy.aware.recall,
-                spy.clearnet_arrivals,
-                spy.clearnet_sender_clearnet_only
+                "SPY {routing:?} {label} blind prec={:.3} rec={:.3} aware prec={:.3} rec={:.3}",
+                spy.blind.precision, spy.blind.recall, spy.aware.precision, spy.aware.recall
             );
         }
     }
     let mut rng = SplitMix64::new(0x5A11);
     let marked = simulate_class_aware_first_spy(
-        Mix {
-            nodes: 32,
-            hidden_out: 8,
-            clearnet_out: 8,
-            onion_fraction: 1.0,
-        },
+        Mix::new(32, 8, 8, 1.0).with_clearnet_only(8),
         Routing::HiddenStemSlot,
         SpyArm::Uniform { p: 0.2 },
-        8,
+        0,
         200,
         &mut rng,
     );
     println!(
-        "MARK clearnet arrivals {} of which sender is clearnet-only {} aware_clearnet_names {} correct {}",
-        marked.clearnet_arrivals,
-        marked.clearnet_sender_clearnet_only,
-        marked.aware_clearnet_names,
-        marked.aware_clearnet_names_clearnet_only
+        "MARK clearnet_only=8 origin=0 blind prec={:.3} aware prec={:.3}",
+        marked.blind.precision, marked.aware.precision
     );
 
     let mut rng = SplitMix64::new(0x4E_11);
     let heavy = simulate_origin_rate_contrast(
-        Mix {
-            nodes: 32,
-            hidden_out: 12,
-            clearnet_out: 12,
-            onion_fraction: 1.0,
-        },
+        Mix::new(32, 12, 12, 1.0),
         Routing::HiddenStemSlot,
         8,
         8,
@@ -198,5 +177,5 @@ fn build_for_inbound(
     rng: &mut SplitMix64,
 ) -> shekyl_relay_privacy::conformance::composition::TwoClassGraph {
     use shekyl_relay_privacy::conformance::composition::build_two_class;
-    build_two_class(400, hidden, 0, fraction, rng)
+    build_two_class(Mix::new(400, hidden, 0, fraction), rng)
 }

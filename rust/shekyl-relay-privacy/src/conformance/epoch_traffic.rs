@@ -9,11 +9,15 @@
 //! while the epoch's map is pinned: P's originated transactions, and every
 //! stem P relays onto the same peer. A single-transaction walk that counts
 //! a relay only when the path revisits the pin does not see that. This
-//! module keeps one [`crate::stem_map::StemMap`] per node, has every node
-//! originate once, and walks each stem with [`walk_stem`].
+//! module keeps one [`crate::stem_map::StemMap`] per node and folds
+//! [`super::composition::walk_originated`], the same walk the first-spy
+//! estimators fold. Stem length comes from [`super::walk_stem`]. A hop
+//! onto a node that already forwarded this stem is fluff in the live
+//! pool, so it is not a delivery here either.
 //!
-//! One originated transaction per node per epoch. A common rate cancels in
-//! the posterior, because relayed mass is other nodes' stems at the same rate.
+//! One originated transaction per node per epoch, unless the caller
+//! passes another rate. A common rate cancels in the posterior, because
+//! relayed mass is other nodes' stems at the same rate.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -26,9 +30,9 @@ use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
 
 use super::composition::{
-    build_node_maps, build_two_class, relay_edge, LinkClass, Mix, NodeMap, Routing, TwoClassGraph,
+    build_node_maps, build_two_class, walk_originated, LinkClass, Mix, OriginatedStem, Routing,
+    StemRelayBudget, TwoClassGraph,
 };
-use super::stem::walk_stem;
 use super::util::usize_from;
 
 /// Own-edge posterior for senders of one inbound degree.
@@ -69,7 +73,8 @@ pub struct EpochTraffic {
     pub own_edge_relayed_per_originated: f64,
     /// Fraction of own-edges that carried at least one relayed stem.
     pub own_edges_carrying_relayed: f64,
-    /// Relayed forwards per originated stem, from [`walk_stem`].
+    /// Relayed forwards per originated stem. Length is [`super::walk_stem`];
+    /// a closing hop the pool would fluff is not a forward.
     pub relayed_per_originated: f64,
     /// Own-edge posterior by the sender's inbound degree. Empty degrees omitted.
     pub by_inbound: Vec<InboundPosterior>,
@@ -228,53 +233,34 @@ fn fold_sender(running: &mut Running, inbound: usize, originated: u64, relayed: 
     }
 }
 
-struct EpochScratch<'a> {
-    maps: &'a mut [NodeMap],
-    local_to: &'a [Option<usize>],
-    running: &'a mut Running,
-    own_originated: &'a mut [u64],
-    own_relayed: &'a mut [u64],
+/// Own-edge deliveries each sender put on its pin during one epoch.
+struct SenderDeliveries {
+    originated: Vec<u64>,
+    relayed: Vec<u64>,
 }
 
-fn send_one_stem<R: RelayRng + ?Sized>(
-    graph: &TwoClassGraph,
-    scratch: &mut EpochScratch<'_>,
-    origin: usize,
-    params: &DandelionParams,
-    embargo: &EmbargoTimer,
-    rng: &mut R,
+fn record_stem(
+    stem: &OriginatedStem,
+    local_to: &[Option<usize>],
+    running: &mut Running,
+    senders: &mut SenderDeliveries,
 ) {
-    let Some(first) = scratch.maps[origin].local else {
+    let Some(own) = stem.own_edge else {
         return;
     };
-    scratch.own_originated[origin] += 1;
-    scratch.running.originated_txs += 1;
-    note_class(scratch.running, first.class, true);
-    let extra = walk_stem(params, embargo, rng)
-        .stem_hops()
-        .saturating_sub(1);
-    // One forward per node per transaction. A cycle that returns to a
-    // node that already stemmed this transaction is the same send, not
-    // a second relayed arrival on its own-edge.
-    let mut sent = vec![false; graph.nodes()];
-    sent[origin] = true;
-    let mut at = first.to;
-    let mut prev = origin;
-    for _ in 0..extra {
-        if sent[at] {
-            break;
+    // `path` is `[origin, own.to, …]`, one longer than `relayed` at each end.
+    debug_assert_eq!(stem.path.len(), stem.relayed.len() + 2);
+    let origin = stem.path[0];
+    senders.originated[origin] += 1;
+    running.originated_txs += 1;
+    note_class(running, own.class, true);
+    for (hop_index, hop) in stem.relayed.iter().enumerate() {
+        let sender = stem.path[hop_index + 1];
+        running.relayed_forwards += 1;
+        note_class(running, hop.class, false);
+        if local_to[sender] == Some(hop.to) {
+            senders.relayed[sender] += 1;
         }
-        sent[at] = true;
-        let Some(hop) = relay_edge(&mut scratch.maps[at], &graph.initiated[at], prev, rng) else {
-            break;
-        };
-        scratch.running.relayed_forwards += 1;
-        note_class(scratch.running, hop.class, false);
-        if scratch.local_to[at] == Some(hop.to) {
-            scratch.own_relayed[at] += 1;
-        }
-        prev = at;
-        at = hop.to;
     }
 }
 
@@ -286,37 +272,29 @@ fn run_epoch<R, F>(
     running: &mut Running,
     origin_times: F,
     rng: &mut R,
-) where
+) -> SenderDeliveries
+where
     R: RelayRng + ?Sized,
     F: Fn(usize) -> u32,
 {
     let n = graph.nodes();
-    let mut maps: Vec<NodeMap> = build_node_maps(graph, routing, rng);
+    let mut maps = build_node_maps(graph, routing, rng);
     let inbound = inbound_degrees(graph);
     let local_to: Vec<Option<usize>> = maps
         .iter()
         .map(|node| node.local.map(|edge| edge.to))
         .collect();
-    let mut own_originated = vec![0_u64; n];
-    let mut own_relayed = vec![0_u64; n];
+    let mut senders = SenderDeliveries {
+        originated: vec![0; n],
+        relayed: vec![0; n],
+    };
 
     for origin in shuffled(n, rng) {
         let times = origin_times(origin);
         for _ in 0..times {
-            send_one_stem(
-                graph,
-                &mut EpochScratch {
-                    maps: &mut maps,
-                    local_to: &local_to,
-                    running,
-                    own_originated: &mut own_originated,
-                    own_relayed: &mut own_relayed,
-                },
-                origin,
-                params,
-                embargo,
-                rng,
-            );
+            let budget = StemRelayBudget::from_walk(params, embargo, rng);
+            let stem = walk_originated(graph, &mut maps, origin, budget, rng);
+            record_stem(&stem, &local_to, running, &mut senders);
         }
     }
 
@@ -325,11 +303,12 @@ fn run_epoch<R, F>(
             fold_sender(
                 running,
                 inbound[node],
-                own_originated[node],
-                own_relayed[node],
+                senders.originated[node],
+                senders.relayed[node],
             );
         }
     }
+    senders
 }
 
 /// Measure [`EpochTraffic`] on `epochs` independent graphs.
@@ -352,13 +331,7 @@ pub fn simulate_epoch_traffic<R: RelayRng + ?Sized>(
     let embargo = EmbargoTimer::geometric_from_ticks(1, DEFAULT_EMBARGO_TICK_MILLIS);
     let mut running = Running::new();
     for _ in 0..epochs {
-        let graph = build_two_class(
-            mix.nodes,
-            mix.hidden_out,
-            mix.clearnet_out,
-            mix.onion_fraction,
-            rng,
-        );
+        let graph = build_two_class(mix, rng);
         run_epoch(&graph, routing, &params, &embargo, &mut running, |_| 1, rng);
     }
     running.finish()
@@ -407,7 +380,10 @@ pub struct OriginRateContrast {
 ///
 /// # Panics
 ///
-/// Panics if `epochs` or `heavy_times` is zero, or the mix has no node 0 edge.
+/// Panics if `epochs` or `heavy_times` is zero, or node 0 has no legal
+/// own-edge under `routing`. The check is the stems node 0 actually
+/// originated, so a routing whose pin is absent cannot report a posterior
+/// of zero as if the node had sent.
 #[must_use]
 pub fn simulate_origin_rate_contrast<R: RelayRng + ?Sized>(
     mix: Mix,
@@ -425,110 +401,32 @@ pub fn simulate_origin_rate_contrast<R: RelayRng + ?Sized>(
     let mut heavy = Counts::default();
     let mut rest = Counts::default();
     for _ in 0..epochs {
-        let graph = build_two_class(
-            mix.nodes,
-            mix.hidden_out,
-            mix.clearnet_out,
-            mix.onion_fraction,
+        let graph = build_two_class(mix, rng);
+        let mut running = Running::new();
+        let senders = run_epoch(
+            &graph,
+            routing,
+            &params,
+            &embargo,
+            &mut running,
+            |node| if node == 0 { heavy_times } else { 1 },
             rng,
         );
-        let mut running = Running::new();
-        let n = graph.nodes();
-        let mut maps = build_node_maps(&graph, routing, rng);
-        let local_to: Vec<Option<usize>> = maps
-            .iter()
-            .map(|node| node.local.map(|edge| edge.to))
-            .collect();
-        let mut own_originated = vec![0_u64; n];
-        let mut own_relayed = vec![0_u64; n];
-        for origin in shuffled(n, rng) {
-            let times = if origin == 0 { heavy_times } else { 1 };
-            for _ in 0..times {
-                send_one_stem(
-                    &graph,
-                    &mut EpochScratch {
-                        maps: &mut maps,
-                        local_to: &local_to,
-                        running: &mut running,
-                        own_originated: &mut own_originated,
-                        own_relayed: &mut own_relayed,
-                    },
-                    origin,
-                    &params,
-                    &embargo,
-                    rng,
-                );
-            }
-        }
-        heavy.originated += own_originated[0];
-        heavy.relayed += own_relayed[0];
-        for node in 1..n {
-            rest.originated += own_originated[node];
-            rest.relayed += own_relayed[node];
+        assert!(
+            senders.originated[0] == u64::from(heavy_times),
+            "node 0 originated {} stems in the epoch, expected {heavy_times}: \
+             no legal own-edge under {routing:?}",
+            senders.originated[0]
+        );
+        heavy.originated += senders.originated[0];
+        heavy.relayed += senders.relayed[0];
+        for node in 1..graph.nodes() {
+            rest.originated += senders.originated[node];
+            rest.relayed += senders.relayed[node];
         }
     }
     OriginRateContrast {
         heavy_posterior: heavy.posterior(),
         rest_posterior: rest.posterior(),
     }
-}
-
-/// Outbound-only p90 on one composition. Transit is per link class.
-///
-/// The reach matches [`shipped_graph_p90`]: no reciprocal edges. An
-/// unconverged reading is the caller's job, through [`super::converge_p90`].
-#[must_use]
-pub fn composition_outbound_p90<R: RelayRng + ?Sized>(
-    mix: Mix,
-    hidden_ms: u64,
-    clearnet_ms: u64,
-    trials: usize,
-    rng: &mut R,
-) -> u64 {
-    use super::flood::simulate_fluff_return_classed;
-    use crate::schedule::DelayFamily;
-
-    simulate_fluff_return_classed(mix.nodes, 20, DelayFamily::Geometric, trials, rng, |rng| {
-        build_two_class(
-            mix.nodes,
-            mix.hidden_out,
-            mix.clearnet_out,
-            mix.onion_fraction,
-            rng,
-        )
-        .outbound_only_fluff_hops(hidden_ms, clearnet_ms)
-    })
-    .p90_ms
-}
-
-/// The shipped degree-12 graph at one transit, outbound-only, 512 nodes.
-#[must_use]
-pub fn shipped_graph_p90<R: RelayRng + ?Sized>(transit_ms: u64, trials: usize, rng: &mut R) -> u64 {
-    use super::flood::{simulate_fluff_return, FloodParams, FloodReach};
-    use crate::schedule::DelayFamily;
-
-    simulate_fluff_return(
-        FloodParams {
-            peers: 12,
-            nodes: 512,
-            reach: FloodReach::OutboundOnly,
-            transit_ms,
-        },
-        20,
-        DelayFamily::Geometric,
-        trials,
-        rng,
-    )
-    .p90_ms
-}
-
-/// The shipped fluff reference: 512 nodes, outbound-only, transit-free, degree 12.
-///
-/// This is the graph `fluff_return_ms = 3250` was read from, run through
-/// [`super::simulate_fluff_return`], the same shortest path the classed flood
-/// uses, with one transit on every edge. A composition's p90 divided by this reading
-/// is the ratio to that fail-safe input. It is not a new constant.
-#[must_use]
-pub fn shipped_fluff_reference<R: RelayRng + ?Sized>(trials: usize, rng: &mut R) -> u64 {
-    shipped_graph_p90(0, trials, rng)
 }
