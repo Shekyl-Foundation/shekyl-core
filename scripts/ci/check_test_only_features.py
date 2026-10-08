@@ -122,7 +122,7 @@ the reason) and share the governance FOLLOWUPS row; the third,
 `extern "C"` in the production header, so categorizing the feature changes
 nothing and the fix is the structural gate that row already names.
 
-# The fifth limb — the production-shape lint lane lints every TEST_ONLY owner
+# The production-shape lint lane lives next door
 
 A test-only feature is on in CI's workspace clippy (the dev edge that enables
 it is one of the `--all-targets` it builds, and features unify) and off in
@@ -130,22 +130,15 @@ production, so the owner's production shape is never built by that step. An
 import or helper that only the gated item uses is unused in production and
 invisible (#990: `std::time::Duration` in `shekyl-p-host/src/signer.rs`).
 `rust-audit-test.yml` carries a `--lib`-only clippy step over the TEST_ONLY
-owners for exactly this. Its package list is a copy of this table, and a copy
-kept in sync by a comment is a check that cannot fail: the fourth owner to
-join the table would go unlinted until someone read the comment. So the gate
-owns the invariant: **the lane's `-p` set must equal the set of TEST_ONLY
-owners**, the step must exist, and cargo's side of its `run:` is a closed
-allow-list — `--locked`, `--lib`, `-p` — because the two ways of putting the
-test feature back on the lib (a dev target, which unifies it; `--features` or
-`--all-features`, which select it) and the one way of leaving production's
-shape (`--no-default-features`) are all just "another flag", and a list of
-known-bad flags misses the next one. The same closure holds on the other two
-surfaces that could quiet the step without touching the command: clippy's
-side is exactly `-D warnings` (an `-A` re-allows, a `|| true` masks the
-exit), and the step's keys are exactly `name`, `working-directory`, `run`
-(an `if:` skips it, `continue-on-error:` lets it fail without failing the
-job, `env:` could cap the lints, a block-scalar `run:` hides the line). The
-edit that makes it fail is adding a row here without touching the lane.
+owners for exactly this, and its `-p` set has to equal this table.
+
+That equality is not a limb of this file. This file reads `cargo metadata`;
+the step is workflow YAML, and reading it wants PyYAML, which the rust-audit
+container does not install. `check_production_lint_lane.py` grades the step
+from the grep-gates job (the job that already has the parser) and imports
+`TEST_ONLY` from here, so the owner set stays one registry and this file does
+not grow a second instrument. Add a row here and a `-p` on that step in the
+same commit.
 
 # A limit this file does not close, named
 
@@ -167,7 +160,6 @@ platform-specific tables, and would report clean on all three.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -425,139 +417,6 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
 }
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "rust-audit-test.yml"
-# The step whose `-p` set this gate holds equal to the TEST_ONLY owners.
-PRODUCTION_LINT_STEP = "cargo clippy: test-only features off, as production builds them (lib only)"
-_STEP_NAME_RE = re.compile(r'^(?P<indent>\s*)-\s+name:\s*"?(?P<name>[^"\n]+?)"?\s*$')
-_STEP_KEY_RE = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z][\w-]*):(?:\s+(?P<value>.*?))?\s*$")
-_PACKAGE_FLAG_RE = re.compile(r"(?:^|\s)-p\s+(?P<pkg>\S+)")
-# The step's whole key set. `if:` would skip it, `continue-on-error:` would
-# let it fail without failing the job, `shell:` or `env:` would change what
-# the line means; none of those has a reason to be here, so the set is closed.
-PRODUCTION_LINT_STEP_KEYS = frozenset({"name", "working-directory", "run"})
-# Everything clippy is passed, exactly. `-A` would re-allow a lint and a
-# shell operator (`|| true`, `; true`) would mask the exit.
-PRODUCTION_LINT_CLIPPY_ARGS = ["-D", "warnings"]
-
-
-def production_lint_step(workflow_text: str) -> list[str] | None:
-    """The lines of `PRODUCTION_LINT_STEP`, from its `- name:` to the line
-    before the next step, or None if no step carries that name. Text-level:
-    one step is one `- name:` block, which is the shape the workflow keeps."""
-    lines = workflow_text.splitlines()
-    for i, line in enumerate(lines):
-        m = _STEP_NAME_RE.match(line)
-        if m is None or m.group("name") != PRODUCTION_LINT_STEP:
-            continue
-        block = [line]
-        for later in lines[i + 1 :]:
-            if _STEP_NAME_RE.match(later):
-                break
-            block.append(later)
-        return block
-    return None
-
-
-def production_lint_run(step: list[str]) -> tuple[str | None, list[str]]:
-    """The step's one-line `run:` value and the lines that are not one of
-    `PRODUCTION_LINT_STEP_KEYS` at the step's own indent. A block scalar
-    (`run: |`) is a stray line too: the lane is one line so it can be read."""
-    key_indent = len(_STEP_NAME_RE.match(step[0]).group("indent")) + 2
-    run: str | None = None
-    stray: list[str] = []
-    for line in step[1:]:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        m = _STEP_KEY_RE.match(line)
-        if m is None or len(m.group("indent")) != key_indent or m.group("key") not in PRODUCTION_LINT_STEP_KEYS:
-            stray.append(stripped)
-            continue
-        if m.group("key") == "run":
-            value = m.group("value") or ""
-            if not value or value[0] in "|>":
-                stray.append(stripped)
-            else:
-                run = value
-    return run, stray
-
-
-def check_production_lint_lane(workflow_text: str, owners: frozenset[str]) -> list[str]:
-    """Fifth limb: the production-shape lint step exists, carries no key but
-    `name`, `working-directory` and `run`, passes cargo nothing but
-    `--locked`, `--lib` and `-p`, passes clippy exactly `-D warnings`, and
-    names exactly the TEST_ONLY owners."""
-    where = f"{WORKFLOW.name} step {PRODUCTION_LINT_STEP!r}"
-    step = production_lint_step(workflow_text)
-    if step is None:
-        return [
-            f"{where}: not found — the TEST_ONLY owners' production shape is "
-            f"linted by that step alone; restore it (renamed? update PRODUCTION_LINT_STEP too)"
-        ]
-    run, stray_lines = production_lint_run(step)
-    failures: list[str] = []
-    if stray_lines:
-        failures.append(
-            f"{where}: line(s) outside the step's closed key set "
-            f"{sorted(PRODUCTION_LINT_STEP_KEYS)}: {'; '.join(stray_lines)} — an `if:` skips "
-            f"the lint, `continue-on-error:` lets it fail quietly, a block-scalar `run:` "
-            f"hides what the one line says"
-        )
-    if run is None:
-        failures.append(f"{where}: no one-line `run:` — nothing lints the production shape")
-        return failures
-    # Everything before `--` is cargo's; everything after is clippy's. The
-    # lane's contract is "exactly what production builds", so cargo's side
-    # is a closed allow-list rather than a list of known-bad flags: a dev
-    # target (`--all-targets`, `--tests`) unifies the test feature onto the
-    # lib *indirectly*; `--features x/test-signer` or `--all-features` puts
-    # the same feature on the same lib *directly*; `--no-default-features`
-    # builds a shape production never does. A flag nobody has thought of
-    # yet is red too, which is the point.
-    cargo_side, sep, clippy_side = run.partition(" -- ")
-    tokens = cargo_side.split()
-    if tokens[:2] != ["cargo", "clippy"] or not sep:
-        failures.append(f"{where}: `run:` is not a `cargo clippy <cargo flags> -- -D warnings` line: {run!r}")
-    if clippy_side.split() != PRODUCTION_LINT_CLIPPY_ARGS:
-        failures.append(
-            f"{where}: clippy is passed {clippy_side.split()!r}, not exactly "
-            f"{PRODUCTION_LINT_CLIPPY_ARGS!r} — an `-A` re-allows a lint and a shell "
-            f"operator after the command (`|| true`) masks the exit"
-        )
-    allowed_flags = {"--locked", "--lib"}
-    stray: list[str] = []
-    i = 2
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok == "-p" and i + 1 < len(tokens):
-            i += 2
-            continue
-        if tok not in allowed_flags:
-            stray.append(tok)
-        i += 1
-    if "--lib" not in tokens[2:]:
-        failures.append(f"{where}: no `--lib` — without it cargo picks the package's default targets")
-    if stray:
-        failures.append(
-            f"{where}: flag(s) outside the lane's closed set {sorted(allowed_flags | {'-p <crate>'})}: "
-            f"{', '.join(stray)} — a dev target unifies the test feature onto the lib, a "
-            f"feature flag selects it directly, and either lints the test shape under a "
-            f"step named for the production one"
-        )
-    linted = frozenset(m.group("pkg") for m in _PACKAGE_FLAG_RE.finditer(cargo_side))
-    missing = sorted(owners - linted)
-    extra = sorted(linted - owners)
-    if missing:
-        failures.append(
-            f"{where}: TEST_ONLY owner(s) not linted feature-off: {', '.join(missing)} — "
-            f"add `-p <crate>` to the lane in the commit that adds the row"
-        )
-    if extra:
-        failures.append(
-            f"{where}: lints crate(s) with no TEST_ONLY row: {', '.join(extra)} — "
-            f"the lane is the table's mirror, not a second list; drop them or add the row"
-        )
-    return failures
 
 
 def cargo_metadata() -> dict:
@@ -1019,106 +878,6 @@ def selftest() -> int:
             if not any(needle in f for f in got):
                 bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
 
-    def lane(run: str, name: str = PRODUCTION_LINT_STEP, before: str = "", after: str = "") -> str:
-        return (
-            "      - name: other step\n        run: echo before\n"
-            f'      - name: "{name}"\n        working-directory: rust\n'
-            "        # comment\n"
-            f"{before}"
-            f"        run: {run}\n"
-            f"{after}"
-            "      - name: after\n        run: echo after\n"
-        )
-
-    good = "cargo clippy --locked -p a -p b --lib -- -D warnings"
-
-    owners = frozenset({"a", "b"})
-    lane_cases = [
-        ("lane names exactly the owners: green", lane("cargo clippy --locked -p a -p b --lib -- -D warnings"), []),
-        (
-            "row added, lane not touched — the hole one level up",
-            lane("cargo clippy --locked -p a --lib -- -D warnings"),
-            ["not linted feature-off: b"],
-        ),
-        (
-            "lane lints a crate with no row",
-            lane("cargo clippy --locked -p a -p b -p c --lib -- -D warnings"),
-            ["no TEST_ONLY row: c"],
-        ),
-        (
-            "lane builds a dev target — the indirect way onto the lib",
-            lane("cargo clippy --locked -p a -p b --lib --all-targets -- -D warnings"),
-            ["outside the lane's closed set", "--all-targets"],
-        ),
-        (
-            "lane turns every feature on — the direct way, no dev target",
-            lane("cargo clippy --locked -p a -p b --lib --all-features -- -D warnings"),
-            ["outside the lane's closed set", "--all-features"],
-        ),
-        (
-            "lane names the test feature itself",
-            lane("cargo clippy --locked -p a -p b --lib --features a/test-signer -- -D warnings"),
-            ["outside the lane's closed set", "--features", "a/test-signer"],
-        ),
-        (
-            "lane drops default features — a shape production never builds",
-            lane("cargo clippy --locked --no-default-features -p a -p b --lib -- -D warnings"),
-            ["outside the lane's closed set", "--no-default-features"],
-        ),
-        (
-            "lane without --lib",
-            lane("cargo clippy --locked -p a -p b -- -D warnings"),
-            ["no `--lib`"],
-        ),
-        (
-            "clippy side without -D warnings",
-            lane("cargo clippy --locked -p a -p b --lib"),
-            ["not a `cargo clippy"],
-        ),
-        ("step renamed away", lane("cargo clippy -p a -p b --lib -- -D warnings", name="something else"), ["not found"]),
-        (
-            "step present, run missing",
-            f'      - name: "{PRODUCTION_LINT_STEP}"\n        working-directory: rust\n      - name: after\n        run: x\n',
-            ["no one-line `run:`"],
-        ),
-        (
-            "exit masked after the command",
-            lane(good + " || true"),
-            ["masks the exit", "'||', 'true'"],
-        ),
-        (
-            "a lint re-allowed on the clippy side",
-            lane(good + " -A clippy::unused_imports"),
-            ["not exactly ['-D', 'warnings']"],
-        ),
-        (
-            "step skipped by a condition, before run",
-            lane(good, before="        if: false\n"),
-            ["outside the step's closed key set", "if: false"],
-        ),
-        (
-            "step allowed to fail quietly, after run",
-            lane(good, after="        continue-on-error: true\n"),
-            ["outside the step's closed key set", "continue-on-error: true"],
-        ),
-        (
-            "environment injected into the step",
-            lane(good, after="        env:\n          RUSTFLAGS: --cap-lints allow\n"),
-            ["outside the step's closed key set", "env:", "RUSTFLAGS"],
-        ),
-        (
-            "run as a block scalar hides the line",
-            lane("|", after=f"          {good}\n"),
-            ["outside the step's closed key set", "run: |", "no one-line `run:`"],
-        ),
-    ]
-    for label, text, want in lane_cases:
-        got = check_production_lint_lane(text, owners)
-        if not want and got:
-            bad.append(f"{label}: expected green, got {got!r}")
-        for needle in want:
-            if not any(needle in f for f in got):
-                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
     if bad:
         print("consumer-owned feature selftest FAILED:\n", file=sys.stderr)
         for b in bad:
@@ -1127,8 +886,7 @@ def selftest() -> int:
     print(
         f"feature-gate selftest: {len(cases)} consumer-owned cases + "
         f"{len(exhaustive_cases) + 1} exhaustiveness cases + "
-        f"{len(trigger_cases)} trigger cases + "
-        f"{len(lane_cases)} production-lint-lane cases held"
+        f"{len(trigger_cases)} trigger cases held"
     )
     return 0
 
@@ -1144,9 +902,6 @@ def main() -> int:
     failures: list[str] = check_consumer_owned(meta, CONSUMER_OWNED)
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
     failures += check_trigger(meta, GOVERNED_OWNERS, MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)
-    failures += check_production_lint_lane(
-        WORKFLOW.read_text(encoding="utf-8"), frozenset(owner for owner, _ in TEST_ONLY)
-    )
 
     for (owner, feature), why in sorted(TEST_ONLY.items()):
         # Subject assertion: the feature must exist where it is claimed to.
@@ -1217,8 +972,7 @@ def main() -> int:
         f"consumer-owned: {owned or 'none registered (selftest is the subject)'}; "
         f"governed feature tables exhaustively categorized: {', '.join(sorted(GOVERNED_OWNERS))}; "
         f"trigger met and grandfathered (shrink-only): "
-        f"{len(MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)}; "
-        f"production-shape lint lane names every TEST_ONLY owner"
+        f"{len(MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)}"
     )
     return 0
 
