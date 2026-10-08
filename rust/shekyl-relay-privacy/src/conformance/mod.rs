@@ -27,6 +27,7 @@
 )]
 
 pub mod analysis;
+pub mod composition;
 pub mod flood;
 pub mod grade;
 pub mod linkage;
@@ -42,9 +43,10 @@ pub use analysis::{
     coefficient_of_variation, inference_precision, residual_masses, sample_poisson, sample_uniform,
 };
 pub use flood::{
-    converged_fluff_return_mixed, simulate_diffusion_first_spy, simulate_fluff_return,
-    simulate_fluff_return_mixed, transit_for, Converged, ConvergenceBudget, ConvergenceRefusal,
-    FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
+    converge_p90, converged_fluff_return_classed, converged_fluff_return_mixed,
+    simulate_diffusion_first_spy, simulate_fluff_return, simulate_fluff_return_classed,
+    simulate_fluff_return_mixed, transit_for, ClassedHop, Converged, ConvergenceBudget,
+    ConvergenceRefusal, FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
 };
 pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};
 pub use reshape::{
