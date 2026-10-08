@@ -4,7 +4,7 @@
 decision authority on 2026-10-08 and are recorded as ruled. §4–§8
 (mechanism, failure modes, keys, authorization, listeners, tunnel) are
 **proposed** and authorize no implementation. §9 registers the probes;
-§10 the questions still open. **RT-O9 blocks RT-W10** (§10).
+§10 the questions still open. **RT-O9's grant table blocks RT-W10 until confirmed** (§6.1, §10).
 **Verified against:** `shekyl-core` @ `fa18edb50` (`dev`). Every
 `file:line` below was read at that commit.
 **Token family:** continues `RT-` from
@@ -205,7 +205,7 @@ ruled 2026-10-08, kept for UX). **Off by default** (RT-O5′, ruled
 2026-10-08): a fresh install has no unauthenticated listener, and the
 operator running a status reader beside the node enables it. Today
 it is the admin surface, reachable by every local user of the host; under
-RT-15 it carries **only the least grant** — a fixed row of the same grant
+RT-15 it carries **only the `view` preset** (§6.1) — a fixed row of the same grant
 table the channel uses (§6.1), not a revived `restricted` flag. Reason: a
 co-located website or monitoring tool reads network status with no
 enrolment and no real exposure in a breach. It stays loopback-only (R0
@@ -502,15 +502,90 @@ R0 RT-7 stands: generated material only, never typed from memory.
 
 ### 6.1 Grants
 
-The existing gates — the route table's `Visibility`
-([`server.rs:139-148`](../../rust/shekyl-daemon-rpc/src/server.rs)) and
-the JSON-RPC method gate
-([`json_rpc.rs:49-63`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs))
-— become the grant model. Whether that is two levels (view, admin) or named
-grants is **RT-O9, which blocks RT-W10**: the incident's consumer calls
-`get_connections`, which is admin-only (`json_rpc.rs:52`), so under two
-levels its ceiling would include `stop_daemon`, `pop_blocks`, `set_bans`
-and `flush_txpool`.
+**Direction (decision authority, 2026-10-08): named grants, with node
+status split out of every view.** The assignment below is proposed
+(RT-O9).
+
+A grant is a **set of facts or actions**, not a list of methods. Most
+methods fall whole into one grant. `get_info` does not: it mixes facts
+about the network with facts about this node, so it is served to any
+connection holding `health` and each field is present only when the
+connection holds that field's grant. **A field outside the grant is
+absent, never zero.** Today's restricted reply writes `0` for a hidden peer
+count (`core_rpc_server.cpp:213-232`), which a reader cannot tell from a
+node with no peers.
+
+One question draws the line between `health` and `status`: *does a client
+need this fact to decide whether it can use this node right now, and is it
+the same on every honest node of this build?* Everything `get_version`
+returns passes ([`methods.rs:112-145`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+RPC contract version, release flag, heights, fork schedule,
+consensus-constants digest, nettype, genesis) — it identifies a build and a
+network, never a node.
+
+| Grant | Carries |
+|---|---|
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods, `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, emission and economics fields) |
+| `pool` | The relayed pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size. Entries not yet relayed are **not** in this grant (`node`) |
+| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, the RPC and protocol contract versions, nettype |
+| `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
+| `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
+| `submit` | `/submit_transaction` |
+| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block` |
+| `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
+| `bans` | `set_bans`, `get_bans`, `banned` |
+| `node` | Everything that controls or exposes the node itself: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, pool entries not yet relayed, `/get_stem_tallies`, `calc_pow`, `get_coinbase_tx_sum`, `request_archival_shard`, `generateblocks`, `inject_archival_serve_credit`, and enrolment (`rpc-enrol`, `rpc-revoke`) |
+
+*Why each `status` field is out of view.*
+
+| Field | What it gives away |
+|---|---|
+| Build version string | The patch level, which tells an attacker which defects apply. The RPC contract version stays in `health` |
+| Start time | Uptime and restart times correlate this node's onion address with its clearnet address |
+| Free space, database size | A host fingerprint. Today's restricted reply rounds the size up to 5 GiB (`core_rpc_server.cpp:248-250`); under the split the field is absent |
+| Aggregate peer counts, RPC connection count | Connectivity posture over time |
+| Alt-blocks count and hashes | Which forks this node saw |
+
+**Presets** (what an operator names at enrolment; a ceiling is a preset or
+an explicit list of grants):
+
+| Preset | Grants |
+|---|---|
+| `view` | `chain` + `pool` + `health` |
+| `wallet` | `view` + `submit` |
+| `miner` | `view` + `mining-work` |
+| `admin` | every grant |
+
+**`status` and `peers` are in no preset but `admin`.** They are granted
+only when the operator names them, so publishing a node's uptime or its
+peers is a deliberate act, not something a consumer inherits from the
+preset it landed in. The plaintext loopback listener is fixed at `view`
+(RT-15); the default request on the channel is `view` (§6.2).
+
+*Changes from today's two-level gate, each to be confirmed* (RT-O9):
+
+- **`/get_alt_blocks_hashes` moves out of the unrestricted-to-everyone
+  set** into `status`. It is served on both listeners today
+  (`server.rs` route table), and it is the per-hash form of the
+  alt-blocks count this split hides. No in-tree client calls it.
+- **`/get_limit` and `/get_net_stats`** are placed in `status`: this
+  node's rate limits and traffic totals. `/get_limit` is on both
+  listeners today.
+- **`/get_stem_tallies` stays in `node`, not `peers`.** It is the
+  anonymity graph (today admin-only for that reason); a consumer granted
+  `peers` to count connections must not receive it.
+- **`get_info.restricted` is retired.** The connection's grant is returned
+  in the handshake (§6.2); a boolean cannot describe it.
+
+*What the incident's consumer gets.* The web host at `view` reads height,
+difficulty and hash rate from `chain`, sync state from `health`, and pool
+size from `pool`. Two things it does today need more. Its **seed-node
+count** and its **peer-reported network height** both come from
+`get_connections`, which is `peers` — peer addresses — and would be an
+explicit enrolment; sync state from `health` replaces the second. The
+**build version** and **database size** it displays are `status`. Uptime is
+`status` too and should stay off a public page for the correlation reason
+above.
 
 ### 6.2 Per-connection request and visible grant
 
@@ -520,7 +595,7 @@ life. **The daemon returns the effective grant in the message-4 payload**,
 so a clamped client knows at connect time, not when a call fails. A call
 outside the grant is refused with its own error — a dedicated JSON-RPC
 code and HTTP 403 on REST — never "method not found" or a 404. The default
-request is the least grant. Nothing is served until the client's first
+request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
 
 The `restricted: bool` that today threads through `AppState`, the router,
@@ -537,7 +612,7 @@ and the method handlers becomes the connection's grant; the two gate tests
   `BoundListener` stays the only thing served.
 - **The local leg** is the owner-only socket or pipe for same-user callers
   and the channel for everyone else (RT-15). The plaintext loopback TCP
-  listener is an operator option at the least grant, loopback-only, with
+  listener is an operator option fixed at `view`, loopback-only, with
   `browser_boundary`, off by default (RT-15).
 - **The onion** (R0 RT-8) is unchanged in spirit: reachability, not a
   security model; the channel runs inside it.
@@ -794,20 +869,21 @@ construction) instead of loopback TCP.
   builds a native-roots TLS connector for `https://` daemon endpoints.
   Under RT-10 no supported posture uses it; deletion takes `rustls`'s
   native-certs path out of the wallet graph.
-- **RT-O9 — grant granularity. Blocks RT-W10.** Two levels, or named
-  grants keyed to jobs (for example: chain read, pool read, peer readout,
-  node control, mining control, ban control — every route and method in
-  exactly one)? The incident's consumer needs `get_connections` and nothing
-  that controls the node (§6.1). The alternative is to change the consumer.
-  Either way, `get_connections` is the node's live peer set, and a public
-  site that displays it publishes the node's connections; that decision
-  should be taken explicitly, not inherited from whichever grant the
-  consumer lands in. **The least grant's content is decided here too**, and
-  RT-15's plaintext-loopback case depends on it: today's restricted surface
-  reports the peer and connection counts as zero
-  (`core_rpc_server.cpp:213-232`), so a co-located status page reading
-  "network status" at the least grant gets chain facts and no peer facts
-  unless this item says otherwise.
+- **RT-O9 — the grant table. Blocks RT-W10 until confirmed.** The form is
+  directed (2026-10-08): named grants, with `status` split from `health`
+  and held out of every preset but `admin`. What remains open is the
+  assignment in §6.1, in particular:
+  - the four changes from today's gate that §6.1 lists
+    (`/get_alt_blocks_hashes`, `/get_limit` and `/get_net_stats`,
+    `/get_stem_tallies`, `get_info.restricted`);
+  - whether `node` should stay one grant. It is every action that today
+    needs the admin listener and has no narrower home; splitting it further
+    has no consumer asking for it (rule 21);
+  - whether the incident's consumer is enrolled for `peers` to keep its
+    seed-node count, or the count is dropped from the site;
+  - `get_info` served field by field. It is the one method that spans
+    grants, and it is still a C++ handler: the grant crosses the FFI as
+    more than today's one boolean until `/get_info` moves to Rust (RK-5c).
 
 ---
 
@@ -900,7 +976,7 @@ construction) instead of loopback TCP.
 |---|---|---|
 | RT-W8 | RT-P7 model; RT-O7 vectors and differential; registry rows; RT-P4 | ratification |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); deadline from RT-P6 | RT-W8 |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants; restricted listener and its C++ flags deleted; plaintext loopback re-scoped to the least grant | RT-W9, **RT-O9**, RT-P8 |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants; restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8 |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet` | RT-W9 |
 | RT-W13 | §11 sweep | lands with RT-W10 |
