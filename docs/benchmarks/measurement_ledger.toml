@@ -268,6 +268,7 @@ cleared = [
   { through = "01aa01fd31", reason = "SH-2 (PR #990): a doc comment on PServeEndpoint::bind in serve.rs, which no longer names the deleted NoResidentKey. No code changed; the verdict's arms are untouched." },
   { through = "9cb164d28e", reason = "SH-2 (PR #990): the six serve counters become one clonable ServeCounterReader the endpoint owns; the accept loop increments the same atomics and the getters delegate. The verdict is over what an abandoned request costs the serve path, and no read, hash, sign or socket operation on that path is added, removed or reordered; the counter stores it already made are the same stores." },
   { through = "8238319ac3", reason = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. The floor verdict is what an abandoned request costs, and no read, hash, sign or socket operation on that path is added, removed or reordered. The two extra arc clones are not part of the verdict's arms." },
+  { through = "112a9a62bf", reason = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only; no executable code changed, and the verdict's arms are untouched." },
 ]
 
 [[path_set]]
@@ -296,6 +297,7 @@ stale_through = [
   { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
   { through = "9cb164d28e", note = "SH-2 (PR #990): the six serve counters in serve.rs move from loose Arc<AtomicU64> locals into one clonable ServeCounterReader the endpoint owns and hands out; the accept loop increments the same atomics it did, and the endpoint's count getters delegate to the reader. Reads of the counters happen on the serving task's health probe, off this path. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path; not measured." },
   { through = "8238319ac3", note = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. Increments stay a relaxed fetch_add of one on the same six atomics at the same events. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path. Not measured." },
+  { through = "112a9a62bf", note = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only. No read, hash, sign or socket operation changed. Not measured." },
 ]
 
 [[constant]]
