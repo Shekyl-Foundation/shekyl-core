@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
@@ -63,14 +63,36 @@ pub fn longest_measured_transit() -> f64 {
         .expect("a connector with a measured transit")
 }
 
+/// One embargo table per assessed transit, for the life of the process.
+///
+/// The table is a pure function of that cell's milliseconds. Building it
+/// walks a geometric mass until the tail cutoff, and the stem path asks
+/// the question once per peer per decision. The first ask for a transit
+/// builds the table; every later ask clones the [`Arc`].
+type EmbargoTables = Mutex<Vec<(u32, Arc<EmbargoTimer>)>>;
+
+fn embargo_tables() -> &'static EmbargoTables {
+    static TABLES: OnceLock<EmbargoTables> = OnceLock::new();
+    TABLES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// The observation window for `declaration`, when its transit cell is assessed.
-fn embargo_timer(declaration: &Declaration) -> Option<EmbargoTimer> {
+fn embargo_timer(declaration: &Declaration) -> Option<Arc<EmbargoTimer>> {
     let Assessment::Assessed(ms) = declaration.measured_transit_ms() else {
         return None;
     };
-    Some(EmbargoTimer::adopted(
+    let tables = embargo_tables();
+    let mut guard = tables
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == ms) {
+        return Some(Arc::clone(timer));
+    }
+    let timer = Arc::new(EmbargoTimer::adopted(
         &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(f64::from(ms)),
-    ))
+    ));
+    guard.push((ms, Arc::clone(&timer)));
+    Some(timer)
 }
 
 fn hides_address(declaration: &Declaration) -> bool {
@@ -758,9 +780,14 @@ impl Relay {
     }
 
     /// Outbound, and the connector has a measured transit. An unmeasured
-    /// connector is not a stem candidate.
+    /// connector is not a stem candidate. The cell is the question; the
+    /// embargo table is built when a stem is recorded, not while listing.
     fn stem_candidate(peer: &PeerFluff) -> bool {
-        peer.direction == PeerDirection::Outbound && embargo_timer(&peer.declaration).is_some()
+        peer.direction == PeerDirection::Outbound
+            && matches!(
+                peer.declaration.measured_transit_ms(),
+                Assessment::Assessed(_)
+            )
     }
 
     /// Established outbound sessions. Inbound peers are not stem candidates.
@@ -1242,3 +1269,22 @@ mod stem_draw;
 mod synthetic;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod embargo_cache {
+    use std::sync::Arc;
+
+    use super::{declaration, embargo_timer};
+    use shekyl_transport_layer::ConnectorId;
+
+    #[test]
+    fn one_table_per_assessed_transit() {
+        let clearnet = declaration(ConnectorId::Clearnet.column());
+        let first = embargo_timer(&clearnet).expect("clearnet transit is assessed");
+        let second = embargo_timer(&clearnet).expect("clearnet transit is assessed");
+        assert!(Arc::ptr_eq(&first, &second));
+        let hidden = declaration(ConnectorId::Tor.column());
+        let tor = embargo_timer(&hidden).expect("tor transit is assessed");
+        assert!(!Arc::ptr_eq(&first, &tor));
+    }
+}
