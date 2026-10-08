@@ -15,10 +15,13 @@
 //!
 //! The chain, under `RuleSet::fakechain(fixed 7, SEB 100 / cap 50)`:
 //! `P` complete-tree personas join in epoch 0 (four per block from height
-//! 10), then thirty-one blocks each carrying a 100 KB spend close shard 0,
-//! so the scan's universe is one shard. Nobody serves — which is how every
-//! observation settles as a miss 2-of-3: with no attestation, every
-//! challenge of the epoch is missed. Each epoch's deadline connect (`199`,
+//! 10), then thirty-one blocks each carrying a 100 KB serve credit close
+//! shard 0, so the scan's universe is one shard. The credits are persona
+//! 0's **on shard 1**, the open one, and are there for their bytes
+//! ([`padded_credit`]); nobody serves shard 0 — which is how every
+//! observation settles as a miss 2-of-3: every challenge is on shard 0,
+//! and with no pass recorded there every challenge of the epoch is
+//! missed. Each epoch's deadline connect (`199`,
 //! `299`, …) settles that epoch: epoch 0 is not challengeable
 //! (`good_through` starts the epoch after the join), epochs `1..M-1` are
 //! misses that do not yet fill the window, and the epoch-`M` deadline
@@ -118,9 +121,19 @@ const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
 /// Joins per block: four keeps `P` personas inside epoch 0 for any `P` the
 /// bench admits.
 const JOINS_PER_BLOCK: u64 = 4;
-/// Blocks carrying a padded spend; thirty-one × 100 KB is past one shard.
-const SPEND_BLOCKS: u64 = 31;
-const SPEND_PAD: usize = 100_000;
+/// Blocks carrying a padded serve credit; thirty-one × 100 KB is past one
+/// shard.
+const CREDIT_BLOCKS: u64 = 31;
+const CREDIT_PAD: usize = 100_000;
+/// The shard the padding credits name: **not** shard 0, the one shard in
+/// the scan's universe and the one every challenge is on — a recorded pass
+/// there would exempt persona 0 from the slash (`slash::passed`). Shard 1
+/// is open through the whole chain; a credit on an open shard is a
+/// `ShardClose::Open` arm of the epoch close and nothing to the slash.
+const CREDIT_SHARD: u64 = 1;
+/// The credits' settlement epoch: the first a persona joining in epoch 0
+/// may serve (CEN-J5).
+const CREDIT_EPOCH: u64 = 1;
 /// Blocks per `store.write`: the bench measures the judge and the connect,
 /// not redb's commit.
 const PER_BATCH: u64 = 50;
@@ -154,19 +167,31 @@ fn ids_in_table_order(personas: u64) -> Vec<PCanonicalId> {
     ids
 }
 
-/// A spend whose opaque proof is padded to `SPEND_PAD` bytes: no landed
-/// rule reads the proof's bytes, so its length is the fixture's free
-/// variable, and thirty-one of them close shard 0.
-fn padded_spend(key: u64) -> Transaction {
-    let mut tx = fixture::spend(fixture::point_at(key), 2);
+/// A serve credit for bench persona 0 on [`CREDIT_SHARD`] at
+/// [`CREDIT_EPOCH`] whose one pruned pass record is `key`'s bytes padded
+/// to `CREDIT_PAD`: the record is the one archival region no landed rule
+/// reads (CEN-J8/J9/J10 will — the debt is `docs/FOLLOWUPS.md`, "Padded
+/// serve-credit records in the store's prune and bench tests"), so its
+/// length is the fixture's free variable, and thirty-one of them close
+/// shard 0. *Records-was:* until the CEN-I13 flip these were fixture spends
+/// with the opaque `fcmp_proof` padded.
+fn padded_credit(key: u64) -> Transaction {
+    let mut tx = fixture::serve_credit_only(persona(0));
+    tx.prefix.inputs = vec![fixture::serve_credit_vin(
+        persona(0),
+        CREDIT_SHARD,
+        CREDIT_EPOCH,
+    )];
     let Ct::Fcmp {
         prunable: Some(prunable),
         ..
     } = &mut tx.ct
     else {
-        unreachable!("fixture::spend with outputs carries a prunable region");
+        unreachable!("fixture::serve_credit_only carries its RF-D1 region");
     };
-    prunable.fcmp_proof = vec![0xF0; SPEND_PAD];
+    let mut record = key.to_le_bytes().to_vec();
+    record.resize(CREDIT_PAD, 0xA5);
+    prunable.serve_credit_pruned = vec![record];
     tx
 }
 
@@ -176,17 +201,24 @@ fn listing(h: u64, personas: u64) -> Vec<Transaction> {
         return Vec::new();
     }
     let join_blocks = personas.div_ceil(JOINS_PER_BLOCK);
-    let first_spend_block = FIRST_SPEND_HEIGHT + join_blocks;
-    if h < first_spend_block {
+    let first_credit_block = FIRST_SPEND_HEIGHT + join_blocks;
+    if h < first_credit_block {
         let first = (h - FIRST_SPEND_HEIGHT) * JOINS_PER_BLOCK;
         return (first..(first + JOINS_PER_BLOCK).min(personas))
             .map(|i| fixture::join_market(fixture::point_at(1_000 + i), persona(i)))
             .collect();
     }
-    if h < first_spend_block + SPEND_BLOCKS {
-        return vec![padded_spend(1_000_000 + h)];
+    if h < first_credit_block + CREDIT_BLOCKS {
+        return vec![padded_credit(1_000_000 + h)];
     }
     Vec::new()
+}
+
+/// The heights carrying a padding credit, ascending — the ServeCredit rows
+/// the snapshot carries, keyed by height.
+fn credit_heights(personas: u64) -> impl Iterator<Item = u64> {
+    let first = FIRST_SPEND_HEIGHT + personas.div_ceil(JOINS_PER_BLOCK);
+    first..first + CREDIT_BLOCKS
 }
 
 #[derive(Clone, Copy, Default)]
@@ -227,7 +259,7 @@ impl SlashedChain {
     fn build(label: &str, personas: u64) -> Self {
         let join_blocks = personas.div_ceil(JOINS_PER_BLOCK);
         assert!(
-            FIRST_SPEND_HEIGHT + join_blocks + SPEND_BLOCKS <= SEB,
+            FIRST_SPEND_HEIGHT + join_blocks + CREDIT_BLOCKS <= SEB,
             "{personas} personas: the joins and the shard must close inside epoch 0"
         );
         let schedule = RULES.settlement_schedule();
@@ -283,7 +315,7 @@ impl SlashedChain {
             m,
             slashing_height,
             first_deadline: schedule.slash_deadline_height(0),
-            shard_closed: FIRST_SPEND_HEIGHT + join_blocks + SPEND_BLOCKS,
+            shard_closed: FIRST_SPEND_HEIGHT + join_blocks + CREDIT_BLOCKS,
             timings,
             built: wall.elapsed(),
         }
@@ -395,17 +427,27 @@ impl SlashedChain {
                 .expect("distinct keys");
         }
         want.set_last_slash_epoch(m).expect("the one row");
+        // Nobody served shard 0 — the challenged shard — but the padding
+        // credits that closed it are recorded: persona 0 on `CREDIT_SHARD`
+        // at `CREDIT_EPOCH`, one row per carrying height, and no other.
+        let padder = fixture::persona(persona(0)).id;
+        for height in credit_heights(self.personas) {
+            want.push_serve_credit(
+                &padder,
+                ShardId::from_raw(CREDIT_SHARD),
+                SettlementEpoch::from_raw(CREDIT_EPOCH),
+                BlockHeight::from_raw(height),
+            )
+            .expect("distinct heights");
+        }
         for family in [
             SnapshotFamily::SlashLog,
             SnapshotFamily::SlashApplied,
             SnapshotFamily::LastSlashEpoch,
+            SnapshotFamily::ServeCredit,
         ] {
             assert_eq!(got.rows(family), want.rows(family), "{family}");
         }
-        assert!(
-            got.rows(SnapshotFamily::ServeCredit).is_empty(),
-            "nobody served"
-        );
 
         // The bytes, spelled: `n_rows u64 ‖ (len u32 ‖ key ‖ value)*`, little-
         // endian throughout, `Canonical(SlashLogEntry)` as `persona[32] ‖
@@ -453,11 +495,17 @@ impl SlashedChain {
         // The whole record, pinned: the only `0x04` body in the tree with
         // the slash families populated.
         let got_hash = hex(&keccak256(&body));
+        let per_family: Vec<String> = SnapshotFamily::ALL
+            .iter()
+            .map(|f| format!("{f}: {}", got.rows(*f).len()))
+            .collect();
         assert_eq!(
-            got_hash, SLASHED_SNAPSHOT_BODY_KECCAK,
-            "the 0x04 body at the slashing tip ({} bytes, {} rows) moved — a §3.8.1 / codec change re-pins it with its version bump",
+            got_hash,
+            SLASHED_SNAPSHOT_BODY_KECCAK,
+            "the 0x04 body at the slashing tip ({} bytes, {} rows: {}) moved — a §3.8.1 / codec change re-pins it with its version bump",
             body.len(),
-            got.row_count()
+            got.row_count(),
+            per_family.join(", ")
         );
         // And the trace's reader decodes exactly what the read encoded.
         let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
@@ -471,10 +519,10 @@ impl SlashedChain {
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 17 536 bytes, 39 rows — four
-/// bonds, thirteen closed epochs' budget and Σwork rows, the open epoch's
-/// accrual, and the slash families above. A fingerprint of bytes, not a
-/// domain: the plain hash, so the pin registers nothing in
+/// under `RULES`, `WITNESS_PERSONAS` personas: 19 396 bytes, 70 rows — four
+/// bonds, the thirty-one padding credits, thirteen closed epochs' budget
+/// and Σwork rows, and the slash families above. A fingerprint of bytes,
+/// not a domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
 /// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
 /// change, and once more at their merge: the emission speed factor became
@@ -482,13 +530,24 @@ impl SlashedChain {
 /// 21), which halves the emission each closed epoch's budget row records;
 /// and the fixture personas gained derived keys and recomputed ids (E6
 /// slice 8 row 4) — same byte count, same row count, the bond rows' keys
-/// and ids moved, the codec did not. *Records-was:*
+/// and ids moved, the codec did not. Re-pinned 2026-10-08 at the CEN-I13
+/// flip: the thirty-one padding bodies became serve credits
+/// ([`padded_credit`]), which the record carries as thirty-one
+/// `ServeCredit` rows — 31 × (4 + 56) = 1 860 bytes, the whole delta from
+/// 17 536 — and nothing else moved: the slash families are spelled and
+/// asserted above; the bond rows are the same joins; the budget rows are
+/// inflow; and every Σwork row is zero and no `R_market` row exists, as
+/// before, because a complete-tree persona is not a market member
+/// (`shekyl_archival_retention::market_member_at_epoch`:
+/// `is_foundation_complete_tree ⇒ false`),
+/// so its credits earn no work and count in no shard. *Records-was:*
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
 /// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
 /// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
-/// (derived keys alone).
+/// (derived keys alone); `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
+/// (both, 17 536 bytes, 39 rows, until the I13 flip).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1";
+    "d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

@@ -120,7 +120,8 @@ pub(super) fn body(tx: Transaction) -> Listed {
 /// connected and then halted the store ten heights later, on SI-7:
 /// its txid mixes the null hash where its `txs_prunable_hash` row is
 /// `keccak256("")`, so the drain's reconstruction named another
-/// transaction. `prune_tests` connects one past that age.
+/// transaction. `prune_tests` connects one past that age (its own
+/// `sized_credit`, the same shape with the record's length chosen).
 pub(super) fn credited(key_image: usize, p: [u8; 32]) -> [Transaction; 2] {
     [
         fixture::join_market(fixture::point(key_image), p),

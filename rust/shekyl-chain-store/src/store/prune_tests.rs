@@ -10,15 +10,23 @@
 //! Shards are cut by archival length (`SHT-Q2`): `W` is a production
 //! constant, three million bytes, so a shard closes only after three
 //! million bytes of prunable and `pqc_auths` segments. The chains here list
-//! spends whose archival length the fixture sets exactly ([`sized_spend`]:
-//! the opaque `fcmp_proof` padded, which no landed rule verifies), and run
-//! under a 100-block epoch with a 50-block undo retention, or a 10-block
-//! epoch with a 3-block retention (`Horizons::new`, the regtest knob — the
-//! production pair would need ten thousand blocks per boundary). The
-//! expected partition is computed by [`Model`], a separate derivation from
-//! the lengths the fixture asked for. The fixtures in `connect_fixtures`
-//! bound their heights to a `u8`, so this module carries its own header for
-//! long chains, with the same shape.
+//! **serve credits** whose archival length the fixture sets exactly
+//! ([`sized_credit`]: the credit's pruned pass record padded — the one
+//! archival region no landed rule reads; CEN-J8/J9/J10, Slice C's verifier,
+//! will, and the padding is recorded as debt against them in
+//! `docs/FOLLOWUPS.md`, "Padded serve-credit records in the store's prune
+//! and bench tests"). Each credit names a persona a [`Sized::Join`] opened
+//! in an earlier block (CEN-J4). *Records-was:* until the CEN-I13 flip the
+//! bodies were fixture spends with the opaque `fcmp_proof` padded; I13
+//! refuses a spend whose declared depth is not the chain's, and a padded
+//! proof is nothing I15 verifies, so the free variable moved to the one
+//! region still opaque. The chains run under a 100-block epoch with a
+//! 50-block undo retention, or a 10-block epoch with a 3-block retention
+//! (`Horizons::new`, the regtest knob — the production pair would need ten
+//! thousand blocks per boundary). The expected partition is computed by
+//! [`Model`], a separate derivation from the lengths the fixture asked for.
+//! The fixtures in `connect_fixtures` bound their heights to a `u8`, so this
+//! module carries its own header for long chains, with the same shape.
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
@@ -27,8 +35,7 @@ use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LEN
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, candidate, candidate_over, credited, judge_under,
-    root_going_into,
+    anchor, batch_root_going_into, candidate, candidate_over, judge_under, root_going_into,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
@@ -86,8 +93,14 @@ struct Builder {
     hashes: Vec<BlockHash>,
     listed: Vec<Vec<Transaction>>,
     /// The archival length each listed transaction was **asked** for, per
-    /// height — the model's input, never re-measured off the bodies.
+    /// height — the model's input, never re-measured off the bodies. A
+    /// join's is [`JOIN_LEN`], the fixture's own, pinned once.
     lens: Vec<Vec<u64>>,
+    /// How many personas each height's joins opened: slot `i`'s join opens
+    /// [`padder`]`(i)`, and a credit in slot `i` at a later height needs it
+    /// (CEN-J4 reads the record off the view the block is judged against,
+    /// which a join in the same block has not yet written).
+    joins: Vec<usize>,
     /// The rule set every block is judged under and handed to `connect`.
     rules: RuleSet,
 }
@@ -102,36 +115,65 @@ impl Builder {
             hashes: Vec::new(),
             listed: Vec::new(),
             lens: Vec::new(),
+            joins: Vec::new(),
             rules,
         }
     }
 
-    /// [`Self::connect`] with each height's spends given by their archival
-    /// lengths: `spec(h)` lists them, and `salt` keeps the key images of two
-    /// chains over the same heights apart.
+    /// The personas with a join at a connected height: slots `0..opened`.
+    fn opened(&self) -> usize {
+        self.joins.iter().sum()
+    }
+
+    /// [`Self::connect`] with each height's bodies given by [`Sized`]:
+    /// `spec(h)` lists them slot by slot, and `salt` keeps the bodies of two
+    /// chains over the same heights apart (a join's key image, a credit's
+    /// record head — two identical credits would be one txid).
     fn connect_sized(
         &mut self,
         store: &ChainStore,
         from: u64,
         to: u64,
         salt: u64,
-        spec: impl Fn(u64) -> Vec<u64>,
+        spec: impl Fn(u64) -> Vec<Sized>,
     ) -> Vec<Connected> {
-        let txs: Vec<Vec<Transaction>> = (from..=to)
-            .map(|h| {
-                spec(h)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, len)| sized_spend(key_of(salt, h, i), len))
-                    .collect()
-            })
-            .collect();
+        let mut opened = self.opened();
+        let mut txs: Vec<Vec<Transaction>> = Vec::new();
+        let mut lens: Vec<Vec<u64>> = Vec::new();
+        let mut joins: Vec<usize> = Vec::new();
+        for h in from..=to {
+            let listed = spec(h);
+            let mut here = 0;
+            let bodies = listed
+                .iter()
+                .enumerate()
+                .map(|(i, body)| match *body {
+                    Sized::Join => {
+                        here += 1;
+                        fixture::join_market(fixture::point_at(key_of(salt, h, i)), padder(i))
+                    }
+                    Sized::Credit(len) => {
+                        assert!(
+                            i < opened,
+                            "height {h} slot {i}: a credit needs its persona's join in an \
+                             earlier block (CEN-J4)"
+                        );
+                        sized_credit(key_of(salt, h, i), i, len)
+                    }
+                })
+                .collect();
+            opened += here;
+            txs.push(bodies);
+            lens.push(listed.iter().map(|body| body.len()).collect());
+            joins.push(here);
+        }
         let out = self.connect(store, from, to, |h| {
             txs[usize::try_from(h - from).expect("fits")].clone()
         });
-        let at = self.lens.len() - (txs.len());
-        for (i, h) in (from..=to).enumerate() {
-            self.lens[at + i] = spec(h);
+        let at = self.lens.len() - txs.len();
+        for (i, (lens, joins)) in lens.into_iter().zip(joins).enumerate() {
+            self.lens[at + i] = lens;
+            self.joins[at + i] = joins;
         }
         out
     }
@@ -142,6 +184,7 @@ impl Builder {
             self.hashes.pop();
             self.listed.pop();
             self.lens.pop();
+            self.joins.pop();
         }
     }
 
@@ -155,9 +198,9 @@ impl Builder {
     /// Connect heights `from..=to` in one batch, handing `listed(h)` at each;
     /// returns each connect's outcome. Every listed transaction is
     /// **anchored** on the chain as built (`connect_fixtures::anchor`: a
-    /// recorded reference inside CEN-I11's window, and its slots signed), so
-    /// a caller lists bare `spend`s and reads them back through
-    /// [`Self::listed`].
+    /// recorded reference inside CEN-I11's window, and its slots signed —
+    /// a join's; a credit has neither and is listed as given), so a caller
+    /// lists bare bodies and reads them back through [`Self::listed`].
     fn connect(
         &mut self,
         store: &ChainStore,
@@ -179,10 +222,11 @@ impl Builder {
                 // The identity is the priced block's (`judge_under`).
                 let judged = judge_under(&view, cand, &self.rules)?;
                 self.hashes.push(judged.block().hash());
-                // A bare listing records no asked-for lengths: its spends are
-                // the fixture's small ones, and `connect_sized` overwrites
-                // this with the spec it built from.
+                // A bare listing records no asked-for lengths and opens no
+                // persona; `connect_sized` overwrites both with the spec it
+                // built from.
                 self.lens.push(vec![u64::MAX; txs.len()]);
+                self.joins.push(0);
                 self.listed.push(txs);
                 out.push(batch.connect(judged, self.rules)?);
             }
@@ -192,14 +236,68 @@ impl Builder {
     }
 }
 
-/// A key image no other spend in these chains draws: `k·G` for a `k` built
-/// from the chain's salt, the height and the position.
+/// A key no other body in these chains draws, built from the chain's salt,
+/// the height and the slot: a join's key image is `k·G` over it, and a
+/// credit's pass record opens with its bytes.
 fn key_of(salt: u64, height: u64, index: usize) -> u64 {
     1_000 + salt * 1_000_000 + height * 8 + u64::try_from(index).expect("fits")
 }
 
-/// Where the probe anchors a candidate: any height with a reference beneath
-/// it, over a chain of null hashes. Anchoring signs the `pqc_auths` slots,
+/// What a sized height lists, slot by slot. Slot `i`'s persona is
+/// [`padder`]`(i)`: a `Join` there opens it, a `Credit` there names it.
+#[derive(Clone, Copy)]
+enum Sized {
+    /// The slot's persona joins ([`fixture::join_market`], a bond post
+    /// funded by a fixture spend — CEN-I13 judges the Spend class, not the
+    /// BondPost one, so the post connects as it did before the flip): the
+    /// record a credit in a **later** block names (CEN-J4). Its archival
+    /// length is the fixture's, [`JOIN_LEN`], not a free variable.
+    Join,
+    /// A serve credit for the slot's persona whose archival length is
+    /// exactly this ([`sized_credit`]).
+    Credit(u64),
+}
+
+impl Sized {
+    /// The archival length the model takes for this body.
+    const fn len(self) -> u64 {
+        match self {
+            Self::Join => JOIN_LEN,
+            Self::Credit(len) => len,
+        }
+    }
+}
+
+const fn credit(len: u64) -> Sized {
+    Sized::Credit(len)
+}
+
+/// The fixture-persona tag of slot `i`. Two slots is the widest listing
+/// here, and two credits in one block must name two personas (CEN-G7, one
+/// `(P, shard, E)` per block).
+fn padder(slot: usize) -> [u8; 32] {
+    [0x50 + u8::try_from(slot).expect("a slot index"); 32]
+}
+
+/// The archival length of a [`Sized::Join`] once anchored and signed as the
+/// builder will — `|pqc_auths| + |prunable|` of the fixture's bond post —
+/// pinned here and read off the probe once
+/// ([`the_join_length_the_model_assumes_is_the_fixtures`]). The specs are
+/// derived from it: a join stands where a 100 000-byte spend stood before
+/// the CEN-I13 flip, and [`GIVEBACK`] is what the spend's successors carry
+/// so every running total from block 9 on is unchanged.
+const JOIN_LEN: u64 = 11_456;
+
+/// Per credit, what the four credits after a join carry over 100 000 bytes
+/// to give back the join's shortfall: `(100 000 − JOIN_LEN) / 4`, exact.
+const GIVEBACK: u64 = (100_000 - JOIN_LEN) / 4;
+const _: () = assert!(
+    (100_000 - JOIN_LEN).is_multiple_of(4),
+    "the join's shortfall must split evenly over four credits"
+);
+
+/// Where the probe anchors a join: any height with a reference beneath it,
+/// over a chain of null hashes. Anchoring signs the `pqc_auths` slots,
 /// which is why the length is measured after it.
 const PROBE_HEIGHT: u64 = 20;
 
@@ -208,14 +306,31 @@ fn anchored(tx: &Transaction) -> Transaction {
     anchor(&hashes, PROBE_HEIGHT, tx.clone())
 }
 
-/// A spend whose archival length is exactly `len` once anchored and signed
-/// as the builder will: [`fixture::spend`] with its opaque `fcmp_proof`
-/// padded until the length is `len`. No landed rule verifies the proof's
-/// bytes, so its length is the fixture's free variable.
-fn sized_spend(key: u64, len: u64) -> Transaction {
-    let mut tx = fixture::spend(fixture::point_at(key), 2);
+#[test]
+fn the_join_length_the_model_assumes_is_the_fixtures() {
+    let join = anchored(&fixture::join_market(fixture::point_at(1), padder(0)));
+    assert_eq!(
+        join.archival_len().to_raw(),
+        JOIN_LEN,
+        "the fixture join's archival length moved — re-derive every table in this module"
+    );
+}
+
+/// A serve credit for `padder(slot)` whose archival length is exactly
+/// `len`: [`fixture::serve_credit_only`] with its one pruned pass record
+/// padded until the length is `len`. The record opens with `key`'s bytes
+/// so no two credits in these chains are one txid. **The record is what
+/// CEN-J8/J9/J10 will verify** (Slice C); until they land its bytes are the
+/// fixture's free variable, and the debt is recorded against them
+/// (`docs/FOLLOWUPS.md`, "Padded serve-credit records in the store's prune
+/// and bench tests"). A credit has no reference and no `pqc_auths`
+/// (CEN-H20), so anchoring leaves it as it is and the length is read off
+/// the body itself.
+fn sized_credit(key: u64, slot: usize, len: u64) -> Transaction {
+    let mut tx = fixture::serve_credit_only(padder(slot));
+    let head = key.to_le_bytes();
     let mut pad: u64 = 1;
-    // The proof's length prefix is a varint, so a pad change can move the
+    // The record's length prefix is a varint, so a pad change can move the
     // total by one more byte than asked; two corrections always land a
     // length this far from a width edge.
     for _ in 0..4 {
@@ -224,41 +339,40 @@ fn sized_spend(key: u64, len: u64) -> Transaction {
             ..
         } = &mut tx.ct
         else {
-            unreachable!("fixture::spend with outputs carries a prunable region");
+            unreachable!("fixture::serve_credit_only carries its RF-D1 region");
         };
-        prunable.fcmp_proof = vec![0xF0; usize::try_from(pad).expect("fits")];
-        let got = anchored(&tx).archival_len().to_raw();
+        let mut record = head.to_vec();
+        record.resize(head.len() + usize::try_from(pad).expect("fits"), 0xA5);
+        prunable.serve_credit_pruned = vec![record];
+        let got = tx.archival_len().to_raw();
         if got == len {
             return tx;
         }
         pad = (pad + len)
             .checked_sub(got)
-            .expect("the asked length is above the unpadded spend's");
+            .expect("the asked length is above the unpadded credit's");
     }
     panic!("no padding lands archival length {len}");
 }
 
-/// The spend with the largest archival length CEN-H3 admits: its weight is
-/// exactly [`fixture::max_tx_weight`]. The segments that are not archival
-/// (prefix, base) and the Bp+ clawback do not move with the proof's
-/// length, so the gap to the bound is all archival.
-fn max_spend(key: u64) -> (Transaction, u64) {
+/// The archival length of the credit with the largest archival length
+/// CEN-H3 admits: its weight is exactly [`fixture::max_tx_weight`]. A
+/// credit's weight is its serialized length (no Bp+ clawback: no outputs),
+/// and the prefix does not move with the record's length, so the gap to the
+/// bound is all archival. One probe, shared by the specs. The per-record
+/// ceiling (`ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`, 1 053 185) is a
+/// decode bound the H3 weight bound sits far under.
+fn max_len() -> u64 {
     let base: u64 = 100_000;
-    let weight = anchored(&sized_spend(key, base)).weight();
+    let weight = sized_credit(1, 0, base).weight();
     let len = base
         + u64::try_from(fixture::max_tx_weight() - weight).expect("under the bound at the base");
-    let tx = sized_spend(key, len);
     assert_eq!(
-        anchored(&tx).weight(),
+        sized_credit(1, 0, len).weight(),
         fixture::max_tx_weight(),
-        "the maximal spend sits exactly on CEN-H3's bound"
+        "the maximal credit sits exactly on CEN-H3's bound"
     );
-    (tx, len)
-}
-
-/// The archival length of [`max_spend`] — one probe, shared by the specs.
-fn max_len() -> u64 {
-    max_spend(1).1
+    len
 }
 
 /// `SHT-Q2` computed the slow way, from the lengths the fixture asked for:
@@ -415,20 +529,27 @@ fn tip(store: &ChainStore) -> u64 {
         .to_raw()
 }
 
-/// The spends of the 100-block chain: thirty 100 000-byte spends at heights
-/// 5–34 fill shard 0 to exactly `W` (it closes at 34), and one more at 250
-/// opens shard 1, which has not closed by 300.
-fn spec_300(h: u64) -> Vec<u64> {
+/// The bodies of the 100-block chain, one per height at 5–34 and 250:
+/// slot 0's join at 5 (the earliest a referencing body can sit,
+/// `FCMP_REFERENCE_BLOCK_MIN_AGE`), then credits for it. Thirty bodies at
+/// heights 5–34 total exactly `W` — `JOIN_LEN + 4·(100 000 + GIVEBACK) +
+/// 25·100 000 = 3 000 000` — so shard 0 closes at 34, as it did when all
+/// thirty were 100 000-byte spends; the running total is the old one from
+/// block 9 on. One more credit at 250 opens shard 1, which has not closed
+/// by 300.
+fn spec_300(h: u64) -> Vec<Sized> {
     match h {
-        5..=34 | 250 => vec![100_000],
+        5 => vec![Sized::Join],
+        6..=9 => vec![credit(100_000 + GIVEBACK)],
+        10..=34 | 250 => vec![credit(100_000)],
         _ => Vec::new(),
     }
 }
 
 /// The chain every test here starts from: heights `0..=300` under a
 /// 100-block epoch, listed by [`spec_300`]. Storage ids: one coinbase at each
-/// of 0–4 (ids 0–4), a coinbase and a spend at each of 5–34 (ids 5–64),
-/// coinbases from 35 (id 65 on), block 250's spend is id 281.
+/// of 0–4 (ids 0–4), a coinbase and a body at each of 5–34 (ids 5–64),
+/// coinbases from 35 (id 65 on), block 250's credit is id 281.
 fn chain_to_300(path: &std::path::Path) -> (ChainStore, Builder, Connected, Connected) {
     let store =
         ChainStore::with_horizons(path, ApplyPolicy::default(), horizons()).expect("create");
@@ -471,8 +592,9 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
     assert_eq!(body_states(&store), not(&b.model().discarded(SEB, 300)));
     {
         let snap = store.begin_read().expect("read");
-        // The spends as listed — anchored and signed by the builder — not
-        // the bare fixture, whose hash they no longer share.
+        // Block 5's join as listed — anchored and signed by the builder —
+        // not the bare fixture, whose hash it no longer shares. A join is
+        // 4-part, so it has the pqc region the prune discards by shard.
         let early = snap
             .tx_record(&b.listed[5][0].hash())
             .expect("read")
@@ -483,14 +605,16 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
             "shard 0's pqc region went with it"
         );
         assert!(early.pqc_auth_hash.is_some(), "the hash row is permanent");
+        // Block 250's credit is 3-part (CEN-H20): no pqc region to hold or
+        // discard; its archival good is the prunable region alone, held
+        // (id 281 above).
         let late = snap
             .tx_record(&b.listed[250][0].hash())
             .expect("read")
             .expect("recorded");
-        assert!(
-            matches!(late.pqc_auths, Some(PqcAuths::Retained(_))),
-            "shard 1 is held"
-        );
+        assert_eq!(late.pqc_auths, None, "a credit carries no pqc region");
+        assert_eq!(late.pqc_auth_hash, None, "and no hash row for one");
+        assert_eq!(late.archival_len.to_raw(), 100_000, "as asked");
     }
 
     // The undo journal keeps exactly `[floor, tip]`.
@@ -566,11 +690,10 @@ fn the_hook_is_idempotent_across_a_boundary_reorg() {
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     assert_eq!(out.map(|p| p.height.to_raw()), Ok(300));
     b.forget(1);
-    // A different block at 300: the spend makes its hash differ.
+    // A different block at 300: a small credit (slot 0's persona joined at
+    // 5) makes its hash differ.
     let again = b
-        .connect(&store, 300, 300, |_| {
-            vec![fixture::spend(fixture::point(3), 2)]
-        })
+        .connect_sized(&store, 300, 300, 0, |_| vec![credit(1_000)])
         .remove(0);
     let pruned = again.pruned.expect("the boundary fires again");
     assert_eq!(pruned.shards(), 0..1, "the same D(3), already empty");
@@ -603,7 +726,7 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
         "the snapshot's read at the recorded tip agrees"
     );
     assert_eq!(e1, None, "epoch 1: nothing can have discarded");
-    // Shard 0's running total reaches `W` at height 34, whose spend ends
+    // Shard 0's running total reaches `W` at height 34, whose credit ends
     // exactly on it.
     assert_eq!(e2, Some(34), "epoch 2: shard 0 closed at height 34");
     assert_eq!(e3, Some(34), "epoch 3: still shard 0, shard 1 is open");
@@ -639,11 +762,17 @@ fn short_store(path: &std::path::Path) -> ChainStore {
     ChainStore::with_horizons(path, ApplyPolicy::default(), short_horizons()).expect("open")
 }
 
-/// The ten-block chain's spends, `max` the [`max_spend`] length:
+/// The ten-block chain's bodies, two slots wide, `max` the [`max_len`]
+/// length. Block 5 opens both slots' personas; blocks 6–9 give back the two
+/// joins' shortfall — `2·(100 000 − JOIN_LEN) = 8·GIVEBACK` — so the
+/// running total through 9 is `1 000 000`, the same as when every body was
+/// a 100 000-byte spend, and every total below is the one it was:
 ///
-/// | Heights | Spends | Running total through the last | |
+/// | Heights | Bodies | Running total through the last | |
 /// | --- | --- | --- | --- |
-/// | 5–19 | 2 × 100 000 | 3 000 000 = `W` | shard 0 closes at 19, exactly on the boundary |
+/// | 5 | 2 joins | 2 × `JOIN_LEN` | |
+/// | 6–9 | 2 × (100 000 + `GIVEBACK`) | 1 000 000 | |
+/// | 10–19 | 2 × 100 000 | 3 000 000 = `W` | shard 0 closes at 19, exactly on the boundary |
 /// | 20 | 1 × 100 000 | 3 100 000 | starts **exactly at** `W`: shard 1 |
 /// | 21–34 | 2 × 100 000 | 5 900 000 | |
 /// | 35 | 1 × `max` | 5 900 000 + `max` | starts in shard 1, ends past `2·W`: shard 1 closes at 35 |
@@ -651,16 +780,18 @@ fn short_store(path: &std::path::Path) -> ChainStore {
 ///
 /// Storage ids: blocks 0–4 one each (0–4); 5–19 three each (block 19:
 /// 47–49); block 20: 50, 51; 21–34 three each (block 34: 91–93); block 35:
-/// 94 and the maximal spend 95; block 36's coinbase is 96.
+/// 94 and the maximal credit 95; block 36's coinbase is 96.
 ///
 /// Boundaries every ten blocks: `D(3)` at 30 is shard 0, `D(5)` at 50
 /// shard 1, `D(6)` at 60 shards 1 **and** 2 — two boundaries in one batch.
-fn short_spec(max: u64) -> impl Fn(u64) -> Vec<u64> {
+fn short_spec(max: u64) -> impl Fn(u64) -> Vec<Sized> {
     move |h| match h {
-        5..=19 | 21..=34 => vec![100_000, 100_000],
-        20 => vec![100_000],
-        35 => vec![max],
-        36..=46 => vec![140_000, 140_000],
+        5 => vec![Sized::Join, Sized::Join],
+        6..=9 => vec![credit(100_000 + GIVEBACK); 2],
+        10..=19 | 21..=34 => vec![credit(100_000); 2],
+        20 => vec![credit(100_000)],
+        35 => vec![credit(max)],
+        36..=46 => vec![credit(140_000); 2],
         _ => Vec::new(),
     }
 }
@@ -703,14 +834,14 @@ fn the_store_records_each_length_and_the_running_total() {
                 .expect("decodes");
             assert_eq!(info.cumulative_archival_len.to_raw(), through, "height {h}");
         }
-        // Through 21: `W`, block 20's spend, block 21's two.
+        // Through 21: `W`, block 20's credit, block 21's two.
         assert_eq!(through, 3_300_000);
     }
     cleanup(&path);
 }
 
 /// Scope 4 (a): a transaction starting **exactly** at `k·W` opens shard
-/// `k`. Block 19's spends end on `W`; block 20's coinbase and spend start
+/// `k`. Block 19's credits end on `W`; block 20's coinbase and credit start
 /// on it. `D(3)` discards the first and keeps the second.
 #[test]
 fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
@@ -778,7 +909,7 @@ fn a_maximal_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in
     assert_eq!(
         out,
         Ok(Some(35)),
-        "shard 1 closed at the maximal spend's height"
+        "shard 1 closed at the maximal credit's height"
     );
     assert_eq!(body_states(&store), not(&model.discarded(SHORT_SEB, 50)));
     cleanup(&path);
@@ -844,8 +975,8 @@ fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
     let spec = short_spec(max);
     // The new branch: shard 2 closes at 47 instead of 46.
     let branch = |h: u64| match h {
-        46 => vec![100_000],
-        47 => vec![100_000, 100_000],
+        46 => vec![credit(100_000)],
+        47 => vec![credit(100_000); 2],
         _ => Vec::new(),
     };
 
@@ -946,7 +1077,7 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
 }
 
 /// Build the ten-block chain to `to` and close the store, for a raw plant.
-/// The corruption tests do not need the exact maximal spend, so height 35
+/// The corruption tests do not need the exact maximal credit, so height 35
 /// lists a 140 000-byte one and skips the probe.
 fn short_chain_to(path: &std::path::Path, to: u64) -> Builder {
     let store = short_store(path);
@@ -955,7 +1086,7 @@ fn short_chain_to(path: &std::path::Path, to: u64) -> Builder {
     b
 }
 
-/// Connect `height` on the reopened ten-block store with no listed spend.
+/// Connect `height` on the reopened ten-block store with nothing listed.
 fn connect_short(
     path: &std::path::Path,
     b: &Builder,
@@ -978,7 +1109,7 @@ fn connect_short(
 fn a_decreasing_listed_total_refuses_the_boundary() {
     let path = tmp("prune-monotone");
     let b = short_chain_to(&path, 29);
-    // Listed through 18: 14 blocks of two spends.
+    // Listed through 18: 14 blocks of two bodies.
     plant_listed(&path, 19, 28 - 5);
     let (store, out) = connect_short(&path, &b, 30);
     assert!(
@@ -1136,7 +1267,7 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
 fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
     let path = tmp("prune-archival-rows");
     let b = short_chain_to(&path, 29);
-    // Id 48 is block 19's first spend.
+    // Id 48 is block 19's first credit.
     {
         let db = redb::Database::open(&path).expect("open raw");
         let txn = db.begin_write().expect("write");
@@ -1480,10 +1611,10 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
-    // A mixed chain ([`spec_300`] to 200): spends filling shard 0 (discarded
-    // at the epoch-2 boundary) and empty blocks — the coinbase-only case —
-    // everywhere else, those from 35 in shard 1 (retained). Recorded at 199,
-    // before the first discard.
+    // A mixed chain ([`spec_300`] to 200): a join (4-part) and credits
+    // (3-part) filling shard 0 (discarded at the epoch-2 boundary) and empty
+    // blocks — the coinbase-only case — everywhere else, those from 35 in
+    // shard 1 (retained). Recorded at 199, before the first discard.
     b.connect_sized(&store, 0, 199, 0, spec_300);
 
     let count = store.begin_read().expect("read").tx_count().expect("count");
@@ -1505,7 +1636,7 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
                 assert_eq!(
                     good_state(&store, record.location.id.to_raw()),
                     Some(true),
-                    "a listed spend carries archival good"
+                    "a listed join or credit carries archival good"
                 );
             }
         }
@@ -1521,10 +1652,10 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     assert_eq!(
         prunable_state(&store, 6),
         Some(false),
-        "the spend at block 5 must actually be discarded, or this test proves nothing"
+        "the join at block 5 must actually be discarded, or this test proves nothing"
     );
 
-    // Leg (f): every answer is unchanged, the discarded spend included.
+    // Leg (f): every answer is unchanged, the discarded bodies included.
     let after: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
     assert_eq!(
         before, after,
@@ -1534,7 +1665,7 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     assert_eq!(
         good_state(&store, 6),
         Some(true),
-        "a DISCARDED spend is still in the domain: its rows outlive its regions"
+        "a DISCARDED join is still in the domain: its rows outlive its regions"
     );
     assert_eq!(
         good_state(&store, 5),
@@ -1571,11 +1702,12 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     cleanup(&path);
 }
 
-/// **`SHT-Q1` leg (f) for the serve-credit form, end to end.** The test
-/// above connects spends and coinbases, and states in its last assertion
-/// that a 3-part transaction with a region stays in the domain on its
-/// `txs_prunable_hash` row alone. This connects one: a credit behind its
-/// join, in shard 0, carried through the boundary that discards shard 0.
+/// **`SHT-Q1` leg (f) for the serve-credit form, named.** The test above
+/// compares the whole vector, and since the CEN-I13 flip its bodies are
+/// credits already; its last assertion states that a 3-part transaction
+/// with a region stays in the domain on its `txs_prunable_hash` row alone.
+/// This pins that for one credit by name: one block behind its join, in
+/// shard 0, carried through the boundary that discards shard 0.
 ///
 /// It is also `SHT-9`'s falsifier. A credit with no prunable region — the
 /// shape CEN-H20 admitted until it required `RF-D1`'s — connected and then
@@ -1587,24 +1719,18 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
     let store =
         ChainStore::with_horizons(&path, ApplyPolicy::default(), horizons()).expect("create");
     let mut b = Builder::new();
-    // Shard 0 is the join at height 5 and its credit at 6 (one block
+    // Shard 0 is the join at height 5 and a small credit at 6 (one block
     // behind the record it names, as CEN-J4 reads it), then thirty
-    // 100,000-byte spends at 7–36: past `W` with the pair's bytes added, so
-    // the shard closes inside that run and the epoch-2 boundary discards it.
+    // 100 000-byte credits at 7–36: past `W` with the pair's bytes added,
+    // so the shard closes inside that run and the epoch-2 boundary discards
+    // it.
     let spec = |h: u64| match h {
-        7..=36 => vec![100_000],
+        5 => vec![Sized::Join],
+        6 => vec![credit(1_000)],
+        7..=36 => vec![credit(100_000)],
         _ => Vec::new(),
     };
-    b.connect_sized(&store, 0, 4, 0, spec);
-    let [join, credit] = credited(14, [0x7c; 32]);
-    b.connect(&store, 5, 6, |h| {
-        if h == 5 {
-            vec![join.clone()]
-        } else {
-            vec![credit.clone()]
-        }
-    });
-    b.connect_sized(&store, 7, 199, 0, spec);
+    b.connect_sized(&store, 0, 199, 0, spec);
 
     let credit_hash = b.listed[6][0].hash();
     let id_of = |hash: &shekyl_types::TxHash| {
