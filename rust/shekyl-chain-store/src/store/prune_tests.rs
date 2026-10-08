@@ -33,6 +33,13 @@
 //! partition is computed by [`Model`], a separate derivation from the
 //! lengths the fixture asked for.
 
+// A whole-file test module: the parent gates it with `#[cfg(test)]`, and
+// this self-declaration is what the debug-macro lint keys on — the
+// `#[ignore]`d boundary test prints its measurement (bodies, close
+// height, wall time) for the nightly lane to read, which is its job, not a
+// debug leftover.
+#![cfg(test)]
+
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet};
