@@ -16653,15 +16653,18 @@ The floors, which are the hard edges of the sweep:
   = 3250` is the p90 first passage at degree 12, and below that degree
   the passage exceeds the provisioned value.
 - Hidden outbound `h` is at least the same 12. That is the own-edge
-  capture cost: the chance an attacker holds every hidden session is
-  the onion-candidate spy share raised to `h`.
+  capture cost. One draw of the pool is `p_h` raised to `h`. Reading 3
+  measures the same capture over epochs, with churn and refill.
 
 `h` is the hidden-address outbound count. `c` is the clearnet outbound
-count. In this section `f` is the fraction of nodes that publish an
-onion, and `p` is the network-wide spy fraction. Those letters already
-mean other things nearby: the first-spy test prints its spy fraction as
-`f`, and §12.6's `f` is the network adversary fraction. The letters
-here are the sweep's.
+count. `f` is the fraction of nodes that publish an onion. `p` is the
+network-wide spy fraction. `p_h` is the spy share among the onion
+publishers a hidden edge is drawn from. `q` is not a spy share. It is
+the fluff probability, 20% (`fluff_probability_pct`), in the paper and
+in `derive.rs`. Expected stem length is `1/q`
+(`DandelionParams::expected_stem_length`), 5 at that 20%. The
+first-spy test prints its spy fraction as `f`, and §12.6's `f` is the
+network adversary fraction. The letters here are the sweep's.
 
 Until the simulation is ruled, the dialer keeps a target of 12. That
 number is the floor, carried as the interim. The hard cap is the
@@ -16726,9 +16729,10 @@ not bound `g`. It is one draw; churn is
 `simulate_induced_churn_exposure` (`InducedChurnExposure`), which is
 higher under a refill. ProxyMark is the attack named in §6.9 and
 §12.6. There is no separate ProxyMark simulator. This occupancy is the
-two stem slots drawn from the whole outbound pool. It is not
-`P(every hidden session is a spy)`, which is the own-edge capture
-quantity below. `simulate_epsilon_greedy_selection` is the §12.11
+two stem slots drawn from the whole outbound pool. Reading 3's
+capture is the hidden pool over epochs, using this churn instrument's
+refill, and the one-draw `p_h^h` is that reading's reference.
+`simulate_epsilon_greedy_selection` is the §12.11
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
 moves the embargo hop against transit and is not this sweep.
 
@@ -16749,35 +16753,72 @@ Totals sit around 12–24, and 16 is among them:
 | 16 | 8 | 24 | both above the floor |
 | 24 | 0 | 24 | hidden at the top of the range |
 
-Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
-Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
-first-spy test already runs. A second arm sets the spy share among
-onion-publishing nodes to twice `p`, capped at 1, and leaves every
-other node at `p`.
+Onion-publishing fraction `f` at 1, 1/2, 1/4, and 0.1 on each kept
+point. `f = 0.1` is there because the mean hidden inbound is then
+`10h`, and the tail is the load one published onion can be asked to
+carry. Network spy fraction `p` at 0.05, 0.10, 0.20, and 0.30. The
+first three are the fractions the first-spy test already runs. 0.30
+is the full-pool figure in the dialer brief. On the uniform arm,
+`p_h = p`. On the second arm, `p_h = min(1, 2p)` and every node that
+does not publish an onion stays at `p`.
 
-Five readings, each compared across that grid. None of them writes
-`fluff_return_ms`, `MIN_PROVISIONED_OUT_PEERS`, or a new outbound
-constant.
+Two baselines sit beside the grid. They are not operating points.
+
+- **Monero-style split.** Own transactions go out on hidden edges
+  only. Relayed transactions go out on clearnet only. The same
+  `(h, c)` points. An inbound hidden stem is then originated with
+  certainty, and an inbound clearnet stem is relayed with certainty.
+  That is ProxyMark's result for a network that separates the two
+  jobs. A run that does not reproduce those two certainties has a
+  broken posterior.
+- **All-clearnet, one graph.** `h = 0`, `c` at 12, 16, 20, and 24.
+  One link class. The floor drops `h = 0` from the operating-point
+  grid; this arm is the comparison, the graph the paper measures.
+  Readings that need a hidden class report the single posterior and
+  do not invent a hidden edge.
+
+Five readings, each compared across the grid and against both
+baselines. None of them writes `fluff_return_ms`,
+`MIN_PROVISIONED_OUT_PEERS`, or a new outbound constant.
 
 1. **First-spy precision and recall, originated transactions.** One
    trial is one transaction this node originates. Precision is the
    fraction of observed trials whose first spy's predecessor is the
    origin. Recall is the fraction of trials a spy observes at all.
-   Both arms: spies at `p` everywhere, and spies at the higher share
-   among onion candidates. The uniform `simulate_diffusion_first_spy`
-   reading is the control, not the result. The result needs the
-   two-class graph this crate does not build yet: each node initiates
-   `h` hidden edges and `c` clearnet edges.
-2. **Originated-versus-relayed skew on hidden edges.** An originated
-   own-edge is drawn from the hidden pool, so its hidden share is 1.
-   A relayed forward drawn uniformly from all outbound sessions lands
-   on a hidden edge with share about `h / (h + c)`. The simulation
-   reports both shares. The approximation is the thing being checked:
-   stem slots are two draws from the whole pool, and that draw can
-   depart from `h / (h + c)`.
-3. **Full own-edge pool capture.** At the onion-candidate spy share
-   `q`, the chance every hidden session is a spy is `q^h`. Report
-   that number, and check it by drawing the pool.
+   Both arms: spies at `p` everywhere, and spies at `p_h` among onion
+   candidates. The uniform `simulate_diffusion_first_spy` reading is
+   the control, not the result. The result needs the two-class graph
+   this crate does not build yet: each node initiates `h` hidden
+   edges and `c` clearnet edges.
+2. **The attacker's posterior on a stem arrival.** The headline is
+   `P(originated | the stem arrived on an inbound hidden edge)`, and
+   the same probability on an inbound clearnet edge. The simulation
+   counts, on each class, the fraction of those arrivals that were
+   the predecessor's own send. The traffic that produces the count
+   uses two facts. The originated-to-relayed ratio follows the stem
+   length: about `1/q` stem sends per originated transaction
+   (`expected_stem_length`), one of them the origin's, so the
+   relayed count per originated transaction is about `1/q - 1`. The
+   own-edge is one hidden session, pinned for the epoch, so every
+   originated send of that epoch goes to that session and to no
+   other. The shares stay as a sub-reading: an originated own-edge
+   is hidden with share 1, and a relayed forward drawn from all
+   outbound sessions lands on a hidden edge with share about
+   `h / (h + c)`. Stem slots are two draws from the whole pool, so
+   the relayed share can depart from `h / (h + c)`, and the
+   sub-reading is that check. On the Monero-style baseline the hidden
+   posterior is 1 and the clearnet posterior is 0. The all-clearnet
+   baseline has one posterior, the same on every edge.
+3. **Full own-edge pool capture, over epochs.** The one-draw chance
+   that every hidden session is a spy is `p_h^h`. That number is the
+   reference, the role `InducedChurnExposure::independent_reference`
+   plays for stem slots. The reading is the fraction of epochs in
+   which the hidden pool is entirely spies after churn and refill,
+   and the fraction of pinned own-edges that are spies under that
+   refill. Refill is the approach in `simulate_induced_churn_exposure`:
+   a dropped session is drawn again from the live pool, and the
+   adversary's extra epochs are the return on forcing those drops.
+   One static draw is not the result.
    `simulate_two_slot_occupancy` stays the stem-slot residual at its
    own `D_out`. This proposal leaves `STEMS` and the §12.6 table
    where they are.
@@ -16789,10 +16830,14 @@ constant.
    fail-safe input. The reading does not replace that constant.
    `simulate_fluff_return_mixed` cannot produce it: one `transit_ms`
    covers every edge.
-5. **Hidden inbound load per published onion.** If each node opens `h`
-   hidden edges uniformly among the `f` fraction that publish, the
-   mean inbound degree of a published onion is `h / f`. Report that
-   mean. A uniform draw checks it. No new load constant.
+5. **Hidden inbound load per published onion.** Each node samples `h`
+   distinct publishers from the `f` fraction that publish. The
+   reading is the distribution of inbound degree across those
+   publishers, including its tail: the upper quantiles the draw
+   produces, and the heaviest onion in the draw. The mean `h / f` is
+   the check that the draw is the one just described, not the result
+   by itself. `f = 0.1` is where that tail is the question. No new
+   load constant, and no percentile is frozen as one.
 
 What a ruled result would be allowed to choose is the operating point:
 one `(h, c)` on or above the floors. It would not choose the ceiling,
@@ -16800,4 +16845,18 @@ and it would not move `fluff_return_ms` inside the same change. A
 reading that wants a new fail-safe input is a later re-derivation,
 named as such, because §90 already requires `F′` and its dependents
 to move together.
+
+A third connector is not a third axis of this grid. What ships is
+two classes, hidden and clearnet. A later connector adds its own
+outbound count, its measured transit, and, if it publishes, its own
+publishing fraction. If its declaration hides our address, its
+sessions join the hidden pool the own-edge is pinned from, and
+`p_h` is the spy share of that pool's candidates rather than of
+onion publishers alone. If the declaration does not hide our
+address, those sessions join the clearnet side of the mix, and an
+attacker separates them from clearnet only when the link itself
+looks different. Fluff return gains that transit. The floors stay
+on the hidden-address pool and on the total, whichever connectors
+fill them. The `(h, c)` grid, the two baselines, and readings 1–5
+are not re-cut into a three-way sweep in this proposal.
 
