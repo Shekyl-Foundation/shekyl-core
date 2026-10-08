@@ -43,8 +43,14 @@ type has been cut.
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
 seam — the socket layer and relay dispatch — and nothing else.** The peerlist,
 admission policy, discovery policy and handshake state machine are **not Levin
-work**; they are P2P-3 slices 1–4 and none of them waits on this one. The
-boundary had been drawn **from a family name rather than from the work**, and a
+work**; they are P2P-3 slices 1–4 and none of them waits on this one.
+**UPDATE 2026-10-08 (PR #1001).** The register's inherits cell is split
+by step. Steps b and c are closed. Step b landed in #991 before slice 1.
+Step c closed after the transport cutover. Neither inherits slices 1–4,
+the timing engine, or relay dispatch. Step a and the registry remainder
+do. Discovery does not wait on the remaining LV-3 work.
+
+The boundary had been drawn **from a family name rather than from the work**, and a
 "first slice" that contained all of them was the round, not a slice. §1's
 first-slice argument is withdrawn at §1.
 
@@ -1560,7 +1566,10 @@ wrong was calling them the round.*
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
 **What slice 5 inherits from slices 1–4. UPDATE 2026-09-25: it does not
-go last, and the sockets are not its move.** The peerlist's differential
+go last, and the sockets are not its move.** **UPDATE 2026-10-08 (PR #1001).**
+Steps b and c are closed and inherit none of slices 1–4, the timing
+engine, or relay dispatch. Step a and the registry remainder do.
+Discovery does not wait on that remainder. The peerlist's differential
 harness, admission's ceiling, discovery's candidate selection and the
 handshake phases are in Rust before this slice's connection object.
 *Records-was: that inheritance was why this slice went last, and why
