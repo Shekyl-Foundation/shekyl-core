@@ -51,7 +51,6 @@ rust/shekyl-chain-ingest/src/grader.rs	1	pub height: u64,
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	fn seed_for(height: u64, hash_at: impl Fn(u64) -> BlockHash) -> BlockHash {
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	height: u64,
-rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	let fork_spend = |hashes: &[BlockHash], height: u64| {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn over(self, tree: &GrownTree, height: u64) -> Facts {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn synthetic_economics(height: u64) -> TraceEconomics {
 rust/shekyl-chain-ingest/src/test_support.rs	4	height: u64,

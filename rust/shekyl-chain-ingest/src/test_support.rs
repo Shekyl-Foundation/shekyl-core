@@ -23,11 +23,16 @@
 //! [`trace_with`] with the synthetic economics. [`facts_at`] is the other
 //! door, for a caller that must name the root.
 //!
-//! Every key image a fixture spends encodes the **whole height** and a
-//! family tag ([`key_image`]), so no chain or fork length collides on
-//! SI-1 (a `u8` per height would have made height 251 respend height 1's
-//! image, and a fork past 96 blocks overflow the byte — caps a test would
-//! meet as a store halt, misattributed to the pipeline).
+//! Every spend a chain lists is a **real** one since slice 6 row 6: the
+//! harness miner's coinbase, matured, sourced and proven by
+//! [`shekyl_harness_spender::Spender`] over the wallet-side tree fed the
+//! same blocks ([`Growing`]), so CEN-I13/I15 judge it rather than skip a
+//! filler. Block `c` spends the coinbase that matured for it — block
+//! `c − FIRST_SPEND_HEIGHT`'s — and a fork's block at `c` spends the same
+//! coinbase at another fee ([`Family::fee`]), so the two chains' trees
+//! differ once those outputs mature, as a real fork's do. The one fixture
+//! key image left ([`key_image`]) names bodies no spend rule judges: the
+//! archival join a mutation duplicates, the unjudged artifact filler.
 //!
 //! Most of these fixtures serve the pipeline tests, which exist only with the
 //! `pipeline` feature. The artifact and corpus tests use a small core. So a
@@ -45,6 +50,7 @@
 
 use core::convert::Infallible;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
@@ -57,6 +63,9 @@ use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_economics::{base_block_reward, EconomicParams};
+use shekyl_harness_spender::{first_spending_height, MinedBlock, MinerWallet, Spender};
+use shekyl_harness_wallet::coinbase::repay;
 use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight,
     CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, SettlementEpoch, TxHash,
@@ -144,6 +153,12 @@ pub struct GrownTree {
     /// the push then adds that block's own burn. Genesis burns nothing,
     /// so the fold starts at zero.
     total_burned: AtomicUnits,
+    /// `burned[h]` — block `h`'s own burn (`PaidEmission::burned`, the
+    /// fee share CEN-F17 destroys), what the store's `block_burn` row
+    /// holds and the trace's row at `h` must carry. Zero for a block
+    /// listing nothing; a real spend's fee burns, so a trace cannot name
+    /// it — it reads it here ([`Self::burned_at`]).
+    burned: Vec<AtomicUnits>,
     /// `accrual[h]` — block `h`'s staker inflow (CEN-G11, the
     /// `PaidEmission::accrual` the reward chain priced), what the store's
     /// E4 hook folds into the open epoch's `archival_budget_accruing` row.
@@ -215,6 +230,14 @@ impl GrownTree {
         self.blocks[at(height)].coins_generated
     }
 
+    /// What block `height` burned as this chain derives it (CEN-F17 over
+    /// the fees its bodies paid) — what the store's `block_burn` row holds
+    /// and the trace's row records.
+    #[must_use]
+    pub fn burned_at(&self, height: BlockHeight) -> AtomicUnits {
+        self.burned[at(height.to_raw())]
+    }
+
     /// The archival state after block `height` as the store writes it for
     /// a synthetic chain — one that posts no bonds, so the only archival
     /// row is the open epoch's accruing total: the sum of every block's
@@ -283,6 +306,7 @@ impl GrownTree {
             .total_burned
             .checked_add(emission.burned())
             .expect("a fixture chain's burned fold fits u64");
+        self.burned.push(emission.burned());
         let coins_generated = emission.coins_generated;
         self.accrual.push(emission.accrual);
         let (listed_before, archival_before) =
@@ -471,8 +495,11 @@ pub fn coinbase(height: u64) -> Transaction {
     fixture::coinbase(height)
 }
 
-/// Which chain a key image belongs to, so a fork's spends never collide
-/// with the main chain's at any height.
+/// Which chain a spend belongs to. A fork block at `c` spends the coinbase
+/// the main block at `c` spent — the store un-spent it when the main
+/// block popped — at this family's fee, so the fork's body is a different
+/// transaction with different outputs, and the two trees differ once
+/// those outputs mature (the reorg family's premise, [`reorg_of`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Family {
@@ -482,16 +509,27 @@ pub enum Family {
     Fork = 0xB0,
 }
 
-/// The key image block `height` of `family` spends: `k·G` for a `k` that
-/// is distinct per `(family, height)` — a canonical prime-order point
-/// (CEN-H11), which a family tag over height bytes was not. Computed, not
-/// pinned (`fixture::point_at`): the seed-epoch tests spend a fresh image
-/// per block for two thousand blocks, past any table. The family offsets
-/// (`1_000` main, `2_000_000` fork) keep the two chains' images apart and
-/// clear of the pinned table's range, which the same fixtures use for keys
-/// and masks. At 4.H an image is held to pointness only; when CEN-I15 binds
-/// it to the spent output (slice 6) these become captured spends' own
-/// images.
+impl Family {
+    /// The fee a spend of this family pays. Any figure the coinbase funds
+    /// serves; the two differ so that a fork's spend of a coinbase is not
+    /// the main chain's body.
+    #[must_use]
+    pub const fn fee(self) -> u64 {
+        match self {
+            Family::Main => 1_000_000,
+            Family::Fork => 2_000_000,
+        }
+    }
+}
+
+/// A fixture key image for a body **no spend rule judges**: `k·G` for a
+/// `k` distinct per `(family, height)` — a canonical prime-order point
+/// (CEN-H11). Since slice 6 row 6 every spend a chain lists is a real
+/// one, with its own image ([`Growing::spend_matured`]); this names the
+/// archival join the mutation family duplicates (a bond post, judged by
+/// 4.J, not I13/I15), the artifact tests' unjudged filler, and the foreign
+/// member a digest control plants. A spend of a fixture image is not a
+/// shape a connected chain carries any more.
 pub fn key_image(family: Family, height: u64) -> [u8; 32] {
     let offset = match family {
         Family::Main => 1_000,
@@ -500,34 +538,39 @@ pub fn key_image(family: Family, height: u64) -> [u8; 32] {
     fixture::point_at(offset + height)
 }
 
-/// A spend of `key_image`: the rules harness's two-output [`fixture::listed`].
-/// The same body the store connects, so a point rule cannot refuse this
-/// crate's chains alone. Bare — its reference is written when it is placed
-/// on a chain ([`chain_listing_with`] anchors every listed body at its
-/// height), so a spend is chain-relative here as it is in production.
-pub fn spend(key_image: [u8; 32]) -> Transaction {
+/// The rules harness's two-output filler spend of `key_image`
+/// ([`fixture::listed`]) — a conforming body, not a proven one. For the
+/// artifact tests, which judge nothing: a connected chain lists real
+/// spends ([`Growing::spend_matured`]), and a filler that reached
+/// `connect` would be CEN-I13's refusal.
+pub fn filler_spend(key_image: [u8; 32]) -> Transaction {
     fixture::listed(key_image)
 }
 
 #[cfg(feature = "pipeline")]
 pub use crate::mutation_bodies::{join_body, serve_credit_body};
 
-/// The first height at which a block may list a spend (CEN-I11: the
-/// reference is at least `REFERENCE_BLOCK_MIN_AGE` below the connecting
-/// height, and the youngest reference any chain has is genesis). [`chain`]
-/// lists nothing below it; a listing that puts a spend lower asks for a
-/// shape consensus refuses, and the builder says so.
-pub const FIRST_SPEND_HEIGHT: u64 = shekyl_chain_rules::REFERENCE_BLOCK_MIN_AGE.to_raw();
+/// The first height at which a block may list a spend: the height at which
+/// block 0's coinbase can be spent against a root that holds it —
+/// [`first_spending_height`] under the genesis rule set (the unlock
+/// window, one, and the reference age; the derivation is that function's
+/// doc). Derived, not pinned: a reader who wants the figure evaluates it.
+/// Block `c ≥ FIRST_SPEND_HEIGHT` spends the coinbase of block
+/// `c − FIRST_SPEND_HEIGHT`, the one that matured for it; [`chain`] lists
+/// nothing below.
+pub const FIRST_SPEND_HEIGHT: u64 = first_spending_height(&RuleSet::GENESIS).to_raw();
 
 /// A fixture height as an index into a hash or block list.
 pub fn at(height: u64) -> usize {
     usize::try_from(height).expect("a fixture height fits usize")
 }
 
-/// `tx` anchored for a block at `height` on the chain whose block hashes so
-/// far are `hashes`: the harness's [`fixture::anchored_at`] — the newest
-/// reference CEN-I11 admits. A serve credit is left as it is. A spend or
-/// an emission below `FIRST_SPEND_HEIGHT` is refused by the builder.
+/// A **fixture** body `tx` anchored for a block at `height` on the chain
+/// whose block hashes so far are `hashes`: the harness's
+/// [`fixture::anchored_at`] — the newest reference CEN-I11 admits. For the
+/// archival bodies (a join, a serve credit, which is left as it is); a
+/// real spend carries its reference inside its proof and is never passed
+/// here — rewriting it would be the forged-reference shape, not an anchor.
 pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
     fixture::anchored_at(hashes, height, tx)
 }
@@ -536,7 +579,11 @@ pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction
 /// header carries `root` — the tree state going into `height`
 /// ([`GrownTree::root_going_into`]; CEN-B5) — and whose coinbase pays
 /// `reward`: what CEN-F18 owes it, priced by [`reward_for`] over the tree
-/// the block extends (a block nothing will judge may pass `0`).
+/// the block extends (a block nothing will judge may pass `0`). The
+/// coinbase is re-paid through the harness wallet ([`repay`]), so its
+/// commitment and encrypted amount are the amount's: a bare amount write
+/// over the fixture's commitment would be an output no scanner recovers
+/// and no spend can prove.
 pub fn block_with_nonce(
     root: CurveTreeRoot,
     height: u64,
@@ -546,7 +593,14 @@ pub fn block_with_nonce(
     nonce: u32,
 ) -> Block {
     let mut miner_transaction = coinbase(height);
-    miner_transaction.prefix.outputs[0].amount = reward;
+    assert!(
+        repay(
+            &mut miner_transaction,
+            MinerWallet::harness().recipient(),
+            reward
+        ),
+        "the harness coinbase is the shape `repay` prices"
+    );
     Block {
         header: BlockHeader {
             major_version: 1,
@@ -576,13 +630,27 @@ pub fn block(
     block_with_nonce(root, height, previous, listed, reward, 7)
 }
 
+/// What a fixture chain's genesis coinbase pays. At genesis the validator
+/// derives no reward — the configured emission stands whole, whatever it
+/// is (CEN-F11) — so the figure is the fixture's to choose, and it
+/// chooses the emission curve's own first figure, the base reward over
+/// nothing yet generated. The bare harness coinbase pays zero, which no
+/// spend can fund a fee from; endowed, block 0's coinbase is the first a
+/// chain spends, at [`FIRST_SPEND_HEIGHT`] exactly as the maturity law
+/// states it — not block 1's a height later, which would have put a `+ 1`
+/// with no law behind it into every count built on the first spend.
+pub fn genesis_endowment() -> u64 {
+    base_block_reward(0, &EconomicParams::default())
+        .expect("the curve's first figure is priced at every parameter set")
+}
+
 /// What CEN-F18 owes the coinbase of the next block on `tree`, listing
 /// `listed` — [`fixture::priced`], which settles through the validator's
 /// reward chain. `height` is that next height: a caller that prices a
 /// different one is naming a block this tree is not building.
 ///
-/// `0` at genesis (the configured emission of a zero coinbase stands) and
-/// for a block the chain refuses before F18.
+/// [`genesis_endowment`] at genesis, where nothing is derived and the
+/// configured figure stands; `0` for a block the chain refuses before F18.
 pub fn reward_for(
     tree: &GrownTree,
     root: CurveTreeRoot,
@@ -595,6 +663,9 @@ pub fn reward_for(
         tree.built(),
         "reward_for prices the block this tree connects next"
     );
+    if height == 0 {
+        return genesis_endowment();
+    }
     let provisional = block(root, height, previous, listed, 0);
     let priced = match fixture::priced(tree, Candidate::new(provisional, listed.to_vec())) {
         Ok(candidate) => candidate,
@@ -606,67 +677,225 @@ pub fn reward_for(
     priced.block.miner_transaction.prefix.outputs[0].amount
 }
 
-/// A chain listing `listed[h]` at height `h`, each block on the last.
-pub fn chain_listing(listed: Vec<Vec<Transaction>>) -> Vec<(Block, Vec<Transaction>)> {
-    chain_listing_with(listed, block)
+/// A block and its listed bodies as the wallet-side tree reads them
+/// ([`MinedBlock`]), so a fixture chain's blocks feed a [`Spender`].
+pub struct Linked<'a>(pub &'a Block, pub &'a [Transaction]);
+
+impl MinedBlock for Linked<'_> {
+    fn height(&self) -> BlockHeight {
+        match self.0.miner_transaction.prefix.inputs.first() {
+            Some(Input::Gen(height)) => BlockHeight::from_raw(*height),
+            _ => panic!("a fixture block's coinbase opens with Input::Gen"),
+        }
+    }
+
+    fn hash(&self) -> BlockHash {
+        self.0.hash()
+    }
+
+    fn miner_transaction(&self) -> &Transaction {
+        &self.0.miner_transaction
+    }
+
+    fn listed(&self) -> &[Transaction] {
+        self.1
+    }
 }
 
-/// [`chain_listing`] with the block builder supplied — a mined chain hands
-/// one that searches nonces (the mutation family's D1 case). Each block is
-/// anchored on the chain so far and `make` receives the root the tree has
-/// going into its height ([`GrownTree`], advanced per block) and the
-/// reward its coinbase must pay ([`reward_for`] over the same tree).
-pub fn chain_listing_with(
-    listed: Vec<Vec<Transaction>>,
-    mut make: impl FnMut(CurveTreeRoot, u64, BlockHash, &[Transaction], u64) -> Block,
-) -> Vec<(Block, Vec<Transaction>)> {
-    let mut hashes: Vec<BlockHash> = Vec::new();
-    let mut tree = GrownTree::new();
-    listed
-        .into_iter()
-        .enumerate()
-        .map(|(hh, txs)| {
-            let hh = hh as u64;
-            let txs: Vec<Transaction> = txs.into_iter().map(|tx| anchor(&hashes, hh, tx)).collect();
-            let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
-            let root = tree.root_going_into(hh);
-            let reward = reward_for(&tree, root, hh, previous, &txs);
-            let b = make(root, hh, previous, &txs, reward);
-            tree.push(&b, &txs);
-            hashes.push(b.hash());
-            (b, txs)
+/// A chain under construction, with the two trees a real spend needs kept
+/// in step: the validator's ([`GrownTree`], what the headers and the
+/// trace carry) and the wallet's ([`Spender`], what a spend's path and
+/// proof are made in). Every block pushed asserts the two agree on the
+/// root going into it — the second-oracle property the spender crate
+/// states (its docs); a spend built here is then valid against the root
+/// the header it references carries, and a disagreement is found at the
+/// block that opened it, not at CEN-I15 some heights later.
+pub struct Growing {
+    hashes: Vec<BlockHash>,
+    tree: GrownTree,
+    spender: Spender,
+    built: Vec<(Block, Vec<Transaction>)>,
+}
+
+impl Default for Growing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Growing {
+    /// An empty chain.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            hashes: Vec::new(),
+            tree: GrownTree::new(),
+            spender: Spender::over::<Linked<'_>>(&[]),
+            built: Vec::new(),
+        }
+    }
+
+    /// The chain `blocks`, re-grown — both trees advanced over blocks
+    /// already built, as a fork's builder starts from the main chain's
+    /// prefix.
+    #[must_use]
+    pub fn over(blocks: &[(Block, Vec<Transaction>)]) -> Self {
+        let mut growing = Self::new();
+        for (block, txs) in blocks {
+            growing.record(block.clone(), txs.clone());
+        }
+        growing
+    }
+
+    /// The next connecting height.
+    #[must_use]
+    pub fn height(&self) -> BlockHeight {
+        h(self.tree.built())
+    }
+
+    /// The block hashes so far — what a fixture archival body anchors on.
+    #[must_use]
+    pub fn hashes(&self) -> &[BlockHash] {
+        &self.hashes
+    }
+
+    /// A real spend, for the block connecting next, of the coinbase that
+    /// matured for it: block `height − FIRST_SPEND_HEIGHT`'s, at
+    /// `family`'s fee. `None` while no coinbase has matured. Along a
+    /// chain each coinbase is spent once, by the block exactly
+    /// `FIRST_SPEND_HEIGHT` above it.
+    #[must_use]
+    pub fn spend_matured(&self, family: Family) -> Option<Transaction> {
+        self.height()
+            .to_raw()
+            .checked_sub(FIRST_SPEND_HEIGHT)
+            .map(|coinbase| self.spend_of(coinbase, family))
+    }
+
+    /// A real spend, for the block connecting next, of block `coinbase`'s
+    /// coinbase at `family`'s fee. The caller names a coinbase that has
+    /// matured (the spender's path assembly asserts it) and that no block
+    /// on this chain spent (CEN-I7 would refuse the block otherwise). The
+    /// spending wallet is the miner's — the one every fixture coinbase pays.
+    #[must_use]
+    pub fn spend_of(&self, coinbase: u64, family: Family) -> Transaction {
+        self.spender.spend_coinbase(
+            MinerWallet::harness(),
+            h(coinbase),
+            self.height(),
+            family.fee(),
+        )
+    }
+
+    /// A **fixture** archival body anchored for the block connecting next
+    /// ([`anchor`]); never a real spend.
+    #[must_use]
+    pub fn anchored(&self, tx: Transaction) -> Transaction {
+        anchor(&self.hashes, self.height().to_raw(), tx)
+    }
+
+    /// Extend with a block listing `listed`, built by [`block_with_nonce`]
+    /// with `nonce`, on the tip, carrying the root going into its height
+    /// and the reward CEN-F18 owes it. Returns the block and its bodies.
+    pub fn extend(&mut self, listed: Vec<Transaction>, nonce: u32) -> &(Block, Vec<Transaction>) {
+        self.extend_with(listed, |root, height, previous, txs, reward| {
+            block_with_nonce(root, height, previous, txs, reward, nonce)
         })
-        .collect()
+    }
+
+    /// [`Self::extend`] with the block builder supplied — a mined chain
+    /// hands one that searches nonces (the mutation family's D1 case).
+    /// `make` receives the root the tree has going into the height and
+    /// the reward the coinbase must pay ([`reward_for`] over that tree).
+    pub fn extend_with(
+        &mut self,
+        listed: Vec<Transaction>,
+        make: impl FnOnce(CurveTreeRoot, u64, BlockHash, &[Transaction], u64) -> Block,
+    ) -> &(Block, Vec<Transaction>) {
+        let height = self.height().to_raw();
+        let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
+        let root = self.tree.root_going_into(height);
+        let reward = reward_for(&self.tree, root, height, previous, &listed);
+        let block = make(root, height, previous, &listed, reward);
+        self.record(block, listed)
+    }
+
+    /// Push `block` to both trees, holding them to one root first.
+    fn record(&mut self, block: Block, listed: Vec<Transaction>) -> &(Block, Vec<Transaction>) {
+        let height = self.height();
+        self.tree.push(&block, &listed);
+        self.spender.push(&Linked(&block, &listed));
+        // The wallet-side client answers a root at a height it has
+        // ingested — the root going into that height, as the store keys
+        // it — so the check is made once the block is in on both sides.
+        assert_eq!(
+            self.spender.root_at(height),
+            self.tree.root_going_into(height.to_raw()),
+            "height {height:?}: the wallet-side tree and the validator's agree on the root going in"
+        );
+        self.hashes.push(block.hash());
+        self.built.push((block, listed));
+        self.built.last().expect("just pushed")
+    }
+
+    /// The blocks built, in order.
+    #[must_use]
+    pub fn finish(self) -> Vec<(Block, Vec<Transaction>)> {
+        self.built
+    }
 }
 
-/// A chain of `n` blocks: block `h ≥ FIRST_SPEND_HEIGHT` lists one spend of
-/// the main family's key image for `h`; the blocks below list nothing —
-/// nothing they could list would be admissible (CEN-I11). A chain shorter
+/// The main chain the tests share, grown once per process and extended
+/// on demand: `chain(n)` is a prefix of `chain(m)` for `n ≤ m`, so every
+/// test reads one chain and no spend is proven twice. A real spend costs
+/// about two seconds to prove; the family alone asks for twenty chains of
+/// the same shape.
+static MAIN: Mutex<Vec<(Block, Vec<Transaction>)>> = Mutex::new(Vec::new());
+
+/// A chain of `n` blocks: block `c ≥ FIRST_SPEND_HEIGHT` lists one real
+/// spend of the coinbase that matured for it (block
+/// `c − FIRST_SPEND_HEIGHT`'s, [`Growing::spend_matured`]); the blocks
+/// below list nothing — no coinbase has matured for them. A chain shorter
 /// than `FIRST_SPEND_HEIGHT + 1` blocks carries no spend at all.
 pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
-    chain_listing(
-        (0..n)
-            .map(|hh| {
-                if hh < FIRST_SPEND_HEIGHT {
-                    Vec::new()
-                } else {
-                    vec![spend(key_image(Family::Main, hh))]
-                }
-            })
-            .collect(),
-    )
+    let mut main = MAIN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let have = u64::try_from(main.len()).expect("a fixture chain fits");
+    if have < n {
+        let mut growing = Growing::over(&main);
+        for _ in have..n {
+            let listed = growing.spend_matured(Family::Main).into_iter().collect();
+            growing.extend(listed, 7);
+        }
+        *main = growing.finish();
+    }
+    main[..at(n)].to_vec()
 }
 
-/// The reorg family (§3.8, RD-Q13): a main chain of `main_len` blocks, a
-/// `Rewind { to }`, then `fork_len` fork blocks chained onto `main[to]`
-/// with nonces and key images the main chain never used, and **three-output
-/// spends where the main chain's have two** — so the fork's tree differs
-/// from the main chain's once its own outputs mature, as a real fork's
-/// would, and a root comparison that failed to retract the abandoned
-/// branch would show it (`pipeline_tests`). `fork_len` must exceed
-/// `main_len - 1 - to` so the fork's tip is beyond every pre-switch tip
-/// (corpus module docs: a checkpoint height is compared the first time it
-/// is the tip).
+/// A chain of `n` blocks listing nothing. For a test whose subject is
+/// not the bodies — a planted work decrease, an epoch step — and for a
+/// block that must find many coinbases unspent ([`Growing::spend_of`]).
+pub fn bare_chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
+    let mut growing = Growing::new();
+    for _ in 0..n {
+        growing.extend(Vec::new(), 7);
+    }
+    growing.finish()
+}
+
+/// The reorg family (§3.8, RD-Q13): a main chain, a `Rewind { to }`, then
+/// `fork_len` fork blocks chained onto `main[to]` with nonces the main
+/// chain never used. A fork block at `c ≥ FIRST_SPEND_HEIGHT` spends the
+/// coinbase that matured for it — the one the main block at `c` spent,
+/// which the rewind un-spent — **at the fork family's fee**, so the body
+/// is another transaction with other outputs, and the fork's tree differs
+/// from the main chain's once those outputs mature (`tx_spendable_age`
+/// blocks on), as a real fork's would; a root comparison that failed to
+/// retract the abandoned branch would show it (`pipeline_tests`).
+/// `fork_len` must exceed `main_len - 1 - to` so the fork's tip is beyond
+/// every pre-switch tip (corpus module docs: a checkpoint height is
+/// compared the first time it is the tip).
 pub struct Reorg {
     /// The chain before the switch.
     pub main: Vec<(Block, Vec<Transaction>)>,
@@ -676,46 +905,30 @@ pub struct Reorg {
     pub after: Vec<(Block, Vec<Transaction>)>,
 }
 
+/// [`reorg_of`] over the shared [`chain`] of `main_len` blocks.
 pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
+    reorg_of(chain(main_len), to, fork_len)
+}
+
+/// A [`Reorg`] from `main` to `to` with a fork of `fork_len` blocks.
+pub fn reorg_of(main: Vec<(Block, Vec<Transaction>)>, to: u64, fork_len: u64) -> Reorg {
+    let main_len = u64::try_from(main.len()).expect("a fixture chain fits");
     assert!(to + 1 < main_len, "the rewind must pop at least one block");
     assert!(
         to + fork_len >= main_len,
         "the fork's tip must reach beyond every pre-switch tip"
     );
-    let main = chain(main_len);
-    let mut after: Vec<(Block, Vec<Transaction>)> =
-        main[..=usize::try_from(to).expect("small")].to_vec();
-    let mut hashes: Vec<BlockHash> = after.iter().map(|(b, _)| b.hash()).collect();
-    // The fork's tree is the main chain's through `to`, then its own.
-    let mut tree = GrownTree::over(&after);
+    // The fork's trees are the main chain's through `to`, then their own.
+    let mut growing = Growing::over(&main[..=at(to)]);
     for i in 0..fork_len {
-        let height = to + 1 + i;
-        // A fork block lists a spend where a main block would (CEN-I11's
-        // floor), anchored on the fork's own chain.
-        let txs: Vec<Transaction> = if height < FIRST_SPEND_HEIGHT {
-            Vec::new()
-        } else {
-            vec![anchor(
-                &hashes,
-                height,
-                fixture::spend(key_image(Family::Fork, height), 3),
-            )]
-        };
-        let root = tree.root_going_into(height);
-        let previous = *hashes.last().expect("non-empty");
-        let b = block_with_nonce(
-            root,
-            height,
-            previous,
-            &txs,
-            reward_for(&tree, root, height, previous, &txs),
-            99 + u32::try_from(i).expect("small"),
-        );
-        tree.push(&b, &txs);
-        hashes.push(b.hash());
-        after.push((b, txs));
+        let listed = growing.spend_matured(Family::Fork).into_iter().collect();
+        growing.extend(listed, 99 + u32::try_from(i).expect("small"));
     }
-    Reorg { main, to, after }
+    Reorg {
+        main,
+        to,
+        after: growing.finish(),
+    }
 }
 
 /// The reorg as a corpus: main's blocks, a rewind record, the fork's.
@@ -772,16 +985,16 @@ pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> V
 /// [`GrownTree`], so a trace built this way cannot record a root the chain
 /// it names did not grow. Since slice 7 commit 4 the same holds for the
 /// three weight values (`weight`, `long_term_weight`,
-/// `long_term_effective_median`), and since commit 5 for `coins_generated`:
-/// the tree derives them by the validator's own definitions as it grows,
-/// and a caller cannot name them — a trace whose medians or accumulator
-/// disagreed with its chain would be the fixture problem the oracles exist
-/// to rule out, and the type makes it unrepresentable rather than the
-/// test-writer's to avoid.
+/// `long_term_effective_median`), since commit 5 for `coins_generated`,
+/// and since slice 6 row 6 for `burned`: the tree derives them by the
+/// validator's own definitions as it grows — a real spend's fee burns a
+/// share, so the burn is the bodies' to determine — and a caller cannot
+/// name them. A trace whose medians, burn or accumulator disagreed with
+/// its chain would be the fixture problem the oracles exist to rule out,
+/// and the type makes it unrepresentable rather than the test-writer's to
+/// avoid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceEconomics {
-    /// `block_burn[h]`, zero when the row is absent.
-    pub burned: AtomicUnits,
     /// `block_info.bi_diff` — the accumulator the trace holds the
     /// validator's derivation to.
     pub cumulative_difficulty: CumulativeDifficulty,
@@ -796,7 +1009,7 @@ impl TraceEconomics {
             weight: weights.weight,
             long_term_weight: weights.long_term_weight,
             coins_generated: tree.coins_generated_at(height),
-            burned: self.burned,
+            burned: tree.burned_at(h(height)),
             root_after: tree.root_after(height),
             long_term_effective_median: tree.median_for(height),
             cumulative_difficulty: self.cumulative_difficulty,
@@ -804,10 +1017,9 @@ impl TraceEconomics {
     }
 }
 
-/// Synthetic economics for `height`: zero burn, the accumulator `height + 1`.
+/// Synthetic economics for `height`: the accumulator `height + 1`.
 fn synthetic_economics(height: u64) -> TraceEconomics {
     TraceEconomics {
-        burned: AtomicUnits::from_raw(0),
         cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
     }
 }
@@ -818,7 +1030,9 @@ fn synthetic_economics(height: u64) -> TraceEconomics {
 /// The door for a caller that must name them. The CTW-5 negative control
 /// plants a wrong root here, the G6 control a wrong median, the F14b/G12
 /// control a wrong accumulator; a trace for a chain uses [`trace_with`],
-/// which fills every derived value from that chain and takes none.
+/// which fills every derived value from that chain and takes none. The
+/// burn is zero: every caller's chain lists nothing (three blocks, below
+/// the first spend), and a block listing nothing burns nothing.
 pub fn facts_at(
     height: u64,
     root_after: CurveTreeRoot,
@@ -831,7 +1045,7 @@ pub fn facts_at(
         weight: weights.weight,
         long_term_weight: weights.long_term_weight,
         coins_generated,
-        burned: economics.burned,
+        burned: AtomicUnits::from_raw(0),
         root_after,
         long_term_effective_median,
         cumulative_difficulty: economics.cumulative_difficulty,
