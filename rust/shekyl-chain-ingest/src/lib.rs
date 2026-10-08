@@ -119,8 +119,6 @@ pub mod grader;
 pub mod metrics;
 pub mod mutation;
 #[cfg(all(test, feature = "pipeline"))]
-mod mutation_bodies;
-#[cfg(all(test, feature = "pipeline"))]
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
 #[cfg(feature = "pipeline")]

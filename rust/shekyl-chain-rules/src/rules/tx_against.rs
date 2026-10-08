@@ -205,9 +205,11 @@ pub(crate) fn to_key_slots(tx: &Transaction) -> Vec<usize> {
 
 /// The curve-tree context a proof-bearing transaction's reference names,
 /// yielded by [`judge_reference`] for the rows that verify against it:
-/// CEN-I15 on a spend (its body is [`I15::verify`] over [`to_key_slots`];
-/// not run on that class yet — see [`I12`]), CEN-J25's backing proof and
-/// CEN-J26's fee-input proof on an emission.
+/// CEN-I15 on a spend and CEN-J27 on a bond post (both [`I15::verify`]
+/// over [`to_key_slots`], run inside the arm that derived the context),
+/// CEN-J25's backing proof and CEN-J26's fee-input proof on an emission.
+/// *Records-was:* the spend's verify was staged off until 2026-10-08
+/// (see [`I12`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReferenceContext {
     /// I10's operand: the reference's recorded height.
@@ -548,14 +550,57 @@ impl Rule for J21 {
     const ROW: CenRow = CenRow::J21;
 }
 
+/// CEN-J27: the bond post's **funding half** — its `referenceBlock` /
+/// curve-tree context as CEN-I10–I13 and the FCMP++ proof over its
+/// funding spends as CEN-I15, one row. The reference is a block of this
+/// chain inside I11's window below the connecting height, the anchor is
+/// the root **at** it, the declared depth is admitted by I13 against the
+/// depth at it, and the proof verifies over every `ToKey` input
+/// ([`to_key_slots`]: the funding spends, the post's own vin excluded by
+/// kind) against that anchor at `tree_depth + 1` layers and the prefix
+/// hash (`blockchain.cpp:3654–3733`, the bond arm: the lookup `:3654`, the
+/// window `:3661–3673`, the root at the reference `:3677`, the depth
+/// `:3678–3684`, the scalars `:3700`, `shekyl_fcmp_verify` `:3713`). The
+/// C++ refuses each failure under the bond arm's own messages; the census
+/// keys them all to this row. Refuses at the transaction.
+///
+/// What this row is **not**: CEN-H21 keeps the post's shape and balance
+/// (`pqc_auths` against the vin count, at least one funding input, the
+/// pseudo-outs count, a non-empty proof, the CT balance against the
+/// post's credit and debit — `tx_form`'s, before this stage), and the
+/// post's semantics against its record are J13–J18's (`judge_bond_post`).
+/// Minted 2026-10-08 (`CHAIN_RULES_SLICE_6.md` §5 row 6, the ruling on
+/// the census H21 cell): not folded into I10–I15, whose rows are the
+/// regular spend's, and not an H21 split. Until then the Rust validator
+/// judged none of this on the `BondPost` class — the funding spends
+/// reached it with their reference and proof unjudged (found 2026-10-06,
+/// slice 8 row 9).
+///
+/// The row has no body of its own: it is [`reference_context`] with every
+/// step attributed to this row ([`BOND_POST_REFERENCE`]) and
+/// [`I15::verify`] over the context it yields — the sequence the spend
+/// runs under I10–I13 and I15 and the emission under J21 and J26, chosen
+/// by [`judge_reference`]'s class arm. Runs **after** `judge_bond_post`,
+/// the C++'s order (`check_archival_bond_post_input` at `:3616`, the
+/// funding half after it): a post refused against its record is J13–J18's
+/// whatever its proof says. A storage-pruned body has no declared depth
+/// and no proof; `tx_form` refuses it before this stage, and here it is
+/// refused rather than judged over a missing field.
+pub(crate) struct J27;
+
+impl Rule for J27 {
+    const ROW: CenRow = CenRow::J27;
+}
+
 /// The row each step of [`reference_context`] is recorded under and
 /// refuses under — the attribution a class arm of [`judge_reference`]
 /// chooses. The sequence is one body; the rows are the class's: on a
 /// spend the steps are four rows (CEN-I10, I11, I12, I13), on an emission
-/// they are one (CEN-J21, *"as CEN-I10–I13"*). Widening which classes
-/// run the sequence is a new constant and a new arm, never a change to
-/// the body — the shape that keeps the emission on J21 whatever the
-/// spend's gate becomes.
+/// they are one (CEN-J21, *"as CEN-I10–I13"*), on a bond post one
+/// (CEN-J27, the funding half). Widening which classes run the sequence
+/// is a new constant and a new arm, never a change to the body — the
+/// shape that keeps the emission on J21 whatever the spend's gate
+/// becomes, and the shape the bond post took on 2026-10-08.
 #[derive(Clone, Copy)]
 struct ReferenceRows {
     /// The reference is a block of this chain ([`I10::lookup`]).
@@ -569,7 +614,7 @@ struct ReferenceRows {
     /// The declared depth is admitted against the depth at it
     /// ([`I13::admits`] over [`I13::depth_at_reference`]). `None` is the
     /// step staged off for the class: the sequence stops after the anchor
-    /// and yields no context. Both classes that run the sequence name a
+    /// and yields no context. Every class that runs the sequence names a
     /// row here since 2026-10-08 (the spend's was `None` until CEN-I13
     /// landed on it, see [`I12`]), so no live constant stages the step
     /// off; the flip changed verdicts and nothing else, and collapsing
@@ -612,6 +657,17 @@ const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
     window: J21::ROW,
     anchor: J21::ROW,
     depth: Some(J21::ROW),
+};
+
+/// The bond post's attribution: every step is CEN-J27's, and so is the
+/// verify over the context — the row [`judge_reference`]'s bond-post arm
+/// records once the proof has passed, never before (the steps alone are
+/// not the row).
+const BOND_POST_REFERENCE: ReferenceRows = ReferenceRows {
+    lookup: J27::ROW,
+    window: J27::ROW,
+    anchor: J27::ROW,
+    depth: Some(J27::ROW),
 };
 
 /// A refusal at the step under `row`, after `passed` steps of `rows` have
@@ -701,23 +757,26 @@ fn reference_context<'id, V: ChainView<'id>>(
 
 /// The reference rows, dispatched on the transaction's class: CEN-I10,
 /// CEN-I11, CEN-I12 and CEN-I13 on a spend, then CEN-I15's verify over
-/// the context they yield; CEN-J21 on an emission; vacuous on every other
-/// class.
+/// the context they yield; CEN-J21 on an emission; CEN-J27 — the same
+/// sequence and the same verify, one row — on a bond post; vacuous on
+/// every other class.
 ///
 /// The dispatch is explicit so that no gate decides which arm a class
-/// reaches: the emission reaches J21 because it is an emission, and the
-/// spend's arm can widen (to the bond post's funding spends under its own
-/// row) without touching the emission's. Each arm records the other arms'
-/// rows vacuous first, as [`run_tx_against`](crate::rules::run_tx_against)
-/// records an out-of-scope kind, then runs [`reference_context`] under
-/// its own attribution. On a spend the yielded context is I15's operand
-/// — the proof verified over every `ToKey` input ([`to_key_slots`]), the
-/// row recorded on success and refusing at the transaction — and the arm
+/// reaches: the emission reaches J21 because it is an emission, the bond
+/// post reaches J27 because it is a bond post, and neither arm's widening
+/// touches the other's. Each arm records the other arms' rows vacuous
+/// first, as [`run_tx_against`](crate::rules::run_tx_against) records an
+/// out-of-scope kind, then runs [`reference_context`] under its own
+/// attribution. On a spend the yielded context is I15's operand — the
+/// proof verified over every `ToKey` input ([`to_key_slots`]), the row
+/// recorded on success and refusing at the transaction — and the arm
 /// yields it on; on an emission the whole context is J21's and is
-/// yielded, for CEN-J25's backing proof and CEN-J26's fee-input proof. A
-/// class with no reference to look up records everything vacuous and
-/// yields `None`. *Records-was:* until 2026-10-08 the spend arm ran
-/// I10–I12 alone and yielded `None` (see [`I12`]).
+/// yielded, for CEN-J25's backing proof and CEN-J26's fee-input proof; on
+/// a bond post the context and the verify over it are J27's, and the
+/// context is yielded on with nothing left to read it. A class with no
+/// reference to look up records everything vacuous and yields `None`.
+/// *Records-was:* until 2026-10-08 the spend arm ran I10–I12 alone and
+/// yielded `None` (see [`I12`]), and the bond post was a vacuous class.
 pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
@@ -726,6 +785,7 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     match cx.class {
         TxClass::Spend { .. } => {
             coverage.insert(J21::ROW);
+            coverage.insert(J27::ROW);
             match reference_context(cx, view, SPEND_REFERENCE, coverage)? {
                 // The C++'s order: the root at the reference and the depth
                 // against it (`blockchain.cpp:4088`, `:4098`), then
@@ -744,13 +804,38 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
+            coverage.insert(J27::ROW);
             reference_context(cx, view, EMISSION_REFERENCE, coverage)
         }
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } | TxClass::BondPost { .. } => {
+        TxClass::BondPost { .. } => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             coverage.insert(J21::ROW);
+            // Every step and the verify are one row, so the steps are run
+            // into a scratch and folded in only once the proof has passed:
+            // a refused row is not recorded, whichever of its steps or its
+            // verify refused it. The C++'s order within the arm: the root
+            // at the reference and the depth against it (`:3677`, `:3678`),
+            // then `shekyl_fcmp_verify` over them (`:3713`).
+            let mut steps = *coverage;
+            match reference_context(cx, view, BOND_POST_REFERENCE, &mut steps)? {
+                Ok(Some(reference)) => {
+                    if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
+                        return Ok(Err(InvalidBlock::new(J27::ROW, cx.locus())));
+                    }
+                    coverage.union(&steps);
+                    Ok(Ok(Some(reference)))
+                }
+                other => Ok(other),
+            }
+        }
+        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => {
+            for row in SPEND_ARM_ROWS {
+                coverage.insert(row);
+            }
+            coverage.insert(J21::ROW);
+            coverage.insert(J27::ROW);
             Ok(Ok(None))
         }
     }

@@ -25,8 +25,8 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::harness::fixture::{
-    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, listed, listed_on, point,
-    point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
+    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
+    listed_on, point, point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
@@ -524,6 +524,171 @@ fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() 
             );
         });
     }
+}
+
+// ---- CEN-J27 (I10–I13 + I15 on the bond post) ---------------------------
+//
+// The bond post's funding half is the spend's reads and verify under one
+// row, so the mock's share is J21's above — absence (an unrecorded
+// reference, one the window refuses, a body with no declared depth) and a
+// declared depth the tree at the reference does not hold — plus the one
+// step J21 has no verify for here: over a **planted** tree whose depth the
+// body declares, the context is yielded and the fixture's filler proof is
+// refused, the row not recorded. Called as the sequence, not through
+// `tx_against`: `judge_bond_post` runs first on this class, and a
+// fixture join reaches it signed only through `anchored_on`; the order's
+// witness through the pipeline — J27 after the post rows, on a join they
+// admit — is `tx_bond_tests`'. The pass is the driver's: a posted bond's
+// proof over the tree it spends from (`scenario_join_tests`), and the
+// moved-prefix refusal beside it.
+
+/// A fixture join, unanchored.
+fn join() -> Transaction {
+    join_market(KI, [0x6a; 32])
+}
+
+/// J27 refuses at the transaction: the reference no chain holds (I10's
+/// read) and a reference the window refuses (I11's), each under J27 on a
+/// bond post where the spend's would be I10 or I11; and nothing recorded.
+#[test]
+fn j27_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
+    let chain = spendable_chain();
+    let tip = chain.tip().expect("a spendable chain has a tip").hash;
+    chain.with_view(|view| {
+        for tx in [join(), referencing(join(), tip)] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies");
+            assert_refused(
+                defined(judge_reference(&cx, &view, &mut coverage)),
+                CenRow::J27,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "a refused row is not recorded"
+            );
+        }
+    });
+}
+
+/// An anchored join whose declared depth the tree at the reference does
+/// not hold — any depth, against the mock's empty tree — is J27's
+/// refusal; so is a body with no prunable region to declare one. The
+/// spend-arm rows and J21 are recorded vacuous beside the refusal.
+#[test]
+fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, join());
+    let mut declared_one = anchored.clone();
+    let mut pruned = anchored.clone();
+    match (&mut declared_one.ct, &mut pruned.ct) {
+        (
+            Ct::Fcmp {
+                prunable: Some(p), ..
+            },
+            Ct::Fcmp { prunable, .. },
+        ) => {
+            p.tree_depth = 1;
+            *prunable = None;
+        }
+        _ => unreachable!("a bond post is an Fcmp ct with a prunable region"),
+    }
+    chain.with_view(|view| {
+        for tx in [anchored, declared_one, pruned] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies");
+            assert_refused(
+                defined(judge_reference(&cx, &view, &mut coverage)),
+                CenRow::J27,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "a refused row is not recorded"
+            );
+            for row in [
+                CenRow::I10,
+                CenRow::I11,
+                CenRow::I12,
+                CenRow::I13,
+                CenRow::I15,
+                CenRow::J21,
+            ] {
+                assert!(
+                    coverage.contains(row),
+                    "{row} recorded vacuous on a bond post"
+                );
+            }
+        }
+    });
+}
+
+/// The verify, apart from the reads: a join anchored on a chain whose
+/// tree **at the reference** is planted at the depth the body declares
+/// passes every step of the sequence — the context is yielded — and is
+/// then refused on J27 over its filler proof, with the row not recorded:
+/// the steps alone are not the row. Genesis's tree is the empty one on
+/// every mock (`trees[0]`), so the chain is one block longer than the
+/// spendable one and the reference is height 1, the tree pushed with
+/// block 0.
+#[test]
+fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
+    use super::{reference_context, BOND_POST_REFERENCE};
+    use crate::harness::fixture::{recorded_with_work, root};
+    use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+
+    // Three leaves: one layer-0 chunk under a single root layer — depth 1
+    // (`harness_probe_tests::the_tree_travels_with_the_root_it_was_pushed_with`).
+    let planted = 3;
+    let chain = (0..=REFERENCE_BLOCK_MIN_AGE.to_raw()).fold(MockChain::default(), |chain, h| {
+        let block = recorded_with_work(
+            1_000 + h * 120,
+            CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
+        );
+        let root = root(u8::try_from(h % 250).expect("fits") + 1);
+        if h == 0 {
+            chain.push_tree(block, root, planted)
+        } else {
+            chain.push(block, root)
+        }
+    });
+    let mut tx = join();
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.tree_depth = 1;
+    }
+    let tx = anchored_on(&chain, tx);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx =
+            TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a bond post classifies");
+        let mut steps = RuleCoverage::EMPTY;
+        let context = defined(reference_context(
+            &cx,
+            &view,
+            BOND_POST_REFERENCE,
+            &mut steps,
+        ))
+        .expect("every step of the sequence passes over the planted tree");
+        assert_eq!(
+            context.map(|c| (c.ref_height, c.tree_depth)),
+            Some((BlockHeight::from_raw(1), 1)),
+            "the context is yielded: the reference at height 1, depth 1"
+        );
+        assert_refused(
+            defined(judge_reference(&cx, &view, &mut coverage)),
+            CenRow::J27,
+            Locus::Tx { slot: TxSlot::Lone },
+        );
+        assert!(
+            !coverage.contains(CenRow::J27),
+            "a refused row is not recorded, though its steps passed"
+        );
+    });
 }
 
 // ---- CEN-I17 ------------------------------------------------------------

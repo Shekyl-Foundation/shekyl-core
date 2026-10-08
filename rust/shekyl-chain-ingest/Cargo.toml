@@ -159,11 +159,6 @@ zeroize = { workspace = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
-# The archival scenarios (`scenario_archival.rs`, DRS-E4 commit 4): the
-# production bond-post constructors (`build_join_market_vin`,
-# `build_release_vin`) shape the posts a persona rides on the driver's
-# spend, so CEN-L7 is judged over posts a wallet would emit, not fixtures.
-shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 # The emission scenarios verify a claim's proof through the consensus
 # verifier (`proof::verify`) against the wallet-side root.
 shekyl-fcmp = { path = "../shekyl-fcmp" }

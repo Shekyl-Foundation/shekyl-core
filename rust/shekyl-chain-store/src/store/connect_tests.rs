@@ -774,8 +774,8 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     // CEN-J4, read off the view before the block), and the join spends —
     // so the join sits at the first spend height, as the SI-1 belt's
     // block does, and the credit one above it.
-    let [join, dup] = credited(9, [0x77; 32]);
-    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![body(join)]]));
+    let (join, dup) = credited(9);
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![join]]));
     let dup_hash = dup.hash();
     let b1 = grown.next(&store, &[body(dup)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {

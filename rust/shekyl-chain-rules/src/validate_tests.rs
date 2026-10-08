@@ -165,6 +165,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
+                // Slice 6 row 6: the bond post's funding half, vacuous on
+                // the coinbase likewise.
+                CenRow::J27,
                 // Slice 8 row 8: the emission statics, vacuous on the
                 // coinbase (no emission vin).
                 CenRow::J19,
@@ -322,9 +325,10 @@ fn tx_entry_points_record_the_landed_rows() {
     // the signatures over it, of which a coinbase has none), J4–J6 (the
     // bond state behind a serve-credit vin, of which a coinbase has none),
     // J13–J16 and J18 (the bond post against its record and the join's
-    // admission, of which a coinbase has none), J21, J23, J25 and J26 (the
-    // emission's reference context, gathers, verify and fee-input proof,
-    // of which a coinbase has none) — are recorded vacuous on a coinbase.
+    // admission, of which a coinbase has none), J27 (the post's funding
+    // half, likewise), J21, J23, J25 and J26 (the emission's reference
+    // context, gathers, verify and fee-input proof, of which a coinbase
+    // has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -349,6 +353,7 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
+                CenRow::J27,
                 CenRow::J21,
                 CenRow::J23,
                 CenRow::J25,

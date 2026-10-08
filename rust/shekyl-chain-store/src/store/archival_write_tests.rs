@@ -31,12 +31,14 @@ use shekyl_chain_rules::{
     RecordWriteKind, ReleaseAnchors, RuleSet, Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::AttestationWitness;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
-use shekyl_wire::{Input, Transaction};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_wire::Input;
+
+use shekyl_harness_spender::Persona;
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, formed_under,
-    judge_under, priced, spendable_prefix, FIRST_SPEND_HEIGHT,
+    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, endow_genesis,
+    formed_under, judge_under, priced, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
@@ -46,13 +48,14 @@ use crate::codec::SettlementEpochBlocks;
 use crate::ids::ServeCreditKey;
 use crate::schema::ARCHIVAL_SERVE_CREDIT;
 
-/// The fixture-persona tag every join here opens a record for.
-const P: [u8; 32] = [0x5a; 32];
+/// The slot of the persona every join here opens a record for
+/// ([`Persona::at`]; each test has its own store).
+const P_SLOT: u32 = 11;
 
-/// The id the persona tagged `p` is recorded under — the recompute over
-/// its derived identity key (CEN-J11), not the tag.
-fn persona(p: [u8; 32]) -> PCanonicalId {
-    fixture::persona(p).id
+/// The id the persona at `slot` is recorded under — the recompute over
+/// its derived identity key (CEN-J11).
+fn persona(slot: u32) -> PCanonicalId {
+    Persona::at(slot).id()
 }
 
 fn epoch(n: u64) -> SettlementEpoch {
@@ -78,8 +81,8 @@ const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
 /// A settlement epoch just long enough to hold the first admissible spend
 /// height, so a chain a few blocks past it closes an epoch with a record
 /// and a credit in it: the join sits at [`FIRST_SPEND_HEIGHT`], in epoch
-/// 0 — the premise the harness credit is built on (`serve_credit_only`
-/// credits epoch 1, "every fixture join is in epoch 0") — and
+/// 0 — the premise the harness credit is built on ([`credited`] credits
+/// epoch 1, "a fixture join is in epoch 0") — and
 /// [`CLOSING_HEIGHT`] closes epoch 1, the first the persona may be
 /// credited for (CEN-J5). Before the spend height was derived from
 /// coinbase maturity it sat at 5 and this epoch was sixteen blocks.
@@ -111,40 +114,40 @@ fn short_store(path: &std::path::Path) -> ChainStore {
     ChainStore::with_horizons(path, ApplyPolicy::Full, horizons).expect("create")
 }
 
-/// Judge and connect one block at `height = hashes.len()` on the chain
-/// `hashes`, listing `listed` (anchored on it), under `rules`; the hash
-/// goes onto `hashes`, and the verdict's archival delta — what the writer
-/// was handed — comes back for the assertions to read against.
+/// Judge and connect one block at the chain's next height, listing
+/// `listed` realised on it ([`Grown::realise`]: joins built, bodies
+/// anchored), under `rules`; the block goes onto `grown` as judged, and
+/// the verdict's archival delta — what the writer was handed — comes back
+/// for the assertions to read against. Genesis is endowed, as
+/// [`connect_chain`] endows it, so the coinbase a join funds its bond from
+/// pays.
 fn connect_one(
     store: &ChainStore,
-    hashes: &mut Vec<BlockHash>,
-    listed: Vec<Transaction>,
+    grown: &mut Grown,
+    listed: &[Listed],
     rules: RuleSet,
 ) -> ArchivalDelta {
-    let height = u64::try_from(hashes.len()).expect("fits");
-    let previous = hashes.last().copied().unwrap_or(BlockHash::NULL);
-    let listed: Vec<Transaction> = listed
-        .into_iter()
-        .map(|tx| anchor(hashes, height, tx))
-        .collect();
-    let out: Result<(BlockHash, ArchivalDelta), TestErr> = store.write(|batch| {
+    let height = grown.height().to_raw();
+    let out: Result<ArchivalDelta, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
+        let txs = grown.realise(listed);
         let root = batch_root_going_into(&view, height)?;
-        let cand = candidate_over(root, height, previous, listed);
+        let mut cand = candidate_over(root, height, grown.tip(), txs.clone());
+        if height == 0 {
+            endow_genesis(&mut cand);
+        }
         let judged = judge_under(&view, cand, &rules)?;
-        let hash = judged.block().hash();
         let delta = judged.block().archival().clone();
+        grown.record(judged.block().block(), &txs);
         batch.connect(judged, rules)?;
-        Ok((hash, delta))
+        Ok(delta)
     });
-    let (hash, delta) = out.expect("the block connects");
-    hashes.push(hash);
-    delta
+    out.expect("the block connects")
 }
 
 /// `connect_one` for a coinbase-only block.
-fn connect_empty(store: &ChainStore, hashes: &mut Vec<BlockHash>, rules: RuleSet) -> ArchivalDelta {
-    connect_one(store, hashes, Vec::new(), rules)
+fn connect_empty(store: &ChainStore, grown: &mut Grown, rules: RuleSet) -> ArchivalDelta {
+    connect_one(store, grown, &[], rules)
 }
 
 /// [`judge_under`] that hands the **verdict** back instead of panicking on
@@ -191,11 +194,11 @@ fn pop(store: &ChainStore) {
 fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     let path = tmp("aw-join-credit");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let mut hashes = Vec::new();
+    let mut grown = Grown::new();
     for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+        connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
-    let p = persona(P);
+    let p = persona(P_SLOT);
     let before = store
         .begin_read()
         .expect("read")
@@ -203,8 +206,8 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         .expect("read");
     assert!(before.is_some(), "the coinbase-only blocks accrued");
 
-    let [join, credit] = credited(11, P);
-    let joined = connect_one(&store, &mut hashes, vec![join], RuleSet::GENESIS);
+    let (join, credit) = credited(P_SLOT);
+    let joined = connect_one(&store, &mut grown, &[join], RuleSet::GENESIS);
     let [write] = joined.records() else {
         panic!("one record write: {:?}", joined.records());
     };
@@ -221,7 +224,7 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         "this block's inflow moved the accrual"
     );
 
-    let credited_delta = connect_one(&store, &mut hashes, vec![credit], RuleSet::GENESIS);
+    let credited_delta = connect_one(&store, &mut grown, &[body(credit)], RuleSet::GENESIS);
     assert!(
         credited_delta.records().is_empty(),
         "a credit writes no record"
@@ -292,35 +295,35 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
 fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back() {
     let path = tmp("aw-close");
     let store = short_store(&path);
-    let mut hashes = Vec::new();
+    let mut grown = Grown::new();
     for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut hashes, SHORT);
+        connect_empty(&store, &mut grown, SHORT);
     }
-    let p = persona(P);
-    let [join, credit] = credited(12, P);
-    connect_one(&store, &mut hashes, vec![join], SHORT);
+    let p = persona(P_SLOT);
+    let (join, credit) = credited(P_SLOT);
+    connect_one(&store, &mut grown, &[join], SHORT);
     for _ in (FIRST_SPEND_HEIGHT + 1)..CREDIT_HEIGHT {
-        connect_empty(&store, &mut hashes, SHORT);
+        connect_empty(&store, &mut grown, SHORT);
     }
     assert_eq!(
-        hashes.len() as u64,
+        grown.height().to_raw(),
         CREDIT_HEIGHT,
         "the next block is {CREDIT_HEIGHT}, the credit's"
     );
-    connect_one(&store, &mut hashes, vec![credit], SHORT);
+    connect_one(&store, &mut grown, &[body(credit)], SHORT);
     let mut accrued_before_close = None;
     for _ in (CREDIT_HEIGHT + 1)..CLOSING_HEIGHT {
-        accrued_before_close = Some(connect_empty(&store, &mut hashes, SHORT).accrual().total);
+        accrued_before_close = Some(connect_empty(&store, &mut grown, SHORT).accrual().total);
     }
     let accrued_before_close =
         accrued_before_close.expect("the blocks between the credit and the close connected");
     assert_eq!(
-        hashes.len() as u64,
+        grown.height().to_raw(),
         CLOSING_HEIGHT,
         "the next block is {CLOSING_HEIGHT}, the closing one"
     );
 
-    let closing = connect_one(&store, &mut hashes, Vec::new(), SHORT);
+    let closing = connect_one(&store, &mut grown, &[], SHORT);
     let close = closing
         .close()
         .unwrap_or_else(|| panic!("block {CLOSING_HEIGHT} closes epoch {CREDIT_EPOCH}"));
@@ -376,8 +379,8 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     );
     drop(snap);
 
-    hashes.pop();
-    let again = connect_one(&store, &mut hashes, Vec::new(), SHORT);
+    grown.pop();
+    let again = connect_one(&store, &mut grown, &[], SHORT);
     assert_eq!(again, closing, "the same block, the same verdict");
     let snap = store.begin_read().expect("read");
     assert_eq!(
@@ -414,9 +417,9 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
 fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let mut hashes = Vec::new();
-    connect_empty(&store, &mut hashes, RuleSet::GENESIS);
-    connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+    let mut grown = Grown::new();
+    connect_empty(&store, &mut grown, RuleSet::GENESIS);
+    connect_empty(&store, &mut grown, RuleSet::GENESIS);
 
     let snap = store.begin_read().expect("read");
     for h in 0..2 {
@@ -431,8 +434,8 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     // The zero-count sidecar on the block that would connect at height 2.
     let zero_count = AttestationWitness::new(0u64.to_le_bytes().to_vec())
         .expect("eight bytes: non-empty, under the cap");
-    let height = hashes.len() as u64;
-    let previous = *hashes.last().expect("a chain");
+    let height = grown.height().to_raw();
+    let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;
@@ -466,7 +469,7 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
 fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip() {
     let path = tmp("aw-inject");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(P);
+    let p = persona(P_SLOT);
 
     let empty = store
         .regtest_inject_serve_credit(Trust::UNANCHORED, p, shard(3), epoch(0))
@@ -476,9 +479,9 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
         "{empty:?}"
     );
 
-    let mut hashes = Vec::new();
+    let mut grown = Grown::new();
     for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+        connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
     let stranger = store
         .regtest_inject_serve_credit(Trust::UNANCHORED, p, shard(3), epoch(0))
@@ -492,13 +495,13 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
     connect_one(
         &store,
-        &mut hashes,
-        vec![fixture::join_market(fixture::point(11), P)],
+        &mut grown,
+        &[Listed::Join { slot: P_SLOT }],
         RuleSet::GENESIS,
     );
     let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
 
-    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(hashes[0]), &[]));
+    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0]), &[]));
     let off = store
         .regtest_inject_serve_credit(anchored, p, shard(3), epoch(0))
         .unwrap_err();
@@ -531,7 +534,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     drop(snap);
 
     // Not journaled: a block above the bit, popped, leaves it.
-    connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+    connect_empty(&store, &mut grown, RuleSet::GENESIS);
     pop(&store);
     let snap = store.begin_read().expect("read");
     assert_eq!(
@@ -557,10 +560,10 @@ fn the_injector_is_refused_when_serve_credits_are_stubbed() {
     let path = tmp("aw-inject-stubbed");
     let policy = ApplyPolicy::stubbed(&[ArchivalFamily::ServeCredit]).expect("non-empty");
     let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
-    let mut hashes = Vec::new();
-    connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+    let mut grown = Grown::new();
+    connect_empty(&store, &mut grown, RuleSet::GENESIS);
     let err = store
-        .regtest_inject_serve_credit(Trust::UNANCHORED, persona([0x1f; 32]), shard(0), epoch(0))
+        .regtest_inject_serve_credit(Trust::UNANCHORED, persona(0x1f), shard(0), epoch(0))
         .unwrap_err();
     assert!(
         matches!(
@@ -596,14 +599,11 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     let path = tmp("aw-arw9");
     let policy = ApplyPolicy::stubbed(&[ArchivalFamily::Bond]).expect("non-empty");
     let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
-    let p = persona(P);
-    let [join, credit] = credited(13, P);
-    let listing = spendable_prefix(vec![vec![body(join)]]);
-    let hashes = connect_chain(&store, &listing).hashes;
-    assert_eq!(
-        hashes.len(),
-        usize::try_from(FIRST_SPEND_HEIGHT + 1).expect("fits")
-    );
+    let p = persona(P_SLOT);
+    let (join, credit) = credited(P_SLOT);
+    let listing = spendable_prefix(vec![vec![join]]);
+    let grown = connect_chain(&store, &listing);
+    assert_eq!(grown.height().to_raw(), FIRST_SPEND_HEIGHT + 1);
 
     let snap = store.begin_read().expect("read");
     assert_eq!(
@@ -619,8 +619,8 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     // The credit, one block above the join it names: J4 reads the table
     // the policy skipped.
     let height = FIRST_SPEND_HEIGHT + 1;
-    let credit = anchor(&hashes, height, credit);
-    let previous = *hashes.last().expect("a chain");
+    let credit = anchor(&grown.hashes, height, credit);
+    let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;
@@ -665,23 +665,25 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
 fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     let path = tmp("aw-claim-open");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let mut hashes = Vec::new();
+    let mut grown = Grown::new();
     for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+        connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
-    // The join is built from the tag `[0xc1; 32]`; `emission_vin(0xc1, …)`
-    // claims as the same persona, whose id is `fixture::claimant(0xc1)`.
+    // The join is the persona at `P_SLOT`'s; the claim below names its
+    // identity key (`emission_vin_for`), so it claims as the same persona,
+    // whose id the record is under.
+    let claimant = Persona::at(P_SLOT);
     connect_one(
         &store,
-        &mut hashes,
-        vec![fixture::join_market(fixture::point(14), [0xc1; 32])],
+        &mut grown,
+        &[Listed::Join { slot: P_SLOT }],
         RuleSet::GENESIS,
     );
     assert!(
         store
             .begin_read()
             .expect("read")
-            .bond_record(&PCanonicalId::from_bytes(fixture::claimant(0xc1)))
+            .bond_record(&claimant.id())
             .expect("read")
             .is_some(),
         "the record is persisted before the claim is judged"
@@ -691,17 +693,18 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     // outputs enter the tree at `height + mined_money_unlock_window`, and
     // the reference sits `REFERENCE_BLOCK_MIN_AGE` below the claim's block.
     for _ in 0..=RuleSet::GENESIS.mined_money_unlock_window().to_raw() {
-        connect_empty(&store, &mut hashes, RuleSet::GENESIS);
+        connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
 
-    let height = u64::try_from(hashes.len()).expect("fits");
+    let height = grown.height().to_raw();
     let open = RuleSet::GENESIS
         .settlement_schedule()
         .epoch_at(BlockHeight::from_raw(height))
         .to_raw();
-    let Input::ArchivalRewardEmission { canonical_bytes } = fixture::emission_vin(0xc1, &[open])
+    let Input::ArchivalRewardEmission { canonical_bytes } =
+        fixture::emission_vin_for(claimant.identity(), &[open])
     else {
-        unreachable!("emission_vin builds an emission input");
+        unreachable!("emission_vin_for builds an emission input");
     };
     let mut claim = fixture::balanced_emission(fixture::point(15), canonical_bytes, 1_000_000);
     // CEN-J21 (E6 slice 8 row 9) judges the declared depth against the
@@ -715,8 +718,19 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     {
         p.tree_depth = 1;
     }
-    let claim = anchor(&hashes, height, claim);
-    let previous = *hashes.last().expect("a chain");
+    // Anchored as every listed body is, then keyed and signed as the
+    // claimant's own: the fixture signer keys an emission slot from the
+    // identity seed of the fixture persona the vin names, and this
+    // claimant is the spender's, so its slot is the persona's identity
+    // (CEN-J20) under its own signature.
+    let claim = fixture::signed_claiming(
+        anchor(&grown.hashes, height, claim),
+        &fixture::Claimant {
+            identity: claimant.identity(),
+            sign: &|hash| claimant.identity_signature(hash),
+        },
+    );
+    let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;

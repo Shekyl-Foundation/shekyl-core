@@ -64,7 +64,7 @@ use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{base_block_reward, EconomicParams};
-use shekyl_harness_spender::{first_spending_height, MinedBlock, MinerWallet, Spender};
+use shekyl_harness_spender::{first_spending_height, MinedBlock, MinerWallet, PostedBond, Spender};
 use shekyl_harness_wallet::coinbase::repay;
 use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight,
@@ -547,9 +547,6 @@ pub fn filler_spend(key_image: [u8; 32]) -> Transaction {
     fixture::listed(key_image)
 }
 
-#[cfg(feature = "pipeline")]
-pub use crate::mutation_bodies::{join_body, serve_credit_body};
-
 /// The first height at which a block may list a spend: the height at which
 /// block 0's coinbase can be spent against a root that holds it —
 /// [`first_spending_height`] under the genesis rule set (the unlock
@@ -779,11 +776,28 @@ impl Growing {
     /// spending wallet is the miner's — the one every fixture coinbase pays.
     #[must_use]
     pub fn spend_of(&self, coinbase: u64, family: Family) -> Transaction {
-        self.spender.spend_coinbase(
+        self.spend_of_posting(coinbase, family, None)
+    }
+
+    /// [`Self::spend_of`] with an archival bond post riding it
+    /// ([`Spender::spend_coinbase_posting`]): a **real** join or release,
+    /// its funding spend proven over the wallet-side tree, so the body
+    /// passes CEN-J27 (the funding half) as it passes I13/I15 — what a
+    /// fixture archival body cannot do since slice 6 row 6. With `None`
+    /// the bytes are [`Self::spend_of`]'s exactly.
+    #[must_use]
+    pub fn spend_of_posting(
+        &self,
+        coinbase: u64,
+        family: Family,
+        bond: Option<&PostedBond<'_>>,
+    ) -> Transaction {
+        self.spender.spend_coinbase_posting(
             MinerWallet::harness(),
             h(coinbase),
             self.height(),
             family.fee(),
+            bond,
         )
     }
 

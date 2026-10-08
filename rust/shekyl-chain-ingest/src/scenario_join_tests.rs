@@ -129,6 +129,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         CenRow::J13,
         CenRow::J14,
         CenRow::J15,
+        CenRow::J27,
         CenRow::L7,
     ] {
         assert!(block.judged_by.contains(&row), "{row} judged the block");

@@ -513,6 +513,12 @@ census_rows! {
         // (a) 2026-10-04). The census keeps the id marked REJECTED; this
         // registry does not. CEN-F12 is the precedent.
         J18 implemented(crate::rules::tx_bond::J18),
+        // J27 (slice 6 row 6, minted 2026-10-08): the bond post's funding
+        // half — the reference sequence as I10–I13 and the FCMP++ verify
+        // over the funding spends as I15, one row, the bond-post arm of
+        // `judge_reference`. Filed with the bond-post family in census
+        // order (after J18), not by number.
+        J27 implemented(crate::rules::tx_against::J27),
         J19 implemented(crate::rules::tx_emission::J19),
         J20 implemented(crate::rules::tx_emission::J20),
         // J21 (slice 8 row 9): the emission's reference context, judged

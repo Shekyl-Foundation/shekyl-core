@@ -344,25 +344,23 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Every spend carries per-input auths (the wire reads `nvin` of them),
-    // so a spend is 4-part — here the join-market post, a spend that opens
-    // the record the 3-part body needs; the 3-part non-coinbase transaction
-    // is the serve-credit-only shape, whose `pqc_auths` are empty by rule
-    // (CEN-H20) — its countersignature is over the pass record (CEN-J10) —
-    // and which connects only behind its join (CEN-L7 / CEN-J4), one block
-    // above it.
-    let [four_part, three_part] = credited(9, [0x5f; 32]);
-    assert!(four_part.txid_parts().pqc_auth_hash.is_some());
+    // so a spend is 4-part — here the join-market post, a real spend that
+    // opens the record the 3-part body needs; the 3-part non-coinbase
+    // transaction is the serve-credit-only shape, whose `pqc_auths` are
+    // empty by rule (CEN-H20) — its countersignature is over the pass
+    // record (CEN-J10) — and which connects only behind its join (CEN-L7 /
+    // CEN-J4), one block above it.
+    let (four_part, three_part) = credited(9);
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    let (four_part, three_part) = (body(four_part), body(three_part));
     // The first spend block lists the 4-part join; the block above it the
     // 3-part credit: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one
     // per block through the join's), then four_part, then the credit
     // block's coinbase, then three_part. The expectation is read off the
-    // join **as connected**: anchoring signs every auth slot, and the third
-    // component is over the auths.
+    // join **as connected**: a join is a spend the chain builds at its
+    // height, and the third component is over its auths.
     let (_, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(vec![vec![four_part], vec![three_part]]),
+        &spendable_prefix(vec![vec![four_part], vec![body(three_part)]]),
     );
     let expected = connected
         .get(at(FIRST_SPEND_HEIGHT))

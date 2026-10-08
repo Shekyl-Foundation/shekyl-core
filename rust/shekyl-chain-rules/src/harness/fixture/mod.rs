@@ -38,8 +38,8 @@ use crate::rules::tx_emission::J19;
 
 mod archival;
 pub use archival::{
-    claimant, emission_vin, join_market, persona, serve_credit_only, serve_credit_vin,
-    FixturePersona, BOND_FLOOR, PRUNED_PASS_RECORD,
+    claimant, emission_vin, emission_vin_for, join_market, persona, serve_credit_only,
+    serve_credit_only_with, serve_credit_vin, FixturePersona, BOND_FLOOR, PRUNED_PASS_RECORD,
 };
 
 /// The well-formed **transaction** shapes this module builds, as a
@@ -365,9 +365,11 @@ pub fn coinbase(height: u64) -> Transaction {
 /// sized to the outputs (H8). A prunable region is present exactly when
 /// there are outputs, and its one BP+ has the canonical layout for that
 /// count (H19's layout half). One [`pqc_auth_filler`] per input, so the
-/// txid is 4-part. The proof bytes are filler: H19's verification and
-/// the 4.I membership rows are not landed, and when they land this
-/// fixture is theirs to refuse. [`listed`] is the two-output case —
+/// txid is 4-part. The proof bytes are filler, and the declared depth is
+/// `0`: since slice 6 row 6 (2026-10-08) CEN-I13 refuses the depth and
+/// CEN-I15 the proof on any view, so this body is a *refusal* fixture
+/// through `tx_against` — a row before I13 or nothing (`tx_against_tests`'
+/// header). [`listed`] is the two-output case —
 /// the fewest CEN-I1 admits (slice 6 commit 2); `spend(ki, 1)` is I1's
 /// own negative fixture.
 pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
@@ -545,7 +547,35 @@ pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transa
 /// `hold`), it is the infrastructure for every test whose subject is
 /// another rule.
 #[must_use]
-pub fn signed(mut tx: Transaction) -> Transaction {
+pub fn signed(tx: Transaction) -> Transaction {
+    signed_with(tx, None)
+}
+
+/// A claimant outside the fixture personas for [`signed_claiming`]: the
+/// identity key its emission slot carries, and the signer that key
+/// answers to.
+pub struct Claimant<'a> {
+    /// The hybrid public key the emission slot carries — the one the vin's
+    /// `P_canonical_id` derives from (CEN-J20).
+    pub identity: Vec<u8>,
+    /// The signature that key makes over a slot's signing hash.
+    pub sign: &'a dyn Fn(&SigningPayloadHash) -> Vec<u8>,
+}
+
+/// [`signed`] for an emission claim whose claimant is **not** a fixture
+/// persona — a keyed persona another harness derived (the spender's),
+/// whose record a real join wrote: every slot is keyed and signed as
+/// [`signed`] keys and signs it, except the emission slot, which carries
+/// `claimant.identity` and is signed by `claimant.sign` — so the body
+/// passes CEN-J20 and CEN-I18 as the claimant's own would. Re-signing an
+/// already-signed body is the same two passes again over the same bytes;
+/// a caller may anchor first ([`anchored_at`]) and claim after.
+#[must_use]
+pub fn signed_claiming(tx: Transaction, claimant: &Claimant<'_>) -> Transaction {
+    signed_with(tx, Some(claimant))
+}
+
+fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transaction {
     let Some(count) = fcmp_auths(&tx).map(Vec::len) else {
         return tx;
     };
@@ -559,15 +589,29 @@ pub fn signed(mut tx: Transaction) -> Transaction {
         .enumerate()
         .map(|(index, input)| fixture_signing_seed(index, input))
         .collect();
+    let emission_slot = claimant.and_then(|_| {
+        tx.prefix
+            .inputs
+            .iter()
+            .position(|input| matches!(input, Input::ArchivalRewardEmission { .. }))
+    });
     // Pass 1 — the public keys, which the message binds. The key only:
     // deriving it by signing a dummy message would make a signature and
     // throw it away.
-    for (auth, seed) in fcmp_auths_mut(&mut tx).into_iter().flatten().zip(&seeds) {
+    for (index, (auth, seed)) in fcmp_auths_mut(&mut tx)
+        .into_iter()
+        .flatten()
+        .zip(&seeds)
+        .enumerate()
+    {
         auth.auth_version = 1;
         auth.scheme_id = shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
         auth.flags = 0;
-        auth.hybrid_public_key = derive_pqc_public_key(seed, FIXTURE_OUTPUT_INDEX)
-            .expect("a fixture seed derives a hybrid public key");
+        auth.hybrid_public_key = match (claimant, emission_slot) {
+            (Some(claimant), Some(slot)) if slot == index => claimant.identity.clone(),
+            _ => derive_pqc_public_key(seed, FIXTURE_OUTPUT_INDEX)
+                .expect("a fixture seed derives a hybrid public key"),
+        };
     }
     // Pass 2 — the signatures, over the hashes those keys are part of.
     let hashes = tx.pqc_signing_payload_hashes();
@@ -575,13 +619,17 @@ pub fn signed(mut tx: Transaction) -> Transaction {
         // No prunable region (the storage-pruned form): nothing to sign over.
         return tx;
     }
-    for ((auth, seed), hash) in fcmp_auths_mut(&mut tx)
+    for (index, ((auth, seed), hash)) in fcmp_auths_mut(&mut tx)
         .into_iter()
         .flatten()
         .zip(&seeds)
         .zip(&hashes)
+        .enumerate()
     {
-        auth.hybrid_signature = fixture_signature(seed, hash);
+        auth.hybrid_signature = match (claimant, emission_slot) {
+            (Some(claimant), Some(slot)) if slot == index => (claimant.sign)(hash),
+            _ => fixture_signature(seed, hash),
+        };
     }
     tx
 }
@@ -793,7 +841,11 @@ pub fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
 /// credit·H` holds with `(credit, debit) = (post.bond_credit, 0)`. `post`
 /// is the caller's: the shape rows read its kind and key length, the
 /// block-level G10 its `p_canonical_id`. Unanchored and with filler auths;
-/// [`anchored_on`] / [`signed`] make it a body `tx_against` admits.
+/// [`anchored_on`] / [`signed`] make it a body the post rows (CEN-J13–J18)
+/// admit, which `tx_against` then refuses on CEN-J27 — the funding half:
+/// the proof is filler and no mock grows a tree (slice 6 row 6,
+/// 2026-10-08; until then the funding half was unjudged on this class and
+/// the body passed whole).
 pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
     let credit = post.bond_credit;
     let mut tx = listed(key_image);

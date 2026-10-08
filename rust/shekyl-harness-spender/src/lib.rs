@@ -64,6 +64,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bond;
+pub mod persona;
 mod spender;
 
 use shekyl_chain_rules::{RuleSet, REFERENCE_BLOCK_MIN_AGE};
@@ -71,6 +72,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Transaction;
 
 pub use bond::PostedBond;
+pub use persona::{complete_tree, shard_set, Persona};
 pub use shekyl_chain_rules::newest_admissible_reference;
 pub use shekyl_harness_wallet::{MinerWallet, Owner, Recipient};
 pub use spender::{Sourced, Spender};

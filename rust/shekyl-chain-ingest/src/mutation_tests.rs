@@ -16,17 +16,19 @@ use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, Transaction};
 
+use crate::archival_driver::ENDPOINT;
 use crate::metrics::Metrics;
 use crate::mutation::{
     first_nonce, Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Overweight,
     Pow, Unmutable, UNHELD_ATTESTATION_ROOT, UNHELD_ROOT,
 };
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
+use crate::scenario_archival::{complete_tree, Persona};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{
-    bare_chain, block_with_nonce, chain, cleanup, h, join_body, key_image, open_store,
-    serve_credit_body, tmp, trace_of, Family, Growing, GrownTree, Scripted, FIRST_SPEND_HEIGHT,
+    bare_chain, block_with_nonce, chain, cleanup, h, open_store, tmp, trace_of, Family, Growing,
+    GrownTree, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 const GENESIS_RULES: ChainRules = ChainRules::Regtest {
@@ -372,50 +374,73 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
             (outcome, AT)
         }
         // A chain whose block `AT` lists one archival body of the kind the
-        // mutation duplicates, beside the spend `chain(n)` would list. The
-        // serve credit's twin is the body itself, `unlock_time` moved; the
-        // bond post's is signed over its content, so the run supplies a
-        // second valid body with the same key — a second **join** for `P1`
-        // (`join_body` docs: a Release over no record is J16's in the slot
-        // loop, before G10). A credit names a persona with a record read
-        // off the view before its block (CEN-J4), so the block below `AT`
-        // lists `P1`'s join beside its spend; the credit's epoch is past
-        // the join's (CEN-J5). (G9's pair is the driver's — `Mutation` docs.)
-        // The archival bodies are fixtures (a bond post is 4.J's, not
-        // I13/I15's) and are anchored where they are listed; the spends
-        // beside them are real.
+        // mutation duplicates, beside (or riding) the spend `chain(n)`
+        // would list. The serve credit's twin is the body itself,
+        // `unlock_time` moved; the bond post's is signed over its content,
+        // so the run supplies a second valid body with the same key — a
+        // second **join** for the persona (a Release over no record is
+        // J16's in the slot loop, before G10). A credit names a persona
+        // with a record read off the view before its block (CEN-J4), so
+        // the block below `AT` lists the persona's join; the credit's
+        // epoch is past the join's (CEN-J5). (G9's pair is the driver's —
+        // `Mutation` docs.)
+        //
+        // The joins are **real**: the persona's post through the
+        // production constructor, riding the block's own coinbase spend
+        // (`Growing::spend_of_posting`), its funding half proven over the
+        // wallet-side tree — since slice 6 row 6 CEN-J27 judges a bond
+        // post's funding spend as I13/I15 judge a regular spend's, and a
+        // fixture join is refused there before G10 is reached. The twin
+        // spends the coinbase that matured one block earlier and no block
+        // spent (block `AT − 1` lists nothing in that case), so both joins
+        // are admissible at `AT` alone and G10 counts the second. The
+        // credit is the one fixture body left: a serve-credit-only
+        // transaction has no funding spend (CEN-H20) and J27 is vacuous on
+        // it. (*Was:* fixture joins with filler proofs, anchored where
+        // listed; green while the funding half was unjudged on the class.)
         Mutation::DuplicateServeCredit | Mutation::DuplicateBondPost => {
-            let (archival, twin): (Transaction, Option<Transaction>) = match mutation {
-                Mutation::DuplicateServeCredit => (serve_credit_body(P1, 7, 11), None),
+            let persona = Persona::at(1);
+            let mut growing = Growing::over(&chain(AT - 1));
+            // Block `AT − 1`: the first spendable coinbase, posting the
+            // join the credit will be judged against — or nothing, so that
+            // coinbase stays for the bond post's twin.
+            let below: Vec<Transaction> = match mutation {
+                Mutation::DuplicateServeCredit => vec![growing.spend_of_posting(
+                    AT - 1 - FIRST_SPEND_HEIGHT,
+                    Family::Main,
+                    Some(&persona.join(complete_tree(), ENDPOINT)),
+                )],
+                _ => Vec::new(),
+            };
+            growing.extend(below, 7);
+            // Block `AT`, and the twin built at its height before it is
+            // extended (the spender anchors at the connecting height).
+            let (at_block, twins): (Vec<Transaction>, Vec<Transaction>) = match mutation {
+                Mutation::DuplicateServeCredit => (
+                    vec![
+                        growing
+                            .spend_matured(Family::Main)
+                            .expect("a coinbase has matured for AT"),
+                        growing.anchored(persona.serve_credit(7, 11)),
+                    ],
+                    Vec::new(),
+                ),
                 _ => (
-                    join_body(key_image(Family::Fork, AT), P1),
-                    Some(join_body(key_image(Family::Fork, AT + 1), P1)),
+                    vec![growing.spend_of_posting(
+                        AT - FIRST_SPEND_HEIGHT,
+                        Family::Main,
+                        Some(&persona.join(complete_tree(), ENDPOINT)),
+                    )],
+                    vec![growing.spend_of_posting(
+                        AT - 1 - FIRST_SPEND_HEIGHT,
+                        Family::Main,
+                        Some(&persona.join(complete_tree(), ENDPOINT)),
+                    )],
                 ),
             };
-            let join_below = matches!(mutation, Mutation::DuplicateServeCredit)
-                .then(|| join_body(key_image(Family::Fork, AT - 1), P1));
-            let mut growing = Growing::over(&chain(AT - 1));
-            let below: Vec<Transaction> = growing
-                .spend_matured(Family::Main)
-                .into_iter()
-                .chain(join_below.map(|j| growing.anchored(j)))
-                .collect();
-            growing.extend(below, 7);
-            let at_block = vec![
-                growing
-                    .spend_matured(Family::Main)
-                    .expect("a coinbase has matured for AT"),
-                growing.anchored(archival),
-            ];
             growing.extend(at_block, 7);
             let chain = growing.finish();
             assert_eq!(chain.len() as u64, n, "the mutated block is the tip");
-            // The twin is anchored at `AT` like every listed body there.
-            let hashes: Vec<BlockHash> = chain.iter().map(|(b, _)| b.hash()).collect();
-            let twins: Vec<Transaction> = twin
-                .into_iter()
-                .map(|t| crate::test_support::anchor(&hashes, AT, t))
-                .collect();
             let outcome = judge(
                 &format!("{mutation:?}").to_lowercase(),
                 &chain,
@@ -533,8 +558,6 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         }
     }
 }
-
-const P1: [u8; 32] = [0xa1; 32];
 
 /// The mined chain itself replays clean under the seeded hasher — so a D1
 /// refusal in the family is the mutation's, not the fixture's.
