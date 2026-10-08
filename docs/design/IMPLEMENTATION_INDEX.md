@@ -49,7 +49,17 @@ crates); every `scripts/ci/check_*` gate (41; `check_chain_rules_coverage`
 stamp, by declaration:** CEN-B2 is promoted to bucket 2 on the
 header-version-rule branch (2026-10-06, `minor_version` reserved at 0),
 which moves `check_conformance_coverage` to 126 / 2 / 5 over 133; the stamp
-moves with that merge.
+moves with that merge. The `CHAIN_RULES_SLICE_6.md` row (and the CEN-I13 /
+CEN-I15 / CEN-J27 cells it cites) is advanced on PR #1003's branch
+(`feat/chain-rules-i13-i15-flip`), whose code is not on `dev`: its cell
+carries its own as-of date (2026-10-08) and the `rg` it re-verifies against
+once merged; at the PR's docs tip, from a fresh clone, `cargo test -p
+shekyl-chain-rules` **368**, `-p shekyl-chain-store` **428** + 3 ignored,
+`-p shekyl-chain-ingest` **120** + 6, workspace clippy `-D warnings` clean
+(505 crates), `check_chain_rules_coverage` `implemented 119 /
+validator-enforced 152`, `check_conformance_coverage` 134 / 134 (tally
+127). The stamp does not move from a docs edit; it moves when its checks
+are re-run on the merged `dev`.
 *Superseded
 stamp:* `dev` = `ad557ac5a` + the DRS-E3 tree (PR #878) as of
 2026-09-27 — moved by DRS-E3, whose rows changed status (`CTW-`, `CTW-Q`,
