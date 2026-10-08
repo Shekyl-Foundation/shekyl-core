@@ -3882,6 +3882,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-genesis-tool",
+ "shekyl-harness-wallet",
  "shekyl-rpc-types",
  "shekyl-types",
  "shekyl-units",
@@ -4438,6 +4439,16 @@ dependencies = [
  "shekyl-types",
  "shekyl-wire",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-harness-wallet"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-crypto-pq",
+ "shekyl-wire",
  "zeroize",
 ]
 

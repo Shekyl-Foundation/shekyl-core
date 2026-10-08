@@ -239,16 +239,21 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             (k.value(), v.value().decode().expect("decodes"))
         })
         .collect();
+    // The key and the commitment are the ones the connected coinbase
+    // carries, read off it (`fixture::paid`): the store records what the
+    // block paid, and the harness miner's output is derived, not a named
+    // point.
+    let paid = fixture::paid(miner).expect("a coinbase with an output");
     assert_eq!(
         rows,
         vec![(
             (0, 0),
             OutKey {
                 output_id: crate::ids::OutputStorageId::from_raw(0),
-                pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::G),
+                pubkey: shekyl_types::OneTimePubkey::from_bytes(paid.key),
                 unlock_time: stored_timelock(60),
                 height: BlockHeight::from_raw(0),
-                commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::TWO_G),
+                commitment: shekyl_types::CommitmentBytes::from_bytes(paid.commitment),
             }
         )],
         "keyed (amount 0, amount_index 0) with the ct-base commitment; the key carries the index"

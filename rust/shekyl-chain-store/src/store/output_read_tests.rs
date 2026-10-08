@@ -197,12 +197,17 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
     let snap = store.begin_read().expect("read");
 
     // Index 0: genesis's miner output, stored under amount 0 with the
-    // ct-base commitment, unlock = height + 60 (fixture).
+    // ct-base commitment, unlock = height + 60 (fixture). The key and the
+    // commitment are read off the coinbase the chain connected at genesis
+    // (`fixture::coinbase(0)`, which pricing leaves as built: genesis pays
+    // zero on this schedule) — the harness miner's output is derived, not
+    // a named point.
+    let genesis = fixture::paid(&fixture::coinbase(0)).expect("a coinbase with an output");
     assert_eq!(
         snap.output(gi(0)).expect("read"),
         AtIndex::Recorded(RecordedOutput {
-            pubkey: shekyl_types::OneTimePubkey::from_bytes(fixture::G),
-            commitment: shekyl_types::CommitmentBytes::from_bytes(fixture::TWO_G),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes(genesis.key),
+            commitment: shekyl_types::CommitmentBytes::from_bytes(genesis.commitment),
             height: h(0),
         })
     );

@@ -24,6 +24,9 @@ use super::*;
 use crate::verdict::TxSlot;
 
 pub use price::{priced, priced_at, repriced};
+pub use shekyl_harness_wallet::coinbase::{paid, Paid};
+pub use shekyl_harness_wallet::MinerWallet;
+
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
@@ -325,13 +328,19 @@ pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
 }
 
 /// A coinbase that satisfies every structural 4.F row for a block at
-/// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
-/// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
+/// `height`, paying the harness miner a **real** output: one
+/// `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one output (F4) whose
+/// key and mask are the shared secret's (F9, F10),
 /// `unlock_time = height + mined_money_unlock_window` (F6), and the
-/// grammar's `extra` for one output (I19, I20). The amount written here
-/// is `0`. [`priced_at`] replaces the first output with what CEN-F18
-/// requires, except at genesis, where the configured amount stands (F11):
-/// a zero coinbase stays zero, and an endowed one is kept.
+/// grammar's `extra` for that output — the tx public key, the KEM
+/// ciphertexts and the PQC leaf entry the wallet will scan (I19, I20).
+/// Composed by [`shekyl_harness_wallet::coinbase::paying`], from the same
+/// two owners the block template composes from; the wallet it pays is
+/// [`MinerWallet::harness`], so a test in a crate that may hold a tree can
+/// spend what a fixture block paid. The amount written here is `0`.
+/// [`priced_at`] re-pays the output with what CEN-F18 requires, except at
+/// genesis, where the configured amount stands (F11): a zero coinbase
+/// stays zero, and an endowed one is kept.
 ///
 /// The F6 claim holds at every height a chain can reach. Within the
 /// window of `u64::MAX` no coinbase satisfies F6 — the rule's own sum
@@ -341,23 +350,12 @@ pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
 /// the bytes, not a verdict.
 pub fn coinbase(height: u64) -> Transaction {
     let unlock_time = height.saturating_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw());
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time,
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: G,
-                view_tag: 1,
-            }],
-            extra: coinbase_extra(1),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![TWO_G],
-        }),
-    }
+    shekyl_harness_wallet::coinbase::paying(
+        MinerWallet::harness().recipient(),
+        height,
+        unlock_time,
+        0,
+    )
 }
 
 /// A spend of `key_image` with `outputs` zero-amount outputs, shaped to

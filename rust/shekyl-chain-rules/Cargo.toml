@@ -61,6 +61,14 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Optional: the `harness` feature's `fixture::point_at` only (see the
 # feature's note). Never enabled on the production surface.
 curve25519-dalek = { version = "4", optional = true }
+# Optional: the `harness` feature's coinbase. `fixture::coinbase` pays the
+# harness miner a real output (`shekyl_harness_wallet::coinbase::paying`)
+# so a test in a crate that may hold a tree can spend it; the pricer
+# re-derives the amount-bound fields through the same crate. Test support
+# under this crate's own no-store belt (its closure adds no package the
+# rules crate does not already reach); never enabled on the production
+# surface.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
 
 [features]
 # The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
@@ -78,7 +86,12 @@ curve25519-dalek = { version = "4", optional = true }
 # surface — which never enables this feature — only ever *verifies*, through
 # `shekyl-ct-balance`. The pinned `POINTS` are `point_at`'s first sixteen,
 # and the gate holds the two equal.
-harness = ["dep:curve25519-dalek"]
+#
+# It also pulls in `shekyl-harness-wallet`: the fixture coinbase is a real
+# output paying the harness miner, so the store's and the ingest's tests
+# can spend a fixture block's coinbase through a real prover rather than
+# asserting over a filler no wallet could scan.
+harness = ["dep:curve25519-dalek", "dep:shekyl-harness-wallet"]
 
 [build-dependencies]
 # Build-script only: read `config/consensus_constants.json` for the two

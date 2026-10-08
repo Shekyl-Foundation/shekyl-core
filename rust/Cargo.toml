@@ -206,6 +206,14 @@ members = [
     # shekyl-chain-rules judges; under the same no-store belt as the rules.
     "shekyl-block-template",
 
+    # Test support, never shipped: the deterministic miner wallet every
+    # fixture coinbase pays and a coinbase composed as that wallet scans it
+    # (the template's second oracle). Reached only from shekyl-chain-rules'
+    # TEST_ONLY `harness` feature and from test-side [dev-dependencies];
+    # under the rules crate's no-store belt, so nothing of the curve tree
+    # or redb is in its closure — the spending half is a sibling crate.
+    "shekyl-harness-wallet",
+
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code
     # shared by E2 (replay) and E3 (live); the one crate where the validator,
