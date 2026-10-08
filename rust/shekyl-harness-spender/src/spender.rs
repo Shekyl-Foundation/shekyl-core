@@ -427,9 +427,18 @@ impl Spender {
             .expect("the coinbase funds the fee and the bond credit");
         let payment_amount = spendable / 2;
         let change_amount = spendable - payment_amount;
+        // The transaction key is a seed (`derive_kem_seed` hashes it), so
+        // any 32 bytes serve; what matters is that two spends are never
+        // built from one. Keyed on the connecting height alone, two spends
+        // in one block to one recipient derived identical output keys —
+        // the same seed, the same keys, the same indices — and a block
+        // listing both carried a duplicate output, not two bodies. The
+        // spent output's key image is the spend's own identity, so it is
+        // mixed in.
         let tx_secret = {
             let mut s = [0u8; 32];
             s[..8].copy_from_slice(&(0x5e00_0000_0000_0000u64 ^ connecting.to_raw()).to_le_bytes());
+            s[8..].copy_from_slice(&key_image.as_bytes()[8..]);
             s
         };
         let pay = |amount: u64, index: u64| -> OutputData {

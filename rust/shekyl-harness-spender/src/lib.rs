@@ -105,18 +105,31 @@ pub trait MinedBlock {
 /// window. The earlier driver added the two and connected at 71, five
 /// blocks later than the first admissible height; the margin had no
 /// reason written, which is how a number gets copied.
+///
+/// `const`, so a fixture can derive a `const` first spending height from
+/// it rather than pin the figure beside a comment that re-derives it.
 #[must_use]
-pub fn coinbase_maturity(rules: &RuleSet) -> BlockCount {
-    rules.mined_money_unlock_window() + BlockCount::ONE + REFERENCE_BLOCK_MIN_AGE
+pub const fn coinbase_maturity(rules: &RuleSet) -> BlockCount {
+    match rules
+        .mined_money_unlock_window()
+        .checked_add(BlockCount::ONE)
+    {
+        Some(unlocked) => match unlocked.checked_add(REFERENCE_BLOCK_MIN_AGE) {
+            Some(matured) => matured,
+            None => panic!("an unlock window is a small span"),
+        },
+        None => panic!("an unlock window is a small span"),
+    }
 }
 
 /// The first height that can spend block 0's coinbase against a root that
 /// holds it: [`coinbase_maturity`] measured from genesis.
 #[must_use]
-pub fn first_spending_height(rules: &RuleSet) -> BlockHeight {
-    BlockHeight::ZERO
-        .checked_add(coinbase_maturity(rules))
-        .expect("an unlock window is a small span")
+pub const fn first_spending_height(rules: &RuleSet) -> BlockHeight {
+    match BlockHeight::ZERO.checked_add(coinbase_maturity(rules)) {
+        Some(first) => first,
+        None => panic!("an unlock window is a small span"),
+    }
 }
 
 #[cfg(test)]
