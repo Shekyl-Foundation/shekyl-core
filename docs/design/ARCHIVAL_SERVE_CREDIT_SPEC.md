@@ -1068,8 +1068,9 @@ stays until that code is deleted (§11.1), and is marked.
 
 ## 16. Labels this specification mints
 
-None has a constant or a registry row yet; each row lands with its
-constant.
+Each row lands with its constant. Two have: the settlement selection and
+the issued-index term (`rust/shekyl-archival-retention/src/settlement_select.rs`,
+2026-10-08). The rest have no constant or registry row yet.
 
 | Label | Mechanism | Use |
 | --- | --- | --- |

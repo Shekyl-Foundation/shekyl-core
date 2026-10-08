@@ -70,6 +70,7 @@ pub mod reward_arithmetic;
 pub mod segment_freeze;
 pub mod serve_eligibility;
 pub mod settlement_row;
+pub mod settlement_select;
 pub mod shard_coverage;
 pub mod wire;
 
