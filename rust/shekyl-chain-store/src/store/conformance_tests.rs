@@ -181,10 +181,11 @@ where
 /// A chain of `len` coinbase-only blocks, connected into a real store AND
 /// mirrored into a `MockChain` from the same inputs: the blocks the store
 /// fixtures build, the `root_after` the verdict derived (the mock keys
-/// roots the way SCW-19 does, so a keying drift shows here), and the
-/// cumulative work the validator derived for each block (both read back off
-/// the verdict the store connected — the record both views must then agree
-/// on).
+/// roots the way SCW-19 does, so a keying drift shows here), the leaf count
+/// the store recorded under that root (CEN-I13's `depth_at` operand), and
+/// the cumulative work the validator derived for each block (read back off
+/// the verdict the store connected and the store it connected into — the
+/// record both views must then agree on).
 fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
     let path = tmp(&format!("conformance-{len}"));
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -216,13 +217,26 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                 valid.block().emission().coins_generated,
             );
             batch.connect(valid, RuleSet::GENESIS)?;
-            Ok(derived)
+            // The leaf count the store recorded going into `h + 1` — the
+            // tree after this block's drain, keyed as `root_after` is
+            // (SCW-19) — read back off the store, not re-derived: CEN-I13
+            // reads `depth_at(ref_height)` off it, and a twin told the root
+            // but not the count would hold an empty tree under every
+            // recorded root and refuse at I13 what the store admits.
+            let AtHeight::Recorded(leaf_count_after) = batch
+                .chain_view()
+                .leaf_count_at(BlockHeight::from_raw(h + 1))?
+            else {
+                unreachable!("the block at {h} just connected");
+            };
+            Ok((derived, leaf_count_after))
         });
-        let (cand, work, root_after, weights, coins_generated) = derived.expect("connects");
+        let ((cand, work, root_after, weights, coins_generated), leaf_count_after) =
+            derived.expect("connects");
         previous = cand.block.hash();
         blocks.push(cand.clone());
         mock = mock
-            .push_weighing(
+            .push_tree_weighing(
                 RecordedBlock {
                     hash: cand.block.hash(),
                     header: cand.block.header.clone(),
@@ -236,6 +250,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
                     cumulative_archival_len: ArchivalLength::ZERO,
                 },
                 root_after,
+                leaf_count_after,
                 // The two weights the store recorded for `h` — the
                 // verdict's (G6b; `weights_window` is held to the store's
                 // below).

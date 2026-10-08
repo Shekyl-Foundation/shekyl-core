@@ -210,11 +210,27 @@ impl MockChain {
         root_after: CurveTreeRoot,
         leaf_count_after: u64,
     ) -> Self {
+        self.push_tree_weighing(block, root_after, leaf_count_after, Self::ZONE_WEIGHTS)
+    }
+
+    /// [`push_tree`](Self::push_tree) with the block's recorded weights
+    /// named as well — a mirror of a real store's block carries both the
+    /// tree the store recorded after it and the weights it recorded for
+    /// it, and a conformance twin that omits either answers a rule's read
+    /// differently from the store it mirrors (CEN-I13 reads `depth_at`,
+    /// CEN-G6 the weights window).
+    pub fn push_tree_weighing(
+        self,
+        block: RecordedBlock,
+        root_after: CurveTreeRoot,
+        leaf_count_after: u64,
+        weights: RecordedWeights,
+    ) -> Self {
         let tree_after = PlantedTree {
             root: root_after,
             leaf_count: leaf_count_after,
         };
-        self.push_recording(block, tree_after, Self::ZONE_WEIGHTS)
+        self.push_recording(block, tree_after, weights)
     }
 
     /// The penalty-free zone in both weight columns — what a block whose
