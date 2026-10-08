@@ -6181,4 +6181,112 @@ mechanism text is deleted from the five documents that stated it before
 and replaced by pointers; what each still owns is the specification's
 §15. Index rows for the document and for `SCS-P` / `SCS-F`.
 
+
+**Further rulings, same date, on review of the merged specification.**
+
+1. **`(m, n)` is not re-pinned on the one-attempt figure.** At the
+   feasibility module's calibration the window exceeds the per-archiver
+   false-slash budget (0.689 against `10⁻³` at 4,096 shards). That
+   calibration credits one attempt per read, because failures inside one
+   window cluster. Under the secret draw the witness reads a draw again
+   hours later, and with three reads the window clears the budget when a
+   draw goes unread after all three with probability at most 0.2076
+   (`ESR-11`).
+   Loosening the window on the one-attempt figure would weaken detection
+   of pairs that do not serve. Two pieces of work instead: the witness's
+   re-read policy is specified as its own policy above `SF-D6`
+   (specification §5: a stall-class read is read again, a completed
+   exchange is final, and circuit assignment stays Tor's under `SF-D3`),
+   and the unread share at hour-scale spacing is measured (`BA-T31`)
+   and fed to the feasibility module. `(m, n)` stays open until then.
+2. **`SO-D8d`'s integrity layers, in their form under the stored index**
+   (closes `SCS-F11`; specification §9.5). The first layer is a digest:
+   at admission each issued `(pair, h, j)` is folded into a per-epoch
+   running digest kept as revertible consensus state, and at settlement
+   the stored index is hashed during the walk that selects the counted
+   draws and compared. Full re-derivation from the kept seeds at
+   settlement, the form first ruled the same day, is **rejected**: it
+   repeated in one block the hashing admission spread over an epoch. A
+   pair mismatch cannot occur, because the pair is derived from `j`. The second, the persisted digest of `D`
+   against a re-walk, and the third, `passes ≤ issued` as a typed halt,
+   carry over.
+
+   **Review, same date.** The sentence above records the hash as taken
+   during the walk that selects the counted draws. The living
+   specification (§9.5) and the proposal (§6.2) were corrected the same
+   day: settlement hashes every issued draw the stored index holds,
+   including a draw the selection then drops because the pair no longer
+   held the shard. Hashing only the counted draws would disagree with
+   the admission digest on an honest node after a mid-epoch slash or
+   release. `BA-T32` already says hash each issued draw, then select.
+3. **Ratified:** the in-flight count stops at `h_open(E)`; the settlement
+   selection's bytes, rejection zone, swap and vectors.
+4. **Accepted:** documents keep describing the attestation path and the
+   `SF-D13` window while that code runs, with the pointer to the
+   specification's §11.1.
+
+5. **One request machinery for every shard fetch.** Challenge and
+   organic reads go through one client code path: one entry point that
+   takes a caller-built header and returns one outcome type, with no
+   challenge-only path in the request layer. Only the nonce's source and
+   the challenger's bookkeeping sit outside it (specification §5.1).
+6. **`SCS-P13`: a fresh nonce for every read, for every caller.** A
+   challenge's nonce takes the read's `attempt`. The record carries
+   `attempt` as one prunable byte; admission recomputes the nonce with
+   one hash and refuses `attempt ≥ K`. `K = 3` is a consensus constant.
+   *Replaces* a nonce bound to `(h, j)` alone, which would have returned
+   to `P` on a re-read.
+7. **`SF-D3` reopened (rule 21) and ruled: fresh SOCKS credentials per
+   read.** The 2026-09-12 ruling was unauthenticated SOCKS with no
+   isolation flags, on the premise that fetches would blend with overlay
+   P2P on shared circuits. For an onion destination the premise is
+   false: a connection to an onion uses a rendezvous circuit to that
+   onion only, and overlay P2P never dials a persona's serving onion.
+   The actual effect was that every read one daemon sent to one persona
+   rode one rendezvous circuit, kept alive from its last use, so `P`
+   could link a producer's reads, a re-read to its failed read, and
+   reads across blocks. Now every read, for every caller, presents fresh
+   SOCKS credentials, and Tor's default `IsolateSOCKSAuth` gives it a
+   circuit of its own. Stall retries inside a read keep the credentials.
+   No isolation flags; no Tor configuration change; works on any stock
+   Tor, and an operator-run `SocksPort` must not disable
+   `IsolateSOCKSAuth`. *Supersedes*, within the same day, "fresh circuit
+   by spacing with `SF-D3` not reopened": the spacing is scheduling only,
+   and the managed Tor's `MaxCircuitDirtiness` test stays as defence in
+   depth.
+
+   **Costs accepted, none measured (`BA-T31`):** about 1 to 5 seconds of
+   circuit setup per read; a higher first-try failure rate, offset by
+   the reads of a draw becoming independent; proof of work paid per read
+   against a flooded onion; slower organic bulk reads. `SF-D7`'s
+   in-flight cap loses its premise that no fetch builds a circuit.
+
+   **As built:** the credentials are a function of the read's nonce, the
+   nonce in hex as the username with a fixed password, taken from the
+   header inside the request layer. The ruling said fresh random
+   credentials. A nonce is fresh for every read and is random for an
+   organic read and pseudo-random for a challenge, and deriving from it
+   means a caller cannot give two reads one circuit or one read two.
+
+   **Checked against a real Tor, 2026-10-07** (0.4.9.11, the pinned
+   bundle): a stall retry inside one read stayed on its circuit, a
+   second read of the same shard rode a different one, both rendezvous
+   circuits, and Tor fetched no descriptor for the new credentials
+   (`docs/benchmarks/sfd3_read_isolation_20261007.md`).
+
+   **Review, same date.** The `MaxCircuitDirtiness` test named above was
+   removed. It restated the spacing theory this ruling superseded: it
+   rejected the option at every value, and two reads with different
+   credentials do not share a circuit at any reuse length. The managed
+   launch stays a closed list of typed options
+   (`the_managed_launch_surface_is_the_typed_options`). That list is the
+   spawn surface, not a second isolation mechanism. The dial uses
+   `Isolation::Persona`; the per-read property is the header's
+   credentials, not a second SOCKS variant.
+8. **Operator visibility of serving attacks is owed.** The design's
+   answer to a sustained flood against a persona's onion is that the
+   operator sees it and has months to respond. That holds only if the
+   data and a warning exist; neither does. FOLLOWUPS carries the row,
+   owned by the RPC lane (data) and the GUI lane (presentation).
+
 ---

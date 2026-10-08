@@ -769,6 +769,12 @@ confirmed they served what the client leg believed it fetched.
 > `live_apparatus` passed over real Tor on the re-based rig in 110 s
 > (three bootstraps, header sent, bodies verified under each persona's key).
 
+**Amendment 2026-10-07.** The re-based rig's warm arm is no longer the
+circuit reuse that paragraph describes. Each fetch mints a nonce and
+presents it as the SOCKS username, so the arm times a new rendezvous
+circuit and no `NEWNYM`. The 2026-09-16 row in §12.3 records the run
+that reused the circuit.
+
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).
 # 2. Extract the real shard.

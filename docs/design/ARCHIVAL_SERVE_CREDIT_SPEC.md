@@ -2,8 +2,8 @@
 
 **Status:** OPEN — Round 0 of SO-D8 Slice C, **RULED 2026-10-07**. The
 design is the maintainer's brief of that date (the secret per-block draw)
-and the rulings on the twelve questions this document first posed (§13).
-Nothing in this document is built.
+and the rulings on the questions this document posed (§13). Nothing in
+this document is built.
 
 **Authority.** This is the single specification of the serve-credit
 mechanism: draw, request, receipt, carrier, admission, miss derivation and
@@ -116,6 +116,8 @@ File names without a directory are under
 | `h` | The block whose producer draws | — | — |
 | `h_incl` | The block that includes a carrier | — | — |
 | `j` | Index of a draw within block `h`, from 0 | `u32` | — |
+| `K` | Reads the witness may make of one draw. A consensus constant: admission refuses a record whose `attempt` is `K` or more. Three, because the failure window is sized on three reads (§12) and each further read is another request the persona must serve | 3 | ruled 2026-10-07 (`SCS-P13`) |
+| `attempt` | Which read of a draw produced a record, from 0 | one byte, `< K` | §5, §7.2 |
 | counted draws | Draws selected per pair at settlement | 3 | ruled; replaces "challenges per pair per epoch" |
 | threshold | Passes among the counted draws that settle Served | 2 | `SERVE_THRESHOLD_PASSES`, `attestation.rs:71` |
 | `L` | Anchor lag | 4 (PROVISIONAL) | `PASS_ANCHOR_LAG_BLOCKS`, `pass_anchor.rs:73-74` |
@@ -288,18 +290,105 @@ to compare against.
 
 ## 5. The request
 
-Every shard request is byte-identical in format and issued by one client
-code path, whether organic or a challenge.
+### 5.1 One request machinery
 
-- **Organic reader.** `nonce` is 32 random bytes.
-- **Challenge.**
-  `nonce = cSHAKE256_32("shekyl/archival-challenge-nonce-v1", seed ‖ block_hash(h) ‖ j_le[4])`.
-  To `P` it is indistinguishable from random. After the reveal it is
-  verifiably bound to `(h, j)`, so one receipt cannot serve two draws.
+**Every shard fetch, challenge or organic, goes through the same client
+code path:** the same header format, the same envelope handling, the same
+stall retries inside a read, the same timeouts, the same classification
+of outcomes, and the same rule for the circuit a read rides. `P` must see no difference between a
+challenge and an ordinary read.
+
+There is one fetch entry point. It takes the header its caller built and
+returns one outcome type to every caller. The request layer has no
+challenge-only path and no parameter that says which kind of caller it
+serves. What is the challenger's own sits outside it:
+
+- **where the nonce comes from**: derived for a challenge, random for an
+  organic read;
+- **the challenger's bookkeeping**: which draw, which read of it, when to
+  read again, and filing the record.
+
+The test of the rule: a challenge fetch and an organic fetch for the same
+shard produce byte-identical requests apart from the nonce.
+`shekyl-p-fetch` holds it today at its request builder
+(`a_request_differs_from_another_only_in_its_nonce`); the challenger's
+caller extends it end to end when it exists (§11).
+
+### 5.2 The header
+
 - **Anchor.** `anchor_height` and `anchor_hash` are the requester's chain
   at its tip minus 720, for every caller.
+- **Nonce: fresh for every read, for every caller.**
+  - Organic: 32 new random bytes.
+  - Challenge:
+    `cSHAKE256_32("shekyl/archival-challenge-nonce-v1", seed ‖ block_hash(h) ‖ j_le[4] ‖ attempt[1])`,
+    with `attempt` the read's index, from 0. To `P` it is
+    indistinguishable from random, and no two reads of a draw share one.
+    After the reveal it is verifiably bound to `(h, j, attempt)`, so one
+    receipt cannot serve two draws.
+- **Inside one read the header does not change on a stall.** `SF-D6`'s
+  stall retries, seconds apart, repeat it for every caller
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)). Its one retry
+  after a 400 derives a fresh anchor and keeps the nonce.
+
+Nonce vectors, `seed = 0x11 × 32`, `block_hash(h) = 0x22 × 32`:
+
+| `j` | `attempt` | Nonce |
+| --- | --- | --- |
+| 0 | 0 | `b9601207ca7b74d36da0ee2402b83418e94408a7815e33d318db0ff783da45dc` |
+| 0 | 1 | `61a3796f42ab53642e53458b5b6012c6102aacbce03c9ea20796407776df2248` |
+| 0 | 2 | `f8bfae392e076cf3415bd37f1584a48abefbae56cb6fe89329b98955cc1b76d4` |
+| 1 | 0 | `65bf6d43f77b2e7f71e2ff7a5e3a570257be3ce73f8760a76152f92773bdb31b` |
+
+A nonce computed without the `attempt` byte is
+`87ade5ae…03adc456` for `j = 0`; it matches no row, which is what goes
+red if the byte is dropped.
+
+### 5.3 The challenger's schedule
+
+None of this is request behaviour, and none of it is consensus except the
+bound `K`.
+
 - **Timing.** The producer spreads its reads at random over many block
-  intervals inside `W₂`. This is client policy, not consensus.
+  intervals inside `W₂`.
+- **Re-reads.** A read, in `SF-D6`'s sense, ends in a verified body or in
+  one typed outcome.
+  - A challenge read that ends **stall-class** — a circuit timeout, a
+    failed connect, a silent close, a truncated body: no exchange
+    completed — is read again later, with the next `attempt` and so a new
+    nonce. At most `K = 3` reads of a draw, consecutive reads at least 30
+    blocks apart (PROVISIONAL, §13.2), at random times in what remains of
+    `W₂`.
+  - A read that ended in a completed exchange is final, as `SF-D6` rules
+    it: a 404, a 503, the refusal trailer, a malformed or overlong reply,
+    a bad countersignature, refused content, or a second 400. `P` answered.
+  - The record is filed for the first read that succeeds, and names that
+    read's `attempt`. A draw whose third read fails, or that runs out of
+    window, is abandoned.
+- **Fresh circuit per read, by credentials.** Every read, for every
+  caller, presents SOCKS credentials no other read presents, and Tor's
+  default `IsolateSOCKSAuth` gives each its own rendezvous circuit
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D3`, reopened
+  and ruled 2026-10-07). This is the request layer's rule, not the
+  challenger's: it holds for organic reads the same. A re-read arrives on
+  a new circuit with a new nonce, so to `P` it is one more request for
+  that shard, and `P` cannot tie a producer's reads to each other by the
+  circuit they come in on.
+  - The 30-block spacing is scheduling only. It is no longer what makes
+    the circuit fresh. Circuit reuse length is not a second mechanism:
+    two reads present different credentials, so they do not share a
+    circuit at any `MaxCircuitDirtiness`.
+  - A new circuit shares this daemon's entry guard with the last one, so
+    the reads of a draw are still not fully independent tries. How far
+    from independent is what `BA-T31` measures (§12).
+  - An operator who points the daemon at a Tor of their own must not
+    disable `IsolateSOCKSAuth` on its `SocksPort`.
+  - The credentials are derived from the read's nonce, so they exist
+    only between the daemon and its own Tor. A local controller
+    subscribed to that Tor's `STREAM` events can read them; nothing of
+    ours logs them, a nonce does not mark a read as a challenge without
+    the seed, and after the reveal a challenge's nonces are public
+    (`SF-D3`).
 - **Ordering.** The client builds no carrier for `h` until every read of
   `h` has completed or been abandoned. A carrier reveals the seed, and
   the seed exposes that block's remaining reads.
@@ -402,13 +491,16 @@ member. The witness refiles the honest members within `W₂`
 | --- | --- | --- | --- |
 | Kept | the input | input tag | 1 |
 | Kept | the input | `j` | varint, ≤ 5 |
+| Prunable | the prunable section | `attempt` | 1 |
 | Prunable | the prunable section | `anchor_height` | 8 |
 | Prunable | the prunable section | `delivery_digest` | 32 |
 | Prunable | the prunable section | receipt signature | 1,356 |
 
 - **A record names `j` and nothing else about its draw.** `(P, s)` is
   derived from `(seed, block_hash(h), j)` (§4.4). `h` is the carrier's.
-  `E = epoch(h)`. The nonce is recomputed from the seed (§5).
+  `E = epoch(h)`. The nonce is recomputed from the seed, `j` and the
+  carried `attempt` (§5.2). `attempt` is prunable: it is read once, at
+  connect, to recompute the nonce, and nothing after needs it.
 - The kept part is in the input and the prunable part in the prunable
   section, following the existing split between the serve-credit vin and
   its pruned record.
@@ -428,7 +520,9 @@ with members in input order, each member the record's full serialization
 (its kept bytes, then its prunable bytes), and `n ≥ 1` a structural check
 on the carrier. The seed and `h` lead at fixed width and need no frame.
 Everything the carrier carries sits under the one signature: the seed,
-`h`, and each record's `j` with its prunable fields.
+`h`, and each record's `j` with its prunable fields, `attempt` among
+them. The vectors below are over opaque member bytes and do not move
+with the record's layout.
 
 Vectors, computed with a standalone cSHAKE256 checked against the NIST
 SP 800-185 samples. `seed = 0x11 × 32`, `h = 1,000,000`
@@ -457,13 +551,13 @@ SP 800-185 samples. `seed = 0x11 × 32`, `h = 1,000,000`
 
 ### 7.4 Size
 
-Per record: at most 6 B kept and 1,396 B prunable, 1,402 B. Per carrier:
+Per record: at most 6 B kept and 1,397 B prunable, 1,403 B. Per carrier:
 at most 42 B kept (the seed and `h`); 1,837 B of witness key and 1,356 B
 of witness signature prunable; 3,235 B.
 
 A carrier under `TX_WEIGHT_LIMIT` (149,400,
 `rust/shekyl-wire/src/transaction.rs:156-158`) holds
-`⌊(149,400 − 3,235) / 1,402⌋ = 104` records.
+`⌊(149,400 − 3,235) / 1,403⌋ = 104` records.
 
 Against the figure this replaces
 ([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
@@ -471,9 +565,9 @@ Against the figure this replaces
 
 | Draws per block | Carriers | Bytes per block | Of which kept |
 | --- | --- | --- | --- |
-| 97, the old figure's count | 1 | 139,229 | 624 |
-| 117, the sim's mean at no dropout (§12) | 2 | 170,504 | 786 |
-| 156, the sim's mean at 30 % dropout | 2 | 225,182 | 1,020 |
+| 97, the old figure's count | 1 | 139,326 | 624 |
+| 117, the sim's mean at no dropout (§12) | 2 | 170,621 | 786 |
+| 156, the sim's mean at 30 % dropout | 2 | 225,338 | 1,020 |
 
 At the same 97 draws the load is 40 % of the old figure, and what a
 pruned node keeps is under 1 KB a block. These are worst cases on the
@@ -497,8 +591,8 @@ has pruned. It therefore reads only kept data.
 - **Kept:** each carrier's seed and `h`, and each record's `j`. From these
   and the issued-draw index any node recomputes the draws, each pair's
   counted draws, and which have pass records.
-- **Prunable:** the witness key and signature, `P`'s receipts, the delivery digests, the
-  anchor fields, and with them the input of the set commitment. All are
+- **Prunable:** the witness key and signature, `P`'s receipts, the delivery digests, each
+  record's `attempt`, the anchor fields, and with them the input of the set commitment. All are
   checked at connect and never needed again.
 
 At connect, admission also confirms that the kept seed, `h` and each `j`
@@ -525,7 +619,9 @@ verdict naming its census row.
    commitment (§7.3).
 4. **Each record's pair.** `j < count(h)`, and `(P, s)` is derived as
    draw `j` at `h` (§4.4), at the issued counts visible at `h`.
-5. **Nonce.** Recomputed from `(seed, block_hash(h), j)` (§5).
+5. **Nonce.** `attempt < K`, or the carrier is refused. The nonce is
+   recomputed from `(seed, block_hash(h), j, attempt)` with one hash
+   (§5.2).
 6. **Receipt.** `P`'s receipt verifies under the bond record's receipt
    key over the transcript of §6.1: the recomputed nonce, the carried
    `anchor_height`, the hash of the block at that height on the
@@ -630,6 +726,40 @@ failure window. This is a precondition (§11), not a consequence: under
 the secret draw, "any pass" would count every pair the draw did not reach
 as a miss.
 
+### 9.5 Settlement integrity
+
+Three local checks at the settlement writer, none on chain
+(`SO-D8d`, [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
+§6; their form under the stored index ruled 2026-10-07). A failure of any
+of them is a store-invariant Fault that halts the writer. It is never a
+verdict on a block, never a clamp and never a skipped row.
+
+1. **The index equals its digest.** As each seed's draws are issued, at
+   admission, every `(P, s, h, j)` is folded into a running digest for
+   the epoch (§10). At settlement the writer hashes every draw the stored
+   index holds — the same draws admission folded, including a draw the
+   selection then drops because the pair no longer held the shard — and
+   compares. Hashing only the counted draws of §9.3 would disagree with
+   the digest on an honest node after a mid-epoch slash or release. A
+   stored list that lost, gained or changed a draw after admission does
+   not reproduce the digest. The pair of a draw is derived from `j`, so a
+   record cannot name a pair its draw did not select; what this guards is
+   the stored lists the selection reads.
+2. **`D` equals a re-walk.** A 32-byte digest of `D` is written in the
+   connect batch at `h_open(E)` and undo-logged with it. The writer
+   re-walks `D` from the bond journals and compares. Draws are selected
+   against `D` as of `h_open(E)`, so a `D` that drifted between admission
+   and settlement would change which pair a draw names.
+3. **`passes ≤ issued`**, a typed halt, beneath both.
+
+Nothing is re-derived at settlement. Check 1 costs one hash per issued
+draw over the stored index. The selection reads that index and then keeps
+a subset; the hash covers the index, not the subset. The walk's time on the
+floor device is not measured
+([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T32`). The digest
+does not cover the per-block counts, which admission reads and settlement
+does not.
+
 ---
 
 ## 10. The issued-draw index
@@ -640,7 +770,8 @@ and on the visible shortfall, each of which depends on earlier counts
 back to `h_open(E)`. And admitting a record for `h` needs the issued
 counts as they stood at `h`, up to `W₂` blocks in the past.
 
-Two tables, both written in the connect batch and undo-logged with it:
+Two tables and one cell, all written in the connect batch and undo-logged
+with it:
 
 - **Per block `h`:** `count(h)`, `carry(h)`, the visible shortfall at
   `h`, and whether `h`'s seed has been revealed.
@@ -648,6 +779,29 @@ Two tables, both written in the connect batch and undo-logged with it:
   `h_reveal` is the block that first admitted `h`'s seed. The count
   visible at any `h′` is the number with `h_reveal < h′`. The first
   carrier for `h` derives every draw of `h` and writes them all.
+
+- **Per epoch, one 32-byte cell: the running digest of the issued
+  draws.** It starts at zero. Each issued draw adds
+
+  ```text
+  cSHAKE256_32("shekyl/archival-issued-index-v1",
+               p_canonical_id[32] ‖ shard_id_le[8] ‖ E_le[8] ‖ h_le[8] ‖ j_le[4])
+  ```
+
+  to it as a 256-bit little-endian integer, modulo `2^256`. A sum does
+  not depend on order: admission folds draws in the order blocks reveal
+  them, and settlement walks them pair by pair. It guards a local store
+  against its own drift, so it is not asked to resist an adversary who
+  chooses the draws.
+
+  Vectors, `E = 5`, `shard_id = 7`: the draws `(0x44×32, h = 1,000,000,
+  j = 0)`, `(0x44×32, 1,000,000, 1)` and `(0x45×32, 1,000,001, 0)`. After
+  the first the cell is
+  `bfd102a54a70d66500e5aa5a15c8e11aa13653be7ea706101c1d0ed6923ffce9`,
+  after the second
+  `9a32f23e5e03cab824e593d674dc90552ef10973da5a2c90f1ff833854d35941`,
+  and after all three, in any order,
+  `053b7619b7c9a1dee912ba0905b91ccb33b8eeb958117c98456e36ea41e99ec8`.
 
 A record's admitted pass is the existing serve-credit row, re-keyed
 `(P, s, E, h, j)`.
@@ -678,7 +832,11 @@ is final.
 Carried with the implementation:
 
 - **Vectors.** The selection KAT of §4.5, the cap vector included; the
-  set-commitment KAT of §7.3; the settlement-selection KAT of §9.3; a test-only replay assertion that a
+  set-commitment KAT of §7.3; the settlement-selection KAT of §9.3; the
+  nonce vectors of §5.2 and the digest vectors of §10; the integrity
+  fixture of §9.5 (an index, and separately a `D`, perturbed between
+  admission and settlement, each halting the writer); the one-machinery
+  test of §5.1, end to end through the challenger's caller; a test-only replay assertion that a
   fixture's carried pairs equal the derived ones; and a fixture that two
   constructions of a block yield distinct seeds, witness keys and `0x0C`
   commitments (§4.2), which fails if either secret is ever derived from
@@ -745,16 +903,48 @@ block independently unrevealed with the stated probability.
 - **`(m, n)`.** An honest pair at a 0.30 per-read failure misses an
   observed epoch with probability 0.216 under 2-of-3. At `(11, 13)` the
   false-slash bound over the bond's life is `2.85 × 10⁻⁴` per pair, and
-  `0.689` for an archiver holding the maximum 4,096 shards. The
-  feasibility module's provisional budget is `10⁻³` per archiver, so the
-  window **exceeds** it at that read failure. Neither figure depends on
-  the observation rate, so dropout does not move them; the module already
-  reads the shipped window as exceeding the budget under the rule it
-  models. The `(m, n)` re-pin is open
-  ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)
-  §3) and this design does not close it. The observation rate is
-  0.995 / 0.989 / 0.962, so a pair that never serves reaches 11 misses in
-  11.05 / 11.12 / 11.44 epochs.
+  `0.689` for an archiver holding the maximum 4,096 shards, against the
+  feasibility module's provisional `10⁻³` per archiver. Neither figure
+  depends on the observation rate, so dropout does not move them.
+
+  `0.689` is `1 − (1 − p)^4096`, which treats an archiver's pairs as
+  failing independently. One persona serves every shard from one host and
+  one onion service, so they do not: the chance of at least one false
+  slash can be lower than the figure, and false slashes would come many
+  at once. It is an exposure on the module's axis, not a probability.
+
+  That figure credits **one read per draw**. The module credits one try
+  because failures inside a single window cluster, so a retry there is
+  not an independent try. Under this design the witness reads a draw
+  again hours later (§5.3), and whether reads that far apart fail together
+  is not measured. The window depends only on `x`, the probability that a
+  draw goes unread after all three reads:
+
+  **`(11, 13)` clears the per-archiver budget when `x ≤ 0.2076`**
+  (`ESR-11`, sim plan §5.15). That boundary assumes no model of how the
+  reads correlate. To show the range, a mixture in which a share `ρ` of
+  first-read failures is common to all three reads and the rest are
+  independent, at the retained per-read failure `p = 0.30`:
+
+  | `ρ` | `x` | Missed observation | Per archiver at 4,096 shards |
+  | --- | --- | --- | --- |
+  | 1.00 (the calibration) | 0.300 | 0.216 | `6.89 × 10⁻¹`, exceeds |
+  | 0.50 | 0.164 | 0.071 | `8.23 × 10⁻⁶`, clears |
+  | 0.25 | 0.095 | 0.025 | `1.07 × 10⁻¹⁰`, clears |
+  | 0.00 (independent) | 0.027 | 0.002 | `1.70 × 10⁻²²`, clears |
+
+  `ρ` is not what a run observes. A run observes `p`, `x`, and
+  `c = x / p`: of draws whose first read failed, the share whose two
+  later reads also failed. In the mixture `c = ρ + (1 − ρ)·p²`, so the
+  boundary is `c ≤ 0.692` at `p = 0.30`, which is `ρ ≤ 0.661`.
+
+  **`(m, n)` stays open and is not re-pinned on the one-read figure**
+  (ruled 2026-10-07): loosening the window there would weaken the
+  detection of pairs that do not serve, to solve a problem the re-reads
+  may already solve. `x` at hour-scale spacing is measured first
+  ([`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T31`). The
+  observation rate is 0.995 / 0.989 / 0.962, so a pair that never serves
+  reaches 11 misses in 11.05 / 11.12 / 11.44 epochs.
 - **The witness's load is new and unmeasured.** A won block costs its
   producer about 117 to 156 whole-shard reads inside `W₂`. A producer
   with a tenth of the hashrate wins about 50 blocks per window: roughly
@@ -788,6 +978,13 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R6 | A draw is issued only by reveal; an unrevealed block issues nothing |
 | R7 | The seed is revealed whole, with records, within `[h, h + W₂]`; per-draw reveal is forbidden |
 | R8 | `W₂` is the only window. Admission checks no bound on the anchor (`SCS-P7`) |
+| R9 | The in-flight count stops at `h_open(E)` (§4.3). Ratified on review |
+| R10 | The settlement selection as §9.3 states it: candidate bytes, rejection zone, swap, the cap, and the vectors. Ratified on review |
+| R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. The first is a running digest folded at admission and checked against every stored issued draw, not only the draws the selection keeps; nothing is re-derived at settlement. Closes `SCS-F11` |
+| R12 | The witness reads a draw again when a read ends stall-class, as its own policy above `SF-D6` (§5.3). `(m, n)` is not re-pinned on the one-read figure; the unread share at hour-scale spacing is measured first (§12) |
+| R13 | **One request machinery** for every shard fetch: one entry point, a caller-built header, one outcome type, no challenge-only path in the request layer (§5.1) |
+| R14 | **A fresh nonce for every read**, for every caller; a challenge's is bound to `(h, j, attempt)`. The record carries `attempt` as one prunable byte and admission refuses `attempt ≥ K`, `K = 3` (`SCS-P13`) |
+| R15 | **A fresh circuit per read, by SOCKS credentials**, for every caller: `SF-D3` reopened under rule 21 and ruled (§5.3). The spacing is scheduling only |
 
 ### 13.2 Provisional (rule 21; reopen on the sim or on testnet measurement)
 
@@ -796,6 +993,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | V1 | Full-pair weight 1/16 | A better setting is measured |
 | V2 | Count rule of §4.3: base 1 per pair per epoch, catch-up by 70 %, minimum horizon 200, cap 3 × nominal | Same |
 | V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.18 % |
+| V4 | Consecutive reads of a draw are at least 30 blocks apart. Challenger scheduling, not consensus | `BA-T31` shows the unread share still falling, or already flat, at a different spacing |
 
 ### 13.3 The twelve questions this round posed — RULED 2026-10-07
 
@@ -805,7 +1003,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | `SCS-P2` | "Revealed once" against the weight limit | **Each carrier carries the whole seed** |
 | `SCS-P3` | Re-derivable coinbase key material | **Dropped; Q10 stands.** The seed and the witness key are fresh randomness per block, independent of each other, in memory only. A value derived from the coinbase shared secret is known to the coinbase recipient. A persistent witness secret is rejected. Loss is harmless: NonObservation, never misses |
 | `SCS-P4` | The form of the draw mapping | **Rejection sampling over the static set**, capped at 256 attempts, the cap pinned by a vector (§4.4, §4.5) |
-| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field (§7.2) |
+| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `attempt` (added by `SCS-P13`), `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field (§7.2) |
 | `SCS-P6` | Q9 bytes | **Amended:** the commitment covers the seed, `h`, and each record's `j` with its prunable fields (§7.3) |
 | `SCS-P7` | A bound on `anchor_height` | **None.** The lower bound keyed on `h` is implied by the nonce, which contains `block_hash(h)`, and is not checked (§9.1) |
 | `SCS-P8` | `issued` above 255 | **Saturate.** The list of issued draws is the selection's operand |
@@ -813,6 +1011,14 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | `SCS-P10` | The witness's read load | **Measure, do not gate.** A mining-box measurement, filed as `BA-T30`. The count rule is provisional already |
 | `SCS-P11` | Which record carries the pass | **The serve-credit input.** The attestation path's pass records and CEN-B4's operand are deleted with reason (§11.1) |
 | `SCS-P12` | The height the settlement drop filter reads | **Per draw, at `h`:** the state after `h` connects, strictly above a same-block slash (§9.3) |
+
+---
+
+### 13.4 Posed on review, and ruled 2026-10-07
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| `SCS-P13` | The nonce of a re-read: derived from `(seed, h, j)` alone it would return to `P` an hour later with a new anchor, which only a challenge does | **A fresh nonce for every read, for every caller.** A challenge's nonce takes the read's `attempt`; the record carries `attempt` as one prunable byte; admission recomputes the nonce with one hash and refuses `attempt ≥ K`, `K = 3` (§5.2, §7.2, §9.1) |
 
 ---
 
@@ -833,7 +1039,7 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F8` | `ARCHIVAL_CHALLENGE_MECHANISM.md` §2 has the pass record "broadcast as a transaction; any miner may include it". Under R-B the record is filed by the producer of `h` in a carrier that producer signs. **Fixed** there |
 | `SCS-F9` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.6.1 and §7.6.2 distinguished "unpruned validators" from "a pruned node". No such split exists: every daemon prunes (§8). **Fixed:** §7.6.1 is replaced by a pointer here and §7.6.2 says every node verifies at connect |
 | `SCS-F10` | `rust/shekyl-wire/src/transaction.rs:202` calls the pruned-record ceiling a twin of a `cryptonote_config.h` constant. `src/cryptonote_config.h:417-423` says it deliberately has no copy there |
-| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so |
+| `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes a running digest folded at admission and checked against every stored issued draw, including a draw the selection then drops; the second and third carry over (§9.5). §6.2 of the proposal states the same check |
 
 ---
 
@@ -869,7 +1075,8 @@ constant.
 | --- | --- | --- |
 | `shekyl/archival-draw-commit-v1` | cSHAKE256 | The `0x0C` commitment over `witness_pk ‖ seed`, §4.2 |
 | `shekyl/archival-draw-v1` | cSHAKE256 | Selection stream, §4.4 |
-| `shekyl/archival-challenge-nonce-v1` | cSHAKE256 | Challenge nonce, §5 |
+| `shekyl/archival-challenge-nonce-v1` | cSHAKE256 | Challenge nonce, over `(seed, block_hash(h), j, attempt)`, §5.2 |
+| `shekyl/archival-issued-index-v1` | cSHAKE256 | One issued draw's term in the epoch's running digest, §10 |
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
 | `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | Set commitment, §7.3 |
 | a receipt-key label | HKDF info | The persona's receipt key, from the master seed, §6.3 |
@@ -894,6 +1101,12 @@ The seed and the witness key have no label: they are fresh randomness.
 | Knock a producer offline | Suppresses observations only; cannot target a `P` |
 | One receipt for two draws | Impossible: the nonce is bound to `(h, j)` |
 | Fingerprint challenge requests | Prevented only by one client code path and identical formats |
+| Remember nonces, stall every first request, serve only a nonce that returns | A returning nonce does not mark a challenge. Inside one read the stall retries repeat the nonce, seconds apart, and an organic read retries the same way, so `P` serving a returning nonce serves every caller's retries alike. Across reads nothing returns: a challenger's re-read carries a fresh nonce, as every new read does (`SCS-P13`) |
+| Stall every first request for a shard and serve the second | Costs `P` nothing against a challenger that re-reads, and degrades every organic reader the same way; `P` cannot tell which requests are challenges, so it cannot aim it |
+| File a record for a fourth read | Refused: `attempt ≥ K` |
+| Link a producer's reads, or a re-read to the read that failed, by the circuit they arrive on | Prevented: every read presents its own SOCKS credentials and rides its own rendezvous circuit (`SF-D3`) |
+| Flood `P`'s onion so honest reads fail for months | The operator must be able to see it and act; that visibility is not built (FOLLOWUPS, *Operator visibility of serving attacks and slash risk*) |
+| An honest pair misses reads on a bad day and walks toward a slash | Up to three reads of a draw, spread across `W₂`; how far that goes depends on how often all three fail, which is unmeasured (§12) |
 | Learn mid-epoch that the epoch is settled, then stop serving | Prevented: the three counted draws are selected at close |
 | Read the public draw count to see that challenges have stopped | Prevented: the base rate keeps draws flowing to the end of every epoch |
 | Derive the witness key from a revealed seed and author carriers, or `P` signs its own receipt | Prevented: the seed and the witness key are independent random values (§4.2) |

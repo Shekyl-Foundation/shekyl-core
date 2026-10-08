@@ -203,6 +203,91 @@ pub struct FloodSummary {
 /// instrument cannot resolve.
 pub const FLOOD_TICK_MS: u64 = 250;
 
+/// One hop of a flood whose links do not share a transit.
+///
+/// The uniform instruments store a bare neighbour and add
+/// [`FloodParams::transit_ms`] at arrival. A two-class graph (hidden edges
+/// at the anonymity transit, clearnet edges at the clearnet transit) cannot:
+/// the transit is a property of the link. [`passage_times`] is the one
+/// shortest-path both shapes use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassedHop {
+    /// Neighbour reached by this hop.
+    pub to: usize,
+    /// Transit added on top of the flush-scheduler draw, in milliseconds.
+    pub transit_ms: u64,
+}
+
+/// Shortest-path first arrival at every node, source at time 0.
+///
+/// Unreached nodes stay `u64::MAX`. The delay draw is the flush scheduler;
+/// `transit_ms` is the link, so two classes do not collapse into one number.
+fn passage_times<R, F>(
+    nodes: usize,
+    edges: &[Vec<ClassedHop>],
+    rng: &mut R,
+    delay_ms: &mut F,
+) -> Vec<u64>
+where
+    R: RelayRng + ?Sized,
+    F: FnMut(&mut R) -> u64,
+{
+    let mut best = vec![u64::MAX; nodes];
+    let mut frontier = std::collections::BinaryHeap::new();
+    best[0] = 0;
+    frontier.push(std::cmp::Reverse((0_u64, 0_usize)));
+    while let Some(std::cmp::Reverse((at, node))) = frontier.pop() {
+        if at > best[node] {
+            continue;
+        }
+        for hop in &edges[node] {
+            let arrival = at
+                .saturating_add(delay_ms(rng))
+                .saturating_add(hop.transit_ms);
+            if arrival < best[hop.to] {
+                best[hop.to] = arrival;
+                frontier.push(std::cmp::Reverse((arrival, hop.to)));
+            }
+        }
+    }
+    best
+}
+
+fn adjacency_with_transit(adjacency: &[Vec<usize>], transit_ms: u64) -> Vec<Vec<ClassedHop>> {
+    adjacency
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&to| ClassedHop { to, transit_ms })
+                .collect()
+        })
+        .collect()
+}
+
+fn summarize_arrivals(mut arrivals: Vec<u64>) -> FloodSummary {
+    arrivals.sort_unstable();
+    let samples = arrivals.len();
+    let unreached = arrivals
+        .iter()
+        .rev()
+        .take_while(|t| **t == u64::MAX)
+        .count();
+    let reached = samples - unreached;
+    assert!(
+        reached > 0,
+        "flood reached no node — check the topology inputs"
+    );
+    let mean_ms = arrivals[..reached].iter().map(|t| *t as f64).sum::<f64>() / reached as f64;
+    let idx = |q: f64| arrivals[(((samples as f64) * q) as usize).min(samples - 1)];
+    FloodSummary {
+        samples,
+        unreached,
+        mean_ms,
+        p50_ms: idx(0.50),
+        p90_ms: idx(0.90),
+    }
+}
+
 /// Build the flood adjacency shared by the instruments below: each node
 /// initiates `peers` *distinct* non-self edges (redraw on a self-hit or a
 /// repeat), so every node's effective degree is fixed by [`FloodParams`], not
@@ -360,59 +445,61 @@ pub fn simulate_fluff_return_mixed<R: RelayRng + ?Sized>(
     );
 
     let table = DelayTable::build(mean_quarter_secs, family);
-    let draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
+    let mut draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
 
     let mut arrivals: Vec<u64> = Vec::with_capacity(trials * flood.nodes);
 
     for _ in 0..trials {
         let adjacency = build_adjacency_from_degrees(degrees, flood.reach, rng);
-
-        let mut best = vec![u64::MAX; flood.nodes];
-        let mut frontier = std::collections::BinaryHeap::new();
-        best[0] = 0;
-        frontier.push(std::cmp::Reverse((0_u64, 0_usize)));
-        while let Some(std::cmp::Reverse((at, node))) = frontier.pop() {
-            if at > best[node] {
-                continue;
-            }
-            for &next in &adjacency[node] {
-                // Flush-scheduler delay PLUS this link class's transit (§91.6).
-                let arrival = at
-                    .saturating_add(draw_ms(rng))
-                    .saturating_add(flood.transit_ms);
-                if arrival < best[next] {
-                    best[next] = arrival;
-                    frontier.push(std::cmp::Reverse((arrival, next)));
-                }
-            }
-        }
-
+        let edges = adjacency_with_transit(&adjacency, flood.transit_ms);
+        let best = passage_times(flood.nodes, &edges, rng, &mut draw_ms);
         // Unreached nodes stay in as `u64::MAX` — see `FloodSummary::unreached`.
         arrivals.extend(best.iter().skip(1).copied());
     }
 
-    arrivals.sort_unstable();
-    let samples = arrivals.len();
-    let unreached = arrivals
-        .iter()
-        .rev()
-        .take_while(|t| **t == u64::MAX)
-        .count();
-    let reached = samples - unreached;
-    assert!(
-        reached > 0,
-        "flood reached no node — check the topology inputs"
-    );
-    let mean_ms = arrivals[..reached].iter().map(|t| *t as f64).sum::<f64>() / reached as f64;
-    let idx = |q: f64| arrivals[(((samples as f64) * q) as usize).min(samples - 1)];
+    summarize_arrivals(arrivals)
+}
 
-    FloodSummary {
-        samples,
-        unreached,
-        mean_ms,
-        p50_ms: idx(0.50),
-        p90_ms: idx(0.90),
+/// [`simulate_fluff_return_mixed`] on a graph whose links do not share a transit.
+///
+/// `build` returns one [`ClassedHop`] adjacency per trial, `nodes` rows.
+/// The shortest path is [`passage_times`], the same one the uniform flood
+/// uses. A reading that needs seeds to agree goes through
+/// [`converged_fluff_return_classed`].
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `nodes` is under two, or a built adjacency
+/// does not have `nodes` rows.
+#[must_use]
+pub fn simulate_fluff_return_classed<R, B>(
+    nodes: usize,
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    trials: usize,
+    rng: &mut R,
+    mut build: B,
+) -> FloodSummary
+where
+    R: RelayRng + ?Sized,
+    B: FnMut(&mut R) -> Vec<Vec<ClassedHop>>,
+{
+    assert!(trials > 0, "simulation needs at least one trial");
+    assert!(nodes >= 2, "a flood needs at least two nodes");
+    let table = DelayTable::build(mean_quarter_secs, family);
+    let mut draw_ms = |rng: &mut R| -> u64 { table.draw(rng).saturating_mul(FLOOD_TICK_MS) };
+    let mut arrivals: Vec<u64> = Vec::with_capacity(trials * nodes);
+    for _ in 0..trials {
+        let edges = build(rng);
+        assert!(
+            edges.len() == nodes,
+            "classed adjacency must name every node: got {}, nodes {nodes}",
+            edges.len()
+        );
+        let best = passage_times(nodes, &edges, rng, &mut draw_ms);
+        arrivals.extend(best.iter().skip(1).copied());
     }
+    summarize_arrivals(arrivals)
 }
 
 /// First-spy source-attribution precision in the fluff (diffusion) phase.
@@ -676,6 +763,63 @@ where
     R: RelayRng,
     F: FnMut(u64) -> R,
 {
+    converge_p90(seeds, budget, |seed, trials| {
+        let mut rng = make_rng(seed);
+        simulate_fluff_return_mixed(flood, degrees, mean_quarter_secs, family, trials, &mut rng)
+            .p90_ms
+    })
+}
+
+/// [`simulate_fluff_return_classed`] through [`converge_p90`].
+///
+/// An unconverged reading is [`Err`]. The closure rebuilds its graph from
+/// `make_rng(seed)` at each rung, so the ladder stays nested the way
+/// [`converged_fluff_return_mixed`] is.
+pub fn converged_fluff_return_classed<R, F, B>(
+    nodes: usize,
+    mean_quarter_secs: u32,
+    family: DelayFamily,
+    seeds: &[u64],
+    budget: ConvergenceBudget,
+    mut make_rng: F,
+    mut build: B,
+) -> Result<Converged, ConvergenceRefusal>
+where
+    R: RelayRng,
+    F: FnMut(u64) -> R,
+    B: FnMut(&mut R) -> Vec<Vec<ClassedHop>>,
+{
+    converge_p90(seeds, budget, |seed, trials| {
+        let mut rng = make_rng(seed);
+        simulate_fluff_return_classed(
+            nodes,
+            mean_quarter_secs,
+            family,
+            trials,
+            &mut rng,
+            &mut build,
+        )
+        .p90_ms
+    })
+}
+
+/// Escalate `reading(seed, trials)` until the seeds agree, or refuse.
+///
+/// This is the ladder inside [`converged_fluff_return_mixed`]. A caller that
+/// measures a different graph uses the same refusal: a spread past the
+/// budget is not a number, and a stranded p90 (`u64::MAX`) is not a number.
+///
+/// # Panics
+///
+/// Panics if fewer than two seeds are given, or if the budget is degenerate.
+pub fn converge_p90<F>(
+    seeds: &[u64],
+    budget: ConvergenceBudget,
+    mut reading: F,
+) -> Result<Converged, ConvergenceRefusal>
+where
+    F: FnMut(u64, usize) -> u64,
+{
     assert!(
         seeds.len() >= 2,
         "convergence needs at least two seeds — one reading has no spread to check"
@@ -690,21 +834,7 @@ where
 
     let mut trials = budget.start_trials;
     loop {
-        let readings_ms: Vec<u64> = seeds
-            .iter()
-            .map(|seed| {
-                let mut rng = make_rng(*seed);
-                simulate_fluff_return_mixed(
-                    flood,
-                    degrees,
-                    mean_quarter_secs,
-                    family,
-                    trials,
-                    &mut rng,
-                )
-                .p90_ms
-            })
-            .collect();
+        let readings_ms: Vec<u64> = seeds.iter().map(|seed| reading(*seed, trials)).collect();
 
         let seeds_stranded = readings_ms.iter().filter(|p| **p == u64::MAX).count();
         if seeds_stranded > 0 {
@@ -715,8 +845,6 @@ where
             });
         }
 
-        // Unwraps are total: `seeds.len() >= 2` is asserted above, so the
-        // iterator is non-empty.
         let hi = *readings_ms.iter().max().unwrap();
         let lo = *readings_ms.iter().min().unwrap();
         let spread_ms = hi - lo;
@@ -738,12 +866,6 @@ where
                 readings_ms,
             });
         }
-        // `saturating_mul`, not `*`: the loop only reaches here with
-        // `trials < max_trials`, so doubling overflows exactly when a caller
-        // passes `max_trials > usize::MAX / 2`. In release that wraps to a
-        // SMALL trial count, which never reaches `max_trials` — an infinite
-        // ladder rather than a refusal, which is the one outcome this type
-        // must not have.
         trials = trials.saturating_mul(2).min(budget.max_trials);
     }
 }

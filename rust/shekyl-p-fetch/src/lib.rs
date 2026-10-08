@@ -21,7 +21,8 @@
 //!    is no queue behind it — `SF-D7`).
 //! 2. Dial `P`'s onion through the daemon's tor-zone SOCKS5 proxy, handing
 //!    the proxy the `.onion` **name** to resolve (SOCKS5h). This crate never
-//!    resolves anything (`SF-D2`, `SF-D3`).
+//!    resolves anything (`SF-D2`). The dial presents SOCKS credentials that
+//!    belong to this read alone, so no two reads share a circuit (`SF-D3`).
 //! 3. Write `GET /shard/{id}` with the one required header — the caller's
 //!    72-byte [`RequestHeader`] `nonce ‖ anchor_height ‖ anchor_hash`, hex on
 //!    the wire (`SF-D5`).

@@ -38,7 +38,7 @@ embargo is provisioned from the defective `F`.** Historical form: **Read F-6 at
 deployment (configuration B) runs neither Dandelion++ nor the embargo** — the
 arc's entire output is bypassed on the deployment a privacy-motivated user
 selects, and two live §6 claims are false there. That outranks the cadence
-work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded**; Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
+work — as does **F-7** (§26) — **CLOSED 2026-08-01, §44: `fluff_return_ms = 3250` landed with the re-derived 190 s embargo and the measured set re-recorded** (*records-was, 2026-10-08, §95.3 and §96 item 2: 3250 is the transit-free degree-12 reading and stays provisional; a composition whose return with per-connector transit exceeds it is not approvable*); Corollary 5.1 puts configuration B's ranking on a literature footing (§28.5): `F = 2250` was an undirected/`EveryPeer`
 measurement fed to the embargo derivation for *every* transport, so
 configuration C's embargo is under-provisioned in the direction the policy
 itself calls a privacy loss. **Q-12 is registered and live** (§22.2). The measurement that motivates this document landed alongside it
@@ -9211,7 +9211,11 @@ more margin than at 144 s.
 
 **Closes F-7** — measured (§40.1: a degree effect), derived (§40.2), landed,
 re-baselined, and §14 restated. Configuration C's embargo is now provisioned
-from the fluff rule it actually uses.
+from the fluff rule it actually uses. *Records-was, 2026-10-08: the 3250 ms
+input this close used is the transit-free degree-12 reading. §95.3 holds it
+as the provisional fail-safe, and §96 item 2 re-derives it on production
+`EveryPeer` with per-connector transit. The degree floor in §45 still holds
+for the transit-free instrument.*
 
 **Leaves, unchanged in order:** mean outbound connection lifetime (F-8's
 convergence check — independent, cheapest); the tx-hash plumbing (§39.6's
@@ -9226,7 +9230,9 @@ and Unit 2 with its substrate.
 ### 45.1 The finding
 
 §44.3's worst-zone argument holds because 3250 ms is the worst case — **at
-usable degree ≥ 12.** Verified at source: a default zone gets
+usable degree ≥ 12.** *Records-was, 2026-10-08: "worst case" here is the
+transit-free instrument. Tor transit on the return is open (§95.3, §96
+item 2); the 190 s derivation is not rewritten by that opening.* Verified at source: a default zone gets
 `P2P_DEFAULT_CONNECTIONS_COUNT = 12` outbound (`set_max_out_peers` with
 `max == -1`, `net_node.inl:2683`), so the pin is correct **for the default
 deployment**. But `--tx-proxy <zone>,<addr>,N` sets the count directly with no
@@ -16680,7 +16686,8 @@ The hidden-address pool and the total outbound degree are lower
 limits. The operating point above those limits, and any ceiling, are
 not chosen by this approval. The ceiling comes from resources and is
 named when a run is ruled. No constant is added. The instruments are
-`conformance::composition` and `conformance::epoch_traffic`, behind the
+`conformance::composition` (the two-class graph, `walk_originated`, and
+the spy and capture folds) and `conformance::epoch_traffic`, behind the
 `conformance` feature. The default build does not contain them. No
 production constant moves, and `own_edge()` stays until the relay lane
 takes the stem-slot ruling.
@@ -16714,15 +16721,16 @@ first-spy test prints its spy fraction as `f`, and §12.6's `f` is the
 network adversary fraction. The letters here are the sweep's.
 
 Until the simulation is ruled, the dialer keeps a target of 12. That
-number is the floor, carried as the interim. The hard cap is the
-assignment on `dev`: `net_node.inl:984` sets
-`max_out_connection_count` from
-`shekyl_relay_zone_min_provisioned_out_peers()` (12). The dialer
-deletes the assignment and keeps 12 until this simulation is ruled
+number is the floor, carried as the interim. The hard cap on `dev`
+is `src/p2p/net_node.inl` lines 984–985: `hidden_out` is
+`shekyl_relay_zone_min_provisioned_out_peers()` (12), and
+`max_out_connection_count` is that `hidden_out`. The dialer deletes
+the assignment and keeps 12 until this simulation is ruled
 ([`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md)).
-*Records-was: the assignment was described as the unmerged relay
-branch, and at pin `d93074d1c4` that line was
-`shekyl_hop0_outbound_target` (4).*
+*Records-was: the cap was described as an unmerged relay branch at
+`net_node.inl:939`, and at pin `d93074d1c4` that assignment was
+`shekyl_hop0_outbound_target` (4). Line 939 is the ephemeral-Tor
+error path.*
 
 ### 95.1 Instruments that already exist
 
@@ -16784,18 +16792,77 @@ refill, and the one-draw `p_h^h` is that reading's reference.
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
 moves the embargo hop against transit and is not this sweep.
 
-### 95.2 The proposal grid — records-was
+### 95.2 The proposal grid — SUPERSEDED by the §95.3 sweep
 
-SUPERSEDED by the §95.3 sweep. The grid that used to sit here listed
-`(h, c)` points for review, including totals of 16. Sixteen was an
-illustration in that grid. It is not a candidate and not a sizing
-input. The sweep that was run is §95.3: `h` at 12, 14 and 16, `c` from
-0 to 16 in steps of 2.
+Points for review, not crate constants. A point is dropped when `h < 12`
+or `h + c < 12`. The report shows those drops, so the edge is visible.
+Totals in this proposal sat around 12–24. Sixteen was one illustration,
+not a chosen total. §95.3 is the sweep that was run: `h` at 12, 14
+and 16, `c` from 0 to 16 in steps of 2, traffic at `f = 1`. Fractions
+below 1 are the inbound stress only. First spy was run at `p = 0.20`
+and at `p_h` from `p = 0.30`, not at 0.05 or 0.10.
 
-A ruled result may choose one `(h, c)` on or above the floors (`h` at
-least 12, and `h + c` at least 12). It does not choose the ceiling, and
-it does not move `fluff_return_ms` in the same change. §90 requires
-`F′` and its dependents to move together.
+| `h` | `c` | total | why it was proposed — not the §95.3 run |
+| --- | --- | --- | --- |
+| 12 | 0 | 12 | both floors, hidden only — proposal, not the run |
+| 12 | 4 | 16 | hidden at the floor, total 16 — proposal, not the run |
+| 16 | 0 | 16 | hidden at 16, clearnet absent — proposal, not the run |
+| 12 | 8 | 20 | hidden at the floor, total 20 — proposal, not the run |
+| 16 | 4 | 20 | both above the floor — proposal, not the run |
+| 12 | 12 | 24 | hidden at the floor, total 24 — proposal, not the run |
+| 16 | 8 | 24 | both above the floor — proposal, not the run |
+| 24 | 0 | 24 | hidden at the top of the range — proposal, not the run |
+
+Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
+Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
+first-spy test already runs. A second arm sets the spy share among
+onion-publishing nodes to twice `p`, capped at 1, and leaves every
+other node at `p`.
+
+Five readings, each compared across that grid. None of them writes
+`fluff_return_ms`, `MIN_PROVISIONED_OUT_PEERS`, or a new outbound
+constant.
+
+1. **First-spy precision and recall, originated transactions.** One
+   trial is one transaction this node originates. Precision is the
+   fraction of observed trials whose first spy's predecessor is the
+   origin. Recall is the fraction of trials a spy observes at all.
+   Both arms: spies at `p` everywhere, and spies at the higher share
+   among onion candidates. The uniform `simulate_diffusion_first_spy`
+   reading is the control, not the result. The result is the two-class
+   graph: each node initiates `h` hidden edges and `c` clearnet edges.
+2. **Originated-versus-relayed skew on the sender's own link.** The
+   attacker's count is every stem that sender puts on the link during
+   the epoch: its originated transactions, and the stems it relays onto
+   the same peer. `h / (h + c)` is how a relay drawn from all outbound
+   sessions would spread. It is not the posterior. A single-transaction
+   walk that counts a relay only when the path revisits the pin is not
+   the posterior either. The epoch tally is §95.3.
+3. **Full own-edge pool capture.** At the onion-candidate spy share
+   `p_h` (not `q`: `q` is the fluff probability), the chance every
+   hidden session is a spy is `p_h^h`. Report that number, and check
+   it by drawing the pool. `simulate_two_slot_occupancy` stays the
+   stem-slot residual at its own `D_out`. This proposal leaves `STEMS`
+   and the §12.6 table where they are.
+4. **Fluff return at the mixed composition, against 3250 ms.** p90
+   first passage on the two-class graph, `EveryPeer`, hidden edges at
+   the anonymity transit and clearnet edges at the clearnet transit,
+   taken through `converged_fluff_return_mixed`'s budget so a single
+   seed cannot become a level. The comparison is the shipped 3250 ms
+   fail-safe input. The reading does not replace that constant.
+   `simulate_fluff_return_mixed` cannot produce it: one `transit_ms`
+   covers every edge.
+5. **Hidden inbound load per published onion.** If each node opens `h`
+   hidden edges uniformly among the `f` fraction that publish, the
+   mean inbound degree of a published onion is `h / f`. Report that
+   mean. A uniform draw checks it. No new load constant.
+
+What a ruled result would be allowed to choose is the operating point:
+one `(h, c)` on or above the floors. It would not choose the ceiling,
+and it would not move `fluff_return_ms` inside the same change. A
+reading that wants a new fail-safe input is a later re-derivation,
+named as such, because §90 already requires `F′` and its dependents
+to move together.
 
 ### 95.3 The sweep, run 2026-10-07 — (h, 0) is a measured case, RULED 2026-10-08
 
@@ -16804,12 +16871,13 @@ is a measured case. It is not a headline recommendation. Tor-only is
 that shape, and it is not a recommended posture. The gate is §96.
 No operating point is chosen. The interim composition is hidden 12
 and clearnet 12. Clearnet's configured default is already
-`P2P_DEFAULT_OUT_PEERS` (12). The hidden cap in the binary is
-`MIN_PROVISIONED_OUT_PEERS`, assigned at `net_node.inl:984`.
-*Records-was: this paragraph said the Tor cap was still
-`HOP0_OUTBOUND_TARGET` (4).* The `(12, 4)` proposal is withdrawn.
-A total of 16 was an illustration in the §95.2 grid, and that grid
-is records-was.
+`P2P_DEFAULT_OUT_PEERS` (12). The address-hiding outbound target is
+already `MIN_PROVISIONED_OUT_PEERS` (12), assigned at
+`net_node.inl:984–985`. *Records-was: the Tor zone's cap was
+`HOP0_OUTBOUND_TARGET` (4).* This measurement does not move either
+constant.
+The `(12, 4)` proposal is withdrawn. A total of 16 was an
+illustration, not a candidate.
 
 **Acceptance.** A point is approvable only when its fluff return,
 measured with real per-connector transit, does not exceed the input
@@ -16826,8 +16894,11 @@ ordinary stem-map pin. Relays still forward with probability `1 − q`.
 `own_edge()` is not that routing. This change does not delete it.
 
 **Epoch tally, 2026-10-08.** Every node originates once per epoch.
-Each node keeps a `StemMap` for that epoch, and stems walk with
-`walk_stem`. The posterior is deliveries on a directed edge:
+Each node keeps a `StemMap` for that epoch. The epoch tally and the
+first-spy estimators fold one walk, `walk_originated`. Its length is
+`walk_stem`. A hop onto a node that already forwarded is fluff in the
+live pool, so that hop is not a delivery. The posterior is deliveries
+on a directed edge:
 originated sends plus relayed sends onto that same peer. 48 nodes,
 20 epochs, `f = 1`. `f ≈ 1` is the normal case: a node publishes a
 per-boot onion and accepts Tor inbound (`add_ephemeral_tor_zone`,
@@ -16839,27 +16910,34 @@ own-edge posterior 0.91, and `HiddenOwnEdge` 0.92–0.94.* That count
 credited a relay only when one transaction's path revisited the pin.
 The epoch tally is the attacker's view.
 
-`HiddenStemSlot` own-edge posterior sat at 0.52–0.56 at every kept
-point, including the measured case `(12, 0)` at 0.54 (0.85 relayed
-stems per originated send; 0.36 of those edges carried any relay).
-`(12, 4)` was 0.56. Clearnet posterior was 0: the local source stays
-on the hidden slot. The hidden-class posterior rose with clearnet,
-0.20 at `(12, 0)` and 0.30 at `(12, 12)`, because fewer relays land
-on hidden edges.
+`HiddenStemSlot` own-edge posterior, re-read on the shared cut at 48
+nodes and 20 epochs (seed `0x5950_0000 + 16h + c`), sat at 0.61–0.64.
+The measured case `(12, 0)` was 0.64 (0.57 relayed stems per
+originated send; 0.33 of those edges carried any relay). `(12, 4)`
+was 0.61. *Records-was, the walk that counted the closing hop:
+0.52–0.56, with `(12, 0)` at 0.54 and `(12, 4)` at 0.56.* Clearnet
+posterior was 0: the local source stays on the hidden slot. The
+hidden-class posterior rose with clearnet, 0.27 at `(12, 0)` and
+0.39 at `(12, 12)`, because fewer relays land on hidden edges.
+*Records-was, same earlier walk: 0.20 and 0.30.*
 
 `HiddenOwnEdge`, today's separate draw, is the residual of ProxyMark's
 root cause. The own-edge is not a stem slot, so most epochs it carries
-no relayed traffic. At `(12, 0)` the posterior was 0.73 and 0.12 of
-edges carried a relay. With clearnet added it sat at 0.80–0.88, and
-the carrying fraction fell to 0.05–0.08. The link looks originated
-because nothing else is scheduled onto it.
+no relayed traffic. At `(12, 0)` the posterior was 0.82 and 0.12 of
+edges carried a relay. With clearnet added it sat at 0.85–0.89, and
+the carrying fraction fell to 0.06–0.08. The link looks originated
+because nothing else is scheduled onto it. *Records-was, the walk
+that counted the closing hop: 0.73 at `(12, 0)`, and 0.80–0.88 with
+clearnet, carrying 0.05–0.08.*
 
 The split baseline still reproduces ProxyMark's certainty: hidden
 posterior 1, clearnet posterior 0, own-edge posterior 1. The
 all-clearnet baseline, the paper's graph, gives an own-edge
-posterior of 0.62 on the instrument's 32-node draw. The 0.91 figure
-does not survive the epoch tally. A node forwards each transaction
-once: a cycle is not a second relayed arrival.
+posterior of 0.64 on the instrument's 32-node draw (12 epochs, seed
+`0xC1_EA`). The 0.91 figure does not survive the epoch tally. A node
+forwards each transaction once: a cycle is not a second relayed
+arrival. *Records-was: that 32-node draw read 0.62 while the epoch
+walk counted the closing hop.*
 
 A sender with inbound degree 0 relays nothing, so every stem it sends
 is originated, on either routing. The unit test strips inbound to one
@@ -16869,7 +16947,9 @@ such sender.
 A sender that originates much more than it relays sits closer to
 posterior 1 on any routing, as in Dandelion++. One node originating
 eight stems an epoch, and the others once, read 1.00 on its own-edge
-against 0.54 for the rest (`HiddenStemSlot`, `h = c = 12`).
+against 0.56 for the rest (`HiddenStemSlot`, `h = c = 12`, 32 nodes,
+8 epochs, seed `0x4E_11`). *Records-was, before the shared cut: 0.54
+for the rest.*
 
 **2×2, 512 nodes, `OutboundOnly` in every cell.** Transit-free against
 per-connector transit (hidden 1625 ms, clearnet 50 ms). The shipped
@@ -16886,9 +16966,12 @@ reach with transit. The sweep below holds reach at `OutboundOnly`.
 
 **Sweep. Nothing is chosen.** `h` at 12, 14 and 16; `c` from 0 to 16
 in steps of 2. Posterior is `HiddenStemSlot`, 40 nodes, 6 epochs,
-`f = 1`. Own-edge posterior sat between 0.50 and 0.61. Hidden-class
-posterior rose with `c`, about 0.21 at `c = 0` and about 0.30–0.34
-at `c = 16`. A cell whose seeds did not agree within 250 ms at 16
+`f = 1`, seed `0xE0C4 + 20h + c`. Own-edge posterior, re-read on the
+shared cut, sat between 0.58 and 0.67. Hidden-class posterior rose
+with `c`, about 0.25–0.27 at `c = 0` and about 0.39–0.42 at `c = 16`.
+*Records-was, the walk that counted the closing hop: own-edge
+0.50–0.61, hidden-class about 0.21 at `c = 0` and 0.30–0.34 at
+`c = 16`.* A cell whose seeds did not agree within 250 ms at 16
 trials is refused, not given a ratio. Of the per-connector cells that
 converged, these exceed 3250: `(12, 8)` 5400, `(12, 12)` 3750,
 `(14, 6)` 6275, `(14, 8)` 5275, `(14, 10)` 4500, `(14, 12)` 3850,
@@ -16906,29 +16989,35 @@ nodes had mean 120, p90 130, max 134. `f = 1` is the normal case.
 **Class-aware first spy.** A clearnet arrival from a sender that has
 a hidden session is certainly relayed, so the estimator does not name
 that sender as the origin. On `h = 12`, `c = 8`, 32 nodes, 200 trials.
-Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.29 and recall
-0.15, aware precision 0.38 and the same recall. At `p_h` from
-`p = 0.30`, blind precision 0.65 and recall 0.56, aware precision
-0.70 and the same recall. The gain is precision: false names on
+Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.42 and recall
+0.21, aware precision 0.53 and the same recall. At `p_h` from
+`p = 0.30`, blind precision 0.69 and recall 0.59, aware precision
+0.76 and the same recall. The gain is precision: false names on
 clearnet edges are dropped, and the true origin's hop is hidden so
 the correct names stay. Under the paper's uniform hop 0 the same
-estimator loses: precision 0.37 to 0.30 at `p = 0.20` (recall 0.20
-to 0.12), and 0.72 to 0.49 at the enriched share (recall 0.63 to
-0.37), because hop 0 can be clearnet and the rule then exonerates
+estimator loses: precision 0.39 to 0.31 at `p = 0.20` (recall 0.17
+to 0.09), and 0.70 to 0.45 at the enriched share (recall 0.61 to
+0.32), because hop 0 can be clearnet and the rule then exonerates
 the origin. `HiddenStemSlot` makes a clearnet arrival exonerating
 rather than identifying. The attack on the origin moves to the onion
 candidate share, which is why §96 item 3 carries this routing's cost.
 Spy labels are drawn once per node per trial, and the origin is not
-a spy.
+a spy. The stem stops when it returns to a node that already
+forwarded it: the live pool switches that duplicate to fluff. The
+epoch tally folds this same walk. The spy digits above are unchanged
+by that sharing: this estimator already stopped on the revisit.
+*Records-was:* a walk that continued past the revisit read blind
+precision 0.29 and aware precision 0.38 at `p = 0.20`.
 
-Separately, eight of 32 nodes initiate no hidden session. Of 606
-clearnet arrivals, 273 had a clearnet-only sender. A clearnet arrival
+Separately, eight of 32 nodes initiate no hidden session. Of 420
+clearnet arrivals, 199 had a clearnet-only sender. A clearnet arrival
 by itself marks its sender clearnet-only less than half the time,
-because relays use clearnet too. The aware estimator named 30
-clearnet predecessors as the origin, and every one of those 30 was
-clearnet-only. That count is the class of the node named, which
-follows from the routing rule; it is not precision against
-clearnet-only origins, and that is unmeasured.
+because relays use clearnet too. The aware estimator named 32
+clearnet predecessors as the origin, and every clearnet predecessor
+it named was clearnet-only. That is the class of the node named,
+which follows from the routing rule; it is not precision against
+clearnet-only origins, and that is unmeasured. That measurement is
+its own `FOLLOWUPS.md` line.
 
 **Cross-connector linkage, not built.** Hypothesis: a spy holding
 both a Tor session and a clearnet session to one node can link that
@@ -16990,16 +17079,13 @@ Each item is open. Its carrier is the only thing that closes it.
    **Carrier:** this item. **Closes when** that measurement is
    recorded here with the two p90s and the input has either moved
    under §90 or been confirmed for the Tor return. **Re-evaluation:**
-   the dated record of those two p90s. **Deferred to the next
-   relay-privacy round, not this item's closure.** Re-deriving
-   `fluff_return_ms` with Tor transit on the return path and
-   production `EveryPeer` reach, and measuring estimator precision
-   for clearnet-only origins as a function of the clearnet-only
-   fraction against the paper's all-clearnet baseline, are not
-   started here. Blocked on the Rust cutover — falsify by a
-   converged 512-node `EveryPeer` per-connector reading, which
-   reopens that round. 3250 stays provisional pending the
-   operational test above. The one-liner is in `FOLLOWUPS.md`.
+   the dated record of those two p90s. **Deferred on this item, not
+   its closure.** Re-deriving `fluff_return_ms` with Tor transit on
+   the return path and production `EveryPeer` reach waits for the
+   next relay-privacy round. Blocked on the Rust cutover — falsify
+   by a converged 512-node `EveryPeer` per-connector reading, which
+   reopens that round. 3250 stays provisional pending the operational
+   test above. The one-liner is in `FOLLOWUPS.md`.
 3. **Onion-candidate flooding defence.** A hidden edge is drawn from
    publishers an attacker can supply. `HiddenStemSlot` moves the
    first-spy attack onto that share: a clearnet arrival exonerates

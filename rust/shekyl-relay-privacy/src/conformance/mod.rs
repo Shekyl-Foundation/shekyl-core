@@ -14,11 +14,16 @@
 //! - [`stem`] — stem walk + propagation / preemption / black-hole
 //! - [`flood`] — fluff-return first-passage + diffusion first-spy
 //! - [`transport`] — fluff-reach supernode observation + passive leak
+//! - [`composition`] — two-class graph, [`composition::walk_originated`], fluff by [`FloodReach`]
+//! - [`epoch_traffic`] — one epoch's posterior on that walk
 //! - [`selection`] — two-slot occupancy, epoch layering, ε-greedy
 //! - [`reshape`] — origin exposure, δ increment, recovery latency
 //!
-//! The shared stem model is [`walk_stem`] / [`StemTrace`]: every stem instrument
-//! that only needs the RD-4/RD-1 path is a thin consumer of that helper.
+//! Stem length is [`walk_stem`] / [`StemTrace`], drawn as
+//! [`composition::StemRelayBudget`]. [`composition::walk_originated`] spends
+//! that budget and stops on the live pool's duplicate. The spy folds and
+//! the hidden-pool capture are re-exported from [`composition`]; the capture
+//! never builds the graph.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -27,6 +32,8 @@
 )]
 
 pub mod analysis;
+pub mod composition;
+pub mod epoch_traffic;
 pub mod flood;
 pub mod grade;
 pub mod linkage;
@@ -42,9 +49,10 @@ pub use analysis::{
     coefficient_of_variation, inference_precision, residual_masses, sample_poisson, sample_uniform,
 };
 pub use flood::{
-    converged_fluff_return_mixed, simulate_diffusion_first_spy, simulate_fluff_return,
-    simulate_fluff_return_mixed, transit_for, Converged, ConvergenceBudget, ConvergenceRefusal,
-    FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
+    converge_p90, converged_fluff_return_classed, converged_fluff_return_mixed,
+    simulate_diffusion_first_spy, simulate_fluff_return, simulate_fluff_return_classed,
+    simulate_fluff_return_mixed, transit_for, ClassedHop, Converged, ConvergenceBudget,
+    ConvergenceRefusal, FirstSpyPrecision, FloodParams, FloodReach, FloodSummary, FLOOD_TICK_MS,
 };
 pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};
 pub use reshape::{
