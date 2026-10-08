@@ -89,5 +89,6 @@ pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
     Staleness, StalenessBound,
 };
-pub use shekyl_p_serve::PassKey;
-pub use signer::NoResidentKey;
+pub use shekyl_p_serve::{sign_pass_transcript, PassKey, ServeCounterReader, SignRefused};
+#[cfg(any(test, feature = "test-signer"))]
+pub use signer::{signer_at_synced_tip, RefusingKey};

@@ -728,7 +728,11 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::I20,
             CenRow::J2,
             CenRow::J11,
-            CenRow::J12
+            CenRow::J12,
+            CenRow::J19,
+            CenRow::J20,
+            CenRow::J22,
+            CenRow::J24
         ]
     );
 }

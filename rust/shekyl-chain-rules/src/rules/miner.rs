@@ -280,7 +280,7 @@ impl BlockRule for F4 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         if cx.connecting.is_zero()
             || cx.candidate().block.miner_transaction.prefix.outputs.len() == 1
         {
@@ -306,7 +306,7 @@ impl BlockRule for F5 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         match cx
             .candidate()
             .block
@@ -336,7 +336,7 @@ impl BlockRule for F6 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let window = cx.formed.rule_set().mined_money_unlock_window().to_raw();
         let expected = cx.connecting.to_raw().checked_add(window);
         let unlock = cx.candidate().block.miner_transaction.prefix.unlock_time;

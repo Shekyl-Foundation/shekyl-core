@@ -18,6 +18,7 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 
 [dev-dependencies]
 proptest = "1"

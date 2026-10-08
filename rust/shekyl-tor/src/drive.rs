@@ -17,14 +17,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
-    accept_error_is_transient, node_gate, read_capped, write_capped, StreamEnds,
+    accept_error_is_transient, node_gate, read_capped, write_capped, InboundEnd, QueueHold,
+    StreamEnds,
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, socks_reply_is_our_request, CloseCause, CloseKind, CloseResult, ConnectorId,
+    OpenError, OpenSocket, Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -169,7 +171,7 @@ where
         admitted,
     } = dial;
     let NetworkAddress::Tor { host, port } = &address else {
-        on_cause(CloseCause::new(CloseKind::DialFailed));
+        on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     };
     if let Err(cause) = check_dial(ConnectorId::Tor, &address) {
@@ -186,26 +188,26 @@ where
             return;
         }
         Err(OpenError::Exhausted) => {
-            on_cause(CloseCause::new(CloseKind::DialFailed));
+            on_cause(CloseCause::new(CloseKind::LocalClose));
             return;
         }
     };
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        settle(reserved, CloseCause::new(CloseKind::DialFailed), &on_cause);
+        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     }
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(proxy).await else {
-            return Err(CloseCause::new(CloseKind::DialFailed));
+            return Err(CloseCause::new(CloseKind::LocalClose));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
@@ -218,6 +220,12 @@ where
             Ok(()) => Ok((stream, proxy_connect_ns, span_ns(dialed.elapsed()))),
             Err(SocksError::Refused { reply }) => {
                 drop(stream.shutdown().await);
+                if socks_reply_is_our_request(u16::from(reply)) {
+                    tracing::error!(
+                        reply,
+                        "tor socks reply is this node's request, not the onion"
+                    );
+                }
                 Err(CloseCause::proxy_refused(u16::from(reply)))
             }
             Err(
@@ -227,7 +235,7 @@ where
                 | SocksError::AuthFailed { .. },
             ) => {
                 drop(stream.shutdown().await);
-                Err(CloseCause::new(CloseKind::DialFailed))
+                Err(CloseCause::new(CloseKind::LocalClose))
             }
         }
     };
@@ -237,7 +245,7 @@ where
         result = wake.as_mut() => {
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::DialFailed,
+                Err(_) => CloseKind::LocalClose,
             };
             ignore(owner.deregister());
             settle(reserved, CloseCause::new(kind), &on_cause);
@@ -325,24 +333,30 @@ where
         .is_err()
     {
         ignore(owner.deregister());
+        let cause = CloseCause::new(CloseKind::LocalClose);
+        inbound.seal(&hold, cause);
         drop(hold);
-        return CloseCause::new(CloseKind::LocalClose);
+        return cause;
     }
 
     let overfull_write = Arc::clone(&overfull);
     let gate = node_gate();
     let mut writer = tokio::spawn(async move {
-        write_capped(
+        let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+        let cause = write_capped(
             &mut write,
             &writer_queue,
             &overfull_write,
             &gate,
-            conn,
+            &mut stall,
             |plain| Ok(Cow::Borrowed(plain)),
         )
-        .await
+        .await;
+        tracing::info!(conn, stall = %stall, "write stall");
+        cause
     });
     let gate = node_gate();
+    let inbound_close = inbound.clone();
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
         Ok(vec![chunk.to_vec()])
     });
@@ -357,7 +371,13 @@ where
                 gap_open = false;
                 ignore(owner.deregister());
                 if result.is_err() {
-                    return stop(hold.take(), &mut writer, CloseCause::new(CloseKind::LocalClose)).await;
+                    return stop(
+                        &inbound_close,
+                        hold.take(),
+                        WriteJoin::Pending(&mut writer),
+                        CloseCause::new(CloseKind::LocalClose),
+                    )
+                    .await;
                 }
                 tracing::info!(
                     conn,
@@ -372,39 +392,87 @@ where
                     Ok(_) => CloseKind::LevinHandshakeTimeout,
                     Err(_) => CloseKind::LocalClose,
                 };
-                return stop(hold.take(), &mut writer, CloseCause::new(kind)).await;
+                let cause = CloseCause::new(kind);
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    cause,
+                )
+                .await;
             }
             read_cause = &mut read_fut => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                return stop(hold.take(), &mut writer, read_cause).await;
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
             }
             write_end = &mut writer => {
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                drop(hold.take());
-                return match write_end {
+                let cause = match write_end {
                     Ok(cause) => cause,
                     Err(_) => CloseCause::new(CloseKind::LocalClose),
                 };
+                return stop(&inbound_close, hold.take(), WriteJoin::Finished, cause).await;
             }
         }
     }
 }
 
+/// Whether `select` has already polled the writer to completion.
+///
+/// A completed [`tokio::task::JoinHandle`] panics if it is polled again.
+/// [`WriteJoin::Finished`] is that arm. The others still hold a running task.
+enum WriteJoin<'a> {
+    Pending(&'a mut tokio::task::JoinHandle<CloseCause>),
+    Finished,
+}
+
+/// Seal the session. Abort the writer only when this select has not joined it.
+///
+/// `hold` is absent only when a previous arm already took it. The inbound
+/// cause is recorded either way.
 async fn stop(
-    hold: Option<shekyl_capped_stream::QueueHold>,
-    writer: &mut tokio::task::JoinHandle<CloseCause>,
+    inbound: &InboundEnd,
+    hold: Option<QueueHold>,
+    writer: WriteJoin<'_>,
     cause: CloseCause,
 ) -> CloseCause {
+    if let Some(hold) = hold.as_ref() {
+        inbound.seal(hold, cause);
+    } else {
+        inbound.close(cause);
+    }
     drop(hold);
-    writer.abort();
-    drop(writer.await);
+    if let WriteJoin::Pending(writer) = writer {
+        writer.abort();
+        drop(writer.await);
+    }
     cause
 }
 
 fn ignore<E>(result: Result<(), E>) {
     if let Err(_err) = result {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_joined_writer_is_not_polled_again() {
+        let ends = StreamEnds::open(8);
+        let mut writer = tokio::spawn(async { CloseCause::new(CloseKind::IoError) });
+        let joined = (&mut writer).await.expect("writer joined");
+        let cause = stop(&ends.inbound, Some(ends.hold), WriteJoin::Finished, joined).await;
+        assert_eq!(cause.kind(), CloseKind::IoError);
+    }
 }

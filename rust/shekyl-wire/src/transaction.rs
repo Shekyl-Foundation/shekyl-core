@@ -1266,6 +1266,20 @@ pub struct TxPrefix {
 }
 
 impl TxPrefix {
+    /// The prefix hash of **this prefix** — `keccak256(varint(TX_VERSION) ‖
+    /// write)`, the one derivation [`Transaction::prefix_hash`] delegates to.
+    /// Taking the prefix rather than the transaction lets a consumer hash a
+    /// prefix it has edited: the emission claim's `signable_tx_hash` is this
+    /// over the prefix with the emission vin removed (CEN-J22, F-C1c), and
+    /// a second body for it would be the two-sources class.
+    pub fn hash(&self) -> PrefixHash {
+        let mut buf = Vec::new();
+        write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
+        self.write(&mut buf)
+            .expect("writing to a Vec is infallible");
+        PrefixHash::from_bytes(keccak256(&buf))
+    }
+
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.unlock_time, w)?;
         write_varint(self.inputs.len(), w)?;
@@ -1590,14 +1604,10 @@ impl Transaction {
     /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`
     /// serializes `VARINT(version)` first, so this is
     /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
-    /// prefix` composition [`Self::write`] emits at the head of the tx.
+    /// prefix` composition [`Self::write`] emits at the head of the tx
+    /// ([`TxPrefix::hash`], over this transaction's prefix).
     pub fn prefix_hash(&self) -> PrefixHash {
-        let mut buf = Vec::new();
-        write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
-        self.prefix
-            .write(&mut buf)
-            .expect("writing to a Vec is infallible");
-        PrefixHash::from_bytes(keccak256(&buf))
+        self.prefix.hash()
     }
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**

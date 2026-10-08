@@ -152,30 +152,44 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  size_t node_server<t_payload_net_handler>::post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then)
   {
-    // Step-b holdout. The protocol handler reads support flags, the pull
-    // state, and the byte counters. The board does not carry those, and
-    // posting this callback onto each strand to wait for it is the deadlock
-    // the seam's floor exists to keep off this path. One of the two
-    // `foreach_connection` sites that remain.
+    // The count is stored before any post runs. The last strand calls
+    // `then`. No connections calls it here. `n == 0` does not post.
+    auto left = std::make_shared<std::atomic<size_t>>(0);
+    auto ran = std::make_shared<std::atomic<bool>>(false);
+    auto finish = std::make_shared<std::function<void()>>(std::move(then));
+    std::vector<std::function<void()>> posts;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
-      });
+      zone.second.m_net_server.get_config_object().collect_context_posts(
+        [note, left, ran, finish](p2p_connection_context& cntx){
+          note(cntx, cntx.support_flags);
+          if (left->fetch_sub(1, std::memory_order_acq_rel) == 1
+              && !ran->exchange(true, std::memory_order_acq_rel)
+              && *finish)
+            (*finish)();
+        }, posts);
     }
+    left->store(posts.size(), std::memory_order_release);
+    for (auto& post : posts)
+      post();
+    if (posts.empty() && !ran->exchange(true, std::memory_order_acq_rel) && *finish)
+      (*finish)();
+    return posts.size();
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> f)
   {
+    // True when some zone queued the callback. The callback runs on that
+    // connection's strand. False means the id is not in a zone.
     for(auto& zone : m_network_zones)
     {
-      const bool result = zone.second.m_net_server.get_config_object().for_connection(connection_id, [&](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
+      const bool queued = zone.second.m_net_server.get_config_object().for_connection(connection_id, [f](p2p_connection_context& cntx){
+        f(cntx, cntx.support_flags);
       });
-      if (result)
+      if (queued)
         return true;
     }
     return false;
@@ -839,17 +853,33 @@ namespace nodetool
     // anonymity zone, so a start failure must leave NO tor zone in the map.
     if (m_offline || m_nettype == cryptonote::FAKECHAIN)
       return;
+    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
+    const bool zone_was_present = preexisting != m_network_zones.end();
     if (command_line::get_arg(vm, arg_no_ephemeral_tor))
     {
-      MINFO("Ephemeral Tor inbound disabled by --" << arg_no_ephemeral_tor.name);
+      // TB-1: declining Tor is a supported choice, and a node that made it
+      // says so on every boot at a level that is read. An operator who
+      // attached a Tor of their own has not declined Tor, only the managed one.
+      //
+      // These lines go to the "global" category on purpose. This file's own
+      // category, net.p2p, is filtered to errors by the default log settings,
+      // so a warning written there is one nobody sees -- which is how a node
+      // came to run clearnet-only without its operator knowing.
+      if (zone_was_present)
+        MINFO("Managed Tor disabled by --" << arg_no_ephemeral_tor.name
+            << "; the operator-provisioned Tor configuration is in use");
+      else
+        MCWARNING("global", "Tor is declined (--" << arg_no_ephemeral_tor.name << "): this node is clearnet-only. "
+            "Its address is visible to its peers, and its own transactions are relayed over clearnet "
+            "with no onion route. The clearnet link is encrypted only where --"
+            << arg_clearnet_transport_encrypt.name << " is set on both ends. "
+            "Remove the flag to run with Tor");
       return;
     }
     // --anonymous-inbound already owns the onion. --tx-proxy does not: it
     // names the SOCKS address dials use, and the per-boot onion still publishes.
     // A tor zone that exists only because a named onion was parsed is the same
     // case — the managed Tor has not started yet, so it is not operator SOCKS.
-    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
-    const bool zone_was_present = preexisting != m_network_zones.end();
     if (zone_was_present && !preexisting->second.m_bind_ip.empty())
     {
       MINFO("Operator inbound onion (--" << arg_anonymous_inbound.name
@@ -872,13 +902,42 @@ namespace nodetool
       MINFO("Pinned tor binary found; publishing ephemeral overlay inbound (PWD-E7)");
       break;
     case SHEKYL_DAEMON_TOR_NO_BINARY:
-      MINFO("No tor binary found; overlay (.onion) inbound disabled for this boot. Install the pinned "
-          "tor bundle beside the daemon, stage it under /opt/shekyl/<version>-<target>/, or set "
-          "SHEKYL_TOR_BINARY to enable the default ephemeral posture");
+      // Not declined, and not present: the state TB-1 says a node is not
+      // quietly in. It is a warning until the refusal (TB-2) lands.
+      // `--tx-proxy` already installed a SOCKS dial, and this return leaves
+      // that zone in place, so outbound is that proxy. Calling the node
+      // clearnet-only would be false.
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "No Tor bundle was found, so there is no per-boot onion for inbound. "
+            "Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it) to publish inbound as well");
+      else
+        MCWARNING("global", "No Tor was found, so this node is clearnet-only for this boot although Tor was not "
+            "declined. Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it), or pass --"
+            << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     case SHEKYL_DAEMON_TOR_BAD_BINARY:
-      MWARNING("A tor binary was found but is unusable for the ephemeral overlay posture: " << error_msg
-          << ". Overlay inbound disabled for this boot");
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion for this boot");
+      else
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". This node is clearnet-only for this boot");
+      return;
+    case SHEKYL_DAEMON_TOR_UNAVAILABLE:
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "). Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion until you pass --" << arg_anonymous_inbound.name
+            << " with an onion of your own");
+      else
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "), so this node is clearnet-only unless you attach a Tor of your own: run tor, then pass --"
+            << arg_tx_proxy.name << " for outbound and --" << arg_anonymous_inbound.name
+            << " for inbound. Pass --" << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     default:
       MERROR("Ephemeral tor start failed (" << error_msg
@@ -919,12 +978,12 @@ namespace nodetool
     {
       zone.m_proxy_address = *proxy_endpoint;
       zone.m_connect = &public_connect;
-      // The own-edge pool. The fluff floor does not apply: relayed stems
-      // draw over every outbound session, and `--out-peers` does not set
-      // this cap.
-      const std::uint32_t hop0_out = shekyl_hop0_outbound_target();
-      zone.m_config.m_net_config.max_out_connection_count = hop0_out;
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hop0_out);
+      // Address-hiding outbound target: the measured degree. The dialer
+      // deletes this assignment; it owns outbound targets. `--out-peers`
+      // does not set it.
+      const std::uint32_t hidden_out = shekyl_relay_zone_min_provisioned_out_peers();
+      zone.m_config.m_net_config.max_out_connection_count = hidden_out;
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hidden_out);
       set_max_in_peers(zone, -1);
     }
     m_ephemeral_tor_alive = true;
@@ -939,7 +998,7 @@ namespace nodetool
         service_id, sizeof (service_id), error_msg, sizeof (error_msg));
     if (publish_rc != SHEKYL_DAEMON_TOR_OK)
     {
-      MWARNING("Ephemeral onion publish failed (" << error_msg
+      MCWARNING("global", "Ephemeral onion publish failed (" << error_msg
           << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
       return;
     }
@@ -955,6 +1014,9 @@ namespace nodetool
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port
         << " -> 127.0.0.1:" << local_port << " (new address every boot; SOCKS " << socks_addr << ")");
+    // The address stays in net.p2p, which the default log settings filter. That
+    // Tor is up is said where an operator reads it, without the address.
+    MGINFO("Tor is up: the managed tor is running and overlay inbound is published on a per-boot onion address");
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1264,7 +1326,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::do_handshake_with_peer(p2p_connection_context& context_, bool just_take_peerlist)
+  handshake_outcome node_server<t_payload_net_handler>::do_handshake_with_peer(p2p_connection_context& context_, bool just_take_peerlist)
   {
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context_.m_connector));
 
@@ -1289,24 +1351,26 @@ namespace nodetool
 
     epee::simple_event ev;
     std::atomic<bool> hsh_result(false);
-    bool timeout = false;
+    int invoke_code = 0;
+    bool levin_rejected = false;
+    bool payload_refused = false;
 
     bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_HANDSHAKE::response>(context_, COMMAND_HANDSHAKE::ID, arg, zone.m_net_server.get_config_object(),
-      [this, &ev, &hsh_result, &just_take_peerlist, &context_, &timeout](int code, const typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context)
+      [this, &ev, &hsh_result, &just_take_peerlist, &context_, &invoke_code, &levin_rejected, &payload_refused](int code, const typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context)
     {
       epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){ev.raise();});
 
+      invoke_code = code;
       if(code < 0)
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
-        if (code == LEVIN_ERROR_CONNECTION_TIMEDOUT || code == LEVIN_ERROR_CONNECTION_DESTROYED)
-          timeout = true;
         return;
       }
 
       if(rsp.node_data.network_id != m_network_id)
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE Failed, wrong network!  (" << rsp.node_data.network_id << "), closing connection.");
+        levin_rejected = true;
         return;
       }
 
@@ -1314,6 +1378,7 @@ namespace nodetool
       {
         LOG_WARNING_CC(context, "COMMAND_HANDSHAKE: failed to handle_remote_peerlist(...), closing connection.");
         add_host_fail(context.m_remote_address);
+        levin_rejected = true;
         return;
       }
       hsh_result = true;
@@ -1323,8 +1388,14 @@ namespace nodetool
         {
           LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoked, but process_payload_sync_data returned false, dropping connection.");
           hsh_result = false;
+          payload_refused = true;
           return;
         }
+        // On this strand, before the callback returns. A later message
+        // queued behind it must already see the handshake flag, and the
+        // relay registry flips with it.
+        shekyl_zone_session_established(shekyl::seam_socket_id(context.m_connection_id));
+        m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
 
         context.support_flags = rsp.node_data.support_flags;
         const auto azone = epee::net_utils::require_session_connector(context.m_connector);
@@ -1347,10 +1418,15 @@ namespace nodetool
       ev.wait();
     }
 
+    classified_close recorded{SHEKYL_CLOSE_LOCAL_CLOSE, 0};
     if(!hsh_result)
     {
       LOG_WARNING_CC(context_, "COMMAND_HANDSHAKE Failed");
-      if (!timeout)
+      recorded = handshake_close_cause(r, invoke_code, levin_rejected, payload_refused,
+          shekyl::seam_socket_id(context_.m_connection_id));
+      // A negative code is the seam already closing the session. Closing
+      // again is the path that still has a live context.
+      if (r && invoke_code >= 0)
         zone.m_net_server.get_config_object().close(context_.m_connection_id);
     }
     else if (!just_take_peerlist)
@@ -1362,7 +1438,7 @@ namespace nodetool
         });
     }
 
-    return hsh_result;
+    return handshake_outcome{hsh_result.load(), recorded.kind, recorded.reply};
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1588,25 +1664,25 @@ namespace nodetool
         << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
         << ")...");
 
-    auto con = zone.m_connect(zone, na);
-    if(!con)
+    dial_result opened = zone.m_connect(zone, na);
+    if(!opened.context)
     {
       bool is_priority = is_priority_node(na);
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, bool(con), "Connect failed to " << na.str()
+      LOG_PRINT_CC_PRIORITY_NODE(is_priority, bool(opened.context), "Connect failed to " << na.str()
         /*<< ", try " << try_count*/);
-      record_addr_failed(na);
+      record_addr_failed(na, opened.cause, opened.reply);
       return false;
     }
 
-    bool res = do_handshake_with_peer(*con, just_take_peerlist);
+    const handshake_outcome res = do_handshake_with_peer(*opened.context, just_take_peerlist);
 
-    if(!res)
+    if(!res.ok)
     {
       bool is_priority = is_priority_node(na);
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer "
+      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *opened.context, "Failed to HANDSHAKE with peer "
         << na.str()
         /*<< ", try " << try_count*/);
-      record_addr_failed(na);
+      record_addr_failed(na, res.kind, res.reply);
       return false;
     }
 
@@ -1615,10 +1691,11 @@ namespace nodetool
     // peer that recovers must not carry an escalation into its next bad minute.
     record_addr_success(na);
 
+    p2p_connection_context& con = *opened.context;
     if(just_take_peerlist)
     {
-      zone.m_net_server.get_config_object().close(con->m_connection_id);
-      LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");
+      zone.m_net_server.get_config_object().close(con.m_connection_id);
+      LOG_DEBUG_CC(con, "CONNECTION HANDSHAKED OK AND CLOSED.");
       return true;
     }
 
@@ -1630,14 +1707,7 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    m_notifier.on_session_established(con->m_connection_id, con->m_is_income, con->m_connector);
-    {
-      std::uint64_t socket_id = 0;
-      std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
-      shekyl_zone_session_established(socket_id);
-    }
-
-    LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
+    LOG_DEBUG_CC(con, "CONNECTION HANDSHAKED OK.");
     return true;
   }
 
@@ -1652,22 +1722,22 @@ namespace nodetool
                                   << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
                                   << ")...");
 
-    auto con = zone.m_connect(zone, na);
-    if (!con) {
+    dial_result opened = zone.m_connect(zone, na);
+    if (!opened.context) {
       bool is_priority = is_priority_node(na);
 
       LOG_PRINT_CC_PRIORITY_NODE(is_priority, p2p_connection_context{}, "Connect failed to " << na.str());
-      record_addr_failed(na);
+      record_addr_failed(na, opened.cause, opened.reply);
 
       return false;
     }
 
-    const bool res = do_handshake_with_peer(*con, true);
-    if (!res) {
+    const handshake_outcome res = do_handshake_with_peer(*opened.context, true);
+    if (!res.ok) {
       bool is_priority = is_priority_node(na);
 
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer " << na.str());
-      record_addr_failed(na);
+      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *opened.context, "Failed to HANDSHAKE with peer " << na.str());
+      record_addr_failed(na, res.kind, res.reply);
       return false;
     }
 
@@ -1679,9 +1749,9 @@ namespace nodetool
     // escalation those peers could never shed.
     record_addr_success(na);
 
-    zone.m_net_server.get_config_object().close(con->m_connection_id);
+    zone.m_net_server.get_config_object().close(opened.context->m_connection_id);
 
-    LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");
+    LOG_DEBUG_CC(*opened.context, "CONNECTION HANDSHAKED OK AND CLOSED.");
 
     return true;
   }
@@ -1690,8 +1760,15 @@ namespace nodetool
 
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr)
+  void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr, std::uint8_t cause, std::uint16_t reply)
   {
+    const auto connector = static_cast<std::uint8_t>(epee::net_utils::require_address_connector(addr));
+    const int recorded = shekyl_close_implicates_address(cause, reply, connector);
+    MDEBUG("addr " << addr.str() << " close cause " << static_cast<unsigned>(cause)
+        << " (" << shekyl::seam_close_name(cause) << ") reply " << reply
+        << (recorded == 1 ? " recorded" : " not recorded"));
+    if (recorded != 1)
+      return;
     m_conn_fails_cache.record_failure(addr, time(NULL));
   }
   //-----------------------------------------------------------------------------------
@@ -2316,26 +2393,21 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::peer_sync_idle_maker()
   {
     MDEBUG("STARTED PEERLIST IDLE HANDSHAKE");
-    // Step-b holdout. This writes `m_in_timedsync`. The board has no sync
-    // state, and the write stays on the context until the handle exists.
-    // The other remaining `foreach_connection` is `for_each_connection`.
-    std::list<epee::net_utils::connection_context_base> cncts;
+    // The other `foreach_connection`. The callback runs on the connection
+    // strand: it writes `m_in_timedsync` and starts the timed sync there.
+    // Nothing after this call reads a list the posts have not filled.
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](p2p_connection_context& cntxt)
+      zone.second.m_net_server.get_config_object().foreach_connection([this](p2p_connection_context& cntxt)
       {
-        // Session state this node OBSERVED, never a wire value: only
-        // handshake-completed connections take part in timed sync.
         if(cntxt.session_established() && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
-          cncts.push_back(cntxt);
+          do_peer_timed_sync(cntxt);
         }
         return true;
       });
     }
-
-    std::for_each(cncts.begin(), cncts.end(), [&](const epee::net_utils::connection_context_base& vl){do_peer_timed_sync(vl);});
 
     MDEBUG("FINISHED PEERLIST IDLE HANDSHAKE");
     return true;
@@ -2978,8 +3050,19 @@ namespace nodetool
 
     for (const auto& entry : m_network_zones)
     {
-      if (!entry.second.m_inbound_cap_explicit)
+      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
+      if (entry.first == epee::net_utils::connector_id::tor)
+        connector = SHEKYL_CONNECTOR_TOR;
+      else if (entry.first != epee::net_utils::connector_id::clearnet)
         continue;
+      // The cap lives on the process socket table, which outlives this zone.
+      // An unset `--in-peers` is no cap. Leaving a previous zone's cap would
+      // keep refusing inbound after this zone replaced it.
+      if (!entry.second.m_inbound_cap_explicit)
+      {
+        shekyl_zone_clear_connector_cap(connector);
+        continue;
+      }
       const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
       if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
       {
@@ -2988,11 +3071,6 @@ namespace nodetool
             << "; refusing to start.");
         return false;
       }
-      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
-      if (entry.first == epee::net_utils::connector_id::tor)
-        connector = SHEKYL_CONNECTOR_TOR;
-      else if (entry.first != epee::net_utils::connector_id::clearnet)
-        continue;
       shekyl_zone_set_connector_cap(connector, cap);
     }
 
@@ -3466,12 +3544,13 @@ namespace nodetool
   }
 
   template<typename t_payload_net_handler>
-  std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
+  typename node_server<t_payload_net_handler>::dial_result
   node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
   {
     p2p_connection_context con{};
-    if (!zone.m_net_server.open(na, con))
-      return std::nullopt;
-    return {std::move(con)};
+    const auto opened = zone.m_net_server.open(na, con);
+    if (opened.kind != 0)
+      return {std::nullopt, opened.kind, opened.reply};
+    return {std::move(con), 0, 0};
   }
 }

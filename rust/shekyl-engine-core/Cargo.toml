@@ -259,6 +259,18 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # (no silently-skipped `required-features` lane).
 shekyl-engine-core = { path = ".", features = ["test-helpers"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
+# says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
+# `TestKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
+# production graph.
+shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+# SH-2's proving test (`serving::round_trip_tests`): the persona's resident
+# pass key behind a real `PServeEndpoint`, fetched by the daemon's real
+# `PFetchClient`, and the countersignature verified against the persona's
+# **bond identity**. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
+# `SF-D4` forbids the client on a wallet production graph, and
+# `check_p_fetch_dep_cut.py` does not follow this edge.
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
 # Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
 # Rust producer builds a block at exactly the consensus weight bound and
 # the C++ daemon judges it (CEN-F14), so the producer crate and the rules
@@ -273,7 +285,12 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # it writes, and the replay's report — so the height cannot be spelled
 # differently at any of them. No default features: the type lives in the
 # unconditional `source` module; the pipeline and CLI are not compiled.
-shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
+# `harness` (E6 slice 8 row 7, Q3's pin): the scenario driver's
+# emission-claim assembly, so `stake_engine_tests::emission_claim_assembly`
+# can hold it and this crate's handler to identical bytes for one shape. A
+# TEST_ONLY feature (check_test_only_features.py) — this dev edge is its
+# one enabler; never from [dependencies].
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["harness"] }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and

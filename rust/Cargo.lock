@@ -3783,6 +3783,7 @@ name = "shekyl-block-template"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
  "shekyl-difficulty",
@@ -4211,6 +4212,7 @@ dependencies = [
  "shekyl-multisig",
  "shekyl-operator-alarm",
  "shekyl-p-host",
+ "shekyl-p-loopback",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
@@ -4516,6 +4518,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-onion-v3",
+ "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-socks",
  "shekyl-types",
@@ -4534,6 +4537,19 @@ dependencies = [
  "shekyl-tor-control-wallet",
  "shekyl-types",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "shekyl-p-loopback"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
+ "shekyl-curve-tree",
+ "shekyl-p-fetch",
+ "shekyl-p-serve",
+ "shekyl-types",
  "tokio",
 ]
 
@@ -4908,6 +4924,7 @@ dependencies = [
  "hmac",
  "kameo",
  "libc",
+ "serde_json",
  "sha2",
  "shekyl-onion-v3",
  "tempfile",
@@ -4959,6 +4976,7 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
+ "shekyl-relay-privacy",
  "shekyl-timing-engine",
 ]
 

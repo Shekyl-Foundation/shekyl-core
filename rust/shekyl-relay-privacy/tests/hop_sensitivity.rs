@@ -31,7 +31,9 @@
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-use shekyl_relay_privacy::RelayZone;
+use shekyl_relay_privacy::verify_cost::{
+    ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+};
 
 /// The adopted embargo, in whole seconds, for a given parameter set.
 ///
@@ -133,8 +135,8 @@ fn hop_sensitivity() {
 /// edit collapsing them back to one global would break.
 #[test]
 fn the_anonymity_embargo_is_derived_from_its_own_hop() {
-    let clearnet = DandelionParams::adopted_for(RelayZone::Public);
-    let anon = DandelionParams::adopted_for(RelayZone::Tor);
+    let clearnet = DandelionParams::adopted_for_transit_ms(ADOPTED_TRANSIT_ASSUMPTION_MS);
+    let anon = DandelionParams::adopted_for_transit_ms(ANON_ZONE_TRANSIT_ASSUMPTION_MS);
 
     let clearnet_s = embargo_secs(&clearnet);
     let anon_s = embargo_secs(&anon);

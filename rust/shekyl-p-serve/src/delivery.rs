@@ -21,9 +21,41 @@
 //! signed bytes are defined once: the `RF-D4` frame header, then every
 //! payload chunk, and nothing else. A body that is not exactly the length
 //! its frame declares has no digest.
+//!
+//! # Where the fold runs
+//!
+//! The fold is a hash over every byte of the shard: software Keccak, tens
+//! of milliseconds for a full segment on the floor device. The serve loop
+//! runs it on the blocking pool, in the same hop as the store read that
+//! produced the chunk ([`read_and_fold`]), so that it does not hold an
+//! executor thread away from every other connection's task while it
+//! hashes.
+//!
+//! That is the part of the digest that scales with the shard, and it is
+//! the only part that moves. [`FramedDigest::start`], which absorbs the
+//! frame header, and [`FramedDigest::finish`], which finalizes, run on
+//! the connection's task: a fixed few Keccak permutations whatever the
+//! shard's size, and less work than a hop to the pool would be.
+//!
+//! What this module's surface enforces is narrower than "never on the
+//! executor", and it is stated exactly so nobody leans on more. The serve
+//! loop can start a digest, move it into [`read_and_fold`] and finish it.
+//! It cannot advance one: [`FramedDigest::absorb`] is private to this
+//! module, and so is [`fold_chunk`], its only caller outside the tests
+//! below. So **the hash cannot be separated from the read**: there is no
+//! way to read a chunk in one place and fold it in another, which is the
+//! shape that put the hash on the executor before. Which thread the
+//! combined step runs on is the caller's choice, and the type system does
+//! not make it: `write_response` wraps [`read_and_fold`] in
+//! `spawn_blocking`, as it always wrapped the store read, and calling it
+//! directly on the executor would compile and would block that thread on
+//! synchronous store I/O as well as on the hash.
 
 use shekyl_archival_retention::{PassDeliveryHasher, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
 use shekyl_curve_tree::served_frame::ServedFrameHeader;
+
+use super::WRITE_CHUNK_BYTES;
+use crate::provider::{ProviderError, ShardBody};
 
 /// Running digest of the framed body ahead of the countersignature.
 pub(super) struct FramedDigest {
@@ -68,7 +100,7 @@ impl FramedDigest {
     /// declared length, or when its length does not fit a `u64`. The digest
     /// is left unchanged in that case, so the caller stops rather than
     /// signing or sending a body the frame does not describe.
-    pub(super) fn absorb(&mut self, chunk: &[u8]) -> Option<()> {
+    fn absorb(&mut self, chunk: &[u8]) -> Option<()> {
         let len = u64::try_from(chunk.len()).ok()?;
         let absorbed = self.absorbed.checked_add(len)?;
         if absorbed > self.framed_len {
@@ -87,6 +119,59 @@ impl FramedDigest {
         }
         Some(self.hasher.finalize())
     }
+}
+
+/// What folding one read of the body into the delivery digest produced.
+pub(super) enum Folded {
+    /// Bytes inside the frame, now part of the digest: write them.
+    Bytes(Vec<u8>),
+    /// The body ended. Whether it ended at the frame's declared length is
+    /// [`FramedDigest::finish`]'s to say.
+    End,
+    /// The store failed part-way.
+    StoreFault,
+    /// The store yielded a byte past the frame's declared length. Not
+    /// folded, and not to be written.
+    PastFrame,
+}
+
+/// Fold one read of the body into the running digest.
+///
+/// The one place a served byte enters the digest. Its one caller is
+/// [`read_and_fold`], which the endpoint runs on the blocking pool and the
+/// `BA-T3` compositions run on their own thread, so the gate counts the
+/// fold the endpoint runs and not a copy of it. A second digest pass
+/// added here moves the gate; there is nowhere else to add one.
+fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
+    match chunk {
+        Ok(Some(bytes)) => match running.absorb(&bytes) {
+            Some(()) => Folded::Bytes(bytes),
+            None => Folded::PastFrame,
+        },
+        Ok(None) => Folded::End,
+        Err(_) => Folded::StoreFault,
+    }
+}
+
+/// Read the next chunk of the body and fold it into the digest: one step
+/// of the send loop, and one blocking-pool hop.
+///
+/// The read is synchronous store I/O and the fold is CPU-bound hashing,
+/// so both belong off the executor and they go together: call this inside
+/// `spawn_blocking`. The body and the digest are taken by value and handed
+/// back with the result, because the hop owns them while it runs: the
+/// caller holds neither across the `await`, and has no other way to
+/// advance the digest (see the module docs).
+///
+/// The chunk size is the serve loop's [`WRITE_CHUNK_BYTES`], read here and
+/// not passed in, so the endpoint and the `BA-T3` compositions cannot read
+/// at different sizes: the gate would then be counting a different loop.
+pub(super) fn read_and_fold(
+    mut body: ShardBody,
+    mut running: FramedDigest,
+) -> (ShardBody, FramedDigest, Folded) {
+    let folded = fold_chunk(&mut running, body.next_chunk(WRITE_CHUNK_BYTES));
+    (body, running, folded)
 }
 
 #[cfg(test)]

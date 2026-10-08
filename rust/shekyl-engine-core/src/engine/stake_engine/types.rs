@@ -599,6 +599,14 @@ pub(crate) enum StakeEngineError {
     /// "bond assembly". Nothing was persisted and no funding was reserved.
     #[error("drain assembly: {0}")]
     DrainAssembly(#[from] DrainAssemblyError),
+
+    /// Countersigning a pass transcript with the held persona's bond identity
+    /// key failed inside the scheme — **malformed resident key material**
+    /// (corrupted in-memory state), the same class as [`Self::ScanSetup`].
+    /// Not a refusal the serving host chose: the host reports it in its
+    /// `late_sign_failures` counter and the client sees a refusal trailer.
+    #[error("pass countersignature failed: {0}")]
+    PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one

@@ -81,15 +81,14 @@
 //!
 //! Not the path, not the peer, not the timing. The only observables are
 //! six aggregate monotone counters with no per-request structure:
-//! [`PServeEndpoint::served_count`], [`PServeEndpoint::refused_count`],
-//! [`PServeEndpoint::lookup_failure_count`],
-//! [`PServeEndpoint::sign_failure_count`],
-//! [`PServeEndpoint::late_sign_failure_count`],
-//! [`PServeEndpoint::accept_error_count`].
+//! [`ServeCounterReader::served_count`], [`ServeCounterReader::refused_count`],
+//! [`ServeCounterReader::lookup_failure_count`],
+//! [`ServeCounterReader::sign_failure_count`],
+//! [`ServeCounterReader::late_sign_failure_count`],
+//! [`ServeCounterReader::accept_error_count`].
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,7 +98,8 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
-use crate::provider::{ProviderError, ShardBody, ShardProvider};
+use crate::provider::{ShardBody, ShardProvider};
+use crate::serve_counters::{ServeCounterReader, ServeCounterWriter};
 use shekyl_archival_retention::{
     PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
 };
@@ -110,7 +110,7 @@ use shekyl_types::BlockHeight;
 // module, and the digest type is private to it.
 #[path = "delivery.rs"]
 mod delivery;
-use delivery::FramedDigest;
+use delivery::{read_and_fold, Folded, FramedDigest};
 
 // The route grammar this endpoint answers — `GET /shard/{id}`, the
 // `application/octet-stream` content type, the request header's name and
@@ -227,12 +227,7 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct PServeEndpoint {
     addr: SocketAddr,
     accept_task: JoinHandle<()>,
-    served: Arc<AtomicU64>,
-    refused: Arc<AtomicU64>,
-    lookup_failures: Arc<AtomicU64>,
-    sign_failures: Arc<AtomicU64>,
-    late_sign_failures: Arc<AtomicU64>,
-    accept_errors: Arc<AtomicU64>,
+    counters: ServeCounterReader,
 }
 
 impl PServeEndpoint {
@@ -248,10 +243,9 @@ impl PServeEndpoint {
     /// to get it wrong.
     ///
     /// `signer` supplies the persona's height for the `SF-D5` gate and the
-    /// `SF-D8` countersignature. A host whose key is not yet resident binds
-    /// a signer that refuses (`shekyl-p-host`'s `NoResidentKey`): the
-    /// endpoint stays up, and a valid request for a held shard gets the
-    /// bare 503 before any shard byte, counted in
+    /// `SF-D8` countersignature. A signer that refuses the pre-flight (the
+    /// key's owner is gone) keeps the endpoint up: a valid request for a
+    /// held shard gets the bare 503 before any shard byte, counted in
     /// [`Self::sign_failure_count`].
     ///
     /// # Errors
@@ -299,18 +293,8 @@ impl PServeEndpoint {
         signer: Arc<dyn PassSigner>,
     ) -> io::Result<Self> {
         let addr = listener.local_addr()?;
-        let served = Arc::new(AtomicU64::new(0));
-        let refused = Arc::new(AtomicU64::new(0));
-        let lookup_failures = Arc::new(AtomicU64::new(0));
-        let sign_failures = Arc::new(AtomicU64::new(0));
-        let late_sign_failures = Arc::new(AtomicU64::new(0));
-        let accept_errors = Arc::new(AtomicU64::new(0));
-        let served_ctr = Arc::clone(&served);
-        let refused_ctr = Arc::clone(&refused);
-        let failures_ctr = Arc::clone(&lookup_failures);
-        let sign_failures_ctr = Arc::clone(&sign_failures);
-        let late_sign_failures_ctr = Arc::clone(&late_sign_failures);
-        let accept_errors_ctr = Arc::clone(&accept_errors);
+        let counters = ServeCounterReader::zeroed();
+        let writer = counters.writer();
         // Bounds concurrency without queueing: an arrival past the cap is
         // closed immediately rather than parked, so the refusal costs one
         // accept and frees the descriptor at once.
@@ -327,7 +311,7 @@ impl PServeEndpoint {
                     // a listener that has become permanently unusable is
                     // otherwise indistinguishable from a quiet epoch, and
                     // the persona would learn about it from a slash.
-                    accept_errors_ctr.fetch_add(1, Ordering::Relaxed);
+                    writer.record_accept_error();
                     tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                     continue;
                 };
@@ -336,32 +320,21 @@ impl PServeEndpoint {
                 // a prober a free capacity oracle; a closed connection is
                 // indistinguishable from ordinary circuit failure.
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
-                    refused_ctr.fetch_add(1, Ordering::Relaxed);
+                    writer.record_refused();
                     drop(stream);
                     continue;
                 };
                 let provider = Arc::clone(&provider);
                 let signer = Arc::clone(&signer);
-                let served = Arc::clone(&served_ctr);
-                let failures = Arc::clone(&failures_ctr);
-                let sign_failures = Arc::clone(&sign_failures_ctr);
-                let late_sign_failures = Arc::clone(&late_sign_failures_ctr);
+                let connection_writer = writer.clone();
                 tokio::spawn(async move {
                     // Errors are swallowed by design: a failed connection
                     // must produce no log line and no differing response,
                     // or the failure itself becomes an observable. `.ok()`
                     // rather than `let _ =` so the discard is explicit.
-                    handle_connection(
-                        stream,
-                        provider,
-                        signer,
-                        &served,
-                        &failures,
-                        &sign_failures,
-                        &late_sign_failures,
-                    )
-                    .await
-                    .ok();
+                    handle_connection(stream, provider, signer, &connection_writer)
+                        .await
+                        .ok();
                     // Held for the whole connection, so the slot reopens
                     // only once the shard has finished sending. What bounds
                     // that hold against a hostile peer is
@@ -375,13 +348,18 @@ impl PServeEndpoint {
         Ok(Self {
             addr,
             accept_task,
-            served,
-            refused,
-            lookup_failures,
-            sign_failures,
-            late_sign_failures,
-            accept_errors,
+            counters,
         })
+    }
+
+    /// The read side of the counters, detached from this endpoint.
+    ///
+    /// Clone it to sample the totals from a task that does not hold the
+    /// endpoint; the six `*_count` getters below are the same reads, for a
+    /// caller that does.
+    #[must_use]
+    pub fn counters(&self) -> &ServeCounterReader {
+        &self.counters
     }
 
     /// The bound loopback address — the `ADD_ONION` `Port=` target.
@@ -394,78 +372,40 @@ impl PServeEndpoint {
         self.addr
     }
 
-    /// Shard responses fully written — an **aggregate**, no per-request
-    /// structure. Exists so a harness can assert the endpoint served what
-    /// it believes it served; it carries no path, no peer, no timing.
+    /// See [`ServeCounterReader::served_count`].
     #[must_use]
     pub fn served_count(&self) -> u64 {
-        self.served.load(Ordering::Relaxed)
+        self.counters.served_count()
     }
 
-    /// Connections refused for exceeding [`MAX_INFLIGHT`] — the operator
-    /// signal that the carried placeholder cap is binding and wants its
-    /// W₂-rig derivation.
+    /// See [`ServeCounterReader::refused_count`].
     #[must_use]
     pub fn refused_count(&self) -> u64 {
-        self.refused.load(Ordering::Relaxed)
+        self.counters.refused_count()
     }
 
-    /// Store faults while answering a parsed shard read.
-    ///
-    /// The cases that fail before a byte is written are the 503, shared with
-    /// a missing key, and the cases that fail after the head is out are a
-    /// connection closed mid-body.
-    ///
-    /// Counted:
-    ///
-    /// * the tip the anchor gate needs could not be read, so the gate never
-    ///   ran, or the shard could not be opened (I/O, or bytes pruned out
-    ///   from under a serve-set that was not pinned) — the 503;
-    /// * the body read failed part-way, ran past its frame, or ended short
-    ///   of it — a response cut off mid-body.
-    ///
-    /// An invalid request (the 400) and an ordinary not-held answer (unknown
-    /// id, unfrozen segment: the 404) are deliberate and **not** counted.
-    /// A key that refuses its pre-flight is [`Self::sign_failure_count`];
-    /// a signer that fails after the body is
-    /// [`Self::late_sign_failure_count`].
+    /// See [`ServeCounterReader::lookup_failure_count`].
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
-        self.lookup_failures.load(Ordering::Relaxed)
+        self.counters.lookup_failure_count()
     }
 
-    /// Valid requests for a held shard that the key refused at its
-    /// pre-flight ([`PassKey::ready`](crate::countersign::PassKey::ready)):
-    /// the 503, before any shard byte. This is the bucket a persona with no
-    /// resident key accrues, and it costs the persona one shard open per
-    /// request. An invalid request and an unheld shard never reach this
-    /// counter.
+    /// See [`ServeCounterReader::sign_failure_count`].
     #[must_use]
     pub fn sign_failure_count(&self) -> u64 {
-        self.sign_failures.load(Ordering::Relaxed)
+        self.counters.sign_failure_count()
     }
 
-    /// Responses whose whole body went out and whose signer then refused,
-    /// or returned an envelope of the wrong length: a 200 whose envelope is
-    /// the refusal trailer. Counted apart from [`Self::sign_failure_count`]
-    /// because it is a different event at a different price: the pre-flight
-    /// said yes, and a whole shard was read, hashed and sent for a response
-    /// nobody can use. A persona that sees this move has a key whose
-    /// pre-flight says yes to what its signer then refuses.
+    /// See [`ServeCounterReader::late_sign_failure_count`].
     #[must_use]
     pub fn late_sign_failure_count(&self) -> u64 {
-        self.late_sign_failures.load(Ordering::Relaxed)
+        self.counters.late_sign_failure_count()
     }
 
-    /// `accept` failures. The loop backs off and retries rather than
-    /// exiting, so without this a listener that has become permanently
-    /// unusable — sustained FD exhaustion, a descriptor that will never
-    /// accept again — looks exactly like a quiet epoch: the other
-    /// counters simply stop moving. Aggregate and monotone like the rest;
-    /// it names no peer and no time.
+    /// See [`ServeCounterReader::accept_error_count`].
     #[must_use]
     pub fn accept_error_count(&self) -> u64 {
-        self.accept_errors.load(Ordering::Relaxed)
+        self.counters.accept_error_count()
     }
 }
 
@@ -534,34 +474,17 @@ async fn handle_connection(
     mut stream: TcpStream,
     provider: Arc<dyn ShardProvider>,
     signer: Arc<dyn PassSigner>,
-    served: &AtomicU64,
-    lookup_failures: &AtomicU64,
-    sign_failures: &AtomicU64,
-    late_sign_failures: &AtomicU64,
+    counters: &ServeCounterWriter,
 ) -> io::Result<()> {
     let head = tokio::time::timeout(READ_TIMEOUT, read_head(&mut stream))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
 
-    let resolved = resolve(
-        &head,
-        provider,
-        Arc::clone(&signer),
-        lookup_failures,
-        sign_failures,
-    )
-    .await;
+    let resolved = resolve(&head, provider, Arc::clone(&signer), counters).await;
 
     let written = tokio::time::timeout(
         WRITE_TIMEOUT,
-        write_response(
-            &mut stream,
-            resolved,
-            signer,
-            served,
-            lookup_failures,
-            late_sign_failures,
-        ),
+        write_response(&mut stream, resolved, signer, counters),
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write"))?;
@@ -645,7 +568,7 @@ enum Lookup {
 /// The gate, the open and the pre-flight: everything this persona does
 /// before its first response byte, as one blocking-pool hop.
 ///
-/// A named function and not a closure, like [`read_chunk`] and
+/// A named function and not a closure, like [`read_and_fold`] and
 /// [`sign_envelope`], because the serve path's cost is gated per thread
 /// (`benches/serve_response_iai.rs`): Callgrind keeps one collection state
 /// per thread, so the gate measures these steps composed on one thread
@@ -669,46 +592,6 @@ fn gate_and_open(
             Ok(()) => Lookup::Held(body),
             Err(_) => Lookup::NoKey,
         },
-    }
-}
-
-/// One chunk of the body for the send loop. The body travels with the
-/// result because the read is a blocking-pool hop that owns it meanwhile.
-fn read_chunk(mut body: ShardBody) -> (ShardBody, Result<Option<Vec<u8>>, ProviderError>) {
-    let chunk = body.next_chunk(WRITE_CHUNK_BYTES);
-    (body, chunk)
-}
-
-/// What folding one read of the body into the delivery digest produced.
-enum Folded {
-    /// Bytes inside the frame, now part of the digest: write them.
-    Bytes(Vec<u8>),
-    /// The body ended. Whether it ended at the frame's declared length is
-    /// [`FramedDigest::finish`]'s to say.
-    End,
-    /// The store failed part-way.
-    StoreFault,
-    /// The store yielded a byte past the frame's declared length. Not
-    /// folded, and not to be written.
-    PastFrame,
-}
-
-/// Fold one read of the body into the running digest.
-///
-/// The one place a served byte enters the digest. [`write_response`] calls
-/// it between the read and the write, and the `BA-T3` compositions call it
-/// in the same place, so the gate counts the fold the endpoint runs and
-/// not a copy of it: a second digest pass added here moves the gate, and
-/// one added anywhere else in `write_response` is a second call site of a
-/// function that has one.
-fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
-    match chunk {
-        Ok(Some(bytes)) => match running.absorb(&bytes) {
-            Some(()) => Folded::Bytes(bytes),
-            None => Folded::PastFrame,
-        },
-        Ok(None) => Folded::End,
-        Err(_) => Folded::StoreFault,
     }
 }
 
@@ -766,8 +649,7 @@ async fn resolve(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
     signer: Arc<dyn PassSigner>,
-    lookup_failures: &AtomicU64,
-    sign_failures: &AtomicU64,
+    counters: &ServeCounterWriter,
 ) -> Resolved {
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Resolved::Invalid;
@@ -787,11 +669,11 @@ async fn resolve(
             fields,
         }),
         Ok(Lookup::NoKey) => {
-            sign_failures.fetch_add(1, Ordering::Relaxed);
+            counters.record_sign_failure();
             Resolved::Unavailable
         }
         Ok(Lookup::StoreFault) | Err(_) => {
-            lookup_failures.fetch_add(1, Ordering::Relaxed);
+            counters.record_lookup_failure();
             Resolved::Unavailable
         }
     }
@@ -831,7 +713,7 @@ async fn resolve(
 /// body was opened. The bytes written are [`FramedDigest::frame_bytes`]: the
 /// header that was hashed, not a second encoding of it.
 ///
-/// Generic over the writer so the invariant tests can stand a sink in for
+/// Generic over the sink so the invariant tests can stand a buffer in for
 /// the socket and say exactly how many bytes a requester took before it
 /// stopped (`serve_invariant_tests.rs`).
 ///
@@ -841,9 +723,7 @@ async fn write_response<W: AsyncWrite + Unpin>(
     stream: &mut W,
     resolved: Resolved,
     signer: Arc<dyn PassSigner>,
-    served: &AtomicU64,
-    lookup_failures: &AtomicU64,
-    late_sign_failures: &AtomicU64,
+    counters: &ServeCounterWriter,
 ) -> io::Result<()> {
     let Held {
         mut body,
@@ -869,31 +749,39 @@ async fn write_response<W: AsyncWrite + Unpin>(
         .ok_or_else(|| io::Error::other("response head"))?;
     write_bounded(stream, &head).await?;
     loop {
-        // The store read is synchronous redb, so each chunk crosses to the
-        // blocking pool and the body comes back with it.
-        let (returned, chunk) = tokio::task::spawn_blocking(move || read_chunk(body))
-            .await
-            .map_err(|_| io::Error::other("shard body task"))?;
+        // The store read is synchronous redb and the fold is a hash over
+        // the chunk, so both cross to the blocking pool together: this
+        // task's executor thread does neither. The body and the digest
+        // travel into the hop and come back with what it produced. This
+        // function cannot advance the digest itself (`absorb` is private
+        // to `delivery`), so the hash cannot drift apart from the read
+        // and back onto this thread; keeping the pair inside
+        // `spawn_blocking` is this line's job.
+        let (returned, digest, folded) =
+            tokio::task::spawn_blocking(move || read_and_fold(body, running))
+                .await
+                .map_err(|_| io::Error::other("shard body task"))?;
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(bytes) => write_bounded(stream, &bytes).await?,
             Folded::End => break,
             Folded::PastFrame => {
                 // Do not write a byte the frame does not describe, and
                 // sign nothing.
-                lookup_failures.fetch_add(1, Ordering::Relaxed);
+                counters.record_lookup_failure();
                 return Err(io::Error::other("shard body longer than its frame"));
             }
             Folded::StoreFault => {
                 // The head is already out; all that is left is to close.
                 // The counter is the only place this is visible.
-                lookup_failures.fetch_add(1, Ordering::Relaxed);
+                counters.record_lookup_failure();
                 return Err(io::Error::other("shard body read failed mid-stream"));
             }
         }
     }
     let Some(digest) = running.finish() else {
-        lookup_failures.fetch_add(1, Ordering::Relaxed);
+        counters.record_lookup_failure();
         return Err(io::Error::other("shard body shorter than its frame"));
     };
     // Every body byte is written and hashed. Sign for exactly those bytes.
@@ -902,12 +790,12 @@ async fn write_response<W: AsyncWrite + Unpin>(
     let Ok(Some(signature)) = signed else {
         // The body is out and cannot be taken back. Say so, in bytes only
         // this end can write.
-        late_sign_failures.fetch_add(1, Ordering::Relaxed);
+        counters.record_late_sign_failure();
         write_bounded(stream, &[REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]).await?;
         return Ok(());
     };
     write_bounded(stream, &signature).await?;
-    served.fetch_add(1, Ordering::Relaxed);
+    counters.record_served();
     Ok(())
 }
 
@@ -958,8 +846,8 @@ fn admit_in_memory(
 /// keeps one collection state per thread and the endpoint's steps run on
 /// tokio's blocking pool, whose idle work made per-thread counts drift by
 /// up to 14 % between runs of one input. So the gate measures the steps
-/// here: [`gate_and_open`], [`response_head`], [`read_chunk`],
-/// [`fold_chunk`], [`sign_envelope`], in the order [`resolve`] and [`write_response`]
+/// here: [`gate_and_open`], [`response_head`], [`read_and_fold`],
+/// [`sign_envelope`], in the order [`resolve`] and [`write_response`]
 /// run them. It is not a second serve path. The steps are the endpoint's
 /// own functions, and `serve_bench_seam_tests.rs` holds this composition
 /// to the live endpoint for every outcome: the same bytes, and the same
@@ -994,9 +882,10 @@ pub fn serve_one_in_memory(
     };
     out.extend_from_slice(&response_head);
     loop {
-        let (returned, chunk) = read_chunk(body);
+        let (returned, digest, folded) = read_and_fold(body, running);
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
             Folded::End => break,
             Folded::PastFrame | Folded::StoreFault => return InMemoryServe::Truncated,
@@ -1064,9 +953,10 @@ pub fn read_and_fold_in_memory(
     let mut body = provider.shard_bytes(shard_id).ok()??;
     let mut running = FramedDigest::start(&body.header(), nonce)?;
     loop {
-        let (returned, chunk) = read_chunk(body);
+        let (returned, digest, folded) = read_and_fold(body, running);
         body = returned;
-        match fold_chunk(&mut running, chunk) {
+        running = digest;
+        match folded {
             Folded::Bytes(_) => {}
             Folded::End => return running.finish(),
             Folded::PastFrame | Folded::StoreFault => return None,

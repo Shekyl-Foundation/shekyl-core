@@ -5,6 +5,8 @@
 
 //! D12's cause table. One enum. The C header is a projection of it.
 
+use crate::ConnectorId;
+
 /// Where a cause may be recorded. `LocalClose` applies in every phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -43,6 +45,15 @@ macro_rules! close_kinds {
             pub const fn code(self) -> u8 {
                 match self {
                     $(Self::$name => $disc,)*
+                }
+            }
+
+            /// The discriminant, or `None` when `code` is not in the table.
+            #[must_use]
+            pub const fn from_code(code: u8) -> Option<Self> {
+                match code {
+                    $($disc => Some(Self::$name),)*
+                    _ => None,
                 }
             }
 
@@ -153,6 +164,100 @@ impl CloseCause {
     pub const fn reply_code(self) -> u16 {
         self.reply_code
     }
+
+    /// Whether remembering this cause should stop us dialing the address.
+    ///
+    /// Forgetting shrinks the dial set, and a shrunken set favours whoever
+    /// is feeding us addresses. A cause that does not name the destination
+    /// leaves the address dialable.
+    ///
+    /// [`CloseKind::DialFailed`] is a direct connect the peer refused
+    /// (TCP RST). Any other connect error is [`CloseKind::LocalClose`]:
+    /// network unreachable, address not available, and permission denied
+    /// are this node's link. [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging the
+    /// peer. [`CloseKind::ProxyRefused`] depends on `connector`. A clearnet
+    /// proxy's reply is the exit's claim about a host, and the cache would
+    /// suppress that whole host for an hour, so no clearnet reply counts.
+    /// An onion dial counts only the replies that name that onion: RFC 1928
+    /// host unreachable (`0x04`) and connection refused (`0x05`), and the
+    /// Tor SOCKS extended codes for a descriptor that is missing (`0xF0`)
+    /// or unusable (`0xF1`) and an introduction that failed (`0xF2`).
+    /// Introduction and rendezvous timeouts (`0xF7`, `0xF3`), general
+    /// failure, a ruleset, network unreachable, and TTL expired do not.
+    /// A command or address type this node sent (`0x07`, `0x08`), an onion
+    /// address Tor rejected (`0xF6`; we validate it before dialing), and
+    /// client-authorization errors (`0xF4`, `0xF5`) do not either. Any
+    /// other reply does not.
+    ///
+    /// The extended codes arrive only when the managed `SocksPort` asks
+    /// for them (`auto ExtendedErrors`). Tor 0.4.9.11 leaves that off
+    /// (`port_cfg_new`), and without it `stream_end_reason_to_socks5_response`
+    /// reports an introduction timeout as reply 4.
+    #[must_use]
+    pub const fn implicates_address(self, connector: ConnectorId) -> bool {
+        match self.kind {
+            CloseKind::DialFailed | CloseKind::LevinHandshakeRejected => true,
+            CloseKind::ProxyRefused => {
+                connector_is_tor(connector) && onion_reply_names_the_destination(self.reply_code)
+            }
+            _ => false,
+        }
+    }
+}
+
+const fn connector_is_tor(connector: ConnectorId) -> bool {
+    matches!(connector, ConnectorId::Tor)
+}
+
+/// RFC 1928 §6. The destination host was not reached.
+const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
+/// RFC 1928 §6. The destination refused the connection.
+const SOCKS_CONNECTION_REFUSED: u16 = 0x05;
+/// RFC 1928 §6. The command this node sent is not supported.
+const SOCKS_COMMAND_NOT_SUPPORTED: u16 = 0x07;
+/// RFC 1928 §6. The address type this node sent is not supported.
+const SOCKS_ADDRESS_TYPE_NOT_SUPPORTED: u16 = 0x08;
+/// Tor extended error (`socks-extensions`, proposal 304). Descriptor missing.
+const TOR_DESCRIPTOR_MISSING: u16 = 0xF0;
+/// Tor extended error. The descriptor is unusable.
+const TOR_DESCRIPTOR_UNUSABLE: u16 = 0xF1;
+/// Tor extended error. The introduction failed.
+const TOR_INTRODUCTION_FAILED: u16 = 0xF2;
+/// Tor extended error. Client authorization is missing. This node's request.
+const TOR_CLIENT_AUTH_MISSING: u16 = 0xF4;
+/// Tor extended error. Client authorization was rejected. This node's request.
+const TOR_CLIENT_AUTH_REJECTED: u16 = 0xF5;
+/// Tor extended error. Tor rejected the onion address. Validated before dial.
+const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
+
+/// Onion SOCKS replies that name the destination.
+///
+/// RFC 1928 §6 host unreachable and connection refused. Tor's extended
+/// codes for a missing or unusable descriptor, and a failed introduction.
+const fn onion_reply_names_the_destination(reply: u16) -> bool {
+    matches!(
+        reply,
+        SOCKS_HOST_UNREACHABLE
+            | SOCKS_CONNECTION_REFUSED
+            | TOR_DESCRIPTOR_MISSING
+            | TOR_DESCRIPTOR_UNUSABLE
+            | TOR_INTRODUCTION_FAILED
+    )
+}
+
+/// Replies that mean the request this node sent, not the onion.
+///
+/// The dial path logs these at error. They do not forget the address.
+/// `0xF4` and `0xF5` are both client-authorization errors.
+pub const fn socks_reply_is_our_request(reply: u16) -> bool {
+    matches!(
+        reply,
+        SOCKS_COMMAND_NOT_SUPPORTED
+            | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED
+            | TOR_CLIENT_AUTH_MISSING
+            | TOR_CLIENT_AUTH_REJECTED
+            | TOR_ONION_ADDRESS_REJECTED
+    )
 }
 
 const HEADER_PREAMBLE: &str = "\
@@ -212,6 +317,7 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 #[cfg(test)]
 mod tests {
     use super::{c_header, CloseCause, CloseKind, Phase};
+    use crate::ConnectorId;
 
     #[test]
     fn the_header_is_the_enum() {
@@ -264,6 +370,47 @@ mod tests {
             .copied()
             .filter(|kind| kind.applies_in(phase))
             .collect()
+    }
+
+    /// Every reply byte, on both connectors. An onion dial counts `0x04`,
+    /// `0x05`, `0xF0`, `0xF1`, and `0xF2`. `0xF3` and `0xF7` stay dialable.
+    /// A clearnet proxy reply never counts. This does not launch Tor and
+    /// does not cover the directory attacker who can force reply 4.
+    #[test]
+    fn implicates_address_over_every_reply_and_both_connectors() {
+        for kind in CloseKind::ALL {
+            if *kind == CloseKind::ProxyRefused {
+                continue;
+            }
+            let cause = CloseCause::new(*kind);
+            let expect = matches!(
+                kind,
+                CloseKind::DialFailed | CloseKind::LevinHandshakeRejected
+            );
+            for connector in [ConnectorId::Clearnet, ConnectorId::Tor] {
+                assert_eq!(
+                    cause.implicates_address(connector),
+                    expect,
+                    "{kind:?} on {connector:?}"
+                );
+            }
+        }
+        for reply in 0u16..=0x00FF {
+            let cause = CloseCause::proxy_refused(reply);
+            // The expected set is the spec's, written here. It is not
+            // `onion_reply_names_the_destination`.
+            let onion = matches!(reply, 0x04 | 0x05 | 0xF0 | 0xF1 | 0xF2);
+            assert_eq!(
+                cause.implicates_address(ConnectorId::Tor),
+                onion,
+                "onion reply {reply:#x}"
+            );
+            assert!(
+                !cause.implicates_address(ConnectorId::Clearnet),
+                "clearnet reply {reply:#x} must stay dialable"
+            );
+        }
+        assert!(!CloseCause::proxy_refused(0x0100).implicates_address(ConnectorId::Tor));
     }
 
     #[test]

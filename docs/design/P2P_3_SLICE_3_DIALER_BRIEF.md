@@ -2,13 +2,14 @@
 
 **Status: OPEN.** Design before code. Rule 26 is cited. No
 implementation starts from this file until a review of it has closed.
-Lines below were read on `dev` at `d93074d1c4` (2026-10-07), which
-contains #991. `record_addr_failed` takes the address, the cause, and
-the reply (`net_node.h:675`). `shekyl_seam_session_cause` is
-`rust/shekyl-ffi/src/cause_ffi.rs:55`. A later tip, `7f7109dc7e`,
-inserts Tor boot warnings above these functions and does not change
-them; the line numbers below are `d93074d1c4`. This slice mints no
-identifier family. It is the §4.2 row rescoped the same day.
+Lines below were read on `dev` at `f317d979c4` (2026-10-08), which
+contains #991 and #1002. `record_addr_failed` takes the address, the
+cause, and the reply (`net_node.h:675`). `shekyl_seam_session_cause`
+is `rust/shekyl-ffi/src/cause_ffi.rs:55`, declared at
+`shekyl_ffi.h:4430`. The C++ read is `net_node.h:229`.
+*Records-was: the pin was `d93074d1c4`, and the declaration was
+`shekyl_ffi.h:4448`.* This slice mints no identifier family. It is
+the §4.2 row rescoped the same day.
 
 **Ruling 2026-10-07 (Rick).** Order: #991 → slice 1 → this slice → RD.
 Dialing moves to Rust. No further fixes to the C++ dial path. Slice 4
@@ -28,8 +29,8 @@ with jittered spacing. The 60-second housekeeping timer is not the
 pace.
 
 Exclusive nodes and priority nodes are dialed by this slice. Today
-they are `connect_to_peerlist` at `net_node.inl:2864`, called from
-`connections_maker` (`:2063`) at `:2068` and `:2084`.
+they are `connect_to_peerlist` at `net_node.inl:2912`, called from
+`connections_maker` (`:2111`) at `:2116` and `:2132`.
 
 The dial is `Hub::connect`. The outbound Levin handshake is a
 timing-engine owner. It is not a thread waiting on an event, and it
@@ -55,6 +56,13 @@ the response's support flags, the peer's sync payload, and the board's
 established flag. The strand is the first reader of those three. The
 owner does not call `process_payload_sync_data`.
 
+In one strand turn after it accepts the sync payload, the strand does
+three things, in this order, before any later frame: set the
+established flag, flip the relay registry
+(`shekyl_relay_zone_on_session_established`), and post the acceptance
+to the dialer. Nothing enters the relay's peer set before the payload
+is accepted.
+
 On failure, the cause is the one the connector closed with. The
 handshake owner has it. It does not read it back from the hub.
 
@@ -68,7 +76,7 @@ established delivery.
 
 ## The handshake request
 
-`do_handshake_with_peer` (`net_node.inl:1281`) fills
+(`do_handshake_with_peer` (`net_node.inl:1329`) fills
 `COMMAND_HANDSHAKE` before the invoke. The sync payload is one field.
 The request also carries the address we announce, `network_id`, the
 support flags we send, and a self-connection nonce.
@@ -85,15 +93,17 @@ that moves while the handshake is in flight stays the snapshot the
 request already took. The fields are public chain data.
 
 **The address we announce.** `get_local_node_data`
-(`net_node.inl:2429`) writes it. The address is this node's own
+(`net_node.inl:2477`) writes it. The address is this node's own
 address on the connector being dialed. The declaration decides the
 shape. The rule does not name a connector.
 
 - The declaration says our address is not hidden, the node is
   reachable on that connector, and inbound is open
   (`max_in_connection_count > 0`). The request carries a port only.
-  The host is zero. The receiver pairs the port with the host it saw
-  on its own socket.
+  The host is zero. For a connector that does not hide our address,
+  the port is `m_external_port` when set, otherwise
+  `m_listening_port` (`get_local_node_data`, `net_node.inl:2504`).
+  The receiver pairs the port with the host it saw on its own socket.
 - The declaration says our address is hidden, the node is reachable
   there, and inbound is open. The request carries this node's address
   on that connector. When that address is not a reachable address, the
@@ -114,13 +124,13 @@ assignments after the address in `get_local_node_data`. Those are
 what we send. The response's support flags are the section below.
 
 **The self-connection nonce.** It is 32 random bytes, minted for this
-attempt (`mint_recorded_handshake_nonce`, `net_node.inl:1299`). It is
+attempt (`mint_recorded_handshake_nonce`, called at `net_node.inl:1347`, defined at `:1497`). It is
 recorded in that connector's in-flight set before the request is
 written. It is erased when the attempt ends on any path; the scope
-guard at `:1300` is the attempt's lifetime. The set moves to Rust.
+guard at `:1348` is the attempt's lifetime. The set moves to Rust.
 The dialer owns it. Until slice 4, the C++ inbound check
-(`detect_self_handshake`, called at `net_node.inl:2741`, defined at
-`:1488`) reads it through `shekyl_dial_take_handshake_nonce`. The
+(`detect_self_handshake`, called at `net_node.inl:2789`, defined at
+`:1536`) reads it through `shekyl_dial_take_handshake_nonce`. The
 query takes the inbound session's connector and the nonce, returns
 whether that connector's set held it, and erases it. The connector is
 the inbound session's, not one the request names. The set contains
@@ -134,7 +144,7 @@ kept as a peer.
 ## The candidate filter
 
 Before a dial, `make_new_connection_from_peerlist`
-(`net_node.inl:1741`) rejects a candidate. Rust takes every row. A
+(`net_node.inl:1789`) rejects a candidate. Rust takes every row. A
 row that is not in this table is dropped with the C++ dial path.
 
 | Filter | Disposition | Reason |
@@ -142,21 +152,21 @@ row that is not in this table is dropped with the C++ dial path.
 | Our own address (`zone.m_our_address`, and `is_self_dial` on a seed) | Kept | A dial to ourselves is not a peer |
 | One outbound per host (`has_outbound_connection_to_host`) | Kept | One outbound session per host on that connector |
 | Peer already in use (`is_peer_used`) | Kept | A second session to an address we already have |
-| Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:704`). A return of 2 is banned. The check is already Rust |
+| Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:706`). A return of 2 is banned. The check is already Rust |
 | Recently failed (`is_addr_recently_failed`) | Kept | This slice's failed-address memory |
-| `/24` diversity, then a second pass with the limit lifted | Kept. The key changes | Eclipse defence. Today the pass runs when the zone object is the clearnet zone. It runs when the connector's addressing cell is IP. A connector whose addressing is not IP has no subnet pass. A v4-mapped IPv6 address uses the v4 `/24`. Other IPv6 is not limited. The second pass runs only when the first pass produced no candidate |
-| One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The address that is dialed is still host and port |
+| `/24` and `/32` diversity, then a second pass with the limit lifted | Kept. Two keys, [pending Rick's ruling on (i) and (ii)] | PWD-B9 owns outbound diversity. This slice rules these two keys under it. (i) The occupied-subnet set is outbound sessions on that connector only. An inbound session does not occupy a subnet. (ii) IPv6 that is not v4-mapped is grouped by `/32`. A v4-mapped IPv6 address stays `/24`. The second pass is unchanged: it runs only when the first pass produced no candidate |
+| One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
 
 ## What the response does besides the sync payload
 
-A `network_id` that is not `m_network_id` (`net_node.inl:1322`) is
+A `network_id` that is not `m_network_id` (`net_node.inl:1370`) is
 `LevinHandshakeRejected`. `handshake_close_cause`
 (`net_node.h:218`) returns that cause when the invoke returned and
 `levin_rejected` is set. The mismatch sets that flag and does not
 call `add_host_fail`.
 
-A peerlist `handle_remote_peerlist` refuses (`net_node.inl:1332`)
+A peerlist `handle_remote_peerlist` refuses (`net_node.inl:1377`)
 closes the same way, `LevinHandshakeRejected`, and the C++ also calls
 `add_host_fail` (`:451`). The dialer posts that address to the C++
 score. The score stays C++. A peerlist this node refuses is the event
@@ -186,7 +196,12 @@ driver refuses. Promoting on the Levin response would put that peer
 on white and hand the next draw an address this node drops on sight.
 Waiting for the strand's acceptance keeps the peer on gray. The
 report does not block the dialer, so a slow strand cannot stall the
-next dial. A session that dies before the report is not white.
+next dial. A session that dies before the report is not white. A
+peer whose payload we refuse is never a stem edge, not even for an
+instant.
+
+Test: with a refused payload, the relay registry never holds the
+session.
 
 The Foundation fleet is not this definition. Slice 1 §3 writes white
 on a confirmed handshake with that fleet even though the dial is a
@@ -196,7 +211,7 @@ addresses, not a second door for anyone else.
 
 ## Seeds and harvest dials
 
-`connect_to_seed` (`net_node.inl:1984`) and `just_take_peerlist` are
+`connect_to_seed` (`net_node.inl:2032`) and `just_take_peerlist` are
 one disposition: a harvest. The handshake runs. The response peerlist
 is admitted to gray through slice 1. The session is closed. There is
 no established delivery and no white write, except slice 1 §3.
@@ -207,17 +222,17 @@ Two callers become that disposition.
   (`has_no_known_peers`, `net_peerlist.h:147`), or a fill pass added
   no session while the connector is still under its outbound target.
   The dialer tries the compiled seed list (`get_seed_nodes`, filled
-  at `net_node.inl:1994`) one address at a time and stops at the first
+  at `net_node.inl:2042`) one address at a time and stops at the first
   confirmed handshake, the `break` after `connect_to_seed`'s dial at
-  `:2024`. Clearnet, once, after every seed has failed, adds
-  `get_ip_seed_nodes` (`:2036`) and tries those the same way. The
+  `:2073`. Clearnet, once, after every seed has failed, adds
+  `get_ip_seed_nodes` (`:2084`) and tries those the same way. The
   session closes, and the fill that follows dials the fleet address
   slice 1 wrote to white. An exclusive
   list skips the pass. Offline skips it.
-- The gray re-test. `gray_peerlist_housekeeping` (`net_node.inl:3288`)
+- The gray re-test. `gray_peerlist_housekeeping` (`net_node.inl:3336`)
   dials one random gray peer through
-  `check_connection_and_handshake_with_peer` (`:1667`), which today
-  calls `do_handshake_with_peer` with `just_take_peerlist` (`:1687`)
+  `check_connection_and_handshake_with_peer` (`:1715`), which today
+  calls `do_handshake_with_peer` with `just_take_peerlist` (`:1735`)
   and closes. Same disposition. An exclusive list skips it.
 
 A harvest that completes clears that address in the failed-address
@@ -229,21 +244,25 @@ memory. A harvest that fails uses the connector's cause.
 [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §95. The
 hidden-address pool and the total outbound degree are lower limits.
 Each is at least `MIN_PROVISIONED_OUT_PEERS` (12,
-`shekyl-relay-privacy/src/params.rs:195`). The total floor is the
+`shekyl-relay-privacy/src/params.rs:203`). The total floor is the
 fail-safe's measured range (`fluff_return_ms = 3250` at degree 12).
-The hidden floor is the own-edge capture cost. An own transaction
-rides a stem slot. The operating point above those floors, and any
-ceiling, are not chosen by the approval. `(h, 0)`, Tor-only, is a
-measured case in §95.3 and is not the target. Recommending Tor-only
-waits on §96. The ceiling comes from resources.
+The operating point above those floors, and any ceiling, are not
+chosen by the approval. `(h, 0)`, Tor-only, is a measured case in
+§95.3 and is not the target. Recommending Tor-only waits on §96.
+The ceiling comes from resources.
 
-Until a run is ruled, the target is 12. That is the floor,
-kept as the interim, and it is a hard cap in the code the dialer
-takes over. On the relay branch, `net_node.inl:939` assigns
+The dialer keeps the hidden-address pool. Until a run is ruled, that
+pool's interim target is 12. On `dev`, `net_node.inl:984` assigns
 `shekyl_relay_zone_min_provisioned_out_peers()` to
 `max_out_connection_count`. This slice deletes that assignment and
 keeps the target at 12. It does not open more than 12 hidden sessions
 before the operating point is chosen.
+
+The relay draws the hidden stem slot from that pool and maps the
+local source to that slot. It is not a separate own-edge draw.
+`own_edge` and `NoOwnEdge` are on `dev` until the relay lane lands
+the ruling. This slice depends on nothing in them. The dialer does
+not choose the slot.
 
 *Records-was, earlier the same day: the address-hiding outbound
 target is exactly `MIN_PROVISIONED_OUT_PEERS`.* *Records-was before
@@ -256,15 +275,12 @@ relays are drawn from. The paper draws those edges from the node's
 P2P outbound edges (η = 8 in the simulations; the measured degree is
 12). The relay lane deletes the constant.
 
-The own-edge pool is the outbound sessions whose connector declares
-`address_hidden_from_peer`. That is a property of the connector. The
-dialer keeps that pool up to the interim target. `Relay::own_edge`
-draws uniformly from it (`hidden_outbound_ids`). The dialer does not
-choose the edge. An empty pool is the relay's `NoOwnEdge`. The draw
-stays the relay lane's. The relay never sees a per-connector count.
+The hidden-address pool is the outbound sessions whose connector
+declares `address_hidden_from_peer`. That is a property of the
+connector. The relay never sees a per-connector count.
 
 Clearnet's cap is what `set_max_out_peers` writes
-(`net_node.inl:2909`; the `--out-peers` call is `:621`). The default
+(`net_node.inl:2957`; the `--out-peers` call is `:621`). The default
 is `shekyl_p2p_default_out_peers`, which is `P2P_DEFAULT_OUT_PEERS`
 (12). A cap of 0 stays legal. A positive cap below the floor is
 still refused by that setter. Clearnet is not folded into the hidden
@@ -282,13 +298,13 @@ is not a stem edge.
 
 The handshake response carries `support_flags`. That value, including
 zero, is what the established delivery hands the strand.
-`try_get_support_flags` (`net_node.inl:1387`) asks again when the
+`try_get_support_flags` (`net_node.inl:1435`) asks again when the
 field is zero. The field is optional on the wire
 (`KV_SERIALIZE_OPT`, default 0), and the second invoke is how an
 omitted field was recovered. Shekyl sends the field. Zero is the
 peer's answer. The dialer does not own a second command.
 
-The inbound call (`net_node.inl:2789`) is the same ask inside the
+The inbound call (`net_node.inl:2837`) is the same ask inside the
 inbound handshake. Slice 4 deletes it for this reason. This slice
 deletes the outbound call.
 
@@ -303,25 +319,30 @@ The memory is not kept across restarts. It is the process map
 `m_conn_fails_cache`. `store_config` writes the peerlist and does not
 write this map. A restart dials again.
 
+Slice 1's gray admission refuses an address the memory holds, and a
+banned one (`handle_remote_peerlist`, `net_node.inl:2472`). Until
+this slice lands, slice 1 takes that predicate from the C++ cache;
+this slice replaces where the predicate comes from.
+
 ## What is deleted
 
-Each name is where it is on `dev` at `d93074d1c4`. When the deletion
+Each name is where it is on `dev` at `f317d979c4`. When the deletion
 has landed, the `rg` returns nothing.
 
 | What | Where | `rg` when it is gone |
 | --- | --- | --- |
-| `connections_maker` | `net_node.inl:2063`, declared `net_node.h:655` | `rg -n 'connections_maker' src/p2p` |
-| `make_new_connection_from_peerlist` and `connect_to_seed` | `net_node.inl:1741` and `connect_to_seed` at `:1984` (it stops at the first confirmed handshake, `:2024`) | `rg -n 'make_new_connection_from_\|connect_to_seed' src/p2p` |
-| `make_expected_connections_count` | `net_node.inl:2137` | `rg -n 'make_expected_connections_count' src/p2p` |
-| `try_to_connect_and_handshake_with_new_peer` | `net_node.inl:1589` | `rg -n 'try_to_connect_and_handshake_with_new_peer' src/p2p` |
-| The outbound calls of `do_handshake_with_peer` | `:1629` and `:1687`. The function itself is `:1281`. Inbound handshake handling is slice 4 and is not this deletion | `rg -n 'do_handshake_with_peer' src/p2p/net_node.inl` finds no call from a dial |
-| `m_conn_fails_cache`, `record_addr_failed`, `record_addr_success` | the cache at `net_node.h:788`; `record_addr_failed` at `net_node.inl:1715` (`addr`, `cause`, `reply`); `record_addr_success` writes at `:1730` | `rg -n 'm_conn_fails_cache\|record_addr_failed\|record_addr_success' src/p2p` |
-| The dial path in `idle_worker` | `idle_worker` is `net_node.inl:2255`. The dial is the `connections_maker` call at `:2258` | `rg -n 'connections_maker' src/p2p/net_node.inl` |
+| `connections_maker` | `net_node.inl:2111`, declared `net_node.h:655` | `rg -n 'connections_maker' src/p2p` |
+| `make_new_connection_from_peerlist` and `connect_to_seed` | `net_node.inl:1789` and `connect_to_seed` at `:2032` (it stops at the first confirmed handshake, `:2073`) | `rg -n 'make_new_connection_from_\|connect_to_seed' src/p2p` |
+| `make_expected_connections_count` | `net_node.inl:2185` | `rg -n 'make_expected_connections_count' src/p2p` |
+| `try_to_connect_and_handshake_with_new_peer` | `net_node.inl:1637` | `rg -n 'try_to_connect_and_handshake_with_new_peer' src/p2p` |
+| The outbound calls of `do_handshake_with_peer` | `:1677` and `:1735`. The function itself is `:1329`. Inbound handshake handling is slice 4 and is not this deletion | `rg -n 'do_handshake_with_peer' src/p2p/net_node.inl` finds no call from a dial |
+| `m_conn_fails_cache`, `record_addr_failed`, `record_addr_success` | the cache at `net_node.h:788`; `record_addr_failed` at `net_node.inl:1763` (`addr`, `cause`, `reply`); `record_addr_success` is `:1776` | `rg -n 'm_conn_fails_cache\|record_addr_failed\|record_addr_success' src/p2p` |
+| The dial path in `idle_worker` | `idle_worker` is `net_node.inl:2303`. The dial is the `connections_maker` call at `:2306` | `rg -n 'connections_maker' src/p2p/net_node.inl` |
 | `zone_server::open` | `zone_server.h:382` | `rg -n 'open_outcome open\(' src/p2p/zone_server.h` |
-| `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:301` | the function returns without waiting for the handler to arm |
-| `shekyl_seam_session_cause` | `rust/shekyl-ffi/src/cause_ffi.rs:55`. Declared at `shekyl_ffi.h:4448`. The C++ read is `net_node.h:229` | `rg -n shekyl_seam_session_cause rust src` |
-| The outbound call of `try_get_support_flags` | `net_node.inl:1387`. The function is `:2629`. The inbound call at `:2789` remains until slice 4 | `rg -n try_get_support_flags src/p2p/net_node.inl` finds no call from `do_handshake_with_peer` |
-| The in-flight handshake-nonce set on the C++ zone | recorded at `net_node.inl:1299`, erased by the guard at `:1300`, read by `detect_self_handshake` at `:2741` | the set lives in the dialer; the inbound check calls `shekyl_dial_take_handshake_nonce` |
+| `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | the function returns without waiting for the handler to arm |
+| `shekyl_seam_session_cause` | `rust/shekyl-ffi/src/cause_ffi.rs:55`. Declared at `shekyl_ffi.h:4430`. The C++ read is `net_node.h:229` | `rg -n shekyl_seam_session_cause rust src` |
+| The outbound call of `try_get_support_flags` | `net_node.inl:1435`. The function is `:2677`. The inbound call at `:2837` remains until slice 4 | `rg -n try_get_support_flags src/p2p/net_node.inl` finds no call from `do_handshake_with_peer` |
+| The in-flight handshake-nonce set on the C++ zone | recorded at `net_node.inl:1347`, erased by the guard at `:1348`, read by `detect_self_handshake` at `:2789` | the set lives in the dialer; the inbound check calls `shekyl_dial_take_handshake_nonce` |
 
 ## Wargame
 
@@ -339,6 +360,9 @@ fill the outbound set. The answer is slice 1's uniform draw within a
 connector. This slice does not sort by `last_seen` and does not give
 `--add-peer` a better chance than any other gray address. Exclusive
 and priority nodes are operator-named and are not part of that draw.
+An attacker's inbound connections would otherwise steer our outbound
+draw if an inbound session occupied a subnet. The occupied-subnet
+set is outbound sessions on that connector only.
 
 **The failed-address memory as something an attacker can drive.** A
 peer, or a directory, that can force a forgetting cause can suppress
@@ -360,22 +384,20 @@ connector has its own in-flight bound, owned by this slice. Both
 numbers are measured before the implementation PR names them. This
 brief picks neither.
 
-**Full-pool capture.** Per epoch, the chance the own-edge is a spy is
-about the spy fraction `p`, at any pool size. The chance an attacker
-holds every session in the pool is `p^k`. At `p = 0.3` that is about
-0.8% for `k = 4` and about `5×10⁻⁷` for `k = 12`. Holding the pool
-means every own-edge, every epoch, is the attacker's: they see the
-first hop of every transaction this node originates, and rotation
-protects nothing. Hidden addressing keeps the IP off that hop. It
-does not keep the transactions from linking to one origin.
-Compositions above a pool of 12 are the §95 sweep, including total
-16. Until that sweep is ruled, the pool the dialer keeps is 12,
-which is also the hard cap the relay branch writes at
-`net_node.inl:939`. The cost at that interim is 12 onion circuits
-on the managed Tor, where the old target opened 4. The in-flight
-dial bound limits how fast they open. Total outbound is clearnet
-plus hidden, and stems are drawn over all of them. Both the hidden
-pool and that total are lower limits.
+**Full-pool capture.** The chance an attacker holds every hidden
+session is `p_h^h`. `p_h` is the onion-candidate spy share, as §95
+defines it. Holding the pool means every hidden stem slot, every
+epoch, is the attacker's: they see the first hop of every transaction
+this node originates, and rotation protects nothing. Hidden
+addressing keeps the IP off that hop. It does not keep the
+transactions from linking to one origin. Until the sweep is ruled,
+the pool the dialer keeps is 12, which is also the hard cap `dev`
+writes at `net_node.inl:984`. The cost at that interim is 12 onion
+circuits on the managed Tor, where the old target opened 4. The
+in-flight dial bound limits how fast they open. Total outbound is
+clearnet plus hidden, and relayed stems are drawn over all of them.
+Both the hidden pool and that total are lower limits.
+*Records-was: the capture was written `p^k`.*
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a
 timed-sync payload are gray entries. They become dials only through

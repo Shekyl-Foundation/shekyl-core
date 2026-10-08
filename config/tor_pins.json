@@ -1,0 +1,102 @@
+{
+  "_comment": [
+    "The Tor pins of record (TOR_BUNDLE_DISTRIBUTION.md TB-9). One file, two readers:",
+    "rust/shekyl-tor-control-client/build.rs compiles the row for the build target into the",
+    "binary, and scripts/release/tor_bundle.py fetches, checks and stages the bundle for",
+    "packaging. Nothing reads this file at runtime. Change it only through the",
+    "RELEASE_CHECKLIST.md 'Bundled Tor pin current' procedure: a digest recorded here must",
+    "come from a tarball whose signature was verified against signing_key_fingerprint.",
+    "Every target the release builds has exactly one row, pinned or unavailable",
+    "(scripts/ci/check_tor_pin_targets.py). An unavailable row is a ruling unless it",
+    "carries \"pending\": the identifier of the work that will pin it. A pending row",
+    "compiles as unavailable, which is what the binary does today, and is counted by",
+    "the gate: the startup refusal (TB-2) may not land while one remains (TB-12)."
+  ],
+  "signing_key_fingerprint": "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",
+  "bundle_url": "https://archive.torproject.org/tor-package-archive/torbrowser/{bundle_version}/tor-expert-bundle-{bundle_target}-{bundle_version}.tar.gz",
+  "source_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz",
+  "source_signature_url": "https://dist.torproject.org/tor-{tor_version}.tar.gz.sha256sum.asc",
+  "targets": [
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "gitian_host": "x86_64-linux-gnu",
+      "disposition": "pinned",
+      "bundle_version": "15.0.24",
+      "bundle_target": "linux-x86_64",
+      "tor_version": "0.4.9.13",
+      "tarball_sha256": "8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813" },
+        { "name": "libevent-2.1.so.7", "sha256": "b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff" },
+        { "name": "libssl.so.3", "sha256": "e95f55c73b63a4e25db7b9c74abdd35c42829ca1dc68f2fb17ae71c4d841381c" },
+        { "name": "libcrypto.so.3", "sha256": "6ed9fc77689324da28567478e0ed226f4f450f71b47852088e9b0b9220eb0404" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
+    },
+    {
+      "os": "linux",
+      "arch": "aarch64",
+      "gitian_host": "aarch64-linux-gnu",
+      "disposition": "pinned",
+      "bundle_version": "16.0a13",
+      "bundle_target": "linux-aarch64",
+      "tor_version": "0.4.9.13",
+      "tarball_sha256": "e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517",
+      "executable": "tor",
+      "files": [
+        { "name": "tor", "sha256": "5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477" },
+        { "name": "libevent-2.1.so.7", "sha256": "097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577" },
+        { "name": "libssl.so.3", "sha256": "080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf" },
+        { "name": "libcrypto.so.3", "sha256": "f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3" }
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
+    },
+    {
+      "os": "linux",
+      "arch": "riscv64",
+      "gitian_host": "riscv64-linux-gnu",
+      "disposition": "unavailable",
+      "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux"
+    },
+    {
+      "os": "android",
+      "arch": "aarch64",
+      "gitian_host": "aarch64-linux-android",
+      "disposition": "unavailable",
+      "reason": "Shekyl does not manage a Tor process on Android"
+    },
+    {
+      "os": "freebsd",
+      "arch": "x86_64",
+      "gitian_host": "x86_64-unknown-freebsd",
+      "disposition": "unavailable",
+      "reason": "the Tor Project publishes no Expert Bundle for FreeBSD"
+    },
+    {
+      "os": "windows",
+      "arch": "x86_64",
+      "gitian_host": "x86_64-w64-mingw32",
+      "disposition": "unavailable",
+      "reason": "the Windows pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
+    },
+    {
+      "os": "macos",
+      "arch": "x86_64",
+      "gitian_host": "x86_64-apple-darwin11",
+      "disposition": "unavailable",
+      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
+    },
+    {
+      "os": "macos",
+      "arch": "aarch64",
+      "gitian_host": "aarch64-apple-darwin11",
+      "disposition": "unavailable",
+      "reason": "the macOS pin is not adopted until its launch test has run (TB-11)",
+      "pending": "TB-11"
+    }
+  ]
+}

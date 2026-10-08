@@ -7,14 +7,18 @@
 //!
 //! Relayed stems draw over every outbound session. This draw is the other
 //! one: uniform over the hidden-address outbound sessions, and not a
-//! stem-map slot. No cover on Tor by ruling. On a cover-bearing link the
-//! own-edge is a stem slot, drawn by [`super::Relay::plan_relay`] when no
-//! configured connector hides the address, and that slot is the channel.
+//! stem-map slot. The pool's target size is
+//! [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]. A pool of
+//! one still reports `hop-0 edge cannot rotate`. That report does not name
+//! a target of 4. *Records-was: `HOP0_OUTBOUND_TARGET`.* No cover on Tor by
+//! ruling. On a cover-bearing link the own-edge is a stem slot, drawn by
+//! [`super::Relay::plan_relay`] when no configured connector hides the
+//! address, and that slot is the channel.
 
 use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use super::{address_hidden_from_peer, Relay, RelayPlan};
+use super::{hides_address, Relay, RelayPlan};
 
 impl Relay {
     /// Draw or reuse this epoch's own-edge.
@@ -51,18 +55,16 @@ impl Relay {
     }
 
     fn hop0_peer_live(&self, id: ConnectionId) -> bool {
-        self.contexts.get(&id).is_some_and(|peer| {
-            Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-        })
+        self.contexts
+            .get(&id)
+            .is_some_and(|peer| Self::stem_candidate(peer) && hides_address(&peer.declaration))
     }
 
     /// Hidden-address outbound sessions, in connection-id order.
     fn hidden_outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts
             .iter()
-            .filter(|(_, peer)| {
-                Self::stem_candidate(peer) && address_hidden_from_peer(peer.connector)
-            })
+            .filter(|(_, peer)| Self::stem_candidate(peer) && hides_address(&peer.declaration))
             .map(|(id, _)| *id)
             .collect()
     }

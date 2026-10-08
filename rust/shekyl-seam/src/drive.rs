@@ -16,22 +16,22 @@
 //! zone: on a runtime with one blocking lane it drove one connection at a
 //! time and left every later one deaf until the first closed.
 
-use shekyl_transport_layer::{CloseCause, CloseKind};
-
 use crate::hub::Hub;
 use shekyl_capped_stream::Session;
 
 /// Drive `session` until the reader stops or the handler refuses a frame.
 ///
-/// A reader that stops with no cause recorded yet is [`CloseKind::PeerClosed`].
-/// A cause that was already recorded stays the cause.
+/// The cause is the one the connector stored on the session.
+/// [`CloseKind::PeerClosed`] is that cause only when the reader saw
+/// end-of-file. A session closed with no stored cause is
+/// [`CloseKind::LocalClose`].
 pub fn drive_inbound(hub: &Hub, id: shekyl_transport_layer::SocketId, mut session: Session) {
     while let Some(frame) = session.recv_blocking() {
         if !hub.deliver(id, frame) {
             return;
         }
     }
-    hub.finish(id, CloseCause::new(CloseKind::PeerClosed));
+    hub.finish(id, session.close_cause());
 }
 
 /// [`drive_inbound`] as a task. Holds no thread between frames or while the
@@ -46,5 +46,5 @@ pub async fn drive_inbound_async(
             return;
         }
     }
-    hub.finish(id, CloseCause::new(CloseKind::PeerClosed));
+    hub.finish(id, session.close_cause());
 }

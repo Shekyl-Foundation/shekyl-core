@@ -41,9 +41,10 @@ use crate::ephemeral::{
 /// path beyond argument passing).
 pub struct BlockingDaemonTorConfig {
     /// Explicit `tor` binary path, or `None` to run the standard discovery
-    /// order (`SHEKYL_TOR_BINARY` env → beside the executable →
-    /// `/opt/shekyl/<version>-<target>/` staging → `PATH`).
-    /// Either way the SP-T0c hash pin verifies before anything spawns.
+    /// order (`SHEKYL_TOR_BINARY` env → `tor/` beside the executable →
+    /// `/opt/shekyl/<version>-<target>/`).
+    /// Either way the SP-T0c pin gate verifies tor's whole directory before
+    /// anything spawns.
     pub tor_binary_override: Option<PathBuf>,
     /// Parent of this boot's unique `DataDirectory` — daemon-owned, never the
     /// wallet's (PWD-E9). A unique 0700 child is created and wiped on teardown.
@@ -61,9 +62,11 @@ pub struct BlockingDaemonTorConfig {
 /// tor and its SOCKS proxy stay up, the zone stays outbound-only.)
 #[derive(Debug)]
 pub enum BlockingStartError {
-    /// No pinned tor binary — not found, or found and failing the SP-T0c
-    /// hash pin. [`TorBinaryError::NotFound`] is the calm skip (nothing to
-    /// spawn); every other variant is a loud "found but unusable".
+    /// No usable tor — not found, found and failing the SP-T0c pin gate, or
+    /// a platform Shekyl manages no tor on.
+    /// [`TorBinaryError::NotFound`] means nothing is installed,
+    /// [`TorBinaryError::Unavailable`] that nothing could be; every other
+    /// variant is "found but unusable".
     Binary(TorBinaryError),
     /// The tokio runtime could not be built (resource exhaustion; loud and
     /// effectively unreachable in practice).

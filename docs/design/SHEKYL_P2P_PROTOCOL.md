@@ -144,7 +144,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `4C771D503D5D43D9`, `166195003AFF953A` | No — follows T1 |
-| **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
+| **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
@@ -156,7 +156,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
@@ -953,7 +953,7 @@ review.
   retired for cause**: no identifier is strictly stronger than an identifier
   pinned to a constant. **`DAEMON_RELAY_PRIVACY.md` §91.4's unlinkability
   composition names the sentinel as one of three composed decisions**, and
-  `rust/shekyl-relay/src/zone/mod.rs:190-199` builds a load-bearing argument on
+  `rust/shekyl-relay/src/graph/mod.rs:190-199` builds a load-bearing argument on
   it. **Both must be re-grounded on "no identifier on the wire" rather than left
   citing a retired mechanism** — the composition gets stronger, but the text
   that states it becomes false.
@@ -4245,7 +4245,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `Zone::queue_fluff` appends every transaction to each peer's queue and
 > `flush_fluff` releases the whole accumulated batch —
 > `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
-> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> (`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`) — and the receive
 > side checks no cardinality either. **So 2002's cap has no derivation input,
 > and until one exists 2002 is not bounded below 2004.** *An earlier version of
 > this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
@@ -4399,7 +4399,7 @@ field must express the largest value the command table can produce, and
 > idle makers** and false of the tree: the relay layer draws fluff delays from
 > `FluffScheduler::memoryless()` — deliberately memoryless rather than the
 > inherited Poisson, which was the F-4 defect — and jitters the noise cadence
-> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/graph/mod.rs:315-320`,
 > `:235`). **So this round is not introducing randomised timing to a tree that
 > has none; it is asking why one layer has it and the layer above does not.**
 
@@ -4411,7 +4411,7 @@ an owner if no row names it (rule 22).
 `Zone::queue_fluff` appends **every** transaction to each peer's queue, and
 `flush_fluff` releases the whole accumulation — `std::mem::take(&mut
 peer.queued)` — with no cardinality or byte cap
-(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`). The receive side
 checks no cardinality either.
 
 > **Why no census row covers it, which is a finding about the instrument.**
@@ -4430,7 +4430,7 @@ checks no cardinality either.
 
 **Bounding the release does not bound the queue, and the ruling has to say
 both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
-(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`rust/shekyl-relay/src/graph/mod.rs:846`) and `flush_fluff` empties it
 (`:868`), with **no bound at either end**. If transactions arrive faster than
 one capped batch per flush interval, the remainder simply accumulates — **once
 per destination peer** — so a release-side cap alone converts the flooder's
@@ -4589,6 +4589,59 @@ on burst tolerance and on what a throttled peer experiences:
 concrete, observable at the sync path, and the failure that would mean the rate
 was chosen against the wrong traffic.
 
+#### On Windows there is no bound for this to be a refinement of — measured on a live daemon, 2026-10-06
+
+Everywhere else B1 is hardening on top of a derived safety bound. On Windows
+it is the **only** inbound bound available, which makes it an **addition to the
+p2p Rust migration rather than a transfer**: there is no C++ mechanism to port,
+so a slice that moves the stack faithfully still lands Windows unbounded.
+
+**Three absences, not one.** A Windows node today is bounded by nothing:
+
+| route | state |
+| --- | --- |
+| by count | `InboundCeiling` resolves `NoPerProcessLimit` — no per-process descriptor quantity exists to read (200,000 sockets opened in one process, no refusal; the loop stopped at the harness's array cap). An unset `--in-peers` is `UINT32_MAX` in `set_max_in_peers`, so the derived ceiling is the only automatic bound and there is no default beneath it. |
+| by source address | PWD-I7's per-host cap deleted 2026-09-22. |
+| by rate | **this row**, ruled and unbuilt. |
+
+**The warning that reports it does not reach an operator, and it no longer
+names the consequence.** Both measured on `shekyld` built from `e0fb3eaa8`
+(MSVC on a Windows 11 client SKU, Ninja rather than CI's `Visual Studio 18
+2026` generator, which CMake 3.31.6 does not carry), run `--offline` at three
+log settings:
+
+| run | reached p2p init | WARN lines | ceiling warning |
+| --- | --- | --- | --- |
+| default (no `--log-level`) | yes | 3 | **absent** |
+| `--log-level 1` | yes | 4 | present |
+| `--log-level "*:WARNING,global:INFO,net.p2p:WARNING"` | yes | 4 | present |
+
+`net_node.inl` logs under `net.p2p`, and level 0's default category set is
+`*:WARNING` with `net.p2p` explicitly carved down to `FATAL`
+(`contrib/epee/src/mlog.cpp:127`) — so the message is filtered three levels
+below where it is emitted. `daemon` and `blockchain::db::lmdb` WARNs print at
+default in the same run, so WARN is not globally off; the carve-out is
+specific. It predates this use and is still right for suppressing
+per-connection `net.p2p` chatter — startup operator guidance sharing that
+category is the defect, so the remedy is the message's category, not the level.
+
+The arm selected is still `NO_PER_PROCESS_LIMIT` after the connector rework,
+so `001f9e957` moving enforcement to the Rust admission table did not change
+which arm Windows takes.
+
+**And the wording was softened a day after it was deliberately strengthened.**
+`82b275f71` added *“this node will accept inbound peers without limit”*
+on 2026-09-22; `0f2c37d58` removed it on 2026-09-23 during the Rust-decision
+refactor, leaving *“the inbound ceiling is unbounded”*. The softening
+was not argued, and the original reasoning stands: *unbounded* reads as
+generous rather than as absent to anyone without this history.
+
+**Why this is recorded here rather than fixed.** Both remedies — restoring
+the clause, and moving the message to `global` — are changes to C++ the
+migration is replacing, which `20-rust-vs-cpp-policy` makes the exception
+rather than the default. The bound itself is this row's, in Rust.
+
+
 ### PWD-B2 — jitter, and the discriminator is observability
 
 **RULED.** The five node-server idle makers are fixed-interval
@@ -4613,7 +4666,7 @@ deadlines, drawn independently**.
 > wake must leave every other entry untouched, because re-drawing on a foreign
 > wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
 > effective interval short** — "a privacy defect no count assertion and no
-> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/graph/mod.rs:231-236`).
 > **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
 > only when that connection's own sync fires.
 

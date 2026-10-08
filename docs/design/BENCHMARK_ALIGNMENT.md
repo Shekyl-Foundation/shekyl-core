@@ -300,7 +300,7 @@ capture counts as a gap until a tracked T3 run reproduces it.
 | **BA-G5** | The validation path the cutover makes consensus: Rust `validate` and store `connect`, with proof verification in it | The cutover itself; its only performance acceptance is the DRS-BENCH suite ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §8.1, `docs/design/DAEMON_REDB_STORE.md:2079`) | `rust/shekyl-chain-rules/src/validate.rs:355`, `:558`, `:622`; `rust/shekyl-chain-store/src/store/connect.rs:170` | The FCMP++ and Bulletproofs+ rows are still pending in the Rust validator (`rust/shekyl-chain-rules/src/census.rs:445`, `:476`). The Rust batch verifier it would use has never run on the floor. BA-I27 and BA-I28 are the only timings, on a fixture with no proofs |
 | **BA-G6** | Chain store on redb: write and read per block, IBD rate | The IBD floor, redb ≤ 1.25× LMDB (`docs/design/DAEMON_REDB_STORE.md:398`) | `rust/shekyl-chain-store/src/store/connect.rs:170` | BA-I69 to BA-I71: LMDB only, x86 dev, coinbase-only. The redb arm waits on a build target (`docs/FOLLOWUPS.md:179`). The floor is specified on x86 by design (`docs/design/DAEMON_REDB_STORE.md:396`); no floor-device IBD figure exists. Reorg cost has no threshold, deliberately (`docs/design/DAEMON_REDB_STORE.md:430`) |
 | **BA-G7** | The P2P deadline distributions, re-measured | Clearnet dial, handshake and gap; Tor dial, gap and shutdown (`src/p2p/net_node.inl:3445` to `:3449`) | `dial_one` in `rust/shekyl-clearnet/src/drive.rs:207` and `rust/shekyl-tor/src/drive.rs:157` | BA-I80 to BA-I88: one capture each, n ≈ 100, floor. Each carries a reopen rule that nothing evaluates. The proxied clearnet dial is unmeasured (`docs/FOLLOWUPS.md:77`) |
-| **BA-G8** | The Tor stem hop: transit and node-local time as a distribution | `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1 625` and `ADOPTED_TRANSIT_ASSUMPTION_MS = 50` (`rust/shekyl-relay-privacy/src/verify_cost.rs:560`, `:465`), and through them the embargo and `ADOPTED_PROPAGATION_TIMEOUT_SECS = 2 297` (`rust/shekyl-relay-privacy/src/schedule.rs:473`) | The Tor-edge embargo (`rust/shekyl-relay/src/zone/edge.rs:537`) | One stem, n = 1 (BA-I68). Carrier open: `docs/FOLLOWUPS.md:65` |
+| **BA-G8** | The Tor stem hop: transit and node-local time as a distribution | `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1 625` and `ADOPTED_TRANSIT_ASSUMPTION_MS = 50` (`rust/shekyl-relay-privacy/src/verify_cost.rs:560`, `:465`), and through them the embargo and `ADOPTED_PROPAGATION_TIMEOUT_SECS = 2 297` (`rust/shekyl-relay-privacy/src/schedule.rs:473`) | The Tor-edge embargo (`rust/shekyl-relay/src/graph/edge.rs:537`) | One stem, n = 1 (BA-I68). Carrier open: `docs/FOLLOWUPS.md:65` |
 | **BA-G9** | RandomX on the floor: per-hash verify and cache derivation | The floor's per-block PoW verify budget and its tip-advance stall at an epoch boundary (`rust/shekyl-difficulty/src/seed_epoch.rs:37`); the dataset-mode decision | `compute_hash` (`rust/shekyl-ffi/src/pow_randomx_ffi.rs:228`); `PreparedCache::derive` (`rust/shekyl-pow-randomx/src/cache_store.rs:535`) | One floor figure, 1.2845 s per hash, a by-product of BA-I77. Cache derivation has never run on the floor; on x86 dev it is 341 ms against a 150–200 ms budget. No budget is stated for the floor, and the ratio gates (BA-I33) run on x86 only |
 | **BA-G10** | Thread budgets under load | `workers = 2`, `blocking = 1` (`src/p2p/net_node.inl:3452`, `:3453`), described in place as a structural floor | The transport pool and the timing-engine service | Unmeasured. Carrier open: `docs/FOLLOWUPS.md:69` |
 | **BA-G11** | Inbound connection cost and accept rate | The inbound ceiling and the clearnet accept-rate bound, neither yet a number | BA-I29's subject; the handshake in BA-I22 | Carriers open: `docs/FOLLOWUPS.md:954`, `:1290` |
@@ -402,7 +402,7 @@ a live node.
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, four `crypto_bench_serve_*` functions (manifest §12) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. Not yet run: 32 and 64 in flight | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
@@ -541,12 +541,12 @@ into the same flat salted digest; then signs and appends the signature.
 *The prerequisite: can the key be absent while the store serves?* Read at
 the pin:
 
-- **Today it always is.** Production binds a placeholder key that refuses
-  every transcript
-  (`rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:246`).
-  Every servable request is read and hashed in full, then answered 404
-  (`rust/shekyl-p-host/src/signer.rs:68`). The pre-flight would retire that
-  work as well.
+- ~~**Today it always is.** Production binds a placeholder key that refuses
+  every transcript.~~ **SUPERSEDED 2026-10-06 (SH-2):** production binds
+  the persona's resident key (`ResidentPassKey`,
+  `rust/shekyl-engine-core/src/engine/stake_engine/serving/pass_key.rs`);
+  the placeholder is deleted. The pre-flight is still what turns a stopped
+  actor into a 503 before the read.
 - **The design intends residency for as long as the host serves**
   (`docs/design/ARCHIVAL_SHARD_FETCH.md:945`), and the key bundles are
   derived when the wallet opens and held for the session
@@ -555,11 +555,20 @@ the pin:
 - **The contract still allows absence at sign time**: "key not resident,
   signer offline, or a host-side policy refusal"
   (`rust/shekyl-p-serve/src/countersign.rs:74`). Whether the signing
-  capability can go away while the listener stays up is the unwired
-  remainder of `SH-2`, and no document settles it.
+  capability can go away while the listener stays up was the unwired
+  remainder of `SH-2`. **Settled 2026-10-06**
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §3 Q2): the
+  serving task's life is a subset of the stake actor's by *teardown
+  order* (`tasks.shutdown()` before `drop(engine)`, pinned by test), and
+  the key holds a **weak** actor handle, so the one case the order cannot
+  cover — the actor fail-stopping under a live listener — is observed by
+  `PassKey::ready` as a refusal, not prevented. The capability can go
+  away; when it does, the pre-flight is what answers 503 before the read.
 
-So the pre-flight is mandatory under S unless `SH-2` makes the serving
-task's life a subset of the key's by construction.
+So the pre-flight is mandatory under S: `SH-2` made the serving task's
+life a subset of the key's by construction for the ordinary path, and
+chose observe-not-prevent for the fail-stop, which is exactly the case
+the pre-flight exists for.
 
 *What S is expected to buy.* The floor runs (BA-G1) put the cost #954 added
 at 78 ms per response, of which the digest is 23.9 ms per pass, twice: 48
@@ -610,8 +619,8 @@ device measured the single-pass tree the same day
 | --- | --- | --- | --- |
 | Median per response, one in flight | 40 to 60 ms | 67.2 ms | **falsified** |
 | Digest cost inside the stream | 23.9 ms, its cost alone | 43 ms (67.2 − 24.6) | 19 ms unexplained |
-| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |
-| Work before the first byte | under 1 ms | not measured on the floor | open |
+| Responses per second, eight in flight | 37 to 60 | 49.7, median of six blocks (`BA-T5`, 2026-10-07) | **held** |
+| Work before the first byte | under 1 ms | not isolated on the floor; a whole abandoned request is 2.2 ms over one that serves nothing (`BA-T5`, 2026-10-07) | open |
 
 The prediction assumed the digest costs the same inside the stream as
 alone. It does not. BA-T3 narrows where the difference can be: on x86 the
@@ -630,10 +639,16 @@ that share of the measured 67.2 ms it is about 5 µs on the floor; the
 store is in memory in the gate, so a cold shard open is not in the figure
 and the estimate keeps its ceiling of 1 ms until the floor measures it.
 
-The falsified estimate and the two open ones are in the measurement
-ledger (`[[retired_estimate]]` and two `estimated` rows), where a check
-holds them: an estimate becomes a measurement only through a capture that
-lands.
+The predictions are in the measurement ledger. Two are retired
+estimates, each beside the floor capture that settled it and with a
+verdict the check computes: the per-response figure (falsified by run 3)
+and throughput at eight in flight (held, by the first run of `BA-T5`,
+2026-10-07). The third, work before the first byte, is still an open
+estimate: that run bounded it from above at 2.2 ms, which includes one
+chunk read and hashed, and an upper bound above the band settles nothing.
+The run's record also explains run 3's two disagreeing blocks
+(the executor-side hash made throughput bimodal) and puts the digest
+alone at 23.9 ms of a 57.7 ms response.
 
 *Carried.* The invariant is general, and a rules-queue row in
 `docs/FOLLOWUPS.md` asks the same of daemon RPC, Levin object and
@@ -645,10 +660,32 @@ which resource bound. The serving device class is itself open
 (`docs/FOLLOWUPS.md:1257`); the default keeps the floor as the conservative
 interim.
 
+*Inputs from the first `BA-T5` run (2026-10-07).* The floor device is
+ruled the serving floor, and it serves today's shards at 41 to 56 per
+second at eight in flight. The cost an unpaid request can impose is about
+4 ms of CPU today and about 8 ms at a frame small enough to be buffered
+whole. The control over how many such requests one rendezvous circuit can
+make is the serving onion's stream cap, 8 per circuit with the circuit
+closed past it (`SERVING_MAX_STREAMS`), a carried placeholder: its value
+is part of this question, beside `MAX_INFLIGHT`. 32 and 64 in flight have
+not been run.
+
 **BA-Q5 — Re-measure `W`, `L`, the retry budget and the read capacity on the
 v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an
 owner and a date entered beside the reopen condition in
 [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](CLIENT_VERSION_CONSTANTS_VALIDATION.md).
+
+*An input the `W` derivation must take (2026-10-07).* The floor device's
+serve verdict holds because a shard of `W` bytes is far larger than what
+can be buffered between the persona and the requester. If `W` falls to
+that amount, every abandoned request costs the persona a whole response
+and a signature
+([`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md),
+"How far this verdict reaches"). The amount is tor's stream window plus
+the kernel's socket buffers, about 250 KB by the specification and not
+yet measured through an onion; BA-T7 measures it. The ledger row
+`serve_floor_verdict_frame` fails when `W` changes, until the verdict is
+re-graded.
 
 **BA-Q6 — The key-dispatch gate and the re-route it waits on (BA-D8).**
 The design routes claims through `KeyEngine::try_claim_output`; the caller

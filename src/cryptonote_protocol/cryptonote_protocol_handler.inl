@@ -36,9 +36,16 @@
 // (may contain code and/or modifications by other developers)
 // developer rfree: this code is caller of our new network code, and is modded; e.g. for rate limiting
 
+#include <array>
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <list>
 #include <ctime>
+
+#include "p2p/seam_board.h"
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "profile_tools.h"
@@ -321,11 +328,6 @@ namespace cryptonote
     std::stringstream ss;
     ss.precision(1);
 
-    double down_sum = 0.0;
-    double down_curr_sum = 0.0;
-    double up_sum = 0.0;
-    double up_curr_sum = 0.0;
-
     ss << std::setw(30) << std::left << "Remote Host"
       << std::setw(20) << "Support Flags"      
       << std::setw(30) << "Recv/Sent (inactive,sec)"
@@ -337,43 +339,52 @@ namespace cryptonote
       << std::setw(13) << "Up(now)"
       << ENDL;
 
-    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags)
-    {
-      bool local_ip = cntxt.m_remote_address.is_local();
-      auto connection_time = time(NULL) - cntxt.m_started;
-      ss << std::setw(30) << std::left << std::string(cntxt.m_is_income ? " [INC]":"[OUT]") +
-        cntxt.m_remote_address.str()
-                << std::setw(20) << std::hex << support_flags
-        << std::setw(30) << std::to_string(cntxt.m_recv_cnt)+ "(" + std::to_string(time(NULL) - cntxt.m_last_recv) + ")" + "/" + std::to_string(cntxt.m_send_cnt) + "(" + std::to_string(time(NULL) - cntxt.m_last_send) + ")"
-        << std::setw(25) << get_protocol_state_string(cntxt.m_state)
-        << std::setw(20) << std::to_string(time(NULL) - cntxt.m_started)
-        << std::setw(12) << std::fixed << (connection_time == 0 ? 0.0 : cntxt.m_recv_cnt / connection_time / 1024)
-        << std::setw(14) << std::fixed << cntxt.m_current_speed_down / 1024
-        << std::setw(10) << std::fixed << (connection_time == 0 ? 0.0 : cntxt.m_send_cnt / connection_time / 1024)
-        << std::setw(13) << std::fixed << cntxt.m_current_speed_up / 1024
-        << (local_ip ? "[LAN]" : "")
-        << std::left << (cntxt.m_remote_address.is_loopback() ? "[LOCALHOST]" : "") // 127.0.0.1
-        << ENDL;
-
-      if (connection_time > 1)
+    auto lines = std::make_shared<std::stringstream>();
+    auto totals = std::make_shared<std::array<double, 4>>();
+    auto guard = std::make_shared<std::mutex>();
+    lines->copyfmt(ss);
+    *lines << ss.str();
+    m_p2p->post_each(
+      [lines, totals, guard](const connection_context& cntxt, uint32_t support_flags)
       {
-        down_sum += (cntxt.m_recv_cnt / connection_time / 1024);
-        up_sum += (cntxt.m_send_cnt / connection_time / 1024);
-      }
-
-      down_curr_sum += (cntxt.m_current_speed_down / 1024);
-      up_curr_sum += (cntxt.m_current_speed_up / 1024);
-
-      return true;
-    });
-    ss << ENDL
-      << std::setw(125) << " "
-      << std::setw(12) << down_sum
-      << std::setw(14) << down_curr_sum
-      << std::setw(10) << up_sum
-      << std::setw(13) << up_curr_sum
-      << ENDL;
-    LOG_PRINT_L0("Connections: " << ENDL << ss.str());
+        const bool local_ip = cntxt.m_remote_address.is_local();
+        const auto connection_time = time(NULL) - cntxt.m_started;
+        std::stringstream row;
+        row.copyfmt(*lines);
+        row << std::setw(30) << std::left << std::string(cntxt.m_is_income ? " [INC]":"[OUT]") +
+          cntxt.m_remote_address.str()
+          << std::setw(20) << std::hex << support_flags
+          << std::setw(30) << std::to_string(cntxt.m_recv_cnt)+ "(" + std::to_string(time(NULL) - cntxt.m_last_recv) + ")" + "/" + std::to_string(cntxt.m_send_cnt) + "(" + std::to_string(time(NULL) - cntxt.m_last_send) + ")"
+          << std::setw(25) << get_protocol_state_string(cntxt.m_state)
+          << std::setw(20) << std::to_string(time(NULL) - cntxt.m_started)
+          << std::setw(12) << std::fixed << (connection_time == 0 ? 0.0 : cntxt.m_recv_cnt / connection_time / 1024)
+          << std::setw(14) << std::fixed << cntxt.m_current_speed_down / 1024
+          << std::setw(10) << std::fixed << (connection_time == 0 ? 0.0 : cntxt.m_send_cnt / connection_time / 1024)
+          << std::setw(13) << std::fixed << cntxt.m_current_speed_up / 1024
+          << (local_ip ? "[LAN]" : "")
+          << std::left << (cntxt.m_remote_address.is_loopback() ? "[LOCALHOST]" : "")
+          << ENDL;
+        std::lock_guard<std::mutex> lock(*guard);
+        *lines << row.str();
+        if (connection_time > 1)
+        {
+          (*totals)[0] += (cntxt.m_recv_cnt / connection_time / 1024);
+          (*totals)[2] += (cntxt.m_send_cnt / connection_time / 1024);
+        }
+        (*totals)[1] += (cntxt.m_current_speed_down / 1024);
+        (*totals)[3] += (cntxt.m_current_speed_up / 1024);
+      },
+      [lines, totals]()
+      {
+        *lines << ENDL
+          << std::setw(125) << " "
+          << std::setw(12) << (*totals)[0]
+          << std::setw(14) << (*totals)[1]
+          << std::setw(10) << (*totals)[2]
+          << std::setw(13) << (*totals)[3]
+          << ENDL;
+        LOG_PRINT_L0("Connections: " << ENDL << lines->str());
+      });
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -652,7 +663,7 @@ namespace cryptonote
   int t_cryptonote_protocol_handler<t_core>::handle_request_compact_missing_tx(int command, NOTIFY_REQUEST_COMPACT_MISSING_TX::request& arg, cryptonote_connection_context& context)
   {
     MLOG_P2P_MESSAGE("Received NOTIFY_REQUEST_COMPACT_MISSING_TX (" << arg.missing_tx_indices.size() << " txes), block hash " << arg.block_hash);
-    if (context.m_state == cryptonote_connection_context::state_before_handshake)
+    if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested compact missing tx before handshake, dropping connection");
       drop_connection(context, false, false);
@@ -800,7 +811,7 @@ namespace cryptonote
 
     // A handshake-complete peer that is still synchronising may relay.
     // Only a session that has not finished the handshake is dropped here.
-    if(context.m_state == cryptonote_connection_context::state_before_handshake)
+    if(!shekyl::seam_handshake_established(context.m_connection_id))
       return 1;
 
     // while syncing, core will lock for a long time, so we ignore
@@ -908,7 +919,7 @@ namespace cryptonote
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::handle_request_get_objects(int command, NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote_connection_context& context)
   {
-    if (context.m_state == cryptonote_connection_context::state_before_handshake)
+    if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested objects before handshake, dropping connection");
       drop_connection(context, false, false);
@@ -1420,9 +1431,8 @@ namespace cryptonote
             if (shekyl_drop_verdict_severs(prepare_verdict))
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f){
                 drop_connection(context, false, true);
-                return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");
             }
@@ -1460,11 +1470,10 @@ namespace cryptonote
             if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
-                if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
+                if (!m_p2p->for_connection(span_connection_id, [this](cryptonote_connection_context& context, uint32_t f){
                   LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
                     "dropping connections");
                   drop_connection(context, false, true);
-                  return 1;
                 }))
                   LOG_ERROR_CCONTEXT("span connection id not found");
 
@@ -1495,10 +1504,9 @@ namespace cryptonote
             if (block_sync_drop(sync))
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [this, sync](cryptonote_connection_context& context, uint32_t f){
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
                 drop_connection_with_score(context, block_sync_heavier_score(sync) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
-                return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");
 
@@ -1521,9 +1529,8 @@ namespace cryptonote
               if (added != nullptr)
               {
                 const uint64_t chain_length = chain_length_of_accepted_block(get_block_height(*added));
-                m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& origin, uint32_t) {
+                m_p2p->for_connection(span_connection_id, [this, chain_length](cryptonote_connection_context& origin, uint32_t) {
                   raise_remote_height(origin, chain_length);
-                  return true;
                 });
               }
             }
@@ -1660,7 +1667,7 @@ skip:
   bool t_cryptonote_protocol_handler<t_core>::kick_idle_peers()
   {
     MTRACE("Checking for idle peers...");
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
+    m_p2p->post_each([this](cryptonote_connection_context& context, uint32_t support_flags)
     {
       if (context.m_state == cryptonote_connection_context::state_synchronizing && context.m_last_request_time != boost::date_time::not_a_date_time)
       {
@@ -1676,8 +1683,7 @@ skip:
           MLOG_PEER_STATE("requesting callback");
         }
       }
-      return true;
-    });
+    }, {});
 
     return true;
   }
@@ -1691,63 +1697,60 @@ skip:
       return true;
 
     MTRACE("Checking for outgoing syncing peers...");
-    std::unordered_map<epee::net_utils::connector_id, unsigned> n_syncing, n_synced;
-    // NOT the most-recently-synced connection, despite what the inherited name
-    // said: this is assigned for every `state_normal` connection the scan
-    // visits, and that scan walks a `boost::unordered_map` keyed on random
-    // UUIDs, so what survives is whichever one hash order happened to put last.
-    // Arbitrary, and not stable between passes.
-    //
-    // Left arbitrary deliberately. Every candidate is already in `state_normal`,
-    // so there is no peer mid-work to spare and no ordering among them that
-    // would be better; imposing one would be invented policy. The name is what
-    // needed fixing -- it asserted a temporal property the code never provided,
-    // and it produced exactly that misreading in a design doc.
-    std::unordered_map<epee::net_utils::connector_id, boost::uuids::uuid> some_synced_connection;
-    std::vector<epee::net_utils::connector_id> zones;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
-    {
-      if (!context.session_established() || context.m_is_income) // only consider connected outgoing peers
-        return true;
-
-      const auto connector = epee::net_utils::connector_from_byte(context.m_connector);
-      if (!connector)
-        return true;
-      const epee::net_utils::connector_id zone = *connector;
-      if (n_syncing.find(zone) == n_syncing.end())
+    // The scan used to finish before the drop. It now finishes on the last
+    // strand. Which synced peer is dropped stays arbitrary: the map walk
+    // never had an order, and every candidate is already in `state_normal`.
+    struct tally {
+      std::mutex mu;
+      std::unordered_map<epee::net_utils::connector_id, unsigned> n_syncing, n_synced;
+      std::unordered_map<epee::net_utils::connector_id, boost::uuids::uuid> some_synced;
+      std::vector<epee::net_utils::connector_id> zones;
+    };
+    auto counted = std::make_shared<tally>();
+    m_p2p->post_each(
+      [counted](cryptonote_connection_context& context, uint32_t)
       {
-        n_syncing[zone] = 0;
-        n_synced[zone] = 0;
-        some_synced_connection[zone] = boost::uuids::nil_uuid();
-        zones.push_back(zone);
-      }
-
-      if (context.m_state == cryptonote_connection_context::state_synchronizing)
-        ++n_syncing[zone];
-      if (context.m_state == cryptonote_connection_context::state_normal)
+        if (!context.session_established() || context.m_is_income)
+          return;
+        const auto connector = epee::net_utils::connector_from_byte(context.m_connector);
+        if (!connector)
+          return;
+        std::lock_guard<std::mutex> lock(counted->mu);
+        const epee::net_utils::connector_id zone = *connector;
+        if (counted->n_syncing.find(zone) == counted->n_syncing.end())
+        {
+          counted->n_syncing[zone] = 0;
+          counted->n_synced[zone] = 0;
+          counted->some_synced[zone] = boost::uuids::nil_uuid();
+          counted->zones.push_back(zone);
+        }
+        if (context.m_state == cryptonote_connection_context::state_synchronizing)
+          ++counted->n_syncing[zone];
+        if (context.m_state == cryptonote_connection_context::state_normal)
+        {
+          ++counted->n_synced[zone];
+          counted->some_synced[zone] = context.m_connection_id;
+        }
+      },
+      [this, counted]()
       {
-        ++n_synced[zone];
-        some_synced_connection[zone] = context.m_connection_id;
-      }
-      return true;
-    });
-
-    for (const auto& zone : zones)
-    {
-      const unsigned int max_out_peers = get_max_out_peers(zone);
-      MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
-
-      // if we're at max out peers, and not enough are syncing, drop one of the synced peers
-      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && some_synced_connection[zone] != boost::uuids::nil_uuid())
-      {
-        if (!m_p2p->for_connection(some_synced_connection[zone], [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
-          MINFO(ctx << "dropping synced peer, " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
-          drop_connection(ctx, false, false);
-          return true;
-        }))
-          MDEBUG("Failed to find peer we wanted to drop");
-      }
-    }
+        for (const auto zone : counted->zones)
+        {
+          const unsigned int max_out_peers = get_max_out_peers(zone);
+          const unsigned syncing = counted->n_syncing[zone];
+          const unsigned synced = counted->n_synced[zone];
+          const boost::uuids::uuid drop_id = counted->some_synced[zone];
+          MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
+          if (synced + syncing >= max_out_peers && syncing < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && drop_id != boost::uuids::nil_uuid())
+          {
+            if (!m_p2p->for_connection(drop_id, [this, syncing, synced, max_out_peers](cryptonote_connection_context& ctx, uint32_t){
+              MINFO(ctx << "dropping synced peer, " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
+              drop_connection(ctx, false, false);
+            }))
+              MDEBUG("Failed to find peer we wanted to drop");
+          }
+        }
+      });
 
     return true;
   }
@@ -1755,7 +1758,7 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::check_standby_peers()
   {
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
+    m_p2p->post_each([this](cryptonote_connection_context& context, uint32_t support_flags)
     {
       if (context.m_state == cryptonote_connection_context::state_standby)
       {
@@ -1763,8 +1766,7 @@ skip:
         ++context.m_callback_request_count;
         m_p2p->request_callback(context);
       }
-      return true;
-    });
+    }, {});
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------
@@ -1772,7 +1774,7 @@ skip:
   int t_cryptonote_protocol_handler<t_core>::handle_request_chain(int command, NOTIFY_REQUEST_CHAIN::request& arg, cryptonote_connection_context& context)
   {
     MLOG_P2P_MESSAGE("Received NOTIFY_REQUEST_CHAIN (" << arg.block_ids.size() << " blocks");
-    if (context.m_state == cryptonote_connection_context::state_before_handshake)
+    if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested chain before handshake, dropping connection");
       drop_connection(context, false, false);
@@ -1831,50 +1833,40 @@ skip:
         const double dl_speed = context.m_max_speed_down;
         if (standby && dt >= REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY && dl_speed > 0)
         {
-          bool download = false;
-          if (m_p2p->for_connection(connection_id, [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
-            const time_t nowt = time(NULL);
-            const time_t time_since_last_recv = nowt - ctx.m_last_recv;
-            const float last_activity = std::min((float)time_since_last_recv, dt/1e6f);
-            const bool stalled = last_activity > LAST_ACTIVITY_STALL_THRESHOLD;
-            if (stalled)
-            {
-              MDEBUG(context << " we should download it as the downloading peer is stalling for " << nowt - ctx.m_last_recv << " seconds");
-              download = true;
-              return true;
-            }
-
-            // estimate the standby peer can give us 80% of its max speed
-            // and let it download if that speed is > N times as fast as the current one
-            // N starts at 10 after REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY,
-            // decreases to 1.25 at REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD,
-            // so that at times goes without the download being done, a retry becomes easier
-            const float max_multiplier = 10.f;
-            const float min_multiplier = 1.25f;
-            float multiplier = max_multiplier;
-            if (dt >= REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY)
-            {
-              multiplier = max_multiplier - (dt-REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY) * (max_multiplier - min_multiplier) / (REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD - REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY);
-              multiplier = std::min(max_multiplier, std::max(min_multiplier, multiplier));
-            }
-            if (dl_speed * .8f > ctx.m_current_speed_down * multiplier)
-            {
-              MDEBUG(context << " we should download it as we are substantially faster (" << dl_speed << " vs "
-                  << ctx.m_current_speed_down << ", multiplier " << multiplier << " after " << dt/1e6 << " seconds)");
-              download = true;
-              return true;
-            }
-            return true;
-          }))
-          {
-            if (download)
-              return true;
-          }
-          else
+          // The other connection's last receive and its current speed are
+          // seam observations. Reading them here keeps the decision on
+          // this call. A later `request_missing_objects(..., true)` would
+          // skip every recheck in that function on values that had gone stale.
+          const auto board = shekyl::seam_board_snapshot();
+          const auto other = std::find_if(board.begin(), board.end(), [&](const shekyl_seam_board_row& row) {
+            return shekyl::seam_connection_id(row.id) == connection_id;
+          });
+          if (other == board.end())
           {
             MWARNING(context << " we should download it as the downloading peer is unexpectedly not known to us");
             return true;
           }
+          std::uint64_t speed_up = 0;
+          std::uint64_t speed_down = 0;
+          shekyl_link_speed(other->id, &speed_up, &speed_down);
+          std::uint64_t send_ms = 0;
+          std::uint64_t recv_ms = 0;
+          shekyl_link_activity(other->id, &send_ms, &recv_ms);
+          const std::uint64_t now_ms = shekyl_monotonic_ms();
+          const std::uint64_t mark = shekyl_recv_mark_ms(recv_ms, other->started_mono);
+          const double since_s = now_ms >= mark ? static_cast<double>(now_ms - mark) / 1000.0 : 0.0;
+          const float last_activity = std::min(static_cast<float>(since_s), dt / 1e6f);
+          bool download = last_activity > LAST_ACTIVITY_STALL_THRESHOLD;
+          if (!download)
+          {
+            const float max_multiplier = 10.f;
+            const float min_multiplier = 1.25f;
+            float multiplier = max_multiplier - (dt - REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY) * (max_multiplier - min_multiplier) / (REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD - REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY);
+            multiplier = std::min(max_multiplier, std::max(min_multiplier, multiplier));
+            download = dl_speed * .8f > static_cast<float>(speed_down) * multiplier;
+          }
+          if (download)
+            return true;
         }
       }
     }
@@ -1908,10 +1900,8 @@ skip:
   {
     // flush stale spans
     std::set<boost::uuids::uuid> live_connections;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
-      live_connections.insert(context.m_connection_id);
-      return true;
-    });
+    for (const auto& row : shekyl::seam_board_snapshot())
+      live_connections.insert(shekyl::seam_connection_id(row.id));
     m_block_queue.flush_stale_spans(live_connections);
 
     // if we don't need to get next span, and the block queue is full enough, wait a bit
@@ -2294,35 +2284,37 @@ skip:
     val_expected = true;
     if (m_ask_for_txpool_complement.compare_exchange_strong(val_expected, false))
     {
-      m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
+      auto asked = std::make_shared<std::atomic<bool>>(false);
+      m_p2p->post_each([this, asked](cryptonote_connection_context& context, uint32_t)
       {
         if(context.m_state < cryptonote_connection_context::state_synchronizing)
         {
           MDEBUG(context << "not ready, ignoring");
-          return true;
+          return;
         }
+        // One ask. The strands run together, so the claim is the exclusion
+        // the old early-return was. A refusal gives the claim back; a strand
+        // that already lost it does not retry.
+        bool claim = false;
+        if (!asked->compare_exchange_strong(claim, true, std::memory_order_acq_rel))
+          return;
         if (!request_txpool_complement(context))
         {
           MERROR(context << "Failed to request txpool complement");
-          return true;
+          asked->store(false, std::memory_order_release);
+          return;
         }
-        return false;
+      }, [this, asked]() {
+        // Every strand passed, or the one that claimed it failed after the
+        // others had already passed. The flag was cleared before the walk.
+        // Put it back so the next sync asks again, rather than waiting for
+        // a disconnect.
+        if (!asked->load(std::memory_order_acquire))
+          m_ask_for_txpool_complement.store(true, std::memory_order_release);
       });
     }
 
     return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------
-  template<class t_core>
-  size_t t_cryptonote_protocol_handler<t_core>::get_synchronizing_connections_count()
-  {
-    size_t count = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
-      if(context.m_state == cryptonote_connection_context::state_synchronizing)
-        ++count;
-      return true;
-    });
-    return count;
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -2487,17 +2479,18 @@ skip:
   {
     // Compact-block announce is the sole block path (PWD-B6), on every session.
     std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections;
-    m_p2p->for_each_connection([&exclude_context, &connections](connection_context& context, uint32_t)
+    for (const auto& row : shekyl::seam_board_snapshot())
     {
-      // session_established() filters out connections before the Levin handshake
-      if (context.session_established() && exclude_context.m_connection_id != context.m_connection_id)
-      {
-        LOG_DEBUG_CC(context, "RELAYING BLOCK TO PEER");
-        if (const auto connector = epee::net_utils::connector_from_byte(context.m_connector))
-          connections.push_back({*connector, context.m_connection_id});
-      }
-      return true;
-    });
+      if (row.established == 0)
+        continue;
+      const boost::uuids::uuid id = shekyl::seam_connection_id(row.id);
+      if (id == exclude_context.m_connection_id)
+        continue;
+      const auto connector = epee::net_utils::connector_from_byte(row.endpoint.connector);
+      if (!connector)
+        continue;
+      connections.push_back({*connector, id});
+    }
 
     if (!connections.empty())
     {
@@ -2546,33 +2539,14 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  std::string t_cryptonote_protocol_handler<t_core>::get_peers_overview() const
-  {
-    std::stringstream ss;
-    const boost::posix_time::ptime now = boost::posix_time::microsec_clock::universal_time();
-    m_p2p->for_each_connection([&](const connection_context &ctx, uint32_t support_flags) {
-      ss << cryptonote::get_protocol_state_char(ctx.m_state);
-      if (ctx.m_last_request_time != boost::date_time::not_a_date_time)
-        ss << (((now - ctx.m_last_request_time).total_microseconds() > IDLE_PEER_KICK_TIME) ? "!" : "?");
-      ss <<  + " ";
-      return true;
-    });
-    return ss.str();
-  }
-  //------------------------------------------------------------------------------------------------------------------------
-  template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::needs_new_sync_connections(epee::net_utils::connector_id zone) const
   {
     const uint64_t target = m_core.get_target_blockchain_height();
     const uint64_t height = m_core.get_current_blockchain_height();
     if (target && target <= height)
       return false;
-    size_t n_out_peers = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
-      if (!ctx.m_is_income && epee::net_utils::connector_from_byte(ctx.m_connector) == zone)
-        ++n_out_peers;
-      return true;
-    });
+    const size_t n_out_peers = static_cast<size_t>(shekyl_seam_board_count(
+        static_cast<std::uint32_t>(zone), SHEKYL_DIRECTION_OUTBOUND));
     if (n_out_peers >= get_max_out_peers(zone))
       return false;
     return true;
@@ -2607,10 +2581,9 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connection(const boost::uuids::uuid& id)
   {
-    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
+    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f){
       // This _could be_ outside of strand, so careful on actions
       drop_connection(context, true, false);
-      return true;
     });
   }
   //------------------------------------------------------------------------------------------------------------------------
@@ -2639,43 +2612,45 @@ skip:
 
     m_p2p->add_host_fail(address, 5);
 
-    std::vector<boost::uuids::uuid> drop;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
-      if (address.is_same_host(cntxt.m_remote_address))
-        drop.push_back(cntxt.m_connection_id);
-      return true;
-    });
-    for (const boost::uuids::uuid &id: drop)
-    {
-      m_block_queue.flush_spans(id, true);
-      m_p2p->for_connection(id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
-        // This _could be_ outside of strand, so careful on actions
-        drop_connection(context, true, false);
-        return true;
-      });
-    }
+    m_p2p->post_each([this, address](cryptonote_connection_context& context, uint32_t) {
+      if (!address.is_same_host(context.m_remote_address))
+        return;
+      m_block_queue.flush_spans(context.m_connection_id, true);
+      drop_connection(context, true, false);
+    }, {});
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::on_connection_close(cryptonote_connection_context &context)
   {
-    uint64_t target = 0;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
-      if (cntxt.m_state >= cryptonote_connection_context::state_synchronizing && cntxt.m_connection_id != context.m_connection_id)
-        target = std::max(target, cntxt.m_remote_blockchain_height);
-      return true;
-    });
-    const uint64_t previous_target = m_core.get_target_blockchain_height();
-    if (target < previous_target)
-    {
-      MINFO("Target height decreasing from " << previous_target << " to " << target);
-      m_core.set_target_blockchain_height(target);
-      if (target == 0 && context.m_state > cryptonote_connection_context::state_before_handshake && !m_stopping)
+    const boost::uuids::uuid closed_id = context.m_connection_id;
+    const bool closed_was_past_handshake = context.m_state > cryptonote_connection_context::state_before_handshake;
+    auto tallest = std::make_shared<std::atomic<uint64_t>>(0);
+    m_p2p->post_each(
+      [closed_id, tallest](const connection_context& cntxt, uint32_t)
       {
-        MCWARNING("global", "shekyld is now disconnected from the network");
-        m_ask_for_txpool_complement = true;
-      }
-    }
+        if (cntxt.m_state < cryptonote_connection_context::state_synchronizing || cntxt.m_connection_id == closed_id)
+          return;
+        uint64_t seen = tallest->load(std::memory_order_relaxed);
+        while (cntxt.m_remote_blockchain_height > seen
+            && !tallest->compare_exchange_weak(seen, cntxt.m_remote_blockchain_height, std::memory_order_relaxed))
+        {}
+      },
+      [this, tallest, closed_was_past_handshake]()
+      {
+        const uint64_t target = tallest->load(std::memory_order_relaxed);
+        const uint64_t previous_target = m_core.get_target_blockchain_height();
+        if (target < previous_target)
+        {
+          MINFO("Target height decreasing from " << previous_target << " to " << target);
+          m_core.set_target_blockchain_height(target);
+          if (target == 0 && closed_was_past_handshake && !m_stopping)
+          {
+            MCWARNING("global", "shekyld is now disconnected from the network");
+            m_ask_for_txpool_complement = true;
+          }
+        }
+      });
 
     m_block_queue.flush_spans(context.m_connection_id, false);
     MLOG_PEER_STATE("closed");

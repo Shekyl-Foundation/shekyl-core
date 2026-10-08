@@ -3242,22 +3242,6 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 // needed here, derive it in the crate and export it, so the number and its
 // reason cannot drift apart again.
 
-/// One embargo duration in seconds, drawn from the adopted memoryless
-/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
-/// geometric support includes 0 and the table is not clamped at the boundary,
-/// so what ships is what was derived and tested. A zero draw does not mean "fire
-/// this instant" — deadlines are whole seconds, so it resolves to the earliest
-/// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
-/// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
-/// embargo is the privacy-losing direction at every draw value including zero.
-///
-/// \param zone The embargo-class byte, not a connector index. 1 is the
-/// clearnet-class window. 3 is the anonymity-class window. 0 and any other
-/// byte take the longest window: a corrupt byte costs recovery latency
-/// rather than embargo length. (Masking would send 5 to the shortest.)
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
-
 /// Not a connector index. The connector embargo draws the longest measured
 /// transit for this byte. A stem-tally row uses the same byte when the
 /// observation recorded no connector.
@@ -3279,10 +3263,10 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds_for_connector(uint8_t connector
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
 ///
-/// Deliberately takes no zone, though the draw above does: this is a wallet
-/// decision, and the wallet cannot know which zone its transaction took. It
-/// gets the worst zone's wait. The whole export is a deletion target — see
-/// DAEMON_RELAY_PRIVACY.md §89.6.
+/// Deliberately takes no connector: the wallet cannot know which connector
+/// carried the transaction, so it gets the longest measured transit's wait.
+/// *Records-was:* the worst `RelayZone`. The whole export is a deletion
+/// target — see DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 /// How long an ORIGIN waits before re-broadcasting its own still-unseen
@@ -3544,11 +3528,6 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! FROM those measurements. Same value today, opposite derivations -- do not
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
-
-//! Hidden-address outbound connections a restricted node opens. The
-//! own-edge rotates over that pool. Not the fluff floor: relayed stems
-//! draw over every outbound session.
-std::uint32_t shekyl_hop0_outbound_target();
 
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not
@@ -3969,6 +3948,7 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 #define SHEKYL_DAEMON_TOR_NO_BINARY          3
 #define SHEKYL_DAEMON_TOR_BAD_BINARY         4
 #define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
 #define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
 #define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
 
@@ -3983,10 +3963,12 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 //! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
 //! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
 //! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
-//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
-//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
-//! down before return, so a failed start commits the caller to nothing).
+//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
+//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
+//! differs, tor's directory holds something that is not pinned, unreadable);
+//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
+//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
+//! before return, so a failed start commits the caller to nothing).
 int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
                             uint32_t bootstrap_timeout_secs,
                             char* out_socks_addr, size_t out_socks_addr_len,
@@ -4391,6 +4373,9 @@ int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t le
 int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
     int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
+/// Record `kind` on `id` when the row has no cause yet. The row stays
+/// until `shekyl_seam_reap`. An unknown kind records nothing.
+void shekyl_seam_record_cause(std::uint64_t id, std::uint8_t kind, std::uint16_t reply);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 
@@ -4404,11 +4389,21 @@ struct shekyl_seam_board_row {
   std::uint8_t established;
   std::uint8_t _pad[7];
   shekyl_seam_observed endpoint;
+  std::uint8_t _pad_tail[2];
+  /// Unix seconds at admission. Last receive and last send are not here:
+  /// they are monotonic millisecond instants on the byte path
+  /// (`shekyl_link_activity`).
+  std::uint64_t started;
+  /// The same admission on that monotonic clock. The stall check uses it
+  /// until a byte arrives. It does not change after admission.
+  std::uint64_t started_mono;
 };
 static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
 static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
 static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
-static_assert(sizeof(shekyl_seam_board_row) == 88, "seam board row");
+static_assert(offsetof(shekyl_seam_board_row, started) == 88, "seam board started");
+static_assert(offsetof(shekyl_seam_board_row, started_mono) == 96, "seam board started_mono");
+static_assert(sizeof(shekyl_seam_board_row) == 104, "seam board row");
 
 /// Rows of `connector` and `direction` on the process hub, handshake or
 /// not. A missing hub, or an index that is not a connector or a direction,
@@ -4417,6 +4412,22 @@ std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t dir
 /// Rows in `direction` on every connector, handshake or not. A missing hub,
 /// or a direction index that is not one, is 0.
 std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
+
+/// 1 when the board row for `id` has finished the Levin handshake, 0 when
+/// the row is present and the handshake has not, -1 when there is no row.
+/// The id is the socket id, not the UUID.
+int shekyl_seam_session_established(std::uint64_t id);
+/// The connector index of `id`'s row. Zero is clearnet. -1 when there is
+/// no row. The id is the socket id, not the UUID.
+int shekyl_seam_session_connector(std::uint64_t id);
+/// 1 when a hub is bound.
+int shekyl_seam_is_bound(void);
+/// 1 when `(kind, reply)` on `connector` should stop dials to that address.
+/// 0 otherwise, including an unknown kind. An unknown connector does not
+/// count a proxy reply.
+int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
+/// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
+int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);
 
 /// Copy the process hub's board through `visit`, one fixed-size row per
 /// call. There is one hub. A missing hub, or a board with no rows, visits
@@ -4513,6 +4524,9 @@ int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// still enforces the process ceiling on the sum. Returns 0, or -1 for an
 /// unknown connector.
 int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
+/// Drop that cap. Later accepts are bounded only by the process ceiling.
+/// Returns 0, or -1 for an unknown connector.
+int shekyl_zone_clear_connector_cap(std::uint32_t connector);
 void shekyl_zone_session_established(std::uint64_t id);
 void shekyl_zone_shutdown(void);
 
@@ -4532,6 +4546,18 @@ void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint
 /// Bytes per second right now, over the link budget's recent-speed
 /// window, read from the engine's clock. A null pointer is skipped.
 void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
+/// Monotonic milliseconds of the last byte read or written on `id`.
+/// A grant is not a byte. Zero until that direction has moved one.
+/// A null pointer is skipped. Compare with `shekyl_monotonic_ms`.
+void shekyl_link_activity(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// The same instants as unix milliseconds, for the operator view.
+/// Zero stays zero. The stall check does not call this.
+void shekyl_link_unix_ms(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// Milliseconds on the monotonic clock the byte stamps use.
+std::uint64_t shekyl_monotonic_ms(void);
+/// The stall mark. `recv_ms` of 0 means no byte yet, and the mark is
+/// `started_ms` (admission, on the same monotonic clock).
+std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_ms);
 
 /// The 16-byte network id for `nettype`
 /// (`cryptonote::network_type`: 0 mainnet, 1 testnet, 2 stagenet, 3 fakechain).
