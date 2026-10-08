@@ -430,6 +430,9 @@ internals); the log may be specific.
 | Target "this computer", no rendezvous for this user or the machine on this network | "No Shekyl node is running on this computer for NETWORK." If a rendezvous exists for another network: "A node is running for OTHER_NETWORK." | — |
 | Rendezvous present, nothing listening (the daemon stopped without cleaning up) | "The Shekyl node on this computer is not running (it stopped unexpectedly). Start it again." The stale rendezvous is reported, not treated as a fault | The next start replaces it |
 | A daemon was just started and has not published its rendezvous yet | Nothing — the client waits for the publication (an event, not a poll that fails), bounded by the daemon's startup; on expiry: "The node did not finish starting. Its log records why." | Startup progress |
+| Unix: no session runtime directory (started under `sudo -u`, cron, or a container) | (Daemon, at start) "This node has no place for its local socket: there is no login session. Install it as a service, keep your session alive after logout (`loginctl enable-linger`), or name a socket directory." Refuses to start | Same line |
+| An explicit socket directory is not owned by this user, is not private to it, or cannot hold a socket | (Daemon, at start) "The socket directory PATH cannot be used: REASON." Refuses to start; never adopts or repairs it | Same line |
+| An instance name that breaks the naming rule (§7.1) | (Daemon, at start) "An instance name may contain only lower-case letters, digits and hyphens, at most 32 characters." Refuses to start | Same line |
 | Starting a daemon while one is already running for this user and network | (Daemon, at start) "A Shekyl node is already running for you on NETWORK. To run a second one beside it, give it a name." Refuses to start | Same line, with the existing node's start time |
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
@@ -556,17 +559,32 @@ client never reaches the wrong network's node.
 - **Unix, run-as-me:** the socket itself, at a fixed name inside a `0700`
   per-user, per-network directory. The directory is the containment (R0
   §1.1 item 1); nobody else can place an object at that name, so no random
-  component is needed. **The directory lives under the user's persistent
-  state home, not the session runtime directory** (proposed). The runtime
-  directory is absent under `sudo -u`, cron and most containers, and it is
-  removed when the user's last session ends — so a daemon kept alive in a
-  terminal multiplexer would lose its socket while still running, and
-  every client would report a node that is not there. A persistent
-  directory means a socket file can outlive a crashed daemon; the start-up
-  dial below handles that the same way on both platforms. A Unix socket
-  path has a short fixed limit (about 100 bytes), so a path that would
-  exceed it is refused at start with the path and the limit named, never
-  truncated.
+  component is needed. **The directory lives under the session runtime
+  directory** (`XDG_RUNTIME_DIR`): its lifetime is the login session's,
+  which is run-as-me's own lifetime (RT-16), it is local to the machine,
+  and a reboot clears it. Three cases follow (proposed):
+  - **No runtime directory** — under `sudo -u`, cron, and most containers.
+    The daemon refuses to start and names the three ways forward: service
+    mode, for a daemon meant to run unattended; `loginctl enable-linger`,
+    for an operator deliberately keeping a run-as-me daemon past logout; or
+    an explicit socket directory.
+  - **An explicit socket directory**, named by the operator, for test and
+    container runs that have no session. The daemon asserts it rather than
+    adopting it: owned by the daemon's user, mode `0700`, on a local
+    filesystem that accepts sockets — or it refuses to start and says
+    which condition failed. A client reaches such a daemon only when told
+    the same directory; it is never what "this computer" resolves to.
+  - **The runtime directory removed under a running daemon** — a daemon
+    left in a terminal multiplexer, without lingering, when its user's last
+    session ends. The daemon keeps running and loses its local leg; a
+    client then reports that no node is running (§4.5), which is wrong.
+    Named, not prevented: the daemon cannot stop the session manager from
+    removing the directory. It notices the loss and logs it, and the
+    refusal above is why a fresh start in that state says so.
+
+  A Unix socket path has a short fixed limit (about 100 bytes), so a path
+  that would exceed it is refused at start with the path and the limit
+  named, never truncated.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
   rendezvous file in a per-user, per-network directory under
@@ -634,7 +652,13 @@ client never reaches the wrong network's node.
   measurement runs start a second daemon of the same network beside an
   installed one, as one user, and without a named form the start-up
   refusal (§4.5) would stop them. The name is the operator's label, not a
-  nettype; the network id still keys the path (rule 71).
+  nettype; the network id still keys the path (rule 71). **The name is
+  operator input that becomes part of a filesystem path**, and on Unix it
+  spends the socket-path budget, so it is restricted: lower-case letters,
+  digits and hyphens only, at most 32 characters, starting with a letter
+  or digit. Anything else is refused at start with the rule stated — never
+  sanitised or truncated — so a separator, a `..`, or a reserved Windows
+  device name cannot reach the rendezvous path.
 - **Start-up dial on Unix.** The Windows start-up rule above applies here
   unchanged: before publishing, dial an existing socket — it answers, so
   another daemon is running, refuse and say so; nothing listens, so it is
@@ -835,6 +859,18 @@ construction) instead of loopback TCP.
 - **A fallback ladder** — try the local socket or pipe, then the channel,
   then anything else. Silent switches between nodes, and a fallback after a
   failed peer check is a downgrade oracle (RT-15).
+- **The Unix socket under the user's persistent state home** (proposed in
+  this round's first review pass, withdrawn). It answered the missing and
+  removed runtime directory, but every such case is an unattended daemon,
+  which RT-16 assigns to service mode. Its costs were real: socket files
+  are unreliable on network-mounted home directories and refused outright
+  on some, long home paths spend the socket-path budget, and a crashed
+  daemon's socket would survive a reboot. The runtime directory stays,
+  with a refusal where it is absent (§7.1).
+- **Isolating a test run by pointing daemon and client at a temporary
+  state home**, instead of a named instance. Windows' folder lookup ignores
+  environment variables, so it would need its own override flag anyway — a
+  hidden surface where the instance name is a visible one.
 - **A predictable per-user pipe name.** Another user can squat it before the
   daemon starts; the random name in a user-only rendezvous removes the name
   to squat (§7.1).
