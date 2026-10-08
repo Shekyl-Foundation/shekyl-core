@@ -217,30 +217,36 @@ evaporates), so SP-T0c's definition of done — "the bundle **and** the checklis
 (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Current pin (bumped 2026-08-06):** verified
-`tor-expert-bundle-linux-x86_64-15.0.19.tar.gz` (Tor `0.4.9.11`) — tarball SHA256
-`5a8f19f5f119b5fa2a8fd799a3a532e3236ad36164241800d6302e32f0e1c2a9`, GPG-signed by the **Tor Browser
+**Current pin (recorded 2026-10-07, `TOR_BUNDLE_DISTRIBUTION.md` TB-10):** verified
+`tor-expert-bundle-linux-x86_64-15.0.24.tar.gz` (Tor `0.4.9.13`) — tarball SHA256
+`8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
-`CAAE408AEBE2288E96FC5D5E157432CF78A65729`). The durable pin is *that signing key*, not just this one
+`022DA248432D2A0E0F54E65E316C1FACD62D07D9`). The durable pin is *that signing key*, not just this one
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
-the new binary hash. The **runtime gate is the extracted binary's** SHA256
-`660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
-recorded in `rust/shekyl-tor-control-client/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
-15.0.17 and 15.0.19 both ship Tor `0.4.9.11` and the extracted binary is byte identical, so two stable
-bundle releases moved the label and not the gate. That is this paragraph's own claim observed in
-practice — the bundle version and the binary digest are independent facts, and reading a stale label as
-a stale gate would be the second-source-of-truth error the design avoids. (Superseded pins, kept so the
-earlier verification claims stay independently checkable: **15.0.17** recorded 2026-07-01, tarball SHA256
-`4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, same extracted-binary digest;
+the new digests. **The pin of record is `config/tor_pins.json`**, which `build.rs` compiles into the
+binary and the packaging tool reads; this paragraph is a pointer to it. Since TB-7 the runtime gate is
+no longer one digest: it is the SHA256 of **each of the four files** tor's directory holds (`tor`
+`74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813`, and `libevent-2.1.so.7`,
+`libssl.so.3`, `libcrypto.so.3` as the file records them), together with the rule that the directory
+holds nothing else. (Superseded pins, kept so the earlier verification claims stay independently
+checkable, each a pin over the `tor` file alone: **15.0.19** recorded 2026-08-06 / Tor `0.4.9.11`,
+tarball SHA256 `5a8f19f5f119b5fa2a8fd799a3a532e3236ad36164241800d6302e32f0e1c2a9`, signing subkey
+`CAAE408AEBE2288E96FC5D5E157432CF78A65729`, extracted-binary SHA256
+`660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb`; **15.0.17** recorded 2026-07-01,
+tarball SHA256 `4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, the same
+extracted-binary digest as 15.0.19 — two bundle releases that moved the label and not the gate;
 **15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
 `71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
 
-**`linux-aarch64` pin (RULED 2026-09-29): Expert Bundle 16.0a12, tor `0.4.9.12`, an alpha.** Verified
-`tor-expert-bundle-linux-aarch64-16.0a12.tar.gz` — tarball SHA256
-`e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, Good signature under
-`EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the extracted binary's SHA256
-`e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`, recorded in `CURRENT_PIN`'s
-`aarch64` arm. The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:
+**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-07): Expert Bundle 16.0a13, tor
+`0.4.9.13`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a13.tar.gz` — tarball SHA256
+`e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, Good signature under
+`EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the four per-file digests in the
+`linux`/`aarch64` row of `config/tor_pins.json` (`tor`
+`5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`). (Superseded: **16.0a12** recorded
+2026-09-29 / tor `0.4.9.12`, tarball SHA256
+`e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, extracted-binary SHA256
+`e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`.) The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:
 at 15.0.17, 15.0.19 and 15.0.24 the Linux targets are `linux-i686` and `linux-x86_64` only, and the
 aarch64 builds are `android-aarch64` (Bionic) and `macos-aarch64` (Mach-O). `linux-aarch64` exists only
 in the alpha line, from 16.0a1 (2025-12-15) on.
@@ -298,8 +304,8 @@ suggests. Matching both arms to 16.0a1 removes it.
 **What this costs, stated so the result is not over-read:** the measurement is taken on a Tor version
 Shekyl does **not** ship. It is therefore valid for the question it was built to answer — *does
 `transit_tor` contain a hardware-dependent term?*, which is a comparison **between the arms** — and not
-as an absolute transit figure for the shipped configuration. Production remains pinned to the stable
-`15.0.19` binary on x86_64; nothing here changes `CURRENT_PIN`. Dev/CI integration KATs are `#[ignore]`-gated off the unit lane
+as an absolute transit figure for the shipped configuration. Production was pinned to the stable
+`15.0.19` binary on x86_64 when this was measured; nothing here changed the pin. Dev/CI integration KATs are `#[ignore]`-gated off the unit lane
 and **hard-fail** (never silently skip) when run without their binary: the lifecycle tests take **any**
 tor via `SHEKYL_TEST_TOR_BINARY`; the pin-match KAT takes **the pinned** tor via the deliberately
 distinct `SHEKYL_TEST_PINNED_TOR_BINARY`, so the two contracts cannot collide. The unit gate and
@@ -307,19 +313,25 @@ CI-without-Tor stay green because the tests are ignored there, not because they 
 
 **Runtime discovery + verify (SP-T0c, built in `shekyl-tor-control-client::binary`).** The chosen posture is
 *discover-and-verify-at-launch*: `discover_and_verify()` selects exactly **one** `tor` candidate — a
-non-empty `SHEKYL_TOR_BINARY` override, else a binary beside the wallet executable (the intended
-production layout), else `PATH` (bring-your-own-tor / dev convenience) — canonicalizes it, and gates it
-on `SHA256 == CURRENT_PIN`. On success it mints **`VerifiedTorBinary`, a witness type whose only
+non-empty `SHEKYL_TOR_BINARY` override, else `tor/tor` beside the running executable (the layout of
+an unpacked release archive), else `/opt/shekyl/<bundle_version>-<bundle_target>/tor` (where a system
+package installs it) — canonicalizes it, and gates it on the pin. *(Amended by
+`TOR_BUNDLE_DISTRIBUTION.md`: the `PATH` tier this paragraph once listed is deleted (TB-8), the
+beside-the-executable tier moved into a `tor/` directory of its own, and the gate is the whole
+directory — exactly the pinned files, each with its digest (TB-7) — where it was `SHA256 ==
+CURRENT_PIN` over the one file.)* On success it mints **`VerifiedTorBinary`, a witness type whose only
 production constructors are the gate itself** (`discover_and_verify` / the settings-file seam
 `discover_and_verify_at`), and `ManagedTor::tor_binary` accepts nothing else — so verification cannot
 be skipped on a future spawn path *by construction* (the SP-T0a `ServerVerified` pattern; the one test
 bypass is the greppable `unchecked_for_test`). There is **no fall-through on a verification failure**:
 the selected candidate's mismatch is terminal, so a present-but-tampered bundled binary can never
-silently defer to a different `tor`. (Fall-through on *absence* is how the tiers advance — deleting the
-bundled binary relocates discovery to `PATH`, where the candidate is still hash-gated; the relocation
-itself is silent, which is acceptable only because the gate travels with it.) A target with no
-`CURRENT_PIN` arm hard-refuses a managed launch (`Attached` still works); a new target is enabled by
-*pinning* it (checklist + `cfg` arm), never by relaxing the gate.
+silently defer to a different `tor`. (Fall-through on *absence* is how the tiers advance — with no
+bundle beside the executable, discovery moves to the system directory, where the candidate is gated the
+same way, and with none there either the answer is `NotFound`; the relocation itself is silent, which
+is acceptable only because the gate travels with it.) A target whose row in `config/tor_pins.json` is
+`unavailable` compiles `CURRENT_DISPOSITION` as `Unavailable` and hard-refuses a managed launch
+(`Attached` still works), and a target with no row does not compile; a new target is enabled by
+*pinning* it (checklist + its row in the pin file), never by relaxing the gate.
 
 **Scope boundary (named, not implied):** the pin defends *at-rest* integrity — a bad download, a
 supply-chain swap, a binary replaced before launch. Verification hashes the file; the launcher later
@@ -619,8 +631,10 @@ eliminates the bind-conflict class and forces consumers onto the posture channel
   a ~60s cap), the attempt counter resetting after a sustained `Ready` period. This is the
   path a staker's liveness rides.
 - **Trust failure** — the SP-T0c gate refuses (**any** `Binary(TorBinaryError)`:
-  `HashMismatch` — the binary changed under us — `Unpinned`, `NotFound`, `NotAFile`,
-  `NotExecutable`, or an `Io` reading the candidate) → **no fast retry into an
+  the directory is not the pinned bundle (`UnexpectedEntry`, `MissingFile`,
+  `HashMismatch`), the candidate cannot be launched (`NotFound`, `NotAFile`,
+  `NotExecutable`, `NotTheExecutable`, `UnsafeLoaderPath`, `Io`), or this
+  platform has no managed tor (`Unavailable`)) → **no fast retry into an
   untrusted binary**: immediate `Degraded` + a slow re-discovery cadence (minutes), which
   is safe to retry forever because discovery never launches what it cannot verify — an
   operator who reinstalls the pinned bundle gets auto-recovery without a restart.
