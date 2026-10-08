@@ -4,7 +4,8 @@
 **`SO-D6` CLOSED 2026-08-24** by grounding (recompute, no alt twin — the
 mechanism is named, not just leaned toward); **`SO-D7` CORRECTED 2026-08-24 —
 it re-derived a constraint the tree already enforced**; **`SO-D8` OPENED** and
-assigned out of this round.
+assigned out of this round. **`SO-D10` OPEN 2026-10-08** — the writer's
+wiring ahead of the secret draw, posed in §14.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -740,6 +741,7 @@ added (Q15).
 | `SO-D7` | ~~Writer runs at `h_close + W₂`~~ → **writer runs inside the slash scheduler's per-epoch pass**; the `≥ W₂` constraint was already const-asserted | **CORRECTED 2026-08-24** |
 | `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`). **Direction ratified 2026-09-13 — shape R-B:** the record names and validates its issuing block `h`, `E = epoch(h)`, deadline `h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`; `PC-D2` reversed; dedup widens to `(P,s,E,h)`; the emission gather joins the writer in the slash pass (this doc's `SO-D7` applied to its second consumer). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B / PC-D4 / SO-D7); `SO-D8d` RULED 2026-09-16 (three local layers, halt not clamp, on-chain digest REJECTED; proposal §6); `SO-D8e` RULED 2026-09-16 (proposal §7.2); Q9 carrier semantics RULED (B) same day; Q9's set-commitment bytes (PROPOSED) remain to be ruled in [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §9. *SUPERSEDED: "and the witness-key / batching questions remain to be ruled" — Q8 and Q9 RULED 2026-09-16.* **Reconciled 2026-09-14 against `PL-D3` (PR #745):** the witness key must not be a spendable output's own key, because `PL-D3` holds only while the per-output key is published once, at spend (proposal §2.2); `SO-D8` builds on `dev` after #745 and touches none of its surfaces. The §12 hold on the writer call site stands until then. **UPDATE 2026-09-16 (Q15 RULED):** wait until SO can be written directly in Rust; no C++ mirroring. **S-CHAIN-W increment 3 landed 2026-09-15** (PR #757); DRS is one increment from a validator. Deadline and SO-D9 are surface-free E6 rows; witness verification is bound to the block/tx surface; membership and dedup wait on S-ARCH with the writer — not the whole port. Wait's load-bearing reason is re-derivation plus a second bite at a genesis-frozen wire (`h`, 117 → ~125, rule 42), not only the shim prohibition. Beacon-era §5.1 interim-writer stays closed. *SUPERSEDED: Q12 sequenced behind F5.* Q3 RULED 2026-09-16 (`DrawableSet::at_epoch_open`; drop stays in `D`; filter at settlement). **UPDATE 2026-09-16 (Q8 RULED):** dedicated non-output hybrid key from coinbase output 0's `combined_ss`; 32-B commitment under `0x0C` (not `0x0B` — no version prefix, `k × 49` B). Combined_ss does not cross the FFI. **UPDATE 2026-09-16 (Q8 pins):** `0x0C` mandatory-present (commitment 2); `combined_ss` uniqueness is a derivation requirement with a fixture; Q10 RULED: memory-only ZeroizeOnDrop; persist-encrypted REJECTED. Q12 RULED independently (proposal §7.9); Q13 writes the CEN row and does not re-open optionality. **UPDATE 2026-09-16 (Q9 RULED):** *records-was, amended below:* Merkle-root batching; fail-whole refused (authorship ≠ incidence); serve-credit is fee-less by construction; 300,000 is `get_min_block_weight` (a floor); prunable bytes count toward weight. Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈365 KB/block; 39:1). Unpaid inclusion and any prunable-weight discount belong to a fee-and-weight round. **UPDATE 2026-09-16 (Q10 RULED):** accept-loss; memory-only ZeroizeOnDrop ring; persist-encrypted REJECTED. File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key`, not persist. **UPDATE 2026-09-16 (Q13 RULED):** 0x0C content is one CEN row, five fixtures, genesis-unconditional; dedicated parser must not copy 0x0B empty-set; length is WITNESS_COMMITMENT_BYTES. **UPDATE 2026-09-16 (Q12 RULED):** 0x0C is a bare 32-B cSHAKE256 of witness_pk under shekyl/archival-witness-key-v1, independent of F5; hiding is theater (reveal publishes pk); reopen if h is removed in order to conceal the issuing block. **UPDATE 2026-09-16 (SO-D8a/b/c RULED):** transcriptions — fire gate dies, `h_close` replaced by per-challenge W₂ (`CHALLENGE_RESPONSE_BLOCKS` FOLLOWUPS discharged); dedup `(P,s,E,h)` exact-get because `h` is in the past and in the DB (what PC-D4 could not do); emission gather to slash pass (SO-D7's second consumer). **UPDATE 2026-09-16 (`SO-D8d` RULED, amended same day vs `dev@5fde3b1ce`):** three local layers — assignment equality (streamed); **persisted** local 32-B `D` digest written in the connect batch at `h_open(E)`, compared against a re-walk at every slash pass; `passes ≤ issued` backstop (strictly dominated). The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone. Desync is a **store-invariant Fault** with a new `SI-` row (Slice C) — `poison().arm(row)` → `ConnectState::Halted`; never `CenRow`/`InvalidBlock`; the block at the slash height is unwritten *because the writer halted*, not because it is invalid. Q7 collapsed: cache drops at `h_close + W₂`; the writer is a pure function of chain data (`SO-D1` §4.2, `SO-D6`). §7.4 pin 4 reconciled by call site. On-chain `D`-digest REJECTED on four grounds (ground 3 withdrawn); issued-from-records REJECTED. Q4 is a coverage precondition (λ divergence passes layer 2). **UPDATE 2026-09-16 (Q15 residue):** #761/#762/#764 landed; falsifier unchanged and unfired (LMDB serves production; `held_by_cxx` rows). **UPDATE 2026-09-16 (review):** Q9's byte construction (proposal §7.6.1, PROPOSED) and carrier semantics (§7.6.2, OPEN — the inherited contract refuses a whole carrier on one bad vin; per-vin admission vs fail-whole + resubmission, recommendation (B)) are ruled before Slice C; Q3's drop-safety argument corrected (a dropped pair writes no row — zero bad observations, not one); fee-and-weight round now a FOLLOWUPS row. **UPDATE 2026-09-16 (`SO-D8e` RULED):** forward urn + `W₂` ring of self-contained pairs (~1.9 MB); no checkpoints — rewind replays from the hash-independent wave boundary; one `DrawableSet` live; lifetime `[h_open, h_close + W₂]`, settlement never reads it; one persisted carve-out (32-B `D` digest at `h_open`, undo-logged); ~16 MB at maturity; stateless draws-with-replacement FORECLOSED; owed `SI-10` (SI-5 exists, reuse refused) and 720-not-`D_max`. **UPDATE 2026-09-16 (Q9 amended):** Merkle-root batching SUPERSEDED same day — its isolation-at-admission premise was false under the carrier contract; ruled form is one signature per carrier over a set commitment (`cSHAKE256_32` of the length-framed records, bytes PROPOSED), **carrier fail-whole + resubmission within `W₂`** ((B) RULED; (A) per-vin admission REJECTED — free-weight channel); no inclusion paths (−22 KB/block); split 42 / 42 / 13, ≈ 347 KB/block, 42:1. **UPDATE 2026-09-17 (Q4 RESOLVED, `fix/so-q4-pin-lambda`):** `ChallengeUrn::new` reads `CHALLENGES_PER_PAIR_PER_EPOCH`; `assign_epoch` feeds that constructor; explicit λ is `#[cfg(test)]`; FOLLOWUPS `lambda_target` row removed. Open: Q9 set-commitment vectors. Q12–Q13 RULED; Q14 resolved by Q15 plus the tautology-repair prohibition. **UPDATE 2026-10-04:** Slice C AUTHORIZED, owned by this round with the writer's call site; the §12 hold lifted (proposal §8.0; `SERVE_CREDIT_VERIFIER.md` `SCV-Q3`). | **DIRECTION RATIFIED 2026-09-13 — a–e RULED 2026-09-16; placement RULED 2026-09-16 (Q15)**, consensus-visible |
 | `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it at that single site from `shekyl_archival_settlement_epoch_at_height(·)` of the block whose epoch the record claims — `current_height` on the **pre-cutover R-A path** (the connecting block), the **validated issuing block `h`** under **R-B** (proposal §1 "what is ruled is the site", §2.1 item 3) — making "the record's epoch is the block's epoch" an explicit enforced rule rather than a bound on *when* implicit in `h_close`. The *site* is independent of `SO-D8`'s shape; the *operand* is not, and the two pre-FFI C++ bounds (`h_close`, `challenge_seal_on_chain`) mean (i) on the R-A operand flips exactly one block per epoch (proposal §1 "Ordering", Q14). **Implementation not yet built** and **not to be built on the C++ path** (Q15, 2026-09-16): the row lands in `shekyl-chain-rules` with the R-B cutover, operand `h`. **Prohibition:** do not repair the tautology in `blockchain.cpp` — that would be a consensus tightening on the live LMDB daemon for a path being replaced. FOLLOWUPS row. Proposal: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 / Q15 | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
+| `SO-D10` | Wiring the writer ahead of the secret draw: it reads the issued-draw index, empty until the draw lands; seven sub-items posed (§14) | **OPEN 2026-10-08** |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual
@@ -748,3 +750,130 @@ the PoW rig run: §2 shows the chain-growth ceiling is gone by 34.6× and the
 block-occupancy cost is a reward penalty rather than a wall, and `SO-D1` is
 correct in both regimes precisely so the schema does not depend on which one
 the network is in.
+
+---
+
+## 14. `SO-D10` — wiring the writer ahead of the secret draw: pre-flight (2026-10-08) — OPEN
+
+**Status:** OPEN — posed for ruling. No implementation commit lands on the
+items marked *posed* until they are ruled
+([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+Grounded at `dev@98fbd20acb`; every `file:line` below is at that commit.
+
+**The charge.** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §11 item 2: "The
+settlement writer is wired before the secret draw goes live. The slash fold
+and accrual read the settlement row with its NonObservation floor." The
+reason is its §9.4: under the secret draw, a reader of "any pass" counts
+every pair the draw did not reach as a miss.
+
+### 14.1 What the code does today
+
+| Subject | State | Where |
+| --- | --- | --- |
+| The fold | `settle_epoch(passes, issued)`: a count against a count, NonObservation below 2. No Rust consensus path calls it; its callers are the FFI and one test | `rust/shekyl-archival-retention/src/attestation.rs:192-203`; `rust/shekyl-ffi/src/archival_ffi/settlement.rs:60`, `:127` |
+| The row | `SettlementRow([u8; 3])`, built only by `settle(passes, issued)`; refuses `issued = 0` and `issued > 255` | `rust/shekyl-archival-retention/src/settlement_row.rs:142-176` |
+| The table | `archival_settlement` is catalogued in the Rust store at ordinal 19 as `Unshaped`: no codec, no writer, no reader, not created at seal | `rust/shekyl-chain-store/src/schema.rs:556-559`, `:70-74` |
+| The slash fold | Decides on any pass: `passed` is this block's credits, or `pass_count(P, s, E).any()`. The window walk-back uses the same read | `rust/shekyl-chain-rules/src/archival/mod.rs:303-320`; `archival/slash.rs:154-178`, `:246-281` |
+| Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
+| When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
+| `issued` | No source. The urn has no caller; the slash pass still reads the one-challenge beacon geometry | `archival/slash.rs:183-240`; `rust/shekyl-archival-retention/src/challenge_assignment.rs` (no caller outside its crate) |
+| A pass, per draw | No source. A pass row is keyed `(P, shard, epoch, including height)`. Nothing names the draw it answers | `rust/shekyl-chain-store/src/schema.rs:553`; `store/archival_write.rs:183-211` |
+| The block's archival writes | `ArchivalDelta` has no settlement field, and `ChainView` has no settlement read | `archival/delta.rs:51-58`; `rust/shekyl-chain-rules/src/view.rs:406-507` |
+| Pruning | The Rust store prunes no archival table by epoch. `prune_archival_epochs_before` is C++ only | `rust/shekyl-chain-store/src/store/prune.rs:132` |
+| The C++ side | `set_archival_settlement` and `get_archival_settlement` exist with no production caller. The revert and the prune of the table are wired | `src/blockchain_db/lmdb/db_lmdb.cpp:6681-6765`, `:5866-5885`, `:6976-6988` |
+
+### 14.2 The defect this pre-flight exists for
+
+**§5.1 says the writer cannot be live before the cutover; the
+specification says it is wired before the draw goes live. Neither cites the
+other.** §5.1's three reasons were about a beacon-era wiring: every row
+would say NonObservation, the rows would store a constant, and both inputs
+would change source at the cutover.
+
+The writer has two inputs: the issued draws of a pair, and which of them
+have a pass. Neither exists in the Rust path today (§14.1). So "wired" cannot
+mean "producing rows from live inputs", and it must not mean a beacon-era
+stand-in, which is what §5.1 refused.
+
+### 14.3 Proposed shape (posed, `SO-D10a`)
+
+**The writer reads the issued-draw index from its first commit, and the
+index is empty until the draw lands.**
+
+- The Rust store gains the index the specification rules (its §10): the
+  per-pair list of issued draws and the per-epoch digest cell. They are
+  shaped, journaled and readable, and nothing writes them yet except a
+  Fakechain-only test hook.
+- The writer runs in the slash pass (`SO-D7`), reads the index, and writes
+  one row per pair with `issued ≥ 1` (`SO-D1`). With an empty index it
+  writes nothing.
+- The slash fold reads the row. An absent row is "no live obligation in
+  `E`" (§3), so nothing is slashed.
+
+§5.1's three reasons do not arise: no row is written at `issued = 0`, so
+nothing stores a constant, and the input is the index from the start, so
+nothing changes source when the draw lands. The draw's admission then
+populates the index and the writer does not move.
+
+**The consequence, stated so it is not discovered: from the change that
+switches the readers until the draw lands, the Rust validator slashes
+nothing.** That is the point of the ordering. The Rust path is not the
+live validator; the C++ daemon keeps the beacon until `DEL-008`.
+
+### 14.4 What is ruled and buildable, in order
+
+1. **The fold over a list** (specification §9.3): the selection of three
+   counted draws by beacon, with its nine vectors, and the outcome. A pure
+   function in `shekyl-archival-retention`.
+2. **The digest term** (specification §10), with its vectors.
+3. **The row's table**: `archival_settlement` shaped as
+   `([u8; 32], u64, u64) → Coded<SettlementRow>`, the tuple form of the
+   48-byte key (`SO-D2`), in the order the store already uses for
+   `archival_slash_applied`. `SCHEMA_VERSION` 21 → 22.
+4. **The view read and the delta field**, and the store write in phase 9
+   ahead of the slash writes (`SO-D7`: write the row, then fold it).
+5. **The integrity checks that have an operand**: the index against its
+   digest, and `passes ≤ issued`, as a store-invariant Fault with a new
+   `SI-` row. `SO-D8d` names `SI-10` for it; that row is taken (cumulative
+   work), so it is the next free one.
+
+### 14.5 Posed
+
+| # | Question | Recommended |
+| --- | --- | --- |
+| `SO-D10a` | What the writer reads before the draw exists | The empty issued-draw index (§14.3). Not a beacon-era stand-in |
+| `SO-D10b` | **The window walk-back over a row that is NonObservation or absent.** Today the walk stops at the first epoch that is not an observation (`rust/shekyl-archival-retention/src/failure_window.rs:53-56`), which is how the join, add and reinstate boundaries fall out. Under the row, an epoch inside a standing run can be unobserved because the draw did not reach the pair. If that stops the walk, a pair that never serves has its window cleared about once in a hundred epochs | **Skip it, do not stop.** The walk stops where the record's own state says the run began (`good_through` false: before the join, or across a reinstatement). Inside the run, Served and Missed are observations, and NonObservation or an absent row is passed over. This is what the sim's "epochs to `m` misses" already assumes |
+| `SO-D10c` | **How a pass is tied to a draw before admission is built.** The writer counts passes among the three selected draws; today's pass row names no draw | The index entry of a draw records whether it has a pass, written by whatever admits the record. The test hook sets it. The specification's "the serve-credit row, re-keyed `(P, s, E, h, j)`" is the admission change's to make; the writer reads the fact, not the table |
+| `SO-D10d` | **Accrual.** The close for `E` runs an epoch before the slash pass settles `E`, so it cannot read `E`'s row where it stands. `SO-D8c` already rules the emission gather into the slash pass | Its own change, after the slash fold's and before the draw. It moves when a claim for `E` first becomes possible by one epoch, and that reaches the wallet's claim arithmetic. Until it lands, accrual stays on any pass while slashing reads the row |
+| `SO-D10e` | **The count fold and the C++ writer.** `settle_epoch(passes, issued)` with its floor of 2, its two FFI exports, the C++ `set_`/`get_archival_settlement` and their unit tests have no production caller and state the superseded fold | Delete them with the change that lands the list fold (rule 15), and leave the LMDB table's handle, revert and prune for `DEL-008`. `SettlementRow` keeps its bytes; its floor becomes 3 |
+| `SO-D10f` | **Tests that slash through any pass.** `slash_writes_land_at_the_m_epoch_deadline`, `the_levered_slash_chain`, and `the_lmdb_slash_fixture`, which compares the Rust slash with the one slash the C++ ever wrote under test | A Fakechain-only hook that issues draws and marks passes, beside the existing serve-credit injector. The first two are re-driven through it. The third compares against a C++ beacon-era capture and is retired with the reason recorded, unless the comparison is wanted at the cost of keeping the any-pass fold alive behind it |
+| `SO-D10g` | **The `D` check** (`SO-D8d` layer 2). It needs the drawable-set enumerator and the digest cell written at `h_open(E)`. Neither exists; admission is their first consumer | Lands with the draw's admission, which produces `D`. Named blocker: no `D` exists for the writer to re-walk |
+
+### 14.6 Defects found while grounding
+
+Doc against code or doc against doc. Fixed with the implementing change
+unless noted.
+
+- **§5.1 against the specification's §11**, above.
+- **`SO-D8`'s plan says the writer and the admission rows land as one
+  unit** (proposal §8.0); the sequencing ruled 2026-10-07 puts the writer
+  first. The specification governs.
+- **The proposal's plan row gives `passes` as the per-pair-epoch pass
+  count**; the specification gives it as the passes among the three
+  selected draws, and the proposal's own §6.5 lists the first as a defect
+  class.
+- **The index row for `SO-D` says `issued = 1` settles NonObservation,
+  that the writer asserts on `issued > 255`, and that no draw state
+  persists.** The specification says fewer than 3, saturate, and stored.
+- **CEN-L8 says a fold refusal aborts the block's write.** `SO-D8d` rules a
+  writer halt that is never a verdict on the block.
+- **`SO-D8d` names `SI-10` for its Fault.** `SI-10` is cumulative-work
+  monotonicity; the register runs to `SI-24`.
+- **The Rust store never prunes an archival table by epoch**, and
+  `failure_window.rs`'s prune assert is written as if it did
+  (`:202-211`). Not this change's: the settlement rows and the index join
+  whatever prune the store gains.
+- **Two test modules describe observations as "settled 2-of-3"** while the
+  code they drive is any pass (`slash_scan_bench_tests.rs`,
+  `archival_write_tests.rs`). They agree only because nobody serves in
+  those chains.
