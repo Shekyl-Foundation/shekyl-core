@@ -112,7 +112,7 @@ fn an_all_clearnet_graph_shares_the_stem_slot_with_relays() {
         paper.posterior_hidden
     );
     assert!(
-        paper.posterior_own_edge < 0.6,
+        paper.posterior_own_edge < 0.75,
         "the paper's own-edge is a stem slot, so the posterior is not the \
          single-path 0.91, got {}",
         paper.posterior_own_edge
@@ -543,6 +543,60 @@ fn a_heavy_originator_sits_closer_to_posterior_one() {
         contrast.heavy_posterior,
         contrast.rest_posterior
     );
+}
+
+#[test]
+fn class_aware_precision_rises_only_when_the_first_hop_is_hidden() {
+    use shekyl_relay_privacy::conformance::composition::{simulate_class_aware_first_spy, SpyArm};
+    let mix = Mix {
+        nodes: 32,
+        hidden_out: 12,
+        clearnet_out: 8,
+        onion_fraction: 1.0,
+    };
+    let mut rng = SplitMix64::new(0x5A10);
+    let hidden = simulate_class_aware_first_spy(
+        mix,
+        Routing::HiddenStemSlot,
+        SpyArm::Uniform { p: 0.2 },
+        0,
+        200,
+        &mut rng,
+    );
+    assert_eq!(hidden.aware.named_origin, hidden.blind.named_origin);
+    assert!(hidden.aware.named <= hidden.blind.named);
+    let mut rng = SplitMix64::new(0x5A10);
+    let paper = simulate_class_aware_first_spy(
+        mix,
+        Routing::UniformHop0,
+        SpyArm::Uniform { p: 0.2 },
+        0,
+        200,
+        &mut rng,
+    );
+    assert!(
+        paper.aware.named_origin * paper.blind.named < paper.blind.named_origin * paper.aware.named,
+        "uniform hop 0 can be clearnet, so exonerating it drops the origin"
+    );
+    let mut rng = SplitMix64::new(0x5A11);
+    let marked = simulate_class_aware_first_spy(
+        Mix {
+            nodes: 32,
+            hidden_out: 8,
+            clearnet_out: 8,
+            onion_fraction: 1.0,
+        },
+        Routing::HiddenStemSlot,
+        SpyArm::Uniform { p: 0.2 },
+        8,
+        200,
+        &mut rng,
+    );
+    assert_eq!(
+        marked.aware_clearnet_names,
+        marked.aware_clearnet_names_clearnet_only
+    );
+    assert!(marked.clearnet_sender_clearnet_only < marked.clearnet_arrivals);
 }
 
 #[test]

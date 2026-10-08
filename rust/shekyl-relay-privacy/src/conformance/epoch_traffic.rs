@@ -253,9 +253,18 @@ fn send_one_stem<R: RelayRng + ?Sized>(
     let extra = walk_stem(params, embargo, rng)
         .stem_hops()
         .saturating_sub(1);
+    // One forward per node per transaction. A cycle that returns to a
+    // node that already stemmed this transaction is the same send, not
+    // a second relayed arrival on its own-edge.
+    let mut sent = vec![false; graph.nodes()];
+    sent[origin] = true;
     let mut at = first.to;
     let mut prev = origin;
     for _ in 0..extra {
+        if sent[at] {
+            break;
+        }
+        sent[at] = true;
         let Some(hop) = relay_edge(&mut scratch.maps[at], &graph.initiated[at], prev, rng) else {
             break;
         };

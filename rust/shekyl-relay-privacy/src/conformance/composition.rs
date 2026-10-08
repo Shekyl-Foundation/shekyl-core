@@ -536,6 +536,20 @@ impl SpyArm {
     }
 }
 
+/// One label per node for this trial. The origin is not a spy: a cycle
+/// that returns to it must not change that, and a revisit must not draw
+/// a second status.
+fn spy_membership<R: RelayRng + ?Sized>(
+    graph: &TwoClassGraph,
+    arm: SpyArm,
+    origin: usize,
+    rng: &mut R,
+) -> Vec<bool> {
+    (0..graph.nodes())
+        .map(|node| node != origin && is_spy(arm, graph.publishes[node], rng))
+        .collect()
+}
+
 fn is_spy<R: RelayRng + ?Sized>(arm: SpyArm, publishes: bool, rng: &mut R) -> bool {
     let p = arm.threshold(publishes);
     let threshold = (p * f64::from(u32::MAX)) as u32;
@@ -578,9 +592,10 @@ pub fn simulate_stem_first_spy<R: RelayRng + ?Sized>(
             continue;
         }
         pinned += 1;
+        let spies = spy_membership(&graph, arm, 0, rng);
         let mut first: Option<usize> = None;
         for (i, &node) in landing.path.iter().enumerate().skip(1) {
-            if is_spy(arm, graph.publishes[node], rng) {
+            if spies[node] {
                 first = Some(i);
                 break;
             }
@@ -726,6 +741,7 @@ pub fn simulate_class_aware_first_spy<R: RelayRng + ?Sized>(
             continue;
         }
         pinned += 1;
+        let spies = spy_membership(&graph, arm, origin, rng);
         let mut blind: Option<usize> = None;
         let mut aware: Option<usize> = None;
         for (i, &node) in landing.path.iter().enumerate().skip(1) {
@@ -738,7 +754,7 @@ pub fn simulate_class_aware_first_spy<R: RelayRng + ?Sized>(
                     clearnet_only += 1;
                 }
             }
-            if !is_spy(arm, graph.publishes[node], rng) {
+            if !spies[node] {
                 continue;
             }
             if blind.is_none() {
@@ -867,13 +883,19 @@ pub fn simulate_own_edge_capture<R: RelayRng + ?Sized>(
                 let drop = usize_from(bounded_uniform_len(rng, live.len()));
                 live.swap_remove(drop);
             }
-            // One refill peer, a new session, spy with probability p_h.
-            // It is not in the frozen set, so stem_for must not return it.
-            if bernoulli_p(rng, p_h) {
-                live.push(peer_id(hidden_out));
-            }
+            // The refill always joins the live set. It is a spy with
+            // probability p_h, and it is not in the frozen set, so the
+            // source's next stem must not be that peer.
+            let refill = peer_id(hidden_out);
+            let refill_spy = bernoulli_p(rng, p_h);
+            live.push(refill);
             let _change = map.update(live, rng);
             let after = map.stem_for(None, rng);
+            assert_ne!(
+                after,
+                Some(refill),
+                "the frozen walk took the refill (spy {refill_spy})"
+            );
             let frozen_spy = after.is_some_and(|id| {
                 let n = node_of(id);
                 n < hidden_out && spies[n]

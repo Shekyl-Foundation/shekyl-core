@@ -16671,9 +16671,8 @@ assignment on the relay branch, which is not merged: `net_node.inl:939`
 sets `max_out_connection_count` from
 `shekyl_relay_zone_min_provisioned_out_peers()` (12). At the dialer
 brief's pin `d93074d1c4` that same line is still
-`shekyl_hop0_outbound_target` (4). The dialer deletes the assignment
-and keeps 12 until this simulation is ruled
-([`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md)).
+`shekyl_hop0_outbound_target` (4). The dialer brief for P2P-3 slice 3, which is not in this tree, deletes
+the assignment and keeps 12 until an operating point is ruled.
 
 ### 95.1 Instruments that already exist
 
@@ -16734,22 +16733,26 @@ quantity below. `simulate_epsilon_greedy_selection` is the §12.11
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
 moves the embargo hop against transit and is not this sweep.
 
-### 95.2 The sweep this proposal would run
+### 95.2 The proposal grid — SUPERSEDED by the §95.3 sweep
 
 Points for review, not crate constants. A point is dropped when `h < 12`
 or `h + c < 12`. The report shows those drops, so the edge is visible.
-Totals sit around 12–24, and 16 is among them:
+Totals in this proposal sat around 12–24. Sixteen was one illustration,
+not a chosen total. §95.3 is the sweep that was run: `h` at 12, 14
+and 16, `c` from 0 to 16 in steps of 2, traffic at `f = 1`. Fractions
+below 1 are the inbound stress only. First spy was run at `p = 0.20`
+and at `p_h` from `p = 0.30`, not at 0.05 or 0.10.
 
-| `h` | `c` | total | why it is here |
+| `h` | `c` | total | why it was proposed — not the §95.3 run |
 | --- | --- | --- | --- |
-| 12 | 0 | 12 | both floors, hidden only |
-| 12 | 4 | 16 | hidden at the floor, total 16 |
-| 16 | 0 | 16 | hidden at 16, clearnet absent |
-| 12 | 8 | 20 | hidden at the floor, total 20 |
-| 16 | 4 | 20 | both above the floor |
-| 12 | 12 | 24 | hidden at the floor, total 24 |
-| 16 | 8 | 24 | both above the floor |
-| 24 | 0 | 24 | hidden at the top of the range |
+| 12 | 0 | 12 | both floors, hidden only — proposal, not the run |
+| 12 | 4 | 16 | hidden at the floor, total 16 — proposal, not the run |
+| 16 | 0 | 16 | hidden at 16, clearnet absent — proposal, not the run |
+| 12 | 8 | 20 | hidden at the floor, total 20 — proposal, not the run |
+| 16 | 4 | 20 | both above the floor — proposal, not the run |
+| 12 | 12 | 24 | hidden at the floor, total 24 — proposal, not the run |
+| 16 | 8 | 24 | both above the floor — proposal, not the run |
+| 24 | 0 | 24 | hidden at the top of the range — proposal, not the run |
 
 Onion-publishing fraction `f` at 1, 1/2, and 1/4 on each kept point.
 Network spy fraction `p` at 0.05, 0.10, and 0.20, the fractions the
@@ -16859,9 +16862,10 @@ because nothing else is scheduled onto it.
 
 The split baseline still reproduces ProxyMark's certainty: hidden
 posterior 1, clearnet posterior 0, own-edge posterior 1. The
-all-clearnet baseline, the paper's graph, gives own-edge posterior
-0.55 and clearnet posterior 0.18. The 0.91 figure does not survive
-the epoch tally.
+all-clearnet baseline, the paper's graph, gives an own-edge
+posterior of 0.62 on the instrument's 32-node draw. The 0.91 figure
+does not survive the epoch tally. A node forwards each transaction
+once: a cycle is not a second relayed arrival.
 
 A sender with inbound degree 0 relays nothing, so every stem it sends
 is originated, on either routing. The unit test strips inbound to one
@@ -16870,8 +16874,8 @@ such sender.
 
 A sender that originates much more than it relays sits closer to
 posterior 1 on any routing, as in Dandelion++. One node originating
-eight stems an epoch, and the others once, read 0.97 on its own-edge
-against 0.49 for the rest (`HiddenStemSlot`, `h = c = 12`).
+eight stems an epoch, and the others once, read 1.00 on its own-edge
+against 0.54 for the rest (`HiddenStemSlot`, `h = c = 12`).
 
 **2×2, 512 nodes, `OutboundOnly` in every cell.** Transit-free against
 per-connector transit (hidden 1625 ms, clearnet 50 ms). The shipped
@@ -16909,23 +16913,26 @@ nodes had mean 120, p90 130, max 134. `f = 1` is the normal case.
 **Class-aware first spy.** A clearnet arrival from a sender that has
 a hidden session is certainly relayed, so the estimator does not name
 that sender as the origin. On `h = 12`, `c = 8`, 32 nodes, 200 trials.
-Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.41 and recall
-0.23, aware precision 0.49 and recall 0.23. At `p_h` from `p = 0.30`,
-blind precision 0.66 and recall 0.58, aware precision 0.70 and the
-same recall. The gain is precision: false names on clearnet edges are
-dropped, and the true origin's hop is hidden so the correct names
-stay. Under the paper's uniform hop 0 the same estimator loses:
-precision 0.32 to 0.25 at `p = 0.20`, and 0.64 to 0.46 at the enriched
-share, because hop 0 can be clearnet and the rule then exonerates the
-origin. `HiddenStemSlot` makes a clearnet arrival exonerating rather
-than identifying. The attack on the origin moves to the onion
+Under `HiddenStemSlot` at `p = 0.20`, blind precision 0.29 and recall
+0.15, aware precision 0.38 and the same recall. At `p_h` from
+`p = 0.30`, blind precision 0.65 and recall 0.56, aware precision
+0.70 and the same recall. The gain is precision: false names on
+clearnet edges are dropped, and the true origin's hop is hidden so
+the correct names stay. Under the paper's uniform hop 0 the same
+estimator loses: precision 0.37 to 0.30 at `p = 0.20` (recall 0.20
+to 0.12), and 0.72 to 0.49 at the enriched share (recall 0.63 to
+0.37), because hop 0 can be clearnet and the rule then exonerates
+the origin. `HiddenStemSlot` makes a clearnet arrival exonerating
+rather than identifying. The attack on the origin moves to the onion
 candidate share, which is why §96 item 3 carries this routing's cost.
+Spy labels are drawn once per node per trial, and the origin is not
+a spy.
 
-Separately, eight of 32 nodes initiate no hidden session. Of 570
-clearnet arrivals, 264 had a clearnet-only sender. A clearnet arrival
+Separately, eight of 32 nodes initiate no hidden session. Of 606
+clearnet arrivals, 273 had a clearnet-only sender. A clearnet arrival
 by itself marks its sender clearnet-only less than half the time,
-because relays use clearnet too. The aware estimator named 43
-clearnet predecessors as the origin, and all 43 were clearnet-only.
+because relays use clearnet too. The aware estimator named 30
+clearnet predecessors as the origin, and all 30 were clearnet-only.
 
 **Cross-connector linkage, not built.** Hypothesis: a spy holding
 both a Tor session and a clearnet session to one node can link that
