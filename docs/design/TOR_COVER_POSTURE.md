@@ -39,11 +39,15 @@ Three consequences follow immediately:
   The own-edge draws uniformly over the hidden-address outbound sessions.
   Both re-draw per epoch. A hidden-address pool of one is a degraded state
   the node reports (`hop-0 edge cannot rotate`), not a configuration it
-  accepts quietly. The managed Tor zone opens `HOP0_OUTBOUND_TARGET` (4)
-  outbound connections so that pool has the paper's degree to rotate over.
-  `--out-peers` does not change that cap. A live own-edge is not
+  accepts quietly. **UPDATE 2026-10-07:** that pool's target is
+  `MIN_PROVISIONED_OUT_PEERS` (12). The warning is a pool of one, and it
+  does not name a target. *Records-was: the managed Tor zone opens
+  `HOP0_OUTBOUND_TARGET` (4) outbound connections so that pool has the
+  paper's degree to rotate over.*
+  `--out-peers` does not change the address-hiding target. A live own-edge is not
   re-pointed; a dead one is replaced from the peers still up. No cover
   on Tor by ruling; on cover-bearing links the own-edge is slot-aligned.
+  Tor's cover class is `Volume`. That ruling is unmeasured, pending TRC-1.
   *Records-was as of 2026-10-08: this bullet is what the code does today.
   The ruling below removes the separate draw.*
 - **UPDATE 2026-10-08 (Rick). Own transactions ride a stem slot.** A node's

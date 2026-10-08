@@ -156,7 +156,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
@@ -953,7 +953,7 @@ review.
   retired for cause**: no identifier is strictly stronger than an identifier
   pinned to a constant. **`DAEMON_RELAY_PRIVACY.md` §91.4's unlinkability
   composition names the sentinel as one of three composed decisions**, and
-  `rust/shekyl-relay/src/zone/mod.rs:190-199` builds a load-bearing argument on
+  `rust/shekyl-relay/src/graph/mod.rs:190-199` builds a load-bearing argument on
   it. **Both must be re-grounded on "no identifier on the wire" rather than left
   citing a retired mechanism** — the composition gets stronger, but the text
   that states it becomes false.
@@ -4245,7 +4245,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `Zone::queue_fluff` appends every transaction to each peer's queue and
 > `flush_fluff` releases the whole accumulated batch —
 > `std::mem::take(&mut peer.queued)`, with no cardinality or byte cap
-> (`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`) — and the receive
+> (`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`) — and the receive
 > side checks no cardinality either. **So 2002's cap has no derivation input,
 > and until one exists 2002 is not bounded below 2004.** *An earlier version of
 > this table wrote "`CRYPTONOTE_MAX_TX_SIZE` × the relay batch bound" as though
@@ -4399,7 +4399,7 @@ field must express the largest value the command table can produce, and
 > idle makers** and false of the tree: the relay layer draws fluff delays from
 > `FluffScheduler::memoryless()` — deliberately memoryless rather than the
 > inherited Poisson, which was the F-4 defect — and jitters the noise cadence
-> as `min + U(0, jitter)` (`rust/shekyl-relay/src/zone/mod.rs:315-320`,
+> as `min + U(0, jitter)` (`rust/shekyl-relay/src/graph/mod.rs:315-320`,
 > `:235`). **So this round is not introducing randomised timing to a tree that
 > has none; it is asking why one layer has it and the layer above does not.**
 
@@ -4411,7 +4411,7 @@ an owner if no row names it (rule 22).
 `Zone::queue_fluff` appends **every** transaction to each peer's queue, and
 `flush_fluff` releases the whole accumulation — `std::mem::take(&mut
 peer.queued)` — with no cardinality or byte cap
-(`rust/shekyl-relay/src/zone/mod.rs:814-847`, `:852-880`). The receive side
+(`rust/shekyl-relay/src/graph/mod.rs:814-847`, `:852-880`). The receive side
 checks no cardinality either.
 
 > **Why no census row covers it, which is a finding about the instrument.**
@@ -4430,7 +4430,7 @@ checks no cardinality either.
 
 **Bounding the release does not bound the queue, and the ruling has to say
 both.** `peer.queued` is a bare `Vec<TxBlob>`: `queue_fluff` extends it
-(`rust/shekyl-relay/src/zone/mod.rs:846`) and `flush_fluff` empties it
+(`rust/shekyl-relay/src/graph/mod.rs:846`) and `flush_fluff` empties it
 (`:868`), with **no bound at either end**. If transactions arrive faster than
 one capped batch per flush interval, the remainder simply accumulates — **once
 per destination peer** — so a release-side cap alone converts the flooder's
@@ -4666,7 +4666,7 @@ deadlines, drawn independently**.
 > wake must leave every other entry untouched, because re-drawing on a foreign
 > wake resamples `min + U(0, jitter)` and keeps the minimum, **biasing the
 > effective interval short** — "a privacy defect no count assertion and no
-> goodness-of-fit grade can see" (`rust/shekyl-relay/src/zone/mod.rs:231-236`).
+> goodness-of-fit grade can see" (`rust/shekyl-relay/src/graph/mod.rs:231-236`).
 > **PWD-B2 adopts that rule verbatim**: a connection's deadline is re-drawn
 > only when that connection's own sync fires.
 

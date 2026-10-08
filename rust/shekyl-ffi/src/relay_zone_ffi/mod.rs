@@ -1149,16 +1149,6 @@ pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
     shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
 }
 
-/// Hidden-address outbound connections a restricted node opens.
-///
-/// The own-edge rotates over that pool. Not
-/// [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]: that floor
-/// is the fluff measurement's degree.
-#[no_mangle]
-pub extern "C" fn shekyl_hop0_outbound_target() -> u32 {
-    shekyl_relay_privacy::params::HOP0_OUTBOUND_TARGET
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_relay_zone_next_wake(handle: *const RelayZoneHandle) -> u64 {
     if handle.is_null() {

@@ -1,6 +1,9 @@
 # P2P-3 slice 1 — the peerlist
 
-**Status:** **REVISED 2026-09-25 (connector partition; white target is diversity).** Lists are partitioned
+**Status:** **REVISED 2026-09-25 (connector partition; white target is diversity).**
+**UPDATE 2026-10-08: interim working values** for outbound degree,
+`disclose(n)`, and the white floor. The derivation is still owed.
+Lists are partitioned
 by connector, derived from the address type. Gray is drawn when white falls
 below that target, not on a fixed minute. The peerlist moves into Rust. The C++ is a
 quarry: evidence for the invariant, and a list of behaviors the Rust model
@@ -86,11 +89,24 @@ inbound does not. One failed redial does not demote; the clock does.
 connections are drawn uniformly from white, so a small white list is a
 small set of hosts an attacker can dominate. The target is enough
 distinct candidates that no attacker-held fraction dominates the draws.
-Slices 1 and 3 derive it. It is not "twice the out-degree", and it is
-not today's 1,000 cap. Two levels, both derived, neither a number.
-The diversity floor is the minimum that resists eclipse. The refill
-line sits above that floor, derived from it. Headroom is the gap
-between them. Refill starts when white crosses the refill line, while
+The 2026-09-25 ruling stands: the floor is not "twice the out-degree",
+and it is not today's 1,000 cap. *Records-was, the same ruling: both
+levels had no number yet.*
+
+**Interim working values (Rick, 2026-10-08), until this slice's
+derivation.** Outbound degree 16. `disclose(n)` with `n = 16`. White
+diversity floor about `4 × 16 = 64`. These replace
+`P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) as
+the size this node aims to send. *Records-was: that 250, and
+`P2P_MAX_PEERS_IN_HANDSHAKE` beside it at `:194`, also 250.* The
+degree is the number the floor and `n` are sized against. It is not
+a ruling of the dialer's operating point (`DAEMON_RELAY_PRIVACY.md`
+§95); that point is still unchosen, and these values move if it is
+ruled at a different degree. The derivation this slice still owes:
+the white floor and the refill line, from draw diversity and the
+candidate filters; `n`, from intake diversity, honest fill, and
+per-reply exposure. The refill line stays above the floor. The gap
+is headroom. Refill starts when white crosses the refill line, while
 it is still above the floor, so the node is not probing stale gray
 entries in the moment connectivity has already collapsed.
 
@@ -195,7 +211,7 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `draw_gray()` | One uniform gray address, remembered as an outstanding draw |
 | `draw_white()` | One uniform white address. Used to re-contact, which can refresh the clock. Not a promotion |
-| `disclose(n)` | `n` distinct white addresses, uniform, order randomized. Gray is absent. `last_observed` is absent |
+| `disclose(n)` | The connector's cached sample: `n` distinct white addresses of that connector, uniform, order randomized. Gray is absent. `last_observed` is absent. Interim `n = 16` |
 
 `handshake_confirmed(address)` is the only writer of `White`, and only in
 three cases. The address is an outstanding gray draw: move it to white and
@@ -214,6 +230,32 @@ draw: it sorts candidates by `last_seen`
 that order (`src/p2p/net_node.inl:1849`). Rust has no time-ordered walk for
 either caller. The property PWD-I2 kept is the one `disclose` has to keep: two
 answers cannot be lined up to infer which address was confirmed more recently.
+
+### Cached disclosure — INTERIM 2026-10-08
+
+One sample per connector. It is drawn once and kept for a window. The
+window starts at the 24-hour white expiry (`EXPIRATION_PERIOD`). Every
+requester in that window, on that connector, receives that sample.
+Refresh draws a new sample for that connector only. Interim `n = 16`
+is the sample size and the number of addresses this node accepts from
+one message.
+
+The cache is per connector. Serving one sample on two connectors
+links this node's IP and its onion: the same addresses on both
+answers are the join.
+
+**Receiver limits, every connector.** A message with more than `n`
+addresses is a violation. It is not trimmed and kept. Gray also has
+a per-source share limit, so one sender cannot fill the list. The
+share is part of the derivation of `n` still owed above: intake
+diversity, honest fill, and per-reply exposure. No share number is
+set here.
+
+**Wargame: fresh samples enumerate white.** A requester who is
+answered with a new uniform draw each time unions the answers and
+walks white, and white includes the peers this node currently dials.
+The cached sample closes that inside the window: a repeat adds no
+address. The window is what limits how often the union grows.
 
 ---
 
@@ -414,13 +456,16 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
   a third door. The Foundation fleet is data this slice reads, not a second
   selector.
 - No connection object. Slice 5. Expiry and the clock do not wait for it.
-- No new cap, no `--in-peers` number, no refusal-window number.
+- The gray cap 5000 and the white cap 1000 are not re-derived. No
+  `--in-peers` number, no refusal-window number. The interim `n` and
+  the per-source gray share are intake limits, and the share's number
+  is still the derivation.
 - The failure cache stays where it is. It may cause the dialer to skip an
   address `draw_gray` returned. It does not write white.
-- Disclosure stays a sample of white with no clock in the value. PWD-I2's
-  property (a second answer does not reveal which address was confirmed more
-  recently) is what `disclose` implements. The `by_time` walk is not part of
-  that property.
+- Disclosure is that connector's cached sample of white, with no clock
+  in the value. PWD-I2's property (a second answer does not reveal which
+  address was confirmed more recently) is what one sample per window
+  keeps. The `by_time` walk is not part of that property.
 
 ---
 
