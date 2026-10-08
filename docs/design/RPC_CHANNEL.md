@@ -577,6 +577,27 @@ preset it landed in. The plaintext loopback listener is fixed at `view`
 - **`get_info.restricted` is retired.** The connection's grant is returned
   in the handshake (§6.2); a boolean cannot describe it.
 
+**Prerequisite: `get_info` moves to Rust first (RK-5c).** `get_info` is
+still a C++ handler, and it is the one reply that must be filled field by
+grant. Carrying a grant into C++ would widen the one boolean that crosses
+the FFI today into a structure the cutover then deletes. So the daemon's
+KV cutover slice that moves `get_info`
+([`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md), RK-5c — design
+open, being drafted in its own lane) lands **before** RT-W10, and this
+round asks three things of it and nothing more:
+
+- each `get_info` field is filled in Rust and is attributable to exactly
+  one grant in the table above;
+- a field the caller may not see is **absent** from the reply, not zeroed,
+  and the reply type says so;
+- the caller's authority reaches the handler as a value that can become a
+  grant, not as a `restricted` boolean, so RT-W10 supplies a richer value
+  without rewriting the handler.
+
+Until the channel exists, RK-5c serves today's two listeners; how it maps
+them onto these fields is that slice's decision. No grant is threaded
+through C++ for `get_info` in any slice of this round.
+
 *What the incident's consumer gets.* The web host at `view` reads height,
 difficulty and hash rate from `chain`, sync state from `health`, and pool
 size from `pool`. Two things it does today need more. Its **seed-node
@@ -882,8 +903,8 @@ construction) instead of loopback TCP.
   - whether the incident's consumer is enrolled for `peers` to keep its
     seed-node count, or the count is dropped from the site;
   - `get_info` served field by field. It is the one method that spans
-    grants, and it is still a C++ handler: the grant crosses the FFI as
-    more than today's one boolean until `/get_info` moves to Rust (RK-5c).
+    grants, and it is settled by where it is built, not here: see the
+    RK-5c prerequisite in §6.1.
 
 ---
 
@@ -976,7 +997,7 @@ construction) instead of loopback TCP.
 |---|---|---|
 | RT-W8 | RT-P7 model; RT-O7 vectors and differential; registry rows; RT-P4 | ratification |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); deadline from RT-P6 | RT-W8 |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants; restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8 |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants; restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet` | RT-W9 |
 | RT-W13 | §11 sweep | lands with RT-W10 |
