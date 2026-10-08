@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **Re-derive `fluff_return_ms` with Tor transit on production `EveryPeer`, and measure clearnet-only origin precision against the all-clearnet baseline.** Both wait for the next relay-privacy round. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading (`DAEMON_RELAY_PRIVACY.md` §96 item 2). 3250 stays provisional pending the operational test named there.
+  - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
+  - Target: pre-genesis
+
 - **Retire the plaintext `captured_chunks` table for sealed persistence in the wallet's sealed proving state (`CT-6` Q3), deleting it rather than migrating it** (why it is plaintext now, and why no nettype branch may stand in: `CT6_PROVING_STATE.md` §11.8; the persona's rows are part of that one proving state: §11.12). Falsify by `captured_chunks` being absent from `redb_backend.rs` with the path set riding the sealed file Q3 names.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis

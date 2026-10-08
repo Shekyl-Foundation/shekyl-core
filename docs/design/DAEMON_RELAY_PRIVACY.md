@@ -16879,13 +16879,12 @@ against 0.54 for the rest (`HiddenStemSlot`, `h = c = 12`).
 
 **2×2, 512 nodes, `OutboundOnly` in every cell.** Transit-free against
 per-connector transit (hidden 1625 ms, clearnet 50 ms). The shipped
-degree-12 graph, same seed and 24 trials that reproduce 3250 ms at
-transit 0, reads 12125 ms with Tor transit on every edge. Four seeds
-at 16 trials did not agree within 250 ms; their readings were 12000,
-12125, 12000 and 12500. Every one exceeds 3250. The provisional input
-omits Tor transit on the return path. That is a §90 question for
-every node with Tor sessions today: `F′` and its dependents move
-together, and this change does not move them.
+degree-12 graph with Tor transit on every edge is unconverged: four
+seeds at 16 trials read 12000–12500 ms, every one above 3250. The
+provisional input omits Tor transit on the return path. That is a
+§90 question for every node with Tor sessions today: `F′` and its
+dependents move together, and this change does not move them. The
+transit-free cell, on the provenance seed and 24 trials, is 3250 ms.
 
 *Records-was, 128-node `EveryPeer` with mixed transit: `(12, 0)`
 7375 ms, `(12, 4)` 4050 ms, `(12, 12)` 1550 ms.* Those cells mixed
@@ -16933,6 +16932,9 @@ clearnet arrivals, 273 had a clearnet-only sender. A clearnet arrival
 by itself marks its sender clearnet-only less than half the time,
 because relays use clearnet too. The aware estimator named 30
 clearnet predecessors as the origin, and all 30 were clearnet-only.
+The 30-of-30 is the class of the node named, which follows from the
+routing rule; it is not precision against clearnet-only origins, and
+that is unmeasured.
 
 **Cross-connector linkage, not built.** Hypothesis: a spy holding
 both a Tor session and a clearnet session to one node can link that
@@ -16993,8 +16995,17 @@ Each item is open. Its carrier is the only thing that closes it.
    that path. A simulated cell under 3250 does not confirm it.
    **Carrier:** this item. **Closes when** that measurement is
    recorded here with the two p90s and the input has either moved
-   under §90 or been confirmed for the Tor return. **Re-evaluation:**
-   the dated record of those two p90s.
+   under §90 or been confirmed for the Tor return.    **Re-evaluation:**
+   the dated record of those two p90s. **Deferred to the next
+   relay-privacy round, not this item's closure.** Re-deriving
+   `fluff_return_ms` with Tor transit on the return path and
+   production `EveryPeer` reach, and measuring estimator precision
+   for clearnet-only origins as a function of the clearnet-only
+   fraction against the paper's all-clearnet baseline, are not
+   started here. Blocked on the Rust cutover — falsify by a
+   converged 512-node `EveryPeer` per-connector reading, which
+   reopens that round. 3250 stays provisional pending the
+   operational test above. The one-liner is in `FOLLOWUPS.md`.
 3. **Onion-candidate flooding defence.** A hidden edge is drawn from
    publishers an attacker can supply. `HiddenStemSlot` moves the
    first-spy attack onto that share: a clearnet arrival exonerates
