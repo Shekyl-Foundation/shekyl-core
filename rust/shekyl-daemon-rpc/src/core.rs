@@ -109,8 +109,11 @@ pub struct ConnectionFacts {
     pub support_flags: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`, unmapped — the name it renders
-    /// to is the wire projection's business.
+    /// to is the wire projection's business. Meaningful when `claims_known`.
     pub state: u8,
+    /// The strand read height, support flags, and state. False means those
+    /// three have not landed and must not be rendered as zeroes.
+    pub claims_known: bool,
     /// epee type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
     pub incoming: bool,
@@ -445,6 +448,7 @@ impl CoreRpc {
                         support_flags: e.support_flags,
                         port: e.port,
                         state: e.state,
+                        claims_known: e.claims_known != 0,
                         address_type: e.address_type,
                         incoming: e.incoming != 0,
                         localhost: e.localhost != 0,

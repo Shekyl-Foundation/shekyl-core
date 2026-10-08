@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::oneshot;
 
@@ -109,6 +110,12 @@ struct Conn {
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
+    /// Unix seconds at admission. The operator view reads this. It is not
+    /// the timing engine's tick. Last receive and last send are not on
+    /// this row: they are monotonic millisecond instants on the byte path.
+    started_unix: u64,
+    /// The same admission, on the monotonic clock the byte stamps use.
+    started_mono: u64,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -132,6 +139,8 @@ struct Inner {
     ceiling: InboundCeiling,
     /// The last board published. Readers clone this. They do not lock the table.
     board: Board,
+    /// How many times [`Hub::republish`] has run. Bytes do not increment it.
+    publishes: u64,
 }
 
 /// What one locked look at a row told [`Hub::deliver_async`].
@@ -179,6 +188,7 @@ impl Hub {
                 conns: HashMap::new(),
                 ceiling,
                 board: Board::empty(),
+                publishes: 0,
             })),
             ready: Arc::new(Condvar::new()),
             post,
@@ -259,12 +269,12 @@ impl Hub {
 
     /// Ask the installed dialer for a channel and post `established`.
     ///
-    /// No dialer is [`CloseKind::DialFailed`]. The caller drives
+    /// No dialer is [`CloseKind::LocalClose`]. The caller drives
     /// [`crate::drive_inbound`] on the returned session.
     pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
         let dial = self
             .current_dial()
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let ceiling = self.lock().ceiling;
         let now = self.now();
         let channel = dial.connect(endpoint, ceiling, now)?;
@@ -382,7 +392,7 @@ impl Hub {
 
     /// Insert `connection` when its id is free.
     ///
-    /// A duplicate id releases `open` and is [`CloseKind::DialFailed`].
+    /// A duplicate id releases `open` and is [`CloseKind::LocalClose`].
     fn place(
         &self,
         connection: Connection,
@@ -394,7 +404,7 @@ impl Hub {
         if inner.conns.contains_key(&connection.id()) {
             drop(inner);
             drop(open);
-            return Err(CloseCause::new(CloseKind::DialFailed));
+            return Err(CloseCause::new(CloseKind::LocalClose));
         }
         Ok(Self::write_row(
             &mut inner, &self.post, connection, open, session, gap,
@@ -421,6 +431,8 @@ impl Hub {
                 phase: Phase::Arming,
                 connection,
                 established: false,
+                started_unix: Self::unix_secs(),
+                started_mono: shekyl_transport_layer::monotonic_ms(),
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
@@ -449,6 +461,19 @@ impl Hub {
         self.lock().board.clone()
     }
 
+    /// How many boards have been published. A byte does not increment this.
+    #[must_use]
+    pub fn publish_count(&self) -> u64 {
+        self.lock().publishes
+    }
+
+    fn unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0)
+    }
+
     /// Rebuild the published board from rows that are still connected.
     ///
     /// The live table is a hash map, keyed for lookup by admission id.
@@ -456,13 +481,23 @@ impl Hub {
     /// flood that is O(N²) across the flood. D5's thread-budget flood leg
     /// measures that cost; it is not a reason to hand a reader the live
     /// row. A closed row stays in the table until [`Self::reap`] and is
-    /// not on the board.
+    /// not on the board. Open, close, and the handshake are the callers.
+    /// A byte is not.
     fn republish(inner: &mut Inner) {
+        inner.publishes = inner.publishes.saturating_add(1);
         let rows = inner
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| Row::new(id, *conn.connection.endpoint(), conn.established))
+            .map(|(&id, conn)| {
+                Row::new(
+                    id,
+                    *conn.connection.endpoint(),
+                    conn.established,
+                    conn.started_unix,
+                    conn.started_mono,
+                )
+            })
             .collect();
         inner.board = Board::from_rows(rows);
     }
@@ -665,8 +700,8 @@ impl Hub {
     /// The same send, with whether the registry held `id` and any cause.
     pub fn send_report(&self, id: SocketId, bytes: Vec<u8>) -> SendReport {
         let outcome = {
-            let inner = self.lock();
-            let Some(conn) = inner.conns.get(&id) else {
+            let mut inner = self.lock();
+            let Some(conn) = inner.conns.get_mut(&id) else {
                 return SendReport {
                     accepted: false,
                     found: false,

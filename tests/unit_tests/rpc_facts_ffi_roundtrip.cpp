@@ -288,7 +288,8 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 120, "incoming offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 121, "localhost offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 122, "local_ip offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 123, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, claims_known) == 123, "claims_known offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 124, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_sync_span_facts) == 72, "sync span facts changed size");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address) == 0, "remote_address offset");

@@ -3287,10 +3287,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
     // `first_stake` genesis posture (CompleteTree) is foundation-shaped and
     // market-excluded (E-2), so its Σwork is zero forever — surfaced by
-    // this e2e's first close. The declared shard need not be frozen
-    // (`bond_post.rs`: adding an unfrozen shard is valid), and an unfrozen
-    // credited shard carries age 0 ⇒ `g(0) = WORK_MILLI_SCALE` ⇒ positive
-    // work.
+    // this e2e's first close. The shard a compact join names must be
+    // closed, final and priced at the parent (CEN-J15, `shekyl-chain-rules`
+    // `tx_bond.rs`); this generator never fills `SHARD_ID`, so the chain it
+    // captures is admitted by the C++ daemon (which marshals a presence bit
+    // and no closure) and refused by the Rust validator at the join — the
+    // `vectors_tests` `PREDATES` record for `emission-claim`. A capture
+    // meant to replay whole fills the shard, lets it close and prices it
+    // before the join.
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])

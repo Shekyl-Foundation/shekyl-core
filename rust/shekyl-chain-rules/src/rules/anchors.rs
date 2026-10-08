@@ -34,6 +34,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
 use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
+use crate::fault::ViewRead;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
@@ -65,7 +66,7 @@ impl BlockRule for E1 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         match cx.trust.anchors().expected_at(cx.connecting) {
             Some(expected) if expected != cx.formed.hash() => refused(Self::ROW, Locus::Block),
             Some(_) | None => Ok(Ok(())),

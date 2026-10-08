@@ -441,6 +441,115 @@ pub fn window_check(short_permille: f64) -> WindowCheck {
     }
 }
 
+/// Reads the witness makes of one draw before abandoning it, spread across
+/// `W₂`. Each is a whole read by the fetch caller's own rule, including its
+/// stall retries inside one window, which the calibration does not credit.
+pub const RETRY_ATTEMPTS: u32 = 3;
+
+/// The correlations the retry table is printed at, from the calibration
+/// (every failure common to all tries) to independent tries.
+pub const RETRY_CORRELATIONS: [f64; 6] = [1.0, 0.5, 0.25, 0.10, 0.05, 0.0];
+
+/// Probability a read fails after `attempts` tries, when a share
+/// `correlation` of single-try failures is common to every try of that read
+/// and the rest are independent.
+///
+/// `p · (ρ + (1 − ρ) · p^(a−1))`. At `ρ = 1` it is `p`, the feasibility
+/// module's calibration, which credits one attempt. At `ρ = 0` it is `p^a`.
+/// `ρ` is a parameter of this model, not a quantity a run observes: a
+/// measurement observes the read failure itself (see
+/// [`clearing_read_failure`]), and `ρ` is inferred from it.
+#[must_use]
+pub fn correlated_read_failure(p_attempt: f64, attempts: u32, correlation: f64) -> f64 {
+    let p = p_attempt.clamp(0.0, 1.0);
+    let rho = correlation.clamp(0.0, 1.0);
+    let independent_rest = p.powi(attempts.saturating_sub(1) as i32);
+    p * (rho + (1.0 - rho) * independent_rest)
+}
+
+/// The production window at one retry correlation.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RetryRow {
+    pub attempts: u32,
+    pub correlation: f64,
+    pub read_failure: f64,
+    pub miss_given_observation: f64,
+    pub false_slash_bound: f64,
+    pub false_slash_max_holder: f64,
+    pub clears_floor: bool,
+}
+
+/// The production window with [`RETRY_ATTEMPTS`] tries per read at one
+/// correlation, judged on the per-archiver axis.
+#[must_use]
+pub fn retry_row(correlation: f64) -> RetryRow {
+    let read_failure =
+        correlated_read_failure(default_sources().p_attempt, RETRY_ATTEMPTS, correlation);
+    let q = missed_two_of_three(read_failure);
+    let per_pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, BOND_LIFE_EPOCHS);
+    let max_holder = max_holder_exposure(per_pair);
+    RetryRow {
+        attempts: RETRY_ATTEMPTS,
+        correlation,
+        read_failure,
+        miss_given_observation: q,
+        false_slash_bound: per_pair,
+        false_slash_max_holder: max_holder,
+        clears_floor: max_holder <= FeasibilityTargets::operative_defaults().false_slash_target,
+    }
+}
+
+/// The window's verdict at a read failure `x`, whatever produced it.
+fn clears_at_read_failure(x: f64) -> bool {
+    let q = missed_two_of_three(x);
+    let per_pair = false_slash_bound(FAILURE_WINDOW_M, FAILURE_WINDOW_N, q, BOND_LIFE_EPOCHS);
+    max_holder_exposure(per_pair) <= FeasibilityTargets::operative_defaults().false_slash_target
+}
+
+/// The largest probability of a draw going unread, after every try, at
+/// which the production window clears the per-archiver budget.
+///
+/// This is the boundary in the quantity a measurement reports directly, and
+/// it assumes no model of how tries correlate. The exposure rises with the
+/// read failure, so it is found by bisection.
+#[must_use]
+pub fn clearing_read_failure() -> f64 {
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if clears_at_read_failure(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// The largest correlation at which the production window clears the
+/// per-archiver budget with [`RETRY_ATTEMPTS`] tries, or `None` if it does
+/// not clear even with independent tries. The exposure rises with the
+/// correlation, so the boundary is found by bisection.
+#[must_use]
+pub fn clearing_correlation() -> Option<f64> {
+    if !retry_row(0.0).clears_floor {
+        return None;
+    }
+    if retry_row(1.0).clears_floor {
+        return Some(1.0);
+    }
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if retry_row(mid).clears_floor {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo)
+}
+
 /// The pair counts the evidence set runs at: the genesis set
 /// `--challenge-coverage` uses, and maturity.
 pub const EVIDENCE_PAIRS: [u32; 2] = [4_096, 324_000];
@@ -549,6 +658,49 @@ pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fm
         FeasibilityTargets::operative_defaults().false_slash_target,
         if w.clears_floor { "clears" } else { "EXCEEDS" }
     )?;
+    writeln!(
+        out,
+        "retries: {RETRY_ATTEMPTS} tries per read at per-try failure {:.2}; rho = share of failures \
+         common to every try (1 = the calibration, one attempt credited)",
+        w.read_failure
+    )?;
+    writeln!(
+        out,
+        "{:>6} {:>10} {:>10} {:>12} {:>14} {:>8}",
+        "rho", "read fail", "q", "per pair", "per archiver", "budget"
+    )?;
+    for rho in RETRY_CORRELATIONS {
+        let r = retry_row(rho);
+        writeln!(
+            out,
+            "{:>6.2} {:>10.4} {:>10.5} {:>12.2e} {:>14.2e} {:>8}",
+            r.correlation,
+            r.read_failure,
+            r.miss_given_observation,
+            r.false_slash_bound,
+            r.false_slash_max_holder,
+            if r.clears_floor { "clears" } else { "EXCEEDS" }
+        )?;
+    }
+    let x_star = clearing_read_failure();
+    writeln!(
+        out,
+        "the window clears the per-archiver budget when a draw goes unread after every try with \
+         probability <= {x_star:.4}; at per-try failure {:.2} that is: the later tries all fail, \
+         given the first did, with probability <= {:.4}",
+        w.read_failure,
+        x_star / w.read_failure
+    )?;
+    match clearing_correlation() {
+        Some(rho) => writeln!(
+            out,
+            "in the mixture model that is rho <= {rho:.4}; none of the three is measured"
+        )?,
+        None => writeln!(
+            out,
+            "the window does not clear the per-archiver budget even with independent tries"
+        )?,
+    }
     for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
         let verdict = match bar_holds(cells, in_flight) {
             Some(true) => "HOLDS",
@@ -716,19 +868,93 @@ mod tests {
     }
 
     #[test]
+    fn a_fully_correlated_retry_is_one_attempt_and_an_independent_one_is_a_power() {
+        let p = default_sources().p_attempt;
+        // Every failure common to all tries: retries buy nothing, and the
+        // row is the calibration's.
+        assert!((correlated_read_failure(p, RETRY_ATTEMPTS, 1.0) - p).abs() < 1e-15);
+        let calibrated = window_check(0.0);
+        let row = retry_row(1.0);
+        assert!((row.false_slash_bound - calibrated.false_slash_bound).abs() < 1e-18);
+        assert_eq!(row.clears_floor, calibrated.clears_floor);
+        // No failure common: three tries fail together at p cubed.
+        assert!((correlated_read_failure(p, 3, 0.0) - p * p * p).abs() < 1e-15);
+        assert!((correlated_read_failure(0.30, 3, 0.0) - 0.027).abs() < 1e-12);
+        // One try is one try at any correlation.
+        assert!((correlated_read_failure(p, 1, 0.0) - p).abs() < 1e-15);
+        assert!((correlated_read_failure(p, 1, 0.4) - p).abs() < 1e-15);
+        // Halfway is the mixture, not the midpoint of the exponents.
+        assert!((correlated_read_failure(0.30, 3, 0.5) - 0.30 * (0.5 + 0.5 * 0.09)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn exposure_rises_with_the_correlation_and_the_boundary_separates_the_verdicts() {
+        let mut last = -1.0_f64;
+        for rho in [0.0, 0.05, 0.10, 0.25, 0.5, 1.0] {
+            let r = retry_row(rho);
+            assert!(
+                r.false_slash_max_holder >= last,
+                "exposure fell at rho = {rho}"
+            );
+            last = r.false_slash_max_holder;
+        }
+        // Where the boundary falls depends on the window and the read
+        // failure, which are provisional. What holds for any of them: the
+        // reported correlation clears, and none above it does.
+        match clearing_correlation() {
+            None => assert!(!retry_row(0.0).clears_floor),
+            Some(rho) => {
+                assert!(retry_row(rho).clears_floor);
+                if rho < 1.0 {
+                    assert!(!retry_row((rho + 1e-6).min(1.0)).clears_floor);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_boundary_is_one_read_failure_however_it_is_reached() {
+        // The window reads only the probability that a draw goes unread. The
+        // mixture's boundary and the model-free one are the same point.
+        let x = clearing_read_failure();
+        assert!(clears_at_read_failure(x));
+        assert!(!clears_at_read_failure(x + 1e-9));
+        let p = default_sources().p_attempt;
+        if let Some(rho) = clearing_correlation().filter(|rho| *rho < 1.0) {
+            assert!((correlated_read_failure(p, RETRY_ATTEMPTS, rho) - x).abs() < 1e-9);
+            // What a run observes is the conditional rate, which is not rho:
+            // it is rho plus the independent remainder.
+            let conditional = x / p;
+            assert!((conditional - (rho + (1.0 - rho) * p * p)).abs() < 1e-9);
+            assert!(conditional > rho);
+        }
+        // Independent tries still fail together sometimes.
+        assert!((correlated_read_failure(p, 3, 0.0) / p - p * p).abs() < 1e-15);
+    }
+
+    #[test]
     fn the_window_is_judged_per_archiver_not_per_pair() {
         let w = window_check(0.0);
         // The budget is per archiver. An archiver at the maximum holdings is
         // exposed on every pair it holds, so its exposure is above one
         // pair's and is what the verdict compares.
         assert!(w.false_slash_max_holder > w.false_slash_bound);
+        // Just past the clearing boundary one pair's bound is still inside
+        // the budget and the archiver's exposure is not. A verdict read on
+        // the per-pair figure would clear there; this one does not. The
+        // point is found from the window, so it moves with a re-pin instead
+        // of pinning today's outcome.
         let budget = FeasibilityTargets::operative_defaults().false_slash_target;
-        assert_eq!(w.clears_floor, w.false_slash_max_holder <= budget);
-        // At the module's read failure the per-pair bound is inside the
-        // budget and the per-archiver exposure is not: reading the first
-        // against the budget gives the wrong verdict.
-        assert!(w.false_slash_bound <= budget);
-        assert!(!w.clears_floor);
+        let x = clearing_read_failure() + 1e-6;
+        let per_pair = false_slash_bound(
+            FAILURE_WINDOW_M,
+            FAILURE_WINDOW_N,
+            missed_two_of_three(x),
+            BOND_LIFE_EPOCHS,
+        );
+        assert!(per_pair <= budget);
+        assert!(max_holder_exposure(per_pair) > budget);
+        assert!(!clears_at_read_failure(x));
     }
 
     #[test]

@@ -4,16 +4,17 @@
 // BSD-3-Clause
 
 //! Fixtures for the bond-state rows: CEN-J4/J5/J6 on a serve-credit vin
-//! and CEN-J13/J14/J16/J18 on a bond post (below) — the arms a view with
-//! **no bonds** can witness. `MockChain` holds no
-//! records by policy (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2,
+//! and CEN-J13/J14/J15/J16/J18 on a bond post (below) — the arms a view
+//! with **no bonds** can witness. `MockChain` holds no records by policy
+//! (`harness.rs`, `archival_reads!(empty, r_market from …)`; DRS-E4 §5.2,
 //! *No `Mock*` archival state*), which is exactly J4's negative: a credit
-//! for a persona with no record. J5 and J6 need a record to read a join
-//! epoch and an interval log from, so their negatives are the ingest
-//! driver's — a real chain that posted the bond, through `connect`
-//! (`archival_slash_tests.rs`, the J5 and J6 pins) — never a record
-//! constructed here. The three rows' vacuity on every other class is also
-//! this file's.
+//! for a persona with no record. The one planted archival read is J15's
+//! market price, for the reason `MockChain::with_r_market` gives. J5 and
+//! J6 need a record to read a join epoch and an interval log from, so
+//! their negatives are the ingest driver's — a real chain that posted the
+//! bond, through `connect` (`archival_slash_tests.rs`, the J5 and J6
+//! pins) — never a record constructed here. The three rows' vacuity on
+//! every other class is also this file's.
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -29,12 +30,20 @@ use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
 use crate::verdict::{Locus, TxSlot, Verdict};
 use shekyl_archival_retention::BondPostKind as RetentionKind;
+use shekyl_types::archival::RMarket;
+use shekyl_types::{SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPost, Holdings};
 use shekyl_wire::{BondPostKind, Ct, Input, Transaction};
 
 const P: [u8; 32] = [0x5e; 32];
 const ROWS: [CenRow; 3] = [CenRow::J4, CenRow::J5, CenRow::J6];
-const POST_ROWS: [CenRow; 4] = [CenRow::J13, CenRow::J14, CenRow::J16, CenRow::J18];
+const POST_ROWS: [CenRow; 5] = [
+    CenRow::J13,
+    CenRow::J14,
+    CenRow::J15,
+    CenRow::J16,
+    CenRow::J18,
+];
 
 /// CEN-J4 at the pool's slot: a credit for a persona the view has no
 /// record for is refused on J4 at its **vin**, through `tx_against` — the
@@ -193,8 +202,7 @@ fn judged_post(tx: &Transaction, view: &MockView<'_, '_>) -> (Verdict<()>, RuleC
     let mut coverage = RuleCoverage::EMPTY;
     let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage)
         .unwrap_or_else(|r| panic!("the post classifies: {r}"));
-    let verdict = judge_bond_post(&cx, view, &RuleSet::GENESIS, &mut coverage)
-        .unwrap_or_else(|never| match never {});
+    let verdict = defined(judge_bond_post(&cx, view, &RuleSet::GENESIS, &mut coverage));
     (verdict, coverage)
 }
 
@@ -376,6 +384,190 @@ fn j13_refuses_the_same_mis_keyed_join_listed() {
                 &Trust::UNANCHORED,
             )),
             CenRow::J13,
+            Locus::Input {
+                slot: TxSlot::Listed(0),
+                input: 1,
+            },
+        );
+    });
+}
+
+// ---- CEN-J15: a compact join's held shards at the parent --------------
+//
+// The fold is synthesized and the price planted (`MockChain::with_r_market`,
+// which says why): a shard closes when the fold reaches `(shard + 1) · W`,
+// `W` being 3 MB of real proof bytes, which no driven chain in the tree
+// produces. So the accept and the refusals are both this file's, over the
+// genesis rule set's cap (720) and schedule (epoch 0 through every height
+// here, so the last settled epoch as of the parent is 0).
+
+/// The height shard 0 closes at: the youngest a spend can anchor on, so
+/// the chain is about the fold and not about the reference.
+const CLOSE: u64 = crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw();
+
+/// A chain of `len` blocks whose archival fold reaches `W` at [`CLOSE`] and
+/// stays there: shard 0 closes at `CLOSE`, shard 1 never does. The next
+/// block connects at `len`, reading parent `len − 1`.
+fn chain_closing_shard_zero(len: u64) -> MockChain {
+    use crate::harness::fixture::{recorded_with_work, root};
+    use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+    use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+    (0..len).fold(MockChain::default(), |chain, h| {
+        let fold = if h >= CLOSE { SHARD_LENGTH.to_raw() } else { 0 };
+        chain.push(
+            crate::view::RecordedBlock {
+                cumulative_archival_len: ArchivalLength::from_raw(fold),
+                ..recorded_with_work(
+                    1_000 + h * 120,
+                    CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
+                )
+            },
+            root(u8::try_from(h % 250).expect("fits") + 1),
+        )
+    })
+}
+
+/// A one-shard compact join of `shard` bonded at one floor, anchored on
+/// `chain`: J14's statics hold, so the row in question is J15's.
+fn compact_join(chain: &MockChain, shard: u64) -> Transaction {
+    join_edited(chain, |post| {
+        post.holdings = Holdings::ShardSetCompact(vec![shard]);
+    })
+}
+
+/// The chain on which shard 0 is closed, final by exactly the cap (its
+/// parent is `CLOSE + cap`), and priced: the accept, and the chain every
+/// refusal below perturbs one operand of.
+fn admissible_chain() -> MockChain {
+    chain_closing_shard_zero(CLOSE + RuleSet::GENESIS.reorg_cap().to_raw() + 1).with_r_market(
+        ShardId::from_raw(0),
+        SettlementEpoch::from_raw(0),
+        RMarket::from_raw(0),
+    )
+}
+
+/// CEN-J15's accept at the pool's slot: a compact join of a shard that is
+/// closed, final (`close + cap ≤ parent`, at the boundary: equal) and
+/// priced at the last settled epoch passes the row and records all five,
+/// through `judge_bond_post` and through `tx_against`. The complete-tree
+/// fixture join passes on the same chain with no price planted — a
+/// complete tree gathers nothing.
+#[test]
+fn j15_admits_a_compact_join_of_a_closed_final_priced_shard() {
+    let chain = admissible_chain();
+    chain.with_view(|view| {
+        for (name, tx) in [
+            ("a priced closed-and-final shard", compact_join(&chain, 0)),
+            (
+                "a complete tree",
+                anchored_on(&chain, join_market(BOND_KI, WHO)),
+            ),
+        ] {
+            let (verdict, coverage) = judged_post(&tx, &view);
+            verdict.unwrap_or_else(|refused| panic!("{name}: {refused}"));
+            for row in POST_ROWS {
+                assert!(coverage.contains(row), "{name}: {row} recorded");
+            }
+            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
+                .unwrap_or_else(|refused| panic!("{name} through tx_against: {refused}"));
+        }
+    });
+}
+
+/// CEN-J15's refusals at the pool's slot, each one operand away from the
+/// accept, each refused on J15 at the post's **vin** — not at the fold,
+/// not on J13 (the key is read after admission, the C++'s order), and
+/// with nothing recorded: a ghost shard past the frontier; the open
+/// frontier shard; shard 0 on a chain one block too short for its close
+/// to be final; shard 0 at `at = c`, the close itself; shard 0 closed and
+/// final but unpriced — the Q4 arm, where the C++ scores the missing row
+/// as `0` and admits; shard 0 priced beyond viability. A mis-keyed
+/// inadmissible join refuses on J15, not J13.
+#[test]
+fn j15_refuses_a_compact_join_one_operand_from_admissible() {
+    let cap = RuleSet::GENESIS.reorg_cap().to_raw();
+    let priced = |chain: MockChain, shard: u64, price: u64| {
+        chain.with_r_market(
+            ShardId::from_raw(shard),
+            SettlementEpoch::from_raw(0),
+            RMarket::from_raw(price),
+        )
+    };
+    let stranger = persona([0x6b; 32]);
+    let cases: [(&str, MockChain, u64); 6] = [
+        (
+            "a ghost shard past the frontier",
+            priced(admissible_chain(), 7, 0),
+            7,
+        ),
+        (
+            "the open frontier shard",
+            priced(admissible_chain(), 1, 0),
+            1,
+        ),
+        (
+            "closed, one block short of final",
+            priced(chain_closing_shard_zero(CLOSE + cap), 0, 0),
+            0,
+        ),
+        (
+            "the close itself, at = c",
+            priced(chain_closing_shard_zero(CLOSE + 1), 0, 0),
+            0,
+        ),
+        (
+            "closed and final, unpriced (Q4)",
+            chain_closing_shard_zero(CLOSE + cap + 1),
+            0,
+        ),
+        (
+            "priced beyond viability",
+            priced(chain_closing_shard_zero(CLOSE + cap + 1), 0, 1_000_000),
+            0,
+        ),
+    ];
+    for (name, chain, shard) in cases {
+        chain.with_view(|view| {
+            let join = compact_join(&chain, shard);
+            let (verdict, coverage) = judged_post(&join, &view);
+            assert_refused(verdict, CenRow::J15, POST_VIN);
+            assert!(
+                !coverage.contains(CenRow::J15),
+                "{name}: a refusal records nothing"
+            );
+            assert_refused(
+                defined(tx_against(&join, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                CenRow::J15,
+                POST_VIN,
+            );
+            assert_refused(
+                judged_post(&slot_carrying(join, stranger.identity.clone()), &view).0,
+                CenRow::J15,
+                POST_VIN,
+            );
+        });
+    }
+}
+
+/// The unpriced compact join listed first in a block is refused by
+/// `validate` on J15 at `Listed(0)`'s vin — before the fold writes a
+/// record for a shard no epoch has priced. This is the pin slice 8 §5.1
+/// row 6 names: a join onto an unclosed or unpriced shard connected in
+/// this crate until this row.
+#[test]
+fn j15_refuses_the_same_unpriced_join_listed() {
+    let chain = chain_closing_shard_zero(CLOSE + RuleSet::GENESIS.reorg_cap().to_raw() + 1);
+    chain.with_view(|view| {
+        let join = compact_join(&chain, 0);
+        let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
+        assert_refused(
+            judged(validate(
+                formed,
+                &view,
+                &RuleSet::GENESIS,
+                &Trust::UNANCHORED,
+            )),
+            CenRow::J15,
             Locus::Input {
                 slot: TxSlot::Listed(0),
                 input: 1,
@@ -570,9 +762,13 @@ fn the_post_rows_are_vacuous_off_the_bond_post_class() {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, slot, &mut coverage)
                 .unwrap_or_else(|refused| panic!("{name} classifies: {refused}"));
-            judge_bond_post(&cx, &view, &RuleSet::GENESIS, &mut coverage)
-                .unwrap_or_else(|never| match never {})
-                .unwrap_or_else(|refused| panic!("{name}: nothing to judge, but {refused}"));
+            defined(judge_bond_post(
+                &cx,
+                &view,
+                &RuleSet::GENESIS,
+                &mut coverage,
+            ))
+            .unwrap_or_else(|refused| panic!("{name}: nothing to judge, but {refused}"));
             for row in POST_ROWS {
                 assert!(coverage.contains(row), "{name}: {row} recorded vacuous");
             }

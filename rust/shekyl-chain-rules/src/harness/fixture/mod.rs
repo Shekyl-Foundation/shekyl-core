@@ -30,6 +30,7 @@ use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
 use crate::archival::BondArm;
+use crate::rules::tx_emission::J19;
 
 mod archival;
 pub use archival::{
@@ -484,9 +485,9 @@ pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeigh
 
 /// Whether a row reads `tx`'s `referenceBlock` as a chain fact.
 ///
-/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21,
-/// in flight, reads it on an emission even when that emission has no fee
-/// input: the reference is the membership anchor of the emission vin.
+/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21
+/// reads it on an emission even when that emission has no fee input: the
+/// reference is the membership anchor of the emission vin.
 /// A serve-credit's [`Ct::Fcmp`] carries the field and no row reads it, so
 /// the decision is not "any `Fcmp`" — that would put the spend window on a
 /// shape that may be listed at any height. A coinbase is [`Ct::Null`] and
@@ -657,7 +658,11 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 /// kind and then signs is signed as the kind it became. A post whose key
 /// no persona owns — hand-built, a key filled by hand — signs by position
 /// as before; J13 refuses it, and a test that signs such a post is asking
-/// for that; a constant per position for the other archival arms.
+/// for that. An **emission** claim signs with the identity seed of the
+/// persona whose key its vin names as `p_pubkey` (CEN-J20: the slot's key
+/// derives the vin's `P_canonical_id`), found the same way; a vin that does
+/// not parse (CEN-J19's refusal) or names no persona signs by position. A
+/// constant per position for the serve credit, which carries no auth.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
@@ -671,6 +676,14 @@ fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
                     Some(BondArm::Release { .. }) => seeds.bond_spend,
                     _ => seeds.identity,
                 };
+            }
+            seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
+        }
+        Input::ArchivalRewardEmission { canonical_bytes } => {
+            if let Some(seeds) =
+                J19::parse(canonical_bytes).and_then(|vin| archival::slot_seeds_for(&vin.p_pubkey))
+            {
+                return seeds.identity;
             }
             seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
         }
@@ -816,18 +829,26 @@ pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
 
 /// A **balanced emission** (CEN-H22's shape) with one fee spend of
 /// `key_image` and the emission vin `canonical_bytes` (the type's minimum
-/// for the shape rows, which read the variant; a parseable vin for the
-/// block-level G9, which reads the claims): the loud vouts sum to `reward`
-/// (the first carries it, the second is a loud zero — I1 wants two); the
-/// mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ masks +
-/// fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H` and
-/// `3·G`, zero fee. Unanchored and with filler auths, as above.
+/// for the shape rows, which read the variant; a parseable vin —
+/// [`emission_vin`] — for CEN-J19 and for everything that reads the
+/// claims): the loud vouts sum to `reward` (the first carries it, the
+/// second is a loud zero — I1 wants two); the mint rides the debit slot,
+/// so `Σ pseudoOuts + reward·H = Σ masks + fee·H` — a pseudo-out of `5·G`
+/// against masks of `2·G + reward·H` and `3·G`, zero fee. Unanchored and
+/// with filler auths, as above — except that the emission slot's key is
+/// the vin's `p_pubkey` when the vin parses, so the body passes CEN-J20
+/// through `tx_form` alone; [`signed`] replaces it with the same key,
+/// derived from the persona's identity seed.
 pub fn balanced_emission(
     key_image: [u8; 32],
     canonical_bytes: Vec<u8>,
     reward: u64,
 ) -> Transaction {
     let mut tx = listed(key_image);
+    let mut slot = pqc_auth_filler();
+    if let Some(vin) = J19::parse(&canonical_bytes) {
+        slot.hybrid_public_key = vin.p_pubkey;
+    }
     tx.prefix
         .inputs
         .push(Input::ArchivalRewardEmission { canonical_bytes });
@@ -839,7 +860,7 @@ pub fn balanced_emission(
         ..
     } = &mut tx.ct
     {
-        pqc_auths.push(pqc_auth_filler());
+        pqc_auths.push(slot);
         base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
         p.pseudo_outs = vec![multiple_of_g(5)];
     }
@@ -862,10 +883,12 @@ pub fn header() -> BlockHeader {
 }
 
 /// A well-formed candidate **on `chain`'s tip**: `previous` is the tip's
-/// hash (the null hash on an empty chain — CEN-A2) and `curve_tree_root`
+/// hash (the null hash on an empty chain — CEN-A2), `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
-/// empty tree at genesis — CEN-B5); the header lists exactly the bodies
-/// it carries. Mutate one field to build a negative fixture. A corrupt
+/// empty tree at genesis — CEN-B5), `attestation_root` is the empty
+/// set's (no sidecar, no `0x0B` field in the coinbase — CEN-B4's
+/// empty-witness arm); the header lists exactly the bodies it carries.
+/// Mutate one field to build a negative fixture. A corrupt
 /// parent read leaves the coinbase as [`coinbase`] built it, so
 /// `validate` is the function that reports the fault.
 pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
@@ -879,6 +902,9 @@ pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
         header: BlockHeader {
             previous: tip.map_or(BlockHash::NULL, |t| t.hash),
             curve_tree_root: root,
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
             ..header()
         },
         miner_transaction: coinbase(connecting.to_raw()),

@@ -402,7 +402,7 @@ a live node.
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, four `crypto_bench_serve_*` functions (manifest §12) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. Not yet run: 32 and 64 in flight | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
@@ -610,8 +610,8 @@ device measured the single-pass tree the same day
 | --- | --- | --- | --- |
 | Median per response, one in flight | 40 to 60 ms | 67.2 ms | **falsified** |
 | Digest cost inside the stream | 23.9 ms, its cost alone | 43 ms (67.2 − 24.6) | 19 ms unexplained |
-| Responses per second, eight in flight | — | 59.6 and 39.7, two blocks that disagree | open: 37 to 60 |
-| Work before the first byte | under 1 ms | not measured on the floor | open |
+| Responses per second, eight in flight | 37 to 60 | 49.7, median of six blocks (`BA-T5`, 2026-10-07) | **held** |
+| Work before the first byte | under 1 ms | not isolated on the floor; a whole abandoned request is 2.2 ms over one that serves nothing (`BA-T5`, 2026-10-07) | open |
 
 The prediction assumed the digest costs the same inside the stream as
 alone. It does not. BA-T3 narrows where the difference can be: on x86 the
@@ -630,10 +630,16 @@ that share of the measured 67.2 ms it is about 5 µs on the floor; the
 store is in memory in the gate, so a cold shard open is not in the figure
 and the estimate keeps its ceiling of 1 ms until the floor measures it.
 
-The falsified estimate and the two open ones are in the measurement
-ledger (`[[retired_estimate]]` and two `estimated` rows), where a check
-holds them: an estimate becomes a measurement only through a capture that
-lands.
+The predictions are in the measurement ledger. Two are retired
+estimates, each beside the floor capture that settled it and with a
+verdict the check computes: the per-response figure (falsified by run 3)
+and throughput at eight in flight (held, by the first run of `BA-T5`,
+2026-10-07). The third, work before the first byte, is still an open
+estimate: that run bounded it from above at 2.2 ms, which includes one
+chunk read and hashed, and an upper bound above the band settles nothing.
+The run's record also explains run 3's two disagreeing blocks
+(the executor-side hash made throughput bimodal) and puts the digest
+alone at 23.9 ms of a 57.7 ms response.
 
 *Carried.* The invariant is general, and a rules-queue row in
 `docs/FOLLOWUPS.md` asks the same of daemon RPC, Levin object and
@@ -645,10 +651,32 @@ which resource bound. The serving device class is itself open
 (`docs/FOLLOWUPS.md:1257`); the default keeps the floor as the conservative
 interim.
 
+*Inputs from the first `BA-T5` run (2026-10-07).* The floor device is
+ruled the serving floor, and it serves today's shards at 41 to 56 per
+second at eight in flight. The cost an unpaid request can impose is about
+4 ms of CPU today and about 8 ms at a frame small enough to be buffered
+whole. The control over how many such requests one rendezvous circuit can
+make is the serving onion's stream cap, 8 per circuit with the circuit
+closed past it (`SERVING_MAX_STREAMS`), a carried placeholder: its value
+is part of this question, beside `MAX_INFLIGHT`. 32 and 64 in flight have
+not been run.
+
 **BA-Q5 — Re-measure `W`, `L`, the retry budget and the read capacity on the
 v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an
 owner and a date entered beside the reopen condition in
 [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](CLIENT_VERSION_CONSTANTS_VALIDATION.md).
+
+*An input the `W` derivation must take (2026-10-07).* The floor device's
+serve verdict holds because a shard of `W` bytes is far larger than what
+can be buffered between the persona and the requester. If `W` falls to
+that amount, every abandoned request costs the persona a whole response
+and a signature
+([`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md),
+"How far this verdict reaches"). The amount is tor's stream window plus
+the kernel's socket buffers, about 250 KB by the specification and not
+yet measured through an onion; BA-T7 measures it. The ledger row
+`serve_floor_verdict_frame` fails when `W` changes, until the verdict is
+re-graded.
 
 **BA-Q6 — The key-dispatch gate and the re-route it waits on (BA-D8).**
 The design routes claims through `KeyEngine::try_claim_output`; the caller

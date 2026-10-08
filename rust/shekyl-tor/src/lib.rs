@@ -127,8 +127,17 @@ impl Session {
     }
 
     /// The next bytes off the stream. `None` means the reader stopped.
+    /// [`Self::close_cause`] is why.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
         self.bytes.recv().await
+    }
+
+    /// The cause the connector stored when it closed this stream.
+    ///
+    /// [`CloseKind::PeerClosed`] only when the reader saw end-of-file.
+    #[must_use]
+    pub fn close_cause(&self) -> CloseCause {
+        self.bytes.close_cause()
     }
 
     /// Queue bytes up to the caller's cap. A buffer that does not fit is
@@ -450,8 +459,8 @@ mod tests {
             ip: Ipv4Addr::LOCALHOST,
             port: 18080,
         });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
         listener.shutdown();
         drop(engine);
     }
@@ -626,6 +635,55 @@ mod tests {
     }
 
     #[test]
+    fn a_silent_acceptor_is_a_handshake_timeout() {
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(300_000_000),
+        );
+        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        let cause = handle.block_on(async {
+            while session.recv().await.is_some() {}
+            session.close_cause()
+        });
+        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        assert_eq!(
+            wait_kind(&seen, CloseKind::LevinHandshakeTimeout).kind(),
+            CloseKind::LevinHandshakeTimeout
+        );
+        drop(client);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
+    fn a_peer_fin_is_peer_closed() {
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(5_000_000_000),
+        );
+        let client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        client.shutdown(std::net::Shutdown::Write).expect("fin");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        let cause = handle.block_on(async {
+            while session.recv().await.is_some() {}
+            session.close_cause()
+        });
+        assert_eq!(cause.kind(), CloseKind::PeerClosed);
+        assert_eq!(
+            wait_kind(&seen, CloseKind::PeerClosed).kind(),
+            CloseKind::PeerClosed
+        );
+        drop(client);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    #[test]
     fn session_established_disarms_the_gap() {
         let (engine, mut listener, seen) = start(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
@@ -668,8 +726,28 @@ mod tests {
             host: "not-a-v3-name.onion".into(),
             port: 18081,
         });
-        let cause = wait_kind(&seen, CloseKind::DialFailed);
-        assert_eq!(cause.reply_code(), 0);
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// The SOCKS port is closed. Covers the TCP connect to the local proxy
+    /// in `dial_one`. Does not cover a proxy that answers and then refuses,
+    /// and does not cover the C++ forget cache.
+    #[test]
+    fn a_closed_socks_port_does_not_implicate_the_onion() {
+        let (engine, listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(5_000_000_000),
+        );
+        listener.dial(NetworkAddress::Tor {
+            host: v3_onion_hostname(&[0x11; 32]),
+            port: 18081,
+        });
+        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
         listener.shutdown();
         drop(engine);
     }

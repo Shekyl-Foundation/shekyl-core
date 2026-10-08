@@ -311,14 +311,14 @@ pub unsafe extern "C" fn shekyl_seam_open(
         reply_code: cause.reply_code(),
     };
     if addr.is_null() {
-        return refused(CloseCause::new(CloseKind::DialFailed));
+        return refused(CloseCause::new(CloseKind::LocalClose));
     }
     let Some(hub) = hub() else {
-        return refused(CloseCause::new(CloseKind::DialFailed));
+        return refused(CloseCause::new(CloseKind::LocalClose));
     };
     let addr = unsafe { &*addr };
     let Some(endpoint) = endpoint_from_c(addr, inbound != 0) else {
-        return refused(CloseCause::new(CloseKind::DialFailed));
+        return refused(CloseCause::new(CloseKind::LocalClose));
     };
     let attached = match hub.connect(&endpoint) {
         Ok(attached) => attached,
@@ -355,6 +355,12 @@ pub extern "C" fn shekyl_seam_handler_armed(id: u64, armed: i32) {
         return;
     };
     hub.handler_armed(id, armed != 0);
+}
+
+/// 1 when a hub is bound. The Levin puppet has none; production does.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_is_bound() -> i32 {
+    i32::from(hub().is_some())
 }
 
 /// Inject one frame into the harness channel and return when `deliver`
@@ -494,6 +500,27 @@ pub extern "C" fn shekyl_seam_close(id: u64) {
         return;
     };
     hub.close(id);
+}
+
+/// Record `kind` when the row has no cause yet. An unknown kind records
+/// nothing. The row stays until [`shekyl_seam_reap`].
+#[no_mangle]
+pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
+    let Some(hub) = hub() else {
+        return;
+    };
+    let Some(id) = SocketId::from_ffi(id) else {
+        return;
+    };
+    let Some(kind) = CloseKind::from_code(kind) else {
+        return;
+    };
+    let cause = if kind == CloseKind::ProxyRefused {
+        CloseCause::proxy_refused(reply)
+    } else {
+        CloseCause::new(kind)
+    };
+    hub.finish(id, cause);
 }
 
 /// Live sockets for one connector and direction.

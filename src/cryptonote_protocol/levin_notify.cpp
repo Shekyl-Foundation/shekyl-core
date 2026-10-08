@@ -72,6 +72,7 @@
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "p2p/net_node.h"
+#include "p2p/seam_endpoint.h"
 #include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -370,12 +371,18 @@ namespace levin
          then waited on a silence that peer was never given a chance to break.
          Found sweeping the carrier's own conversion; fixed here rather than
          left as the next instance of it. */
-      bool in_registry = false;
-      p2p.for_connection(destination, [&in_registry](detail::p2p_context&) {
-        in_registry = true;
-        return true;
-      });
-      if (!in_registry)
+      // The board is the session when a hub is bound. This registry is the
+      // handler the send actually uses, and the lookup does not post.
+      // The relay puppet has no hub; its connections live only here.
+      if (shekyl_seam_is_bound() != 0)
+      {
+        if (shekyl_seam_session_established(shekyl::seam_socket_id(destination)) < 0)
+        {
+          MINFO("seam send refused conn " << destination << " registry no");
+          return false;
+        }
+      }
+      else if (!p2p.has_connection(destination))
       {
         MINFO("seam send refused conn " << destination << " registry no");
         return false;
@@ -422,16 +429,25 @@ namespace levin
 
       std::optional<held_session> session_of(const boost::uuids::uuid& id) const
       {
+        // The board is the session when a hub is bound. One id returns the
+        // connector; this loop only picks the Levin registry that owns it.
+        // Zero is clearnet, so a missing row is negative. The relay puppet
+        // has no hub, and its connections live only in these registries.
+        if (shekyl_seam_is_bound() != 0)
+        {
+          const int connector = shekyl_seam_session_connector(shekyl::seam_socket_id(id));
+          if (connector < 0)
+            return std::nullopt;
+          for (const auto& entry : registries)
+          {
+            if (entry.registry && static_cast<int>(entry.connector) == connector)
+              return held_session{entry.registry.get(), entry.connector};
+          }
+          return std::nullopt;
+        }
         for (const auto& entry : registries)
         {
-          if (!entry.registry)
-            continue;
-          bool found = false;
-          entry.registry->for_connection(id, [&found](detail::p2p_context&) {
-            found = true;
-            return true;
-          });
-          if (found)
+          if (entry.registry && entry.registry->has_connection(id))
             return held_session{entry.registry.get(), entry.connector};
         }
         return std::nullopt;
@@ -1256,10 +1272,10 @@ namespace levin
           // record — and arms the stem observation. Failure returns. No
           // refresh, no second plan, no fluff: a still-live own-edge that
           // failed to write must not be published on a clear link.
-          connections* registry = zone_->registry_holding(destination);
-          if (registry && make_payload_send_txs(*registry, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
+          const auto held = zone_->session_of(destination);
+          if (held && make_payload_send_txs(*held->registry, std::vector<blobdata>{txs_}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::local, txs_, zone_->connector_of(destination));
+            record_relayed(relay_method::local, txs_, std::make_optional(held->connector));
             record_stem_observation(zone_->relay.get(), txs_, destination, source_);
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " on the own-edge");
             return;
@@ -1434,11 +1450,11 @@ namespace levin
              pool is not left un-told; it is told the thing that actually
              happened. `record_stem_observation` was already placed this way,
              and the two records now arm on the same event. */
-          connections* registry = zone_->registry_holding(destination);
-          if (plan == SHEKYL_RELAY_PLAN_STEM && registry &&
-              make_payload_send_txs(*registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
+          auto held = zone_->session_of(destination);
+          if (plan == SHEKYL_RELAY_PLAN_STEM && held &&
+              make_payload_send_txs(*held->registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem, to_send, zone_->connector_of(destination));
+            record_relayed(relay_method::stem, to_send, std::make_optional(held->connector));
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             /* Source is intentionally omitted in debug log for privacy - a
                nil uuid indicates source is that node. */
@@ -1460,11 +1476,11 @@ namespace levin
             MDEBUG("unsynchronised node originates no stem");
             return;
           }
-          registry = zone_->registry_holding(destination);
-          if (plan == SHEKYL_RELAY_PLAN_STEM && registry &&
-              make_payload_send_txs(*registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
+          held = zone_->session_of(destination);
+          if (plan == SHEKYL_RELAY_PLAN_STEM && held &&
+              make_payload_send_txs(*held->registry, std::vector<blobdata>{to_send}, destination, zone_->pad_txs, false))
           {
-            record_relayed(relay_method::stem, to_send, zone_->connector_of(destination));
+            record_relayed(relay_method::stem, to_send, std::make_optional(held->connector));
             record_stem_observation(zone_->relay.get(), to_send, destination, source_);
             MDEBUG("Sent " << to_send.size() << " transaction(s) to " << destination << " using Dandelion++ stem");
             return;

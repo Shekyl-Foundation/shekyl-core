@@ -160,9 +160,11 @@ pub fn claimant(p_pubkey_fill: u8) -> [u8; 32] {
 /// `[p_pubkey_fill; 32]` ([`claimant`]) claiming `epochs`, one shard-7
 /// serve-credit entry per epoch, a membership-only backing and filler
 /// auths: enough for CEN-L7's claim arm to read the persona and the
-/// epochs (and for the block-level G9, which reads the claims). Nothing
-/// here verifies the backing or the auths; the emission slot is signed by
-/// position, not by the persona, until the emission key rows land.
+/// epochs (and for the block-level G9, which reads the claims), and for the
+/// emission statics (CEN-J19 parses it; CEN-J20 reads `p_pubkey`, which is
+/// the persona's identity key, so the slot is keyed and signed by the
+/// persona — [`signed`](super::signed)). Nothing here verifies the backing
+/// or the auths: CEN-J25's witness is the driven claim, not this.
 /// [`balanced_emission`](super::balanced_emission) puts it in a body
 /// CEN-H22 balances.
 pub fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {

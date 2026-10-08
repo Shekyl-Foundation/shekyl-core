@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
-use shekyl_capped_stream::{FrameSender, QueueHold, StreamEnds};
+use shekyl_capped_stream::{QueueHold, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{CloseCause, SocketId, Sockets};
@@ -22,7 +22,7 @@ use crate::dial::{Channel, Dial};
 use crate::endpoint::{admit, Endpoint};
 
 struct Slot {
-    inject: Option<FrameSender>,
+    inject: Option<shekyl_capped_stream::InboundEnd>,
     hold: Option<QueueHold>,
     writer: Option<JoinHandle<()>>,
     pump: Option<JoinHandle<()>>,

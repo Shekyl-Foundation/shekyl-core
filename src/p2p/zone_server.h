@@ -51,7 +51,6 @@ namespace detail
     std::mutex mu;
     zone_binding* clearnet = nullptr;
     zone_binding* tor = nullptr;
-    bool seam_bound = false;
   };
 
   inline zone_slots& slots()
@@ -91,19 +90,18 @@ namespace detail
     target->enqueue(id, kind, stored, have, std::move(copy));
   }
 
+  /// The hub is the binding. The relay harness clears it with a null
+  /// `shekyl_seam_bind` when that test finishes, and the next listen
+  /// installs this zone's hub again. A flag set on the first bind would
+  /// stay set across that clear: the listen would only refresh a ceiling
+  /// on a hub that is no longer there, and every later port would fail.
   inline bool ensure_seam(const shekyl_inbound_ceiling& ceiling)
   {
     std::lock_guard<std::mutex> lock(slots().mu);
-    if (slots().seam_bound)
-    {
-      shekyl_seam_set_ceiling(&ceiling);
-      return true;
-    }
+    if (shekyl_seam_is_bound() != 0)
+      return shekyl_seam_set_ceiling(&ceiling) == 0;
     static int ctx = 1;
-    if (shekyl_seam_bind(&ctx, &zone_post, &ceiling) != 0)
-      return false;
-    slots().seam_bound = true;
-    return true;
+    return shekyl_seam_bind(&ctx, &zone_post, &ceiling) == 0;
   }
 
   inline void register_binding(std::uint32_t connector, zone_binding* binding)
@@ -371,24 +369,37 @@ public:
     return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), &params, &ceiling) == 0;
   }
 
-  bool open(const epee::net_utils::network_address& address, connection_context& out)
+  /// `kind == 0` when `out` is the opened context. Otherwise the seam
+  /// cause and its proxy reply. An address this process cannot encode, a
+  /// dial the link map does not hold, and a seam result that recorded no
+  /// cause are `LocalClose`: an unknown cause does not forget the address.
+  struct open_outcome
+  {
+    std::uint8_t kind = 0;
+    std::uint16_t reply = 0;
+  };
+
+  open_outcome open(const epee::net_utils::network_address& address, connection_context& out)
   {
     shekyl_seam_address ffi{};
     if (!detail::address_from(address, ffi))
-      return false;
+      return {SHEKYL_CLOSE_LOCAL_CLOSE, 0};
     const shekyl_seam_open_result result = shekyl_seam_open(&ffi, 0);
     if (result.id == 0)
     {
-      MINFO("seam open refused cause " << seam_close_name(result.cause_kind)
+      const std::uint8_t cause = result.cause_kind == 0
+          ? static_cast<std::uint8_t>(SHEKYL_CLOSE_LOCAL_CLOSE)
+          : result.cause_kind;
+      MINFO("seam open refused cause " << seam_close_name(cause)
           << " reply " << result.reply_code);
-      return false;
+      return {cause, result.reply_code};
     }
     std::lock_guard<std::mutex> lock(m_mu);
     const auto found = m_links.find(result.id);
     if (found == m_links.end())
-      return false;
+      return {SHEKYL_CLOSE_LOCAL_CLOSE, 0};
     out = found->second->context();
-    return true;
+    return {};
   }
 
   void enqueue(std::uint64_t id, std::uint32_t kind, shekyl_seam_observed observed, bool have_observed, std::vector<std::uint8_t> bytes) override
