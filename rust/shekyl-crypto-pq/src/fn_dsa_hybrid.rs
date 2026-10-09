@@ -56,7 +56,7 @@
 //!   after that. [`HybridEd25519FnDsa::generate_keypair`] draws both seeds
 //!   from the OS and **fails** if it cannot (key material is fail-loud,
 //!   [`crate::rng`]).
-//! - **Signing** takes OS randomness through [`crate::rng::HedgedOsRng`].
+//! - **Signing** takes OS randomness through the crate-private `rng::HedgedOsRng`.
 //!   FN-DSA's signer hedges internally — the drawn seed is replaced by
 //!   `SHAKE256(H(signing key) ‖ μ ‖ seed)` before use — so the adapter's
 //!   zero-on-failure fallback yields a deterministic signature, never a

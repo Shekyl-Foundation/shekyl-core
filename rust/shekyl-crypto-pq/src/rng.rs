@@ -70,8 +70,12 @@ pub fn hedged_fresh32() -> [u8; 32] {
 /// key, and a zero seed makes the hashed point a function of the key and
 /// message alone. That is why the signing vectors are pinned on both
 /// supported architectures (`tests/kat_fn_dsa_hybrid_v1.rs`).
+///
+/// Crate-private for that reason: it is a `CryptoRng` that can return
+/// zeros, and the type system would accept it wherever a key generator
+/// takes one. No caller outside this crate can name it.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct HedgedOsRng;
+pub(crate) struct HedgedOsRng;
 
 impl rand::RngCore for HedgedOsRng {
     fn next_u32(&mut self) -> u32 {
