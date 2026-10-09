@@ -426,7 +426,12 @@ not claim `P` stores them.
   will change when FIPS 206 is final. §11 carries the FOLLOWUPS row and
   the genesis gate.
 - **Signature domain.** A new scheme domain for the receipt under scheme
-  3. One label never names two messages or two schemes.
+  3, `shekyl/archival-receipt-scheme-v1`; the witness's carrier signature
+  has its own, `shekyl/archival-witness-carrier-scheme-v1`. One label
+  never names two messages or two schemes.
+- **Key generation.** The receipt key is seeded (§6.3). The witness's key
+  is not: it is drawn from the OS for one block and is never derived from
+  anything (§4.2).
 
 Sizes, from the crate's fixed encodings (1,793-byte verifying key,
 1,280-byte signature):
@@ -845,7 +850,11 @@ Carried with the implementation:
   sub-crates. Key-generation **and** verification vectors pinned on both
   x86_64 and aarch64: key generation and verification are integer-only in
   the crate, and signing uses hardware `f64`, so it is the two integer
-  paths that must agree across the supported architectures.
+  paths that must agree across the supported architectures. Landed with
+  the scheme ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §3). A seeded signing
+  vector is pinned beside them and gives the same bytes on x86_64 with
+  AVX2, on x86_64 without it, and on aarch64 under emulation; the run on
+  aarch64 hardware is owed.
 - **FOLLOWUPS:** update `fn-dsa` and regenerate vectors when FIPS 206 is
   final.
 - **Genesis gate:** no genesis on a pre-1.0 `fn-dsa`.
@@ -1068,8 +1077,10 @@ stays until that code is deleted (§11.1), and is marked.
 
 ## 16. Labels this specification mints
 
-None has a constant or a registry row yet; each row lands with its
-constant.
+Each row lands with its constant. The two scheme domains have theirs
+(`SCHEME_DOMAIN_RECEIPT`, `SCHEME_DOMAIN_WITNESS_CARRIER` in
+`rust/shekyl-crypto-pq/src/signature.rs`); no other label has a constant
+or a registry row yet.
 
 | Label | Mechanism | Use |
 | --- | --- | --- |
@@ -1080,10 +1091,10 @@ constant.
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
 | `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | Set commitment, §7.3 |
 | a receipt-key label | HKDF info | The persona's receipt key, from the master seed, §6.3 |
-| a receipt scheme domain | signature domain | Receipts under scheme 3, §6.2 |
-| a carrier scheme domain | signature domain | The witness signature under scheme 3, §7.3 |
+| `shekyl/archival-receipt-scheme-v1` | signature domain | Receipts under scheme 3, §6.2 |
+| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness signature under scheme 3, §7.3 |
 
-The HKDF and scheme-domain strings are named when their constants land.
+The HKDF string is named when its constant lands.
 The seed and the witness key have no label: they are fresh randomness.
 
 ---

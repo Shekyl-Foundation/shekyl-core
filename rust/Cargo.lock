@@ -4040,6 +4040,7 @@ dependencies = [
  "fn-dsa-kgen",
  "fn-dsa-sign",
  "fn-dsa-vrfy",
+ "gungraun",
  "helioselene",
  "hex",
  "hkdf",

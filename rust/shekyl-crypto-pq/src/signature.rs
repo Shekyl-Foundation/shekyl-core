@@ -288,7 +288,7 @@ impl HybridSignature {
 }
 
 /// A hybrid signature scheme: the nested combiner over Ed25519 and one
-/// post-quantum algorithm ([`crate::hybrid_combiner`]).
+/// post-quantum algorithm (the private `hybrid_combiner` module).
 ///
 /// The key and signature types are the scheme's own. Two schemes share the
 /// trait and the combiner and nothing else: a key or signature of one is a

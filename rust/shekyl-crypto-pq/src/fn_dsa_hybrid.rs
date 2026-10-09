@@ -5,8 +5,8 @@
 
 //! Hybrid Ed25519 + FN-DSA-1024 signatures — scheme byte 3.
 //!
-//! The same nested combiner as [`crate::signature`] (SA-R-1,
-//! [`crate::hybrid_combiner`]) with FN-DSA-1024 as the post-quantum half:
+//! The same nested combiner as [`crate::signature`] (SA-R-1, the private
+//! `hybrid_combiner` module) with FN-DSA-1024 as the post-quantum half:
 //!
 //! ```text
 //! preimage  = cSHAKE256-64(customization = domain, input = 0x03 ‖ message)
@@ -75,8 +75,8 @@
 //!
 //! A decoded FN-DSA-1024 signing key is a ~114 kB context (the secret
 //! basis in FFT form plus working buffers) and the key generator carries
-//! ~48 kB of scratch. Both are locals of [`fn_dsa_sign`] and
-//! [`fn_dsa_keygen`], wiped by the crate when they drop. The crate's
+//! ~48 kB of scratch. Both are locals of the private `fn_dsa_sign` and
+//! `fn_dsa_keygen`, wiped by the crate when they drop. The crate's
 //! `small_context` feature would shrink the first to ~82 kB for ~25% more
 //! signing time; it is not enabled and has not been measured here.
 //!

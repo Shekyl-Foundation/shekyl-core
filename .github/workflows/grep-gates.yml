@@ -224,6 +224,15 @@ jobs:
             python3 scripts/ci/check_cxx_version_gates.py
           run_one "C++ version-gate inventory self-test" \
             python3 scripts/ci/test_check_cxx_version_gates.py
+          # FN-DSA is pre-standard: the five `fn-dsa*` crates are pinned exact
+          # and locked at one version, and a genesis release (a tag with no
+          # pre-release suffix) is refused on a pre-1.0 lock. Here the gate
+          # asserts its subject and reports; the refusal is armed in the
+          # tag-triggered release workflow.
+          run_one "fn-dsa is pinned exact, at one version (genesis gate)" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py
+          run_one "fn-dsa genesis gate self-test" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py --selftest
           # TB-4/TB-9: every host a gitian descriptor builds has one Tor
           # disposition in config/tor_pins.json, and the records that restate
           # the pin (the tor-pin-verify default, the release checklist) agree

@@ -31,6 +31,14 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`CT6_PROVING_STATE.md`](design/CT6_PROVING_STATE.md)
   - Target: pre-genesis
 
+- **Move `fn-dsa` to its FIPS 206 release and regenerate every scheme-3 vector.** The pinned crate (`=0.4.0`, with its four sub-crates) is pre-standard, and its keys and signatures will change when FIPS 206 is final. Blocked on NIST publishing FIPS 206 and the crate reaching 1.0. Until then a genesis-tagged build is refused by `scripts/ci/check_fn_dsa_genesis_gate.py` (`FN_DSA_HYBRID.md` §4). Falsify by the five packages locked at 1.0 or later, `FN_DSA_HYBRID_V1_KAT.json` regenerated and re-pinned on x86_64 and aarch64, and that gate passing on a tag with no pre-release suffix.
+  - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
+  - Target: pre-genesis
+
+- **Run `BA-T33`'s floor arm: sign, verify and key generation under hybrid scheme 3 on the floor device.** The x86 figures count AVX2 code the floor never runs, and the vectors' agreement on aarch64 was shown under emulation, not on hardware (`FN_DSA_HYBRID.md` `FND-9`). Blocked on a floor-device session, which is a shared-estate claim. Falsify by a capture under `docs/benchmarks/` naming the revision, with `kat_fn_dsa_hybrid_v1` passing on the device in the same session.
+  - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
+  - Target: pre-genesis
+
 - **Stamp the revision when cross-building a bench binary for a remote rig.** `shekyl-wss-q1b-bench`'s `build.rs` watches `HEAD`, `packed-refs` and the branch ref, but a `.rs` edit is none of those, so Cargo reuses the cached script output: the stamp goes stale **and** loses its `-dirty` suffix, reporting a clean build of a dirty tree. `AssembleEdgeRecord` carries only that build-time stamp, and runtime capture (`report::ProverPin::capture`) cannot help on a rig with no repo — the case the cross-build exists for. `assemble_edge_20261002T052942Z.json` reads `1ab4664cb` for a binary built from `11a0c8451`. `build.rs` already honours a `SHEKYL_GIT_REVISION` override, so the remedy is to set it in the cross-build recipe rather than to add a rerun trigger Cargo does not offer. Falsify by a record from a copied binary naming the revision it was built from.
   - Owner: [`WSS_Q1B_BENCH_SPEC.md`](design/WSS_Q1B_BENCH_SPEC.md)
   - Target: pre-genesis

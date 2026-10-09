@@ -217,6 +217,11 @@ shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
 # dev-dependency entry (a duplicate would only risk version/feature drift).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
+# Instruction-count arm of the scheme-3 sign/verify bench (`fn_dsa_hybrid_iai`,
+# gated through `scripts/bench/capture_rust_baseline.sh`). Already a
+# dev-dependency of the engine crates and so already in `Cargo.lock` — this
+# adds no package to the supply chain (`17-dependency-discipline`).
+gungraun = "0.19"
 proptest = "1"
 # Wilson-Hilferty chi-square critical value + strict-alpha normal quantile for
 # the `enc_label` indistinguishability test. Single-sourced from the generic,
@@ -242,6 +247,14 @@ harness = false
 
 [[bench]]
 name = "fa6_decap_prefilter"
+harness = false
+
+[[bench]]
+name = "fn_dsa_hybrid"
+harness = false
+
+[[bench]]
+name = "fn_dsa_hybrid_iai"
 harness = false
 
 [[bin]]

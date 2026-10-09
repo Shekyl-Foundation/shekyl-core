@@ -501,7 +501,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented in §13 (Known gaps) because neither fully
+the split are documented in §14 (Known gaps) because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -531,7 +531,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§13 (Known gaps) below**. In the interim, a delta in this bench is
+**§14 (Known gaps) below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -878,7 +878,42 @@ instruction-count *drop*.
 
 **Apples-to-oranges against C++.** None; the serve path is Rust only.
 
-## 13. Known gaps
+## 13. `crypto_bench_fn_dsa_hybrid_*` — hybrid scheme 3 (`BA-T33`)
+
+**Crate.** `shekyl-crypto-pq`.
+**Binary.** `benches/fn_dsa_hybrid_iai.rs` (gungraun), with the criterion
+sibling `benches/fn_dsa_hybrid.rs`.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%), both functions.
+
+**What it measures.** One nested sign and one nested verify under
+Ed25519 + FN-DSA-1024 (`docs/design/FN_DSA_HYBRID.md`), over a 128-byte
+message and the receipt scheme domain:
+
+| Function | What is inside the count |
+| --- | --- |
+| `crypto_bench_fn_dsa_hybrid_sign` | The combiner's preimage, decoding the FN-DSA signing key, one FN-DSA-1024 signature, one Ed25519 signature |
+| `crypto_bench_fn_dsa_hybrid_verify` | The preimage, decoding the FN-DSA verifying key, one FN-DSA-1024 verification, one Ed25519 verification |
+
+**Determinism.** FN-DSA signing is rejection sampling, and its signer
+draws 40 bytes per attempt. The gated sign arm enters through
+`sign_with_rng_seed`, which shares the nested body with the production
+`sign` and replaces only the source of that draw with a fixed ChaCha20
+stream, so the count repeats exactly. The criterion sign arm uses the
+production entry and its OS-seeded draw.
+
+**What it does not measure.** The cost on the floor device. FN-DSA signing
+is floating-point: the pinned crate uses hardware `f64` and dispatches to
+AVX2 at run time on x86_64, so an x86 count is a count of code the floor
+device does not run. It is a drift signal for the x86 path and nothing
+else; `BA-T33`'s T3 arm is the floor figure.
+
+**First counts** (x86_64 development host, gungraun-runner 0.19.3, two
+runs identical): sign 6,675,212 instructions; verify 891,246. Criterion on
+the same host: sign 457 µs, verify 58 µs, seeded key generation 6.2 ms.
+
+---
+
+## 14. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -963,7 +998,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 14. Cross-references
+## 15. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -994,13 +1029,13 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 15. Change log for this manifest
+## 16. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §13, Known gaps (§12 when this entry was written;
+  gaps documented in §14, Known gaps (§12 when this entry was written;
   renumbered since, as the entries below record) (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
@@ -1056,3 +1091,12 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   +0.009 %); `serve_prehead` and `serve_digest_alone` unchanged. Whether
   the move is worth anything is the floor's to say (`BA-T5`). Schema
   version unchanged.
+- `BA-T33` (`docs/design/BENCHMARK_ALIGNMENT.md`): added §13, hybrid
+  scheme 3's sign and verify on `shekyl-crypto-pq`, two
+  `crypto_bench_fn_dsa_hybrid_*` functions with a criterion sibling.
+  Schema version unchanged (`shekyl_rust_v0`); the function names route
+  into the existing `crypto_bench_*` class. Sections previously numbered
+  §§13–15 (Known gaps, Cross-references, Change log) renumbered to
+  §§14–16. The same change moves the existing scheme's sign onto the
+  shared combiner body: `crypto_bench_hybrid_sign_1_input` 7,163,792 →
+  7,161,994 on an x86 development host (−0.025 %).
