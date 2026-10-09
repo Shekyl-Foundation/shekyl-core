@@ -2179,10 +2179,11 @@ daemon's CPU priority by default, with no operator setting. The evidence
 is `BA-T5` session 2
 ([`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md)):
 on the floor device, with the serving process at `nice 19` beside a
-daemon syncing the chain, the daemon kept 93 to 98 % of the sync rate it
+daemon syncing the chain, the daemon kept 90 to 97 % of the sync rate it
 has with nothing serving, and serving still delivered 5 to 8 responses
 per second — about a hundred times honest demand. At normal priority the
-same serving took the daemon down to 37 to 46 % of its rate.
+same serving took the daemon down to about a third of its rate, 31 to
+37 %.
 
 **Why the scope is the serving threads and nothing wider.** Serving is
 not its own process. `shekyl-p-host` binds the loopback endpoint on
@@ -2297,7 +2298,7 @@ priority does not change instruction counts.
 ruling).** A short `BA-T5` floor block with the syncing daemon, N = 8
 and N = 64, with the shipped thread-level mechanism in place of the
 external `nice 19`. Its record says whether the thread-level mechanism
-reproduces the 93 to 98 % sync figure, and it is the first measurement
+reproduces the 90 to 97 % sync figure, and it is the first measurement
 of the serving runtime's budget.
 
 **Ledger.** A constant row `serving_priority_nice` (the Linux nice

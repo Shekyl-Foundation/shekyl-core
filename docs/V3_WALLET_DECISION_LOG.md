@@ -6302,9 +6302,9 @@ in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
 1. **The evidence.** `BA-T5` session 2 on the floor device
    ([`ba_t5_serve_floor_device_20261009.md`](benchmarks/ba_t5_serve_floor_device_20261009.md)):
    with the serving process at `nice 19` beside a daemon syncing the
-   chain, the daemon kept 93 to 98 % of its no-serve sync rate and
+   chain, the daemon kept 90 to 97 % of its no-serve sync rate and
    serving still delivered 5 to 8 responses per second, about a hundred
-   times honest demand; at normal priority the daemon kept 37 to 46 %.
+   times honest demand; at normal priority the daemon kept 31 to 37 %.
 2. **The unit is the serving threads, not the process.** Serving runs
    inside the wallet process on the engine's runtime, so a service-unit
    `Nice=` would also slow the GUI and the user's own spend proving.

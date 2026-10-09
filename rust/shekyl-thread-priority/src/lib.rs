@@ -36,8 +36,8 @@ use std::io;
 /// The Linux nice value the serving runtime's threads run at.
 ///
 /// The lowest nice under normal scheduling. `BA-T5` session 2 measured
-/// serving at this value beside a syncing daemon: the daemon kept 93 to
-/// 98 % of its no-serve sync rate and serving still delivered 5 to 8
+/// serving at this value beside a syncing daemon: the daemon kept 90 to
+/// 97 % of its no-serve sync rate and serving still delivered 5 to 8
 /// responses per second. The ledger row `serving_priority_nice` carries
 /// it.
 pub const SERVING_NICE: i32 = 19;
