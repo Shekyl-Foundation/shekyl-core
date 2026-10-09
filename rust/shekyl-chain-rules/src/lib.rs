@@ -183,7 +183,9 @@ pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
-pub use rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+pub use rules::tx_against::{
+    newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
+};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{

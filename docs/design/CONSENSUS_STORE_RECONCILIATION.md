@@ -342,7 +342,7 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
 
-<!-- conformance-tally: 126 CHECKED-CONFORMANT, 2 DIVERGENT, 5 UNREVIEWED -->
+<!-- conformance-tally: 127 CHECKED-CONFORMANT, 2 DIVERGENT, 5 UNREVIEWED -->
 
 **Adjudication semantics (RULED 2026-09-19, E2 direction —
 [`DRS_E2_REPLAY_DRIVER.md`](DRS_E2_REPLAY_DRIVER.md) §0):** the C++ trace is
@@ -519,6 +519,7 @@ Rust-side FFI calls, with the exceptions noted per row.
 | CEN-J24 | **CHECKED-CONFORMANT** | W-EM. `outPk` count gate, loud-vout selection in vout order, missing-key reject, and `shekyl_checked_sum_amounts` overflow reject (`:4099–4143`) |
 | CEN-J25 | **CHECKED-CONFORMANT** | W-EM. `shekyl_emission_vin_verify` rc-checked reject (`:4151–4177`) |
 | CEN-J26 | **CHECKED-CONFORMANT** *(re-reviewed post-fix — history: DIVERGENT coupled to M8, round 2)* | Re-reviewed at `a45916c66` (round 6). W-EM + the FCMP arm. Absent⇔zero-fee-inputs enforced both directions (`:4186`/`:3889`); "present ⇒ verifies" now holds: a present fee-input proof either verifies at connect (`shekyl_fcmp_verify` rc-checked, `:4351+`) or carried an admission-verified matching hash — the only skip the hash-gated cache grants. **REWRITE-NOTE:** `skip_fcmp_verify` is a **pool-admission verification cache**, embargo-load-bearing per the in-code note (`DAEMON_RELAY_PRIVACY.md` §71). The Rust pool store already types it — `FcmpVerificationHash`, CEN-M8's cache key, and the embargo clock, [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) — and the admission semantics are E5's, owned there *(rewritten 2026-09-26 from "the rewrite must preserve that timing semantics")* | Digest identity **required**; a match on this row **is** correctness evidence |
+| CEN-J27 | **CHECKED-CONFORMANT** | Reviewed at the mint (2026-10-08, PR #1003; the row minted that day per the H21 cell's ruling of 2026-10-07). W-RB applied to the bond-post arm, `:3654–3733`, after `check_archival_bond_post_input` `:3616`: `block_exists` lookup, min/max age windows, root **at** `ref_height`, `depth == 0 \|\| depth > current` reject, empty-proof reject, per-spend `shekyl_fcmp_pqc_key_scalar`, then `shekyl_fcmp_verify` over the `txin_to_key` subset's key images, the pseudoOuts, the scalars, the root, layers = depth+1 and the prefix hash — rc-checked reject. The two deltas are the ones CEN-I13 and CEN-I15 already carry, not new ones: the C++ depth bound is the *current* depth where the ratified clause (slice 6 Q8) is the depth **at** `ref_height`, and `skip_fcmp_verify` is CEN-M8's cache, whose admission gate is M8's divergence. The Rust `tx_against::J27` runs the same sequence after `judge_bond_post` (J13–J18), the C++'s order within the arm |
 
 **Section-level REWRITE-NOTE (routed to the rewrite through this register):**
 W-SC's correctness was held, at the walk date, by a **deliberate

@@ -11,7 +11,7 @@
 
 use shekyl_chain_rules::{CenRow, Locus, RuleSet, TxSlot};
 use shekyl_types::archival::BondRecord;
-use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_types::BlockHeight;
 
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::scenario_archival::Persona;
@@ -23,15 +23,13 @@ pub(crate) const FEE: u64 = 1_000_000;
 pub(crate) const ENDPOINT: [u8; 32] = [0xEE; 32];
 
 /// The first height that can spend block 0's coinbase against a root that
-/// holds it (`scenario_tests`: unlock window + spendable age + 1). The same
-/// under every regtest rule set here: a levered schedule moves settlement,
-/// not the unlock window.
+/// holds it — the spender's derivation
+/// ([`shekyl_harness_spender::first_spending_height`]: the unlock window,
+/// one, and the reference age) under the genesis rule set. The same under
+/// every regtest rule set here: a levered schedule moves settlement, not
+/// the unlock window.
 pub(crate) fn first_spending_height() -> BlockHeight {
-    let rules = &RuleSet::GENESIS;
-    let wait = rules.mined_money_unlock_window() + rules.tx_spendable_age() + BlockCount::ONE;
-    BlockHeight::ZERO
-        .checked_add(wait)
-        .expect("a regtest unlock window is a small span")
+    shekyl_harness_spender::first_spending_height(&RuleSet::GENESIS)
 }
 
 /// The bond post's vin. Every driven post spends at input 0 and posts at

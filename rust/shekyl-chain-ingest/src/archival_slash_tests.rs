@@ -59,9 +59,9 @@ use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, levered_rules, levered_schedule, mine_to, Filled,
 };
-use crate::scenario_spend::Spender;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
+use shekyl_harness_spender::Spender;
 
 /// `FAILURE_WINDOW_M`: the misses a slash waits for, counted from the epoch
 /// after the join.

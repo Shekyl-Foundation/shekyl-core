@@ -170,9 +170,17 @@ fn i20_every_departure_from_the_grammar_is_refused_at_miner() {
     let nonce = || TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]);
     let pubkey = || TxExtraField::PubKey(G);
     let ser = |fields: &[TxExtraField]| tx_extra::serialize(fields).expect("fields serialize");
-    // Baseline: the fixture's own extra is the grammar and passes.
-    assert_eq!(coinbase(1).prefix.extra, coinbase_extra(1));
+    // Baseline: the fixture's own extra — the grammar's constructor over
+    // the harness miner's real output — passes, as does the filler-bodied
+    // `coinbase_extra(1)` the departures below are cut from: the grammar
+    // reads the layout, not the fields' content.
     tx_form(&coinbase(1), TxSlot::Miner, &RuleSet::GENESIS).expect("the grammar");
+    tx_form(
+        &coinbase_with_extra(coinbase_extra(1)),
+        TxSlot::Miner,
+        &RuleSet::GENESIS,
+    )
+    .expect("the grammar over filler");
 
     let departures: [Vec<u8>; 7] = [
         ser(&[nonce(), kem(), leaf()]),
