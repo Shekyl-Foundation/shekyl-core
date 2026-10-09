@@ -732,10 +732,14 @@ a NonObservation row are passed over, not a stop: stopping would let a
 producer withhold one reveal, push a non-server's pair below three issued
 draws in one epoch, and clear its window. The walk stops where the
 record's standing ends (before the join, or across a reinstatement), at
-`n` observations, and at the retention horizon: it reads no epoch a store
-may have deleted, because a deleted row and an absent one read the same.
-So the rule is `m` misses within the last `n` observations inside the
-retained window (`ARCHIVAL_SETTLEMENT_WRITER.md` §14.4 step 3).
+`n` observations, and at the retention horizon (ruled 2026-10-09). The
+horizon is the one the settlement rows' own prune uses, a single constant
+for both, so the walk never reads a row a store may have deleted. The
+rule is `m` misses within the last `n` observations inside the retained
+window. The horizon leaves twice `n` epochs to find `n` observations in,
+so it shortens a walk only when fewer than half a pair's epochs are
+observed; the code asserts that relation
+(`ARCHIVAL_SETTLEMENT_WRITER.md` §14.4 step 3).
 
 ### 9.5 Settlement integrity
 

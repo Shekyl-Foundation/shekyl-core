@@ -128,7 +128,7 @@ jobs:
         # Rule 47: the lane asserts every subject it owns is in the set
         # before running it — a renamed, deleted or un-ignored member fails
         # here by name, not by passing a run that no longer contains it. The
-        # three names are the lane's charter; a fourth ignored test runs too
+        # four names are the lane's charter; a fifth ignored test runs too
         # and is counted, and joins the list when it is this lane's to own.
         # The benches run at their defaults: a default that builds a chain
         # the constants refuse is exactly what this lane exists to see.
@@ -138,6 +138,7 @@ jobs:
           for subject in \
             'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
             'store::slash_scan_bench_tests::slash_scan_bench' \
+            'store::slash_scan_bench_tests::the_window_stops_at_the_retention_horizon' \
             'store::weights_read_bench_tests::weights_read_bench'
           do
             printf '%s\n' "$list" | grep -qx "${subject}: test" \

@@ -4,10 +4,11 @@
 // BSD-3-Clause
 
 //! Tests for the archival reads (`store/archival_reads.rs`, DRS-E1 S-ARCH
-//! A1–A10; DRS-E4 A11–A13; `SO-D10` A14–A16). No writer exists yet for these tables (E4's), so every
-//! planted state is written raw through the schema's own table handles and
-//! asserted on a fresh snapshot — the reads' contract is with the bytes a
-//! writer will leave, not with any writer.
+//! A1–A10; DRS-E4 A11–A13; `SO-D10` A14–A16). Every planted state is
+//! written raw through the schema's own table handles and asserted on a
+//! fresh snapshot: the reads' contract is with the bytes a writer leaves,
+//! not with any writer, so the reads are tested apart from the writers
+//! (`archival_write_tests`, `slash_scan_bench_tests`).
 
 use redb::Value;
 use shekyl_chain_rules::AtHeight;

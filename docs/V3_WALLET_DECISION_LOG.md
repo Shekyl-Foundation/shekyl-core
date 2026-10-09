@@ -6351,3 +6351,33 @@ on `DEL-008` and in the SO-D8 proposal's §8.0; `ESR-12` in
 `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.16.
 
 ---
+
+## 2026-10-09 — The failure window's walk stops at the retention horizon (`SO-D10b`, amended)
+
+**Decision (maintainer, relayed 2026-10-09, on the choice
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§14.4 step 3 posed).** `SO-D10b` ruled that the walk passes over an
+unobserved epoch and stops only where the record says the run began. That
+removed the walk's old bound of `n − 1` epochs, so it could read below the
+horizon a prune of settlement rows would use. The walk now also stops at
+that horizon.
+
+- **One constant.** The walk's bound and the settlement rows' prune
+  horizon are the same constant, `SETTLEMENT_RETENTION_EPOCHS`, and it is
+  const-asserted against `n` and a stated minimum observation rate, so the
+  reasoning is in code and not in prose.
+- **Why it is acceptable.** The window needs 13 observations and the
+  horizon leaves 26 epochs to find them in. The bound shortens a walk only
+  when fewer than half a pair's epochs are observed. At the simulated
+  observation rate, 0.96 or better, 13 observations span about 14 epochs.
+  A slash missed below one half observed is accepted: the network has
+  larger problems than one free rider at that point.
+- **Why now.** Adding the bound when pruning lands would be a consensus
+  change at that point (rule 07). In the rule from the first commit, the
+  prune is not one.
+
+**Cost recorded.** A pair with ten misses, more than a retention window of
+unobserved epochs, and one more miss has eleven recorded misses and is not
+slashed.
+
+---

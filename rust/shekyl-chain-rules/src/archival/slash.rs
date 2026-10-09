@@ -35,17 +35,18 @@
 //! in one epoch, and clear its window. The walk stops where the record
 //! says the run began ([`good_through`] false: before the join, or across
 //! a reinstatement), at `FAILURE_WINDOW_N` observations, once the serve
-//! budget is exceeded — and at the retention horizon.
+//! budget is exceeded, and at the retention horizon.
 //!
-//! **The horizon is a bound the skip made necessary.** While the walk
-//! stopped at the first unobserved epoch it read at most `n − 1` epochs
-//! back, which `failure_window.rs` const-asserts inside the horizon. A walk
-//! that passes over unobserved epochs can go further, to rows a store may
-//! have deleted. A deleted row and an absent one read the same, so the
-//! verdict would depend on what a node had pruned. The walk therefore
-//! reads no epoch below `SettlementSchedule::prune_below_epoch_at_height`
-//! at the connecting height, which also bounds its cost at
-//! `MAX_CLAIM_AGE_W_EPOCHS` reads per Missed pair.
+//! **The horizon (ruled 2026-10-09).** While the walk stopped at the first
+//! unobserved epoch it read at most `n − 1` epochs back. A walk that
+//! passes over unobserved epochs can go further, to rows a store may
+//! delete, and a deleted row reads the same as an absent one. So the walk
+//! reads no epoch below [`settlement_retention_floor`]: the horizon the
+//! settlement rows' own prune uses, one constant for both, in the rule
+//! now so that the prune is not a consensus change when it lands. It
+//! shortens a walk only when fewer than half a pair's epochs are observed
+//! (`failure_window.rs`, `WINDOW_MIN_OBSERVATION_PER_MILLE`), and it bounds
+//! the walk's cost at the retention's length.
 //!
 //! # The stale snapshot
 //!
@@ -60,13 +61,13 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    failure_window_slashable, good_through, holds_shard_at, slash_open_interval_to_append,
-    BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
-    MAX_BOND_BAD_INTERVALS,
+    failure_window_slashable, good_through, holds_shard_at, settlement_retention_floor,
+    slash_open_interval_to_append, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, SlashLogEntry, SlashedHolding, MAX_CLAIM_AGE_W_EPOCHS,
+    SettlementRow, SlashLogEntry, SlashedHolding,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -451,14 +452,11 @@ impl super::Transition {
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
         let window = usize::try_from(FAILURE_WINDOW_N).expect("a u32 fits a usize");
-        let horizon = self
-            .schedule
-            .prune_below_epoch_at_height(self.connecting.to_raw(), MAX_CLAIM_AGE_W_EPOCHS)
-            .unwrap_or(0);
+        let floor = settlement_retention_floor(self.schedule, self.connecting).to_raw();
         let mut observations = vec![BaselineObservation::missed(epoch.to_raw())];
         let mut passes_seen = 0u32;
         let mut e = epoch.to_raw();
-        while observations.len() < window && e > horizon {
+        while observations.len() < window && e > floor {
             e -= 1;
             let earlier = SettlementEpoch::from_raw(e);
             if !in_standing(record, earlier) {

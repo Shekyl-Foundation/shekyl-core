@@ -184,8 +184,9 @@ pub use emission_wire::{
 };
 pub use error::VerifyError;
 pub use failure_window::{
-    failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
-    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    failure_window_slashable, settlement_retention_floor, BaselineObservation, FailureWindowError,
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS,
+    WINDOW_MIN_OBSERVATION_PER_MILLE,
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};

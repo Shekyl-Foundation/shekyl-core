@@ -1286,9 +1286,10 @@ is the whole justification, and it is a domain claim, not a safety claim.
   `archival_shard_segment` are `NOT_PORTED` on the redb side (revert
   pre-images held by `undo_log`; a cache the fold recomputes — E4 §3.4),
   so there is no state to compare and the exclusion is recorded in the
-  snapshot's own `Disposition::Excluded` arm, not silently; **one held** —
-  `archival_settlement`, no writer on either side: the C++ one is deleted
-  (`SO-D10e`) and the Rust one (`SO-D10`) is not wired yet. The clause
+  snapshot's own `Disposition::Excluded` arm, not silently; **one
+  excluded for want of a counterpart** — `archival_settlement`: the Rust
+  slash pass writes it (`SO-D10`) and the C++ writer is deleted
+  (`SO-D10e`), so LMDB holds nothing to compare. The clause
   that the instrument *watch LMDB run those paths* is what the `0x04`
   record is: the C++'s own reading, committed as data in every captured
   trace (E4 commit 7 re-captures the six). The settlement paragraphs below

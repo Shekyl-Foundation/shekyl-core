@@ -820,34 +820,33 @@ live validator; the C++ daemon stays consensus, on the beacon, until
 
    Four things the build settled that the rulings did not spell:
 
-   - **The walk-back stops at the retention horizon. Not ruled; for
-     ratification.** `SO-D10b` says stop only where the record says the
-     run began. The walk as built also reads no epoch below
-     `SettlementSchedule::prune_below_epoch_at_height` at the connecting
-     height. What that buys and costs, stated as it stands today:
-     - *Cost, now.* A walk that passes over unobserved epochs has no
-       other bound but the join. Every epoch before the draw goes live is
-       unobserved, so a pair bonded long before it would read every one of
-       them on each Missed epoch. With the bound it is at most
-       `MAX_CLAIM_AGE_W_EPOCHS` reads.
-     - *Determinism, later.* While the walk stopped at the first
-       unobserved epoch it read at most `n − 1` epochs back, which
-       `failure_window.rs` const-asserts inside the horizon. A walk that
-       passes over epochs can reach rows a store may have deleted, and a
-       deleted row reads the same as an absent one. **The Rust store
-       prunes no archival table by epoch today**, so on the path this
-       code runs no row is deleted and this reason is prospective.
-     - *The price, now.* The rule becomes `m` misses within the last `n`
-       observations **inside the retained window**. A pair with ten
-       misses, then more than a retention window unobserved, then one
-       miss, has eleven recorded misses and is not slashed
-       (`the_window_stops_at_the_retention_horizon`). That is the quiet
-       direction `failure_window.rs` warns about, bought for a prune that
-       does not exist yet.
-
-     The alternative is no bound until the Rust store gains an epoch
-     prune, with the bound landing in that change against the horizon it
-     shares. The read cost above is then unbounded in the meantime.
+   - **The walk-back stops at the retention horizon. RULED 2026-10-09**
+     (§14.5, the amendment to `SO-D10b`). While the walk stopped at the
+     first unobserved epoch it read at most `n − 1` epochs back. A walk
+     that passes over unobserved epochs can go further, to rows a store
+     may delete, and a deleted row reads the same as an absent one. The
+     walk reads no epoch below `settlement_retention_floor`
+     (`rust/shekyl-archival-retention/src/failure_window.rs`).
+     - **One constant.** `SETTLEMENT_RETENTION_EPOCHS` is both the walk's
+       bound and the horizon the settlement rows' prune will use. The
+       Rust store prunes no archival table by epoch yet; when it does it
+       prunes to this constant, and the walk already stops there.
+     - **Now, not with the prune.** Adding the bound when the prune lands
+       would change a consensus rule at that point (rule 07).
+     - **It binds only in a degraded state.** The window needs `n = 13`
+       observations and the horizon leaves 26 epochs to find them in, so a
+       walk is cut short only when fewer than half a pair's epochs are
+       observed. That relation is a const-assert against
+       `WINDOW_MIN_OBSERVATION_PER_MILLE = 500`, so re-pinning `n`, the
+       retention or the slash grace across it fails the build. At the
+       simulated observation rate, 0.96 or better, 13 observations span
+       about 14 epochs.
+     - **The accepted price.** A pair with ten misses, then more than a
+       retention window unobserved, then one miss, has eleven recorded
+       misses and is not slashed
+       (`the_window_stops_at_the_retention_horizon`, in the nightly store
+       lane). Below one half observed the network has larger problems.
+     - It also bounds the walk's cost at the retention's length.
    - **The check is `passes ≤ counted`.** The row type holds `passes` to
      the draws that were counted — three, or none below three issued —
      which implies §9.5's `passes ≤ issued`. The fold cannot overcount, so
@@ -861,8 +860,8 @@ live validator; the C++ daemon stays consensus, on the beacon, until
 
    Tests: `slash_scan_bench_tests` (the witness re-driven through the
    door; the empty index; the skip, the serve budget and which draws
-   count; the horizon; index drift three ways; a second settlement; the
-   pop) and the levered chain in `shekyl-chain-ingest`
+   count; the horizon, in the nightly lane; index drift three ways; a
+   second settlement; the pop) and the levered chain in `shekyl-chain-ingest`
    (`archival_slash_tests`, live lane). **The LMDB comparison
    (`archival_fixture_replica_tests`) is retired** as ruled: it held the
    Rust slash against the one slash the C++ decided on the one-challenge
@@ -878,6 +877,7 @@ live validator; the C++ daemon stays consensus, on the beacon, until
 | --- | --- | --- |
 | `SO-D10a` | What the writer reads before the draw exists | **The empty issued-draw index** (§14.3). Not a beacon-era stand-in. The Rust validator slashes nothing until the draw lands; the C++ daemon stays consensus until `DEL-008` |
 | `SO-D10b` | The window walk-back over a row that is NonObservation or absent, inside a standing run. Before this ruling the walk stopped at the first epoch that is not an observation (`rust/shekyl-archival-retention/src/failure_window.rs:53-56`), which is how the join, add and reinstate boundaries fall out | **Skip it; stop only where the record says the run began** (`good_through` false: before the join, or across a reinstatement). Inside the run, Served and Missed are observations and a NonObservation or absent row is passed over. **Stopping is exploitable:** a colluding producer can withhold one reveal, push a non-server's pair below 3 issued draws in that epoch, and clear its window. Skipping is what the genesis-frozen rule says: `m` misses within the last `n` observations |
+| `SO-D10b`, amended 2026-10-09 | The skip removes the walk's `n − 1` bound, so it can read below the horizon a prune would use | **The walk also stops at the retention horizon.** Condition: the walk's bound and the settlement rows' prune horizon are **one constant**, const-asserted against `n` and a stated minimum observation rate, so the reasoning is in code. It binds only below one half observed, where a missed slash is acceptable; and it is in the rule now so that the prune is not a consensus change when it lands |
 | `SO-D10c` | How a pass is tied to a draw before admission is built. The writer counts passes among the three selected draws; the pass row today names no draw | **The draw's index entry carries the pass fact.** Condition: **the pass fact has exactly one home.** When admission lands, the `(P, s, E, h)` serve-credit table is re-keyed or deleted; it is never kept beside the index's pass bit. **The issued-index digest covers issuance only**: a pass is set later, inside `W₂`, and is not part of what the digest folds |
 | `SO-D10d` | Accrual. The close for `E` runs an epoch before the slash pass settles `E`, so it cannot read `E`'s row where it stands. `SO-D8c` rules the emission gather into the slash pass | **Its own change, after the slash fold reads the row and before the draw.** Until it lands, accrual stays on any pass while slashing reads the row. **Gate:** the draw cannot go live until `SO-D10d` has landed — no Rust consensus that pays on any pass while it slashes on rows. Slash timing stays as designed: the slash pass for `E` at `(E+2)·SEB − 1` |
 | `SO-D10e` | The count fold `settle_epoch(passes, issued)` with its floor of 2, its two FFI exports, the C++ `set_`/`get_archival_settlement` and their unit tests. None has a production caller, and they state the superseded fold | **Delete them with the list fold** (rule 15). The LMDB table's handle, revert and prune stay for `DEL-008`. `SettlementRow` keeps its bytes; its floor becomes 3 |

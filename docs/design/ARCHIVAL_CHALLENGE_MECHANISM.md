@@ -1548,7 +1548,8 @@ settlement writer (item 9's schema is genuinely open).
   a wiring cutover, not an open schema question. **UPDATE 2026-10-08 (`SO-D10e`):**
   `set_archival_settlement` and the C++ value encoding are deleted; the
   writer is the Rust slash pass's, `ARCHIVAL_SETTLEMENT_WRITER.md` §14
-  (`SO-D10`), and is not wired yet.
+  (`SO-D10`), and is wired. What it waits on is a block path that issues
+  a draw: until the secret draw lands the issued-draw index is empty.
 
 **Recorded rather than edited down to the two survivors**, because the list's
 own framing is the useful part: it named a hold whose blocker was *the format
@@ -1902,7 +1903,8 @@ dependency: it stands on `J9` landing with SO-D8 Slice C.** Until then
 nothing reaches settlement (`set_archival_settlement` has no production
 caller, `FOLLOWUPS.md` CEN-L8 row), so nothing is exposed in the interval.
 **UPDATE 2026-10-08 (`SO-D10e`):** `set_archival_settlement` is deleted; the C++
-store has no settlement writer and the Rust writer is not wired yet, so the
+store has no settlement writer. The Rust slash pass writes settlement rows,
+but no block path issues a draw yet, so it has nothing to settle and the
 interval claim holds.
 The reopen criterion above is unchanged: a second production pinner, a
 test-support constructor that escapes `#[cfg(test)]`, or an FFI surface that
