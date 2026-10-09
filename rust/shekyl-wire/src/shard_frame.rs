@@ -48,14 +48,14 @@ use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
 use crate::transaction::{pqc_auth_hash_of, prunable_hash_of, TxidParts};
 use crate::varint::write_varint;
 
+/// The streaming decoder and the ten-byte cap, defined once in
+/// [`crate::varint`] and named here because the frame is the grammar a
+/// reader matches on.
+pub use crate::varint::{VarintDecoder, VarintFault, MAX_VARINT_LEN};
+
 /// The frame's leading byte. Bumps when the grammar changes; a reader
 /// refuses any other value before reading a length.
 pub const SHARD_FRAME_VERSION: u8 = 1;
-
-/// The widest canonical LEB128 `u64`: ten bytes. The bound a streaming
-/// reader puts on one varint, and the per-field term of
-/// [`frame_len_ceiling`].
-pub const MAX_VARINT_LEN: usize = 10;
 
 /// Varints ahead of each entry's bytes: the auth count and the two lengths.
 const ENTRY_VARINTS: u64 = 3;
@@ -123,68 +123,6 @@ pub fn frame_len_ceiling(tx_count: u64, archival_total: ArchivalLength) -> Optio
     1u64.checked_add(varint)?
         .checked_add(per_entry)?
         .checked_add(archival_total.to_raw())
-}
-
-/// A streaming canonical-LEB128 `u64` decoder: feed it the body bytes one
-/// at a time until it yields the value. Refuses what [`crate::varint::read_varint`]
-/// refuses — a redundant trailing zero, a group whose bits fall off the
-/// `u64` — and additionally a varint still unterminated after
-/// [`MAX_VARINT_LEN`] bytes, so a reader never waits on an endless
-/// continuation.
-#[derive(Debug, Default)]
-pub struct VarintDecoder {
-    value: u64,
-    shift: u32,
-    bytes: usize,
-}
-
-impl VarintDecoder {
-    const CONTINUATION: u8 = 0b1000_0000;
-    const PAYLOAD: u8 = !Self::CONTINUATION;
-
-    /// A decoder with nothing fed.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Feed the next byte. `Ok(Some(v))` when the varint terminated on it,
-    /// `Ok(None)` when more bytes are needed.
-    ///
-    /// # Errors
-    ///
-    /// [`FrameError::Varint`] on a non-canonical, overflowing or over-long
-    /// encoding. The decoder is spent after an error.
-    pub fn push(&mut self, byte: u8) -> Result<Option<u64>, FrameError> {
-        if self.bytes >= MAX_VARINT_LEN {
-            return Err(FrameError::Varint(VarintFault::TooLong));
-        }
-        self.bytes += 1;
-        if self.shift != 0 && byte == 0 {
-            return Err(FrameError::Varint(VarintFault::NonCanonical));
-        }
-        let payload = u64::from(byte & Self::PAYLOAD);
-        if self.shift >= u64::BITS || (payload << self.shift) >> self.shift != payload {
-            return Err(FrameError::Varint(VarintFault::Overflow));
-        }
-        self.value |= payload << self.shift;
-        self.shift += 7;
-        if byte & Self::CONTINUATION == Self::CONTINUATION {
-            return Ok(None);
-        }
-        Ok(Some(self.value))
-    }
-}
-
-/// How a varint on the wire failed to decode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VarintFault {
-    /// A redundant trailing zero group — the encoding is not canonical.
-    NonCanonical,
-    /// A group whose bits fall off the `u64`.
-    Overflow,
-    /// Still unterminated after [`MAX_VARINT_LEN`] bytes.
-    TooLong,
 }
 
 /// The frame is not the grammar: `P` is not speaking the protocol. Distinct
@@ -516,10 +454,7 @@ mod tests {
         // Redundant trailing zero.
         let mut d = VarintDecoder::new();
         assert_eq!(d.push(0x80).unwrap(), None);
-        assert_eq!(
-            d.push(0x00).unwrap_err(),
-            FrameError::Varint(VarintFault::NonCanonical)
-        );
+        assert_eq!(d.push(0x00).unwrap_err(), VarintFault::NonCanonical);
         // Ten continuation bytes then one more: too long before overflow
         // can be judged on the eleventh.
         let mut d = VarintDecoder::new();
@@ -527,20 +462,14 @@ mod tests {
             assert_eq!(d.push(0x81).unwrap(), None);
         }
         // The tenth byte may carry only one bit; 0x02 overflows.
-        assert_eq!(
-            d.push(0x02).unwrap_err(),
-            FrameError::Varint(VarintFault::Overflow)
-        );
+        assert_eq!(d.push(0x02).unwrap_err(), VarintFault::Overflow);
         let mut d = VarintDecoder::new();
         for _ in 0..9 {
             assert_eq!(d.push(0x81).unwrap(), None);
         }
         // Still continuing on the tenth byte with an in-range group.
         assert_eq!(d.push(0x81).unwrap(), None);
-        assert_eq!(
-            d.push(0x01).unwrap_err(),
-            FrameError::Varint(VarintFault::TooLong)
-        );
+        assert_eq!(d.push(0x01).unwrap_err(), VarintFault::TooLong);
         assert_eq!(check_version(2).unwrap_err(), FrameError::Version(2));
         assert_eq!(check_version(SHARD_FRAME_VERSION), Ok(()));
     }

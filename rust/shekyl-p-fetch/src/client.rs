@@ -23,7 +23,7 @@ use shekyl_curve_tree::serving_route::{
 use shekyl_socks::{connect as socks_connect, Destination, Isolation};
 use shekyl_types::ShardId;
 use shekyl_wire::shard_frame::{
-    check_components, check_lengths, check_version, ContentMismatch, VarintDecoder,
+    check_components, check_lengths, check_version, ContentMismatch, FrameError, VarintDecoder,
 };
 use shekyl_wire::TxidParts;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -784,7 +784,10 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         let mut decoder = VarintDecoder::new();
         loop {
             let byte = self.byte().await?;
-            if let Some(value) = decoder.push(byte).map_err(Malformed::Frame)? {
+            if let Some(value) = decoder
+                .push(byte)
+                .map_err(|fault| Malformed::Frame(FrameError::Varint(fault)))?
+            {
                 return Ok(value);
             }
         }
