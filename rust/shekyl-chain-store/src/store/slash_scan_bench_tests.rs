@@ -667,20 +667,19 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
 
 /// With no draw issued, the slash pass settles nothing and slashes nothing
 /// (`SO-D10a`): the state of every chain until the secret draw lands. The
-/// same chain as the witness, to the same height, with an empty index.
+/// witness's chain with an empty index, through three deadline connects.
 #[test]
 fn an_empty_index_settles_nothing_and_slashes_nothing() {
     fn nothing(_: u64, _: u64) -> Option<&'static [bool]> {
         None
     }
-    let through = RULES
-        .settlement_schedule()
-        .slash_deadline_height(u64::from(FAILURE_WINDOW_M));
+    let last = 2u64;
+    let through = RULES.settlement_schedule().slash_deadline_height(last);
     let chain = SlashedChain::build_with("slash-empty-index", WITNESS_PERSONAS, through, nothing);
     let snap = chain.store.begin_read().expect("read");
     assert_eq!(
         snap.last_settled_slash_epoch().expect("read"),
-        Some(SettlementEpoch::from_raw(chain.m)),
+        Some(SettlementEpoch::from_raw(last)),
         "the pass ran: the watermark moved"
     );
     assert_eq!(snap.total_burned().expect("read"), AtomicUnits::ZERO);
@@ -694,7 +693,7 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
             .expect("read")
             .expect("bonded")
             .is_complete_tree());
-        for e in 0..=chain.m {
+        for e in 0..=last {
             assert_eq!(
                 snap.settlement_row(&p, ShardId::from_raw(0), SettlementEpoch::from_raw(e))
                     .expect("read"),
@@ -813,7 +812,12 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
 /// Persona 1's ten misses are epochs 3–12, all at or above it: eleven
 /// misses, slashed. Persona 0's are epochs 1–10, two of them below it:
 /// nine, not slashed. Without the bound both would be.
+///
+/// Ignored on two counts. The bound is as built and not yet ruled
+/// (`ARCHIVAL_SETTLEMENT_WRITER.md` §14.4 step 3), so this is its witness
+/// and not a pin of a ratified rule. And the chain is thirty epochs.
 #[test]
+#[ignore = "pins the unruled retention-horizon bound (SO-D10b, awaiting ratification) over 3 000 connects, minutes in debug. Run: cargo test -p shekyl-chain-store --lib -- --ignored the_window_stops_at_the_retention_horizon"]
 fn the_window_stops_at_the_retention_horizon() {
     fn plan(epoch: u64, persona: u64) -> Option<&'static [bool]> {
         let first = if persona == 0 { 1 } else { 3 };

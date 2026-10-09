@@ -735,7 +735,7 @@ every pair the draw did not reach as a miss.
 | The fold | `settle_pair(beacon, P, shard, E, draws)`: takes a pair's counted draws in `(h, j)` order, selects three by the beacon (`select_counted`), and counts the passes among them. No row for no draws; NonObservation below three. Called by the slash pass for every pair with a draw in the epoch. The count fold `settle_epoch` it replaces is deleted (`SO-D10e`) | `rust/shekyl-archival-retention/src/settlement_select.rs`; `rust/shekyl-chain-rules/src/archival/slash.rs` (`settle`) |
 | The row | `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused. Decoding re-settles the counts and refuses an outcome they do not give. It is the only `SettlementRow`: the count fold's type and its FFI are deleted | `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
 | The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed, written by the slash pass. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No block writes the index or the digest until admission lands; the Fakechain door is their one producer | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`) |
-| The slash fold | Settles the epoch, then decides on rows. A pair is a candidate only if its row for the epoch is Missed; Served, NonObservation and no row are each no slash. The window walks back through earlier rows, passing over an unobserved epoch (`SO-D10b`), and stops where the record's standing ends, at `n` observations, past the serve budget, and at the retention horizon (§14.4 step 3). The one-challenge beacon geometry is gone from the Rust pass | `rust/shekyl-chain-rules/src/archival/slash.rs` (`scan_epoch`, `settle`, `challenge_failed`, `window_slashable`) |
+| The slash fold | Settles the epoch, then decides on rows. A pair is a candidate only if its row for the epoch is Missed; Served, NonObservation and no row are each no slash. The window walks back through earlier rows, passing over an unobserved epoch (`SO-D10b`), and stops where the record's standing ends, at `n` observations, past the serve budget, and at the retention horizon (§14.4 step 3). A complete-tree record's candidates are the shards it has a row for, in shard order, where the pass used to walk every closed shard; it is still slashed on the first failing one only. The one-challenge beacon geometry is gone from the Rust pass | `rust/shekyl-chain-rules/src/archival/slash.rs` (`scan_epoch`, `settle`, `challenge_failed`, `window_slashable`) |
 | Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
 | When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
 | `issued` | The length of a pair's counted draws in the stored index: those issued while it held the shard, read as `holds_shard_at` reads it. Nothing issues a draw on a block path yet, so the index is empty off Fakechain and the Rust pass settles and slashes nothing (`SO-D10a`) | `archival/slash.rs` (`counted`); `rust/shekyl-archival-retention/src/challenge_assignment.rs` (the urn, still without a caller outside its crate) |
@@ -818,19 +818,34 @@ live validator; the C++ daemon stays consensus, on the beacon, until
 
    Four things the build settled that the rulings did not spell:
 
-   - **The walk-back stops at the retention horizon, for ratification.**
-     `SO-D10b` says stop only where the record says the run began. While
-     the walk stopped at the first unobserved epoch it read at most
-     `n − 1` epochs back, which `failure_window.rs` const-asserts inside
-     the horizon. A walk that passes over unobserved epochs can go
-     further, to rows a store may have deleted, and a deleted row reads
-     the same as an absent one: the verdict would depend on what a node
-     had pruned. The walk reads no epoch below
+   - **The walk-back stops at the retention horizon. Not ruled; for
+     ratification.** `SO-D10b` says stop only where the record says the
+     run began. The walk as built also reads no epoch below
      `SettlementSchedule::prune_below_epoch_at_height` at the connecting
-     height. Cost: at most `MAX_CLAIM_AGE_W_EPOCHS` reads per Missed pair.
-     Effect on the rule: `m` misses within the last `n` observations
-     **inside the retained window**. A pair with ten misses, then more
-     than a retention window unobserved, then one miss, is not slashed.
+     height. What that buys and costs, stated as it stands today:
+     - *Cost, now.* A walk that passes over unobserved epochs has no
+       other bound but the join. Every epoch before the draw goes live is
+       unobserved, so a pair bonded long before it would read every one of
+       them on each Missed epoch. With the bound it is at most
+       `MAX_CLAIM_AGE_W_EPOCHS` reads.
+     - *Determinism, later.* While the walk stopped at the first
+       unobserved epoch it read at most `n − 1` epochs back, which
+       `failure_window.rs` const-asserts inside the horizon. A walk that
+       passes over epochs can reach rows a store may have deleted, and a
+       deleted row reads the same as an absent one. **The Rust store
+       prunes no archival table by epoch today**, so on the path this
+       code runs no row is deleted and this reason is prospective.
+     - *The price, now.* The rule becomes `m` misses within the last `n`
+       observations **inside the retained window**. A pair with ten
+       misses, then more than a retention window unobserved, then one
+       miss, has eleven recorded misses and is not slashed
+       (`the_window_stops_at_the_retention_horizon`). That is the quiet
+       direction `failure_window.rs` warns about, bought for a prune that
+       does not exist yet.
+
+     The alternative is no bound until the Rust store gains an epoch
+     prune, with the bound landing in that change against the horizon it
+     shares. The read cost above is then unbounded in the meantime.
    - **The check is `passes ≤ counted`.** The row type holds `passes` to
      the draws that were counted — three, or none below three issued —
      which implies §9.5's `passes ≤ issued`. The fold cannot overcount, so
