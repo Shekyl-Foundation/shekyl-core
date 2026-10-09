@@ -488,6 +488,49 @@ fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
     cleanup(&path);
 }
 
+/// Settlement's integrity checks that the validator observes
+/// (`Corrupt::SettlementIntegrity`) are SI-25, each under its own fault:
+/// the index not folding to its digest, the fold counting more passes
+/// than draws it selected, and the settlement beacon not recorded strictly
+/// below the connecting height. The second has no store state behind it —
+/// it is a defect of the fold — so this mapping is its only witness. The
+/// beacon arm is unreachable on a schedule whose grace covers the response
+/// window, and the mapping is what keeps a re-pin from settling nothing.
+#[test]
+fn a_settlement_integrity_fault_is_si25_under_the_check_it_failed() {
+    use shekyl_chain_rules::SettlementCheck;
+    let epoch = shekyl_types::SettlementEpoch::from_raw(3);
+    let persona = shekyl_types::PCanonicalId::from_bytes([0xa1; 32]);
+    let shard = shekyl_types::ShardId::from_raw(7);
+    for (check, observed) in [
+        (
+            SettlementCheck::IssuedIndexDigest,
+            SettlementFault::IndexDrift,
+        ),
+        (
+            SettlementCheck::PassesExceedCounted { persona, shard },
+            SettlementFault::PassesExceedCounted { persona, shard },
+        ),
+        (
+            SettlementCheck::BeaconNotRecorded,
+            SettlementFault::BeaconNotRecorded,
+        ),
+    ] {
+        let path = tmp("connect-refuse-corrupt-settlement");
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let out: Result<(), TestErr> = store.write(|batch| {
+            let _view = batch.chain_view();
+            Err(batch
+                .refuse_corrupt(shekyl_chain_rules::Corrupt::SettlementIntegrity { epoch, check })
+                .into())
+        });
+        let row = StoreInvariant::SettlementNotSound { epoch, observed };
+        expect_row(&out, row);
+        assert_eq!(row.row(), 25);
+        cleanup(&path);
+    }
+}
+
 /// A producer read opens a batch and aborts it. The slot is released —
 /// `inspect` is not `write`.
 #[test]

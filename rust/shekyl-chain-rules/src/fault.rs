@@ -290,6 +290,46 @@ pub enum Corrupt {
         /// The open epoch whose total overflowed.
         epoch: SettlementEpoch,
     },
+    /// Settlement of `epoch` found the recorded state it folds unfit to
+    /// fold (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5; SI-25). Never a refusal
+    /// of the block: the block at the slash height is not invalid, this
+    /// node cannot settle it.
+    SettlementIntegrity {
+        /// The epoch being settled.
+        epoch: SettlementEpoch,
+        /// Which check failed.
+        check: SettlementCheck,
+    },
+}
+
+/// Which of settlement's integrity checks failed —
+/// [`Corrupt::SettlementIntegrity`]'s discriminant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementCheck {
+    /// The epoch's issued-draw rows do not fold to the epoch's running
+    /// digest (§9.5 check 1): a row was lost, gained or changed after the
+    /// draw was indexed, or the digest was.
+    IssuedIndexDigest,
+    /// The fold counted more passes for a pair than draws it selected
+    /// (§9.5 check 3, in the form the row type holds: `passes ≤ counted`,
+    /// with `counted` three, or none below three issued — which implies
+    /// `passes ≤ issued`). The fold selects at most three and only then
+    /// counts, so this is a defect of the fold and not a state a store can
+    /// hold. It halts, and is never clamped and never skipped: a pair with
+    /// no row reads as unobserved.
+    PassesExceedCounted {
+        /// The persona of the pair.
+        persona: PCanonicalId,
+        /// The shard of the pair.
+        shard: ShardId,
+    },
+    /// The settlement beacon's block is not strictly below the connecting
+    /// height. The slash grace is at least the response window on every
+    /// schedule that has one, so a passed deadline puts the beacon there.
+    /// A re-pin that does not is this halt, not an empty settlement: the
+    /// block at the slash height is not invalid, and this node cannot
+    /// settle the epoch.
+    BeaconNotRecorded,
 }
 
 /// Which of a bond record's invariants a retention fold found broken —
@@ -520,6 +560,22 @@ impl fmt::Display for Corrupt {
             Self::AccrualOverflow { epoch } => {
                 write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
             }
+            Self::SettlementIntegrity { epoch, check } => match check {
+                SettlementCheck::IssuedIndexDigest => write!(
+                    f,
+                    "the issued draws recorded for epoch {epoch} do not fold to its digest (SI-25)"
+                ),
+                SettlementCheck::PassesExceedCounted { persona, shard } => write!(
+                    f,
+                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
+                     draws selected (SI-25)"
+                ),
+                SettlementCheck::BeaconNotRecorded => write!(
+                    f,
+                    "the settlement beacon of epoch {epoch} is not a block strictly below \
+                     the connecting height (SI-25)"
+                ),
+            },
         }
     }
 }

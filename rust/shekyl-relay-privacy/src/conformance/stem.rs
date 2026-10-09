@@ -78,9 +78,9 @@ where
     R: RelayRng + ?Sized,
     F: FnMut(usize, u64, &mut R),
 {
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
     let q = u64::from(params.fluff_probability_pct);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
 
     let mut deadlines = Vec::new();
     let mut t = 0_u64;
@@ -387,7 +387,7 @@ pub fn simulate_sighting_separability<R: RelayRng + ?Sized>(
         spy_fraction > 0.0 && spy_fraction <= 1.0,
         "spy fraction must be in (0, 1]"
     );
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
     let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
 
     let mut natural: Vec<u64> = Vec::new();
@@ -498,9 +498,9 @@ pub fn simulate_blackhole_attack<R: RelayRng + ?Sized>(
         spy_fraction > 0.0 && spy_fraction <= 1.0,
         "spy fraction must be in (0, 1]"
     );
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
     let q = u64::from(params.fluff_probability_pct);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
     let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
 
     let mut source_counts: Vec<u64> = Vec::new();

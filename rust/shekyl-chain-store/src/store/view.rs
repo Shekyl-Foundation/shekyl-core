@@ -88,7 +88,7 @@
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
 };
-use shekyl_types::archival::{PassCount, ServedShard};
+use shekyl_types::archival::{IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
     ShardId, TxHash,
@@ -343,5 +343,23 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
 
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
 }

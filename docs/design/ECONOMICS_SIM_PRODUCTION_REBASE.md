@@ -1218,6 +1218,35 @@ them and depends on how the tries are spaced, which the model does not
 represent. A persona that is down for the whole of `W₂` fails all three
 tries at any `ρ`, and that is a miss the window is meant to count.
 
+### 5.16 ESR-12 — settlement timing, posed (2026-10-08). Not run
+
+Posed by the maintainer with the settlement writer's rulings
+([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §14.5).
+Nothing here is modelled yet; this is the question and what a run has to
+report. The model, the bar and the predictions are written before the code,
+as for ESR-11.
+
+**The question.** Does settling epoch `E` at `h_close(E) + W₂ + 1`, where
+it is settled today at `(E+2)·SEB − 1`, change anything that matters?
+
+Settlement needs every reveal for `E` to be in, and that is true at
+`h_close(E) + W₂`. The full-epoch delay is inherited from the beacon's
+resolution window of one epoch.
+
+**To measure, under both timings:**
+
+- the time from serving to a claimable reward;
+- the time to slash for a pair that does not serve;
+- the exposure of an honest archiver to a slash during an outage that
+  straddles the epoch boundary;
+- the interaction with `MAX_CLAIM_AGE_W`, with the grace coupling
+  (`SLASH_GRACE_EPOCHS · SEB ≥ W₂`), and with the wallet's claim arithmetic.
+
+**What it can change.** It does not block the settlement writer, which is
+built on the current timing. If the run shows a material gain, the result
+comes back as a re-pin: slash timing and the grace coupling re-derived. It
+does not come back as a move of the pass.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
@@ -1557,7 +1586,7 @@ The first three rows are structural: every registered run inherits them from `ba
 | R13 | `sim/failure_confirmation.rs:36` | `BLOCK_WEIGHT_LIMIT_BYTES = 300_000` | Block budget | `FULL_REWARD_ZONE` `econ/params.rs:17`. That is the reward zone, not the limit (`econ/emission.rs:265`). | V |
 | R14 | `sim/failure_confirmation.rs:668-672` | 1 baseline challenge per pair per epoch | Challenge volume | `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, `prod/constants.rs:30` | V |
 | R15 | `sim/failure_confirmation.rs:1087-1088` (m=2, n=5), sweep `:748-749`, `:1127-1136` | Sliding window m-of-n | Slash window | `FAILURE_WINDOW_M/N = 11/13`, `prod/failure_window.rs:334-337`. Imported only in tests (`sim/failure_confirmation.rs:1193`). The policy function `:526-551` is equivalence-tested against production (`:1254`). | V |
-| R16 | `sim/fingerprint.rs:145-149` | `serve_credit_bit = deep && held && inflight==0` | Serve credit | `settle_epoch` and `SERVE_THRESHOLD_PASSES = 2`, `prod/attestation.rs:71,192` | V |
+| R16 | `sim/fingerprint.rs:145-149` | `serve_credit_bit = deep && held && inflight==0` | Serve credit | `settle_epoch` and `SERVE_THRESHOLD_PASSES = 2`, `prod/attestation.rs:71,192`. **UPDATE 2026-10-08 (`SO-D10e`):** `settle_epoch` is deleted; the fold is `settle_pair` (`prod/settlement_select.rs`) and `SERVE_THRESHOLD_PASSES = 2` is in `rust/shekyl-types/src/archival/settlement.rs` | V |
 | R17 | `sim/timing_cluster.rs:33`, `:171` | `JOIN_LAG_BLOCKS = SEB`; `verify_f4_slow_emitter(25, 1)` | Join lag; W−1 | `good_through` `prod/consensus_state.rs:85-102`; `MAX_CLAIM_AGE_W = 26` | V |
 | R18 | `sim/budget_throttle.rs:107-111` | `emis_frac` 1.0 / 0.012 | Emission share of the purse | Hand-copied from `shekyl-economics-sim` output; computable from `econ/emission_share.rs:33`, `econ/burn.rs:124` | V (literal) / I (source) |
 | R19 | `sim/failure_confirmation.rs:24-27`; `sim/clustering.rs:122-134,156-157,205-206`; `sim/cover.rs:336-337,912-915`; `sim/budget_throttle.rs:115` | L16 constants, baseline constants and endowments, 80/20 operators, `N_P` 17/79/154, knee 80/86 | Intra-sim copies of `baseline()` values and of registered-run outputs | Owner is `sim/scenarios.rs:2051-2197` and the doc tables. `sim/clustering.rs:114-117` claims "single-sourced" but retypes. | V |

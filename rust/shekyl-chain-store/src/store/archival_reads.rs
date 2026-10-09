@@ -37,6 +37,15 @@
 //! - **A13** [`budget_accruing`] — the open epoch's running staker inflow
 //!   (SI-23), the accrual's pre-image and the close's operand.
 //!
+//! Settlement's reads (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`):
+//!
+//! - **A14** [`settlement_row`] — what an epoch settled for a pair; absent
+//!   is "no draw issued, or not settled yet", never a miss.
+//! - **A15** [`issued_draws`] — one epoch's issued-draw index, whole, in
+//!   `(P, shard, h, j)` order.
+//! - **A16** [`issued_digest`] — the running digest that index is checked
+//!   against.
+//!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
 //! - **"No bond record" is a case**, not a `false`: every caller branches
@@ -80,17 +89,19 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
 use shekyl_store_codec::{BlobKind, CodecError};
-pub use shekyl_types::archival::{PassCount, ServedShard};
+pub use shekyl_types::archival::{
+    IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
-use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -109,6 +120,12 @@ const SIGMA_WORK: &str = "archival_sigma_work";
 const BUDGET: &str = "archival_budget";
 /// The `archival_budget_accruing` cell as faults name it.
 const BUDGET_ACCRUING: &str = "archival_budget_accruing";
+/// The `archival_settlement` cell as faults name it.
+const SETTLEMENT: &str = "archival_settlement";
+/// The `archival_issued_draw` cell as faults name it.
+const ISSUED_DRAW: &str = "archival_issued_draw";
+/// The `archival_issued_digest` cell as faults name it.
+const ISSUED_DIGEST: &str = "archival_issued_digest";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
 
@@ -394,6 +411,62 @@ pub(super) fn budget_accruing<T: ReadTables>(
         epoch.to_raw(),
         BUDGET_ACCRUING,
     )
+}
+
+/// **A14.** `archival_settlement[(persona, shard, epoch)]` — what the epoch
+/// settled for the pair. `None` is a pair no draw was issued to in that
+/// epoch, or an epoch not settled yet: never a miss. A row that does not
+/// decode — an outcome its own counts do not give among them — is SI-7.
+pub(super) fn settlement_row<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+) -> Result<Option<SettlementRow>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_SETTLEMENT,
+        SettlementKey::new(*persona, shard, epoch).key(),
+        SETTLEMENT,
+    )
+}
+
+/// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order: one
+/// range of `archival_issued_draw`. Empty for an epoch no draw was issued
+/// in. A row that does not decode is SI-7.
+pub(super) fn issued_draws<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Vec<IndexedDraw>, ReadFault> {
+    let table = txn.table(ARCHIVAL_ISSUED_DRAW)?;
+    let mut out = Vec::new();
+    for row in table.range(IssuedDrawKey::epoch(epoch))? {
+        let (key, value) = row?;
+        let key = IssuedDrawKey::from_key(key.value());
+        let state = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(ISSUED_DRAW, cause))?;
+        out.push(IndexedDraw {
+            persona: *key.persona(),
+            shard: key.shard(),
+            issuing_height: key.issuing_height(),
+            draw: key.draw(),
+            state,
+        });
+    }
+    Ok(out)
+}
+
+/// **A16.** `archival_issued_digest[epoch]` — the running digest of the
+/// draws issued in `epoch`. An epoch with no row has had no draw folded,
+/// which is [`IssuedDigest::ZERO`]: the digest of no draws, not a hole.
+pub(super) fn issued_digest<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<IssuedDigest, ReadFault> {
+    chain_reads::cell(txn, ARCHIVAL_ISSUED_DIGEST, epoch.to_raw(), ISSUED_DIGEST)
+        .map(Option::unwrap_or_default)
 }
 
 /// The nine table-backed families of the archival snapshot

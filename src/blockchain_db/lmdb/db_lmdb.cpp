@@ -6614,103 +6614,11 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
   mdb_cursor_close(cur);
 }
 
-// PC-D4/§5.2: this table keys with `ArchivalPairEpochKey`, not
-// `ArchivalServeCreditKey`. SO-D2 ruled the two byte-identical so one key could
-// probe both tables; PC-D4 widened the serve-credit key to 56 B and the
-// settlement table stayed per-pair-epoch, so that rationale is RETIRED rather
-// than broken -- the tables answer at different granularities, evidence per
-// challenge and verdict per pair-epoch.
-//
-// Left borrowing the widened key, these rows would be written at 56 B and the
-// revert's size guard would then throw FATAL on every 48-byte row already in
-// the table: a silent-until-catastrophic coupling between two tables that only
-// ever shared a shape.
-void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch, uint32_t passes, uint32_t issued)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival settlement write requires active write txn");
-
-  // Rust owns the value: it folds (passes, issued) and emits the three bytes.
-  // C++ never composes an outcome byte, so a settlement whose outcome
-  // contradicts its counts is not a thing this side can express (SO-D2).
-  // Rule 40: the length is agreed at COMPILE time on both sides. The buffer is
-  // declared from the shared constant, and the assertion below is the one that
-  // fails if Rust's SETTLEMENT_ROW_LEN ever moves -- a build error, where the
-  // old runtime length query could only have thrown after the mismatched
-  // buffer was already compiled in.
-  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES> row{};
-  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
-    "settlement row is outcome||passes||issued (SO-D2); Rust pins the same 3");
-
-  const uint8_t rc = shekyl_archival_settlement_row(passes, issued, row.data());
-  if (rc != 0)
-    throw std::runtime_error("FATAL: settlement fold refused (P, shard, E) counts; code "
-      + std::to_string(static_cast<unsigned>(rc)));
-
-  shekyl::db::ArchivalPairEpochKey key(
-    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v{ row.size(), row.data() };
-  const int result = mdb_put(*m_write_txn, m_archival_settlement, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to write archival_settlement row: ", result).c_str()));
-}
-
-bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch,
-  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  shekyl::db::ArchivalPairEpochKey key(
-    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v;
-  // Same read helper the serve-credit bit uses -- this table has no dedicated
-  // cursor member, and adding one would be plumbing for a reader that does a
-  // single point lookup.
-  const int result = archival_db_get(m_archival_settlement, &k, &v);
-  if (result == MDB_NOTFOUND)
-    return false;
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to read archival_settlement row: ", result).c_str()));
-  if (v.mv_size != out_row.size())
-    throw std::runtime_error("FATAL: archival_settlement value size mismatch");
-
-  std::memcpy(out_row.data(), v.mv_data, out_row.size());
-
-  // SO-D2: the stored outcome must be the one its counts derive, and a
-  // zero-issued row is not a settlement (SO-D1). The write path cannot emit
-  // either, so reaching one here is corruption -- but "cannot be written" is
-  // only half an invariant while the reader has no way to ASK. C++ does not
-  // re-fold the counts itself (rule 36: Rust owns the value); it hands the
-  // bytes back to the same decoder that refuses them on the write side.
-  //
-  // Coverage boundary, stated because it is not what it looks like: the
-  // VALIDATOR is directly tested (`a_corrupt_row_is_refused_on_read` drives
-  // every refusal through the FFI), but this CALL SITE is a corruption
-  // tripwire with no red-side test -- `set_archival_settlement` cannot write a
-  // row that fails it, so the state is not constructible through any
-  // accessible interface, and deleting this call fails nothing. A test-only
-  // raw writer would add a way to STORE invalid rows in order to prove invalid
-  // rows are rejected; the honest note is the better trade. Same category as
-  // the `mv_size` FATAL checks throughout this file.
-  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
-    "the validate call names all three bytes; a width change must break this");
-  const uint8_t row_rc =
-    shekyl_archival_settlement_row_validate(out_row[0], out_row[1], out_row[2]);
-  if (row_rc != 0)
-    throw std::runtime_error(
-      "FATAL: stored archival_settlement row is not a canonical settlement; code "
-      + std::to_string(static_cast<unsigned>(row_rc)));
-  return true;
-}
-
+// The table keys with `ArchivalPairEpochKey` (48 B), not the 56-byte
+// `ArchivalServeCreditKey`: the two tables answer at different granularities,
+// evidence per challenge and verdict per pair-epoch (PC-D4, §5.2). Nothing in
+// this store writes or reads a row (SO-D10e); the revert and the prune below
+// are what remain until DEL-008.
 void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_epoch)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -6870,11 +6778,9 @@ void BlockchainLMDB::delete_archival_attestation_witness_before_height(uint64_t 
 // reason (SO-D2's key puts the epoch LAST so a pair's epochs range-scan in
 // order, which costs a full-table walk here).
 //
-// Without this the table was the ONE epoch-scoped archival table the shared
-// prune did not visit, so its rows would have accumulated for the life of the
-// chain the moment the writer went live. It is latent today only because
-// set_archival_settlement has no production caller yet -- which is exactly
-// the kind of "not reachable, so not wrong" that stops being true silently.
+// The shared prune visits every epoch-scoped archival table, this one
+// included. Nothing in this store writes a row here (SO-D10e), so the walk
+// is over an empty table until DEL-008.
 void BlockchainLMDB::delete_archival_settlement_before_epoch(uint64_t prune_below_epoch)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);

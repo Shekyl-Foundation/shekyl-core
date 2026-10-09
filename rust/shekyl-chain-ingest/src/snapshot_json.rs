@@ -18,10 +18,17 @@
 //! and beside them the inputs the Rust side must reproduce — personas and
 //! their seeded records, the serve passes, the schedule, the chain's shape
 //! and the asserted waypoints — named rather than left as whatever the C++
-//! fixture happened to pass. The consumer is `archival_fixture_replica_tests`,
-//! which rebuilds that state through the production stack and compares it
-//! through a role map; the test at the foot of this file is what holds the
-//! pair readable and self-consistent on its own.
+//! fixture happened to pass. The test at the foot of this file holds the
+//! pair readable and self-consistent.
+//!
+//! **Nothing compares the pair with the Rust stack any more.** The replica
+//! that rebuilt the fixture's state through the production stack and held
+//! it against these rows was retired with the any-pass slash fold
+//! (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): the fixture is one slash
+//! the C++ decided on the one-challenge beacon, the Rust slash pass
+//! decides on settlement rows, and keeping the old fold alive to feed the
+//! comparison was the wrong trade. The pair stays as the capture's record
+//! and goes with the capture tooling (`DEL-008`).
 //!
 //! The shape is deliberately dumb: family name, then rows as hex `key` /
 //! `value` pairs in the family's key order. Nothing here interprets a row.
@@ -307,9 +314,8 @@ mod tests {
     /// facts the inputs name: the serve passes are the credit rows, the
     /// slash lands at the slash epoch's deadline on the named persona, the
     /// watermark is that epoch, and the accruing row is the tip's open
-    /// epoch. The comparison against the Rust writer is
-    /// `archival_fixture_replica_tests`'; this is what keeps the pair
-    /// honest without building anything.
+    /// epoch. Nothing compares the pair with the Rust writer (module
+    /// docs); this is what keeps it readable and self-consistent.
     #[test]
     fn the_committed_m_of_n_capture_reads_back_and_matches_its_inputs() {
         let rows = from_json(include_str!(

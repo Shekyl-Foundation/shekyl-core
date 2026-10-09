@@ -1,16 +1,18 @@
 # shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-tables = 38
+tables = 40
 [tables]
 alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
 archival_attestation_witness = #20 map<u64, shekyl::Blob<attestation_witness>>
 archival_bond = #21 map<[u8;32], shekyl::Coded<bond_record>>
 archival_budget = #26 map<u64, shekyl::Coded<atomic_units>>
 archival_budget_accruing = #27 map<u64, shekyl::Coded<atomic_units>>
+archival_issued_digest = #39 map<u64, shekyl::Coded<issued_digest>>
+archival_issued_draw = #38 map<(u64,[u8;32],u64,u64,u32), shekyl::Coded<issued_draw>>
 archival_r_market = #24 map<(u64,u64), shekyl::Coded<r_market>>
 archival_serve_credit = #18 map<([u8;32],u64,u64,u64), shekyl::Present>
-archival_settlement = #19 map<&[u8], shekyl::Unshaped>
+archival_settlement = #19 map<([u8;32],u64,u64), shekyl::Coded<settlement_row>>
 archival_sigma_work = #25 map<u64, shekyl::Coded<sigma_work_milli>>
 archival_slash_applied = #22 map<([u8;32],u64,u64), shekyl::Present>
 archival_slash_log = #23 map<(u64,u32), shekyl::Coded<slash_log_entry>>

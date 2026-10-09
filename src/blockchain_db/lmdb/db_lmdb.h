@@ -669,19 +669,11 @@ public:
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
 
-  // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
+  // ─── Settlement outcomes (SO-D6 revert and prune; SO-D10e) ──────────────
   //
-  // Public so the table's KATs can drive the path directly (same reason
-  // apply_archival_slash_one is). Overrides of BlockchainDB; contract text
-  // lives on the base declarations. LMDB-specific: SO-D2 puts the epoch last,
-  // so both deletes are full-table scans.
-
-  void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override;
-
-  bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch,
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const override;
+  // Overrides of BlockchainDB; contract text lives on the base declarations.
+  // LMDB-specific: SO-D2 puts the epoch last, so both deletes are full-table
+  // scans.
 
   /// A full-table scan filtering the epoch field, because SO-D2's key puts the
   /// epoch LAST so the outer-window walk can range-scan a pair's epochs in

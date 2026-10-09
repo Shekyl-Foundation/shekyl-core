@@ -138,6 +138,23 @@ host are not candidates. A pending `Keep` counts toward the outbound
 target. A pending `Confirm` or `Harvest` does not. The set is empty
 after the outcome, including failure before adopt.
 
+**The `Keep` count is the dialer's.** It is adopted `Keep` rows plus
+pending `Keep` attempts, per connector. It is not `Board::count`
+(`rust/shekyl-seam/src/registry.rs:175`), which counts every outbound
+row on the connector, a `Confirm` row included, and knows nothing of
+a pending attempt. Lowering the cap at runtime, today
+`release_outbound` from `set_max_out_peers` (`net_node.inl:3176`,
+defined at `:2240`), moves to the dialer and closes `Keep` rows only.
+A `Confirm` row is never what the cap closes.
+
+**Interim in-flight bound: one dial per connector (2026-10-08).** The
+fill is one dial per wake, so the interim needs no measurement. It is
+measured and raised on the Rust path after the cutover, into the
+register (`DAEMON_RELAY_PRIVACY.md` §97). Wargame: at boot, hidden
+sessions open one at a time. The node's own transactions are held
+(`NoOwnEdge`) only until the first hidden session, so originating does
+not wait for all 12.
+
 *Records-was: `connections_maker` (`net_node.inl:2134-2157`) branches
 on `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70,
 `cryptonote_config.h:200`). Below that share of the cap it tries white
@@ -208,19 +225,25 @@ The dialer does not wait on that turn. A slow strand cannot stall the
 next wake. Until `SessionAccepted` or `Confirmed`, the session may be
 up and the address is still gray.
 
-**The clock.** The only handshake clock is the transport gap from
-channel established to session established
-([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D3, and D11 item
-5). The connector arms it when the channel exists. `dial_channel`
-returns that channel with the gap already armed. Adopting later does
-not start another clock. Until D9 derives the per-connector value, the
-armed duration is `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` (5 s,
-`cryptonote_config.h:199`). The owner does not arm a second invoke
-timer. The gap firing is the connector's close. The owner holds that
-cause. It does not call `shekyl_seam_session_cause`. That read is the
-post-handshake race in the known-defect section.
-*Records-was: the 5 s invoke was described as having no
-outbound-handshake role.*
+**The clock (Rick, 2026-10-08).** The outbound handshake's only clock
+is each connector's transport gap, from channel established to session
+established ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D3, and
+D11 item 5), armed by the connector with D9's values: clearnet 1.430 s
+and Tor 2.6 s, set today in `transport_spans` (`net_node.inl:3527`,
+`:3529`) and labelled `CppPath` in `DAEMON_RELAY_PRIVACY.md` §97. The
+connector arms it when the channel exists. `dial_channel` returns that
+channel with the gap already armed. Adopting later does not start
+another clock. The 5 s Levin invoke timer
+(`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, armed at `net_node.inl:1414`)
+is not the dialer's clock. Its outbound arm goes with
+`do_handshake_with_peer` at the cutover. The owner does not arm a
+second invoke timer. The gap firing is the connector's close. The
+owner holds that cause. It does not call `shekyl_seam_session_cause`.
+That read is the post-handshake race in the known-defect section.
+*Records-was: the armed duration was the 5 s invoke timeout until D9
+derived the per-connector value; D9 had already derived it. Before
+that, the 5 s invoke was described as having no outbound-handshake
+role.*
 
 Test: no frame after the handshake reaches the strand before that
 handshake result. With a refused payload, the relay registry never
@@ -458,6 +481,59 @@ This slice replaces where the predicate comes from.
 
 ---
 
+## What the C++ still calls into the peerlist, until slice 4
+
+After the cutover these are the only C++ calls into the Rust peerlist,
+and nothing else. Each is a call into Rust. None returns list state for
+the C++ to hold.
+
+- `admit_gray`, called on a received peerlist (`handle_remote_peerlist`,
+  `net_node.inl:2448`), on an inbound advertisement (`:2831`, today
+  `append_with_peer_gray`), and for `--add-peer` (`:1098`, today
+  `append_operator_candidate`).
+- `disclose`, called for the inbound handshake response and the
+  timed-sync response.
+- `shekyl_dial_take_handshake_nonce`, the inbound `detect_self_handshake`
+  reading the dialer's `HandshakeNonceSet` (the deletion table).
+
+A fourth call is a finding, not a convenience. Slice 4 moves the
+inbound handshake and timed sync, and these three go with it.
+
+## Measured after the cutover, on the Rust path
+
+Dial pacing, the handshake gap per connector (D9), and the in-flight
+bound are measured after the cutover, on the Rust dialer, into the
+register (`DAEMON_RELAY_PRIVACY.md` §97, Ruling B). Then the white
+floor, the refill line and the per-source gray share are re-derived
+from those readings. No derivation and no measurement gates the
+cutover PR; a number taken with the C++ dial path in front would be
+thrown away.
+
+## What else the cutover moves to Rust
+
+Values Rust reads through C++ move to Rust in the cutover, so
+retuning them no longer means editing C++. Each move removes the C++
+lines; it does not add a second copy.
+
+- `transport_spans` (`net_node.inl:3504`, declared `net_node.h:776`;
+  the D9 deadlines, the send-queue cap, the shutdown wait, the thread
+  budget) moves into `shekyl-transport-layer`. The three C++ call
+  sites (`:967`, `:1127`, `:1158`) go with it.
+- The hidden outbound cap assignment (`net_node.inl:984` to `:985`,
+  `shekyl_relay_zone_min_provisioned_out_peers` into
+  `max_out_connection_count`) and `set_max_out_peers`'s floor check
+  (`:2957`; the refusal of a positive cap below
+  `shekyl_relay_zone_min_provisioned_out_peers`, the F-8b floor) move
+  to the dialer, which owns outbound targets. A cap of 0 stays legal
+  there.
+
+| What | Where, at `98fbd20acb` | `rg` when it has landed |
+| --- | --- | --- |
+| `transport_spans` | definition `net_node.inl:3504`, declaration `net_node.h:776`, calls `:967`, `:1127`, `:1158` | `rg -n -e transport_spans src/p2p` returns nothing. Before the move that command hits all five sites |
+| The hidden cap assignment and the floor check | `net_node.inl:984` to `:985`; `set_max_out_peers` `:2957` | `rg -n -e shekyl_relay_zone_min_provisioned_out_peers src/p2p` returns nothing. Before the move it hits the assignment and the floor check |
+
+---
+
 ## What is deleted
 
 Each name is where it is on `dev` at `f317d979c4`. A deletion check
@@ -468,6 +544,41 @@ while the subject is still there (rule 47).
 Before the deletion, the same command must hit the sites named in the
 row. A before-run that matches nothing means the pattern is wrong, and
 the implementation PR stops.
+
+**The freeze (Ruling A, 2026-10-08).** Until the cutover deletes them,
+these functions do not change. The list is
+`scripts/ci/dial_path_freeze.tsv`, one row per function below plus the
+two dial calls inside `idle_worker`, and `scripts/ci/check_dial_path_freeze.py`
+compares each body with the base revision on every PR to `dev`: a
+change fails, a deletion passes, a row it cannot find at base fails.
+Deleted means gone: the row's witness identifier (its bare name, or
+`open_outcome` for `zone_server::open`, whose bare name is an ordinary
+word) matches nothing under `src/` at head outside comments and
+string literals, and the body does not survive under another
+signature. A definition moved out of `src/p2p` is still the dial path. **`net_node.inl`, `net_node.h` and
+`src/cryptonote_protocol/levin_notify.cpp` take deletions only (Rick,
+2026-10-09):** a change may add no code lines to them. A comment-only
+addition is free; an edited line, or logic swapped for a call into
+Rust, is an added code line, so each PR that moves something to Rust
+carries one dated `UNFREEZE` line naming the file. *Records-was,
+2026-10-08: the two p2p files were shrink-only, which an in-place edit
+passed.* This table cites that file so the two cannot drift. The one
+exception is a line in this brief, new in the PR, of exactly this
+form, naming the row's full anchor or the file path:
+`**UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>`.
+Nothing looser is read. **Scope (Rick, 2026-10-09):** a line naming a
+function covers that function's row and nothing else. Editing a frozen
+function inside one of these files takes two lines, one naming the
+anchor and one naming the file, because the two rules guard two
+different things. At the cutover the same list is the deletion gate:
+every body and calls row's function is absent, and the cutover PR
+removes those rows. A shrink row is retired only when its file is
+deleted, and deleted means gone: `git diff --name-status -M` over the
+tree reports no rename or copy from the path, and no file under
+`src/` at head holds half or more of the file's distinct code lines.
+`net_node.inl` outlives the dial path, since slice 4 and RD still edit
+it, and `levin_notify.cpp` is RD's. *Records-was: the cutover PR
+empties the file.*
 
 `do_handshake_with_peer` is the outbound invoke. Its callers are the
 two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`
@@ -488,7 +599,7 @@ keep the callers named below.
 | `m_conn_fails_cache`, `record_addr_failed`, `record_addr_success` | cache `net_node.h:788`; `record_addr_failed` `:1763`; `record_addr_success` `:1776` | `rg -n -e m_conn_fails_cache -e record_addr_failed -e record_addr_success src/p2p` returns nothing |
 | The dial path in `idle_worker` | `idle_worker` is `:2303`. The fill call is `:2306`. The gray-probe call is `:2307` | `rg -n -e connections_maker -e gray_peerlist_housekeeping src/p2p` returns nothing. `idle_worker` itself stays until its other gates move |
 | `gray_peerlist_housekeeping` and its interval | function `:3336`, declaration `net_node.h:713`, interval `:756`. The comment at `net_node.inl:1091` names the function and goes with it | `rg -n -e gray_peerlist_housekeeping -e m_gray_peerlist_housekeeping_interval src/p2p` returns nothing. Before deletion that command hits the declaration, the interval, the `idle_worker` call, the definition, and that comment |
-| `zone_server::open` | `zone_server.h:382` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing |
+| `zone_server::open` and its `open_outcome` result type | `zone_server.h:382`; `struct open_outcome` at `:376` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing, and `rg -n -w open_outcome src/p2p` returns nothing: the struct is the freeze row's witness and goes with the function |
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
@@ -532,10 +643,14 @@ process.
 managed Tor process was not sized for, and a way to stall every other
 dial behind one SOCKS exchange. Many simultaneous clearnet dials pin
 the dialer's tasks and the peers' handshake slots the same way. Each
-connector has its own in-flight bound, owned by this slice. Both
-numbers are measured before the implementation PR names them. This
-brief picks neither. The fill's one-dial-per-wake is the schedule,
-not that bound.
+connector has its own in-flight bound, owned by this slice. The
+interim is one dial per connector (the fill section). It is measured
+and raised on the Rust path after the cutover, not before it: a bound
+measured with the C++ dial path in front is a `CppPath` reading
+(`DAEMON_RELAY_PRIVACY.md` §97) and nothing is derived from it.
+*Records-was: both numbers are measured before the implementation PR
+names them.* The fill's one-dial-per-wake is the schedule, not that
+bound.
 
 **Full-pool capture.** The chance an attacker holds every hidden
 session is `p_h^h`. `p_h` is the onion-candidate spy share, as §95

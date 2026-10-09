@@ -223,7 +223,17 @@ use super::{Canonical, CodecError};
 ///   not compute, and would halt at its first skeleton rebuild as
 ///   corruption; the bump refuses it at open with the true reason. LMDB
 ///   took `VERSION` 15 → 16 with the same change, for the same reason.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(21);
+/// - `22` — the settlement writer's tables (`ARCHIVAL_SETTLEMENT_WRITER.md`
+///   §14, `SO-D10`). `archival_settlement` leaves `Unshaped` for
+///   `([u8; 32], u64, u64) → settlement_row` and is sealed from here on;
+///   `archival_issued_draw` (`(u64, [u8; 32], u64, u64, u32) →
+///   issued_draw`) and `archival_issued_digest` (`u64 → issued_digest`) are
+///   born Rust-only, appended at ordinals 38 and 39 so no existing ordinal
+///   moves. A `21` file lacks all three, and `header::verify` would refuse
+///   it as a sealed file missing a table (SI-7); the bump refuses it at
+///   open with the true reason. No snapshot family moves: none of the
+///   three has a C++ counterpart to compare.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(22);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -280,10 +290,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(21));
-        assert_eq!(SCHEMA_VERSION.encode(), [21, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(22));
+        assert_eq!(SCHEMA_VERSION.encode(), [22, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[21, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[22, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

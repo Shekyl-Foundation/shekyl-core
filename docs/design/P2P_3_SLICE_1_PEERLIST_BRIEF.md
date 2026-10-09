@@ -5,8 +5,13 @@ The interim composition is the dialer brief's. Per connector,
 `disclose_count` is that connector's outbound target and
 `white_diversity_floor` is `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4)
 times that count. The list writer is `apply(DialOutcome)`. The
-derivation of the floor is still owed.
-*Records-was: REVISED 2026-09-25 (connector partition; white target is
+derivation of the floor runs on the Rust path after the slice 3
+cutover (Ruling B, 2026-10-08); it does not gate this slice's crate
+increments. Until then the floor, the refill line and the per-source
+gray share are named interim constants, labelled `Assumption` in
+`DAEMON_RELAY_PRIVACY.md` §97.
+*Records-was: "the derivation of the floor is still owed", and before
+that REVISED 2026-09-25 (connector partition; white target is
 diversity), and the 2026-10-08 working values used outbound degree 16.*
 Lists are partitioned
 by connector, derived from the address type. Gray is drawn when white falls
@@ -136,14 +141,22 @@ the same day: outbound degree 16, `disclose(n)` with `n = 16`, floor
 about 64. Sixteen was the withdrawn §95.2 illustration.* The
 operating point (`DAEMON_RELAY_PRIVACY.md` §95) is still unchosen.
 When it is ruled, `disclose_count` and the floor move with that
-connector's target. The derivation this slice still owes: the white
-floor and the refill line, from draw diversity and the candidate
-filters; `disclose_count`, from intake diversity, honest fill, and
-per-reply exposure. The multiple 4 is the interim stand-in for that
-floor, not the derivation. The refill line stays above the floor. The
-gap is headroom. Refill starts when white crosses the refill line,
-while it is still above the floor, so the node is not probing stale
-gray entries in the moment connectivity has already collapsed.
+connector's target. **The derivation is not a gate before the cutover
+(Ruling B, 2026-10-08).** The white floor, the refill line and the
+per-source gray share ship as named interim constants, each labelled
+`Assumption` in the register (`DAEMON_RELAY_PRIVACY.md` §97). They are
+derived on the Rust path after the slice 3 cutover: the list's
+behaviour includes dial timing, and dial timing is C++ until then, so
+a derivation made now would rest on a `CppPath` reading. What that
+derivation owes, when it runs: the white floor and the refill line,
+from draw diversity and the candidate filters; `disclose_count`, from
+intake diversity, honest fill, and per-reply exposure. The multiple 4
+is the interim stand-in for that floor, not the derivation.
+*Records-was: "the derivation this slice still owes", read as owed
+before the cutover.* The refill line stays above the floor. The gap is
+headroom. Refill starts when white crosses the refill line, while it
+is still above the floor, so the node is not probing stale gray
+entries in the moment connectivity has already collapsed.
 
 **The refill trigger is the refill line, plus one deadline for quiet decline.**
 If white is already below the refill line, including empty after boot
@@ -294,10 +307,11 @@ answers are the join.
 **Receiver limits, every connector.** A message with more than
 `disclose_count` addresses is a violation. It is not trimmed and kept.
 Gray also has a per-source share limit, so one sender cannot fill the
-list. The share is part of the derivation of `disclose_count` still
-owed above: intake
-diversity, honest fill, and per-reply exposure. No share number is
-set here.
+list. The share is part of the derivation of `disclose_count` above,
+which runs on the Rust path after the cutover: intake diversity, honest
+fill, and per-reply exposure. Until then the share ships as a named
+interim constant, labelled `Assumption` in the register. The crate PR
+names it; this brief does not pick the number.
 
 **Wargame: fresh samples enumerate white.** A requester who is
 answered with a new uniform draw each time unions the answers and
@@ -528,8 +542,9 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
 - No connection object. Slice 5. Expiry and the clock do not wait for it.
 - The gray cap 5000 and the white cap 1000 are not re-derived. No
   `--in-peers` number, no refusal-window number. The interim `n` and
-  the per-source gray share are intake limits, and the share's number
-  is still the derivation.
+  the per-source gray share are intake limits; both ship as named
+  interim constants, and their derivation runs on the Rust path after
+  the cutover (§97's register carries them as `Assumption`).
 - The failure cache stays where it is. It may cause the dialer to skip an
   address `draw_gray` returned. It does not write white.
 - Disclosure is that connector's cached sample of white, with no clock

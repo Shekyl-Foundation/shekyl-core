@@ -121,7 +121,7 @@ pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity,
-    PoolCannot, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{

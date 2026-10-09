@@ -20,8 +20,8 @@ use core::convert::Infallible;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, PaidEmission,
-    RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
+    form, validate, AtHeight, Candidate, ChainValid, ChainView, Corrupt, Fault, FormAttempt,
+    PaidEmission, RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -243,6 +243,20 @@ pub(super) fn judge_under<'b, 'id>(
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    match judge_or_corrupt(view, candidate, rules)? {
+        Ok(valid) => Ok(valid),
+        Err(corrupt) => panic!("fixture view is corrupt: {corrupt}"),
+    }
+}
+
+/// [`judge_under`] for a fixture that built the corrupt state on purpose:
+/// the validator's [`Corrupt`] comes back as a value, for the test to hand
+/// to `refuse_corrupt` as the ingest would.
+pub(super) fn judge_or_corrupt<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
     let candidate = priced(view, candidate)?;
     match validate(
         formed_under(view, candidate, rules)?,
@@ -250,10 +264,10 @@ pub(super) fn judge_under<'b, 'id>(
         rules,
         &Trust::UNANCHORED,
     ) {
-        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+        Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
-        Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
+        Err(Fault::Corrupt(corrupt)) => Ok(Err(corrupt)),
     }
 }
 
