@@ -174,7 +174,8 @@ leg:
 
 - **The same OS user as the daemon:** an owner-only socket on Unix, an
   owner-only named pipe on Windows — authenticated by OS identity, carrying
-  the owner's full grant, with no keys to provision. This is R0 §1.1's
+  the owner's full grant (every grant, and as the host's administrator the
+  host-only classes of §6.1), with no keys to provision. This is R0 §1.1's
   ratified end-state transport for the daemon, and it covers the default
   install: the GUI running `shekyld` as its child, same user, same session.
 - **Anyone else** — a service-mode daemon's callers (RT-16), another user,
@@ -418,6 +419,8 @@ internals); the log may be specific.
 | Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enrol." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
 | Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node you enrolled with. Do not connect; check the address." No retry | Nothing — a daemon with a different key never sends message 2 |
 | Requested grant exceeds the ceiling | Yes — message 4 carries the grant | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
+| A call for host-only data or an armed test lever from an enrolled key, whatever its ceiling | Yes | "METHOD is served only on the node's own computer, to its administrator." | — |
+| A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
 | Handshake deadline expired | Yes | "The node did not complete the handshake in time." | Timeout, with the stage reached |
 | The other run mode's daemon is answering at the address (two daemons, two bundles) | No — reads as the first row | As the first row | Prevented, not diagnosed: the two modes refuse to run side by side (RT-16) |
@@ -460,14 +463,25 @@ R0 RT-7 stands: generated material only, never typed from memory.
   proposed `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and
   `shekyld rpc-revoke FINGERPRINT`. No CA, no issuance key (R0 RT-4's
   argument carries over).
+- **Who may enrol, and how far (RULED, R1).** Enrolment is the `enrol`
+  grant, carried by the `admin` preset only. **An enrolled ceiling can
+  never exceed the enroller's own effective grant** — otherwise every
+  boundary in §6.1 is one enrol call from `admin`. The same bound applies
+  to raising an existing ceiling.
+- **Who may revoke** (proposed). A key may revoke only enrolments whose
+  ceiling lies within its own effective grant. Otherwise a narrow `enrol`
+  holder could revoke the operator's admin keys — a denial of service
+  through the boundary R1 just drew.
 - **Who needs a key.** Same-user callers need none (RT-15). Keys exist for
   callers of a service-mode daemon, other users, other machines, and the
   tunnel.
 - **Bootstrap — the console key** (proposed; service mode). Enrolment runs
   over the channel, so for a service-mode daemon something must be enrolled
   before anything can enrol. On first start the service generates its own
-  bundle and a **console key**, enrols the console key with an admin
-  ceiling, and writes the console key's private half to a file readable only
+  bundle and a **console key**, records it as the **host administrator's
+  credential** — not an enrolment with a ceiling: it carries every grant
+  and the two host-only classes of §6.1, which no enrolled key can — and
+  writes the console key's private half to a file readable only
   by the service account and administrators. `shekyld <command>` run by an
   administrator uses it. Placing that file uses an OS ACL once, at creation;
   it is not a per-call authentication path. A run-as-me daemon needs no
@@ -503,8 +517,13 @@ R0 RT-7 stands: generated material only, never typed from memory.
 ### 6.1 Grants
 
 **Direction (decision authority, 2026-10-08): named grants, with node
-status split out of every view.** The assignment below is proposed
-(RT-O9).
+status split out of every view.** Four rulings of the same date shape the
+table and are marked **RULED** where they apply: enrolment is its own grant
+(R1), test levers belong to no grant (R2), anonymity data is host-only and
+not a grant (R3), and cost is a resource policy separate from grants (R4,
+§6.3). Granular grants are the rule: presets bundle grants to make
+administration easy, but permissions coupled in one grant are hard to
+separate later. The rest of the assignment is proposed (RT-O9).
 
 A grant is a **set of facts or actions**, not a list of methods. Most
 methods fall whole into one grant. `get_info` does not: it mixes facts
@@ -525,16 +544,48 @@ network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods, `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, emission and economics fields) |
-| `pool` | The relayed pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size. Entries not yet relayed are **not** in this grant (`node`) |
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, R4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, R4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, emission and economics fields) |
+| `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, R3) |
 | `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, the RPC and protocol contract versions, nettype |
 | `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
 | `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
 | `submit` | `/submit_transaction` |
-| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block` |
+| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, R4) |
 | `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
 | `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Everything that controls or exposes the node itself: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, pool entries not yet relayed, `/get_stem_tallies`, `calc_pow`, `get_coinbase_tx_sum`, `request_archival_shard`, `generateblocks`, `inject_archival_serve_credit`, and enrolment (`rpc-enrol`, `rpc-revoke`) |
+| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard` |
+| `enrol` | `rpc-enrol`, `rpc-revoke` (R1). Carried by the `admin` preset only |
+
+**Two classes that are not grants.** Every route and method is in exactly
+one grant above or in exactly one of these; no ceiling, `admin` included,
+can contain either.
+
+- **Host-only data (RULED, R3).** `/get_stem_tallies` — per-successor relay
+  outcome counts, whose consumer is a human tuning `n_min`, `cut` and
+  `cooldown` (`handlers/json.rs:489-506`) — and **unrelayed pool
+  entries**: stem-phase and not-yet-broadcast transactions, including ones
+  this node originated. The pool's sensitivity flag is what reaches them
+  today: the pool listing, its hashes and its statistics
+  (`core_rpc_server.cpp:500-541`), `/get_transactions` by hash
+  (`handlers/json.rs:191-194`), and `get_info`'s pool size when it counts
+  them. These are served **only to the host's administrator**: the owner
+  leg (the same-user socket or pipe, RT-15) and the console key (service
+  mode, §5). **Never to an enrolled key, whatever its ceiling** — `admin`
+  over the channel does not include them. The daemon decides this from
+  which of its own credentials is asking, not from the network a request
+  arrived on. Reason: no remote job needs this data, and it is exactly what
+  Dandelion++ exists to hide.
+- **Armed test levers (R2 RULED; the arming is proposed).**
+  `generateblocks` and `inject_archival_serve_credit` are not production
+  capabilities. The regtest harnesses depend on `generateblocks`
+  (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
+  RT-W10 carries an **armed-and-pinned override** (rule 71): an explicit
+  start switch, logged at every start; when armed, the levers are served to
+  the host's administrator only. Never selected by nettype. *Today's defect,
+  recorded:* `inject_archival_serve_credit` is absent from
+  `RESTRICTED_METHODS`, so the restricted listener serves it, and its only
+  gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:944`) — the pattern
+  rule 71 forbids.
 
 *Why each `status` field is out of view.*
 
@@ -554,7 +605,7 @@ an explicit list of grants):
 | `view` | `chain` + `pool` + `health` |
 | `wallet` | `view` + `submit` |
 | `miner` | `view` + `mining-work` |
-| `admin` | every grant |
+| `admin` | every grant, `enrol` included — and **neither** non-grant class |
 
 **`status` and `peers` are in no preset but `admin`.** They are granted
 only when the operator names them, so publishing a node's uptime or its
@@ -571,9 +622,13 @@ preset it landed in. The plaintext loopback listener is fixed at `view`
 - **`/get_limit` and `/get_net_stats`** are placed in `status`: this
   node's rate limits and traffic totals. `/get_limit` is on both
   listeners today.
-- **`/get_stem_tallies` stays in `node`, not `peers`.** It is the
-  anonymity graph (today admin-only for that reason); a consumer granted
-  `peers` to count connections must not receive it.
+- **`/get_stem_tallies` and unrelayed pool entries leave the grant model**
+  for the host-only class (R3). Today any caller of the unrestricted
+  listener receives them.
+- **`get_coinbase_tx_sum` and `calc_pow` stop being admin-only** (R4): they
+  were restricted for their cost, which §6.3 now bounds directly.
+- **The test levers are in no grant** (R2); `generateblocks` is admin-only
+  today and `inject_archival_serve_credit` is served on both listeners.
 - **`get_info.restricted` is retired.** The connection's grant is returned
   in the handshake (§6.2); a boolean cannot describe it.
 
@@ -623,6 +678,31 @@ The `restricted: bool` that today threads through `AppState`, the router,
 and the method handlers becomes the connection's grant; the two gate tests
 (`server.rs:787`, `json_rpc.rs`
 `admin_methods_are_refused_only_on_the_restricted_listener`) re-key to it.
+
+### 6.3 Resource policy (RULED, R4 — independent of §6.1)
+
+What a caller **may** ask for is its grant. How **much** work one request
+may cost is this policy. They are separate: today's restriction encodes
+both as authority, which is why an expensive public fact
+(`get_coinbase_tx_sum`) and a computation service (`calc_pow`) sat behind
+the admin listener.
+
+- **What is bounded:** the four batch caps
+  ([`methods.rs:512-527`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+  `RESTRICTED_BLOCK_COUNT`, `RESTRICTED_BLOCK_HEADER_RANGE`,
+  `RESTRICTED_TRANSACTIONS_COUNT`, `RESTRICTED_SPENT_KEY_IMAGES_COUNT`) and
+  the expensive computations — the number of headers a request may ask
+  `fill_pow_hash` for, `calc_pow`, and the span of `get_coinbase_tx_sum`.
+- **Who is bounded:** every connection except the host's administrator
+  (the owner leg and the console key), **whatever its grant**. An
+  `admin`-ceiling key over the channel is bounded like any other.
+- **The values are inherited** from the Monero lineage and are not
+  re-derived in this round (rule 16: inherited code is not inherited
+  architecture, and an inherited constant is not a derived one). *Named
+  reopen:* the floor-device measurement in RT-W10, beside RT-P6 — the caps
+  are then set from measured cost on the Pi 4, not guessed.
+- **A request over a bound is refused with the bound named**, never
+  silently truncated.
 
 ---
 
@@ -891,17 +971,22 @@ construction) instead of loopback TCP.
   Under RT-10 no supported posture uses it; deletion takes `rustls`'s
   native-certs path out of the wallet graph.
 - **RT-O9 — the grant table. Blocks RT-W10 until confirmed.** The form is
-  directed (2026-10-08): named grants, with `status` split from `health`
-  and held out of every preset but `admin`. What remains open is the
-  assignment in §6.1, in particular:
-  - the four changes from today's gate that §6.1 lists
-    (`/get_alt_blocks_hashes`, `/get_limit` and `/get_net_stats`,
-    `/get_stem_tallies`, `get_info.restricted`);
-  - whether `node` should stay one grant. It is every action that today
-    needs the admin listener and has no narrower home; splitting it further
-    has no consumer asking for it (rule 21);
+  directed and four rulings are recorded (2026-10-08, §6.1, §6.3): named
+  grants; `status` split from `health`; `enrol` its own grant; test levers
+  in no grant; anonymity data host-only; cost a separate resource policy.
+  What remains open is the rest of the assignment and the proposals that
+  follow from the rulings:
+  - the placements §6.1 lists as changes from today's gate that no ruling
+    covers: `/get_alt_blocks_hashes`, `/get_limit` and `/get_net_stats` in
+    `status`, and `get_info.restricted` retired;
+  - the revocation bound (§5) and the arming switch for the test levers
+    (§6.1), both proposed;
   - whether the incident's consumer is enrolled for `peers` to keep its
     seed-node count, or the count is dropped from the site;
+  - whether the wallet engine pages its requests within §6.3's batch
+    caps. Today those caps bind only the restricted listener, so the engine
+    has not met them on its usual connection; a remote wallet on the
+    channel will. Unverified;
   - `get_info` served field by field. It is the one method that spans
     grants, and it is settled by where it is built, not here: see the
     RK-5c prerequisite in §6.1.
@@ -986,6 +1071,14 @@ construction) instead of loopback TCP.
   pipe either (WP-D6).
 - **Running the daemon as SYSTEM or root.** Any parser defect becomes a
   whole-machine compromise (RT-16).
+- **An `anonymity` grant** holding the stem tallies and unrelayed pool
+  entries, for measurement tooling. A grant can be put in a ceiling and
+  used from another machine; no remote job needs this data, and it is what
+  Dandelion++ hides. It is host-only, not a grant (R3, §6.1).
+- **Enrolment inside `node`.** A `node` holder could enrol itself an
+  `admin` key and step around every other boundary (R1).
+- **Encoding cost as authority** — keeping `get_coinbase_tx_sum` and
+  `calc_pow` admin-only because they are expensive (R4, §6.3).
 - **A reload signal or editable file for the enrolled set.** A revocation
   that waits for a reload is a revocation that can be forgotten (§5).
 
@@ -997,7 +1090,7 @@ construction) instead of loopback TCP.
 |---|---|---|
 | RT-W8 | RT-P7 model; RT-O7 vectors and differential; registry rows; RT-P4 | ratification |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); deadline from RT-P6 | RT-W8 |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants; restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet` | RT-W9 |
 | RT-W13 | §11 sweep | lands with RT-W10 |
