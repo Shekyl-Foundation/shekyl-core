@@ -44,7 +44,6 @@ harness = [
     "dep:shekyl-archival-retention",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
-    "dep:shekyl-bulletproofs",
     "dep:shekyl-curve-generators",
     "dep:curve25519-dalek",
     "dep:zeroize",
@@ -112,7 +111,6 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = 
 # the driver. Optional here, enabled by `harness` alone.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
-shekyl-bulletproofs = { path = "../shekyl-bulletproofs", optional = true }
 shekyl-curve-generators = { path = "../shekyl-curve-generators", optional = true }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"], optional = true }
 zeroize = { workspace = true, optional = true }
@@ -154,10 +152,8 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # `TemplateContext` takes (rule 35).
 zeroize = { workspace = true }
 # The emission claim's assembly (`emission_assembly.rs`): the production
-# tx-builder signs it and the Bulletproof+ blob is read back for the
-# production wire encoder. Also behind `harness` above.
+# tx-builder signs it and `open_spend` encodes it. Also behind `harness` above.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
-shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # The emission scenarios verify a claim's proof through the consensus
 # verifier (`proof::verify`) against the wallet-side root.

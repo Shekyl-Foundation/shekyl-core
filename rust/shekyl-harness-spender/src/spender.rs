@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_chain_rules::newest_admissible_reference;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::{
@@ -22,17 +21,16 @@ use shekyl_curve_tree::{
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_tx_builder::{
-    encode_final_tx, phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput,
-    TreeContext, WireEncodeInput,
+    open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
+    InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
 };
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, parse, pqc_kem_per_output, pqc_leaf_entries_per_output, serialize,
     TxExtraField,
 };
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
 use crate::{MinedBlock, MinerWallet, Owner, Recipient};
@@ -426,14 +424,44 @@ impl Spender {
         fee: u64,
     ) -> (Transaction, Vec<BlockHeight>) {
         assert!(!heights.is_empty(), "a spend has an input");
-        let mut sourced: Vec<(BlockHeight, Sourced)> = heights
+        let pairs: Vec<(BlockHeight, Sourced)> = heights
             .iter()
             .map(|&height| (height, self.source_coinbase(wallet, height, connecting)))
             .collect();
-        sourced.sort_by(|a, b| b.1.key_image.as_bytes().cmp(a.1.key_image.as_bytes()));
-        let (heights, sourced): (Vec<BlockHeight>, Vec<Sourced>) = sourced.into_iter().unzip();
-        let tx = Self::spend_sourced(sourced, connecting, fee, None, wallet.recipient());
-        (tx, heights)
+        // `spend_sourced` is the one CEN-I5 sort. Heights come back from the
+        // encoded body's key images, so a sort here would have to stay
+        // identical to that one or the pairing would describe a different order.
+        let height_of: BTreeMap<KeyImage, BlockHeight> = pairs
+            .iter()
+            .map(|(height, source)| (source.key_image, *height))
+            .collect();
+        assert_eq!(
+            height_of.len(),
+            pairs.len(),
+            "each spent coinbase has its own key image"
+        );
+        let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
+        let tx = Self::spend_sourced(inputs, connecting, fee, None, wallet.recipient());
+        let spent_heights: Vec<BlockHeight> = tx
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::ToKey { key_image, .. } => Some(
+                    height_of
+                        .get(&KeyImage::from_bytes(*key_image))
+                        .copied()
+                        .expect("the body's key image is one of the spent coinbases"),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            spent_heights.len(),
+            height_of.len(),
+            "a coinbase spend lists only the spent coinbases"
+        );
+        (tx, spent_heights)
     }
 
     /// Block `height`'s coinbase sourced for the miner, for a spend
@@ -584,12 +612,10 @@ impl Spender {
             &tree,
         )
         .expect("sign the spend");
-        // The PQC auth signs `Transaction::pqc_signing_payload_hashes` — a
-        // hash over the assembled body with the public key in place (CEN-I17
-        // / I18) — so the body is encoded once with the key and an empty
-        // signature, hashed, signed, and encoded again with the signature.
-        // One revealed key per input, each derived from its own output's
-        // shared secret at its own index (the signer's derivation).
+        // One revealed key per spend input, each derived from its own
+        // output's shared secret at its own index (the signer's derivation).
+        // `open_spend` hashes these keys, signs the spend slots, and refuses
+        // a derived key that is not the key the payload covered (CEN-I17 / I18).
         let revealed_pks: Vec<Vec<u8>> = spend_inputs
             .iter()
             .map(|input| {
@@ -599,85 +625,48 @@ impl Spender {
                 derive_pqc_public_key(combined64, input.output_index).expect("hybrid pk")
             })
             .collect();
-        let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-            .expect("the signer's Bulletproof+ blob reads back");
-        let wire = |pqc_auths: Vec<shekyl_tx_builder::PqcAuth>| -> WireEncodeInput {
-            WireEncodeInput {
-                key_images: key_image_bytes.clone(),
-                extra_inputs: extra_inputs.clone(),
-                output_keys: output_keys.to_vec(),
-                output_amounts: vec![0, 0],
-                view_tags: view_tags.to_vec(),
-                tx_extra: extra.clone(),
-                fee,
-                enc_amounts: signed.enc_amounts.clone(),
-                enc_labels: signed.enc_labels.clone(),
-                out_commitments: signed.commitments.clone(),
-                pseudo_outs: signed.pseudo_outs.clone(),
-                bulletproof: bulletproof.clone(),
-                reference_block: signed.reference_block,
-                fcmp_proof: signed.fcmp_proof.clone(),
-                pqc_auths,
-                fcmp_layers: signed.tree_depth,
-            }
-        };
-        // Phase 1: every slot's key in place with an empty signature — the
-        // spend's revealed key, then the bond slot's — hashed per input.
-        let empty = |public_key: Vec<u8>| shekyl_tx_builder::PqcAuth {
-            auth_version: 1,
-            signature: Vec::new(),
-            public_key,
-        };
         let n_spend = spend_inputs.len();
-        let mut slots: Vec<shekyl_tx_builder::PqcAuth> =
-            revealed_pks.iter().cloned().map(empty).collect();
-        if let Some(b) = bond {
-            slots.push(empty(b.slot_pk.clone()));
-        }
-        let payloads = phase1_payload_hashes(&wire(slots)).expect("the unsigned body hashes");
-        assert_eq!(
-            payloads.len(),
-            n_spend + usize::from(bond.is_some()),
-            "one payload per input"
-        );
-        // Phase 2: the spends' slots through the production signer; the bond
-        // slot by the persona's key over its own payload (I17 / I18 hold
-        // each to its input's preimage).
-        let mut pqc_auths = sign_pqc_auths(&payloads[..n_spend], &spend_inputs).expect("PQC auths");
-        for (auth, pk) in pqc_auths.iter().zip(&revealed_pks) {
-            assert_eq!(&auth.public_key, pk, "the key the payload bound");
-        }
-        if let Some(b) = bond {
-            pqc_auths.push(shekyl_tx_builder::PqcAuth {
-                auth_version: 1,
-                signature: b.sign_slot(&payloads[n_spend]),
-                public_key: b.slot_pk.clone(),
-            });
-        }
-        let bytes =
-            encode_final_tx(&wire(pqc_auths)).expect("the production encoder emits the spend");
+        let open = open_spend(
+            signed,
+            &spend_inputs,
+            SpendLayout {
+                key_images: key_image_bytes,
+                extra_inputs,
+                output_keys: output_keys.to_vec(),
+                output_amounts: vec![0; output_keys.len()],
+                view_tags: view_tags.to_vec(),
+                tx_extra: extra,
+                fee,
+                slots: AuthSlots {
+                    spend: revealed_pks.clone(),
+                    extra: bond.map(|b| vec![b.slot_pk.clone()]).unwrap_or_default(),
+                },
+            },
+        )
+        .expect("the spend opens");
 
         // Self-check through the consensus verifier against the wallet-side
         // root at the reference height — CEN-I15's exact operation — so the
         // object handed to the caller is known sound before any rule judges
         // it. A test then holds this root equal to the store's at the same
         // height (`Spender::root_at` vs `RootAt`), which is what makes the
-        // proof valid against the header the block will carry.
+        // proof valid against the header the block will carry. `layers` is
+        // the prover's layer count `L`; the verifier takes that same `L`.
         let pqc_scalars: Vec<PqcKeyScalar> = revealed_pks
             .iter()
             .map(|pk| PqcKeyScalar::from_pqc_public_key(pk))
             .collect();
         let verified = proof::verify(
             &ShekylFcmpProof {
-                data: signed.fcmp_proof.clone(),
+                data: open.fcmp_proof().to_vec(),
                 num_inputs: u32::try_from(n_spend).expect("under the prover's cap"),
-                tree_depth: signed.tree_depth,
+                tree_depth: open.layers(),
             },
             &key_images,
-            &signed.pseudo_outs,
+            open.pseudo_outs(),
             &pqc_scalars,
             tree.tree_root.as_bytes(),
-            signed.tree_depth,
+            open.layers(),
             tx_prefix_hash.to_bytes(),
         )
         .expect("verify runs");
@@ -685,6 +674,20 @@ impl Spender {
             verified,
             "the spend verifies against the wallet-side root at the reference height"
         );
+        // The bond slot, when present, is signed by the persona's key over
+        // its own payload. A plain spend seals with no extra signature.
+        let extra_signatures = match bond {
+            Some(posted) => {
+                let payload = open
+                    .sole_extra_payload()
+                    .expect("the bond slot has a payload");
+                vec![posted.sign_slot(payload)]
+            }
+            None => Vec::new(),
+        };
+        let bytes = open
+            .encode(extra_signatures)
+            .expect("the production encoder emits the spend");
         Transaction::from_bytes(&bytes).expect("the encoder's bytes parse as a transaction")
     }
 }

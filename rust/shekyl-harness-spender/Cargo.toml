@@ -37,16 +37,14 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # `compute_output_key_image`), `construct_output` for the paid outputs,
 # the archival persona keys, and the hybrid signature for the bond slot.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# The production signer (`sign_transaction_with_terms`, `sign_pqc_auths`)
-# and wire encoder (`encode_final_tx`).
+# The production signer (`sign_transaction_with_terms`) and the shared
+# open-spend tail (`open_spend`).
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # The production bond-post constructors (`build_join_market_vin`,
 # `build_release_vin`, `bond_post_input`) a `Persona` posts through, and
 # the retention crate's vin and holdings types they are built over.
 shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# The signer's Bulletproof+ blob is read back for the wire encoder.
-shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 # `Hp(O)` for the key image.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # The spend self-verifies through the consensus verifier against the

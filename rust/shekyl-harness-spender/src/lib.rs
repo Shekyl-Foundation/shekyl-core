@@ -41,9 +41,9 @@
 //! What is real: the miner's keys and the coinbase that paid them (`0x06`
 //! KEM ciphertext, `0x07` leaf entry), recovered by the production scanner
 //! (`recover_combined_ss`, `scan_output`, `compute_output_key_image`); the
-//! path (`assemble_path`); the signature (`sign_transaction_with_terms`,
-//! `sign_pqc_auths`); the wire bytes (`encode_final_tx`). Nothing is a
-//! filler point or a conforming blob.
+//! path (`assemble_path`); the signature and the wire bytes (`open_spend`,
+//! over proofs from `sign_transaction_with_terms`). Nothing is a filler
+//! point or a conforming blob.
 //!
 //! A spend can pay a [`Recipient`] other than the miner — a persona's base
 //! address — and the tree can be told to watch ([`Spender::own`]) for
