@@ -47,8 +47,8 @@ use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LEN
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
-    at, batch_root_going_into, candidate, candidate_over, endow_genesis, judge_under,
-    root_going_into, serve_credit, Grown, Listed, FIRST_SPEND_HEIGHT,
+    at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
+    Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
@@ -283,7 +283,7 @@ impl Builder {
     /// stands; a body is anchored — a credit has no reference and is
     /// listed as given), so a caller lists entries and reads the bodies
     /// back through [`Self::listed`]. Genesis is endowed
-    /// ([`endow_genesis`]) so its coinbase is one a join can spend.
+    /// ([`super::connect_fixtures::endow_genesis`]) so its coinbase is one a join can spend.
     fn connect(
         &mut self,
         store: &ChainStore,
@@ -301,14 +301,8 @@ impl Builder {
                     "the chain connects in height order"
                 );
                 let txs = self.grown.realise(&listed(h));
-                let root = batch_root_going_into(&view, h)?;
-                let mut cand = candidate_over(root, h, self.grown.tip(), txs.clone());
-                if h == 0 {
-                    endow_genesis(&mut cand);
-                }
                 // The identity is the priced block's (`judge_under`).
-                let judged = judge_under(&view, cand, &self.rules)?;
-                self.grown.record(judged.block().block(), &txs);
+                let judged = self.grown.judge_listing(&view, &self.rules, &txs)?;
                 // A bare listing records no asked-for lengths;
                 // `connect_sized` overwrites them with the spec it built
                 // from.
@@ -807,7 +801,10 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
 
     let mut grown = Grown::new();
     let mut lens: Vec<Vec<u64>> = Vec::new();
-    let mut spends: Vec<Transaction> = Vec::new();
+    // Fee taken from the matured coinbase. Not a consensus figure:
+    // the chain only needs a fee that coinbase can pay.
+    const SPEND_FEE: u64 = 1_000;
+    let mut built_spends: Vec<Transaction> = Vec::new();
     let mut close: Option<u64> = None;
     let mut boundaries: Vec<(u64, Vec<u64>, u64)> = Vec::new();
     let started = Instant::now();
@@ -822,8 +819,11 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
             // closes; coinbase-only blocks from there to the second boundary
             // that names it.
             let mut txs = Vec::new();
+            // One `Spends` entry is `MAX_INPUTS` coinbases. Entries accrue
+            // until the measured archival length crosses `W`, which the
+            // loop cannot know before the body exists.
             while close.is_none() && grown.matured().len() >= inputs * (txs.len() + 1) {
-                let tx = grown.spend_many(inputs, 1_000);
+                let tx = grown.stage(&spends(inputs, SPEND_FEE));
                 assert!(
                     tx.weight() <= fixture::max_tx_weight(),
                     "an {inputs}-input spend sits under H3's bound"
@@ -836,14 +836,8 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
                 }
             }
             lens.push(txs.iter().map(|t| t.archival_len().to_raw()).collect());
-            let root = batch_root_going_into(&view, h)?;
-            let mut cand = candidate_over(root, h, grown.tip(), txs.clone());
-            if h == 0 {
-                endow_genesis(&mut cand);
-            }
-            let judged = judge_under(&view, cand, &RULES)?;
-            grown.record(judged.block().block(), &txs);
-            spends.extend(txs);
+            let judged = grown.judge_listing(&view, &RULES, &txs)?;
+            built_spends.extend(txs);
             let connected = batch.connect(judged, RULES)?;
             if let Some(pruned) = connected.pruned {
                 boundaries.push((h, pruned.shards().collect(), pruned.undo_floor.to_raw()));
@@ -858,9 +852,9 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
     eprintln!(
         "prune-boundary-real: {} spends of {inputs} inputs (first archival_len {}, weight {}) \
          closed shard 0 at h={close}; ran to h={tip} through the boundaries at {:?} in {:?}",
-        spends.len(),
-        spends[0].archival_len().to_raw(),
-        spends[0].weight(),
+        built_spends.len(),
+        built_spends[0].archival_len().to_raw(),
+        built_spends[0].weight(),
         boundaries.iter().map(|b| b.0).collect::<Vec<_>>(),
         started.elapsed()
     );
@@ -868,7 +862,7 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
     // The model's close height is the store's, and the chain used at least
     // the fewest bodies any chain can.
     assert_eq!(model.close_height(0), Some(close));
-    assert!(spends.len() >= usize::try_from(fewest_bodies).expect("fits"));
+    assert!(built_spends.len() >= usize::try_from(fewest_bodies).expect("fits"));
     assert_eq!(model.close_height(1), None, "shard 1 never closed");
 
     // Every boundary from epoch 2 on ran, each discarding what the calendar
@@ -899,7 +893,7 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
     assert_eq!(prunable_state(&store, ids_0.end), Some(true));
     {
         let snap = store.begin_read().expect("read");
-        for spend in [&spends[0], spends.last().expect("a spend")] {
+        for spend in [&built_spends[0], built_spends.last().expect("a spend")] {
             let record = snap
                 .tx_record(&spend.hash())
                 .expect("read")

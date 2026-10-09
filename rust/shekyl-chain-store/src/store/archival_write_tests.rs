@@ -37,8 +37,8 @@ use shekyl_wire::Input;
 use shekyl_harness_spender::Persona;
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, endow_genesis,
-    formed_under, judge_under, priced, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
+    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, formed_under,
+    priced, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
@@ -127,18 +127,11 @@ fn connect_one(
     listed: &[Listed],
     rules: RuleSet,
 ) -> ArchivalDelta {
-    let height = grown.height().to_raw();
     let out: Result<ArchivalDelta, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let txs = grown.realise(listed);
-        let root = batch_root_going_into(&view, height)?;
-        let mut cand = candidate_over(root, height, grown.tip(), txs.clone());
-        if height == 0 {
-            endow_genesis(&mut cand);
-        }
-        let judged = judge_under(&view, cand, &rules)?;
+        let judged = grown.judge_listing(&view, &rules, &txs)?;
         let delta = judged.block().archival().clone();
-        grown.record(judged.block().block(), &txs);
         batch.connect(judged, rules)?;
         Ok(delta)
     });
@@ -150,7 +143,7 @@ fn connect_empty(store: &ChainStore, grown: &mut Grown, rules: RuleSet) -> Archi
     connect_one(store, grown, &[], rules)
 }
 
-/// [`judge_under`] that hands the **verdict** back instead of panicking on
+/// [`super::connect_fixtures::judge_under`] that hands the **verdict** back instead of panicking on
 /// a refusal — for the one test here whose block is meant not to connect.
 /// The verdict is read through the rules crate's own `assert_refused`, the
 /// idiom every rule test uses; the store names no verdict type

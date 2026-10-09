@@ -107,10 +107,7 @@ use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, Shard
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
-use super::connect_fixtures::{
-    batch_root_going_into, candidate_over, endow_genesis, judge_under, Grown, Listed,
-    FIRST_SPEND_HEIGHT,
-};
+use super::connect_fixtures::{Grown, Listed, FIRST_SPEND_HEIGHT};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
@@ -340,15 +337,12 @@ impl SlashedChain {
                 for height in h..end {
                     assert_eq!(grown.height().to_raw(), height);
                     let txs = grown.realise(&listing(height, personas));
-                    let root = batch_root_going_into(&view, height)?;
-                    let mut cand = candidate_over(root, height, grown.tip(), txs.clone());
-                    if height == 0 {
-                        endow_genesis(&mut cand);
-                    }
                     let started = Instant::now();
-                    let judged = judge_under(&view, cand, &RULES)?;
+                    // `record` rides inside the judge interval. It is the
+                    // wallet-tree insert, microseconds beside the proof
+                    // `realise` already spent outside this timer.
+                    let judged = grown.judge_listing(&view, &RULES, &txs)?;
                     let judge = started.elapsed();
-                    grown.record(judged.block().block(), &txs);
                     archival_total += txs.iter().map(|tx| tx.archival_len().to_raw()).sum::<u64>();
                     if shard_closed.is_none() && archival_total >= SHARD_LENGTH.to_raw() {
                         shard_closed = Some(height);
