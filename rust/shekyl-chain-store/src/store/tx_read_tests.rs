@@ -13,7 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    body, connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
@@ -32,27 +32,29 @@ fn hash_of(tx: &Transaction) -> TxHash {
 }
 
 /// The spendable prefix, then the first admissible spend block listing
-/// the join that opens a record, then the spend block listing two bodies:
-/// the 3-part serve credit on that record (a serve-credit-only transaction
-/// — no `pqc_auths` by rule, CEN-H20; it connects only behind its record,
-/// CEN-L7 / CEN-J4, read off the view before the block, so it sits one
-/// block above the join rather than beside it or at height 1), and a
-/// spend, which carries per-input `pqc_auths` and is 4-part. Coinbases at
-/// every height, so the dense id space is `0..TX_COUNT`: the coinbases and
-/// the join through the spend block's coinbase, then the serve credit, the
-/// spend.
+/// the join that opens a record (a real spend of genesis's coinbase, the
+/// one matured for that block, funding the bond), then the spend block
+/// listing two bodies: the 3-part serve credit on that record (a
+/// serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20; it
+/// connects only behind its record, CEN-L7 / CEN-J4, read off the view
+/// before the block, so it sits one block above the join rather than
+/// beside it or at height 1), and a real spend (of block 1's coinbase,
+/// the one matured for the spend block and spent by none), which carries
+/// per-input `pqc_auths` and is 4-part. Coinbases at every height, so the
+/// dense id space is `0..TX_COUNT`: the coinbases and the join through the
+/// spend block's coinbase, then the serve credit, the spend.
 fn tx_chain(path: &std::path::Path) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let [join, plain] = credited(10, [0x5e; 32]);
-    let listing = spendable_prefix(&[vec![join], vec![plain.clone(), spend(15, 2)]]);
-    // The spend as connected — anchored on the chain — is the one the reads
+    let (join, plain) = credited(10);
+    let listing = spendable_prefix(vec![vec![join], vec![body(plain.clone()), spend()]]);
+    // The spend as connected — built on the chain — is the one the reads
     // are asked about by hash.
-    let (hashes, mut anchored) = connect_chain_anchored(&store, &listing);
-    let with_pqc = anchored
+    let (grown, mut connected) = connect_chain_anchored(&store, &listing);
+    let with_pqc = connected
         .pop()
         .and_then(|mut block| block.pop())
         .expect("the last block lists the spend");
-    (store, hashes, plain, with_pqc)
+    (store, grown.hashes, plain, with_pqc)
 }
 
 /// The height [`tx_chain`]'s spend block sits at: one above the join's.

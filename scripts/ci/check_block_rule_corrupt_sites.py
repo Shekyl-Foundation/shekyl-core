@@ -40,10 +40,16 @@
 #        - a bare `Err(` that is neither the inner half of `Ok(Err(` nor
 #          wrapping an `InvalidBlock` (a refusal, at any nesting) nor a
 #          match-arm pattern (`Err(_) =>`);
-#   3. the rules with a site are exactly CORRUPT_CAPABLE. A second rule gaining
-#      one is a refusal naming the rule and the site, so the day it happens
-#      is a reviewed day: the reviewer adds the name here, on purpose. A
-#      listed rule with no site is a stale entry and refuses too.
+#   3. the rules with a site are exactly CORRUPT_CAPABLE, whose entries each
+#      name the read the rule's halt comes from. The rule the gate enforces:
+#      a block rule may *propagate* a `Corrupt` a read produced, never
+#      *consume* one — a `Corrupt` is a store invariant observed broken, and
+#      a rule that turns it into a refusal (or a verdict) has made the writer's
+#      halt a block's fault. The gate sees capability, not intent, so a rule
+#      that swallows a `Corrupt` trips it exactly as one that lifts one does;
+#      the finding leads with the rule so the reader asks which of the two the
+#      site is, and whitelists only a propagation, naming its read. A listed
+#      rule with no site is a stale entry and refuses too.
 #
 # What is not checked: that a lifting function or a converter *does* construct
 # `Corrupt` on some path. Both types can carry it, and that is the bar — a
@@ -68,15 +74,22 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_SRC = REPO / "rust" / "shekyl-chain-rules" / "src"
 
-# The block rules whose error position may carry `ViewRead::Corrupt`.
-# CEN-B4 (`rules/attestation.rs`): `anchor_window` lifts a hole in the
-# predecessor's anchor window to `Corrupt::HoleBelowTip`; `committed_hybrid_key`
-# lifts a stored bond key the grammar rejects to `Corrupt::BondHybridKeyMalformed`.
-CORRUPT_CAPABLE: frozenset[str] = frozenset({"B4"})
+# The block rules whose error position may carry `ViewRead::Corrupt`, each
+# entry naming the read its halt comes from — the thing a reviewer checks
+# when a rule is added here: that every site *propagates* that read's
+# `Corrupt`, and none consumes one.
+CORRUPT_CAPABLE: dict[str, str] = {
+    # `rules/attestation.rs`: `anchor_window` lifts a hole in the predecessor's
+    # anchor window (through `recorded`) to `Corrupt::HoleBelowTip`;
+    # `committed_hybrid_key` lifts a stored bond key the grammar rejects to
+    # `Corrupt::BondHybridKeyMalformed`.
+    "B4": "anchor_window through recorded; committed_hybrid_key",
+}
 
 # Fewer `impl BlockRule` than this and the walk did not find the crate.
 MIN_BLOCK_RULES = 10
@@ -321,23 +334,28 @@ def analyze(files: dict[str, str]) -> Report:
     return report
 
 
-def judge(report: Report, capable: frozenset[str] = CORRUPT_CAPABLE) -> list[str]:
-    """Findings (exit 1), empty when the capable set is exactly `capable`."""
+def judge(report: Report, capable: Mapping[str, str] = CORRUPT_CAPABLE) -> list[str]:
+    """Findings (exit 1), empty when the rules with a site are exactly `capable`."""
     errs: list[str] = []
     for rule, sites in sorted(report.rules.items()):
         if sites and rule not in capable:
             where = "; ".join(f"{s.path}:{s.line} {s.what}" for s in sites)
             errs.append(
-                f"block rule {rule} can produce ViewRead::Corrupt ({where}) and is not in "
-                f"CORRUPT_CAPABLE. If the halt is intended, add it there with the reason; "
-                f"if not, the read belongs in validate or behind a V::Fault-only path."
+                f"a block rule may propagate ViewRead::Corrupt, never consume it: "
+                f"block rule {rule} has a Corrupt site ({where}) and is not in "
+                f"CORRUPT_CAPABLE. A site that passes a read's Corrupt through is a "
+                f"propagation — add the rule there naming that read. A site that turns "
+                f"a Corrupt into a refusal or a verdict (a match that stops it, a map "
+                f"into InvalidBlock) is the defect: the halt belongs to the writer, and "
+                f"an entry would whitelist the rule, not fix the site."
             )
-    for rule in sorted(capable):
+    for rule, read in sorted(capable.items()):
         if rule not in report.rules:
             errs.append(f"CORRUPT_CAPABLE names {rule}, which has no `impl BlockRule`: stale")
         elif not report.rules[rule]:
             errs.append(
-                f"CORRUPT_CAPABLE names {rule}, whose body has no Corrupt site: stale entry"
+                f"CORRUPT_CAPABLE names {rule} (halt from {read}), whose body has no "
+                f"Corrupt site: stale entry"
             )
     return errs
 
@@ -453,18 +471,18 @@ class _Probe:
 def selftest() -> None:
     p = _Probe()
     p.clean("consistent", _synthetic())
-    p.red("second rule lifts", _synthetic(extra={"G1": _LIFTS}), "block rule G1 can produce")
-    p.red("second rule literal", _synthetic(extra={"C9": _LITERAL}), "block rule C9 can produce")
-    p.red("map_err constructor", _synthetic(extra={"C6": _MAP_ERR}), "block rule C6 can produce")
+    p.red("second rule lifts", _synthetic(extra={"G1": _LIFTS}), "block rule G1 has a Corrupt site")
+    p.red("second rule literal", _synthetic(extra={"C9": _LITERAL}), "block rule C9 has a Corrupt site")
+    p.red("map_err constructor", _synthetic(extra={"C6": _MAP_ERR}), "block rule C6 has a Corrupt site")
     p.red(
         "map_err converter",
         _synthetic(extra={"F7": _MAP_PARENT}, mod=_MOD + _CONVERTER),
-        "block rule F7 can produce",
+        "block rule F7 has a Corrupt site",
     )
-    p.red("outer Err", _synthetic(extra={"C8": _OUTER_ERR}), "block rule C8 can produce")
-    p.red("opaque ?", _synthetic(extra={"C7": _OPAQUE}), "block rule C7 can produce")
+    p.red("outer Err", _synthetic(extra={"C8": _OUTER_ERR}), "block rule C8 has a Corrupt site")
+    p.red("opaque ?", _synthetic(extra={"C7": _OPAQUE}), "block rule C7 has a Corrupt site")
     p.red("path-qualified lifting method", _synthetic(extra={"F9": _METHOD}, mod=_MOD + _READ),
-          "block rule F9 can produce")
+          "block rule F9 has a Corrupt site")
     p.clean("a refusal built inside a match",
             _synthetic(extra={"G7": "Ok(match x { None => Ok(()), Some(l) => Err(InvalidBlock::new(Self::ROW, l)) })"}))
     p.clean("Err as a match pattern",
@@ -525,7 +543,10 @@ def main(argv: list[str] | None = None) -> int:
         for e in errs:
             print(f"check_block_rule_corrupt_sites: {e}", file=sys.stderr)
         return 1
-    print(f"check_block_rule_corrupt_sites: {describe(report)}; exactly CORRUPT_CAPABLE")
+    print(
+        f"check_block_rule_corrupt_sites: {describe(report)}; exactly CORRUPT_CAPABLE "
+        + "(" + "; ".join(f"{r}: halt from {read}" for r, read in sorted(CORRUPT_CAPABLE.items())) + ")"
+    )
     return 0
 
 

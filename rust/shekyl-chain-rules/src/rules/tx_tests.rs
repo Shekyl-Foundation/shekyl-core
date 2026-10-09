@@ -12,8 +12,7 @@
 use super::*;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    candidate_on, coinbase, coinbase_extra, listed, listed_on, point, pqc_extra, serve_credit_only,
-    spendable_chain, G, TWO_G,
+    candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, serve_credit_only, G, TWO_G,
 };
 use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
 use crate::rule_set::RuleSet;
@@ -112,30 +111,13 @@ fn a_non_coinbase_row_is_vacuous_at_the_miner_slot_and_run_elsewhere() {
     refused_lone(&no_inputs, CenRow::H4);
 }
 
-/// Every listed slot records what it evaluated, and `validate` unions the
-/// per-slot coverages: with H4 landed, a block of two well-formed listed
-/// transactions carries H4 once.
-#[test]
-fn tx_form_coverage_is_unioned_per_slot_by_validate() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        let formed = formed_on(
-            &chain,
-            candidate_on(
-                &chain,
-                vec![listed_on(&chain, KI), listed_on(&chain, point(10))],
-            ),
-        );
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("two well-formed listed transactions connect");
-        assert!(valid.coverage().contains(CenRow::H4));
-    });
-}
+// That `validate` unions the per-slot coverages — a block of two
+// well-formed listed transactions carries H4 once — is asserted where two
+// well-formed listed transactions can exist: `shekyl-chain-ingest`'s
+// `scenario_spend_tests::two_spends_connect_and_the_per_slot_rows_record`
+// reads H4 off `Mined::judged_by`. A fixture spend is refused at CEN-I13
+// on any `MockChain` view (slice 6 row 6), so the union has no accepted
+// block to show on here.
 
 // ---- the limits: pinned to the C++ defines, held equal to the wire's ----
 

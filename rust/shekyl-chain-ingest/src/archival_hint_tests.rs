@@ -26,20 +26,26 @@
 
 use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount};
 
 use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
 };
 use crate::scenario::{Mined, Scenario};
 use crate::scenario_archival::{complete_tree, Persona};
-use crate::scenario_spend::Spender;
+use shekyl_harness_spender::Spender;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_post_is_keyed_by_the_recompute_and_a_release_by_the_record_key() {
     let mut scenario = Scenario::open("slice-8-hint");
+    // The three posts below spend coinbases 0, 1 and 2, each at the next
+    // height, and a refused block does not advance the chain: mine to
+    // where coinbase 2, the latest, is mature, so every spend is.
     let mut chain: Vec<Mined> = scenario
-        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
+        .mine(
+            ChainCount::from_next_height(first_spending_height() + BlockCount::from_raw(2))
+                .to_raw(),
+        )
         .await;
     let next = |chain: &Vec<Mined>| {
         ChainCount::from_raw(u64::try_from(chain.len()).expect("small")).next_height()

@@ -10,9 +10,10 @@
 //! auth over the Q1 binding messages, the fee spends' FCMP with the mint
 //! on the input side — so the object the 4.J rows judge is the one the
 //! wallet produces. The engine handler's steps are re-made here as the
-//! bond post's were in `scenario_archival`; this is the **second**
-//! re-making, and the slice's §6 records the trigger a third one would
-//! trip (a builder crate is the answer then, not a fourth copy).
+//! bond post's were in `scenario_archival`. The prove / phase-1 /
+//! spend-slot / encode sequence both share is
+//! [`shekyl_tx_builder::open_spend`]. What stays here is the emission vin:
+//! the membership-only backing, the dual auth, and the loud reward output.
 //!
 //! # The pin
 //!
@@ -30,11 +31,12 @@
 //!
 //! The engine derives its spend inputs from `PFundingOutputRecord`s through
 //! `derive_spend_parts`; the driver derives its own from its wallet-side
-//! tree through the production scanner (`scenario_spend`). Both end in a
-//! [`SpendInput`], and that is where this function begins: `SpendInput`s
-//! in, wire bytes out. Everything from the signable hash to the final
-//! encoding is one definition on both sides, with the transaction key
-//! passed in rather than drawn, so the byte test can hold the two equal.
+//! tree through the production scanner (`shekyl-harness-spender`). Both
+//! end in a [`SpendInput`], and that is where this function begins:
+//! `SpendInput`s in, wire bytes out. Everything from the signable hash to
+//! the final encoding is one definition on both sides, with the
+//! transaction key passed in rather than drawn, so the byte test can hold
+//! the two equal.
 //!
 //! Panics are the instrument's failure mode (`expect`), as the driver's
 //! spend's are. Self-verification is the caller's: the scenario verifies
@@ -47,7 +49,6 @@ use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, MembershipOnlyBacking, RewardCommit, WorkEpochClaim,
 };
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
@@ -58,9 +59,9 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_tx_builder::{
-    encode_final_tx, phase1_payload_hashes, prove_backing_membership, sign_pqc_auths,
-    sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, InputTerm, OutputInfo,
-    PqcAuth, SpendInput, TreeContext, WireEncodeInput,
+    open_spend, prove_backing_membership, sign_transaction_with_terms,
+    tx_prefix_hash_from_parts_with_extra, AuthSlots, InputTerm, OutputInfo, SpendInput,
+    SpendLayout, TreeContext,
 };
 use shekyl_types::{HoldingsDescriptor, PCanonicalId, PrefixHash};
 use shekyl_units::AtomicUnits;
@@ -331,66 +332,48 @@ pub fn assemble_emission_claim(
         Some(&reward_commits[0].commitment),
         "the signer's reward commitment is the auth-bound commit"
     );
-    let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-        .expect("the signer's Bulletproof+ blob reads back");
 
-    // Steps 16–17: one PQC auth slot per prefix input — the fee slots at
-    // their output-derived keys, the emission slot at the identity key —
-    // hashed with empty signatures, then signed.
-    let mut wire = WireEncodeInput {
-        key_images: key_images.clone(),
-        extra_inputs,
-        output_amounts,
-        output_keys,
-        view_tags,
-        tx_extra,
-        fee,
-        enc_amounts: signed.enc_amounts,
-        enc_labels: signed.enc_labels,
-        out_commitments: signed.commitments,
-        pseudo_outs: signed.pseudo_outs.clone(),
-        bulletproof,
-        reference_block: signed.reference_block,
-        fcmp_proof: signed.fcmp_proof.clone(),
-        pqc_auths: fee_pubkeys
-            .iter()
-            .cloned()
-            .chain(std::iter::once(hybrid_pk_bytes.clone()))
-            .map(|public_key| PqcAuth {
-                auth_version: 1,
-                signature: Vec::new(),
-                public_key,
-            })
-            .collect(),
-        fcmp_layers: signed.tree_depth,
-    };
-    let payload_hashes = phase1_payload_hashes(&wire).expect("the unsigned body hashes");
-    assert_eq!(
-        payload_hashes.len(),
-        spend_inputs.len() + 1,
-        "one payload per prefix input"
-    );
-    let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
-        .expect("the fee slots sign");
-    let emission_sig = HybridEd25519MlDsa
-        .sign(
-            &keys.hybrid_sign_sk,
-            SCHEME_DOMAIN_PQC_AUTH_TX,
-            payload_hashes[spend_inputs.len()].as_bytes(),
-        )
-        .expect("the emission slot signs");
-    pqc_auths.push(PqcAuth {
-        auth_version: 1,
-        signature: emission_sig
-            .to_canonical_bytes()
-            .expect("the emission slot's signature encodes"),
-        public_key: hybrid_pk_bytes,
-    });
-    wire.pqc_auths = pqc_auths;
+    // Steps 16–17: fee slots sign inside `open_spend`; the emission slot
+    // signs with the persona's identity key over its own payload.
+    let open = open_spend(
+        signed,
+        &spend_inputs,
+        SpendLayout {
+            key_images: key_images.clone(),
+            extra_inputs,
+            output_amounts,
+            output_keys,
+            view_tags,
+            tx_extra,
+            fee,
+            slots: AuthSlots {
+                spend: fee_pubkeys.clone(),
+                extra: vec![hybrid_pk_bytes],
+            },
+        },
+    )
+    .expect("the fee side opens");
     drop(spend_inputs);
-
-    // Step 19: the production encoder.
-    let bytes = encode_final_tx(&wire).expect("the production encoder emits the claim");
+    let emission_sig = {
+        let payload = open
+            .sole_extra_payload()
+            .expect("the emission slot has a payload");
+        HybridEd25519MlDsa
+            .sign(
+                &keys.hybrid_sign_sk,
+                SCHEME_DOMAIN_PQC_AUTH_TX,
+                payload.as_bytes(),
+            )
+            .expect("the emission slot signs")
+    };
+    let pseudo_outs = open.pseudo_outs().to_vec();
+    let fcmp_proof = open.fcmp_proof().to_vec();
+    let tree_depth = open.layers();
+    let bytes = open
+        .encode(vec![emission_sig
+            .to_canonical_bytes()
+            .expect("the emission slot's signature encodes")])
+        .expect("the production encoder emits the claim");
 
     AssembledClaim {
         bytes,
@@ -401,9 +384,9 @@ pub fn assemble_emission_claim(
         persona,
         key_images,
         fee_pubkeys,
-        pseudo_outs: signed.pseudo_outs,
-        fcmp_proof: signed.fcmp_proof,
-        tree_depth: signed.tree_depth,
+        pseudo_outs,
+        fcmp_proof,
+        tree_depth,
     }
 }
 

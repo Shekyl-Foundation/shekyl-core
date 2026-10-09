@@ -6,9 +6,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
-use crate::harness::fixture::{
-    candidate, candidate_on, coinbase, listed_on, point, spendable_chain,
-};
+use crate::harness::fixture::{candidate, candidate_on, coinbase, spendable_chain};
 use crate::harness::{
     defined, formed, formed_on, formed_under, judged, Faulted, MockChain, MockSubstrate,
 };
@@ -19,15 +17,16 @@ use crate::TxIdentity;
 
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
-    // On the youngest chain that can list a spend (CEN-I11), the two spends
-    // anchored on it (CEN-I10); a genesis block listing spends is a shape
-    // consensus refuses, and until slice 6 commit 5 this fixture was one.
+    // On the youngest chain that can list a spend (CEN-I11), a coinbase-only
+    // block: the one well-formed block a `MockChain` can hold, since a
+    // fixture spend is refused at CEN-I13 on any view (slice 6 row 6 — until
+    // which this candidate listed two of them; a genesis block listing
+    // spends is a shape consensus refuses, and until slice 6 commit 5 it
+    // was one of those). The coverage a block with real spends records is
+    // `shekyl-chain-ingest`'s `scenario_spend_tests` (`Mined::judged_by`).
     let chain = spendable_chain();
     chain.with_view(|view| {
-        let input = candidate_on(
-            &chain,
-            vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
-        );
+        let input = candidate_on(&chain, Vec::new());
         let valid = judged(validate(
             formed_on(&chain, input),
             &view,
@@ -133,11 +132,15 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I9,
                 // Slice 6 commit 5: the regular-spend reference rows — the
                 // reference recorded (I10), in the window (I11), the anchor
-                // read at its height (I12, a definition).
+                // read at its height (I12, a definition). Slice 6 row 6
+                // (2026-10-08): the declared depth against the tree at the
+                // reference (I13) and the proof over that context (I15).
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
                 CenRow::I14,
+                CenRow::I15,
                 CenRow::I16,
                 // Slice 6 commit 7: the signing preimage, a definition
                 // recorded where the hashes are derived.
@@ -162,6 +165,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
+                // Slice 6 row 6: the bond post's funding half, vacuous on
+                // the coinbase likewise.
+                CenRow::J27,
                 // Slice 8 row 8: the emission statics, vacuous on the
                 // coinbase (no emission vin).
                 CenRow::J19,
@@ -186,13 +192,15 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     });
 }
 
+/// The block is coinbase-only (the one a `MockChain` can hold; slice 6 row
+/// 6), so the identity derived here is the miner's. A listed spend's
+/// 4-part identity, derived once by the verdict and recorded by the store
+/// as the verdict handed it, is `shekyl-chain-store`'s `tx_read_tests`
+/// (the record against `txid_parts()`, `pqc_auth_hash` included).
 #[test]
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let chain = spendable_chain();
-    let input = candidate_on(
-        &chain,
-        vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
-    );
+    let input = candidate_on(&chain, Vec::new());
     let expected_hash = input.block.hash();
     let identity = |tx: &Transaction| {
         let parts = tx.txid_parts();
@@ -222,12 +230,10 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
     // A coinbase txid is 3-part: there is no third component to record
     // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
-    // A spend carries one `pqc_auth` per input, so its txid is 4-part and
-    // the component is `Some`.
+    // (A spend carries one `pqc_auth` per input, so its txid is 4-part and
+    // the component `Some`: the store's `tx_read_tests`, above.)
     assert_eq!(expected_miner.pqc_auth_hash, None);
-    for (id, _) in &expected_listed {
-        assert!(id.pqc_auth_hash.is_some(), "a spend's txid is 4-part");
-    }
+    assert!(expected_listed.is_empty());
 
     chain.with_view(|view| {
         let valid = judged(validate(
@@ -313,14 +319,16 @@ fn tx_entry_points_record_the_landed_rows() {
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
-    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
-    // regular-spend reference rows), I17 and I18 (the signing preimage and
+    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I13 and I15
+    // (the regular-spend reference rows and the proof over the context
+    // they yield), I17 and I18 (the signing preimage and
     // the signatures over it, of which a coinbase has none), J4–J6 (the
     // bond state behind a serve-credit vin, of which a coinbase has none),
     // J13–J16 and J18 (the bond post against its record and the join's
-    // admission, of which a coinbase has none), J21, J23, J25 and J26 (the
-    // emission's reference context, gathers, verify and fee-input proof,
-    // of which a coinbase has none) — are recorded vacuous on a coinbase.
+    // admission, of which a coinbase has none), J27 (the post's funding
+    // half, likewise), J21, J23, J25 and J26 (the emission's reference
+    // context, gathers, verify and fee-input proof, of which a coinbase
+    // has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -333,6 +341,8 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
+                CenRow::I15,
                 CenRow::I17,
                 CenRow::I18,
                 CenRow::J4,
@@ -343,6 +353,7 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::J15,
                 CenRow::J16,
                 CenRow::J18,
+                CenRow::J27,
                 CenRow::J21,
                 CenRow::J23,
                 CenRow::J25,
