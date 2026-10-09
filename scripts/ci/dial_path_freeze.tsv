@@ -1,0 +1,38 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The frozen C++ dial path (Ruling A, 2026-10-08). Every row is a function
+# the P2P-3 slice 3 cutover deletes. Until that PR, a change to a row's body
+# fails `check_dial_path_freeze.py`; deleting the function passes. This file
+# is the list the dialer brief's deletion table cites
+# (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md, "What is deleted").
+#
+# Removing a row while its function is still present needs a dated ruling by
+# Rick in the dialer brief naming the function; the gate looks for it. When
+# the cutover has deleted every function here, it empties this file, and the
+# gate reports the freeze discharged.
+#
+# Columns, tab-separated:
+#   kind   body   the function from its anchor to its closing brace
+#          calls  the lines inside that function that call the fourth column
+#   file   repository path
+#   anchor the definition's qualified name up to its opening parenthesis;
+#          it must occur once in the file
+#   callee (calls rows only) the function those frozen lines call
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::connections_maker(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::make_new_connection_from_peerlist(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::connect_to_seed(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::make_expected_connections_count(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::do_handshake_with_peer(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::check_connection_and_handshake_with_peer(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::gray_peerlist_housekeeping(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::record_addr_failed(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::record_addr_success(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::mint_recorded_handshake_nonce(
+body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::erase_outbound_handshake_nonce(
+body	src/p2p/zone_server.h	open_outcome open(
+calls	src/p2p/net_node.inl	node_server<t_payload_net_handler>::idle_worker(	connections_maker
+calls	src/p2p/net_node.inl	node_server<t_payload_net_handler>::idle_worker(	gray_peerlist_housekeeping
