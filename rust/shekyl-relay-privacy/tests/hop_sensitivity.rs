@@ -59,7 +59,7 @@ fn hop_sensitivity() {
     let base_s = embargo_secs(&DandelionParams::inherited());
     for hop in [175_u32, 300, 500, 875, 1050, 1750] {
         let mut p = DandelionParams::inherited();
-        p.time_between_hop_ms = hop;
+        p.time_between_hop_ms = p.time_between_hop_ms.derived(hop);
         let s = embargo_secs(&p);
         println!(
             "  {hop:>6}   {s:>8}   {:>+7.0}%{}",
@@ -143,11 +143,11 @@ fn the_anonymity_embargo_is_derived_from_its_own_hop() {
     println!("\n  zone       hop_ms   embargo(s)");
     println!(
         "  clearnet   {:>6}   {clearnet_s:>10}",
-        clearnet.time_between_hop_ms
+        clearnet.time_between_hop_ms.ms()
     );
     println!(
         "  anon       {:>6}   {anon_s:>10}",
-        anon.time_between_hop_ms
+        anon.time_between_hop_ms.ms()
     );
 
     // Nothing here sets `fluff_probability_pct`. Both sides read the shipped
@@ -160,7 +160,7 @@ fn the_anonymity_embargo_is_derived_from_its_own_hop() {
     );
 
     assert!(
-        anon.time_between_hop_ms > clearnet.time_between_hop_ms,
+        anon.time_between_hop_ms.ms() > clearnet.time_between_hop_ms.ms(),
         "the anonymity hop must exceed clearnet's — a rendezvous path is six \
          relays where clearnet is one direct connection"
     );

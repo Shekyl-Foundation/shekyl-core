@@ -211,6 +211,28 @@ impl DerivationMs {
     pub const fn basis(self) -> TimingBasis {
         self.basis
     }
+
+    /// A value derived from this one, carrying the basis this one was
+    /// admitted with. The derivation that produced `ms` consumed an admitted
+    /// input, so the result rests on nothing a derivation may not consume;
+    /// this is how `time_between_hop_ms` keeps the transit's basis.
+    #[must_use]
+    pub const fn derived(self, ms: u32) -> Self {
+        Self {
+            ms,
+            basis: self.basis,
+        }
+    }
+
+    /// `self` plus `extra` milliseconds, with the same basis, or `None` on
+    /// overflow. For sensitivity probes that step a derived value.
+    #[must_use]
+    pub const fn checked_add_ms(self, extra: u32) -> Option<Self> {
+        match self.ms.checked_add(extra) {
+            Some(ms) => Some(self.derived(ms)),
+            None => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +265,15 @@ mod tests {
         assert_eq!(admitted.ms(), 1_625);
         assert_eq!(admitted.basis(), TimingBasis::Assumption);
         assert_eq!(Timing::<Model>::new(3_250.0).basis(), TimingBasis::Model);
+    }
+
+    #[test]
+    fn a_derived_value_carries_the_basis_it_was_derived_from() {
+        let transit = DerivationMs::admit(Timing::<RustPath>::new(40.0));
+        let hop = transit.derived(165);
+        assert_eq!((hop.ms(), hop.basis()), (165, TimingBasis::RustPath));
+        assert_eq!(hop.checked_add_ms(10), Some(transit.derived(175)));
+        assert_eq!(hop.checked_add_ms(u32::MAX), None);
     }
 
     #[test]

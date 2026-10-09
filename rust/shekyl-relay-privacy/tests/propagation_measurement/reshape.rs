@@ -59,14 +59,14 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
     println!("\nExposure vs fluff-return F (embargo 144s, no reshape) — F-4's second correction");
     let f_lo = {
         let p = DandelionParams {
-            fluff_return_ms: 2_250,
+            fluff_return_ms: base.fluff_return_ms.derived(2_250),
             ..base
         };
         simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(4)).exposure_rate
     };
     let f_hi = {
         let p = DandelionParams {
-            fluff_return_ms: 13_750,
+            fluff_return_ms: base.fluff_return_ms.derived(13_750),
             ..base
         };
         simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(5)).exposure_rate

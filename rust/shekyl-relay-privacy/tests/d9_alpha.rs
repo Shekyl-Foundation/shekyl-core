@@ -66,7 +66,9 @@ fn shipped_mean_ticks() -> u32 {
 
 fn alpha_at(fluff_return_ms: u32) -> f64 {
     let params = DandelionParams {
-        fluff_return_ms,
+        fluff_return_ms: DandelionParams::adopted()
+            .fluff_return_ms
+            .derived(fluff_return_ms),
         ..DandelionParams::adopted()
     };
     full_travel_probability(&params, shipped_mean_ticks(), DEFAULT_EMBARGO_TICK_MILLIS)

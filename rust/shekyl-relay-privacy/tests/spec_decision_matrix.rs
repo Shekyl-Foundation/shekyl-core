@@ -176,7 +176,7 @@ const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();
-    p.time_between_hop_ms = hop_ms;
+    p.time_between_hop_ms = p.time_between_hop_ms.derived(hop_ms);
     let d = derive_embargo(
         &p,
         DEFAULT_EMBARGO_TICK_MILLIS,

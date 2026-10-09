@@ -602,7 +602,7 @@ pub const ANON_ZONE_TRANSIT: Timing<Assumption> = Timing::new(ANON_ZONE_TRANSIT_
 ///
 /// Propagates the table's refusal — an unpopulated or out-of-domain cell
 /// must not silently become a hop value (§83.3).
-pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal> {
+pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<DerivationMs, VerifyCostRefusal> {
     adopted_hop_ms_with_transit(n_in, depth, DerivationMs::admit(ADOPTED_TRANSIT))
 }
 
@@ -620,7 +620,9 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal>
 /// Callers admit [`ADOPTED_TRANSIT`] for clearnet or [`ANON_ZONE_TRANSIT`]
 /// for Tor; prefer [`crate::params::DandelionParams::adopted_for_transit_ms`]
 /// over calling this directly, so the connector chooses the constant rather
-/// than the call site.
+/// than the call site. The hop returned carries the transit's basis: the
+/// verification floor is a Rust-path measurement, so the transit is the
+/// term that decides what the hop rests on.
 ///
 /// # Errors
 ///
@@ -630,7 +632,7 @@ pub fn adopted_hop_ms_with_transit(
     n_in: usize,
     depth: u32,
     transit: DerivationMs,
-) -> Result<u32, VerifyCostRefusal> {
+) -> Result<DerivationMs, VerifyCostRefusal> {
     let f = SPEC_VERIFY_COST.f_ms(n_in, depth)?;
     // CLIPPY: exact — every populated cell is const-asserted plausible
     // (positive, finite, < 10 s) and the transit is a whole `u32`, so
@@ -638,7 +640,8 @@ pub fn adopted_hop_ms_with_transit(
     // loss. A NaN cannot reach this cast; it cannot build (see the const
     // guard).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Ok((f + f64::from(transit.ms())).round() as u32)
+    let hop = (f + f64::from(transit.ms())).round() as u32;
+    Ok(transit.derived(hop))
 }
 
 #[cfg(test)]
@@ -746,10 +749,16 @@ mod tests {
     /// message size, so it is small exactly where the message is.
     #[test]
     fn the_adopted_modal_hop_is_the_priced_175() {
-        assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(175));
+        assert_eq!(
+            adopted_hop_ms(1, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
+            Ok(175)
+        );
         // And the tail endpoint at genesis: 399.2 + 50 + 4.26 ms node crypto
         // over that shape's 59,344 B message.
-        assert_eq!(adopted_hop_ms(8, GENESIS_TREE_DEPTH), Ok(453));
+        assert_eq!(
+            adopted_hop_ms(8, GENESIS_TREE_DEPTH).map(DerivationMs::ms),
+            Ok(453)
+        );
     }
 
     /// The node-crypto term is INSIDE [`SpecVerifyCost::f_ms`], and this pins
@@ -873,10 +882,17 @@ mod tests {
         let as_model = DerivationMs::admit(Timing::<crate::basis::Model>::new(
             ADOPTED_TRANSIT_ASSUMPTION_MS,
         ));
+        let from_assumption = adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_assumption)
+            .expect("the modal cell is pinned");
+        let from_model = adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_model)
+            .expect("the modal cell is pinned");
+        // Same number; the hop carries the basis of the transit it consumed.
+        assert_eq!(from_assumption.ms(), from_model.ms());
         assert_eq!(
-            adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_assumption),
-            adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_model)
+            from_assumption.basis(),
+            crate::basis::TimingBasis::Assumption
         );
-        assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(175));
+        assert_eq!(from_model.basis(), crate::basis::TimingBasis::Model);
+        assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(from_assumption));
     }
 }

@@ -53,7 +53,7 @@ use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 
 fn embargo_of(hop_ms: u32) -> (u32, u64) {
     let mut p = DandelionParams::inherited();
-    p.time_between_hop_ms = hop_ms;
+    p.time_between_hop_ms = p.time_between_hop_ms.derived(hop_ms);
     let d = derive_embargo(
         &p,
         DEFAULT_EMBARGO_TICK_MILLIS,

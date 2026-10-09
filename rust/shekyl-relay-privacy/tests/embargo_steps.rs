@@ -73,7 +73,9 @@ fn the_distance_from_each_shipped_hop_to_the_next_embargo_step_is_recorded() {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let hop_ms = hop.round() as u32;
         let params = DandelionParams {
-            time_between_hop_ms: hop_ms,
+            time_between_hop_ms: DandelionParams::inherited()
+                .time_between_hop_ms
+                .derived(hop_ms),
             ..DandelionParams::inherited()
         };
         let step = next_embargo_step(

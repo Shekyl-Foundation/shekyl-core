@@ -249,7 +249,7 @@ spec = ["rust/shekyl-relay-privacy/src/params.rs"]
 [[constant]]
 name = "fluff_return_ms"
 defined_in = "rust/shekyl-relay-privacy/src/params.rs"
-needle = "fluff_return_ms: 3_250,"
+needle = "pub const FLUFF_RETURN: Timing<Model> = Timing::new(3_250.0);"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). A simulated figure from an earlier graph; its own comment says it has not been re-measured."
