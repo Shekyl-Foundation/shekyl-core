@@ -77,6 +77,7 @@ compile_error!(
      attempting to revert this gate."
 );
 
+mod assemble;
 mod error;
 mod sign;
 pub mod types;
@@ -86,12 +87,15 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
+pub use assemble::{open_spend, AuthSlots, OpenSpend, SpendLayout};
 pub use error::TxBuilderError;
 pub use sign::{
     prove_backing_membership, sign_pqc_auths, sign_transaction, sign_transaction_with_terms,
     MembershipOnlyProof,
 };
-pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
+pub use types::{
+    LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
+};
 
 /// Cleartext balance terms, re-exported so `sign_transaction_with_terms`
 /// callers name them through this crate (the signing boundary) rather than

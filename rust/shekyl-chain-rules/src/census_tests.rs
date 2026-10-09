@@ -183,7 +183,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I10,
             CenRow::I11,
             CenRow::I12,
+            // Slice 6 row 6 (2026-10-08): the depth step and the proof over
+            // the reference context, on the spend class.
+            CenRow::I13,
             CenRow::I14,
+            CenRow::I15,
             CenRow::I16,
             CenRow::I17,
             CenRow::I18,
@@ -209,6 +213,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J15,
             CenRow::J16,
             CenRow::J18,
+            // Slice 6 row 6 (2026-10-08): the bond post's funding half —
+            // its reference context and the proof over its funding spends,
+            // one row in `judge_reference`'s bond-post arm.
+            CenRow::J27,
             // Slice 8 row 8: the emission statics — the vin's parse, the
             // slot's key, the signable hash and the reward commit set.
             CenRow::J19,
@@ -310,11 +318,15 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 154 → 153 on 2026-10-04: CEN-J17 (the `HoldingsUpdate` add / drop
     // arms, a post kind REJECTED 2026-09-20 and deleted by E4's ARW-14) went
     // to bucket 3 (E6 slice 8 Q1 (a)) — a row whose subject is gone does
-    // not inflate the denominator. 153 → 152 on 2026-10-08: CEN-B7 (the
-    // one-time warning on a block version above the last scheduled one)
-    // went to bucket 3 with the hard-fork mechanism: a higher version is
-    // refused by B1, and there is nothing to warn about.
-    assert_eq!(CenRow::ALL.len(), 152);
+    // not inflate the denominator. 153 → 154 on 2026-10-08: CEN-J27 (the
+    // bond post's funding half — its reference context and the proof over
+    // its funding spends, one row) minted with its implementation, per the
+    // H21 cell's ruling of 2026-10-07 (slice 6 row 6). 154 → 153 on
+    // 2026-10-08: CEN-B7 (the one-time warning on a block version above
+    // the last scheduled one) went to bucket 3 with the hard-fork
+    // mechanism: a higher version is refused by B1, and there is nothing
+    // to warn about.
+    assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

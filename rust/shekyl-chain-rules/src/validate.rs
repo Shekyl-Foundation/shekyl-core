@@ -656,19 +656,19 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
-    // walks the inputs (I7), then the reference sequence (I10 yields the
-    // height, I11 measures it, I12 reads the anchor; on an emission the
-    // whole context is J21's and is yielded for the emission's proof
-    // rows). I13 and I15 join the spend's sequence in `judge_reference`,
-    // not here.
+    // walks the inputs (I7, `blockchain.cpp:3414–3467`), then runs the
+    // class's arm (`:3516`, `:3606`, `:3734`): the serve credit's and the
+    // bond post's record reads, then the reference sequence (I10 yields
+    // the height, I11 measures it, I12 reads the anchor; on an emission
+    // the whole context is J21's and is yielded for the emission's proof
+    // rows; on a bond post it is J27's, after the post has been judged
+    // against its record — `check_archival_bond_post_input` at `:3616`,
+    // the funding half at `:3654`). I13 and I15 join the spend's sequence
+    // in `judge_reference`, not here.
     match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    let reference = match judge_reference(&cx, view, &mut coverage)? {
-        Ok(reference) => reference,
-        Err(refused) => return Ok(Err(refused)),
-    };
     // The serve-credit arm of `check_tx_inputs`: the bond record read off
     // the view before the block (J4), its join epoch against the credited
     // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
@@ -689,11 +689,20 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // JoinMarket's held shards are admissible at the parent (J15) between
     // its statics and its key, as the C++ gathers between the two. J15 is
     // the first 4.J row to read a per-height record, so the sequence's
-    // fault is a `ViewRead` from here on.
+    // fault is a `ViewRead` from here on. Before the funding half (J27, in
+    // `judge_reference`), as the C++ judges the post before its funding
+    // spends' reference and proof: a post refused against its record is
+    // these rows' whatever its proof says. *Records-was:* the reference
+    // sequence ran ahead of this arm until 2026-10-08, when the bond post
+    // was a vacuous class there and the order between them was moot.
     match judge_bond_post(&cx, view, rule_set, &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
+    let reference = match judge_reference(&cx, view, &mut coverage)? {
+        Ok(reference) => reference,
+        Err(refused) => return Ok(Err(refused)),
+    };
     // The emission arm of `check_tx_inputs`: every claimed epoch's frozen
     // close gathered (J23), then the verify over the gathers, the
     // claimant's record before the block, J21's reference context and the

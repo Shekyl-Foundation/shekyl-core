@@ -168,12 +168,21 @@ pub fn claimant(p_pubkey_fill: u8) -> [u8; 32] {
 /// [`balanced_emission`](super::balanced_emission) puts it in a body
 /// CEN-H22 balances.
 pub fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
+    emission_vin_for(persona([p_pubkey_fill; 32]).identity, epochs)
+}
+
+/// [`emission_vin`] for a persona named by its **identity key** rather than
+/// a fixture tag — the harness spender's keyed persona, whose record a real
+/// join wrote (CEN-J27 judges a fixture join's funding spend as any spend,
+/// so a driven store has no fixture-persona record to claim against).
+/// Everything but `p_pubkey` is the fixture's filler, as above.
+pub fn emission_vin_for(p_pubkey: Vec<u8>, epochs: &[u64]) -> Input {
     use shekyl_archival_retention::{
         ArchivalRewardEmissionVin, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking,
         ShardSet, ShardWorkEntry, WorkEpochClaim,
     };
     let vin = ArchivalRewardEmissionVin {
-        p_pubkey: persona([p_pubkey_fill; 32]).identity,
+        p_pubkey,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7]).expect("one shard"),
@@ -274,14 +283,23 @@ pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
 /// (CEN-J4; L7 at the fold and SI-15 at the store are the belts beneath),
 /// which a [`join_market`] for `p` writes only once its own block has
 /// connected — so over a chain holding no record (every `MockChain`) this
-/// body is for `tx_form`, not for `validate`
-/// ([`TxShape::reads_bond_state`]); its `validate` witness is a driven
-/// chain that posted the join a block earlier.
+/// body is for `tx_form`, not for `validate` ([`TxShape::valid_at`]); its
+/// `validate` witness is a driven chain that posted the join a block
+/// earlier.
 pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
+    serve_credit_only_with(serve_credit_vin(p, 0, 1))
+}
+
+/// [`serve_credit_only`]'s shape around a serve-credit vin a caller built —
+/// for a persona that is not a fixture one (the harness spender's, keyed
+/// from a seed, whose `serve_credit_vin` names its own id), or for a
+/// shard and epoch other than the fixture's. The body is the one above:
+/// H20's, with one `RF-D1` pruned record for the one vin.
+pub fn serve_credit_only_with(vin: Input) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![serve_credit_vin(p, 0, 1)],
+            inputs: vec![vin],
             outputs: Vec::new(),
             extra: Vec::new(),
         },

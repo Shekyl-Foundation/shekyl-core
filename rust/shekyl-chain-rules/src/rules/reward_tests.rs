@@ -30,7 +30,6 @@ use crate::rules::block_weight::{EffectiveMedian, Medians, Weights};
 use crate::rules::miner::Emission;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
-use crate::verdict::InvalidBlock;
 use shekyl_economics::{effective_emission, FULL_REWARD_ZONE};
 use shekyl_types::{BlockWeight, LongTermWeight};
 use shekyl_wire::Ct;
@@ -470,12 +469,14 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
 }
 
 /// A light block through `validate` pays the full emission and advances
-/// the accumulator by it; the verdict carries both.
+/// the accumulator by it; the verdict carries both. The block is
+/// coinbase-only — the one a `MockChain` can hold, a fixture spend being
+/// refused at CEN-I13 on any view (slice 6 row 6) — which is as light as a
+/// block gets.
 #[test]
 fn the_verdict_carries_the_paid_emission() {
     let chain = spendable_chain();
-    let body = listed_on(&chain, point_at(9));
-    let (w, paid) = validated_on(&chain, candidate_on(&chain, vec![body])).expect("valid");
+    let (w, paid) = validated_on(&chain, candidate_on(&chain, Vec::new())).expect("valid");
     assert!(w.weight.to_raw() < ZONE);
     let emission = emission_on(&chain, chain.tip().expect("tip").height.to_raw() + 1);
     let full = match emission.subsidy() {
@@ -489,48 +490,15 @@ fn the_verdict_carries_the_paid_emission() {
     );
 }
 
-/// F14 through `validate`: enough listed bodies to put the block over
-/// twice the zone is refused on F14 at `Locus::Block` — after every body
-/// passed its own rows (the refusal is the block's, not a slot's) — and
-/// the same chain one body lighter connects with a penalised, non-zero
-/// reward.
-#[test]
-fn f14_an_overweight_block_is_refused_at_the_block_after_every_body_passed() {
-    let chain = spendable_chain();
-    let one = listed_on(&chain, point_at(1000));
-    let body_weight = u64::try_from(one.weight()).expect("fits");
-    let limit = 2 * ZONE;
-    // Bodies enough to cross the limit, each with its own key image.
-    let needed = limit / body_weight + 1;
-    let bodies: Vec<Transaction> = (0..needed)
-        .map(|k| listed_on(&chain, point_at(1000 + k)))
-        .collect();
-    let total: u64 = bodies
-        .iter()
-        .map(|b| u64::try_from(b.weight()).expect("fits"))
-        .sum();
-    assert!(
-        total > limit,
-        "the fixture crosses the bound: {total} > {limit}"
-    );
-    match validated_on(&chain, candidate_on(&chain, bodies.clone())) {
-        Err(InvalidBlock { rule, locus }) => {
-            assert_eq!(rule, CenRow::F14);
-            assert_eq!(locus, Locus::Block);
-        }
-        Ok(_) => panic!("a block over twice the median must be refused"),
-    }
-    // Drop bodies until the block is inside the bound but over the median.
-    let mut lighter = bodies;
-    while lighter
-        .iter()
-        .map(|b| u64::try_from(b.weight()).expect("fits"))
-        .sum::<u64>()
-        > limit - 2_000
-    {
-        lighter.pop();
-    }
-    let (w, paid) = validated_on(&chain, candidate_on(&chain, lighter)).expect("inside the bound");
-    assert!(w.weight.to_raw() <= limit && w.weight.to_raw() > ZONE);
-    assert!(paid.paid > AtomicUnits::ZERO, "penalised, not zeroed");
-}
+// F14 through `validate` — a block over twice the zone refused at
+// `Locus::Block` after every body passed its own rows, and a block inside
+// the bound but over the median admitted with a penalised, non-zero reward
+// — needs listed bodies that pass their rows, which a fixture spend no
+// longer does (CEN-I13 refuses it on any view; slice 6 row 6). Both halves
+// are witnessed on real spends: the refusal by `shekyl-chain-ingest`'s
+// `Mutation::OverweightBlock` (`mutation_tests`, as many real spends as
+// twice the zone holds, refused F14 at the block), the penalised admission
+// by the `median-full` capture (`vectors_tests`: block 211 lists 23 bodies
+// over the median, connects, and its accumulator matches the daemon's
+// `coins_generated`, so the penalty curve is held there). F14's predicate
+// over the weight is `f14_*` above.

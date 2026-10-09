@@ -18,7 +18,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::test_support::h;
 #[cfg(feature = "fetch")]
-use crate::test_support::{block, key_image, spend, wire, Family};
+use crate::test_support::{block, filler_spend, key_image, wire, Family};
 use crate::trace::{
     Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC, TRACE_VERSION,
 };
@@ -27,15 +27,15 @@ use shekyl_types::BlockHash;
 
 // ---------------------------------------------------------------- fixtures
 
-/// Three blocks — genesis, one spend, two spends — as the network carries
+/// Three blocks — genesis, one body, two bodies — as the network carries
 /// them: (block bytes, body bytes). Built block by block rather than through
-/// `chain_listing`: nothing here is judged, the subject is the fetch and
-/// the corpus's body count, so the spends sit where the byte shapes want
-/// them and carry no chain anchor (`chain_listing` would refuse a spend
-/// below CEN-I11's floor, rightly, for a chain that is going to be judged).
+/// `Growing`: nothing here is judged, the subject is the fetch and the
+/// corpus's body count, so the bodies are fixture filler (`filler_spend`)
+/// sitting where the byte shapes want them, below any height a real spend
+/// could be proven for.
 #[cfg(feature = "fetch")]
 fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
-    let ki = |n| spend(key_image(Family::Main, n));
+    let ki = |n| filler_spend(key_image(Family::Main, n));
     let listed = [Vec::new(), vec![ki(1)], vec![ki(2), ki(3)]];
     let mut previous = BlockHash::NULL;
     listed
