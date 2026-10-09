@@ -10,7 +10,7 @@ those commits. Open work on the hard-fork mechanism's deletion also edits
 content cited does not.
 **Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §2 row
 RK-5c, §2.1.1, §5. Family `RK-` (registered); this document mints
-**RK-D13…RK-D23** (decisions) and **RK-Q1…RK-Q8** (open questions) inside
+**RK-D13…RK-D23** (decisions) and **RK-Q1…RK-Q9** (open questions) inside
 it, added to the family's index row in the commit that lands this file
 (rule 94).
 **Sibling round:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md), round R1. Its §6.1
@@ -386,9 +386,10 @@ else with economics.
 - **No era.** RK-D21 deletes `emission_era` before this function is
   written. The projection takes no asymptote, cuts no thresholds and
   returns no label.
-- The burn-refusal path (`:280-287`) keeps its behaviour: the field reports
-  `0` and the refusal is logged. Whether that `0` should become absence is
-  the economics lane's question, not this slice's.
+- The burn-refusal path (`:280-287`) keeps its behaviour through parity:
+  the field reports `0` and the refusal is logged. `0` % is a legitimate
+  burn, so that reply cannot be told from an answer (RK-D23). How a
+  refusal is written is this slice's, as RK-Q2's encoding is: RK-Q9.
 
 ### 4.4 Oracle capture for a handler that computes
 
@@ -435,7 +436,7 @@ in commit 4:
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
 | 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7 as recommended, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
-| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
+| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
 
 Commit 2 changes the wire before parity and commits 6–8 change it after,
 each deliberately and each in its own diff — the RK-4c / RK-5b precedent
@@ -458,6 +459,7 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | 8+ (RK-Q2) | `already_generated_coins`, `total_burned` become decimal strings | `Option<String>` and `u64` | `total_burned` becomes a string; the first already is |
 | 8+ (RK-Q6) | `nettype` and the three booleans retired | not read | none |
 | 8+ (RK-Q8) | a restricted reply omits Status and Peers | required `database_size: u64` and `version: String` | both optional; a remote node that withholds them renders as withheld, not as an empty version and a rounded size |
+| 8+ (RK-Q9) | `burn_pct` is `null` when the computation refused | `#[serde(default)] u64` | `Option<u64>`; `null` rendered as unavailable, not `0` % |
 
 The other in-tree-external reader, the website consumer, is the RPC-channel
 round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
@@ -508,3 +510,4 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 | **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
 | **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
+| **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
