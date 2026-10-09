@@ -9,7 +9,7 @@ decision authority on 2026-10-08 and are recorded as ruled. §4–§8
 `file:line` below was read at that commit.
 **Token family:** continues `RT-` from
 [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) (R0): rulings
-`RT-10…RT-16`, open items `RT-O5…RT-O10` (RT-O5 and RT-O5′ ruled into RT-15; RT-O6, RT-O7, RT-O8 ruled 2026-10-09; RT-O9 ruled in four parts, `RT-O9.1`…`RT-O9.4`, its table open; RT-O10 open), probes `RT-P4…RT-P8`, slices
+`RT-10…RT-16`, open items `RT-O5…RT-O10` (RT-O5 and RT-O5′ ruled into RT-15; RT-O6, RT-O7, RT-O8 ruled 2026-10-09; RT-O9 ruled in four parts, `RT-O9.1`…`RT-O9.4`, its table open; RT-O10 ruled 2026-10-09), probes `RT-P4…RT-P8`, slices
 `RT-W8…RT-W14`. No new family (rule 94); the index row for `RT-` is
 extended in the commit that lands this round.
 **Decision authority:** Rick.
@@ -838,10 +838,12 @@ Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a
 client never reaches the wrong network's node.
 
-- **Unix, run-as-me:** the socket itself, at a fixed name inside a `0700`
-  per-user, per-network directory. The directory is the containment (R0
-  §1.1 item 1); nobody else can place an object at that name, so no random
-  component is needed. **RULED (2026-10-09): the directory lives under
+- **Unix, run-as-me:** the socket itself, one file per daemon, directly
+  inside the per-user session directory and named by a hash of the network
+  id and the instance (RT-O10, below). That directory is the containment
+  (R0 §1.1 item 1): it is owned by the user and closed to everyone else,
+  the daemon asserts that before binding, and nobody else can place an
+  object there — so the name needs no secret component. **RULED (2026-10-09): the directory lives under
   the per-user session directory, and the daemon's life is its
   rendezvous's.**
   - **Where.** Linux: `XDG_RUNTIME_DIR`. macOS:
@@ -869,23 +871,42 @@ client never reaches the wrong network's node.
     (§4.5) is then always accurate: there is no state in which a daemon
     runs with its local leg gone.
 
-  **The path budget.** A Unix socket path is limited to 108 bytes on Linux
-  and 104 on macOS, terminator included; a path over the limit is refused
-  at start with the path and the limit named, never truncated. Layout
-  (proposed): `<base>/shekyl/<network>/<instance>/rpc.sock`, where
-  `<network>` is the 16-byte network id in hex (32 characters) and
-  `<instance>` is `default` or a name of at most 16 characters (below).
-  After `<base>` that is 7 + 33 + 17 + 9 = 66 bytes at the longest name.
+  **The socket's name — RULED (RT-O10, decision authority, 2026-10-09): a
+  hash of network and instance.** The socket is
+  `<base>/shekyl-<name>.sock`, where `<name>` is derived from the network
+  id and the instance name (`default`, or the operator's name), so the
+  instance name's length never reaches the path. Details proposed: `<name>`
+  is the first 12 bytes of cSHAKE256 under a registered customization
+  (`shekyl/rpc-socket-name-v1`, `CRYPTO_DOMAIN_REGISTRY.tsv`) over the
+  network id and the instance name, written as 24 hex characters. A daemon
+  and a client compute the same name from the same two inputs; nothing is
+  looked up.
+
+  *The arithmetic.* A Unix socket path is limited to 108 bytes on Linux
+  and 104 on macOS, terminator included. After `<base>` the name costs
+  1 + 7 + 24 + 5 = 37 bytes, whatever the instance is called.
   - *Linux.* `<base>` is `/run/user/<uid>`, at most 20 bytes for a 32-bit
-    uid. 20 + 66 + 1 = **87 of 108**: 21 bytes of margin.
-  - *macOS.* `<base>` is typically 48 bytes
-    (`/var/folders/xx/` + a 30-character name + `/T`; from the platform's
-    documented layout, **not measured** — the estate has no macOS host).
-    48 + 66 + 1 = **115 of 104: eleven bytes over.** The default instance
-    alone (`default`, 7 characters) is 106, two over. So the 16-character
-    name does not fit on macOS under this layout, and neither does the
-    default. The name limit is not changed here; the macOS layout is open
-    (RT-O10).
+    uid: 20 + 37 + 1 = **58 of 108**.
+  - *macOS.* `<base>` is typically 48 bytes (`/var/folders/xx/` + a
+    30-character name + `/T`; from the platform's documented layout, **not
+    measured** — the estate has no macOS host): 48 + 37 + 1 = **86 of
+    104**, 18 bytes of margin against a base longer than expected.
+  - *An operator-named directory* has whatever length the operator chose.
+    A path over the limit is refused at start with the path and the limit
+    named, never truncated.
+
+  *What the hash costs, and its answer.* Nobody can read the path and tell
+  which network or instance it belongs to. So the daemon logs the socket
+  path beside its network and instance at every start, and a client that
+  finds nothing says which network and instance it looked for, never the
+  hash (§4.5). The readable layout this replaces —
+  `<base>/shekyl/<network>/<instance>/rpc.sock` — was 87 bytes on Linux
+  and 115 on macOS at a 16-character name, and 106 on macOS for the
+  default instance alone.
+
+  The 16-character limit on instance names (below) stands as ruled. It no
+  longer protects the path; it keeps names typeable and keeps the Windows
+  rendezvous directory, which does use the name, short.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
   rendezvous file in a per-user, per-network directory under
@@ -1104,38 +1125,14 @@ construction) instead of loopback TCP.
   the deletion lands with RT-W12 and not before. It removes `hyper-rustls`
   and native-roots loading from the wallet's dependency graph
   ([`http_client.rs:240-266`](../../rust/shekyl-rpc-transport/src/http_client.rs)).
-- **RT-O10 — the macOS socket path. Open.** §7.1's arithmetic: under the
-  layout `<base>/shekyl/<network>/<instance>/rpc.sock` the Linux path fits
-  with 21 bytes to spare, and the macOS path is over the 104-byte limit
-  even for the default instance. The ruled 16-character name limit is not
-  changed. Candidates: (a) a shorter network component on macOS — the first
-  8 bytes of the id, 16 hex characters, leaves 5 bytes at the longest name,
-  which is thin and rests on an unmeasured base length; (b) one socket file
-  per daemon directly in the per-user directory, named by a short hash of
-  network id and instance, which removes the name from the budget on every
-  platform (about 86 bytes on macOS) at the cost of a path nobody can read;
-  (c) measure the macOS base first, on a real host, before choosing. The
-  estate has no macOS host today.
-- **RT-O9 — the grant table. Blocks RT-W10 until confirmed.** The form is
-  directed and four rulings are recorded (2026-10-08, §6.1, §6.3): named
-  grants; `status` split from `health`; `enrol` its own grant; test levers
-  in no grant; anonymity data host-only; cost a separate resource policy.
-  What remains open is the rest of the assignment and the proposals that
-  follow from the rulings:
-  - the placements §6.1 lists as changes from today's gate that no ruling
-    covers: `/get_alt_blocks_hashes`, `/get_limit` and `/get_net_stats` in
-    `status`, and `get_info.restricted` retired;
-  - the revocation bound (§5) and the arming switch for the test levers
-    (§6.1), both proposed;
-  - whether the incident's consumer is enrolled for `peers` to keep its
-    seed-node count, or the count is dropped from the site;
-  - whether the wallet engine pages its requests within §6.3's batch
-    caps. Today those caps bind only the restricted listener, so the engine
-    has not met them on its usual connection; a remote wallet on the
-    channel will. Unverified;
-  - `get_info` served field by field. It is the one method that spans
-    grants, and it is settled by where it is built, not here: see the
-    RK-5c prerequisite in §6.1.
+- **RT-O10 — the Unix socket path. RULED 2026-10-09: named by a hash.**
+  The readable layout fit Linux and exceeded the macOS limit even for the
+  default instance. One socket file per daemon, directly in the per-user
+  directory, named by a hash of network id and instance, takes the
+  instance name out of the path budget on both platforms (58 of 108 bytes
+  on Linux, 86 of 104 on macOS). The hash's length and customization are
+  proposed. The macOS base length is still unmeasured; the margin is 18
+  bytes. Recorded in §7.1.
 
 ---
 
@@ -1227,6 +1224,11 @@ construction) instead of loopback TCP.
   state home**, instead of a named instance. Windows' folder lookup ignores
   environment variables, so it would need its own override flag anyway — a
   hidden surface where the instance name is a visible one.
+- **A readable socket path** — `<base>/shekyl/<network>/<instance>/rpc.sock`.
+  It exceeds the macOS path limit even for the default instance (RT-O10).
+- **A shortened network component on macOS only.** It fits with five bytes
+  to spare against an unmeasured base length, and gives the two Unix
+  platforms different layouts for one mechanism.
 - **A predictable per-user pipe name.** Another user can squat it before the
   daemon starts; the random name in a user-only rendezvous removes the name
   to squat (§7.1).
