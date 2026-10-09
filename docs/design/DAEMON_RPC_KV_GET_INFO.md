@@ -88,7 +88,7 @@ and unmaintainable. Every decision below is that principle applied.
 | **RK-D16** | **Economics fields are ported, not redesigned**, into a flexible typed Rust structure the economics lane evolves on its own (EUP is in assessment; no parameter or field-meaning changes are authorized here). |
 | **RK-D17** | **RK-5c lands before RT-W10.** Recorded in `RPC_CHANNEL.md` §6.1 at #1006's head. |
 | **RK-D21** | **`emission_era` is removed, not ported.** There never was an emission era: the chain is pre-genesis and the idea was retired. The field, its four labels and its thresholds are deleted from the C++ reply **before** the oracle capture, so nothing in Rust — no type, no enum, no function, no fixture — ever carries it. |
-| **RK-D23** | **`0` is a value; "no result" is `None` / `null`.** Zero is a valid answer for most quantities, so using it to mean "there is no answer" is ambiguous. In Rust the absence is `Option`; on the JSON wire it is `null`. This is RK-D15's principle stated generally, and it decides how every absence in this slice is written (§4.1, RK-Q7, RK-Q9). A standing rule for it is being drafted separately; this document cites RK-D23 either way. |
+| **RK-D23** | **`0` is a value; "no result" is `None` / `null`.** Zero is a valid answer for most quantities, so using it to mean "there is no answer" is ambiguous. In Rust the absence is `Option`; on the JSON wire it is `null`. This is RK-D15's principle stated generally, and it decides how every absence in this slice is written (§4.1, RK-Q7). RK-Q9 is the case it does not cover: a refused computation is a fault, not an absence. A standing rule for it is being drafted separately; this document cites RK-D23 either way. |
 
 RK-D15's "or absent" was written before RK-D23. It means the core has no
 target, which RK-D23 and RK-Q7 write as `null`; it does not mean the field
@@ -347,8 +347,12 @@ thing:
 | On the wire | Meaning |
 | --- | --- |
 | a value, including `0` | the answer |
-| `null` | there is no answer (the core has no target; a computation refused) |
+| `null` | there is no answer (the core has no target) |
 | field absent | not disclosed to this caller (a `Hidden` part) — or, for any other field, contract drift |
+
+A refusal is none of the three. A computation that refuses because the
+store contradicts itself is an error and the method does not reply
+(RK-Q9); it is not a value state of a field.
 
 Parity (commit 4) does not have these yet: it writes today's sentinel and
 stand-ins. Each later commit that changes the wire moves fields onto this
@@ -422,8 +426,11 @@ else with economics.
   returns no label.
 - The burn-refusal path (`:280-287`) keeps its behaviour through parity:
   the field reports `0` and the refusal is logged. `0` % is a legitimate
-  burn, so that reply cannot be told from an answer (RK-D23). How a
-  refusal is written is this slice's, as RK-Q2's encoding is: RK-Q9.
+  burn, so that reply cannot be told from an answer. After parity the
+  refusal is a **store fault** (RK-Q9): the projection checks the supply
+  invariant on the snapshot and returns the violation, the handler maps
+  it to the fault, and `get_info` refuses with an error that names the
+  invariant and its operands. `burn_pct` is never `null`.
 
 ### 4.4 Oracle capture for a handler that computes
 
@@ -446,7 +453,7 @@ no vector carries `emission_era`. Fixtures:
 | syncing, unrestricted | real target |
 | peerless startup (target 0, not synchronized) | the case the sentinel collides with |
 | synced, restricted | each of the four restricted stand-ins in §0, `alt_blocks_count` included |
-| burn refusal (`total_burned > already_generated`) | the logged-zero path |
+| burn refusal (`total_burned > already_generated`) | the logged-zero path — kept so parity matches; RK-Q9's commit replaces the behaviour |
 
 One case is not an oracle vector, because the C++ handler cannot express
 it — it reads the same zero-on-missing exports. It is a Rust handler test
@@ -493,7 +500,6 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | 8+ (RK-Q2) | `already_generated_coins`, `total_burned` become decimal strings | `Option<String>` and `u64` | `total_burned` becomes a string; the first already is |
 | 8+ (RK-Q6) | `nettype` and the three booleans retired | not read | none |
 | 8+ (RK-Q8) | a restricted reply omits Status and Peers | required `database_size: u64` and `version: String` | both optional; a remote node that withholds them renders as withheld, not as an empty version and a rounded size |
-| 8+ (RK-Q9) | `burn_pct` is `null` when the computation refused | `#[serde(default)] u64` | `Option<u64>`; `null` rendered as unavailable, not `0` % |
 
 The other in-tree-external reader, the website consumer, is the RPC-channel
 round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
@@ -534,8 +540,10 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 
 ## 8. Questions — RK-Q1…RK-Q9 RULED 2026-10-08 (Rick); RK-Q10 RULED 2026-10-08
 
-Each of RK-Q1…RK-Q9 was ruled as recommended, in one pass. The reasoning
-beside each ruling is the recommendation's, kept as the record of why.
+RK-Q1…RK-Q8 were ruled as recommended, in one pass, and RK-Q10 as
+recommended; the reasoning beside each is the recommendation's, kept as
+the record of why. RK-Q9 was held back from that pass and ruled
+separately, against the first recommendation.
 
 | ID | Question | Ruling |
 | --- | --- | --- |
@@ -547,5 +555,5 @@ beside each ruling is the recommendation's, kept as the record of why.
 | **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **RULED 2026-10-08 (Rick).** **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
 | **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **RULED 2026-10-08 (Rick).** **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it, and the GUI pair opened against that commit — never piecemeal. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; whether the version fields must stay decodable on their own is a failure-mode point (rule 82) the ruling did not address; it is settled in commit 6's design, before that commit is written. |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **RULED 2026-10-08 (Rick).** **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
-| **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **RULED 2026-10-08 (Rick).** **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
+| **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **RULED 2026-10-09 (Rick). A refused burn computation is a store fault, and the refusal is verbose.** Not as first recommended (`null`), and not part of the batch ruling: this question was held back. The only reachable refusal is the supply invariant, `total_burned > coins_generated` (`rust/shekyl-ffi/src/economics_ffi.rs:204-226`; the null-out arm is a caller bug). That is the store contradicting itself — the class `FactsFault::Inconsistent` exists for (`rust/shekyl-daemon-rpc/src/chain_facts.rs:205-217`: a contradiction with a plausible-looking fallback that must not reach the caller as a fact). It is not "no answer". **(1)** The economics projection checks the invariant on the RK-D20 snapshot and returns the violation; the handler maps it to the store fault and `get_info` refuses. No partial reply. **(2)** Verbose: the refusal the caller receives names the violated invariant and carries its operands — coins generated, total burned, and the tip the snapshot was read at. All three are public chain facts the reply already carries, so nothing is disclosed that a successful reply would not show. The same text is logged. `FactsFault` is `Copy` with a payload-free `Inconsistent` today; whether the detail rides a payload on that variant or a dedicated variant is the implementation's call — the requirement is that the caller's error says what contradicted what. **(3)** `burn_pct` stays a plain number, never `null`. **(4)** Its own commit after parity (8+). The capture keeps its "burn refusal → logged zero" fixture so parity matches; this commit replaces that behaviour, and its test is Rust-side: a snapshot with `total_burned > coins_generated` makes `get_info` refuse with an error naming the invariant and all three operands. |
 | **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **RULED 2026-10-08 (Rick; given through the RPC-channel lane and confirmed in this lane 2026-10-09).** **Split, in commit 8+.** `tx_pool_size` counts relayed entries only and is a value for every caller, in `pool`. The unrelayed count is its own field in its own one-field `Hidden` part, present only for the host's administrator and absent for every other caller, `admin` included (`RPC_CHANNEL.md` §6.1, RT-O9.3, at `28e485ce9`). Before RT-W10 there is no host identity and the unrestricted listener stands in for it, so nothing a caller sees today is withdrawn. **Readers:** `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` reads the **sum** of the two fields — its drain loop and its return-to-pool observable (`:437-438`) mean "everything this daemon holds", and it is a host caller. `tests/stressnet/monitor.py:142` reads the **relayed** count, a cross-node metric, and stops defaulting a missing key to `0`. |
