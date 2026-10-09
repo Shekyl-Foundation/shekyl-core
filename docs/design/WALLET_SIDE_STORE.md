@@ -1130,9 +1130,10 @@ so a response whose length disagrees is refusable at the header.
 
 #### 6.6.3 The frame re-key — owed to the RF/SF lane, not to this round — DISCHARGED 2026-10-08 (`SF-D8` amendment: `served_frame` deleted; the body is `shekyl_wire::shard_frame`, no padding field)
 
-`RF-D4`'s inner frame is **leaf-typed**: `leaf_count` varint ≤
+`RF-D4`'s inner frame **was** leaf-typed: `leaf_count` varint ≤
 `leaves_per_segment`, then exactly `leaf_count × LEAF_BYTES`
-(`shekyl-curve-tree/src/served_frame.rs:18-21`). Under the byte unit:
+(`rust/shekyl-curve-tree/src/served_frame.rs@f317d979c:18-21`, the
+module's last revision before its deletion). Under the byte unit:
 
 - **`leaf_count` becomes a byte length**, bounded by
   `SHARD_BYTES + MAX_TX_SIZE`.

@@ -5,6 +5,9 @@
 `SV-D4`…`SV-D8` **PROPOSED** with defaults, built as proposed and reopened on
 review. `SV-D9` is the blocker: the daemon has no facts source for the view
 until the `DRS-E3` store cutover, and the RPC says so with its own code.
+Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09); 2c
+is the wallet lane's (`WSS-Q1`). The round stays OPEN on `SV-D4`…`SV-D8`'s
+review and `SV-D9`'s falsifier.
 Identifier family `SV-D` (index row `SV-D1…SV-Dn`, registered at birth per
 rule 94 §1). Decision authority: Rick. Companion to
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) (what a
@@ -291,7 +294,12 @@ branch.
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
 | 2c | the serve side: a `ShardProvider` over `P`'s body store serving the tx-range frame | the wallet lane (`WSS-`) | `WSS-Q1` |
 | 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in `shekyl-daemon-image` is `SV-D9`'s | this round | 2b |
-| 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route | this round | 3 |
+| 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route — **landed 2026-10-09**: `get_shard_view` SPECIFIED (`wallet_rpc.yaml` 0.11.0; codes `-29534` `SHARD_STILL_OPEN`, `-29535` `SHARD_UNAVAILABLE`, `-29536` `SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` \| `skeleton_absent`), the daemon call and refusal mapping once in `shekyl-wallet-contract::shard_view::fetch_shard_view`, served by `shekyl-wallet-rpc`; CLI `shard fetch <id> [--png <path>] [--size <n>]`; GUI `get_shard_view` contract adapter drawing locally; `shekyl-shard-render` (`shekyl-shard-visual`, feature `cli`) for shekyl-web, whose `/api/shards/{id}/view[/png]` routes call the site daemon's unrestricted listener; the `ArchivalShardSource` stub deleted | this round | 3 |
+
+**What a viewer shows today.** Every shipped daemon answers `SV-D9`'s
+`ARCHIVAL_SKELETON_ABSENT`, so every viewer shows *not offered by this
+daemon* until the `DRS-E3` cutover. The states below it are built and
+tested against a fake daemon, not yet reached from a real one.
 
 Until 2c lands every fetch against the still-wired leaf-segment provider
 ends refused — `Malformed::Frame` where the raw leaf bytes are not the

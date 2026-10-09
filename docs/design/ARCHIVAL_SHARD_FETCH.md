@@ -152,7 +152,7 @@ inherited as "the client waits."
 | Pin | Where | What it fixes |
 | --- | --- | --- |
 | Serve route | `rust/shekyl-p-serve/src/serve.rs:57` — `ROUTE_PREFIX = "/shard/"` | The path the client dials (`RF-R1`) |
-| Served body | `rust/shekyl-curve-tree/src/served_frame.rs:282` — `ServedFrameHeader::read` — **RETIRED 2026-10-08** (module deleted; the body is `shekyl_wire::shard_frame`, `SF-D8` amendment) | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable (as pinned 2026-09-12) |
+| Served body | `rust/shekyl-curve-tree/src/served_frame.rs@f317d979c:282` — `ServedFrameHeader::read` — **RETIRED 2026-10-08** (module deleted; the body is `shekyl_wire::shard_frame`, `SF-D8` amendment) | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable (as pinned 2026-09-12) |
 | Content-verify function | `rust/shekyl-curve-tree/src/store/ops.rs:139` — `recompute_segment_r_k(&[[u8; 128]]) -> Result<[u8; 32], _>` | Content-authentication half only; today its only non-store caller is `p-serve/tests/store_axis.rs` — no production fetcher |
 | Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `pub(crate) SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Number RULED 80** (`SF-D5`). `MAX_STREAMS` stays SPIKE-PIN. **Home** is `shekyl-curve-tree` (`SF-D4`); this `pub(crate)` is the current location, not the home — the implementation PR moves the declaration |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
@@ -429,8 +429,9 @@ Refused homes (graph, not FFI):
 - `shekyl-archival-retention` — consensus assignment / Merkle verify.
 - `shekyl-chain-store` — storage; the fill scheduler *calls* fetch.
 - `shekyl-curve-tree` — codec; network I/O stays out.
-- `shekyl-shard-source` — GUI fixture seam toward Stage 5
-  `ArchivalEngine`; wrong side.
+- `shekyl-shard-source` — the GUI's fixture-only preview source (its
+  `ArchivalShardSource` stub deleted 2026-10-08; live views are the
+  wallet contract's `get_shard_view`); wrong side.
 - A module of a future `shekyl-daemon` — that crate does not exist.
 
 - **Reopen if:** at implementation, the client turns out to be a thin

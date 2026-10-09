@@ -365,7 +365,13 @@ challenge/organic (`SF-D7`).
    served natively in `shekyl-daemon-rpc` (`SV-D3`), stays restricted
    (`SV-D6`), refuses the open tip shard and carries `close_height`
    (`SV-D5`). Round and landing order:
-   [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md) §4.
+   [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md) §4. **UPDATE 2026-10-09:**
+   the GUI no longer calls this method itself; its Shards page draws from
+   the wallet contract's `get_shard_view` (`wallet_rpc.yaml` 0.11.0),
+   which forwards `shard_id` to the wallet's daemon and maps the daemon's
+   refusals to `SHARD_STILL_OPEN` / `SHARD_UNAVAILABLE` /
+   `SHARD_VIEW_NOT_OFFERED`. `list_shards` (item 1's projection) is
+   unchanged: still the GUI's own daemon read, still no bodies.
 3. **Client-side shuffle** of equal join-profit bands (per-process RNG; not
    consensus).
 4. **`SL-D6` payout-floor arithmetic** stays FOLLOWUPS — profit is shown, not

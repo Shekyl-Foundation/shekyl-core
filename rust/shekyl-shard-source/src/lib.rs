@@ -148,8 +148,10 @@ impl ShardRenderHandle {
 /// Source of the shard list and per-shard aggregate lookup.
 ///
 /// The renderer is *not* part of this trait — it lives in
-/// `shekyl_shard_visual` and is the same across every implementation, so the
-/// Stage 5 cutover is a trait-impl swap, not a render rewrite.
+/// `shekyl_shard_visual` and is the same for every input. Live shards do
+/// not come through this trait at all: they are the wallet contract's
+/// `get_shard_view` (`SV-D`), whose aggregate feeds the same renderer.
+/// This trait is the fixture preview's seam only.
 pub trait ShardSource {
     /// List every shard visible to this source.
     fn list_shards(&self) -> Result<Vec<ShardSummary>, ShardSourceError>;
@@ -178,7 +180,8 @@ static FIXTURE_SUMMARIES: LazyLock<Vec<ShardSummary>> = LazyLock::new(|| {
 
 /// Fixture-backed source: the regime fixtures shipped in `shekyl-shard-visual`.
 ///
-/// This is the pre-ArchivalEngine implementation the wallet uses today.
+/// The only implementation. It backs the GUI's illustrative preview; it is
+/// not a stand-in for a live source, and it retires with the preview.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FixtureShardSource;
 

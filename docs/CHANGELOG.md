@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Shard view — a picture of a shard is drawn from a real fetch
+
+- **Wallet RPC: `get_shard_view { shard_id }`** (contract 0.11.0,
+  `SHARD_VIEW_FETCH.md`). The wallet forwards the id to its daemon, which
+  fetches the shard's body from an archivist, verifies it per transaction
+  and returns the aggregate the viewers draw from: `shard_hash`,
+  `archival_len`, `block_count`, `tx_count`, `output_count`,
+  `coinbase_output_count`, `time_range_seconds`, `close_height`. A shard
+  the wallet itself holds is still answered through the daemon; the point
+  of the method is the fetch. New codes: `-29534 SHARD_STILL_OPEN`,
+  `-29535 SHARD_UNAVAILABLE` (no archivist could serve it), `-29536
+  SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` or
+  `skeleton_absent`.
+- **Daemon RPC: `request_archival_shard` is served in Rust (RPC 3.42).**
+  The C++ handler and its struct are deleted; `shekyl-daemon-rpc` answers
+  natively. The response gains `close_height`; `shard_hash` is now the
+  **view hash** — a cSHAKE256 fold over the shard's archival bytes that
+  requires the pruned components to derive (`SV-D1`), distinct from the
+  per-transaction verification digests the challenge path uses. The
+  method stays restricted. New code `-25 ARCHIVAL_SKELETON_ABSENT`: the
+  daemon has no shard-range read until the `DRS-E3` store cutover
+  (`SV-D9`), so **every daemon in this release answers it** and every
+  viewer shows *not offered by this daemon*.
+- **Fetch client and scheduler (`SF` Sub-PR 2).** `shekyl-p-fetch` reads
+  the tx-range body as a stream, one transaction resident, verifying each
+  against the `txs_prunable_hash` / `txs_pqc_auth_hash` rows and the
+  boundary pair; `shekyl-archival-fetch-sched` is the one scheduler that
+  challenge, organic and view callers enter, drawing holders from the
+  epoch's drawable set with an in-flight cap of 8. Until the serve side
+  speaks the same unit (`WSS-Q1`), a fetch against a shipped archivist is
+  a typed content miss, never a picture.
+- **CLI: `shard fetch <id> [--png <path>] [--size <n>]`** prints the
+  aggregate and optionally writes the candidate.v1 render. **GUI:** the
+  Shards page draws a card from `get_shard_view`, with *fetching*, *still
+  open*, *could not be retrieved* (retry) and *not offered* as visible
+  states; the fixture-only `ArchivalShardSource` stub is deleted.
+  **shekyl-web:** `shekyl-shard-visual` gains the `shekyl-shard-render`
+  binary (feature `cli`; JSON view on stdin, PNG on stdout) for the site's
+  server-side route.
+
 - **P2P.** A context walk posts onto that connection's strand and returns. `get_connections` and `sync_info` wait up to two seconds for the claim fields, on the admin thread. A claim that has not landed is unknown: `height` and `support_flags` are JSON null, not a height of zero. A dial in `idle_worker` can occupy the io pool those posts share, so unknown during a dial is expected until the dialer (P2P-3 slice 3) moves the dial off that pool. The connector closes the session with the cause, and the seam records that cause. A silent peer is a handshake timeout. A peer that sends FIN is a peer close. A refused connection, a rejected handshake, and an onion SOCKS reply that names the onion make the address undialable. A handshake timeout, a peer close, and a local failure do not. A clearnet proxy reply does not: it is the exit's claim and would suppress the whole host for an hour. The managed Tor SocksPort is `auto ExtendedErrors`, so an introduction timeout is not reported as a missing host. A gap timeout, a close this node chose, and a local proxy or Tor failure leave the address dialable. An attacker who can answer for an onion's responsible directories can still force reply 4, which buys only the short Tor backoff. A direct clearnet connect counts only when the peer refuses the connection. That refusal was being dropped: the admission channel closed in the same instant as the cause, and the opener kept the channel close, which is a local failure and does not forget the address. The opener now keeps the cause the dial sent. Last receive and last send are stamped when the bytes are read or written, on a monotonic clock, and shown to the operator as unix time. They do not rebuild the connection board. An address the node stops dialing is logged with the close cause, the reply, and whether it was recorded. The four pre-handshake request gates read the seam board, and a missing row is not established. A listen after another caller clears the hub installs that hub again. A connector's inbound cap belongs to the zone that set it: shutdown releases it, and a zone that did not set one does not keep the previous cap.
 - Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
 
