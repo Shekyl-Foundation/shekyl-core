@@ -40,7 +40,9 @@ is not. Its handler (`src/rpc/core_rpc_server.cpp:199-305`) holds policy:
   counts, the four socket counts, both peerlist sizes, `start_time`
   (`:213-232`, `:245`); `free_space = u64::MAX` (`:246`); `database_size`
   rounded up to 5 GiB (`:248-250`); `version = ""` (`:251`). Each is a
-  value that means "not this value".
+  value that means "not this value" — the same defect as the sentinel
+  above, not a second kind. `free_space = u64::MAX` is the plainest case:
+  a number standing where RK-D23 puts an absence. RK-Q8 removes all four.
 - **Three sources for one quantity.** `incoming_connections_count` is
   `total − outgoing` (`:214-216`): `total` from the clearnet zone's epee
   `m_connects`, `outgoing` from the Rust seam board. Two stores, unsigned
@@ -430,7 +432,7 @@ in commit 4:
 | --- | --- | --- |
 | 0 | This document + index row (rule 94) + §2 row note in the parent + the `FOLLOWUPS.md` item for §3.3 | docs gates |
 | 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row; needs the two-node regtest the row names) | regtest |
-| 2 | **RK-D21:** `emission_era` deleted — the struct field and its `KV_SERIALIZE` (`core_rpc_server_commands_defs.h:270`, `:320`), the computation (`core_rpc_server.cpp:294-302`), and the "Emission Era" row of `docs/DESIGN_CONCEPTS.md:673` | `CORE_RPC_VERSION` bump; `git grep emission_era` → this document and CHANGELOG only |
+| 2 | **RK-D21:** `emission_era` deleted — the struct field and its `KV_SERIALIZE` (`core_rpc_server_commands_defs.h:270`, `:320`), the computation (`core_rpc_server.cpp:294-302`), and the "Emission Era" row of `docs/DESIGN_CONCEPTS.md:673` | `CORE_RPC_VERSION` bump; `git grep emission_era` (the identifier, not the era names) → this document and CHANGELOG only. The era names also label the phases of the burn-rate table at `docs/DESIGN_CONCEPTS.md:299-303`; that table is not the field and is out of this commit's scope |
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
 | 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1 |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
