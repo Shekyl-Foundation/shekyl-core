@@ -1,9 +1,9 @@
 # RK-5c — `get_info`, the hub: rule-26 pre-flight
 
-**Status:** OPEN — R0, **DRAFT for ratification** (2026-10-08). §1's rulings
+**Status:** OPEN — R0, **RATIFIED 2026-10-09** (Rick); implementation open,
+starting at commit 1 of §5. Drafted 2026-10-08. §1's rulings
 are recorded as ruled; **RK-Q1…RK-Q9 were ruled 2026-10-09** and RK-Q10
-2026-10-08, confirmed 2026-10-09 (§8). §4–§5 are proposed
-until the document is ratified.
+2026-10-08, confirmed 2026-10-09 (§8).
 **Ground:** `shekyl-core` `dev` **`98fbd20ac`** (#1005 merge, 2026-10-08);
 `shekyl-gui-wallet` `dev` **`447908f`**. Every `file:line` below was read at
 those commits. Open work on the hard-fork mechanism's deletion also edits
@@ -251,7 +251,7 @@ the field `Option<u64>` and renders `null` as no target (§5.1).
 
 ---
 
-## 4. Design — PROPOSED
+## 4. Design — RATIFIED 2026-10-09
 
 ### 4.1 Types (`shekyl-rpc-types`) — RK-D18
 
@@ -465,12 +465,12 @@ in commit 4:
 
 ---
 
-## 5. Commit plan — PROPOSED (one PR; each commit bisects)
+## 5. Commit plan — RATIFIED 2026-10-09 (one PR; each commit bisects)
 
 | # | Commit | Gate |
 | --- | --- | --- |
 | 0 | This document + index row (rule 94) + §2 row note in the parent + the `FOLLOWUPS.md` item for §3.3 | docs gates |
-| 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row; needs the two-node regtest the row names) | regtest |
+| 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row). **This commit builds the two-node rig; it does not reuse one** — none exists on `dev`, and the parent's 2026-08-27 entry records the single-node form passing one run in three. The rig's verdict must be deterministic, and the commit states how: what holds the transaction in the stem or embargo window for the whole of the assertion | the two-node regtest, green on repeated runs |
 | 2 | **RK-D21:** `emission_era` deleted — the struct field and its `KV_SERIALIZE` (`core_rpc_server_commands_defs.h:270`, `:320`), the computation (`core_rpc_server.cpp:294-302`), and the "Emission Era" row of `docs/DESIGN_CONCEPTS.md:673` | `CORE_RPC_VERSION` bump; `git grep emission_era` (the identifier, not the era names) → this document and CHANGELOG only. The era names also label the phases of the burn-rate table at `docs/DESIGN_CONCEPTS.md:299-303`; that table is not the field and is out of this commit's scope |
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
 | 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1 |
