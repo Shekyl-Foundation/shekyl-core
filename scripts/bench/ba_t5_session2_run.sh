@@ -33,8 +33,8 @@ SYS_PID=$(pgrep -x shekyld | head -1)
 SYNC_RPC=13030; SYNC_P2P=13021; SYNC_RPC_R=13029
 SYNC_PID=""
 IN_FLIGHT="8 16 32 64"
-QUIET_S=30
-FETCHES=256
+QUIET_S=45
+FETCHES=2048
 
 info() { curl -s -m 3 "http://127.0.0.1:$1/get_info"; }
 field() { python3 -c 'import sys,json
@@ -46,8 +46,8 @@ except Exception:
 envrow() {  # tag
   local sh="na" ss="na" sj="na" sr="na"
   if [ -n "$SYNC_PID" ] && kill -0 "$SYNC_PID" 2>/dev/null; then
-    local i; i=$(info $SYNC_RPC)
-    sh=$(echo "$i" | field height); ss=$(echo "$i" | field synchronized)
+    sh=$(grep -oE 'Synced [0-9]+' "$WORK/syncdata/stdout.log" 2>/dev/null | tail -1 | grep -oE '[0-9]+$'); [ -z "$sh" ] && sh=na
+    ss=$(grep -c "SYNCHRONIZED OK" "$WORK/syncdata/stdout.log" 2>/dev/null)
     sj=$(awk '{print $14+$15}' /proc/$SYNC_PID/stat 2>/dev/null || echo na)
     sr=$(awk '/VmRSS/{print $2}' /proc/$SYNC_PID/status 2>/dev/null || echo na)
   fi
@@ -66,9 +66,9 @@ envrow() {  # tag
     "$(awk '/SwapFree/{print $2}' /proc/meminfo)" >> "$ENVF"
 }
 
-poll_start() {  # label state
+poll_start() {  # label state — reads the syncing daemon's own stdout log
   rm -f "$WORK/stop-poll"
-  "$HERE/ba_t5_sync_poll.sh" $SYNC_RPC "$1" "$2" "$WORK/stop-poll" "$SYNCF" &
+  "$HERE/ba_t5_sync_poll.sh" "$WORK/syncdata/stdout.log" "$1" "$2" "$WORK/stop-poll" "$SYNCF" &
   POLL_PID=$!
 }
 poll_stop() { touch "$WORK/stop-poll"; wait $POLL_PID 2>/dev/null; rm -f "$WORK/stop-poll"; }
@@ -89,13 +89,16 @@ sync_start() {  # a fresh data directory, then the daemon, then wait until it is
     --p2p-bind-ip 0.0.0.0 --p2p-bind-port $SYNC_P2P --in-peers 0 --no-igd \
     --rpc-bind-ip 127.0.0.1 --rpc-bind-port $SYNC_RPC --rpc-restricted-bind-port $SYNC_RPC_R \
     --add-exclusive-node "$PEER" --clearnet-transport-encrypt \
-    --log-file "$WORK/syncdata/sync.log" --log-level 0 --non-interactive >> "$WORK/syncdaemon.out" 2>&1 &
+    --log-file "$WORK/syncdata/sync.log" --log-level 0 --non-interactive > "$WORK/syncdata/stdout.log" 2>&1 &
   SYNC_PID=$!
+  echo "$SYNC_PID" > "$WORK/syncdata/pid"
+  # Wait until the daemon's own log shows it past height 50. The RPC is
+  # not used here either: it answers in seconds under sync load.
   local h=0 waited=0
-  while [ "$h" = "na" ] || [ "$h" -lt 50 ]; do
+  while [ "$h" -lt 50 ]; do
     sleep 2; waited=$((waited + 2))
-    h=$(info $SYNC_RPC | field height); [ "$h" = "na" ] && h=0
-    if [ $waited -gt 120 ]; then printf 'NOTE\tsync daemon did not reach height 50 in 120 s\n' >> "$OBS"; return 1; fi
+    h=$(grep -oE 'Synced [0-9]+' "$WORK/syncdata/stdout.log" 2>/dev/null | tail -1 | grep -oE '[0-9]+$'); [ -z "$h" ] && h=0
+    if [ $waited -gt 150 ]; then printf 'NOTE\tsync daemon did not reach height 50 in 150 s\n' >> "$OBS"; return 1; fi
   done
   printf 'NOTE\tsync daemon pid %s syncing from height %s at %s\n' "$SYNC_PID" "$h" "$(date -u +%FT%TZ)" >> "$OBS"
 }
@@ -122,6 +125,7 @@ order_for_pass() {  # the four counts in the order registered for the pass
   echo "# syncing daemon: $SHEKYLD, own data dir, exclusive peer $PEER (a LAN testnet staker), in-peers 0"
   echo "# resident daemon mining_status: $(curl -s -m 5 http://127.0.0.1:12030/mining_status | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("active","threads_count")})' 2>/dev/null)"
   echo "# states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block; no-serve windows $QUIET_S s; $PASSES passes per state"
+  echo "# sync rate from the syncing daemon's own stdout log (Synced H/T lines), not its RPC, which answers in 6 to 9 s under sync load"
   echo "# signature scheme: Ed25519 + ML-DSA-65 hybrid (shekyl/archival-attestation-scheme-v3)"
 } > "$OBS"
 echo "# ENV utc tag temp_mC governor cur_freq_kHz load1 busy_jiffies sync_daemon_jiffies sync_daemon_rss_kB sync_height sync_synced mem_available_kB sync_daemon_pid system_daemon_rss_kB swap_total_kB swap_free_kB" > "$ENVF"

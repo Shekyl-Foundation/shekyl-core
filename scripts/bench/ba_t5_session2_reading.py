@@ -29,8 +29,8 @@ Row formats (tab-separated; the first column is the kind):
          sync_daemon_jiffies sync_daemon_rss_kB sync_height sync_synced
          mem_available_kB sync_daemon_pid system_daemon_rss_kB
          swap_total_kB swap_free_kB                    (environment)
-  SYNC   label state start_height end_height seconds polls stalls
-  SYNCH  utc label state height target synchronized   (sync poll)
+  SYNC   label state first_height last_height seconds points stalls last_target
+  SYNCH  utc label state height target             (sync poll, from the daemon's log)
 
 Labels are `<state>.<pass>.<cell>`: state `idle`, `sync` or `nice`; cell
 `N<k>` for a serving block at k in flight, `quiet` or `quiet<k>` for a
@@ -54,7 +54,8 @@ IN_FLIGHT = (8, 16, 32, 64)
 BLOCKS_PER_CELL = 3
 TTFB_STATES = ("idle", "sync")
 TTFB_SAMPLES = 300
-SYNC_STALL_POLLS_MAX = 2
+SYNC_STALL_POINTS_MAX = 1
+SYNC_POINTS_MIN = 3
 
 # The registered predictions, as numbers.
 P1_P99_US = 100_000
@@ -137,13 +138,22 @@ def rate_per_s(block: list[str]) -> float:
 
 
 def sync_rate(window: list[str]) -> float | None:
-    """Blocks per second across one SYNC window, or None if it is void."""
-    start, end, seconds, stalls = window[2], window[3], int(window[4]), int(window[6])
-    if start == "na" or end == "na" or seconds <= 0:
+    """Blocks per second across one SYNC window, or None if it is void.
+
+    The points are the daemon's own "Synced H/T" log lines, about eight
+    seconds apart; `seconds` is the span between the first and the last
+    point's timestamps. Void: fewer than three points, a point at which the
+    height did not advance beyond one, no advance over the window, or the
+    target reached at the last point."""
+    first, last, seconds, points, stalls = window[2], window[3], float(window[4]), int(window[5]), int(window[6])
+    target = window[7] if len(window) > 7 else "na"
+    if first == "na" or last == "na" or seconds <= 0 or points < SYNC_POINTS_MIN:
         return None
-    if int(end) <= int(start) or stalls > SYNC_STALL_POLLS_MAX:
+    if int(last) <= int(first) or stalls > SYNC_STALL_POINTS_MAX:
         return None
-    return (int(end) - int(start)) / seconds
+    if target != "na" and int(last) >= int(target):
+        return None
+    return (int(last) - int(first)) / seconds
 
 
 def mark(held: bool) -> str:
@@ -354,7 +364,7 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     for state in STATES:
         for pas in ("1", "2", "3"):
             if state in SYNCING:
-                syn.append(f"SYNC\t{state}.{pas}.quiet\t{state}\t100\t{100 + int(quiet_rate * 30)}\t30\t30\t0")
+                syn.append(f"SYNC\t{state}.{pas}.quiet\t{state}\t100\t{100 + int(quiet_rate * 40)}\t40.0\t5\t0\t2240")
             for n in IN_FLIGHT:
                 label = f"{state}.{pas}.N{n}"
                 if label in drop:
@@ -369,7 +379,7 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
                 if state in SYNCING:
                     share = share_at.get((state, n), default_share[state][n])
                     stalls = stalls_at.get((state, n), 0)
-                    syn.append(f"SYNC\t{label}\t{state}\t200\t{200 + int(quiet_rate * share * 20)}\t20\t20\t{stalls}")
+                    syn.append(f"SYNC\t{label}\t{state}\t200\t{200 + int(quiet_rate * share * 56)}\t56.0\t7\t{stalls}\t2240")
         if state in TTFB_STATES:
             p50, p99 = ttfb.get(state, (600, 3_000))
             obs.append(f"TTFB\t{state}.1.ttfb\tfull-store\t300\t{p50}\t900\t{p99}\t4000")
@@ -422,7 +432,7 @@ def selftest() -> int:
     run("P3 missed: the daemon keeps its rate", 0, ("never below inside the sweep: missed",),
         share={("sync", 8): 0.9, ("sync", 16): 0.85, ("sync", 32): 0.8, ("sync", 64): 0.78})
     run("void windows are excluded and named", 0, ("void windows (excluded): sync.1.N16",),
-        stalls={("sync", 16): 5})
+        stalls={("sync", 16): 2})
     run("P4 missed: throughput keeps growing", 0, ("no knee inside the sweep: missed",),
         rate={("sync", 8): 20, ("sync", 16): 30, ("sync", 32): 40, ("sync", 64): 50})
     run("P5 missed: nice does not give the rate back", 0, ("N=32: 50 %", "): missed; serving throughput"),

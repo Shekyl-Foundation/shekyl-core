@@ -28,9 +28,18 @@ as pass or fail, and it does not set `MAX_INFLIGHT`.
 (01:10Z) with lines (c), (d), (e) graded pass or fail, a rule that would
 have set `MAX_INFLIGHT` from the sweep, and no nice-19 arm. The
 maintainer replaced that framing before the device was claimed for the
-run, and this is the registration that stands: pushed before the claim,
-not edited afterwards. The first registration's text is in the branch
-history and nothing in it was measured.
+run; that registration was pushed at `3c21d9ec6b` (01:25Z). **A first
+start under it was aborted** at 01:41Z, eight minutes in, when the sync
+poll's RPC reads of the syncing daemon came back empty: under a sync that
+takes three cores, a `get_height` call took 6 to 9 seconds and the poll's
+2-second timeout saw nothing, so every sync window of that start was void
+on its face. Its eleven blocks (one idle pass, one sync pass) are
+discarded and are not in the capture. This registration amends the
+method — the sync rate is read from the daemon's own log, the serving
+blocks are longer so a window holds enough points, and the window
+validity rule is restated in those terms — and nothing else. It is the
+registration that stands: pushed before the device is claimed again, not
+edited afterwards. Both earlier texts are in the branch history.
 
 ## The questions
 
@@ -55,12 +64,12 @@ history and nothing in it was measured.
 ### What is measured, per cell
 
 A cell is one daemon state and one in-flight count N, at full segment
-from the on-disk store, 256 whole fetches per block, at least three
+from the on-disk store, 2,048 whole fetches per block, at least three
 blocks per cell. For each block: responses per second; CPU per response;
 the endpoint's refusals; p50, p90, p99 and maximum wake lateness on the
 endpoint's executor; and, when the daemon is syncing, its sync rate in
 blocks per second over the block's window, read from its own height.
-Between serving blocks in a syncing pass, no-serve windows of 30 s give
+Between serving blocks in a syncing pass, no-serve windows of 45 s give
 the sync rate with the probe idle.
 
 ### Predictions, recorded against the measurements
@@ -121,7 +130,7 @@ beside the measurement. The same block is run under sync and recorded.
   - **nice:** as `sync`, with the serving process started under
     `nice -n 19`. The same sweep, with sync rate and serving throughput
     recorded.
-  - **no-serve syncing** is the 30-second window before and after every
+  - **no-serve syncing** is the 45-second window before and after every
     serving block in a sync or nice pass, with the probe idle; it is
     interleaved so drift shows in both.
 - **Departure from the brief, stated:** the brief says to wipe *the*
@@ -137,20 +146,26 @@ beside the measurement. The same block is run under sync and recorded.
   registered for the pass — pass 1: 32, 64, 8, 16; pass 2: 16, 8, 64, 32;
   pass 3: 64, 16, 32, 8 — so that each N sits at a different point of the
   sync in each pass.
-- **The sync poll** reads the syncing daemon's height once a second over
-  its local RPC for every window. Its cost, one `curl` and one `python3`
-  start per second, is about 6 % of one core while it runs; it is charged
-  to the environment's remainder and not to the probe or the daemon.
+- **The sync poll** reads the syncing daemon's height from the daemon's
+  own standard output, where it writes `Synced H/T` about every eight
+  seconds while syncing, once a second checking for a new line; the
+  window's rate is the height gained between its first and last such
+  line over those lines' own timestamps. The daemon's RPC is not used:
+  under sync load it answers in 6 to 9 seconds (measured in the aborted
+  first start). The poll's cost is one `tail` and one `grep` per second
+  and is charged to the environment's remainder.
 - **A syncing window is valid** if the daemon's height advanced throughout
-  it: at most 2 one-second polls at which the height did not move, the
-  end height above the start height, and the target not reached inside
-  the window. A void window's block is reported and excluded from its
-  cell's sync-rate median.
+  it: at least three log points in the window, at most one point at which
+  the height did not advance from the previous one, the last height above
+  the first, and the target not reached at the last point. A void
+  window's block is reported and excluded from its cell's sync-rate
+  median. A serving block of 2,048 fetches is 35 to 70 seconds under sync,
+  so a window holds four to nine points.
 - **The sync-speed trial** that set this up: the second daemon synced the
   2,228-block testnet chain from the LAN staker at 2.7 to 2.9 blocks per
   second, about 13 minutes end to end, at 3.3 cores, board 46 to 70 °C.
-  One pass of four serving blocks with its windows is about five minutes,
-  so each pass sits inside one sync.
+  One pass of four serving blocks with its windows is about eight
+  minutes, so each pass sits inside one sync.
 
 ### Void conditions
 
