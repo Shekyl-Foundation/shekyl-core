@@ -39,9 +39,9 @@ pub fn simulate_origin_exposure<R: RelayRng + ?Sized>(
     rng: &mut R,
 ) -> OriginExposure {
     assert!(trials > 0, "need at least one trial");
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
     let q = u64::from(params.fluff_probability_pct);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
 
     let mut exposed = 0_u64;
     for _ in 0..trials {

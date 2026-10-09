@@ -125,13 +125,11 @@ pub struct FloodParams {
 /// revision spelled these as literals (`50`, `1_625`) beside doc text naming
 /// the constants — a duplicate that drifts the instant either assumption is
 /// adjusted, leaving the flood simulating a network the derivation has stopped
-/// describing.
-/// Both constants are finite, positive and far below 2^53; the cast cannot
-/// truncate meaningfully or lose a sign.
+/// describing. Both rows are assumptions (§97); the instrument simulates
+/// under them and does not measure them.
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn transit_for(connector: crate::verify_cost::MeasuredConnector) -> u64 {
-    crate::verify_cost::transit_ms_for_connector(connector) as u64
+    u64::from(crate::verify_cost::transit_ms_for_connector(connector).ms())
 }
 
 #[cfg(test)]
@@ -146,11 +144,11 @@ mod transit_for_tests {
     fn transit_tracks_the_connector_not_the_reach() {
         assert_eq!(
             transit_for(MeasuredConnector::Clearnet),
-            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS as u64
+            u64::from(crate::verify_cost::ADOPTED_TRANSIT.ms())
         );
         assert_eq!(
             transit_for(MeasuredConnector::Tor),
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS as u64
+            u64::from(crate::verify_cost::ANON_ZONE_TRANSIT.ms())
         );
         assert!(transit_for(MeasuredConnector::Tor) > transit_for(MeasuredConnector::Clearnet));
     }

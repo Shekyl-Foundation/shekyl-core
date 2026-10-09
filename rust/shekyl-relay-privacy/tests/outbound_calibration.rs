@@ -25,7 +25,7 @@ use shekyl_relay_privacy::SplitMix64;
 fn outbound_calibration_grid() {
     let tor = transit_for(MeasuredConnector::Tor);
     let clear = transit_for(MeasuredConnector::Clearnet);
-    let provisional = u64::from(DandelionParams::adopted().fluff_return_ms);
+    let provisional = u64::from(DandelionParams::adopted().fluff_return_ms.ms());
     println!("REACH OutboundOnly in every cell. nodes 512. provisional input {provisional}");
     println!("per-connector transit hidden {tor} clearnet {clear}");
 
