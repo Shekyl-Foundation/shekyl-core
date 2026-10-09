@@ -28,7 +28,7 @@ use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
     mine_to,
 };
-use crate::scenario_spend::Spender;
+use shekyl_harness_spender::Spender;
 
 /// The settlement epoch open at `height` under the levered schedule the
 /// join mines.
@@ -129,6 +129,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         CenRow::J13,
         CenRow::J14,
         CenRow::J15,
+        CenRow::J27,
         CenRow::L7,
     ] {
         assert!(block.judged_by.contains(&row), "{row} judged the block");

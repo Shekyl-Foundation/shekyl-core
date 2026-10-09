@@ -3841,19 +3841,18 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-address",
- "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-block-template",
- "shekyl-bulletproofs",
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
- "shekyl-curve-tree",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-harness-spender",
+ "shekyl-harness-wallet",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -3882,6 +3881,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-genesis-tool",
+ "shekyl-harness-wallet",
  "shekyl-rpc-types",
  "shekyl-types",
  "shekyl-units",
@@ -3900,6 +3900,9 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-difficulty",
  "shekyl-economics",
+ "shekyl-fcmp",
+ "shekyl-harness-spender",
+ "shekyl-harness-wallet",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
@@ -4439,6 +4442,34 @@ dependencies = [
  "shekyl-types",
  "shekyl-wire",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-harness-spender"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-bond-builder",
+ "shekyl-archival-retention",
+ "shekyl-chain-rules",
+ "shekyl-crypto-pq",
+ "shekyl-curve-generators",
+ "shekyl-curve-tree",
+ "shekyl-fcmp",
+ "shekyl-harness-wallet",
+ "shekyl-tx-builder",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
+]
+
+[[package]]
+name = "shekyl-harness-wallet"
+version = "3.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-crypto-pq",
+ "shekyl-wire",
  "zeroize",
 ]
 

@@ -89,9 +89,9 @@ use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, mine_to,
     ClosedShard, EPOCH_BLOCKS,
 };
-use crate::scenario_spend::Spender;
 use crate::snapshot_json::{from_json, unhex};
 use crate::source::ServeCredit;
+use shekyl_harness_spender::Spender;
 
 const ROWS: &str = include_str!("../fixtures/archival_fixture_slash_m_of_n.rows.json");
 const INPUTS: &str = include_str!("../fixtures/archival_fixture_slash_m_of_n.inputs.json");

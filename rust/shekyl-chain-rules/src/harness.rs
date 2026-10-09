@@ -18,15 +18,12 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::archival::{
-    BondRecord, Holdings, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
-};
+use shekyl_types::archival::{RMarket, SigmaWorkMilli};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
-    LongTermWeight, PCanonicalId, PowHash, SettlementEpoch, ShardId, Timestamp, TxHash,
+    LongTermWeight, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
@@ -38,14 +35,9 @@ use shekyl_wire::{
     Transaction, TxPrefix,
 };
 
-use crate::block::{Candidate, StructurallyValid};
-use crate::census::CenRow;
-use crate::fault::{Fault, FormAttempt, ViewRead};
+use crate::block::Candidate;
 use crate::rule_set::RuleSet;
-use crate::substrate::Substrate;
 use crate::tree_growth::TreeFrontier;
-use crate::validate::form;
-use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip};
 
 /// Invariant brand, as in `verdict.rs`.
@@ -91,17 +83,29 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// appends at `tip + 1`, so — like the store — the only absence the view can
 /// report is above the tip. Key images are a set.
 ///
-/// Roots are keyed the way the store keys them (S-CHAIN-W SCW-19):
+/// Trees are keyed the way the store keys them (S-CHAIN-W SCW-19):
 /// `root_at(h)` is the tree state **at** `h` — after block `h − 1` connected,
-/// before block `h` drained — so `roots[0]` is the empty tree, the root
-/// pushed *with* block `h` is `roots[h + 1]`, and `root_at(tip + 1)` is
+/// before block `h` drained — so `trees[0]` is the empty tree, the tree
+/// pushed *with* block `h` is `trees[h + 1]`, and `root_at(tip + 1)` is
 /// recorded (the state the next candidate is checked against, CEN-B5) while
-/// `root_at(tip + 2)` is `AboveTip`.
+/// `root_at(tip + 2)` is `AboveTip`. The leaf count is keyed identically and
+/// travels with the root it is a function of ([`PlantedTree`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockChain {
     recorded: Vec<RecordedBlock>,
-    /// `roots[h]` = the tree state at height `h`; `roots.len() == recorded.len() + 1`.
-    roots: Vec<CurveTreeRoot>,
+    /// `trees[h]` = the tree state at height `h`; `trees.len() == recorded.len() + 1`.
+    ///
+    /// The mock is **told** its tree, never derives it: it records no
+    /// outputs, so nothing here grows, and a root or a count is what a
+    /// fixture pushed. A count other than `0` is a planted tree, the way a
+    /// planted key image is a planted spend — a fixture that names one
+    /// ([`push_tree`](Self::push_tree)) declares the tree is not its
+    /// subject; a fixture whose subject *is* the tree's depth uses
+    /// `I13::admits`, and the tree's own witness is a driven chain
+    /// (`scenario_*`). Until 2026-10-07 `leaf_count_at` answered `0` for
+    /// every recorded height whatever root sat there, a tree question the
+    /// mock was never asked to hold; this is the symmetry that replaced it.
+    trees: Vec<PlantedTree>,
     /// `weights[h]` = block `h`'s two recorded weights; `weights.len() ==
     /// recorded.len()`. What the store projects from `block_info` for
     /// CEN-G6's medians (slice 7); [`push`](Self::push) records the
@@ -135,7 +139,7 @@ impl Default for MockChain {
     fn default() -> Self {
         Self {
             recorded: Vec::new(),
-            roots: vec![CurveTreeRoot::EMPTY],
+            trees: vec![PlantedTree::EMPTY],
             weights: Vec::new(),
             key_images: BTreeSet::new(),
             transactions: BTreeSet::new(),
@@ -156,29 +160,86 @@ impl MockChain {
         self
     }
 
-    /// Append a block at `tip + 1` and the tree state **after** it — what
+    /// Append a block at `tip + 1` and the root **after** it — what
     /// `root_at(tip + 2)` will return, and what the header of the block
-    /// after it must carry (CEN-B5). The block's weights are the
+    /// after it must carry (CEN-B5). The leaf count carries over from the
+    /// tree before: the mock records no outputs, so a pushed block grows
+    /// nothing, and a chain built by `push` alone has the empty tree's
+    /// count (`0`) at every height. The block's weights are the
     /// penalty-free zone, both columns; a weights fixture uses
     /// [`push_weighing`](Self::push_weighing).
     pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
-        let zone = RecordedWeights {
-            weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
-            long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
-        };
-        self.push_weighing(block, root_after, zone)
+        self.push_weighing(block, root_after, Self::ZONE_WEIGHTS)
     }
 
     /// [`push`](Self::push) with the block's recorded weights named — what
     /// `weights_window` will return for its height.
     pub fn push_weighing(
-        mut self,
+        self,
         block: RecordedBlock,
         root_after: CurveTreeRoot,
         weights: RecordedWeights,
     ) -> Self {
+        let leaf_count = self.trees.last().expect("never empty").leaf_count;
+        let tree_after = PlantedTree {
+            root: root_after,
+            leaf_count,
+        };
+        self.push_recording(block, tree_after, weights)
+    }
+
+    /// [`push`](Self::push) with the tree after the block **planted** —
+    /// its root and its leaf count together, what `root_at(tip + 2)` and
+    /// `leaf_count_at(tip + 2)` (so `depth_at`) will return. A planted
+    /// tree, the register's sense: the mock did not grow it and cannot
+    /// serve its chunks ([`MockView::tree_frontier`]); a fixture plants one
+    /// to put a tree of some depth under a rule whose subject is not the
+    /// tree (CEN-I13's admission is the pure `I13::admits`; the grown
+    /// tree's witness is a driven chain).
+    pub fn push_tree(
+        self,
+        block: RecordedBlock,
+        root_after: CurveTreeRoot,
+        leaf_count_after: u64,
+    ) -> Self {
+        self.push_tree_weighing(block, root_after, leaf_count_after, Self::ZONE_WEIGHTS)
+    }
+
+    /// [`push_tree`](Self::push_tree) with the block's recorded weights
+    /// named as well — a mirror of a real store's block carries both the
+    /// tree the store recorded after it and the weights it recorded for
+    /// it, and a conformance twin that omits either answers a rule's read
+    /// differently from the store it mirrors (CEN-I13 reads `depth_at`,
+    /// CEN-G6 the weights window).
+    pub fn push_tree_weighing(
+        self,
+        block: RecordedBlock,
+        root_after: CurveTreeRoot,
+        leaf_count_after: u64,
+        weights: RecordedWeights,
+    ) -> Self {
+        let tree_after = PlantedTree {
+            root: root_after,
+            leaf_count: leaf_count_after,
+        };
+        self.push_recording(block, tree_after, weights)
+    }
+
+    /// The penalty-free zone in both weight columns — what a block whose
+    /// fixture is not about weights records.
+    const ZONE_WEIGHTS: RecordedWeights = RecordedWeights {
+        weight: BlockWeight::from_raw(FULL_REWARD_ZONE),
+        long_term_weight: LongTermWeight::from_raw(FULL_REWARD_ZONE),
+    };
+
+    fn push_recording(
+        mut self,
+        block: RecordedBlock,
+        tree_after: PlantedTree,
+        weights: RecordedWeights,
+    ) -> Self {
         self.recorded.push(block);
-        self.roots.push(root_after);
+        self.trees.push(tree_after);
         self.weights.push(weights);
         self
     }
@@ -260,12 +321,31 @@ impl MockChain {
             .map_or(AtHeight::AboveTip, AtHeight::Recorded)
     }
 
-    fn root(&self, height: BlockHeight) -> AtHeight<CurveTreeRoot> {
+    pub(crate) fn tree(&self, height: BlockHeight) -> AtHeight<PlantedTree> {
         usize::try_from(height.to_raw())
             .ok()
-            .and_then(|index| self.roots.get(index))
-            .map_or(AtHeight::AboveTip, |root| AtHeight::Recorded(*root))
+            .and_then(|index| self.trees.get(index))
+            .map_or(AtHeight::AboveTip, |tree| AtHeight::Recorded(*tree))
     }
+}
+
+/// The tree state at one height as the mock holds it: the root and the
+/// leaf count the root is a function of, pushed together
+/// ([`MockChain::push_tree`]) so one cannot be asked what the other was
+/// never told. The store records the same pair per height
+/// (`curve_tree_roots[h]`, `curve_tree_leaf_counts[h]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlantedTree {
+    pub(crate) root: CurveTreeRoot,
+    pub(crate) leaf_count: u64,
+}
+
+impl PlantedTree {
+    /// The empty tree: `CurveTreeRoot::EMPTY` over no leaves.
+    const EMPTY: Self = Self {
+        root: CurveTreeRoot::EMPTY,
+        leaf_count: 0,
+    };
 }
 
 /// A `ChainView<'id>` over a [`MockChain`]. Never faults.
@@ -302,7 +382,10 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     }
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        Ok(self.chain.root(height))
+        Ok(match self.chain.tree(height) {
+            AtHeight::Recorded(tree) => AtHeight::Recorded(tree.root),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
     }
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
@@ -338,22 +421,36 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
         Ok(self.chain.transactions.contains(hash))
     }
 
-    /// A mock chain records no outputs, so its tree never grows: the
-    /// frontier is empty, every recorded height's outputs are none and its
-    /// leaf count is zero. Rules that read the tree's operands (F17, I13)
-    /// see an empty tree; the growth derivation appends nothing and the
-    /// verdict carries `root_at(connecting)` forward unchanged.
+    /// The tree at `tip + 1` as the next grow would need it: the leaf
+    /// count the chain was told, over **no chunks** — the mock holds none,
+    /// having grown nothing. For a chain built by `push` alone that is
+    /// `TreeFrontier::EMPTY`, the honest frontier of a chain that records
+    /// no outputs. For a planted tree ([`MockChain::push_tree`]) it is a
+    /// frontier `grow` refuses as `FrontierFault::Shape`, which the drain
+    /// raises as `Corrupt::TreeUnservable`: the view cannot describe the
+    /// tree, which is the truth of a plant, said in the type rather than by
+    /// an empty frontier under a non-zero count. The drain reads this only
+    /// with outputs to append, and the mock's outputs are none.
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-        Ok(TreeFrontier::EMPTY)
+        let tree = self.chain.trees.last().expect("never empty");
+        Ok(TreeFrontier {
+            leaf_count: tree.leaf_count,
+            last_chunks: Vec::new(),
+        })
     }
 
+    /// The leaf count pushed with the root at `height` — `0` for every
+    /// height of a chain built by `push`, the planted count where
+    /// [`MockChain::push_tree`] named one. `depth_at` derives from it.
     fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-        Ok(match self.chain.root(height) {
-            AtHeight::Recorded(_) => AtHeight::Recorded(0),
+        Ok(match self.chain.tree(height) {
+            AtHeight::Recorded(tree) => AtHeight::Recorded(tree.leaf_count),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
 
+    /// None at every recorded height: the mock records no outputs, which
+    /// is why nothing in it grows and the drain appends nothing.
     fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
         Ok(match self.chain.block(height) {
             AtHeight::Recorded(_) => AtHeight::Recorded(BlockOutputs::default()),
@@ -373,573 +470,17 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     crate::archival_reads!(empty, r_market from chain.r_market, close from chain.closes);
 }
 
-/// The fault a [`FaultingView`] raises.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Faulted;
-
-/// A view whose every read faults — the substrate failing under the rule.
-#[derive(Default)]
-pub struct FaultingView<'id>(Brand<'id>);
-
-impl<'id> ChainView<'id> for FaultingView<'id> {
-    type Fault = Faulted;
-
-    fn has_key_image(&self, _: &KeyImage) -> Result<bool, Faulted> {
-        Err(Faulted)
-    }
-
-    fn total_burned(&self) -> Result<AtomicUnits, Faulted> {
-        Err(Faulted)
-    }
-
-    fn tree_frontier(&self) -> Result<TreeFrontier, Faulted> {
-        Err(Faulted)
-    }
-
-    fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn weights_window(
-        &self,
-        _: BlockHeight,
-        _: BlockCount,
-    ) -> Result<AtHeight<Vec<RecordedWeights>>, Faulted> {
-        Err(Faulted)
-    }
-
-    fn has_transaction(&self, _: &TxHash) -> Result<bool, Faulted> {
-        Err(Faulted)
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Faulted> {
-        Err(Faulted)
-    }
-
-    crate::archival_reads!(fault Faulted);
-}
-
-/// The one per-height read a [`WithholdingView`] answers `AboveTip` for.
-///
-/// One read, one height. A view that withholds several, or that lies about
-/// its tip, is a different instrument and is not this one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WithheldRead {
-    /// [`ChainView::block_at`] at this height — the block row.
-    BlockAt(BlockHeight),
-    /// [`ChainView::root_at`] at this height — the curve-tree root.
-    RootAt(BlockHeight),
-    /// [`ChainView::weights_window`] ending at this height — the weights
-    /// projection answers `AboveTip` for a height the tip says is
-    /// recorded (slice 7, CEN-G6's read).
-    WeightsBelow(BlockHeight),
-    /// [`ChainView::leaf_count_at`] at this height — the tree's size,
-    /// and so [`ChainView::depth_at`] (slice 8, CEN-J21's I13 read).
-    LeafCountAt(BlockHeight),
-}
-
-/// A [`MockView`] with one per-height read withheld.
-///
-/// Charter job 3. A conforming store refuses to hold this (SI-7): the tip
-/// still says the chain is dense, and one row answers [`AtHeight::AboveTip`].
-/// The assertion a test makes with it is the fault class — [`crate::Corrupt`]
-/// — never a verdict. Every read other than the withheld one is the inner
-/// mock's, so the contradiction is exactly one fact.
-pub struct WithholdingView<'a, 'id> {
-    inner: MockView<'a, 'id>,
-    withheld: WithheldRead,
-}
-
-impl<'a, 'id> MockView<'a, 'id> {
-    /// Withhold `read`. The mock moves into the wrapper; the chain it
-    /// borrows is unchanged.
-    #[must_use]
-    pub fn withholding(self, read: WithheldRead) -> WithholdingView<'a, 'id> {
-        WithholdingView {
-            inner: self,
-            withheld: read,
-        }
-    }
-}
-
-impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
-    type Fault = Infallible;
-
-    fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
-        self.inner.has_key_image(key_image)
-    }
-
-    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
-        self.inner.total_burned()
-    }
-
-    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-        if let WithheldRead::BlockAt(at) = self.withheld {
-            if height == at {
-                return Ok(AtHeight::AboveTip);
-            }
-        }
-        self.inner.block_at(height)
-    }
-
-    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-        self.inner.height_of(hash)
-    }
-
-    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        if let WithheldRead::RootAt(at) = self.withheld {
-            if height == at {
-                return Ok(AtHeight::AboveTip);
-            }
-        }
-        self.inner.root_at(height)
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        self.inner.tip()
-    }
-
-    fn weights_window(
-        &self,
-        end: BlockHeight,
-        at_most: BlockCount,
-    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-        if let WithheldRead::WeightsBelow(at) = self.withheld {
-            if end == at {
-                return Ok(AtHeight::AboveTip);
-            }
-        }
-        self.inner.weights_window(end, at_most)
-    }
-
-    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
-        self.inner.has_transaction(hash)
-    }
-
-    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-        self.inner.tree_frontier()
-    }
-
-    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-        if let WithheldRead::LeafCountAt(at) = self.withheld {
-            if height == at {
-                return Ok(AtHeight::AboveTip);
-            }
-        }
-        self.inner.leaf_count_at(height)
-    }
-
-    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-        self.inner.outputs_at(height)
-    }
-
-    crate::archival_reads!(delegate inner);
-}
-
-/// Hybrid-key bytes [`HybridPublicKey::from_canonical_bytes`] rejects.
-///
-/// The constructor is that rejection, so a [`NonCanonicalBondView`] cannot
-/// serve a key the admission grammar accepts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NonCanonicalHybridKey(Vec<u8>);
-
-impl NonCanonicalHybridKey {
-    /// `Some` when `bytes` are not a canonical hybrid public key.
-    #[must_use]
-    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Option<Self> {
-        let bytes = bytes.into();
-        if HybridPublicKey::from_canonical_bytes(&bytes).is_ok() {
-            None
-        } else {
-            Some(Self(bytes))
-        }
-    }
-}
-
-/// A [`MockView`] that serves one persona a bond record whose hybrid key
-/// is not canonical.
-///
-/// Job 3 of the mock's charter, beside [`WithholdingView`]. `bond_records`
-/// is the inner list with this persona's record planted, so the two bond
-/// reads agree and every other persona stays the inner mock's. A chain
-/// that posts a real bond is the writer's to witness, not this view's:
-/// the constructor will not accept a canonical key.
-pub struct NonCanonicalBondView<'a, 'id> {
-    inner: MockView<'a, 'id>,
-    persona: PCanonicalId,
-    record: BondRecord,
-}
-
-impl<'a, 'id> MockView<'a, 'id> {
-    /// Serve `persona` the record whose hybrid key is `key`. The record's
-    /// other fields are empty: this instrument exists so a rule can observe
-    /// the key, and it folds nothing.
-    #[must_use]
-    pub fn with_non_canonical_bond(
-        self,
-        persona: PCanonicalId,
-        key: NonCanonicalHybridKey,
-    ) -> NonCanonicalBondView<'a, 'id> {
-        NonCanonicalBondView {
-            inner: self,
-            persona,
-            record: BondRecord {
-                hybrid_pubkey: key.0,
-                bond_spend_pk: Vec::new(),
-                endpoint: [0; 32],
-                join_settlement_epoch: SettlementEpoch::ZERO,
-                bonded_total: AtomicUnits::ZERO,
-                holdings: Holdings::shard_set(Vec::new())
-                    .expect("an empty shard set is a holdings value"),
-                bad_intervals: Vec::new(),
-                claimed_settlement_epochs: Vec::new(),
-                first_paying_emission_height: None,
-            },
-        }
-    }
-}
-
-impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
-    type Fault = Infallible;
-
-    fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
-        self.inner.has_key_image(key_image)
-    }
-
-    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
-        self.inner.total_burned()
-    }
-
-    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-        self.inner.block_at(height)
-    }
-
-    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-        self.inner.height_of(hash)
-    }
-
-    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        self.inner.root_at(height)
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        self.inner.tip()
-    }
-
-    fn weights_window(
-        &self,
-        end: BlockHeight,
-        at_most: BlockCount,
-    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-        self.inner.weights_window(end, at_most)
-    }
-
-    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
-        self.inner.has_transaction(hash)
-    }
-
-    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-        self.inner.tree_frontier()
-    }
-
-    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-        self.inner.leaf_count_at(height)
-    }
-
-    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-        self.inner.outputs_at(height)
-    }
-
-    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
-        if persona == &self.persona {
-            Ok(Some(self.record.clone()))
-        } else {
-            self.inner.bond_record(persona)
-        }
-    }
-
-    fn slash_log_after(
-        &self,
-        persona: &PCanonicalId,
-        height: BlockHeight,
-    ) -> Result<Vec<SlashLogEntry>, Infallible> {
-        self.inner.slash_log_after(persona, height)
-    }
-
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Infallible> {
-        self.inner.last_served_epoch(persona, shard)
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
-        self.inner.served_shards(persona)
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, Infallible> {
-        self.inner.pass_count(persona, shard, epoch)
-    }
-
-    fn r_market(
-        &self,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<Option<RMarket>, Infallible> {
-        self.inner.r_market(shard, epoch)
-    }
-
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
-        self.inner.sigma_work(epoch)
-    }
-
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        self.inner.budget(epoch)
-    }
-
-    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
-        self.inner.last_settled_slash_epoch()
-    }
-
-    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
-        let mut records = self.inner.bond_records()?;
-        if let Some((_, record)) = records
-            .iter_mut()
-            .find(|(persona, _)| *persona == self.persona)
-        {
-            *record = self.record.clone();
-        } else {
-            records.push((self.persona, self.record.clone()));
-        }
-        Ok(records)
-    }
-
-    fn slash_applied(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<bool, Infallible> {
-        self.inner.slash_applied(persona, shard, epoch)
-    }
-
-    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        self.inner.budget_accruing(epoch)
-    }
-}
-
-/// The environment a fixture is judged in: a fixed clock and a longhash
-/// function the test chooses.
-///
-/// The default longhash is the **all-zero** hash — `0 · d < 2^256` for
-/// every target, so PoW passes at any difficulty and a fixture that is not
-/// about PoW never trips on it. A PoW fixture swaps in a closure that
-/// returns what it needs; a fault fixture swaps in one that returns
-/// [`Faulted`].
-#[derive(Clone, Copy)]
-pub struct MockSubstrate {
-    /// What `local_clock` returns.
-    pub clock: Timestamp,
-    /// What `longhash` returns, given the preimage and the seed.
-    pub longhash: fn(&[u8], &BlockHash) -> Result<PowHash, Faulted>,
-}
-
-impl MockSubstrate {
-    /// A clock comfortably after every fixture header's timestamp
-    /// ([`fixture::header`] is `1_700_000_000`), so CEN-C1 passes unless a
-    /// test moves one or the other.
-    pub const CLOCK: Timestamp = Timestamp::from_raw(1_700_000_100);
-
-    /// The longhash that satisfies every target. The `Result` is the fn
-    /// pointer's shape, not this function's choice.
-    #[allow(clippy::unnecessary_wraps)]
-    pub fn always_satisfies(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
-        Ok(PowHash::from_bytes([0; 32]))
-    }
-}
-
-impl Default for MockSubstrate {
-    fn default() -> Self {
-        Self {
-            clock: Self::CLOCK,
-            longhash: Self::always_satisfies,
-        }
-    }
-}
-
-impl Substrate for MockSubstrate {
-    type Fault = Faulted;
-
-    fn local_clock(&self) -> Result<Timestamp, Faulted> {
-        Ok(self.clock)
-    }
-
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Faulted> {
-        (self.longhash)(pow_blob, seed)
-    }
-}
-
-/// The seed CEN-D3 expects for a candidate on `chain`'s tip: the null hash
-/// at genesis admission, else the identity of the block at
-/// [`seed_height`](crate::seed_height). What an honest driver claims to
-/// `form`.
-#[must_use]
-pub fn expected_seed(chain: &MockChain) -> BlockHash {
-    let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |tip| tip.height.to_raw() + 1));
-    let Some(seed_height) = crate::seed_height(connecting) else {
-        return BlockHash::NULL;
-    };
-    match chain.block(seed_height) {
-        AtHeight::Recorded(block) => block.hash,
-        AtHeight::AboveTip => unreachable!("the seed height is below the tip"),
-    }
-}
-
-/// Run the stateless stage under `rule_set` with the default substrate,
-/// claiming `seed`. Panics if the substrate faults or a stateless rule
-/// refuses — a fixture that wants to exercise either calls [`form`] itself.
-#[track_caller]
-pub fn formed_under(
-    candidate: Candidate,
-    rule_set: &RuleSet,
-    seed: BlockHash,
-) -> StructurallyValid {
-    match form(
-        candidate,
-        rule_set,
-        &MockSubstrate::default(),
-        seed,
-        FormAttempt::FIRST,
-    ) {
-        Ok(Ok(formed)) => formed,
-        Ok(Err(refused)) => panic!("the fixture was refused by a stateless rule: {refused}"),
-        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
-    }
-}
-
-/// [`formed_under`] the genesis rule set, claiming the seed `chain` expects
-/// — the honest driver's call, so D3 holds and the view stage judges the
-/// candidate.
-#[track_caller]
-pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
-    formed_under(candidate, &RuleSet::GENESIS, expected_seed(chain))
-}
-
-/// [`formed_on`] an empty chain — a genesis candidate.
-#[track_caller]
-pub fn formed(candidate: Candidate) -> StructurallyValid {
-    formed_on(&MockChain::default(), candidate)
-}
-
-/// Unwrap a result whose error cannot exist.
-pub fn infallible<T>(result: Result<T, Infallible>) -> T {
-    match result {
-        Ok(value) => value,
-        Err(never) => match never {},
-    }
-}
-
-/// Unwrap a parent-side definition ([`crate::tx_volume_window`],
-/// [`crate::mtp_median_at`]) over a view that cannot fault and is dense.
-/// A hole is a fixture failure.
-#[track_caller]
-pub fn defined<T>(read: Result<T, ViewRead<Infallible>>) -> T {
-    match read {
-        Ok(value) => value,
-        Err(ViewRead::View(never)) => match never {},
-        Err(ViewRead::Corrupt(corrupt)) => panic!("corrupt view: {corrupt}"),
-    }
-}
-
-/// Unwrap `validate`'s outer position over a view that cannot fault: the
-/// view arm is uninhabited, and the crate's own arms are a fixture failure
-/// unless the test asked for them.
-#[track_caller]
-pub fn judged<T>(result: Result<T, Fault<Infallible>>) -> T {
-    match result {
-        Ok(value) => value,
-        Err(Fault::View(never)) => match never {},
-        Err(Fault::Stale(stale)) => panic!("unexpected stale premise: {stale}"),
-        Err(Fault::Corrupt(corrupt)) => panic!("unexpected corrupt view: {corrupt}"),
-    }
-}
-
-/// Assert `result` is exactly a refusal on `rule` at `locus`.
-///
-/// Panics on a pass ("the rule did not fire"), on a refusal by any other
-/// row ("the wrong rule fired"), and on the right row at the wrong place
-/// (miner vs listed vs input index) — the three ways a negative fixture
-/// goes vacuous.
-#[track_caller]
-pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow, locus: Locus) {
-    match result {
-        Err(InvalidBlock {
-            rule: fired,
-            locus: at,
-        }) if fired == rule && at == locus => {}
-        Err(other) => panic!("expected {rule} at {locus}, but {other}"),
-        Ok(passed) => {
-            panic!("expected {rule} at {locus}, but the candidate passed: {passed:?}")
-        }
-    }
-}
-
-/// A `by_construction` falsifier that serves several rows names every one of
-/// them, and this is what each served row must pass: it is registered
-/// `by_construction`. Slice 5 Q6's condition — one test credited to N rows
-/// is not N rows covered unless the test walks the list — so a falsifier
-/// calls this first with the rows it serves, and the coverage gate refuses
-/// a shared falsifier whose body does not name each of them. A row re-keyed
-/// to another status or another falsifier fails here until it is taken off
-/// the list.
-#[track_caller]
-pub fn credited_to_this_falsifier(rows: &[CenRow], falsifier: &str) {
-    for row in rows {
-        assert_eq!(
-            row.status(),
-            crate::census::RowStatus::ByConstruction,
-            "{row} is credited to `{falsifier}` but is not registered by_construction"
-        );
-    }
-}
-
-/// Assert `f` passes `last_ok` and refuses `first_bad` on `rule` at `locus`
-/// — the two sides of a boundary, so an off-by-one in the rule fails here.
-#[track_caller]
-pub fn boundary_pair<T: Debug, V>(
-    last_ok: V,
-    first_bad: V,
-    rule: CenRow,
-    locus: Locus,
-    f: impl Fn(V) -> Verdict<T>,
-) {
-    if let Err(refused) = f(last_ok) {
-        panic!("the last acceptable value was refused: {refused}");
-    }
-    assert_refused(f(first_bad), rule, locus);
-}
+mod assert;
+mod views;
+
+pub use assert::{
+    assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_seed, formed,
+    formed_on, formed_under, infallible, judged, MockSubstrate,
+};
+pub use views::{
+    Faulted, FaultingView, NonCanonicalBondView, NonCanonicalHybridKey, WithheldRead,
+    WithholdingView,
+};
 
 pub mod fixture;
 mod price;
