@@ -65,6 +65,13 @@ pub const HYBRID_KEY_VERSION: u8 = 1;
 /// `HYBRID_KEY_VERSION` stays 1 — the *key* format is unchanged.
 pub const HYBRID_SIG_VERSION: u8 = 2;
 pub const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
+/// Ed25519 + FN-DSA-1024 ([`crate::fn_dsa_hybrid`]): the receipt key and the
+/// witness carrier signature (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.2). Value 2
+/// is the multisig container ([`crate::multisig::HYBRID_SCHEME_ID_MULTISIG`]).
+///
+/// This byte is not a transaction authorization scheme: [`verify_pqc_auth`]
+/// refuses it, so a receipt key cannot sign for an output.
+pub const HYBRID_SCHEME_ID_ED25519_FN_DSA_1024: u8 = 3;
 
 /// Scheme-level domain-separation strings (SA-R-2): one distinct string per
 /// signing **surface**. Each is the outer domain of the nested combiner — a
@@ -109,6 +116,16 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
+/// A serve receipt, under scheme 3: `P`'s signature over the 112-byte
+/// delivery transcript with its **receipt key**
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
+/// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
+/// identity key and scheme 1: one label never names two schemes.
+pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
+/// The witness's signature over a carrier's set commitment, under scheme 3
+/// with a key generated fresh for the block (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §7.3).
+pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
 // generic surface-A `pqc_auths` slot (SCHEME_DOMAIN_PQC_AUTH_TX), which binds a
@@ -443,11 +460,13 @@ impl SignatureScheme for HybridEd25519MlDsa {
 
         hybrid_combiner::verify_nested(
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
-            &public_key.ed25519,
-            &signature.ed25519,
+            &hybrid_combiner::NestedSignature {
+                ed25519_public: &public_key.ed25519,
+                ed25519_signature: &signature.ed25519,
+                sigma_pq: &ml_dsa_signature,
+            },
             domain,
             message,
-            &ml_dsa_signature,
             || {
                 let ml_dsa_public: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = public_key
                     .ml_dsa

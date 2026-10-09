@@ -87,6 +87,14 @@ pub(crate) fn sign_nested<P: AsRef<[u8]>>(
     Ok((sigma_ed.to_bytes(), sigma_pq))
 }
 
+/// What a nested signature consists of, as the verifier receives it: the
+/// classical key and the two signature halves.
+pub(crate) struct NestedSignature<'a> {
+    pub(crate) ed25519_public: &'a [u8; ED25519_PUBLIC_KEY_LENGTH],
+    pub(crate) ed25519_signature: &'a [u8],
+    pub(crate) sigma_pq: &'a [u8],
+}
+
 /// The one nested-verify body.
 ///
 /// Checks run in a fixed order, the one the ML-DSA scheme has always had:
@@ -99,17 +107,15 @@ pub(crate) fn sign_nested<P: AsRef<[u8]>>(
 /// `Result<()>`, never `Result<bool>`: there is no `Ok(false)` to mishandle.
 pub(crate) fn verify_nested<K>(
     scheme_id: u8,
-    ed25519_public: &[u8; ED25519_PUBLIC_KEY_LENGTH],
-    ed25519_signature: &[u8],
+    signature: &NestedSignature<'_>,
     domain: &[u8],
     message: &[u8],
-    sigma_pq: &[u8],
     prepare_pq: impl FnOnce() -> Result<K, CryptoError>,
     verify_pq: impl FnOnce(&K, &[u8; 64]) -> bool,
 ) -> Result<(), CryptoError> {
-    let verifying_key =
-        VerifyingKey::from_bytes(ed25519_public).map_err(|_| CryptoError::InvalidKeyMaterial)?;
-    let sigma_ed = Ed25519Signature::try_from(ed25519_signature)
+    let verifying_key = VerifyingKey::from_bytes(signature.ed25519_public)
+        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    let sigma_ed = Ed25519Signature::try_from(signature.ed25519_signature)
         .map_err(|_| CryptoError::SignatureVerificationFailed)?;
     let pq_key = prepare_pq()?;
 
@@ -118,7 +124,7 @@ pub(crate) fn verify_nested<K>(
         return Err(CryptoError::SignatureVerificationFailed);
     }
     verifying_key
-        .verify(&outer_message(&inner, sigma_pq), &sigma_ed)
+        .verify(&outer_message(&inner, signature.sigma_pq), &sigma_ed)
         .map_err(|_| CryptoError::SignatureVerificationFailed)
 }
 

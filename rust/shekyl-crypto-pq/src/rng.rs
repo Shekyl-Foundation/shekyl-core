@@ -51,6 +51,68 @@ pub fn hedged_fresh32() -> [u8; 32] {
     fresh
 }
 
+/// The OS CSPRNG as a [`rand::RngCore`], with [`hedged_fresh32`]'s policy:
+/// fresh bytes, or zeros if the OS RNG fails, never a panic.
+///
+/// For a signer that **hedges internally** and takes its randomness as an
+/// RNG it calls infallibly. FN-DSA's is the case this exists for: its
+/// `sign` draws a seed with `fill_bytes` and immediately replaces it with
+/// `SHAKE256(H(signing key) ‖ μ ‖ seed)`, so the seed is one input among
+/// three and a zero seed degrades to a deterministic signature over the
+/// same key and message rather than to a repeated nonce. Handing that
+/// signer the bare `OsRng` would instead panic, inside whatever task was
+/// signing, the moment the OS RNG failed.
+///
+/// **Not for key generation**, and not for any consumer that uses the
+/// bytes as a secret directly — see the module docs. A deterministic
+/// FN-DSA signature is only as safe as its floating-point arithmetic is
+/// reproducible: two different signatures over one hashed point leak the
+/// key, and a zero seed makes the hashed point a function of the key and
+/// message alone. That is why the signing vectors are pinned on both
+/// supported architectures (`tests/kat_fn_dsa_hybrid_v1.rs`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HedgedOsRng;
+
+impl rand::RngCore for HedgedOsRng {
+    fn next_u32(&mut self) -> u32 {
+        let mut bytes = [0u8; 4];
+        self.fill_bytes(&mut bytes);
+        u32::from_le_bytes(bytes)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut bytes = [0u8; 8];
+        self.fill_bytes(&mut bytes);
+        u64::from_le_bytes(bytes)
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        if OsRng.try_fill_bytes(dest).is_err() {
+            dest.fill(0);
+        }
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+
+/// A hedged signer's randomness source: the fallback is sound only inside
+/// the construction, which is the caller's to establish.
+impl rand::CryptoRng for HedgedOsRng {}
+
+/// 32 bytes of key material from the OS CSPRNG, or an error.
+///
+/// The fail-loud half of the policy, without the panic: a caller that must
+/// survive an entropy outage gets an `Err` to propagate, and never a
+/// predictable key.
+pub fn key_material32() -> Result<zeroize::Zeroizing<[u8; 32]>, rand::Error> {
+    let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
+    OsRng.try_fill_bytes(bytes.as_mut())?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +128,24 @@ mod tests {
         let b = hedged_fresh32();
         assert_ne!(a, b, "consecutive draws must differ under a working RNG");
         assert_ne!(a, [0u8; 32], "a working RNG must not return the fallback");
+    }
+
+    /// The adapter draws real entropy when the OS provides it: the same
+    /// property as above, through the `RngCore` face a signer calls.
+    #[test]
+    fn the_adapter_draws_distinct_bytes() {
+        use rand::RngCore as _;
+        let (mut a, mut b) = ([0u8; 40], [0u8; 40]);
+        HedgedOsRng.fill_bytes(&mut a);
+        HedgedOsRng.fill_bytes(&mut b);
+        assert_ne!(a, b);
+        assert_ne!(a, [0u8; 40]);
+    }
+
+    #[test]
+    fn key_material_draws_are_distinct() {
+        let a = key_material32().expect("a working OS RNG");
+        let b = key_material32().expect("a working OS RNG");
+        assert_ne!(*a, *b);
     }
 }

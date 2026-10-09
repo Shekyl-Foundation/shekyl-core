@@ -55,6 +55,7 @@ pub mod bip39;
 pub mod derivation;
 mod encrypted_output_field;
 pub mod error;
+pub mod fn_dsa_hybrid;
 pub mod handle;
 mod hybrid_combiner;
 pub mod kem;
