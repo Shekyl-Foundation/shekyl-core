@@ -669,8 +669,9 @@ fn a13_budget_accruing_is_the_open_epochs_row_and_none_otherwise() {
 }
 
 // ---------------------------------------------------------------------------
-// A14–A16 — settlement's reads (`SO-D10`). No writer reaches these tables
-// yet, so every row is planted.
+// A14–A16 — settlement's reads (`SO-D10`). Every row is planted: the reads
+// are tested apart from the slash pass that writes the rows
+// (`slash_scan_bench_tests`).
 // ---------------------------------------------------------------------------
 
 #[test]

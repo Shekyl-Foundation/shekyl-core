@@ -89,9 +89,9 @@ This section is the only place the document describes current behaviour.
 | Coinbase tag `0x0C` | Does not exist. The highest tx-extra tag is `0x0B`, and the coinbase grammar admits neither | `rust/shekyl-wire/src/tx_extra/mod.rs:79`; `tx_extra/coinbase.rs:57-62` |
 | Witness key, witness seed ring | Not in code | grep for `derive_witness_keypair`, `LABEL_WITNESS`: no hits |
 | Coinbase transaction secret | Random per block and not retained. The Rust builder takes it from the caller; the C++ builder generates it | `rust/shekyl-block-template/src/lib.rs:191-194`; `src/cryptonote_core/cryptonote_tx_utils.cpp:79` |
-| Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three, else Missed (§9.3). Nothing calls it yet | `rust/shekyl-archival-retention/src/settlement_select.rs` |
-| Settlement rows | The 3-byte row and its table exist in the Rust store, with the issued-draw index and its digest (§10). No writer reaches them yet. The C++ store keeps the table's handle with no writer | `rust/shekyl-types/src/archival/settlement.rs`; `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `rust/shekyl-chain-store/src/archival_snapshot.rs` (`disposition`) |
-| Slash fold | Reads "any pass", not a settlement row | `rust/shekyl-chain-rules/src/archival/mod.rs:317-318`; `src/blockchain_db/lmdb/db_lmdb.cpp:5361-5362` |
+| Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three, else Missed (§9.3). The Rust slash pass calls it for every pair with a draw in the epoch | `rust/shekyl-archival-retention/src/settlement_select.rs`; `rust/shekyl-chain-rules/src/archival/slash.rs` |
+| Settlement rows | The Rust slash pass writes one per pair with a counted draw, ahead of the slash it decides. The issued-draw index and its digest (§10) have no block writer yet; a Fakechain-only door stands in for admission. The C++ store keeps the table's handle with no writer | `rust/shekyl-types/src/archival/settlement.rs`; `rust/shekyl-chain-store/src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`); `rust/shekyl-chain-store/src/archival_snapshot.rs` (`disposition`) |
+| Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs`; `src/blockchain_db/lmdb/db_lmdb.cpp` (`archival_challenge_failed_at_height`) |
 | Accrual | A pair earns for an epoch on "any pass" | `rust/shekyl-chain-rules/src/archival/close.rs:344-352` |
 | Failure window | `m = 11`, `n = 13`; a two-valued observation with no NonObservation arm | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:258-265` |
 | Signature schemes | Ed25519 + ML-DSA-65 hybrid. The canonical encoding already carries a scheme byte: values 1 (single) and 2 (multisig) | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:152-154`; `multisig.rs:18` |
@@ -726,6 +726,17 @@ failure window. This is a precondition (§11), not a consequence: under
 the secret draw, "any pass" would count every pair the draw did not reach
 as a miss.
 
+**The window.** From a Missed epoch the slash fold walks back through the
+pair's earlier rows. Served and Missed are observations. An absent row and
+a NonObservation row are passed over, not a stop: stopping would let a
+producer withhold one reveal, push a non-server's pair below three issued
+draws in one epoch, and clear its window. The walk stops where the
+record's standing ends (before the join, or across a reinstatement), at
+`n` observations, and at the retention horizon: it reads no epoch a store
+may have deleted, because a deleted row and an absent one read the same.
+So the rule is `m` misses within the last `n` observations inside the
+retained window (`ARCHIVAL_SETTLEMENT_WRITER.md` §14.4 step 3).
+
 ### 9.5 Settlement integrity
 
 Three local checks at the settlement writer, none on chain
@@ -750,7 +761,15 @@ verdict on a block, never a clamp and never a skipped row.
    re-walks `D` from the bond journals and compares. Draws are selected
    against `D` as of `h_open(E)`, so a `D` that drifted between admission
    and settlement would change which pair a draw names.
-3. **`passes ≤ issued`**, a typed halt, beneath both.
+3. **`passes ≤ issued`**, a typed halt, beneath both. The row type holds
+   the tighter `passes ≤ counted` — `counted` is three, or none below
+   three issued — which implies it. The fold selects at most three and
+   only then counts, so the halt names a defect of the fold; it is never
+   clamped and the row is never skipped.
+
+Checks 1 and 3 are one store-invariant row, `SI-25`
+(`STORE_INVARIANT_REGISTER.md`), with the fact that an epoch settles
+once. Check 2 lands with admission.
 
 Nothing is re-derived at settlement. Check 1 costs one hash per issued
 draw over the stored index. The selection reads that index and then keeps

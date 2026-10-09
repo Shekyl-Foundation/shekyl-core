@@ -82,10 +82,6 @@ mod archival_corpus_tests;
 /// tests share.
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod archival_driver;
-/// `ARW-Q15`'s consumer: the LMDB slash fixture rebuilt on the Rust stack
-/// under a levered schedule and compared through a role map.
-#[cfg(all(test, feature = "pipeline"))]
-mod archival_fixture_replica_tests;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 4): a mismatched hint is
 /// CEN-J11, and a Release signed by the wrong key is CEN-J13.
 #[cfg(all(test, feature = "pipeline"))]
@@ -165,8 +161,8 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected, Rewind,
-    Rewound, RunEnd, RunFault, TemplateFacts,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected,
+    IssueDraws, Rewind, Rewound, RunEnd, RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

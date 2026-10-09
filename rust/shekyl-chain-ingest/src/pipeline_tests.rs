@@ -269,6 +269,42 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     cleanup(&path);
 }
 
+/// The draw-issue door is regtest-only as `Inject` is, refused at the
+/// connector before the store is asked, and the refusal is not a halt.
+/// The regtest path is `archival_slash_tests`' levered chain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
+    let path = tmp("connector-issue-off-regtest");
+    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path),
+        rules,
+    });
+    let epoch = shekyl_types::SettlementEpoch::from_raw(1);
+    let refused = joined
+        .actor
+        .ask(crate::connector::IssueDraws {
+            epoch,
+            draws: Vec::new(),
+            digest: shekyl_types::archival::IssuedDigest::ZERO,
+        })
+        .await
+        .expect_err("regtest-only");
+    assert!(
+        matches!(
+            refused,
+            SendError::HandlerError(RunFault::IssueOffRegtest {
+                epoch: named,
+                rules: under,
+            }) if named == epoch && under == rules
+        ),
+        "{refused:?}"
+    );
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
+    cleanup(&path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_checkpoint() {
     let path = tmp("pipeline-replay");

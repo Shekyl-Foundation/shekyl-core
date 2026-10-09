@@ -78,6 +78,32 @@
 //! at `E_reinstate`); the interval boundary is what extends the same treatment to a
 //! **carried** shard the same sweep did not slash.
 //!
+//! ## Two callers gather the window, and they walk differently
+//!
+//! What is above is the C++ walk, which is consensus until `DEL-008`: it
+//! reads the serve-credit ledger and halts at the first epoch that is not an
+//! observation.
+//!
+//! The Rust slash pass (`shekyl-chain-rules`, `archival/slash.rs`) reads
+//! settlement rows, and by `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10b` it
+//! **passes over** an epoch that is not an observation — a NonObservation
+//! row, or no row — and does not stop there. Stopping is exploitable under
+//! the secret draw: a producer that withholds one reveal can push a
+//! non-server's pair below three issued draws in one epoch and clear its
+//! window. The three boundaries hold in this form:
+//!
+//! - before `E_join + 1`, and across a closed bad interval: `good_through`
+//!   is false and the walk stops, as above;
+//! - before the shard's `E_add + 1`: the pair has no counted draw there, so
+//!   there is nothing to count. Not a stop, and nothing accumulates.
+//!
+//! A walk that passes over epochs is no longer bounded by `n − 1` epochs
+//! of look-back, so the Rust walk also stops at the retention horizon
+//! (`SettlementSchedule::prune_below_epoch_at_height`): it reads no epoch a
+//! store may have deleted. The assert below still has to hold — `n`
+//! observations must fit inside what is retained — and the explicit stop
+//! is what keeps the reads there.
+//!
 //! ## Persistence: recomputed, never stored
 //!
 //! There is no miss-tally in persisted consensus state, and therefore no

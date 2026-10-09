@@ -10,7 +10,10 @@
 //! reorg cap) puts the first slash deadline eleven settled misses can
 //! reach inside what a test mines. One persona
 //! joins two shards, serves one of them, and is slashed on the shard it
-//! never served. The phases then run on that record, in order, without
+//! never served. Nothing admits a draw yet, so each epoch's draws are
+//! issued through the connector's regtest door ([`IssueDraws`],
+//! `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): three per shard, passed on
+//! the served shard and not on the other. The phases then run on that record, in order, without
 //! re-mining the chain:
 //!
 //! - The chain fills shards 0 and 1 with real spends and lets them close
@@ -34,19 +37,23 @@
 //! (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
 //! the_levered_slash_chain`).
 
+use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
     good_through, serve_credit_epoch_ok, verify_reinstate_bond_post, HoldingsKind,
     ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, SettlementSchedule, TxSlot};
-use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings};
+use shekyl_types::archival::{
+    BadInterval, BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw,
+    SettlementOutcome,
+};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
 };
-use crate::connector::{Inject, Injected};
+use crate::connector::{Inject, Injected, IssueDraws};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
@@ -235,10 +242,15 @@ impl LeveredChain {
         self.chain.push(first_serving);
     }
 
-    /// Eleven passes on the served shard, none on the other, then the slash
-    /// in the deadline block. The mined credit is the first pass; the
-    /// injector writes the other ten.
+    /// Eleven epochs of three draws on each shard, every one passed on the
+    /// served shard and none on the other, then the slash in the deadline
+    /// block. The served shard also keeps its serve credits — the mined
+    /// one and ten injected — which the Release's served anchor reads; the
+    /// slash reads the draws.
     async fn slash_the_unserved_shard(&mut self, join: &Joined) -> Slashed {
+        for epoch in (join.join_epoch + 1)..=(join.join_epoch + FAILURE_WINDOW) {
+            self.issue_three_draws_each(join, epoch).await;
+        }
         for epoch in (join.join_epoch + 2)..=(join.join_epoch + FAILURE_WINDOW) {
             let Injected { .. } = self
                 .scenario
@@ -270,6 +282,27 @@ impl LeveredChain {
             vec![deadline],
             "one slash, in the deadline block"
         );
+        // The rows the deadline block settled, ahead of the slash it
+        // decided on them: the unserved shard Missed, the served one Served.
+        let settled: Vec<(u64, SettlementOutcome)> = self
+            .chain
+            .last()
+            .expect("mined")
+            .archival
+            .settlements()
+            .iter()
+            .map(|s| {
+                assert_eq!(s.persona, join.persona.id());
+                assert_eq!(s.epoch.to_raw(), slash_epoch);
+                (s.shard.to_raw(), s.row.outcome())
+            })
+            .collect();
+        let mut expected = vec![
+            (join.served, SettlementOutcome::Served),
+            (join.unserved, SettlementOutcome::Missed),
+        ];
+        expected.sort_unstable_by_key(|(shard, _)| *shard);
+        assert_eq!(settled, expected, "one row per pair, in shard order");
         let slash = &self.chain.last().expect("mined").archival.slashes()[0];
         assert_eq!(slash.entry.persona, join.persona.id());
         assert_eq!(slash.entry.shard.to_raw(), join.unserved);
@@ -296,6 +329,48 @@ impl LeveredChain {
             record,
             slash_epoch,
         }
+    }
+
+    /// Issue `epoch`'s draws for the persona's two pairs: three each, at
+    /// the epoch's first heights, passed on the served shard only.
+    async fn issue_three_draws_each(&mut self, join: &Joined, epoch: u64) {
+        let persona = join.persona.id();
+        let epoch_id = SettlementEpoch::from_raw(epoch);
+        let open = self.schedule.open_height(epoch);
+        let mut digest = IssuedDigest::ZERO;
+        let mut draws = Vec::new();
+        for (shard, passed) in [(join.served, true), (join.unserved, false)] {
+            let shard = ShardId::from_raw(shard);
+            for k in 0..3u64 {
+                let issuing_height = BlockHeight::from_raw(open + k);
+                digest.fold(&issued_draw_term(
+                    &persona,
+                    shard,
+                    epoch_id,
+                    issuing_height,
+                    0,
+                ));
+                draws.push(IndexedDraw {
+                    persona,
+                    shard,
+                    issuing_height,
+                    draw: 0,
+                    state: IssuedDraw {
+                        revealed_at: BlockHeight::from_raw(open + k + 1),
+                        passed,
+                    },
+                });
+            }
+        }
+        self.scenario
+            .connector()
+            .ask(IssueDraws {
+                epoch: epoch_id,
+                draws,
+                digest,
+            })
+            .await
+            .expect("the door issues the draws");
     }
 
     /// Inside the open interval both credits refuse on J6: the kept shard

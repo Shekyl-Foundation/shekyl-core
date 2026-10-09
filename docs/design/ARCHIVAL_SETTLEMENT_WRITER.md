@@ -732,15 +732,15 @@ every pair the draw did not reach as a miss.
 
 | Subject | State | Where |
 | --- | --- | --- |
-| The fold | `settle_pair(beacon, P, shard, E, draws)`: takes a pair's counted draws in `(h, j)` order, selects three by the beacon (`select_counted`), and counts the passes among them. No row for no draws; NonObservation below three. Nothing calls it yet outside its tests. The count fold `settle_epoch` it replaces is deleted (`SO-D10e`) | `rust/shekyl-archival-retention/src/settlement_select.rs` |
+| The fold | `settle_pair(beacon, P, shard, E, draws)`: takes a pair's counted draws in `(h, j)` order, selects three by the beacon (`select_counted`), and counts the passes among them. No row for no draws; NonObservation below three. Called by the slash pass for every pair with a draw in the epoch. The count fold `settle_epoch` it replaces is deleted (`SO-D10e`) | `rust/shekyl-archival-retention/src/settlement_select.rs`; `rust/shekyl-chain-rules/src/archival/slash.rs` (`settle`) |
 | The row | `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused. Decoding re-settles the counts and refuses an outcome they do not give. It is the only `SettlementRow`: the count fold's type and its FFI are deleted | `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
-| The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No writer reaches any of the three yet | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/codec/schema_version.rs` |
-| The slash fold | Decides on any pass: `passed` is this block's credits, or `pass_count(P, s, E).any()`. The window walk-back uses the same read | `rust/shekyl-chain-rules/src/archival/mod.rs:303-320`; `archival/slash.rs:154-178`, `:246-281` |
+| The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed, written by the slash pass. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No block writes the index or the digest until admission lands; the Fakechain door is their one producer | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`) |
+| The slash fold | Settles the epoch, then decides on rows. A pair is a candidate only if its row for the epoch is Missed; Served, NonObservation and no row are each no slash. The window walks back through earlier rows, passing over an unobserved epoch (`SO-D10b`), and stops where the record's standing ends, at `n` observations, past the serve budget, and at the retention horizon (§14.4 step 3). The one-challenge beacon geometry is gone from the Rust pass | `rust/shekyl-chain-rules/src/archival/slash.rs` (`scan_epoch`, `settle`, `challenge_failed`, `window_slashable`) |
 | Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
 | When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
-| `issued` | No source. The urn has no caller; the slash pass still reads the one-challenge beacon geometry | `archival/slash.rs:183-240`; `rust/shekyl-archival-retention/src/challenge_assignment.rs` (no caller outside its crate) |
-| A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`); nothing sets it yet. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands | `rust/shekyl-chain-store/src/schema.rs:553`; `store/archival_write.rs:183-211` |
-| The block's archival writes | `ArchivalDelta` has no settlement field. `ChainView` reads the row (A14), one epoch's issued draws in `(P, shard, h, j)` order (A15) and the epoch's digest (A16) | `archival/delta.rs:51-58`; `rust/shekyl-chain-rules/src/view.rs` (`settlement_row`, `issued_draws`, `issued_digest`); `rust/shekyl-chain-store/src/store/archival_reads.rs` |
+| `issued` | The length of a pair's counted draws in the stored index: those issued while it held the shard, read as `holds_shard_at` reads it. Nothing issues a draw on a block path yet, so the index is empty off Fakechain and the Rust pass settles and slashes nothing (`SO-D10a`) | `archival/slash.rs` (`counted`); `rust/shekyl-archival-retention/src/challenge_assignment.rs` (the urn, still without a caller outside its crate) |
+| A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`), and settlement reads it. Only the Fakechain door sets it. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands, and until then feeds accrual and the Release's served anchor, not the slash | `rust/shekyl-chain-store/src/schema.rs`; `store/archival_write.rs:183-211` |
+| The block's archival writes | `ArchivalDelta::settlements()` carries the rows the pass derived, by epoch, persona and shard; the store writes them in phase 9 ahead of the slash writes (`SO-D7`), insert-once. `ChainView` reads the row (A14), one epoch's issued draws in `(P, shard, h, j)` order (A15) and the epoch's digest (A16) | `archival/delta.rs` (`Settlement`); `rust/shekyl-chain-rules/src/view.rs`; `rust/shekyl-chain-store/src/store/archival_write.rs` (`write_settlements`) |
 | Pruning | The Rust store prunes no archival table by epoch. `prune_archival_epochs_before` is C++ only | `rust/shekyl-chain-store/src/store/prune.rs:132` |
 | The C++ side | No writer and no reader: `set_`/`get_archival_settlement`, the two FFI exports they called and their unit tests are deleted (`SO-D10e`). The table's handle, its revert and its prune remain and run over a table nothing writes, until `DEL-008` | `src/blockchain_db/lmdb/db_lmdb.cpp` (`delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch`); `docs/design/archival_forcing_cells.tsv` |
 
@@ -807,13 +807,51 @@ live validator; the C++ daemon stays consensus, on the beacon, until
    exports, the C++ writer and reader and their unit tests are deleted.
    The urn's per-pair target is asserted equal to the draws settlement
    counts while both exist.
-3. **The slash fold reads the row.** The writer in the slash pass, the
-   delta field, the store write in phase 9 ahead of the slash writes
-   (`SO-D7`: write the row, then fold it), the walk-back of `SO-D10b`, the
-   integrity checks that have an operand (the index against its digest,
-   and `passes ≤ issued`) as a store-invariant Fault with a new `SI-` row,
-   and the test hook of `SO-D10f`. `SO-D8d` names `SI-10` for the Fault;
-   that row is taken (cumulative work), so it is the next free one.
+3. **The slash fold reads the row. LANDED** (§14.1 rows *The slash fold*,
+   *`issued`*, *The block's archival writes*). The writer in the slash
+   pass, the delta field, the store write in phase 9 ahead of the slash
+   writes (`SO-D7`), the walk-back of `SO-D10b`, and the test door of
+   `SO-D10f`. The integrity checks that have an operand are one
+   store-invariant row, `SI-25` (`STORE_INVARIANT_REGISTER.md`): the index
+   against its digest, the fold's count, and a row written once. `SO-D8d`
+   named `SI-10`; that row is cumulative work.
+
+   Four things the build settled that the rulings did not spell:
+
+   - **The walk-back stops at the retention horizon, for ratification.**
+     `SO-D10b` says stop only where the record says the run began. While
+     the walk stopped at the first unobserved epoch it read at most
+     `n − 1` epochs back, which `failure_window.rs` const-asserts inside
+     the horizon. A walk that passes over unobserved epochs can go
+     further, to rows a store may have deleted, and a deleted row reads
+     the same as an absent one: the verdict would depend on what a node
+     had pruned. The walk reads no epoch below
+     `SettlementSchedule::prune_below_epoch_at_height` at the connecting
+     height. Cost: at most `MAX_CLAIM_AGE_W_EPOCHS` reads per Missed pair.
+     Effect on the rule: `m` misses within the last `n` observations
+     **inside the retained window**. A pair with ten misses, then more
+     than a retention window unobserved, then one miss, is not slashed.
+   - **The check is `passes ≤ counted`.** The row type holds `passes` to
+     the draws that were counted — three, or none below three issued —
+     which implies §9.5's `passes ≤ issued`. The fold cannot overcount, so
+     the fault names a defect of the fold; it halts and is never clamped.
+   - **A schedule with no response window settles on the epoch's last
+     block.** A levered epoch shorter than the `W₂` divisor has no `W₂`;
+     its beacon is `block_hash(h_close(E))`.
+   - **A stored draw naming a persona with no bond record is not
+     counted.** Admission is what holds an index row to a bonded persona;
+     the read-side belt lands with it.
+
+   Tests: `slash_scan_bench_tests` (the witness re-driven through the
+   door; the empty index; the skip, the serve budget and which draws
+   count; the horizon; index drift three ways; a second settlement; the
+   pop) and the levered chain in `shekyl-chain-ingest`
+   (`archival_slash_tests`, live lane). **The LMDB comparison
+   (`archival_fixture_replica_tests`) is retired** as ruled: it held the
+   Rust slash against the one slash the C++ decided on the one-challenge
+   beacon, and the Rust pass no longer decides that way. The committed
+   capture stays as a record and goes with the capture tooling
+   (`DEL-008`).
 4. **`SO-D10d`**: accrual reads the row.
 5. **Admission and the draw.**
 
@@ -853,14 +891,16 @@ unless noted.
   that the writer asserts on `issued > 255`, and that no draw state
   persists.** The specification says fewer than 3, saturate, and stored.
 - **CEN-L8 says a fold refusal aborts the block's write.** `SO-D8d` rules a
-  writer halt that is never a verdict on the block.
+  writer halt that is never a verdict on the block. **Fixed:** the census
+  row carries the Rust form, `Corrupt::SettlementIntegrity` → `SI-25`.
 - **`SO-D8d` names `SI-10` for its Fault.** `SI-10` is cumulative-work
-  monotonicity; the register runs to `SI-24`.
+  monotonicity. **Fixed:** the row is `SI-25`.
 - **The Rust store never prunes an archival table by epoch**, and
   `failure_window.rs`'s prune assert is written as if it did
   (`:202-211`). Not this change's: the settlement rows and the index join
   whatever prune the store gains.
-- **Two test modules describe observations as "settled 2-of-3"** while the
-  code they drive is any pass (`slash_scan_bench_tests.rs`,
-  `archival_write_tests.rs`). They agree only because nobody serves in
-  those chains.
+- **Two test modules described observations as "settled 2-of-3"** while
+  the code they drove was any pass. **Fixed** in
+  `slash_scan_bench_tests.rs`, which now issues the draws it settles. The
+  other, `archival_write_tests.rs`, drives accrual, which stays on any
+  pass until `SO-D10d`.

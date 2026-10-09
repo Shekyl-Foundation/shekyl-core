@@ -80,10 +80,14 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::{Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant};
+use shekyl_chain_rules::{
+    Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant, SettlementCheck,
+};
 use shekyl_units::AtomicUnits;
 
-use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{
+    CellFault, EngineError, SettlementFault, StoreCannot, StoreError, StoreInvariant,
+};
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
 use super::shared::Shared;
@@ -257,6 +261,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
     /// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
     /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
+    /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25) |
     ///
     /// (The arms between are documented inline on the match.)
     ///
@@ -438,6 +443,21 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // `archival_budget_accruing` is observed from the rule side.
             Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
                 cell: "archival_budget_accruing",
+            },
+            // Settlement's two checks that have an operand
+            // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3). The
+            // validator derives the rows (`ARW-Q1`), so it is the one that
+            // observes the index not folding to its digest, or its own fold
+            // overcounting; the block is not invalid, this node cannot
+            // settle the epoch.
+            Corrupt::SettlementIntegrity { epoch, check } => StoreInvariant::SettlementNotSound {
+                epoch,
+                observed: match check {
+                    SettlementCheck::IssuedIndexDigest => SettlementFault::IndexDrift,
+                    SettlementCheck::PassesExceedCounted { persona, shard } => {
+                        SettlementFault::PassesExceedCounted { persona, shard }
+                    }
+                },
             },
         };
         self.poison.arm(row)

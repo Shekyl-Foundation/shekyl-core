@@ -2133,7 +2133,10 @@ so where it applies.
     rows; witness verification is bound to the block/tx surface;
     membership and dedup wait on S-ARCH with the writer. Pre-cutover
     LMDB daemon keeps today's beacon — §5.1's interim-writer question
-    stays closed. Falsify by `shekyl-chain-rules` being the live connect
+    stays closed. **UPDATE 2026-10-08 (`SO-D10`):** §5.1 is superseded;
+    the Rust writer is wired ahead of the draw on an empty issued-draw
+    index (`ARCHIVAL_SETTLEMENT_WRITER.md` §14). The C++ daemon keeps the
+    beacon, as here. Falsify by `shekyl-chain-rules` being the live connect
     validator (`ChainValid` without a C++-verdict shim) **and** a
     production settlement write on the Rust apply/slash path. Until
     both, Slice C is not authorized. Subsumes Q14. *SUPERSEDED in part

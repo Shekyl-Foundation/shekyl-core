@@ -153,15 +153,15 @@ pub mod harness;
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
-    EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
+    EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement, Slash,
 };
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, Stale, ViewRead,
-    MAX_FORM_ATTEMPTS,
+    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, SettlementCheck, Stale,
+    ViewRead, MAX_FORM_ATTEMPTS,
 };
 pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
 pub use rule_set::{

@@ -290,6 +290,50 @@ pub enum StoreInvariant {
         /// What the block's own cell records.
         cell: u64,
     },
+    /// **SI-25** — settlement folds the index admission wrote, once.
+    /// The `archival_issued_draw` rows of an epoch fold to
+    /// `archival_issued_digest[E]` ([`SettlementFault::IndexDrift`]); the
+    /// fold counts no more passes for a pair than draws it selected
+    /// ([`SettlementFault::PassesExceedCounted`]); and
+    /// `archival_settlement` holds one row per `(persona, shard, epoch)`,
+    /// written once ([`SettlementFault::AlreadySettled`]). The first two
+    /// are observed by the validator, which computes the rows, and arrive
+    /// through `refuse_corrupt`; the third is the store's own, at the
+    /// insert. Armed by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// §14; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 checks 1 and 3).
+    SettlementNotSound {
+        /// The epoch being settled.
+        epoch: shekyl_types::SettlementEpoch,
+        /// Which of the three was observed.
+        observed: SettlementFault,
+    },
+}
+
+/// What an SI-25 check observed (payload of
+/// [`StoreInvariant::SettlementNotSound`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementFault {
+    /// The epoch's issued-draw rows do not fold to its digest: a row was
+    /// lost, gained or changed after its draw was indexed, or the digest
+    /// cell was.
+    IndexDrift,
+    /// The fold counted more passes for the pair than draws it selected.
+    /// A defect of the fold, not a state a file can hold; halted on, never
+    /// clamped.
+    PassesExceedCounted {
+        /// The persona of the pair.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard of the pair.
+        shard: shekyl_types::ShardId,
+    },
+    /// `archival_settlement` already holds a row for the pair in this
+    /// epoch: the epoch was settled twice.
+    AlreadySettled {
+        /// The persona of the pair.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard of the pair.
+        shard: shekyl_types::ShardId,
+    },
 }
 
 /// What an SI-18 write observed (payload of
@@ -395,6 +439,7 @@ impl StoreInvariant {
             Self::SlashLogNotDense { .. } => 22,
             Self::AccruingNotSingular { .. } => 23,
             Self::ArchivalLengthsDisagree { .. } => 24,
+            Self::SettlementNotSound { .. } => 25,
         }
     }
 }
@@ -543,6 +588,24 @@ impl core::fmt::Display for StoreInvariant {
                  cumulative_archival_len, but its own cell records {cell}; the shard boundaries \
                  cannot be placed, rebuild from the block corpus"
             ),
+            Self::SettlementNotSound { epoch, observed } => match observed {
+                SettlementFault::IndexDrift => write!(
+                    f,
+                    "archival_issued_draw's rows for epoch {epoch} do not fold to \
+                     archival_issued_digest; the index settlement reads is not the one that \
+                     was written, rebuild from the block corpus"
+                ),
+                SettlementFault::PassesExceedCounted { persona, shard } => write!(
+                    f,
+                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
+                     draws selected; the settlement fold is defective"
+                ),
+                SettlementFault::AlreadySettled { persona, shard } => write!(
+                    f,
+                    "archival_settlement already holds ({persona}, {shard}, {epoch}); an epoch \
+                     settles once"
+                ),
+            },
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -583,6 +646,7 @@ impl core::error::Error for StoreInvariant {
             | Self::SlashLogNotDense { .. }
             | Self::AccruingNotSingular { .. }
             | Self::ArchivalLengthsDisagree { .. }
+            | Self::SettlementNotSound { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }
