@@ -2,7 +2,7 @@
 # A=42233bd13500308108fc4c05835976de718b8864 B=bfcf46c0929682139312cbf594ecfe83e64eee3f
 # probe sha256 A=0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a B=0e842db5d25b0ca718993123a3bbff335bfa9188a424f4b0a275a8a73bfd3f3a
 # rustc rustc 1.94.0 (4a4ef493e 2026-03-02); RUSTFLAGS unset; release profile
-# daemon: /usr/local/bin/shekyld --config-file /etc/shekyl/shekyld-testnet.conf --non-interactive  pid 472480
+# daemon: the floor device's resident testnet daemon, pid 472480
 # mining_status: {"active":false,"threads_count":0}
 # tcp_wmem 4096 16384 4194304 tcp_rmem 4096 131072 33554432
 # signature scheme: Ed25519 + ML-DSA-65 hybrid (shekyl/archival-attestation-scheme-v3)
