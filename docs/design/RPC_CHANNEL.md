@@ -532,21 +532,28 @@ connection holding `health` and each field is present only when the
 connection holds that field's grant. **A field outside the grant is
 absent, never zero.** Today's restricted reply writes `0` for a hidden peer
 count (`core_rpc_server.cpp:213-232`), which a reader cannot tell from a
-node with no peers.
+node with no peers. Absence means exactly one thing here — *not disclosed
+to this caller*. A fact the node has no answer for is `null`, and `0` is a
+value: the three wire states of RK-D23, ruled in the RK-5c round
+(`DAEMON_RPC_KV_GET_INFO.md`, PR #1008, draft). **When** the withheld
+fields stop being written as zeros is that round's open question RK-Q8 and
+is not agreed here.
 
 One question draws the line between `health` and `status`: *does a client
 need this fact to decide whether it can use this node right now, and is it
-the same on every honest node of this build?* Everything `get_version`
-returns passes ([`methods.rs:112-145`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+transient — saying nothing lasting about this node?* Sync state passes: it
+differs between nodes, but it describes a moment, not a host. Everything
+`get_version` returns passes for a stronger reason, being the same on every
+node of the build ([`methods.rs:112-145`](../../rust/shekyl-daemon-rpc/src/methods.rs):
 RPC contract version, release flag, heights, fork schedule,
 consensus-constants digest, nettype, genesis) — it identifies a build and a
 network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, R4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, R4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, emission and economics fields) |
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, R4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, R4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, R3) |
-| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, the RPC and protocol contract versions, nettype |
+| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions, nettype |
 | `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
 | `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
 | `submit` | `/submit_transaction` |
@@ -555,6 +562,16 @@ network, never a node.
 | `bans` | `set_bans`, `get_bans`, `banned` |
 | `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard` |
 | `enrol` | `rpc-enrol`, `rpc-revoke` (R1). Carried by the `admin` preset only |
+
+*Two notes on `health`, both owned by the RK-5c round (PR #1008).*
+`has_peers` is true when the node holds at least one **handshaken** session
+on any connector; what the facts read needs to say so is that round's open
+question RK-Q4. It exists because a caller without `status` no longer sees
+the peer counts, and without it could not tell a peerless daemon from a
+following one. `nettype` is listed under `health`, but RK-Q6 there
+recommends retiring it and the three network booleans from `get_info`; if
+it is ruled so, the identity source is `get_version` alone and this table's
+entry points there.
 
 **Two classes that are not grants.** Every route and method is in exactly
 one grant above or in exactly one of these; no ceiling, `admin` included,
@@ -644,7 +661,7 @@ round asks three things of it and nothing more:
 - each `get_info` field is filled in Rust and is attributable to exactly
   one grant in the table above;
 - a field the caller may not see is **absent** from the reply, not zeroed,
-  and the reply type says so;
+  and the reply type says so (which commit changes the wire is RK-Q8);
 - the caller's authority reaches the handler as a value that can become a
   grant, not as a `restricted` boolean, so RT-W10 supplies a richer value
   without rewriting the handler.
@@ -983,6 +1000,9 @@ construction) instead of loopback TCP.
     (§6.1), both proposed;
   - whether the incident's consumer is enrolled for `peers` to keep its
     seed-node count, or the count is dropped from the site;
+  - what `status` discloses if the RK-5c round's RK-Q3 is ruled as
+    recommended: the two aggregate peer counts become sums over every
+    connector, where today they count clearnet sessions only;
   - whether the wallet engine pages its requests within §6.3's batch
     caps. Today those caps bind only the restricted listener, so the engine
     has not met them on its usual connection; a remote wallet on the
@@ -1008,6 +1028,18 @@ construction) instead of loopback TCP.
   re-scoped to the least-grant loopback listener and their parsing moves
   out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7).
 - `bind.rs`'s refusal text and its two tests that assert the onion remedy.
+- The readers of `get_info.restricted`, which RT-W10 retires:
+  `shekyl-cli/src/commands/mine.rs:68` — the "restricted listener" refusal
+  becomes a check for `mining-control` in the grant the handshake returned;
+  `stake_engine/serving/daemon_tip.rs:299` — moves to `has_peers` in RK-5c's
+  own commit, and RT-W13 confirms the read is gone.
+- The callers that **pass** the deleted flags: `shekyl-gui-wallet` starts
+  its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`),
+  and the regtest end-to-end harness starts a second listener with
+  `--rpc-restricted-bind-port` (`engine/regtest_e2e.rs`,
+  `start_with_restricted_listener`). Both need their replacement in the
+  commit that deletes the flags, or the GUI's daemon and those tests stop
+  starting.
 - `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves
   to the owner-only socket or pipe for a run-as-me daemon, and to the
   channel with the console key for a service (RT-15, §5).
