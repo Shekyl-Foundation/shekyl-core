@@ -309,8 +309,8 @@ Measured at `8494f2a27` by the items each crate names through
 | --- | --- | --- |
 | `shekyl-engine-core` | `CurveTreeClient`, `assemble_path`, `AssembleInput`, `TreeContext`, `ReferenceBlock`, `select_reference_height`, `REF_ANCHOR_AGE`, `should_reanchor`, `BlockLeaves`, `TxLeafInputs`, `LeafStore`, `serving_route` | **Both** — A dominant; `serving_route` and the serve-set source are B |
 | `shekyl-p-host` | `ServingReader`, `SegmentPin`, `PostureDeclaration`, `BlockHeight`, `serving_route`, `StoreError` (~~`served_frame`~~ deleted 2026-10-08) | **B only** |
-| `shekyl-p-serve` | `FrozenSegmentBody`, `SegmentId`, `ServingReader`, `StoreError`, `serving_route`, `leaves_per_segment` (~~`served_frame`, `ServedFrameHeader`~~ deleted 2026-10-08) | **B only** |
-| `shekyl-p-fetch` | `serving_route`, `leaves_per_segment`, `LEAF_BYTES` (~~`ServedFrameHeader`~~ deleted 2026-10-08; the leaf ceiling leaves with fetch Sub-PR 2's client) | **B only** (client side of the route) |
+| `shekyl-p-serve` | `FrozenSegmentBody`, `SegmentId`, `ServingReader`, `StoreError`, `serving_route` (~~`served_frame`, `ServedFrameHeader`, `leaves_per_segment`~~ deleted 2026-10-08: the body streams unframed, with no leaf ceiling on the serve side) | **B only** |
+| `shekyl-p-fetch` | `serving_route` (~~`ServedFrameHeader`, `leaves_per_segment`, `LEAF_BYTES`~~ deleted 2026-10-08 with fetch Sub-PR 2's client: the body is `shekyl_wire::shard_frame`, bounded by `W`, not by a leaf ceiling) | **B only** (client side of the route) |
 | `shekyl-ffi` | `CurveTreeClient`, `client`, `types` | **A only** |
 | `shekyl-wire` | `CurveTreeClient` (e2e spend tests) | **A only** |
 | `shekyl-archival-retention` | `LEAF_BYTES`, `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — **constants, no store handle** | Neither (consensus constants) |
