@@ -108,6 +108,13 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     (SOK-Q3): red by construction on any tree that routes the method
 #     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
 #     inverted, panicked there).
+#   restricted_listener_hides_a_transaction_this_node_has_not_broadcast —
+#     the origin guard anchored on include_sensitive (RK-5c commit 1), two
+#     daemons. Sabotage 2026-10-09, twice, each rebuilding the daemon:
+#     dispatch_json passing nullptr for the origin panicked naming the three
+#     bridged pool routes and not the native one; the native
+#     /get_transactions handler passing `true` for the flag panicked naming
+#     that route alone. ~77 s measured, local Release daemon.
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
@@ -137,6 +144,7 @@ ARMED=(
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
+  engine::regtest_e2e::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
 )
 
 # Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the

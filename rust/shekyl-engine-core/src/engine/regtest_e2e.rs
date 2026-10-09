@@ -150,7 +150,32 @@ pub(super) struct RegtestDaemon {
     /// production one).
     schedule: Option<RegtestSchedule>,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
-    _serial: OwnedMutexGuard<()>,
+    /// `None` on the second daemon of a [`StemSinkPair`], whose first daemon
+    /// holds the one guard for both.
+    _serial: Option<OwnedMutexGuard<()>>,
+}
+
+/// How a spawned daemon takes part in peer-to-peer.
+#[derive(Clone, Copy, Debug)]
+enum Peering {
+    /// `--offline`: no listener and no dial. The protocol starts
+    /// synchronized, so a submitted transaction finds no route and is
+    /// broadcast-recorded within milliseconds.
+    Offline,
+    /// Bound on loopback and dialling exactly one peer.
+    ///
+    /// `--add-exclusive-node` is what keeps the daemon off the public
+    /// network: p2p reads `--regtest` as mainnet, and an exclusive list is
+    /// the condition under which it dials no seed. `--no-ephemeral-tor`
+    /// declines the managed Tor, so the node is clearnet-only and a local
+    /// origin takes the stem slot, not a hidden own-edge.
+    Linked {
+        p2p_port: u16,
+        peer_p2p_port: u16,
+        /// `--no-sync`: the daemon never reports itself synchronized, so it
+        /// drops every transaction a peer sends it and relays none.
+        sink: bool,
+    },
 }
 
 /// `get_info` result fields we care about.
@@ -212,6 +237,22 @@ impl RegtestDaemon {
         l.local_addr().expect("local_addr").port()
     }
 
+    /// A free port that is none of `taken`. Each probe binds :0 and releases
+    /// immediately, so the kernel is free to hand back the same number twice
+    /// — and a daemon given one number for two listeners dies at startup,
+    /// intermittently. (The TOCTOU window between releasing a probe and the
+    /// daemon binding is unchanged; this only removes the self-collision,
+    /// which is the part we create.)
+    fn free_port_excluding(taken: &[u16]) -> u16 {
+        for _ in 0..64 {
+            let port = Self::free_port();
+            if !taken.contains(&port) {
+                return port;
+            }
+        }
+        panic!("could not obtain a port distinct from {taken:?}");
+    }
+
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
@@ -271,10 +312,37 @@ impl RegtestDaemon {
         // concurrent `cargo test` *process*'s daemon — the in-process lock can't
         // serialize across processes — so it is deliberately not done here.
         let serial = serial_lock().lock_owned().await;
+        Self::spawn(
+            Some(serial),
+            schedule,
+            restricted_listener,
+            console,
+            Peering::Offline,
+        )
+        .await
+    }
+
+    /// Spawn one daemon. `serial` is the test-binary guard, taken by the
+    /// caller so a test that spawns two daemons takes it once.
+    async fn spawn(
+        serial: Option<OwnedMutexGuard<()>>,
+        schedule: Option<RegtestSchedule>,
+        restricted_listener: bool,
+        console: bool,
+        peering: Peering,
+    ) -> RegtestDaemon {
         install_wallet_tracing();
 
         let bin = Self::binary();
-        let rpc_port = Self::free_port();
+        let p2p_ports: &[u16] = match &peering {
+            Peering::Offline => &[],
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                ..
+            } => &[*p2p_port, *peer_p2p_port],
+        };
+        let rpc_port = Self::free_port_excluding(p2p_ports);
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -283,7 +351,6 @@ impl RegtestDaemon {
         let mut cmd = Command::new(&bin);
         cmd.args([
             "--regtest",
-            "--offline",
             "--no-igd",
             "--fixed-difficulty",
             "1",
@@ -299,12 +366,29 @@ impl RegtestDaemon {
             "--log-level",
             "1",
         ]);
-        // Distinct from the main port. Both probes bind :0 and release
-        // immediately, so the kernel is free to hand back the same number
-        // twice — and the daemon would then try to bind both listeners to it
-        // and die at startup, intermittently. (The pre-existing TOCTOU window
-        // between releasing a probe and the daemon binding is unchanged; this
-        // only removes the self-collision, which is the part we create.)
+        match peering {
+            Peering::Offline => {
+                cmd.arg("--offline");
+            }
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                sink,
+            } => {
+                cmd.args([
+                    "--p2p-bind-ip",
+                    "127.0.0.1",
+                    "--p2p-bind-port",
+                    &p2p_port.to_string(),
+                    "--no-ephemeral-tor",
+                    "--add-exclusive-node",
+                    &format!("127.0.0.1:{peer_p2p_port}"),
+                ]);
+                if sink {
+                    cmd.arg("--no-sync");
+                }
+            }
+        }
         // `--non-interactive` unless the test drives the daemon's own console:
         // the console is what reads stdin, and suppressing it is what makes
         // the in-process arm unreachable.
@@ -312,14 +396,9 @@ impl RegtestDaemon {
             cmd.arg("--non-interactive");
         }
         let restricted_port = restricted_listener.then(|| {
-            let mut port = Self::free_port();
-            for _ in 0..64 {
-                if port != rpc_port {
-                    return port;
-                }
-                port = Self::free_port();
-            }
-            panic!("could not obtain a restricted port distinct from {rpc_port}");
+            let mut taken = p2p_ports.to_vec();
+            taken.push(rpc_port);
+            Self::free_port_excluding(&taken)
         });
         if let Some(port) = restricted_port {
             // A second listener on the same daemon. This flag binds an extra
@@ -706,6 +785,180 @@ impl RegtestDaemon {
             "spent_status is positional; a short reply is unreadable"
         );
         res.spent_status
+    }
+}
+
+/// Two linked regtest daemons: an **origin** a wallet submits to, and a
+/// **sink** that drops what it is sent.
+///
+/// This is the rig that holds a transaction un-broadcast for longer than an
+/// assertion takes, which one daemon cannot do. An `--offline` daemon has no
+/// route, so it broadcast-records a submitted transaction within
+/// milliseconds; the single-node form of the test this rig serves found that
+/// window already shut on one run in three
+/// (`DAEMON_RPC_KV_CUTOVER.md` §7, 2026-08-27).
+///
+/// **What holds the transaction.** The origin's only outbound peer is the
+/// sink. A transaction the origin's own wallet submits is a local origin, and
+/// a local origin takes the stem slot whatever the epoch draw
+/// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
+/// records it `stem`, embargoed. The sink runs `--no-sync`, never reports
+/// itself synchronized, and drops the transaction on receipt — so nothing
+/// fluffs it back. It stays `stem` on the origin until the origin's own
+/// embargo expires. The flag is load-bearing: a second daemon that
+/// synchronizes normally stems the transaction straight back, the origin
+/// upgrades the second arrival to fluff, and the hold is over in seconds.
+///
+/// **What the rig does not fix.** The embargo is a draw (geometric, mean
+/// 190 s on clearnet) with no lever, so a short one can end mid-assertion.
+/// The rig does not pretend otherwise: [`StemSinkPair::stem_held`] reads the
+/// state back, and a caller brackets its assertions with it.
+pub(super) struct StemSinkPair {
+    origin: RegtestDaemon,
+    /// Held only to keep the process alive and to clean it up on drop.
+    _sink: RegtestDaemon,
+}
+
+/// One entry of the unrestricted `/get_transaction_pool` reply — the three
+/// members that say where a transaction is in its relay.
+#[derive(Debug, Deserialize)]
+struct PoolRelayEntry {
+    id_hash: String,
+    relayed: bool,
+    last_relayed_time: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PoolRelayResp {
+    /// Absent when the pool is empty: the C++ serializer drops an empty
+    /// sequence, so the default is the wire's own encoding of "none".
+    #[serde(default)]
+    transactions: Vec<PoolRelayEntry>,
+}
+
+/// Where the origin holds a transaction, read from its unrestricted listener.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StemHold {
+    /// Sent on the stem and embargoed: not broadcast.
+    Held,
+    /// Admitted, and the stem send has not been recorded yet.
+    NotYetSent,
+    /// Broadcast: the embargo ended, or the transaction came back fluffed.
+    Broadcast,
+    /// Not in the pool at all.
+    Absent,
+}
+
+impl StemSinkPair {
+    /// Spawn the sink, then the origin with a restricted listener, and wait
+    /// until the origin holds an outbound session to the sink and reports
+    /// itself synchronized. The two must link **before** anything is mined:
+    /// a node becomes synchronized from a handshake with a peer at its own
+    /// height, and an unsynchronized node withholds a local origin instead
+    /// of stemming it.
+    pub(super) async fn start() -> StemSinkPair {
+        let serial = serial_lock().lock_owned().await;
+        let origin_p2p = RegtestDaemon::free_port();
+        let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
+        let sink = RegtestDaemon::spawn(
+            None,
+            None,
+            false,
+            false,
+            Peering::Linked {
+                p2p_port: sink_p2p,
+                peer_p2p_port: origin_p2p,
+                sink: true,
+            },
+        )
+        .await;
+        let origin = RegtestDaemon::spawn(
+            Some(serial),
+            None,
+            true,
+            false,
+            Peering::Linked {
+                p2p_port: origin_p2p,
+                peer_p2p_port: sink_p2p,
+                sink: false,
+            },
+        )
+        .await;
+        let pair = StemSinkPair {
+            origin,
+            _sink: sink,
+        };
+        pair.await_linked().await;
+        pair
+    }
+
+    /// The daemon a wallet submits to. It carries both listeners.
+    pub(super) fn origin(&self) -> &RegtestDaemon {
+        &self.origin
+    }
+
+    async fn await_linked(&self) {
+        #[derive(Deserialize, Debug)]
+        struct Synchronized {
+            synchronized: bool,
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut last = String::new();
+        while Instant::now() < deadline {
+            let connections: shekyl_rpc_types::GetConnectionsResponse = self
+                .origin
+                .rpc
+                .json_rpc_call("get_connections", None)
+                .await
+                .expect("origin get_connections");
+            let outbound = connections
+                .connections
+                .iter()
+                .filter(|c| !c.incoming)
+                .count();
+            let info: Synchronized = self
+                .origin
+                .rpc
+                .json_rpc_call("get_info", None)
+                .await
+                .expect("origin get_info");
+            if outbound >= 1 && info.synchronized {
+                return;
+            }
+            last = format!(
+                "outbound sessions {outbound}, synchronized {}",
+                info.synchronized
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        self.origin.panic_with_log(
+            "the origin never linked to the sink",
+            format!("after 60s: {last}"),
+        );
+    }
+
+    /// Where the origin holds `txid` now.
+    ///
+    /// Read from the unrestricted `/get_transaction_pool`, which is the only
+    /// reply that carries the relay state: `relayed` is set when a send is
+    /// recorded, and `last_relayed_time` is written as `0` for exactly the
+    /// entries the pool marks `dandelionpp_stem` (`tx_pool.cpp`,
+    /// `get_transactions_and_spent_keys_info`). A broadcast entry carries
+    /// the time of its broadcast there.
+    pub(super) async fn stem_held(&self, txid: TxHash) -> StemHold {
+        let pool: PoolRelayResp = self
+            .origin
+            .rpc
+            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+            .await
+            .expect("origin /get_transaction_pool");
+        let wanted = hex::encode(txid.as_bytes());
+        match pool.transactions.iter().find(|t| t.id_hash == wanted) {
+            None => StemHold::Absent,
+            Some(entry) if !entry.relayed => StemHold::NotYetSent,
+            Some(entry) if entry.last_relayed_time == 0 => StemHold::Held,
+            Some(_) => StemHold::Broadcast,
+        }
     }
 }
 
@@ -2427,6 +2680,22 @@ async fn transfer_to(
     batch: u64,
     max_batches: usize,
 ) {
+    submit_transfer(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Build (retrying past the C2 reference-spendability gate) + submit a transfer
+/// of exactly `amount` to `recipient`, and leave it in the pool. Returns the
+/// hash of a fresh accept.
+async fn submit_transfer(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    recipient: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) -> TxHash {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
@@ -2455,14 +2724,15 @@ async fn transfer_to(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)")
     };
-    eprintln!("daemon accepted transfer: {tx_hash:?}");
-    daemon.generate_blocks(1, address).await;
+    let tx_hash = require_fresh_accept(outcome, "the transfer");
+    eprintln!("daemon accepted transfer: {tx_hash}");
+    tx_hash
 }
 
 async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
@@ -5179,7 +5449,9 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
 /// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
 /// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
 /// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
-/// in `shekyl-daemon-rpc`. The WE result-envelope shape is
+/// in `shekyl-daemon-rpc`. The pool routes' sensitivity flag — the bridge's
+/// durable subject once `/get_info` moves — is
+/// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`. The WE result-envelope shape is
 /// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
 /// histogram deletion gate is `get_output_histogram_stays_unrouted`.
 ///
@@ -5352,6 +5624,268 @@ async fn get_output_histogram_stays_unrouted() {
             "{DELETED_METHOD} was deleted (SOK-Q3) and must stay unrouted on the {name} listener"
         );
     }
+}
+
+/// A restricted listener does not disclose a transaction this node has not
+/// broadcast.
+///
+/// This is the origin guard anchored on the property the fix protects —
+/// `include_sensitive` — and not on a symptom of it. The bridge's REST
+/// template passes each handler its caller's origin; each pool handler turns
+/// that into the flag it reads the pool with, and a restricted caller must
+/// read the broadcast set only. The earlier anchors were request caps, then
+/// `/get_info`'s field trimming, and each left with the route that carried
+/// it (`DAEMON_RPC_KV_CUTOVER.md` §7, 2026-08-28). The pool routes are the
+/// subjects that outlive `/get_info`, so this exists before that route moves.
+///
+/// **Four reads take the flag, and all four are here.** Three cross the
+/// bridge (`dispatch_json`): `/get_transaction_pool`,
+/// `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`. The fourth,
+/// `/get_transactions`, is native and reads the pool through the facts
+/// export with the same flag. `/is_key_image_spent` is not a subject: it
+/// reads the broadcast set for every caller.
+///
+/// **The verdict is deterministic, and the state is not.** The transaction
+/// is held un-broadcast by [`StemSinkPair`], for as long as the origin's
+/// embargo runs — a draw with no lever. So the restricted reads are
+/// bracketed: [`StemSinkPair::stem_held`] must say `Held` immediately before
+/// them and immediately after. The relay state only moves forward, so `Held`
+/// on both sides means held throughout, and the reads are judged. A bracket
+/// that does not close proves nothing about the reads either way, so that
+/// attempt is discarded whatever they returned and the next one submits a
+/// new transaction. Running out of attempts is its own failure, and says the
+/// subject was never established — it is not a pass.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns two live daemons"]
+async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
+    use shekyl_units::AtomicUnits;
+
+    /// Embargo draws at or under the bracket's width are rare (about one in
+    /// sixty at a mean of 190 s and a bracket of a few seconds), so three
+    /// independent attempts all failing to hold is about one run in 200,000.
+    const ATTEMPTS: usize = 3;
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+
+    let pair = StemSinkPair::start().await;
+    let origin = pair.origin();
+    let restricted = HttpRpc::new(origin.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", origin.rpc_port()))
+        .await
+        .expect("unrestricted rpc client");
+
+    let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5e).await;
+    let arc = Arc::new(RwLock::new(wallet));
+    mine_until_spendable(origin, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+
+    let pool_hashes = |reply: &serde_json::Value| -> Vec<String> {
+        reply
+            .get("tx_hashes")
+            .and_then(serde_json::Value::as_array)
+            .map(|hashes| {
+                hashes
+                    .iter()
+                    .filter_map(|h| h.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let pool_ids = |reply: &serde_json::Value| -> Vec<String> {
+        reply
+            .get("transactions")
+            .and_then(serde_json::Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| e.get("id_hash").and_then(|h| h.as_str()).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let pool_total = |reply: &serde_json::Value| -> u64 {
+        reply
+            .pointer("/pool_stats/txs_total")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| panic!("pool stats carry txs_total; got {reply}"))
+    };
+
+    for attempt in 1..=ATTEMPTS {
+        let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+        let txid = submit_transfer(
+            origin,
+            &arc,
+            &address,
+            &address,
+            amount,
+            MINE_BATCH_BLOCKS,
+            MAX_MINE_BATCHES,
+        )
+        .await;
+        let hex_id = hex::encode(txid.as_bytes());
+        let by_hash = json!({ "txs_hashes": [hex_id] });
+
+        // The stem send is recorded a moment after the accept. Wait for it,
+        // briefly: `NotYetSent` is also un-broadcast, but it is the state the
+        // single-node form raced, and the bracket is on `Held`.
+        let mut before = pair.stem_held(txid).await;
+        let sent_by = Instant::now() + Duration::from_secs(10);
+        while before == StemHold::NotYetSent && Instant::now() < sent_by {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            before = pair.stem_held(txid).await;
+        }
+
+        let restricted_pool: serde_json::Value = restricted
+            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+            .await
+            .expect("restricted /get_transaction_pool");
+        let restricted_hashes: serde_json::Value = restricted
+            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
+            .await
+            .expect("restricted /get_transaction_pool_hashes");
+        let restricted_stats: serde_json::Value = restricted
+            .rpc_call("get_transaction_pool_stats", None::<serde_json::Value>)
+            .await
+            .expect("restricted /get_transaction_pool_stats");
+        let restricted_tx: shekyl_rpc_types::GetTransactionsResponse = restricted
+            .rpc_call("get_transactions", Some(by_hash.clone()))
+            .await
+            .expect("restricted /get_transactions");
+
+        let admin_pool: serde_json::Value = admin
+            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+            .await
+            .expect("unrestricted /get_transaction_pool");
+        let admin_hashes: serde_json::Value = admin
+            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
+            .await
+            .expect("unrestricted /get_transaction_pool_hashes");
+        let admin_stats: serde_json::Value = admin
+            .rpc_call("get_transaction_pool_stats", None::<serde_json::Value>)
+            .await
+            .expect("unrestricted /get_transaction_pool_stats");
+        let admin_tx: shekyl_rpc_types::GetTransactionsResponse = admin
+            .rpc_call("get_transactions", Some(by_hash))
+            .await
+            .expect("unrestricted /get_transactions");
+
+        let after = pair.stem_held(txid).await;
+        if before != StemHold::Held || after != StemHold::Held {
+            eprintln!(
+                "attempt {attempt}: the transaction was not held across the reads \
+                 ({before:?} before, {after:?} after); discarding the attempt"
+            );
+            // Clear the pool so the next attempt's counts are its own.
+            origin.generate_blocks(1, &address).await;
+            assert_eq!(
+                origin.tx_pool_size().await,
+                0,
+                "the discarded attempt's transaction must be mined out of the pool"
+            );
+            refresh(&arc).await;
+            continue;
+        }
+
+        // Held on both sides of the reads: they are judged. Every read is
+        // judged before any verdict, so one run names every route that
+        // disclosed and not only the first.
+        let mut disclosed = Vec::new();
+        if pool_ids(&restricted_pool).contains(&hex_id) {
+            disclosed.push("/get_transaction_pool listed it");
+        }
+        if pool_hashes(&restricted_hashes).contains(&hex_id) {
+            disclosed.push("/get_transaction_pool_hashes named it");
+        }
+        if pool_total(&restricted_stats) != 0 {
+            disclosed.push("/get_transaction_pool_stats counted it");
+        }
+        let missed = restricted_tx
+            .missed_tx
+            .iter()
+            .any(|h| h.as_bytes() == txid.as_bytes());
+        if !restricted_tx.txs.is_empty() || !missed {
+            disclosed.push("/get_transactions returned it by hash");
+        }
+        assert!(
+            disclosed.is_empty(),
+            "a restricted listener must not disclose a transaction this node has \
+             not broadcast, and it did for {hex_id}: {disclosed:?}. A route named \
+             here read the pool with the unrestricted flag — its handler lost the \
+             caller's origin, or stopped deriving the flag from it"
+        );
+
+        // Blast radius, and the subject's own existence: the unrestricted
+        // listener shows the same transaction on the same four reads. Without
+        // these, everything above holds for a daemon with an empty pool.
+        let mut withheld = Vec::new();
+        if !pool_ids(&admin_pool).contains(&hex_id) {
+            withheld.push("/get_transaction_pool");
+        }
+        if !pool_hashes(&admin_hashes).contains(&hex_id) {
+            withheld.push("/get_transaction_pool_hashes");
+        }
+        if pool_total(&admin_stats) != 1 {
+            withheld.push("/get_transaction_pool_stats");
+        }
+        let returned = admin_tx
+            .txs
+            .iter()
+            .any(|t| t.tx_hash.as_bytes() == txid.as_bytes());
+        if !returned || !admin_tx.missed_tx.is_empty() {
+            withheld.push("/get_transactions");
+        }
+        assert!(
+            withheld.is_empty(),
+            "the unrestricted listener must show the held transaction {hex_id} on \
+             every pool read, and did not on: {withheld:?}"
+        );
+        eprintln!("attempt {attempt}: held across the reads; hidden on four, shown on four");
+
+        // The other half: hidden because it is not broadcast, not hidden
+        // whatever its state. Mine the transaction and pop the block. A
+        // popped transaction returns to the pool recorded as carried by a
+        // block, which is in the broadcast set — so the restricted listener
+        // must now show the transaction it withheld a moment ago. A listener
+        // that hid every pool transaction would pass everything above.
+        origin.generate_blocks(1, &address).await;
+        assert_eq!(
+            origin.tx_pool_size().await,
+            0,
+            "the held transaction must be mined out of the pool"
+        );
+        origin.pop_blocks(1).await;
+        let broadcast_hashes: serde_json::Value = restricted
+            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
+            .await
+            .expect("restricted /get_transaction_pool_hashes after the pop");
+        let broadcast_tx: shekyl_rpc_types::GetTransactionsResponse = restricted
+            .rpc_call("get_transactions", Some(json!({ "txs_hashes": [hex_id] })))
+            .await
+            .expect("restricted /get_transactions after the pop");
+        assert!(
+            pool_hashes(&broadcast_hashes).contains(&hex_id),
+            "once the transaction is in the broadcast set a restricted listener \
+             must name it; if it does not, the listener hides the pool wholesale \
+             and the assertions above proved nothing about the flag"
+        );
+        assert!(
+            broadcast_tx
+                .txs
+                .iter()
+                .any(|t| t.tx_hash.as_bytes() == txid.as_bytes()),
+            "once the transaction is in the broadcast set a restricted listener \
+             must return it by hash; got {broadcast_tx:?}"
+        );
+        return;
+    }
+    origin.panic_with_log(
+        "no transaction stayed held across the reads",
+        format!(
+            "{ATTEMPTS} attempts each lost their hold. That is not a short embargo \
+             {ATTEMPTS} times running; the rig is not holding"
+        ),
+    );
 }
 
 /// The native handlers apply their own request caps.
