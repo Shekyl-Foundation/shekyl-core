@@ -161,11 +161,13 @@ pub struct ServingHandle {
 }
 
 impl ServingHandle {
-    /// Serving-runtime threads that could not lower their CPU priority
-    /// (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). Zero on every
-    /// supported platform; a non-zero count is the one thing the operator
-    /// is shown when the platform refused, beside the warning the host
-    /// logged. Born with this handle, so it reads after a failed start too.
+    /// Serving-runtime threads whose priority-lowering call the OS refused
+    /// (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8): the call's
+    /// result, thread by thread, and nothing more. Zero on every supported
+    /// platform; a non-zero count is the one thing the operator is shown
+    /// when the platform refused, beside the warning the host logged. It
+    /// does not say whether the lowering yields CPU to the daemon. Born
+    /// with this handle, so it reads after a failed start too.
     #[must_use]
     pub fn priority_not_lowered(&self) -> u32 {
         self.priority_failures.count()

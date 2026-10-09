@@ -61,13 +61,16 @@ const SERVING_THREAD_NAME: &str = "sk-serving";
 /// [`Pool::shutdown`] documents.
 const SERVING_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
-/// Threads of the serving runtime whose priority could not be lowered.
+/// Threads of the serving runtime whose priority-lowering call the OS
+/// refused.
 ///
 /// Born by the caller that reports serving status and handed to the host,
 /// so the count outlives any one host and is readable without holding it.
-/// Each thread that failed to lower itself adds one; a thread that
-/// succeeded adds nothing. Zero is the expected reading on every supported
-/// platform.
+/// Each thread whose call failed adds one; a thread whose call succeeded
+/// adds nothing. Zero is the expected reading on every supported platform.
+/// It is the OS call's result and nothing more: it does not say whether
+/// the lowered priority yields CPU to the daemon, which depends on the two
+/// processes being in one scheduling group (§9.8, the confirming run).
 #[derive(Clone, Debug, Default)]
 pub struct PriorityFailures(Arc<AtomicU32>);
 
@@ -137,8 +140,8 @@ impl ServingPool {
                 if !warned.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         %cause,
-                        "a serving thread could not lower its CPU priority; it serves at \
-                         normal priority and the count is on the serving status"
+                        "the OS refused to lower a serving thread's CPU priority; it serves at \
+                         normal priority, and the count of such threads is on the serving status"
                     );
                 }
             }

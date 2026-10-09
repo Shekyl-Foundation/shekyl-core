@@ -2183,7 +2183,9 @@ daemon syncing the chain, the daemon kept 90 to 97 % of the sync rate it
 has with nothing serving, and serving still delivered 5 to 8 responses
 per second — about a hundred times honest demand. At normal priority the
 same serving took the daemon down to about a third of its rate, 31 to
-37 %.
+37 %. At nice 19 the serving executor's own p99 wake lateness rises to
+0.5 to 0.7 s at N ≥ 32: that is serving yielding as intended, and it sits
+inside the 30 s write-stall timeout and the witness's window.
 
 **Why the scope is the serving threads and nothing wider.** Serving is
 not its own process. `shekyl-p-host` binds the loopback endpoint on
@@ -2273,7 +2275,10 @@ by default.
    warning per host start naming what was not lowered and that serving
    continues. Serving is never refused for this: a persona that stops
    answering accrues misses toward a slash, and a priority it could not
-   set is not a reason to be slashed.
+   set is not a reason to be slashed. The counter reports the OS call's
+   result, thread by thread, and nothing more; whether the lowered
+   priority yields CPU to the daemon is a question of scheduling
+   topology, answered by the confirming run below, not by the counter.
 
 4. **Uniform, with no knob (rule 75).** Priority shows only under
    contention, and timing already reveals load, so if every `P` runs the
@@ -2297,9 +2302,26 @@ priority does not change instruction counts.
 **Confirming run (after merge; discovery, not a gate, by the 2026-10-08
 ruling).** A short `BA-T5` floor block with the syncing daemon, N = 8
 and N = 64, with the shipped thread-level mechanism in place of the
-external `nice 19`. Its record says whether the thread-level mechanism
-reproduces the 90 to 97 % sync figure, and it is the first measurement
-of the serving runtime's budget.
+external `nice 19`, in **two topologies**, because nice orders threads
+only within one scheduling group:
+
+1. **The daemon as a child of the wallet's session** — the GUI sidecar
+   shape, where wallet and daemon share the user's session scope.
+2. **The daemon as the resident system service, the wallet in a user
+   session** — the Pi staker shape, where the two sit in different
+   cgroups and, with autogroup on, in different scheduling groups.
+
+For each topology the record carries, for both processes,
+`/proc/<pid>/cgroup`, whether `cpu` is in the parent cgroup's
+`cgroup.controllers`, and `/proc/sys/kernel/sched_autogroup_enabled`,
+beside the sync-rate share and the serving throughput. Its record says
+whether the thread-level mechanism reproduces the 90 to 97 % figure in
+each topology, and it is the first measurement of the serving runtime's
+budget. **If topology 2 shows no benefit, the record says so plainly**:
+the nice value is then ordering the serving threads against the wallet's
+other threads and not against the daemon's, and the fix for that shape is
+a CPU weight on the cgroup, which is its own follow-up and not a change to
+this mechanism.
 
 **Ledger.** A constant row `serving_priority_nice` (the Linux nice
 value, 19) on a new path set `serving-runtime` covering the serving

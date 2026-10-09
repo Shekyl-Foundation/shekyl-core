@@ -809,11 +809,16 @@ pub struct StakingInfoResult {
     /// standoff is not yet serving anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posture: Option<String>,
-    /// Serving-runtime threads that could not lower their CPU priority
-    /// (`SH-3`: serving runs below the daemon's priority by default). `0`
-    /// on every supported platform; a non-zero count means part of serving
-    /// runs at normal priority beside the daemon, and the wallet logged one
-    /// warning saying why. Absent when no serving lifecycle is parked.
+    /// Serving-runtime threads whose priority-lowering call the OS refused
+    /// (`SH-3`: serving runs below the daemon's priority by default). It
+    /// reports the result of that call, thread by thread, and nothing
+    /// more: `0` means every serving thread asked for the lower priority
+    /// and got it; a non-zero count means that many threads run at normal
+    /// priority, and the wallet logged one warning saying why. It does not
+    /// say whether the lowering yields CPU to the daemon — nice orders
+    /// threads within one scheduling group, so that depends on the two
+    /// processes sharing one (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
+    /// Absent when no serving lifecycle is parked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serving_priority_not_lowered: Option<u32>,
 }
