@@ -2099,6 +2099,12 @@ async fn e2e_cxx_template_fills_to_its_median() {
         weights,
     } = overfill_pool(&daemon, &arc, &address).await;
 
+    // `get_block_template` reports what the template pays its miner. With
+    // the pool full the template lists transactions, and the figure is the
+    // coinbase the template carries: not zero, and not the pre-split
+    // emission.
+    assert_template_reports_its_coinbase(&daemon, &address, true).await;
+
     // The fullest block the C++ producer builds from that pool.
     let mined = daemon.generate_blocks(1, &address).await;
     assert_eq!(mined.blocks.len(), 1);
@@ -2117,11 +2123,10 @@ async fn e2e_cxx_template_fills_to_its_median() {
         pool_after >= 1,
         "the template must have been bounded by its own policy: the pool ran dry instead"
     );
-    // The producer's stop is the fee/penalty equilibrium just past the
-    // median (the doc above): one more spend would have been refused for
-    // decreasing the coinbase, and the block is within two spends of `M`
-    // on the heavy side — not at the limit, and not under the median with
-    // room to spare.
+    // The producer stops once the listed weight passes the median (the
+    // doc above), so the block is within two spends of `M` on the heavy
+    // side — not at the limit, and not under the median with room to
+    // spare.
     assert!(
         block_weight + lightest_left > median,
         "one more spend ({lightest_left}) would have kept the block under the median: \
@@ -2130,7 +2135,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
     assert!(
         block_weight < median + 2 * lightest_left,
         "the C++ producer took the block {block_weight} more than two spends past its median \
-         {median}: the fee/penalty stop is not where tx_pool.cpp:2135–2146 says it is"
+         {median}: the fill does not stop where `fill_block_template` says it does"
     );
     assert!(
         carried >= 20,
@@ -2147,6 +2152,8 @@ async fn e2e_cxx_template_fills_to_its_median() {
         daemon.generate_blocks(1, &address).await;
     }
     assert_eq!(daemon.tx_pool_size().await, 0, "the pool drains");
+    // The same holds for a template that lists nothing.
+    assert_template_reports_its_coinbase(&daemon, &address, false).await;
     daemon.generate_blocks(1, &address).await;
     maybe_capture_chain_vector(
         &daemon,
@@ -2156,6 +2163,53 @@ async fn e2e_cxx_template_fills_to_its_median() {
         &[],
     )
     .await;
+}
+
+/// `get_block_template.expected_reward` is the sum of the coinbase outputs of
+/// the template it returns. `lists_transactions` states which template the
+/// caller set up, so a pool that did not fill (or did not drain) fails here
+/// and not as a vacuous pass.
+#[cfg(test)]
+async fn assert_template_reports_its_coinbase(
+    daemon: &RegtestDaemon,
+    address: &str,
+    lists_transactions: bool,
+) {
+    use shekyl_wire::Block;
+
+    let template: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call(
+            "get_block_template",
+            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
+        )
+        .await
+        .expect("get_block_template");
+    let block = Block::from_bytes(&hex_decode(
+        template["blocktemplate_blob"]
+            .as_str()
+            .expect("blocktemplate_blob"),
+    ))
+    .expect("the C++ template parses");
+    assert_eq!(
+        !block.transaction_hashes.is_empty(),
+        lists_transactions,
+        "the template lists {} transaction(s)",
+        block.transaction_hashes.len()
+    );
+    let coinbase: u64 = block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .map(|output| output.amount)
+        .sum();
+    assert!(coinbase > 0, "a template pays its miner");
+    assert_eq!(
+        template["expected_reward"].as_u64(),
+        Some(coinbase),
+        "expected_reward is the coinbase the template carries"
+    );
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must

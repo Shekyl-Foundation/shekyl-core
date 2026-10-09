@@ -1647,7 +1647,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 
   size_t txs_weight;
   uint64_t fee;
-  if (!m_tx_pool.fill_block_template(b, median_weight, already_generated_coins, height, txs_weight, fee, expected_reward))
+  if (!m_tx_pool.fill_block_template(b, median_weight, txs_weight, fee))
   {
     return false;
   }
@@ -1770,6 +1770,11 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     // Explicit (not only the constructor default) so a reused template never
     // retains a stale value (ARCHIVAL_CREDIT_WIRE.md §3).
     b.attestation_root = empty_attestation_root();
+
+    // What this template pays its miner: the coinbase just built, whose
+    // amount is the miner's emission leg plus its fee income at the weight
+    // the block has. The pool's fill prices nothing.
+    expected_reward = get_outs_money_amount(b.miner_tx);
 
     // Always cacheable now: every template extends the tip (from_block deleted).
     cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);

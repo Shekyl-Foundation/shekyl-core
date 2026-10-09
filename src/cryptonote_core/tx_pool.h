@@ -346,15 +346,12 @@ namespace cryptonote
      *
      * @param bl return-by-reference the block to fill in with transactions
      * @param median_weight the current median block weight
-     * @param already_generated_coins the current total number of coins "minted"
      * @param total_weight return-by-reference the total weight of the new block
      * @param fee return-by-reference the total of fees from the included transactions
-     * @param expected_reward return-by-reference the total reward awarded to the miner finding this block, including transaction fees
-     * @param version hard fork version to use for consensus rules
      *
      * @return true
      */
-    bool fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward);
+    bool fill_block_template(block &bl, size_t median_weight, size_t &total_weight, uint64_t &fee);
 
     /**
      * @brief get a list of all transactions in the pool

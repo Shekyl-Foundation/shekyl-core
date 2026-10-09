@@ -67,6 +67,12 @@ leaves no activation machinery behind.
 - **Version gate:** a hard-fork table call is refused under every landing.
   Labelling one `tx-version` does not admit it.
 - **Python RPC client:** `hard_fork_info` is deleted with the method.
+- **`get_block_template.expected_reward` is the coinbase the template
+  carries.** It reported the pre-split emission for an empty template and
+  `0` for any template that listed a transaction, because the inherited
+  fill only priced the coinbase in an arm that never ran. It is now the sum
+  of the template's coinbase outputs: the miner's emission leg plus its fee
+  income. The fill itself is unchanged.
 - **Not removed:** LMDB still declares `hf_versions` and
   `hf_starting_heights`, unused, until the redb cutover (`FOLLOWUPS.md`).
   The redb store's `hf_versions` is the rule set in force per height and is

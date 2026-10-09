@@ -2021,26 +2021,13 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //TODO: investigate whether boolean return is appropriate
-  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward)
+  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, size_t &total_weight, uint64_t &fee)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
 
-    uint64_t empty_block_reward = 0;
-    bool listed = false;
     total_weight = 0;
     fee = 0;
-    const shekyl::tx_volume_window tx_volume = m_blockchain.get_tx_volume_window(block_height);
-
-    // The reward of a template that lists nothing. A listed transaction
-    // reports 0: recomputing the coinbase is the reward-aware fill, and
-    // its owner is shekyl_block_template::Fill::admit (docs/FOLLOWUPS.md).
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, empty_block_reward, tx_volume))
-    {
-      MERROR("Failed to get block reward for empty block");
-      return false;
-    }
-
 
     size_t max_total_weight = (130 * median_weight) / 100 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     std::unordered_set<crypto::key_image> k_images;
@@ -2062,7 +2049,7 @@ namespace cryptonote
         warned = true;
         continue;
       }
-      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", empty-block reward " << print_money(empty_block_reward) << ", relay method " << (unsigned)meta.get_relay_method());
+      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", relay method " << (unsigned)meta.get_relay_method());
 
       // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
       // relayable. The opt-in (m_mine_relayable_txes, set from
@@ -2168,7 +2155,6 @@ namespace cryptonote
       }
 
       bl.tx_hashes.push_back(sorted_it->second);
-      listed = true;
       total_weight += meta.weight;
       fee += meta.fee;
       append_key_images(k_images, tx);
@@ -2176,13 +2162,8 @@ namespace cryptonote
     }
     lock.commit();
 
-    // This fill listed nothing: the empty-block reward. It listed a
-    // transaction: 0. The reward-aware fill that would price the listed
-    // block is not this function (docs/FOLLOWUPS.md).
-    expected_reward = listed ? 0 : empty_block_reward;
     LOG_PRINT_L2("Block template filled with " << bl.tx_hashes.size() << " txes, weight "
-        << total_weight << "/" << max_total_weight << ", expected reward " << print_money(expected_reward)
-        << " (including " << print_money(fee) << " in fees)");
+        << total_weight << "/" << max_total_weight << ", " << print_money(fee) << " in fees");
     return true;
   }
   //---------------------------------------------------------------------------------

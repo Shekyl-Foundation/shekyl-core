@@ -841,10 +841,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) (DRS-W5, DRS-W15)
 
-- **`get_block_template`'s `expected_reward` is 0 for any template that lists a transaction.** `tx_memory_pool::fill_block_template` sets `best_coinbase = coinbase` after each admitted body, and `coinbase` was only ever assigned in the reward-aware arm, which never ran (`tx_pool.cpp`). So the figure is the empty-block reward for an empty template and 0 otherwise, and it ignores the emission split either way. Found 2026-10-08 while removing the block-version parameter; not changed there, because the fill is deleted when it moves to Rust (the template-fill row above). Falsify by: the Rust template's reported reward equals the coinbase it builds, tested on a template with bodies.
-  - Target: pre-genesis
-  - Owner: [`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §3.1; the rule's code owner is `shekyl-block-template`
-
 - **`bi_cum_rct` is written and never read.** The block-info row's `bi_cum_rct` holds each block's own output count. Its accumulation sat behind `major_version >= 4` and never ran, and its one reader, `get_output_distribution`, had no caller and is deleted (2026-10-05). The field stays because it is part of the persisted row: removing it is a schema-version change, and the LMDB store is being replaced. Delete it with the store, or in the next schema bump that touches `mdb_block_info`. Falsify by: `git grep -n bi_cum_rct src/` empty.
   - Target: pre-genesis
   - Owner: the DRS lane ([`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); found by [`CXX_VERSION_GATES.md`](design/CXX_VERSION_GATES.md) §6
