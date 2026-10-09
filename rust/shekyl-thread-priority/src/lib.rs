@@ -151,6 +151,31 @@ mod platform {
     }
 }
 
+/// This thread's errno slot.
+///
+/// Linux exports `__errno_location` (`libc` 0.2.184,
+/// `unix/linux_like/linux_l4re_shared.rs`, included for `target_os =
+/// "linux"`). Android's bionic exports `__errno`
+/// (`unix/linux_like/android/mod.rs`) and does not export
+/// `__errno_location`. `std::io::Error::last_os_error` already picks the
+/// right one; only the clear-before-`getpriority` has to name it.
+#[cfg(target_os = "linux")]
+fn errno_slot() -> *mut libc::c_int {
+    // SAFETY: `__errno_location` returns the calling thread's errno slot,
+    // valid for the thread's life.
+    unsafe { libc::__errno_location() }
+}
+
+/// Android's errno slot. Bionic names it `__errno`, not
+/// `__errno_location`.
+#[cfg(target_os = "android")]
+fn errno_slot() -> *mut libc::c_int {
+    // SAFETY: bionic's `__errno` returns the calling thread's errno slot,
+    // valid for the thread's life. Android does not export
+    // `__errno_location`.
+    unsafe { libc::__errno() }
+}
+
 /// The calling thread's nice value, as the kernel reports it.
 ///
 /// Linux and Android only: the read-back the tests and the serving host's
@@ -162,10 +187,10 @@ mod platform {
 /// The OS error if the kernel refused the read.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn current_thread_nice() -> io::Result<i32> {
-    // SAFETY: `__errno_location` returns this thread's errno slot, which
-    // is valid for the thread's life; `getpriority` takes two integers.
+    // SAFETY: `errno_slot` is this thread's errno slot; `getpriority`
+    // takes two integers and reads the calling thread when `who` is 0.
     unsafe {
-        *libc::__errno_location() = 0;
+        *errno_slot() = 0;
     }
     let value = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
     if value == -1 {
