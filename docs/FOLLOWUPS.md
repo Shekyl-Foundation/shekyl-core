@@ -381,6 +381,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Rust wallet stack: no Windows support (blocks Windows wallet [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)**
   - Target: pre-genesis
 
+- **Windows: a low-integrity process running as the user can read an exported seed file.** `create_owner_only_file` sets no no-read-up label (WP-D8, reopened 2026-10-09). Blocked on a ruling and on a Windows run that observes the low-integrity read refused.
+  - Owner: [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md) WP-D8
+  - Target: pre-genesis
+
 - **Daemon RPC: restricted-method dual-list single-source** (added 2026-07-10).
   - Target: pre-genesis
 
