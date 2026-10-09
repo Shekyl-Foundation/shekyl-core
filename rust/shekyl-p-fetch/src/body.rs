@@ -253,7 +253,7 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         let n = timeout(self.stall, self.stream.read(&mut self.buf))
             .await
             .map_err(|_| Stall::BodyTimeout)?
-            .map_err(Stall::Io)?;
+            .map_err(Stall::from)?;
         self.buf.truncate(n);
         if n == 0 {
             return Err(FetchError::Stall(Stall::Truncated {
@@ -355,7 +355,7 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         let n = timeout(self.stall, self.stream.read(&mut probe))
             .await
             .map_err(|_| Stall::NoClose)?
-            .map_err(Stall::Io)?;
+            .map_err(Stall::from)?;
         if n != 0 {
             return Err(FetchError::Malformed(Malformed::Overlength {
                 declared: self.declared,

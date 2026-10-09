@@ -14,11 +14,18 @@
 
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 
 use shekyl_wire::shard_frame::{ContentMismatch, FrameError};
 
 /// Why a [`fetch`](crate::PFetchClient::fetch) did not return a shard.
-#[derive(Debug)]
+///
+/// `Clone` so one outcome can be handed to every viewer waiting on the
+/// same flight. The only non-`Clone` payload the taxonomy ever held was
+/// [`Stall::Io`]'s [`std::io::Error`], and that is shared through an
+/// [`Arc`] rather than stringified: [`Error::source`](std::error::Error::source)
+/// still returns it.
+#[derive(Clone, Debug)]
 pub enum FetchError {
     /// **No complete exchange.** The dial failed or timed out, the
     /// connection closed before a complete head, a read stalled, or the
@@ -171,7 +178,7 @@ impl fmt::Display for FetchError {
 impl std::error::Error for FetchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Stall(Stall::Io(e)) => Some(e),
+            Self::Stall(Stall::Io(error)) => Some(error.as_ref()),
             Self::ContentRefused(m) => Some(m),
             Self::Malformed(Malformed::Frame(e)) => Some(e),
             _ => None,
@@ -181,7 +188,7 @@ impl std::error::Error for FetchError {
 
 /// Where a [`FetchError::Stall`] stopped. Diagnostic detail only: every
 /// arm has the same disposition.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Stall {
     /// The SOCKS dial did not complete within the connect bound — the
     /// proxy was slow to answer, or the rendezvous with `P`'s onion did
@@ -220,7 +227,17 @@ pub enum Stall {
     /// An I/O error on the stream **after** a complete head (body drain or
     /// the close probe). Pre-head I/O is [`Self::ClosedBeforeHead`]: no
     /// exchange happened, so it is not a short body.
-    Io(io::Error),
+    ///
+    /// Shared, not copied: an `io::Error` is not `Clone`, and a view flight
+    /// hands one refusal to every waiter. The [`Arc`] keeps
+    /// [`Error::source`](std::error::Error::source) pointed at this error.
+    Io(Arc<io::Error>),
+}
+
+impl From<io::Error> for Stall {
+    fn from(error: io::Error) -> Self {
+        Self::Io(Arc::new(error))
+    }
 }
 
 impl fmt::Display for Stall {
@@ -235,14 +252,14 @@ impl fmt::Display for Stall {
                 write!(f, "body truncated: {received} of {declared} bytes")
             }
             Self::NoClose => f.write_str("body complete but P did not close"),
-            Self::Io(e) => write!(f, "i/o: {e}"),
+            Self::Io(error) => write!(f, "i/o: {}", error.as_ref()),
         }
     }
 }
 
 /// How a complete head, or the envelope behind it, departed from the
 /// contract. Diagnostic detail only: every arm has the same disposition.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Malformed {
     /// Bytes kept arriving past the head bound with no `\r\n\r\n`. Not a
     /// stall — the stream is flowing — and not the contract.

@@ -1434,8 +1434,8 @@ mod tests {
         // Body-phase I/O (the only remaining `Stall::Io` site) is a mid-body
         // break, not a missing head.
         assert_eq!(
-            classify(&FetchError::Stall(Stall::Io(std::io::Error::from(
-                std::io::ErrorKind::ConnectionReset
+            classify(&FetchError::Stall(Stall::Io(Arc::new(
+                std::io::Error::from(std::io::ErrorKind::ConnectionReset)
             )))),
             FailureKind::Truncated
         );
