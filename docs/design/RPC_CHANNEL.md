@@ -173,9 +173,10 @@ as the P2P listener.
 leg:
 
 - **The same OS user as the daemon:** an owner-only socket on Unix, an
-  owner-only named pipe on Windows — authenticated by OS identity, carrying
-  the owner's full grant (every grant, and as the host's administrator the
-  host-only classes of §6.1), with no keys to provision. This is R0 §1.1's
+  owner-only named pipe on Windows — authenticated by OS identity. The
+  owner is the host's administrator: every grant, plus the two host-only
+  classes of §6.1, which are not grants and which no ceiling can contain.
+  There are no keys to provision. This is R0 §1.1's
   ratified end-state transport for the daemon, and it covers the default
   install: the GUI running `shekyld` as its child, same user, same session.
 - **Anyone else** — a service-mode daemon's callers (RT-16), another user,
@@ -326,14 +327,38 @@ always precedes `skem`, which always precedes all public keys and the
 payload.* The channel adopts that token order unchanged:
 
 ```
-<- s                          pre-message: the daemon's static bundle
+<- s                          pre-message: the daemon's static bundle; never sent
 ...
--> skem, e, es                encaps to the daemon's static KEM key; client ephemerals; DH(e, rs)
-<- ekem, e, ee                encaps to the client's ephemeral KEM key; daemon ephemerals; DH(e, re)
--> s, se                      client statics (encrypted); DH(s, re)   payload: grant request
-<- skem                       encaps to the client's static KEM key   payload: grant
--> (first transport record)   proves the client decapsulated the last skem
+-> skem, e, es                message 1   payload: empty
+<- ekem, e, ee                message 2   payload: empty
+-> s, se                      message 3   payload: grant request
+<- skem                       message 4   payload: grant
 ```
+
+This is the whole pattern; nothing is elided. The `...` line is Noise's
+own notation and is part of how a pattern is written: it divides the
+pre-messages above it — keys each side already holds, hashed into the
+transcript and never transmitted — from the handshake messages below it.
+There is one pre-message, the daemon's `s`, and there are four messages.
+Token by token:
+
+| Message | Token | What it does |
+|---|---|---|
+| 1, client → daemon | `skem` | encapsulates to the daemon's static ML-KEM key; sends the ciphertext |
+| | `e` | sends the client's ephemeral X25519 key, then its ephemeral ML-KEM key |
+| | `es` | DH of the client's ephemeral with the daemon's static X25519 key |
+| 2, daemon → client | `ekem` | encapsulates to the client's ephemeral ML-KEM key; sends the ciphertext |
+| | `e` | sends the daemon's ephemeral X25519 key, then its ephemeral ML-KEM key |
+| | `ee` | DH of the two ephemeral X25519 keys |
+| 3, client → daemon | `s` | sends the client's static X25519 key, then its static ML-KEM key, each encrypted |
+| | `se` | DH of the client's static with the daemon's ephemeral X25519 key |
+| 4, daemon → client | `skem` | encapsulates to the client's static ML-KEM key; sends the ciphertext, encrypted |
+
+Every message ends with its payload, encrypted once a key exists — empty
+in messages 1 and 2, the grant request in 3, the grant in 4. The handshake
+is complete after message 4. The client's first transport record is not
+part of the pattern; it is what proves the client decapsulated message 4's
+`skem` (below).
 
 **`e` and `s` each carry two keys: the X25519 key, then the ML-KEM-768
 key**, hashed and mixed in that order (clatter's README, "Tokens `e` and
@@ -342,9 +367,13 @@ side's `e` is an ephemeral X25519 key and an ephemeral ML-KEM
 encapsulation key. One consequence is read from the source, not the
 README: the daemon's `e` carries an ephemeral ML-KEM key that nothing in
 this pattern encapsulates to (clatter's `handshakestate/hybrid.rs:460-490`
-generates and sends both keys for either side). It costs 1,184 bytes and
-one key generation per handshake and is kept, because dropping it would be
-a different pattern from the one cross-checked below.
+generates and sends both keys for either side). That one key is pure
+overhead: 1,184 bytes in message 2 and one ML-KEM key generation on the
+daemon that the pattern never uses. Both are already counted in the cost
+below — the second of its two ephemeral key generations, and part of
+message 2's 2,320 bytes — and are not additional to it. The key is kept,
+because dropping it would be a different pattern from the one
+cross-checked below.
 
 **Protocol name:** `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`,
 following clatter's naming scheme. (Its README example writes `X25519`;
@@ -985,10 +1014,19 @@ client never reaches the wrong network's node.
     ([`file.rs:86`](../../rust/shekyl-win-sec/src/file.rs)), which WP-D8
     left unlabelled because the read-up question for files was not that
     slice's (`file.rs:20-21`); it is answered now.
-  - **The directory carries its own no-read-up label** as well: a
-    low-integrity process cannot open it, so it cannot enumerate the
-    rendezvous (measured). The directory's label is not relied on to
-    protect the file.
+  - **The directory `%LOCALAPPDATA%\Shekyl` carries its own no-read-up
+    label** as well: a low-integrity process cannot open it, so it cannot
+    enumerate the rendezvous (measured). The directory's label is not
+    relied on to protect the file. **That directory is reserved for
+    rendezvous files and holds nothing else** (proposed). The label denies
+    a low-integrity reader everything inside, so a file with a different
+    audience must not be put there by accident; nothing in the tree uses
+    this directory today (`shekyl-cli` keeps its history under
+    `%LOCALAPPDATA%\shekyl-cli`, the GUI under the roaming profile), and
+    anything that later wants a per-user Shekyl directory takes a
+    different one. The daemon creates the directory with its descriptor
+    and label in the creating call, and where it already exists asserts
+    both — owner and the label's policy bits — rather than adopting it.
   - **Clean exit deletes the rendezvous before closing the pipe**, so the
     name is never free while a rendezvous still points at it.
   - **Start-up dials an existing rendezvous through the peer check** before
