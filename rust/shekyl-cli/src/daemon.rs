@@ -148,16 +148,21 @@ pub struct ShardCoverageRow {
     pub expected_profit_atomic: u64,
 }
 
-/// `request_archival_shard` result. An aggregate, never shard bytes.
+/// `request_archival_shard` result (`shekyl_rpc_types::RequestArchivalShardResponse`).
+/// An aggregate, never shard bytes.
 #[derive(Debug, Deserialize)]
 pub struct ArchivalShardFetch {
     pub shard_id: u64,
     pub shard_hash: String,
+    pub archival_len: u64,
     pub block_count: u64,
     pub tx_count: u64,
     pub output_count: u64,
     pub coinbase_output_count: u64,
     pub time_range_seconds: u64,
+    /// The block that closed the shard; two views of one id that differ
+    /// here are views across a reorg.
+    pub close_height: u64,
 }
 
 /// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an

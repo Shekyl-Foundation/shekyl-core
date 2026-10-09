@@ -29,55 +29,25 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_fetch::DiscardTxs;
-use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, ShardViewHash};
+use shekyl_types::{ArchivalLength, BlockHash, ShardId, ShardView};
 
 use crate::facts::{BlockSpan, FactsFault, HolderSource, ShardFacts, ShardStanding};
 use crate::read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
 
-/// One closed shard's view: what a viewer renders (`SV-D4`).
-///
-/// Every field is a deterministic function of the shard's body and the
-/// public skeleton — no key, no wallet state, no holder privilege — which
-/// is the admissibility rule the renderer's input type
-/// (`shekyl-shard-visual`) is held to. The RPC layer projects this onto
-/// its wire type; the renderer takes that.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShardView {
-    pub shard_id: ShardId,
-    /// The view hash folded over the verified body (`SV-D8`). The hash
-    /// the viewer draws from, and the one two daemons fetching the same
-    /// shard agree on.
-    pub shard_hash: ShardViewHash,
-    /// Archival bytes the body carried.
-    pub archival_len: ArchivalLength,
-    /// Blocks in the span `[first, last]`, inclusive.
-    pub block_count: BlockCount,
-    /// In-domain transactions, as the stream delivered them.
-    pub tx_count: u64,
-    /// Outputs of those transactions plus the span's coinbase outputs.
-    pub output_count: u64,
-    /// Coinbase outputs across the span's blocks.
-    pub coinbase_output_count: u64,
-    /// `last`'s timestamp minus `first`'s, saturating.
-    pub time_range_seconds: u64,
-    /// The block that closed the shard: the cache key the response carries
-    /// so a viewer can tell two views of one id apart across a reorg.
-    pub close_height: BlockHeight,
-}
-
-impl ShardView {
-    fn assemble(read: &Read, span: &BlockSpan) -> Self {
-        Self {
-            shard_id: read.shard.shard_id(),
-            shard_hash: read.shard.view_hash(),
-            archival_len: read.shard.archival_len(),
-            block_count: span.block_count(),
-            tx_count: read.shard.tx_count(),
-            output_count: span.tx_outputs.saturating_add(span.coinbase_outputs),
-            coinbase_output_count: span.coinbase_outputs,
-            time_range_seconds: span.time_range_seconds(),
-            close_height: read.close.height,
-        }
+/// The scheduler fills [`ShardView`] (`shekyl-types`) from a read and the
+/// span; the type lives beside the ids it is keyed on so the RPC crate on
+/// the far side of the fetch-client dep cut shares it rather than copying it.
+fn assemble(read: &Read, span: &BlockSpan) -> ShardView {
+    ShardView {
+        shard_id: read.shard.shard_id(),
+        shard_hash: read.shard.view_hash(),
+        archival_len: read.shard.archival_len(),
+        block_count: span.block_count(),
+        tx_count: read.shard.tx_count(),
+        output_count: span.tx_outputs.saturating_add(span.coinbase_outputs),
+        coinbase_output_count: span.coinbase_outputs,
+        time_range_seconds: span.time_range_seconds(),
+        close_height: read.close.height,
     }
 }
 
@@ -209,7 +179,7 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
             }) => return Err(open_refusal(shard_id, open_shard, archival_through_tip)),
             Err(other) => return Err(ViewRefusal::Local(other)),
         };
-        let view = ShardView::assemble(&read, &span);
+        let view = assemble(&read, &span);
         self.cache.lock().expect("view cache lock").insert(
             shard_id,
             Cached {

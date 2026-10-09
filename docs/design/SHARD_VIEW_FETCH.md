@@ -1,8 +1,10 @@
 # Shard view — the view hash of a `W`-byte shard and the fetch that produces it
 
-**Status:** OPEN — Round 0 opened 2026-10-08. `SV-D1`, `SV-D2`, `SV-D3`
-**RULED** (Rick, 2026-10-08, in review of the shard-view plan); `SV-D4`…`SV-D8`
-**PROPOSED** with defaults, built as proposed and reopened on review.
+**Status:** OPEN — Round 0 opened 2026-10-08. `SV-D1`, `SV-D2`, `SV-D3`,
+`SV-D9` **RULED** (Rick, 2026-10-08, in review of the shard-view plan);
+`SV-D4`…`SV-D8` **PROPOSED** with defaults, built as proposed and reopened on
+review. `SV-D9` is the blocker: the daemon has no facts source for the view
+until the `DRS-E3` store cutover, and the RPC says so with its own code.
 Identifier family `SV-D` (index row `SV-D1…SV-Dn`, registered at birth per
 rule 94 §1). Decision authority: Rick. Companion to
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) (what a
@@ -44,9 +46,12 @@ live document still carried on 2026-10-08.
 4. **Nothing in the view path was buildable.** `shekyl-p-fetch` ships the
    leaf unit (`ServedFrameHeader`, `R_k` recompute — the frame deleted
    2026-10-08, `R_k` leaves with the client commit); the tx-range body is
-   fetch Sub-PR 2, unbuilt at round open; `shekyl_daemon_operator_shard_fetch` is a typed
-   miss; the serve side for `W`-shard bodies is the wallet lane's store
-   rebuild (`WSS-`, behind `WSS-Q1`). The ordering in §4 follows from this.
+   fetch Sub-PR 2, unbuilt at round open; the C++ shim's
+   `shekyl_daemon_operator_shard_fetch` was a typed miss (deleted with
+   `SV-D3`, step 3); the serve side for `W`-shard bodies is the wallet
+   lane's store rebuild (`WSS-`, behind `WSS-Q1`); and the daemon's store
+   can answer none of the scheduler's facts (`SV-D9`). The ordering in §4
+   follows from this.
 5. **The method is admin-only and must stay so while it fetches** (`SV-D6`).
 
 ---
@@ -129,6 +134,14 @@ scheduler, the verifier, the hash and the cache are Rust
 (`20-rust-vs-cpp-policy.mdc`: parses untrusted input, defines a contract other
 code consumes).
 
+*Landed 2026-10-08 (step 3).* `shekyl_daemon_rpc::shard_view` holds the
+trait (`ShardViewFacts`), the method and its refusal mapping; the wire types
+are `shekyl_rpc_types::archival` (`CORE_RPC_VERSION` 3.42); every C++ site
+named above, `src/shekyl/shekyl_daemon_fetch.h`, the C ABI struct and the
+`core_rpc_ffi.cpp` dispatch row are deleted. The C++ error-code header keeps
+the three slots (-22, -24, -25) as a note so they are not re-minted there.
+The facts trait's one shipped implementation is `SV-D9`'s.
+
 ### `SV-D4` — PROPOSED: aggregate semantics for a `W`-byte shard
 
 A shard is a `tx_id` range `[b_k, b_{k+1})` (`PDM-Q-F32`, `SHT-Q2`); its
@@ -151,14 +164,24 @@ never empty. `coinbase_ratio` stays a derived feature
 
 ### `SV-D5` — PROPOSED: closed shards only; cache keyed on the close
 
-The open tip shard is refused with a typed error (`ShardOpen { shard_id,
-closes_at_or_after }`), never rendered: its picture would change every block
-and the integrity signal (`V3_SHARD_VISUALIZATION.md` property 1) would
-false-alarm. A closed shard's aggregate is immutable below the reorg window,
-so it is cached keyed on `(shard_id, close_height, hash_of(close_height))` and
-invalidated when the block at `close_height` changes. The response carries
-`close_height` so the rendering-spec version can be pinned to chain data
-(the *Spec version is chain data* ruling).
+The open tip shard is refused with a typed error, never rendered: its
+picture would change every block and the integrity signal
+(`V3_SHARD_VISUALIZATION.md` property 1) would false-alarm. A closed shard's
+aggregate is immutable below the reorg window, so it is cached keyed on
+`(shard_id, close_height, hash_of(close_height))` and invalidated when the
+block at `close_height` changes. The response carries `close_height` so the
+rendering-spec version can be pinned to chain data (the *Spec version is
+chain data* ruling).
+
+*As built (2b, 3).* The scheduler's `ViewRefusal::Open { shard_id,
+open_shard, remaining_to_close }` carries how many archival bytes the open
+shard still needs when that is the shard asked for (`None` for an id past
+it); the RPC answers it as `CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN` (-24).
+A closed shard no drawn holder served is `CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`
+(-22) with the attempt count; the per-attempt errors are the daemon's log
+(`SF-D12`), not the wire's. The cache key is the close block's hash alone —
+`close_height` is a function of the shard under one chain, so the pair adds
+nothing the hash does not already distinguish.
 
 ### `SV-D6` — PROPOSED: the method stays restricted
 
@@ -189,6 +212,62 @@ same pass after each transaction verifies; a refused transaction aborts the
 fold and the fetch. No body is buffered to be hashed afterwards, so `SF-D7`'s
 memory leg (`N` times one transaction's peak) is unchanged by the view.
 
+### `SV-D9` — RULED 2026-10-08: the daemon has no facts source for the view until the store cutover
+
+**Finding.** The scheduler (step 2b) reads two things no shipped daemon can
+answer. `ShardFacts::shard(k)` needs a `W`-shard skeleton: the shard's
+`ExpectedShard` (the per-transaction `TxidParts` rows of its tx-id range and
+the cumulative archival length ahead of it) and the block span the range
+falls in. `HolderSource::holders_of(k)` needs the shard's bonded holders
+with their serving endpoints and hybrid verifying keys. The daemon runs on the C++ LMDB
+(`DAEMON_REDB_STORE.md`: *the daemon still opens LMDB only*), and the LMDB
+has **no `txs_archival_len` row** — that column is born Rust-only in
+`shekyl-chain-store` (`codec/schema_version.rs`) — so it cannot place a
+`SHT-Q2` boundary at all; its shard surfaces (`archival_shard_coverage.cpp`,
+`get_archival_emission_claim_source`) are keyed on the retired leaf-segment
+partition. Its bond-record read reaches Rust only as a per-id presence probe
+(`get_archival_bond_hybrid_pubkey` behind `SubmitFactsFfi::bond_record_exists`),
+not as holders-per-shard with endpoints. `shekyl-chain-store` has the
+per-transaction length and the bond records, but no shard-range or
+cumulative-archival-length index either; that read is owed with the cutover.
+
+**Ruling** (Rick, in review of the shard-view plan: *"That is definitely a
+blocker. We do need to wait on that, or that becomes the plan."*). No C++ is
+written to close the gap (`SV-D3`), and no Rust adapter is faked over the
+LMDB. Step 3 lands the RPC over its `RK-D7` trait with one shipped
+implementation, `shekyl_daemon_rpc::shard_view::SkeletonAbsent`, which
+refuses every request as `CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT`
+(-25): a statement about the daemon — *this daemon holds no archival skeleton
+and serves no shard view* — with its own code, so a viewer shows that state
+and never mistakes it for a miss (`23-disposition-visibility`: say what is,
+not what might be). The scheduler is linked into the daemon image with no
+production caller: **STAGED**, consumer named below.
+
+**What lifts it.** The `DRS-E3` cutover (`DAEMON_REDB_STORE.md`: swap the
+source, drop the grader) makes `shekyl-chain-store` the daemon's live store,
+and with it: a shard-range read over the cumulative archival length (the
+`SHT-Q2` boundary function `shard_of` applied to a prefix sum the store
+indexes), the block span for a tx-id range, and `bond_records` joined to
+serving endpoints. The composition root is `shekyl-daemon-image` — the one
+crate that reaches both the scheduler and the RPC (`check_p_fetch_dep_cut.py`
+holds the RPC crates out of the fetch client) — which then implements
+`ShardViewFacts` over `ViewDesk` and passes it in `ServerConfig::shard_view`.
+
+**Falsifier (rule 22).** `rg -n 'impl ShardViewFacts for' rust/` returns an
+implementor other than `SkeletonAbsent` and the test-local scripts, in
+`rust/shekyl-daemon-image/`, whose `ShardFacts`/`HolderSource` are backed by
+`shekyl-chain-store` rows. Until that line exists the block stands; when it
+exists `SkeletonAbsent` becomes the default nothing production selects, and
+this ruling is re-read rather than inherited.
+
+**`PDM-Q9` note.** The view cache is an in-memory map of a public aggregate,
+held by the RESTRICTED listener's process and keyed on the close block's hash.
+It is episodic — gone at restart, re-derived from a fetch — and correlates
+with nothing about this node's own holdings, so it is not the persistent,
+posture-correlated serving state `PDM-Q9` forbids in the daemon. If a future
+change proposes persisting it, that is a `PDM-Q9` question, not a cache
+tuning.
+
 ---
 
 ## 3. What the view does not add
@@ -211,7 +290,7 @@ branch.
 | 2a | fetch Sub-PR 2 client: tx-range frame, streaming per-tx `ContentVerify`, range-derived response ceiling, `ServedFrameHeader` / `recompute_segment_r_k` out of the client path | `SF-` (FOLLOWUPS row) | — |
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
 | 2c | the serve side: a `ShardProvider` over `P`'s body store serving the tx-range frame | the wallet lane (`WSS-`) | `WSS-Q1` |
-| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire | this round | 2b |
+| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in `shekyl-daemon-image` is `SV-D9`'s | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route | this round | 3 |
 
 Until 2c lands every fetch against the still-wired leaf-segment provider
@@ -233,3 +312,7 @@ holder (`SF-D8` amendment, 2026-10-08).
 - `SV-D2` reopens if a storage-only path is shown to exercise the serve
   endpoint end to end without a fetch client (the same clause as `SF-D1`).
 - `SV-D4`…`SV-D8` are defaults; the review that lands step 2b rules them.
+- `SV-D9` lifts on its falsifier (an `impl ShardViewFacts` in the daemon
+  image backed by store rows), and on nothing else — not on time, not on a
+  viewer wanting the picture sooner. A proposal to answer the view from the
+  LMDB or from C++ reopens `SV-D3`, not this.

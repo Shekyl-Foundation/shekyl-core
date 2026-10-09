@@ -630,6 +630,7 @@ impl core::fmt::Display for SettlementEpochBlocks {
 mod bond;
 mod serve;
 mod slash;
+mod view;
 
 pub use bond::{
     BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, RMarket,
@@ -637,6 +638,7 @@ pub use bond::{
 };
 pub use serve::{PassCount, ServedShard};
 pub use slash::{SlashLogEntry, SlashedHolding};
+pub use view::ShardView;
 
 #[cfg(test)]
 mod tests {

@@ -30,8 +30,6 @@
 
 #pragma once
 
-#include <limits>
-
 #include "string_tools.h"
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
@@ -1636,47 +1634,6 @@ namespace cryptonote
         KV_SERIALIZE(sigma_work_milli)
         KV_SERIALIZE(profit_estimate_available)
         KV_SERIALIZE(shards)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  /// Operator fetch that names `shard_id` only (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
-  /// Returns a ruling-A aggregate, never segment bytes.
-  struct COMMAND_RPC_REQUEST_ARCHIVAL_SHARD
-  {
-    struct request_t: public rpc_request_base
-    {
-      /// Omitted on the wire stays this sentinel (`struct_init` + in-class
-      /// initializer). 0 is a real shard; `{}` must not fetch it.
-      uint64_t shard_id = std::numeric_limits<uint64_t>::max();
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(shard_id)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t shard_id;
-      std::string shard_hash;
-      uint64_t block_count;
-      uint64_t tx_count;
-      uint64_t output_count;
-      uint64_t coinbase_output_count;
-      uint64_t time_range_seconds;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(shard_id)
-        KV_SERIALIZE(shard_hash)
-        KV_SERIALIZE(block_count)
-        KV_SERIALIZE(tx_count)
-        KV_SERIALIZE(output_count)
-        KV_SERIALIZE(coinbase_output_count)
-        KV_SERIALIZE(time_range_seconds)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;
