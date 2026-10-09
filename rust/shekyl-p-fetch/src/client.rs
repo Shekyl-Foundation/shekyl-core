@@ -11,22 +11,31 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
+use shekyl_archival_retention::{
+    verify_pass_transcript, ArchivalTx, PassDeliveryHasher, ShardViewHasher,
+    PASS_DELIVERY_DIGEST_LEN,
+};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
     is_refusal_trailer, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
     SERVING_VIRTUAL_PORT,
 };
-use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use shekyl_socks::{connect as socks_connect, Destination, Isolation};
+use shekyl_types::ShardId;
+use shekyl_wire::shard_frame::{
+    check_components, check_lengths, check_version, ContentMismatch, VarintDecoder,
+};
+use shekyl_wire::TxidParts;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
-use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
+use crate::target::{
+    ExpectedShard, FetchTarget, ServingEndpoint, TxSink, VerifiedShard, VerifiedTx,
+};
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
 /// in-flight cap `N`. Shared by both callers; there is no queue behind
@@ -41,21 +50,24 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 ///   0.0 / 1.0 / 0.0 / 0.0 %; p50 12.4 → 13.2 s. 8 is the largest
 ///   width that apparatus could exercise (eight personas); 16 was not
 ///   measured. Raising above 8 is a new sweep, not a silent bump.
-/// - **Upper bound (memory).** The client materialises each body until
-///   both verifications finish (`SF-D8`: verified-or-refused, no
-///   streaming accept), so `N × max_body_bytes()` is resident in the worst
-///   case. At the leaf figure that is `8 × ~6.7 MB ≈ 53 MB` on the Pi 4
-///   floor (rule 76) — still well under the placeholder-64 figure
-///   `SF-D7` refused (213 MB). Memory does not bind at 8.
+/// - **Upper bound (memory).** The body streams: one transaction's two
+///   segments are resident per fetch while they are checked and handed to
+///   the sink, then dropped (`SF-D8` amendment 2026-10-08). The resident
+///   term is `N × (largest archival length of one transaction + a read
+///   chunk)`, bounded by consensus (`max_tx_weight`) and not by `W`. At
+///   the pin it was `N × max_body_bytes()` with the whole body resident —
+///   `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor (rule 76), itself well under
+///   the placeholder-64 figure `SF-D7` refused (213 MB). Memory did not
+///   bind at 8 then and binds less now.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a
 ///   single Tor instance whose per-stream throughput, not the client's
 ///   parallelism, is the ceiling (`SF-D3`: no per-fetch circuit build).
 ///   The (b) judgement that four outstanding transfers keep the stream
 ///   busy still holds; eight is that judgement plus the W₂ room.
 ///
-/// **Re-derive under `PDM-Q6`'s unit** once the body is a tx-range's and
-/// not a leaf shard's — the memory term changes, the shape does not.
-/// Reopen otherwise on `SF-D7`'s criteria: capped reconstruct throughput
+/// The body is the tx-range's now (`SHT-Q2`); the memory term moved as
+/// above and the churn bound did not, so the pin stands. Reopen on
+/// `SF-D7`'s criteria: capped reconstruct throughput
 /// below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer
 /// for a challenge fetch approaching `CHALLENGE_RESPONSE_BLOCKS`.
 pub const MAX_INFLIGHT: usize = 8;
@@ -67,32 +79,6 @@ pub const MAX_INFLIGHT: usize = 8;
 /// `P` releases it only after the body, so a countersignature in hand
 /// means the whole read was delivered.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
-
-/// Ceiling on a response body, applied to `content-length` **before** a
-/// body byte is read (`SF-D6`: refused from the HTTP headers).
-///
-/// `content-length` comes from a potentially adversarial `P`; an
-/// unbounded one is a pre-allocation and resource-exhaustion path. The
-/// figure is `envelope + 20 + 2 × leaf-segment`, the bound the retired
-/// `RF-D4` frame admitted (two varint lengths, padding capped at one
-/// segment).
-///
-/// **This is the one leaf-shaped number in the crate, and it is
-/// provisional by name.** It is a *resource* bound, not a parse: the crate
-/// still hands the bytes to the content-verify hole unparsed. The serve
-/// side no longer writes the frame (`SF-D8` amendment 2026-10-08), and
-/// the body's exact length is derivable from the requester's own skeleton
-/// rows; the Sub-PR 2 client replaces this figure with that derivation
-/// (`ExpectedShard::max_response_len`) and nothing else here moves.
-#[must_use]
-pub fn max_body_bytes() -> u64 {
-    // The retired frame's two LEB128 `u64` lengths, at most 10 bytes each.
-    const FRAME_HEADER_MAX: u64 = 2 * 10;
-    let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).expect("segment fits u64");
-    u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64")
-        + FRAME_HEADER_MAX
-        + 2 * segment
-}
 
 /// Longest head this client will buffer while looking for `\r\n\r\n`. The
 /// ruled head is a status line and two headers — well under 200 bytes.
@@ -151,7 +137,7 @@ impl Default for Timeouts {
 pub struct PFetchClient {
     proxy: SocketAddr,
     /// `Arc` so a permit can be *owned* and travel into the blocking
-    /// verify task — see [`Self::fetch`] on cancellation.
+    /// check tasks — see [`Self::fetch`] on cancellation.
     slots: Arc<Semaphore>,
     timeouts: Timeouts,
 }
@@ -175,8 +161,8 @@ impl PFetchClient {
     /// thing here that *is* resolved locally, because it is a loopback
     /// socket, not a name.
     ///
-    /// The content-verify hole is per-`fetch`, not per-client: two callers
-    /// share this admission path and plug the check for *this* shard.
+    /// The expectation and the sink are per-`fetch`, not per-client: two
+    /// callers share this admission path and each names *its* shard.
     #[must_use]
     pub fn new(proxy: SocketAddr) -> Self {
         Self::with_timeouts(proxy, Timeouts::DEFAULT)
@@ -199,25 +185,46 @@ impl PFetchClient {
         self.slots.available_permits()
     }
 
-    /// Fetch `target.shard_id` from `target.endpoint`, carrying `header`,
-    /// and return it only if `P`'s countersignature verifies under
-    /// `target.verifying_key` and `verifier` accepts the body.
+    /// Fetch `expected`'s shard from `target.endpoint`, carrying `header`,
+    /// checking the body against `expected` transaction by transaction as
+    /// it streams and handing each verified transaction to `sink`; return
+    /// the shard's record only if the whole body matched and `P`'s
+    /// countersignature verifies under `target.verifying_key`.
     ///
     /// Waits for an in-flight slot first; the slot is held until the
-    /// result is decided, body included (`SF-D7`: the body is resident
-    /// until verify finishes). Both verifications run off the executor
-    /// thread — a hybrid verify is CPU, and the hole may be far more.
+    /// result is decided. The body is never resident whole (`SF-D8`
+    /// amendment 2026-10-08): the frame is read as `version ‖ tx_count ‖
+    /// per tx (pqc_auth_count, pqc_auths_len ‖ bytes, prunable_len ‖
+    /// bytes)`, each entry's declared lengths are checked against its
+    /// retained row **before** its segments are read (a `P` declaring a
+    /// length the rows do not allow is refused without the client
+    /// allocating for it), and each entry's two segments are hashed
+    /// against the rows, folded into the view hash and handed to `sink` on
+    /// the blocking pool, then dropped. The delivery digest folds every
+    /// body byte, frame bytes included, under this request's nonce.
+    ///
+    /// Refusal order, by what each outcome is evidence of: a frame that is
+    /// not the grammar, or does not end where the envelope begins, is
+    /// [`Malformed`] where it is seen — `P` is off the contract. A frame
+    /// whose content is not the expectation is remembered, the rest of the
+    /// body is drained into the digest, and the envelope is read: a
+    /// refusal trailer is [`FetchError::Unsigned`], a signature that does
+    /// not verify is [`FetchError::BadCountersignature`], and only a
+    /// signature that **does** verify makes the mismatch
+    /// [`FetchError::ContentRefused`] — `P`'s own statement that it served
+    /// these bytes for this request. A mismatch behind a bad signature says
+    /// nothing about `P`'s content.
     ///
     /// Cancellation: dropping the future closes the stream and releases the
     /// slot — **once the fetch is actually over**. A `spawn_blocking` task
     /// does not stop when its handle is dropped, so if the future is
-    /// dropped mid-verify the body and the hole keep running to their end;
-    /// the slot travels into that task and is released by it, not by the
-    /// drop. Otherwise repeated cancellation during verify would let the
-    /// next fetch take the slot while the last body is still resident,
-    /// and `MAX_INFLIGHT` would bound admissions rather than bodies.
-    /// Nothing is decided about `P` by a fetch that was not allowed to
-    /// finish.
+    /// dropped during an entry's check the entry, the sink call and the
+    /// final verify run to their end; the slot travels through those tasks
+    /// and is released by the last of them, not by the drop. Otherwise
+    /// repeated cancellation during a check would let the next fetch take
+    /// the slot while the last entry is still resident, and `MAX_INFLIGHT`
+    /// would bound admissions rather than resident work. Nothing is decided
+    /// about `P` by a fetch that was not allowed to finish.
     ///
     /// # Errors
     ///
@@ -227,15 +234,17 @@ impl PFetchClient {
         &self,
         target: &FetchTarget,
         header: &RequestHeader,
-        verifier: Arc<dyn ContentVerify>,
+        expected: &ExpectedShard,
+        sink: Arc<dyn TxSink>,
     ) -> Result<VerifiedShard, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
             .await
             .expect("in-flight semaphore is never closed");
 
+        let shard_id = expected.shard_id();
         let mut stream = self.dial(&target.endpoint).await?;
-        let request = request_bytes(target.shard_id, header);
+        let request = request_bytes(shard_id.to_raw(), header);
         timeout(self.timeouts.head, stream.write_all(&request))
             .await
             .map_err(|_| FetchError::Stall(Stall::HeadTimeout))?
@@ -243,8 +252,9 @@ impl PFetchClient {
             // close, not a short body (`Stall::Io` is body-phase only).
             .map_err(|_| FetchError::Stall(Stall::ClosedBeforeHead))?;
 
-        let (head, mut body) = read_head(&mut stream, self.timeouts.head).await?;
+        let (head, carried) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
+        let envelope_len = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
         // A bare answer's verdict, or `None` for a 200.
         let bare = match head.status {
             400 | 404 | 503 => {
@@ -259,11 +269,10 @@ impl PFetchClient {
             }
             200 => {
                 let declared = head.content_length;
-                let envelope = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
-                if declared < envelope {
+                if declared < envelope_len {
                     return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
                 }
-                let max = max_body_bytes();
+                let max = expected.max_response_len();
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
@@ -278,57 +287,75 @@ impl PFetchClient {
         // bare answer, it is a `P` off the contract. And a 200 that stops
         // short is a stall at every offset: nothing is concluded about `P`
         // from where a stream ended.
-        read_body(&mut stream, &mut body, head.content_length, self.timeouts).await?;
-        drop(stream);
+        let mut reader = BodyReader::new(
+            &mut stream,
+            carried,
+            head.content_length,
+            header,
+            self.timeouts.body_stall,
+        )?;
         if let Some(verdict) = bare {
+            match timeout(self.timeouts.body_total, reader.close_probe()).await {
+                Err(_elapsed) => return Err(FetchError::Stall(Stall::BodyTimeout)),
+                Ok(probe) => probe?,
+            }
             return Err(verdict);
         }
-        // The envelope is the body's tail: `declared >= envelope` was
-        // checked at the head and `read_body` read exactly `declared`. If
-        // it is the refusal trailer, `P` has said it served and did not
-        // sign. That is read before anything is verified, and the body
-        // behind it goes no further.
-        if is_refusal_trailer(&body[body.len() - SIGNATURE_ENVELOPE_LEN..]) {
+
+        let checker = Checker::new(slot, shard_id, sink);
+        let streamed = async {
+            let (checker, mismatch) = read_frame(&mut reader, expected, checker).await?;
+            let envelope = reader.envelope().await?;
+            reader.close_probe().await?;
+            Ok::<_, FetchError>((checker, mismatch, envelope, reader.finish()))
+        };
+        let (checker, mismatch, envelope, delivery_digest) =
+            match timeout(self.timeouts.body_total, streamed).await {
+                Err(_elapsed) => return Err(FetchError::Stall(Stall::BodyTimeout)),
+                Ok(outcome) => outcome?,
+            };
+        drop(stream);
+
+        // The envelope is the body's tail. If it is the refusal trailer,
+        // `P` has said it served and did not sign. That is read before
+        // anything is verified, and the body behind it goes no further.
+        if is_refusal_trailer(&envelope) {
             return Err(FetchError::Unsigned);
         }
 
-        // Off the executor: a hybrid verify is real CPU, and the hole may
-        // be much more (today it recomputes a segment root). The slot goes
-        // with the body: it is dropped when this closure returns, whether
-        // or not anyone is still awaiting the handle.
-        let (verifying_key, shard_id, header) =
-            (target.verifying_key.clone(), target.shard_id, *header);
+        // Off the executor: a hybrid verify is real CPU. The slot goes with
+        // the checker: it is dropped when this closure returns, whether or
+        // not anyone is still awaiting the handle.
+        let (verifying_key, header) = (target.verifying_key.clone(), *header);
+        let (tx_count, archival_len) = (expected.tx_count(), expected.archival_len());
         tokio::task::spawn_blocking(move || {
-            let _slot = slot;
-            // The envelope is the body's tail. `declared >= envelope` was
-            // checked at the head and `read_body` read exactly `declared`.
-            let mut content = body;
-            let envelope = content.split_off(content.len() - SIGNATURE_ENVELOPE_LEN);
+            let checker = checker;
             let signature = HybridSignature::from_canonical_bytes(&envelope)
                 .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
-            // The digest is recomputed from the bytes in hand under this
-            // request's own nonce, never taken from `P`: a signature over
-            // any other bytes, or over these bytes for another request,
-            // fails the next check.
-            let delivery_digest = pass_delivery_digest(header.nonce(), &content);
+            // The digest was recomputed from the bytes as they arrived
+            // under this request's own nonce, never taken from `P`: a
+            // signature over any other bytes, or over these bytes for
+            // another request, fails this check.
             verify_pass_transcript(
                 &verifying_key,
                 header.nonce(),
                 header.anchor_height(),
                 header.anchor_hash(),
-                shard_id,
+                shard_id.to_raw(),
                 &delivery_digest,
                 &signature,
             )
             .map_err(|_| FetchError::BadCountersignature)?;
-            verifier
-                .verify(shard_id, &content)
-                .map_err(FetchError::ContentRefused)?;
+            if let Some(mismatch) = mismatch {
+                return Err(FetchError::ContentRefused(mismatch));
+            }
             Ok(VerifiedShard::new(
                 shard_id,
                 delivery_digest,
                 signature,
-                content,
+                checker.finish(),
+                tx_count,
+                archival_len,
             ))
         })
         .await
@@ -501,61 +528,319 @@ impl From<Stall> for FetchError {
     }
 }
 
-/// Read exactly `declared` body bytes into `body` (which may already hold
-/// the bytes that arrived with the head), then confirm `P` closed — under
-/// a per-read stall bound and a whole-body deadline.
-///
-/// "Exactly" is checked in both directions. Fewer bytes before the close is
-/// [`Stall::Truncated`], at every offset; more bytes — already buffered behind the head, or
-/// arriving on the probe for the close — is [`Malformed::Overlength`]
-/// (`SF-D6`: body long of agreed `N` is malformed, not trimmed). The probe
-/// is what makes the second direction decidable: `RF-R1` has `P` close
-/// after the body, so a conforming `P`'s EOF is already behind the last
-/// byte, and a `P` that sends neither EOF nor bytes within the stall bound
-/// is [`Stall::NoClose`].
-async fn read_body<S: AsyncRead + Unpin>(
-    stream: &mut S,
-    body: &mut Vec<u8>,
-    declared: u64,
-    timeouts: Timeouts,
-) -> Result<(), FetchError> {
-    let declared_len = usize::try_from(declared).expect("declared length within the ceiling");
-    if body.len() > declared_len {
-        return Err(FetchError::Malformed(Malformed::Overlength { declared }));
+/// The in-flight slot and the per-transaction state that travel through
+/// the blocking checks: the view-hash fold, the sink, and the two segment
+/// buffers (reused across entries so a fetch allocates for the largest
+/// entry once, not per entry).
+struct Checker {
+    _slot: OwnedSemaphorePermit,
+    view: ShardViewHasher,
+    sink: Arc<dyn TxSink>,
+    pqc_auths: Vec<u8>,
+    prunable: Vec<u8>,
+}
+
+impl Checker {
+    fn new(slot: OwnedSemaphorePermit, shard_id: ShardId, sink: Arc<dyn TxSink>) -> Self {
+        Self {
+            _slot: slot,
+            view: ShardViewHasher::begin(shard_id),
+            sink,
+            pqc_auths: Vec::new(),
+            prunable: Vec::new(),
+        }
     }
-    body.reserve_exact(declared_len - body.len());
-    let drain = async {
-        while body.len() < declared_len {
-            let want = (declared_len - body.len()).min(BODY_CHUNK);
-            let start = body.len();
-            body.resize(start + want, 0);
-            let n = timeout(timeouts.body_stall, stream.read(&mut body[start..]))
-                .await
-                .map_err(|_| Stall::BodyTimeout)?
-                .map_err(Stall::Io)?;
-            body.truncate(start + n);
-            if n == 0 {
-                return Err(FetchError::Stall(Stall::Truncated {
-                    declared,
-                    received: u64::try_from(body.len()).expect("received fits u64"),
-                }));
+
+    /// Hash the resident entry against its row; on a match fold it into
+    /// the view hash and hand it to the sink. Blocking: CPU over the
+    /// segments plus whatever the sink does.
+    fn check(
+        &mut self,
+        index: u64,
+        parts: &TxidParts,
+        pqc_auth_count: u64,
+    ) -> Result<(), ContentMismatch> {
+        check_components(
+            index,
+            parts,
+            pqc_auth_count,
+            &self.pqc_auths,
+            &self.prunable,
+        )?;
+        self.view.fold_tx(ArchivalTx {
+            txid: &parts.hash,
+            prunable: &self.prunable,
+            pqc_auths: &self.pqc_auths,
+        });
+        self.sink.accept(&VerifiedTx {
+            index,
+            parts,
+            pqc_auth_count,
+            pqc_auths: &self.pqc_auths,
+            prunable: &self.prunable,
+        });
+        Ok(())
+    }
+
+    fn finish(self) -> shekyl_types::ShardViewHash {
+        self.view.finish()
+    }
+}
+
+/// Read the frame ahead of the envelope against `expected`, one entry
+/// resident at a time.
+///
+/// Returns the checker and the first content mismatch, if any — after
+/// which the rest of the content was drained into the digest unparsed, so
+/// the envelope behind it can still decide whether the mismatch is `P`'s.
+/// Grammar faults and a frame that does not fit its content exactly are
+/// [`Malformed`] and return at once.
+async fn read_frame<S: AsyncRead + Unpin>(
+    reader: &mut BodyReader<'_, S>,
+    expected: &ExpectedShard,
+    mut checker: Checker,
+) -> Result<(Checker, Option<ContentMismatch>), FetchError> {
+    check_version(reader.byte().await?).map_err(Malformed::Frame)?;
+    let declared = reader.varint().await?;
+    if declared != expected.tx_count() {
+        reader.drain().await?;
+        return Ok((
+            checker,
+            Some(ContentMismatch::TxCount {
+                expected: expected.tx_count(),
+                declared,
+            }),
+        ));
+    }
+    for (i, parts) in expected.txs().iter().enumerate() {
+        let index = u64::try_from(i).expect("a range index fits u64");
+        let pqc_auth_count = reader.varint().await?;
+        let pqc_auths_len = reader.varint().await?;
+        let prunable_len = reader.varint().await?;
+        if let Err(mismatch) = check_lengths(index, parts, pqc_auths_len, prunable_len) {
+            reader.drain().await?;
+            return Ok((checker, Some(mismatch)));
+        }
+        // Lengths passed: each is at most the row's `archival_len`, so the
+        // buffers are bounded by the requester's own rows.
+        reader
+            .segment(pqc_auths_len, &mut checker.pqc_auths)
+            .await?;
+        reader.segment(prunable_len, &mut checker.prunable).await?;
+        // `TxidParts` is `Copy`; the row travels into the blocking task
+        // with the checker and the checker comes back.
+        let parts = *parts;
+        let (outcome, returned) = tokio::task::spawn_blocking(move || {
+            let outcome = checker.check(index, &parts, pqc_auth_count);
+            (outcome, checker)
+        })
+        .await
+        .expect("check task does not panic");
+        checker = returned;
+        if let Err(mismatch) = outcome {
+            reader.drain().await?;
+            return Ok((checker, Some(mismatch)));
+        }
+    }
+    if reader.content_remaining() != 0 {
+        return Err(FetchError::Malformed(Malformed::FrameLong));
+    }
+    Ok((checker, None))
+}
+
+/// The response body behind a complete head, read exactly to its declared
+/// length under a per-read stall bound — content first (hashed into the
+/// delivery digest), then the envelope (not hashed), then the probe for
+/// `P`'s close.
+///
+/// "Exactly" is checked in both directions. Fewer bytes before the close
+/// is [`Stall::Truncated`], at every offset; more bytes — already buffered
+/// behind the head, or arriving on the probe for the close — is
+/// [`Malformed::Overlength`] (`SF-D6`: body long of agreed `N` is
+/// malformed, not trimmed). The probe is what makes the second direction
+/// decidable: `RF-R1` has `P` close after the body, so a conforming `P`'s
+/// EOF is already behind the last byte, and a `P` that sends neither EOF
+/// nor bytes within the stall bound is [`Stall::NoClose`].
+struct BodyReader<'a, S> {
+    stream: &'a mut S,
+    /// Bytes read from the stream and not yet consumed: `buf[pos..]`.
+    buf: Vec<u8>,
+    pos: usize,
+    /// Bytes `content-length` declared, and how many have arrived.
+    declared: u64,
+    received: u64,
+    /// Content bytes (ahead of the envelope) not yet consumed.
+    content_remaining: u64,
+    digest: PassDeliveryHasher,
+    stall: Duration,
+}
+
+impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
+    /// `carried` is what arrived behind the head. More of it than
+    /// `declared` is already [`Malformed::Overlength`].
+    fn new(
+        stream: &'a mut S,
+        carried: Vec<u8>,
+        declared: u64,
+        header: &RequestHeader,
+        stall: Duration,
+    ) -> Result<Self, FetchError> {
+        let received = u64::try_from(carried.len()).expect("carried bytes fit u64");
+        if received > declared {
+            return Err(FetchError::Malformed(Malformed::Overlength { declared }));
+        }
+        let envelope = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
+        Ok(Self {
+            stream,
+            buf: carried,
+            pos: 0,
+            declared,
+            received,
+            content_remaining: declared.saturating_sub(envelope),
+            digest: PassDeliveryHasher::new(header.nonce()),
+            stall,
+        })
+    }
+
+    fn content_remaining(&self) -> u64 {
+        self.content_remaining
+    }
+
+    fn buffered(&self) -> &[u8] {
+        &self.buf[self.pos..]
+    }
+
+    /// Make at least one byte available in the buffer.
+    async fn fill(&mut self) -> Result<(), FetchError> {
+        if self.pos < self.buf.len() {
+            return Ok(());
+        }
+        let want = usize::try_from(self.declared - self.received)
+            .expect("declared length within the ceiling")
+            .min(BODY_CHUNK);
+        if want == 0 {
+            // Everything declared has arrived; a caller still wanting
+            // bytes has outrun the declaration. The content methods refuse
+            // before asking; the envelope cannot (its width was checked at
+            // the head), so this arm is unreachable in practice.
+            return Err(FetchError::Malformed(Malformed::FrameShort));
+        }
+        self.buf.resize(want, 0);
+        self.pos = 0;
+        let n = timeout(self.stall, self.stream.read(&mut self.buf))
+            .await
+            .map_err(|_| Stall::BodyTimeout)?
+            .map_err(Stall::Io)?;
+        self.buf.truncate(n);
+        if n == 0 {
+            return Err(FetchError::Stall(Stall::Truncated {
+                declared: self.declared,
+                received: self.received,
+            }));
+        }
+        self.received += u64::try_from(n).expect("a read fits u64");
+        Ok(())
+    }
+
+    /// Take up to `max` buffered content bytes, hashing them. Never past
+    /// the content: the envelope shares the buffer and is not content.
+    fn take_content(&mut self, max: usize) -> &[u8] {
+        let content = usize::try_from(self.content_remaining).unwrap_or(usize::MAX);
+        let n = self.buffered().len().min(max).min(content);
+        let start = self.pos;
+        self.pos += n;
+        let taken = &self.buf[start..start + n];
+        self.digest.update(taken);
+        self.content_remaining -= u64::try_from(n).expect("a take fits u64");
+        taken
+    }
+
+    /// One content byte.
+    async fn byte(&mut self) -> Result<u8, FetchError> {
+        if self.content_remaining == 0 {
+            return Err(FetchError::Malformed(Malformed::FrameShort));
+        }
+        self.fill().await?;
+        Ok(self.take_content(1)[0])
+    }
+
+    /// One canonical-LEB128 `u64` of content.
+    async fn varint(&mut self) -> Result<u64, FetchError> {
+        let mut decoder = VarintDecoder::new();
+        loop {
+            let byte = self.byte().await?;
+            if let Some(value) = decoder.push(byte).map_err(Malformed::Frame)? {
+                return Ok(value);
             }
         }
-        // Exactly `declared` in hand. The next read decides the response:
-        // EOF completes it, a byte breaks it, silence is a stall.
+    }
+
+    /// Exactly `len` content bytes into `out` (cleared first).
+    async fn segment(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), FetchError> {
+        if len > self.content_remaining {
+            return Err(FetchError::Malformed(Malformed::FrameShort));
+        }
+        out.clear();
+        let len = usize::try_from(len).expect("segment within the ceiling");
+        out.reserve(len);
+        while out.len() < len {
+            self.fill().await?;
+            let chunk = self.take_content(len - out.len());
+            out.extend_from_slice(chunk);
+        }
+        Ok(())
+    }
+
+    /// Consume the rest of the content into the digest.
+    async fn drain(&mut self) -> Result<(), FetchError> {
+        while self.content_remaining != 0 {
+            self.fill().await?;
+            self.take_content(BODY_CHUNK);
+        }
+        Ok(())
+    }
+
+    /// The envelope: the declared length's last bytes, not hashed. Only
+    /// after the content is spent.
+    async fn envelope(&mut self) -> Result<[u8; SIGNATURE_ENVELOPE_LEN], FetchError> {
+        debug_assert_eq!(self.content_remaining, 0);
+        let mut out = [0u8; SIGNATURE_ENVELOPE_LEN];
+        let mut got = 0usize;
+        while got < SIGNATURE_ENVELOPE_LEN {
+            self.fill().await?;
+            let n = self.buffered().len().min(SIGNATURE_ENVELOPE_LEN - got);
+            out[got..got + n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+            self.pos += n;
+            got += n;
+        }
+        Ok(out)
+    }
+
+    /// Exactly `declared` in hand. The next read decides the response:
+    /// EOF completes it, a byte breaks it, silence is a stall.
+    async fn close_probe(&mut self) -> Result<(), FetchError> {
+        debug_assert_eq!(self.received, self.declared);
+        if self.pos < self.buf.len() {
+            return Err(FetchError::Malformed(Malformed::Overlength {
+                declared: self.declared,
+            }));
+        }
         let mut probe = [0u8; 1];
-        let n = timeout(timeouts.body_stall, stream.read(&mut probe))
+        let n = timeout(self.stall, self.stream.read(&mut probe))
             .await
             .map_err(|_| Stall::NoClose)?
             .map_err(Stall::Io)?;
         if n != 0 {
-            return Err(FetchError::Malformed(Malformed::Overlength { declared }));
+            return Err(FetchError::Malformed(Malformed::Overlength {
+                declared: self.declared,
+            }));
         }
         Ok(())
-    };
-    match timeout(timeouts.body_total, drain).await {
-        Err(_elapsed) => Err(FetchError::Stall(Stall::BodyTimeout)),
-        Ok(outcome) => outcome,
+    }
+
+    /// The delivery digest over every content byte consumed.
+    fn finish(self) -> [u8; PASS_DELIVERY_DIGEST_LEN] {
+        self.digest.finalize()
     }
 }
 
@@ -658,14 +943,6 @@ mod tests {
             )),
             Malformed::ContentLength
         );
-    }
-
-    #[test]
-    fn the_body_ceiling_is_two_leaf_segments_behind_the_envelope_and_twenty() {
-        let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).unwrap();
-        assert_eq!(max_body_bytes(), 3385 + 20 + 2 * segment);
-        // The figure the round quoted: ~3.33 MB a segment, so ~6.7 MB ceiling.
-        assert_eq!(segment, 3_326_976);
     }
 
     #[test]

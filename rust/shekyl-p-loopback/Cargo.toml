@@ -20,15 +20,16 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `HybridPublicKey` on `fetch_target`. No `test-utils`: this crate does
 # not mint keys.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# `one_leaf` is one `LEAF_BYTES` payload: a short fixture body.
-shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # The client half. A normal edge here is safe because nothing shipped
 # depends on this crate (`check_p_fetch_dep_cut.py` follows shipped edges).
 shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # The server half. No `test-signer`: the caller brings the `PassSigner`.
 shekyl-p-serve = { path = "../shekyl-p-serve" }
-# `request_header` takes an ordinal `BlockHeight`.
+# `request_header` takes an ordinal `BlockHeight`; the fixture expectation
+# is placed in `ShardId` / `ArchivalLength` terms.
 shekyl-types = { path = "../shekyl-types" }
+# The fixture body is a `shard_frame`; its expectation is the frame's rows.
+shekyl-wire = { path = "../shekyl-wire" }
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "rt"] }
 
 [lints]

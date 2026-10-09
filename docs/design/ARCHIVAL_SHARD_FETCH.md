@@ -1454,14 +1454,19 @@ by not sending them.
   tx_count: varint
   per transaction, range order:
     pqc_auth_count: varint
-    pqc_auths_len:  varint ‖ pqc_auths bytes
-    prunable_len:   varint ‖ prunable bytes
+    pqc_auths_len:  varint
+    prunable_len:   varint
+    pqc_auths bytes ‖ prunable bytes
   ```
 
   No txid, no digest, no shard id on the wire: order is the range's
   and identity is the requester's expectation. Anything `P` could put
   there would be a claim about the body (`RF-D6`). The varints are the
   canonical `shekyl-wire` LEB128 (`varint.rs`), at most ten bytes each.
+  The three varints lead the entry's bytes so the lengths are held
+  against the row before a segment byte is read (next item); an
+  interleaved layout (`len ‖ bytes ‖ len ‖ bytes`) would have put the
+  first segment resident before the second length was known.
 - **An expectation replaces the hole.** The entry point is
   `fetch(&FetchTarget, &RequestHeader, &ExpectedShard, Arc<dyn TxSink>)`.
   `FetchTarget` is now `{ endpoint, verifying_key }` — the shard moved

@@ -15,7 +15,7 @@
 use std::fmt;
 use std::io;
 
-use crate::target::ContentRefused;
+use shekyl_wire::shard_frame::{ContentMismatch, FrameError};
 
 /// Why a [`fetch`](crate::PFetchClient::fetch) did not return a shard.
 #[derive(Debug)]
@@ -75,8 +75,10 @@ pub enum FetchError {
     /// **A completed exchange that is not the contract.** A status other
     /// than 200, 400, 404 or 503, a header set other than the ruled two, a
     /// `content-length` that is missing, unparseable, below the envelope
-    /// width, or above the ceiling, or an envelope that is not a canonical
-    /// `HybridSignature`. Refused before, or without, reading the body.
+    /// width, or above the expectation's ceiling, a body that is not the
+    /// `shard_frame` grammar or does not end where the envelope begins, or
+    /// an envelope that is not a canonical `HybridSignature`. Refused as
+    /// soon as it is seen — from the head where the head decides it.
     /// **Name another `P`**; this one is not speaking the protocol.
     Malformed(Malformed),
     /// **`P` served, but the countersignature does not verify** under the
@@ -85,11 +87,18 @@ pub enum FetchError {
     /// one outcome that is evidence *about* `P` rather than about the
     /// path, which is why it is typed apart from [`Self::Malformed`].
     BadCountersignature,
-    /// **`P` served and signed, but the content is not what the caller
-    /// expected** — the [`ContentVerify`](crate::ContentVerify) hole
-    /// refused. `P` demonstrably answered *this* request with *these*
-    /// bytes. **Name another `P`.**
-    ContentRefused(ContentRefused),
+    /// **`P` served and signed a well-formed frame whose content is not the
+    /// shard the caller expected** — a transaction count, a declared length
+    /// or a segment hash off the requester's retained rows
+    /// ([`ExpectedShard`](crate::ExpectedShard)). Typed only once the
+    /// countersignature has verified: `P` demonstrably answered *this*
+    /// request with *these* bytes. **Name another `P`.**
+    ///
+    /// Against the interim leaf-segment provider every fetch ends here —
+    /// that `P` serves a body this grammar does not describe — which is a
+    /// statement about the serve side, not evidence against `P`
+    /// (`SHARD_VIEW_FETCH.md` §4).
+    ContentRefused(ContentMismatch),
 }
 
 /// What a scheduler does after a failed fetch of one `P` (`SF-D6`).
@@ -153,7 +162,7 @@ impl fmt::Display for FetchError {
             Self::BadCountersignature => {
                 f.write_str("countersignature does not verify under the target key")
             }
-            Self::ContentRefused(r) => write!(f, "content refused: {r}"),
+            Self::ContentRefused(m) => write!(f, "content refused: {m}"),
         }
     }
 }
@@ -162,7 +171,8 @@ impl std::error::Error for FetchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Stall(Stall::Io(e)) => Some(e),
-            Self::ContentRefused(r) => Some(r),
+            Self::ContentRefused(m) => Some(m),
+            Self::Malformed(Malformed::Frame(e)) => Some(e),
             _ => None,
         }
     }
@@ -254,9 +264,11 @@ pub enum Malformed {
         /// Bytes `content-length` declared.
         declared: u64,
     },
-    /// `content-length` exceeds [`max_body_bytes`](crate::max_body_bytes).
+    /// `content-length` exceeds the expectation's
+    /// [`max_response_len`](crate::ExpectedShard::max_response_len).
     /// Refused from the head, before a body byte is read: the declaration
-    /// comes from a potentially adversarial `P`.
+    /// comes from a potentially adversarial `P`, and the ceiling from the
+    /// requester's own rows.
     Oversize {
         /// Bytes `content-length` declared.
         declared: u64,
@@ -271,7 +283,19 @@ pub enum Malformed {
         /// Bytes `content-length` declared.
         declared: u64,
     },
-    /// The leading envelope bytes are not a canonical `HybridSignature`.
+    /// The body is not the `shard_frame` grammar: a version byte that is
+    /// not the frame's, or a varint that does not decode. Refused where it
+    /// is read; the rest of the body is not drained.
+    Frame(FrameError),
+    /// The frame ran into the envelope: a varint or a segment still wanted
+    /// bytes when the content ahead of the signature was spent. The frame
+    /// `P` declared is longer than the body `P` sent.
+    FrameShort,
+    /// The frame ended with content bytes still ahead of the envelope. A
+    /// frame ends exactly where the declared length says (`SF-D6`: body
+    /// long of agreed `N`), not at a parse that happened to finish.
+    FrameLong,
+    /// The trailing envelope bytes are not a canonical `HybridSignature`.
     Envelope,
 }
 
@@ -301,6 +325,11 @@ impl fmt::Display for Malformed {
                     f,
                     "more body bytes than the declared content-length {declared}"
                 )
+            }
+            Self::Frame(e) => write!(f, "body is not the shard frame: {e}"),
+            Self::FrameShort => f.write_str("frame ran into the signature envelope"),
+            Self::FrameLong => {
+                f.write_str("frame ended with content bytes still ahead of the envelope")
             }
             Self::Envelope => f.write_str("envelope is not a canonical hybrid signature"),
         }

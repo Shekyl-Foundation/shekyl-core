@@ -4521,6 +4521,7 @@ dependencies = [
  "shekyl-p-serve",
  "shekyl-socks",
  "shekyl-types",
+ "shekyl-wire",
  "tokio",
 ]
 
@@ -4545,10 +4546,10 @@ version = "3.1.0"
 dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
- "shekyl-curve-tree",
  "shekyl-p-fetch",
  "shekyl-p-serve",
  "shekyl-types",
+ "shekyl-wire",
  "tokio",
 ]
 
@@ -4844,6 +4845,7 @@ dependencies = [
  "shekyl-p-serve",
  "shekyl-tor-control-client",
  "shekyl-types",
+ "shekyl-wire",
  "tempfile",
  "tokio",
  "ureq",

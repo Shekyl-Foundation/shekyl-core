@@ -10,11 +10,14 @@ publish = false
 
 [dependencies]
 # The route grammar both ends read (`serving_route`: virt-port, path,
-# header name and encoding, response header set) and the
-# provisional body ceiling's inputs (`leaves_per_segment`, `LEAF_BYTES`).
-# Codec shared, not mirrored (`SF-D4`). The frame itself is sub-PR 2's;
-# this crate hands frame bytes to the content-verify hole unparsed.
+# header name and encoding, response header set, refusal trailer). Codec
+# shared, not mirrored (`SF-D4`). Nothing of the leaf geometry is read.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The body grammar both ends read (`shard_frame`: the tx-range frame, its
+# streaming varint decoder, the per-entry length and component checks) and
+# the `txid_parts` row the body is checked against. One codec for the
+# serve side's writer and this reader (`SF-D8` amendment 2026-10-08).
+shekyl-wire = { path = "../shekyl-wire" }
 # rend-spec-v3 hostname from the bond-record endpoint. Shared with the
 # wallet publish path (`OnionIdentity`) so the address a persona
 # publishes and the address this crate dials cannot drift. Encoding
@@ -27,12 +30,14 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
 # The SF-D8 transcript and its verifier (`pass_anchor`, `verify_pass_transcript`)
 # — one implementation shared with the admission verifier, so the client and
-# the chain can never disagree about what `P` signed. Retention is a pure
-# consensus library with no serving edge, so this stays inside SF-D4's cut.
+# the chain can never disagree about what `P` signed — and the shard view
+# hash fold (`ShardViewHasher`, SV-D). Retention is a pure consensus library
+# with no serving edge, so this stays inside SF-D4's cut.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # net + io-util for the stream, sync for the in-flight semaphore, time for
 # the per-step bounds, rt for `spawn_blocking` (the hybrid verify and the
-# content-verify hole are CPU work that must not sit on the executor thread).
+# per-transaction hash checks are CPU work that must not sit on the executor
+# thread).
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "time", "sync", "rt"] }
 # SOCKS5h dial into the daemon's tor zone (`SF-D2`, `SF-D3`): the proxy
 # resolves the `.onion`; this crate never resolves anything. Principal:

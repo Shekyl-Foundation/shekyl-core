@@ -51,8 +51,13 @@ shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # anchor against, read from the same constant the verifier reads.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `PSlot` — the persona identity the derivation binds to; and
-# `MAX_HOLDINGS_SHARDS`, the list bound reading B reports as one row.
+# `MAX_HOLDINGS_SHARDS`, the list bound reading B reports as one row; and the
+# `ShardId` / `ArchivalLength` / `SHARD_LENGTH` a framed object's expectation
+# is placed in.
 shekyl-types = { path = "../shekyl-types" }
+# `shard_frame`: the served payload is framed as one transaction, and the
+# client's expectation is that frame's row.
+shekyl-wire = { path = "../shekyl-wire" }
 # `T_SECONDS`, the target block time: reading B's epoch is the consensus
 # epoch's blocks at that time, not a literal.
 shekyl-difficulty = { path = "../shekyl-difficulty" }

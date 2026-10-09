@@ -17,8 +17,8 @@ use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_p_fetch::{FetchError, NextMove, PFetchClient, Timeouts};
 use shekyl_p_loopback::{
-    endpoint_and_client, fetch_target, one_leaf, request_header, AcceptAny, PServeEndpoint,
-    FIXTURE_SHARD_ID,
+    endpoint_and_client, fetch_target, fixture_body, fixture_expectation, fixture_prunable,
+    request_header, DiscardTxs, PServeEndpoint, TxSink, VerifiedTx, FIXTURE_SHARD_ID, FIXTURE_TXID,
 };
 use shekyl_p_serve::{
     PassKey, PassSigner, SignRefused, TestKeySigner, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
@@ -43,7 +43,26 @@ fn ephemeral_timeouts() -> Timeouts {
 /// A real endpoint holding [`FIXTURE_SHARD_ID`] behind `signer`, and a
 /// client aimed at it through the shim.
 async fn stacks(signer: Arc<dyn PassSigner>) -> (PServeEndpoint, PFetchClient) {
-    endpoint_and_client(FIXTURE_SHARD_ID, one_leaf(), signer, ephemeral_timeouts()).await
+    endpoint_and_client(
+        FIXTURE_SHARD_ID,
+        fixture_body(),
+        signer,
+        ephemeral_timeouts(),
+    )
+    .await
+}
+
+/// Records `(txid, prunable)` of every transaction the client hands over.
+#[derive(Default)]
+struct Recorder(std::sync::Mutex<Vec<(shekyl_types::TxHash, Vec<u8>)>>);
+
+impl TxSink for Recorder {
+    fn accept(&self, tx: &VerifiedTx<'_>) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((tx.parts.hash, tx.prunable.to_vec()));
+    }
 }
 
 #[tokio::test]
@@ -51,18 +70,25 @@ async fn fetch_client_accepts_a_real_served_body() {
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let public: HybridPublicKey = signer.public_key().clone();
     let (_ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
+    let seen = Arc::new(Recorder::default());
     let shard = client
         .fetch(
-            &fetch_target(public, FIXTURE_SHARD_ID),
+            &fetch_target(public),
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            seen.clone(),
         )
         .await
         .expect("the two stacks speak the same contract");
-    assert_eq!(shard.shard_id(), FIXTURE_SHARD_ID);
-    // Envelope already stripped; what remains is the provider's body,
-    // exactly — the loop writes nothing of its own ahead of it.
-    assert_eq!(shard.body(), one_leaf().as_ref());
+    assert_eq!(shard.shard_id().to_raw(), FIXTURE_SHARD_ID);
+    assert_eq!(shard.tx_count(), 1);
+    // The provider's body crossed exactly — the loop writes nothing of
+    // its own ahead of it — and the client took it apart into the one
+    // transaction the expectation named.
+    assert_eq!(
+        seen.0.lock().unwrap().as_slice(),
+        &[(FIXTURE_TXID, fixture_prunable())]
+    );
 }
 
 #[tokio::test]
@@ -78,9 +104,10 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     for shard in [FIXTURE_SHARD_ID, FIXTURE_SHARD_ID + 1] {
         let err = client
             .fetch(
-                &fetch_target(public.clone(), shard),
+                &fetch_target(public.clone()),
                 &request_header(BlockHeight::from_raw(OWN_HEIGHT)),
-                Arc::new(AcceptAny),
+                &fixture_expectation(shard),
+                Arc::new(DiscardTxs),
             )
             .await
             .expect_err("an anchor at the tip is outside the gate");
@@ -91,9 +118,10 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 
     let err = client
         .fetch(
-            &fetch_target(public.clone(), FIXTURE_SHARD_ID + 1),
+            &fetch_target(public.clone()),
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID + 1),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect_err("not held");
@@ -103,9 +131,10 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     // The retry the 400 earns: same `P`, a fresh in-gate anchor.
     client
         .fetch(
-            &fetch_target(public, FIXTURE_SHARD_ID),
+            &fetch_target(public),
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect("a fresh anchor inside the gate is served");
@@ -171,9 +200,10 @@ async fn a_persona_with_no_key_is_unavailable_and_sends_no_shard() {
     let (ep, client) = stacks(Arc::new(Keyless)).await;
     let err = client
         .fetch(
-            &fetch_target(any_key(), FIXTURE_SHARD_ID),
+            &fetch_target(any_key()),
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect_err("no key");
@@ -192,9 +222,10 @@ async fn a_signer_that_fails_after_the_body_is_a_failed_read() {
     let (ep, client) = stacks(Arc::new(RefusesLate)).await;
     let err = client
         .fetch(
-            &fetch_target(any_key(), FIXTURE_SHARD_ID),
+            &fetch_target(any_key()),
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect_err("no signature");

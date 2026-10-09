@@ -35,7 +35,9 @@
 //!
 //! - **`N` (`SF-D7`):** the churn table — per width: `n`, p50, p99, p99 as
 //!   a ratio to width 1, circuit-failure rate, `D*`, and the memory term
-//!   `width × max_body_bytes()`. The binary does **not** pick the knee; a
+//!   `width × resident bytes per fetch` (the client holds one transaction
+//!   at a time, and this rig's object is one transaction, so the term is
+//!   the served payload). The binary does **not** pick the knee; a
 //!   threshold it invented would be exactly the kind of number the `L`
 //!   note's falsifier was rewritten to avoid. The reader takes the largest
 //!   width that is not churning *and* whose memory term fits the Pi 4
@@ -63,7 +65,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
 use shekyl_sp_t3_spike::harness::{posture_tag, postures_from_env, Apparatus};
 use shekyl_sp_t3_spike::measure::{
@@ -152,8 +153,10 @@ fn fmt_opt_secs(d: Option<Duration>) -> String {
     )
 }
 
-/// The `SF-D7` churn table, with the memory term beside each row.
-fn report_churn(points: &[SweepPoint]) {
+/// The `SF-D7` churn table, with the memory term beside each row:
+/// `width × per_body`, where `per_body` is what one in-flight fetch holds
+/// resident (one transaction — this rig's whole object).
+fn report_churn(points: &[SweepPoint], per_body: u64) {
     println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
     println!("(one client tor; `width` cold fetches to `width` personas at once, start rotating by round; shared uplink → pessimistic)");
     println!(
@@ -164,7 +167,6 @@ fn report_churn(points: &[SweepPoint]) {
         "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  valid",
         "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
     );
-    let per_body = max_body_bytes();
     let rows = churn_table(points);
     let void_rows = rows.iter().filter(|r| r.is_void()).count();
     for row in &rows {
@@ -173,8 +175,8 @@ fn report_churn(points: &[SweepPoint]) {
             DStar::Unbounded => " UNBOUNDED".to_owned(),
             DStar::Undefined => "     undef".to_owned(),
         };
-        // `width × max_body_bytes()` is the resident term SF-D7 caps
-        // against the Pi 4 floor; integer bytes, shown to a tenth of a MB.
+        // `width × per_body` is the resident term SF-D7 caps against the
+        // Pi 4 floor; integer bytes, shown to a tenth of a MB.
         let mem_bytes = u64::try_from(row.width)
             .expect("width fits u64")
             .saturating_mul(per_body);
@@ -581,7 +583,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The two pin inputs this run exists to produce, last so they are what
     // the operator sees at the bottom of the log.
-    report_churn(&sweep);
+    report_churn(
+        &sweep,
+        u64::try_from(app.expected_body_len()).expect("payload length fits u64"),
+    );
     report_l(&cold_summary);
 
     let app = Arc::try_unwrap(app).map_err(|_| "a fetch task still holds the apparatus")?;

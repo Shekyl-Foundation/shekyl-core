@@ -31,9 +31,9 @@
 //!
 //! One thing the shape inherited rather than chose: the served body is
 //! whatever the production serving contract writes for the fixture, and
-//! **no caller compares against `SHARD_BYTES`.** The apparatus derives the
-//! expected body length from the payload through that contract
-//! (`ShardBody::flat(..).len()`) and owns it; `await_reachable` /
+//! **no caller compares against `SHARD_BYTES`.** The apparatus frames the
+//! payload once (`fixture::FramedObject`), derives each fetch's expectation
+//! and verified length from that same object, and owns them; `await_reachable` /
 //! `timed_fetch` take no length parameter. When the since-retired `RF-D4`
 //! frame landed (2026-08-20), every probe still compared against the raw
 //! fixture length — so every reachability probe would have timed out and

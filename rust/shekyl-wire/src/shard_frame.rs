@@ -19,15 +19,20 @@
 //! tx_count: varint
 //! per transaction, range order:
 //!   pqc_auth_count: varint
-//!   pqc_auths_len:  varint ‖ pqc_auths bytes
-//!   prunable_len:   varint ‖ prunable bytes
+//!   pqc_auths_len:  varint
+//!   prunable_len:   varint
+//!   pqc_auths bytes ‖ prunable bytes
 //! ```
 //!
 //! No txid, no digest and no shard id are on the wire: order is the
 //! range's and identity is the requester's expectation (a [`TxidParts`]
 //! per entry, from skeleton rows). Anything `P` could put there would be a
 //! claim about the body. The varints are this crate's canonical LEB128
-//! ([`crate::varint`]), so the frame has one encoding per content.
+//! ([`crate::varint`]), so the frame has one encoding per content. The
+//! three varints lead the entry's bytes so a streaming reader can hold
+//! them against the row ([`check_lengths`]) before it takes a segment
+//! byte: a length off the row is refused with nothing of that entry
+//! resident.
 //!
 //! The codec is shared by both ends (`SF-D4`: shared, not mirrored):
 //! [`write_frame`] is the serve side's, [`VarintDecoder`] and
@@ -81,8 +86,8 @@ pub fn write_frame<W: Write>(txs: &[FrameTx<'_>], w: &mut W) -> io::Result<()> {
     for tx in txs {
         write_varint(tx.pqc_auth_count, w)?;
         write_varint(tx.pqc_auths.len(), w)?;
-        w.write_all(tx.pqc_auths)?;
         write_varint(tx.prunable.len(), w)?;
+        w.write_all(tx.pqc_auths)?;
         w.write_all(tx.prunable)?;
     }
     Ok(())
@@ -407,9 +412,9 @@ mod tests {
         for _ in 0..tx_count {
             let count: u64 = read_varint(&mut cursor).unwrap();
             let pqc_len: usize = read_varint(&mut cursor).unwrap();
+            let prunable_len: usize = read_varint(&mut cursor).unwrap();
             let (pqc, rest) = cursor.split_at(pqc_len);
             cursor = rest;
-            let prunable_len: usize = read_varint(&mut cursor).unwrap();
             let (prunable, rest) = cursor.split_at(prunable_len);
             cursor = rest;
             entries.push((count, pqc.to_vec(), prunable.to_vec()));
@@ -431,12 +436,12 @@ mod tests {
             prunable: &[9; 300],
         };
         let bytes = encode_frame(&[a, b]);
-        // version, count, then entry a: count 2, len 8, 8 bytes, len 3, 3 bytes.
-        let mut expected = vec![SHARD_FRAME_VERSION, 2, 2, 8];
+        // version, count, then entry a: count 2, len 8, len 3, 8 bytes, 3 bytes.
+        let mut expected = vec![SHARD_FRAME_VERSION, 2, 2, 8, 3];
         expected.extend_from_slice(&[0xAA; 8]);
-        expected.push(3);
         expected.extend_from_slice(&[1, 2, 3]);
-        // entry b: count 0, len 0, no bytes, len 300 as LEB128 (0xAC 0x02).
+        // entry b: count 0, len 0, len 300 as LEB128 (0xAC 0x02), no pqc
+        // bytes, 300 prunable bytes.
         expected.extend_from_slice(&[0, 0, 0xAC, 0x02]);
         expected.extend_from_slice(&[9; 300]);
         assert_eq!(bytes, expected);
