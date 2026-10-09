@@ -209,9 +209,17 @@ counts.
 `core_rpc_server_commands_defs.h:265`, `:315`). The 3.41 reply decodes
 because the field is absent; the 3.42 reply is a type error.
 `get_wallet_status` maps the error to `connected: false`
-(gui `commands.rs:121-129`); `get_chain_health` fails. **Not RK-5c's to
-fix** — it needs a fix now, and its home is the `FOLLOWUPS.md` item this
-document owns, blocked on RK-Q2. It is also RK-Q2's evidence, in one
+(gui `commands.rs:121-129`); `get_chain_health` fails.
+
+**No interim fix (Rick, 2026-10-08).** The repair is RK-Q2's commit in
+this slice, with its GUI pair. Until it lands the GUI cannot read a
+post-#1005 daemon; that is accepted, because testnet is not exercising the
+GUI now. The two interim fixes were both refused as churn: editing the C++
+handler this slice deletes to write one field as a string, or having the
+GUI accept a number and then switch back. The `FOLLOWUPS.md` item this
+document owns tracks it until then.
+
+The failure is also RK-Q2's evidence, in one
 direction only: the GUI expects a string for `already_generated_coins` and
 a number for `total_burned` (gui `daemon_rpc.rs:116-117`), so RK-Q2 as
 recommended repairs the first and moves the second (§5.1).
@@ -501,8 +509,8 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 - **Economics fields' meaning.** The EUP lane owns them (RK-D16). RK-D21 is
   not an exception: it deletes a field whose idea was already retired, and
   changes no parameter and no surviving field.
-- **The GUI fix** for §3.3: needed now, independently, and tracked in
-  `FOLLOWUPS.md`.
+- **An interim fix for §3.3.** The GUI stays unable to read a post-#1005
+  daemon until RK-Q2's commit; ruled acceptable (§3.3).
 
 ---
 
