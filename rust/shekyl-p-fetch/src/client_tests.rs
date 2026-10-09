@@ -1132,6 +1132,7 @@ async fn declared_lengths_off_the_row_are_refused_before_the_segments_are_read()
         ContentMismatch::Lengths {
             index: 0,
             expected: rows[0].archival_len,
+            pqc_auth_count: entries[0].0,
             pqc_auths_len: 40,
             prunable_len: 299,
         }
@@ -1155,9 +1156,45 @@ async fn declared_lengths_off_the_row_are_refused_before_the_segments_are_read()
         ContentMismatch::Lengths {
             index: 1,
             expected: rows[1].archival_len,
+            pqc_auth_count: 1,
             pqc_auths_len: 8,
             prunable_len: 120,
         }
+    );
+
+    // A count declared over an empty segment for a row that has none:
+    // the lengths fit the row exactly, and nothing downstream would hash
+    // the count against anything, so the pre-read check is what refuses
+    // it. Nothing reaches the sink.
+    let sink = Sink::new();
+    let mut entries = self::entries();
+    entries[1].0 = 1;
+    let phantom_count = encode_frame(&frame_txs(&entries));
+    let (out, _) = run(
+        Script::Respond(signed_body(
+            &keys,
+            &header(),
+            SHARD.to_raw(),
+            &phantom_count,
+        )),
+        sink.clone(),
+        &keys,
+    )
+    .await;
+    assert_eq!(
+        content_refused(out),
+        ContentMismatch::Lengths {
+            index: 1,
+            expected: rows[1].archival_len,
+            pqc_auth_count: 1,
+            pqc_auths_len: 0,
+            prunable_len: 128,
+        }
+    );
+    assert_eq!(
+        sink.indices(),
+        vec![0],
+        "entry 0 was verified before entry 1 was refused"
     );
 }
 

@@ -242,14 +242,18 @@ pub enum ContentMismatch {
         declared: u64,
     },
     /// The entry's two declared lengths do not sum to the retained
-    /// `txs_archival_len`, or a `pqc_auths` segment was declared for a
-    /// transaction whose retained `txs_pqc_auth_hash` is `None`. Decided
-    /// before a segment byte is read.
+    /// `txs_archival_len`; a `pqc_auths` segment was declared for a
+    /// transaction whose retained `txs_pqc_auth_hash` is `None`; or the
+    /// declared count and segment disagree about whether there are any
+    /// authorizations (`pqc_auth_count == 0` is `pqc_auths_len == 0`).
+    /// Decided before a segment byte is read.
     Lengths {
         /// Position in the range.
         index: u64,
         /// The retained archival length.
         expected: ArchivalLength,
+        /// Declared `pqc_auths` count.
+        pqc_auth_count: u64,
         /// Declared `pqc_auths` length.
         pqc_auths_len: u64,
         /// Declared prunable length.
@@ -279,12 +283,14 @@ impl std::fmt::Display for ContentMismatch {
             Self::Lengths {
                 index,
                 expected,
+                pqc_auth_count,
                 pqc_auths_len,
                 prunable_len,
             } => write!(
                 f,
-                "entry {index}: declared lengths {pqc_auths_len} + {prunable_len} \
-                 are not the retained archival length {expected}"
+                "entry {index}: declared {pqc_auth_count} authorizations in \
+                 {pqc_auths_len} + {prunable_len} bytes do not fit the retained \
+                 archival length {expected}"
             ),
             Self::PqcAuthHash { index } => {
                 write!(
@@ -301,30 +307,43 @@ impl std::fmt::Display for ContentMismatch {
 
 impl std::error::Error for ContentMismatch {}
 
-/// The pre-read check on one entry: do the declared lengths fit the
+/// The pre-read check on one entry: do the three declared varints fit the
 /// retained rows? Run **before** reading the segments, so a `P` that
-/// declares a length the rows do not allow is refused without the client
+/// declares a shape the rows do not allow is refused without the client
 /// allocating for it.
 ///
 /// # Errors
 ///
-/// [`ContentMismatch::Lengths`] unless `pqc_auths_len + prunable_len`
-/// equals `expected.archival_len`, and `pqc_auths_len == 0` whenever
-/// `expected.pqc_auth_hash` is `None` (a transaction the chain hashes
-/// 3-part has no `pqc_auths` component to carry).
+/// [`ContentMismatch::Lengths`] unless all of:
+///
+/// - `pqc_auths_len + prunable_len` equals `expected.archival_len`;
+/// - `pqc_auths_len == 0` whenever `expected.pqc_auth_hash` is `None` (a
+///   transaction the chain hashes 3-part has no `pqc_auths` component to
+///   carry);
+/// - `pqc_auth_count == 0` exactly when `pqc_auths_len == 0`. The count
+///   is the segment's arity, so a count with no bytes or bytes with no
+///   count is not a transaction; the frame has one encoding per content
+///   and this is where that holds for the count. Without it a `None` row
+///   would accept any count over an empty segment, since the hash check
+///   has no row to compare that count against.
 pub fn check_lengths(
     index: u64,
     expected: &TxidParts,
+    pqc_auth_count: u64,
     pqc_auths_len: u64,
     prunable_len: u64,
 ) -> Result<(), ContentMismatch> {
     let mismatch = ContentMismatch::Lengths {
         index,
         expected: expected.archival_len,
+        pqc_auth_count,
         pqc_auths_len,
         prunable_len,
     };
     if expected.pqc_auth_hash.is_none() && pqc_auths_len != 0 {
+        return Err(mismatch);
+    }
+    if (pqc_auth_count == 0) != (pqc_auths_len == 0) {
         return Err(mismatch);
     }
     match pqc_auths_len.checked_add(prunable_len) {
@@ -534,17 +553,24 @@ mod tests {
             prunable: &[4; 24],
         };
         let expected = parts(&with_auths, 1);
-        assert_eq!(check_lengths(0, &expected, 16, 24), Ok(()));
+        assert_eq!(check_lengths(0, &expected, 1, 16, 24), Ok(()));
         // The same total split differently passes the length check (the
         // hash check decides), a different total does not.
-        assert_eq!(check_lengths(0, &expected, 10, 30), Ok(()));
+        assert_eq!(check_lengths(0, &expected, 1, 10, 30), Ok(()));
         assert!(matches!(
-            check_lengths(0, &expected, 16, 25),
+            check_lengths(0, &expected, 1, 16, 25),
             Err(ContentMismatch::Lengths { index: 0, .. })
         ));
         assert!(matches!(
-            check_lengths(0, &expected, u64::MAX, 1),
+            check_lengths(0, &expected, 1, u64::MAX, 1),
             Err(ContentMismatch::Lengths { .. })
+        ));
+        // The count and the segment must agree about whether there are
+        // any authorizations: a count over no bytes, or bytes under no
+        // count, is refused before a byte is read.
+        assert!(matches!(
+            check_lengths(0, &expected, 0, 16, 24),
+            Err(ContentMismatch::Lengths { index: 0, .. })
         ));
         // A 3-part transaction may not be sent a pqc_auths segment.
         let three_part = FrameTx {
@@ -554,9 +580,15 @@ mod tests {
         };
         let expected = parts(&three_part, 2);
         assert_eq!(expected.pqc_auth_hash, None);
-        assert_eq!(check_lengths(3, &expected, 0, 24), Ok(()));
+        assert_eq!(check_lengths(3, &expected, 0, 0, 24), Ok(()));
         assert!(matches!(
-            check_lengths(3, &expected, 8, 16),
+            check_lengths(3, &expected, 1, 8, 16),
+            Err(ContentMismatch::Lengths { index: 3, .. })
+        ));
+        // Nor may it be sent a count: with no row to hash the count
+        // against, this is the only check that sees it.
+        assert!(matches!(
+            check_lengths(3, &expected, 1, 0, 24),
             Err(ContentMismatch::Lengths { index: 3, .. })
         ));
     }

@@ -630,7 +630,9 @@ async fn read_frame<S: AsyncRead + Unpin>(
         let pqc_auth_count = reader.varint().await?;
         let pqc_auths_len = reader.varint().await?;
         let prunable_len = reader.varint().await?;
-        if let Err(mismatch) = check_lengths(index, parts, pqc_auths_len, prunable_len) {
+        if let Err(mismatch) =
+            check_lengths(index, parts, pqc_auth_count, pqc_auths_len, prunable_len)
+        {
             reader.drain().await?;
             return Ok((checker, Some(mismatch)));
         }

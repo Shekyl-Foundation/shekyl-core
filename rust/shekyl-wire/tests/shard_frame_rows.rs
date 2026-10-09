@@ -54,7 +54,10 @@ fn a_real_spends_frame_entry_is_its_two_rows_and_passes_both_checks() {
 
     let pqc_len = u64::try_from(segments.pqc_auths.len()).unwrap();
     let prunable_len = u64::try_from(segments.prunable.len()).unwrap();
-    assert_eq!(check_lengths(0, &parts, pqc_len, prunable_len), Ok(()));
+    assert_eq!(
+        check_lengths(0, &parts, entry.pqc_auth_count, pqc_len, prunable_len),
+        Ok(())
+    );
     assert_eq!(
         check_components(
             0,
