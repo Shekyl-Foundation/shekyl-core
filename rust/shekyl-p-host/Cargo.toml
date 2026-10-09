@@ -63,6 +63,9 @@ tokio = { version = "1", default-features = false, features = [
 # under test (which never launches — the composition test drives it with a
 # binary that cannot pass the hash gate).
 tempfile = "3"
+# The refusal test counts the one warning. Already in the workspace
+# (`shekyl-logging`, `shekyl-engine-core`); a dev edge only.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 [lints]
 workspace = true

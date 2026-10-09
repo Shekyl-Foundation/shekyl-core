@@ -53,6 +53,13 @@ pub const SERVING_BLOCKING: usize = MAX_INFLIGHT;
 /// The OS thread name and ledger label of the serving runtime.
 const SERVING_THREAD_NAME: &str = "sk-serving";
 
+/// The one warning a host logs when lowering fails.
+///
+/// The failure-path test counts this text. One host logs it once; a
+/// second wording would be a second alarm.
+const SERVING_PRIORITY_REFUSAL: &str = "the OS refused to lower a serving thread's CPU priority; \
+     it serves at normal priority, and the count of such threads is on the serving status";
+
 /// How long the runtime's shutdown waits for a blocking hop still running.
 ///
 /// A hop is one chunk read and folded, or one sign round trip into the
@@ -139,11 +146,7 @@ impl ServingPool {
             if let Err(cause) = lower() {
                 failures.record();
                 if !warned.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(
-                        %cause,
-                        "the OS refused to lower a serving thread's CPU priority; it serves at \
-                         normal priority, and the count of such threads is on the serving status"
-                    );
+                    tracing::warn!(%cause, "{SERVING_PRIORITY_REFUSAL}");
                 }
             }
         });
@@ -245,10 +248,18 @@ mod tests {
     }
 
     /// The failure path: the setter refuses on every thread, every thread
-    /// is counted once, one warning is logged, and the runtime still runs
-    /// work.
+    /// is counted once, one warning is logged, and an endpoint bound on
+    /// that runtime still answers.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_lowering_is_counted_once_per_thread_and_serving_goes_on() {
+        let warnings = refusal_warning_log();
+        // A sibling test can register this callsite with no subscriber
+        // first. Interest is cached process-wide from that first hit, so
+        // recompute it against the subscriber installed above before any
+        // serving thread starts.
+        tracing::callsite::rebuild_interest_cache();
+        let warnings_before = refusal_warnings(&warnings);
+
         let failures = PriorityFailures::new();
         let pool = ServingPool::build_with(&failures, || {
             Err(NotLowered::Refused(io::Error::from_raw_os_error(13)))
@@ -286,6 +297,36 @@ mod tests {
         let counted = failures.count() as usize;
         assert!(counted >= seen, "counted {counted}, saw {seen} threads");
         assert!(counted <= SERVING_WORKERS + SERVING_BLOCKING);
+
+        // The accept loop has to be the serving runtime's. A 400 is enough:
+        // an invalid request is answered before the store or the key, and
+        // any answer means the loop is running.
+        let signer = crate::signer_at_synced_tip(
+            Arc::new(crate::RefusingKey),
+            shekyl_types::BlockHeight::from_raw(10_000),
+            Duration::from_secs(60),
+        );
+        let endpoint =
+            pool.handle()
+                .spawn(async move {
+                    shekyl_p_serve::PServeEndpoint::bind(Arc::new(NoShards), signer).await
+                })
+                .await
+                .expect("bind task")
+                .expect("endpoint");
+        let response = request_status(endpoint.addr()).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 "),
+            "the endpoint answered {response:?}"
+        );
+        drop(endpoint);
+
+        let warnings_after = refusal_warnings(&warnings);
+        assert_eq!(
+            warnings_after - warnings_before,
+            1,
+            "one warning for the host, not one per thread"
+        );
         drop(pool);
     }
 
@@ -313,5 +354,93 @@ mod tests {
             began.elapsed() < Duration::from_millis(150),
             "drop waited for the blocking hop"
         );
+    }
+
+    /// No shard is held. The refusal test's request is answered before the
+    /// store is opened, so this body is never read.
+    struct NoShards;
+
+    impl shekyl_p_serve::ShardProvider for NoShards {
+        fn shard_bytes(
+            &self,
+            _shard_id: u64,
+        ) -> Result<Option<shekyl_p_serve::ShardBody>, shekyl_p_serve::ProviderError> {
+            Ok(None)
+        }
+    }
+
+    /// Process-wide, because a worker thread does not see a thread-local
+    /// subscriber. Installed once: `set_global_default` has no uninstall.
+    fn refusal_warning_log() -> Arc<Mutex<Vec<u8>>> {
+        use std::io::Write;
+        use std::sync::OnceLock;
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("warning log").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+            type Writer = Self;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        static LOG: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+        LOG.get_or_init(|| {
+            let sink = SharedBuf::default();
+            let buf = Arc::clone(&sink.0);
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::WARN)
+                .with_writer(sink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("this test process has no other global tracing subscriber");
+            buf
+        })
+        .clone()
+    }
+
+    fn refusal_warnings(log: &Mutex<Vec<u8>>) -> usize {
+        let text = log.lock().expect("warning log");
+        String::from_utf8_lossy(&text)
+            .matches(SERVING_PRIORITY_REFUSAL)
+            .count()
+    }
+
+    async fn request_status(addr: std::net::SocketAddr) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .expect("write");
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 256];
+        let read = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let n = stream.read(&mut tmp).await.expect("read");
+                assert!(n > 0, "the endpoint closed without answering");
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        });
+        read.await.expect("the endpoint answered");
+        String::from_utf8(buf).expect("response bytes")
     }
 }
