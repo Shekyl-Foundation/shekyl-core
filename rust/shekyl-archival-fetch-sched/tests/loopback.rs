@@ -44,8 +44,14 @@ fn ephemeral_timeouts() -> Timeouts {
 struct Facts {
     tip: Mutex<u64>,
     close_hash: Mutex<[u8; 32]>,
+    /// The span's coinbase count: the skeleton-side field a reorg moves.
+    coinbase_outputs: Mutex<u64>,
     closed: ShardId,
     shard_reads: Mutex<u32>,
+    /// When set, the `n`th `shard()` read is answered from a reorged
+    /// standing (new close hash, one more coinbase) and every read after
+    /// it: a reorg landing between two readers of the skeleton.
+    reorg_at_read: Mutex<Option<u32>>,
 }
 
 impl Facts {
@@ -53,18 +59,25 @@ impl Facts {
         Self {
             tip: Mutex::new(OWN_HEIGHT),
             close_hash: Mutex::new([0xc1; 32]),
+            coinbase_outputs: Mutex::new(11),
             closed: SHARD,
             shard_reads: Mutex::new(0),
+            reorg_at_read: Mutex::new(None),
         }
     }
 
-    fn span() -> BlockSpan {
+    fn reorg(&self) {
+        *self.close_hash.lock().unwrap() = [0xd2; 32];
+        *self.coinbase_outputs.lock().unwrap() += 1;
+    }
+
+    fn span(&self) -> BlockSpan {
         BlockSpan {
             first: BlockHeight::from_raw(8_990),
             last: BlockHeight::from_raw(CLOSE_HEIGHT),
             first_timestamp: 1_700_000_000,
             last_timestamp: 1_700_001_200,
-            coinbase_outputs: 11,
+            coinbase_outputs: *self.coinbase_outputs.lock().unwrap(),
             tx_outputs: 2,
         }
     }
@@ -90,11 +103,18 @@ impl ShardFacts for Facts {
     }
 
     fn shard(&self, shard_id: ShardId) -> Result<ShardStanding, FactsFault> {
-        *self.shard_reads.lock().unwrap() += 1;
+        let reads = {
+            let mut reads = self.shard_reads.lock().unwrap();
+            *reads += 1;
+            *reads
+        };
+        if *self.reorg_at_read.lock().unwrap() == Some(reads) {
+            self.reorg();
+        }
         if shard_id == self.closed {
             return Ok(ShardStanding::Closed(Box::new(ClosedShard {
                 expected: fixture_expectation(shard_id.to_raw()),
-                span: Self::span(),
+                span: self.span(),
                 close: ShardClose {
                     height: BlockHeight::from_raw(CLOSE_HEIGHT),
                     hash: BlockHash::from_bytes(*self.close_hash.lock().unwrap()),
@@ -339,13 +359,42 @@ async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
 
     // The block that closed the shard changed hash: the entry is dropped
     // and the view goes back to the holders — of which there are now none.
-    *s.facts.close_hash.lock().unwrap() = [0xd2; 32];
+    s.facts.reorg();
     let err = desk.view(SHARD).await.unwrap_err();
     assert!(
         matches!(err, ViewRefusal::Unavailable { shard_id, ref attempts } if shard_id == SHARD && attempts.is_empty()),
         "{err:?}"
     );
     assert_eq!(desk.cached_count(), 0);
+}
+
+/// A reorg between the desk's cache check and the scheduler's own read of
+/// the skeleton. The view must describe one standing — the one the body
+/// was verified against — and be cached under that standing's close hash,
+/// so the cache keeps answering it and nothing retains a view with the old
+/// span's counts under the new hash.
+#[tokio::test]
+async fn a_reorg_between_the_cache_check_and_the_read_yields_one_standing() {
+    let s = stack(FIXTURE_SHARD_ID, 2).await;
+    let desk = ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT);
+    // Read 1 is the desk's cache check; read 2 is the scheduler's snapshot.
+    *s.facts.reorg_at_read.lock().unwrap() = Some(2);
+
+    let view = desk.view(SHARD).await.expect("the read's own standing");
+    assert_eq!(*s.facts.shard_reads.lock().unwrap(), 2);
+    assert_eq!(
+        view.coinbase_output_count, 12,
+        "the span is the read's snapshot, not the cache check's"
+    );
+    assert_eq!(view.output_count, 14);
+    assert_eq!(s.endpoint.served_count(), 1);
+
+    // Cached under the standing it describes: the post-reorg skeleton
+    // answers it without a holder.
+    s.holders.clear();
+    assert_eq!(desk.view(SHARD).await.expect("cache hit"), view);
+    assert_eq!(s.endpoint.served_count(), 1);
+    assert_eq!(desk.cached_count(), 1);
 }
 
 #[tokio::test]

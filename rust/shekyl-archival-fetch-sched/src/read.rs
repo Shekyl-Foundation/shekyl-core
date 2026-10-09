@@ -37,7 +37,7 @@ use shekyl_types::{ArchivalLength, BlockHeight, PCanonicalId, ShardId};
 
 use crate::draw::{DrawFault, Urn};
 use crate::facts::{
-    ClosedShard, FactsFault, Holder, HolderSource, ShardClose, ShardFacts, ShardStanding,
+    BlockSpan, ClosedShard, FactsFault, Holder, HolderSource, ShardClose, ShardFacts, ShardStanding,
 };
 
 /// How far one need goes before it gives up.
@@ -85,6 +85,12 @@ pub struct Read {
     /// What the skeleton said closed the shard when the need opened. The
     /// view caller keys its cache on this.
     pub close: ShardClose,
+    /// Where the skeleton placed the shard's transactions when the need
+    /// opened — the same snapshot as `close` and as the rows the body was
+    /// verified against. A view is assembled from this and the body, never
+    /// from a second read of the skeleton: a reorg between two reads would
+    /// pair one standing's span with another's body and hash.
+    pub span: BlockSpan,
 }
 
 /// One dial that did not end in a verified shard, kept so the caller can
@@ -191,6 +197,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                         holder: holder.id,
                         header,
                         close: closed.close,
+                        span: closed.span,
                     });
                 }
                 Err(errors) => attempts.extend(errors),
@@ -231,6 +238,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                         holder: holder.id,
                         header,
                         close: closed.close,
+                        span: closed.span,
                     });
                 }
                 Err(errors) => attempts.extend(errors),

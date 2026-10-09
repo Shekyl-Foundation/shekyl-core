@@ -31,13 +31,16 @@ use std::sync::{Arc, Mutex};
 use shekyl_p_fetch::DiscardTxs;
 use shekyl_types::{ArchivalLength, BlockHash, ShardId, ShardView};
 
-use crate::facts::{BlockSpan, FactsFault, HolderSource, ShardFacts, ShardStanding};
+use crate::facts::{FactsFault, HolderSource, ShardFacts, ShardStanding};
 use crate::read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
 
-/// The scheduler fills [`ShardView`] (`shekyl-types`) from a read and the
-/// span; the type lives beside the ids it is keyed on so the RPC crate on
+/// The scheduler fills [`ShardView`] (`shekyl-types`) from one read: the
+/// body's figures and the span the read's own skeleton snapshot placed the
+/// shard in ([`Read::span`]), so every field describes one standing of the
+/// chain. The type lives beside the ids it is keyed on so the RPC crate on
 /// the far side of the fetch-client dep cut shares it rather than copying it.
-fn assemble(read: &Read, span: &BlockSpan) -> ShardView {
+fn assemble(read: &Read) -> ShardView {
+    let span = &read.span;
     ShardView {
         shard_id: read.shard.shard_id(),
         shard_hash: read.shard.view_hash(),
@@ -142,13 +145,15 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
     }
 
     async fn view_uncontended(&self, shard_id: ShardId) -> Result<ShardView, ViewRefusal> {
-        let facts = self.scheduler.facts();
-        let span = match facts.shard(shard_id).map_err(local)? {
+        // This standing serves the cache check only. The read takes its own
+        // snapshot and the view is assembled from that one, so a reorg
+        // between here and the read costs at most a fetch the cache could
+        // have answered — never a view with fields from two standings.
+        match self.scheduler.facts().shard(shard_id).map_err(local)? {
             ShardStanding::Closed(closed) => {
                 if let Some(view) = self.cached(shard_id, closed.close.hash) {
                     return Ok(view);
                 }
-                closed.span
             }
             ShardStanding::Open {
                 open_shard,
@@ -156,7 +161,7 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
             } => {
                 return Err(open_refusal(shard_id, open_shard, archival_through_tip));
             }
-        };
+        }
         let read = match self
             .scheduler
             .read(shard_id, Arc::new(DiscardTxs), self.budget)
@@ -179,7 +184,7 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
             }) => return Err(open_refusal(shard_id, open_shard, archival_through_tip)),
             Err(other) => return Err(ViewRefusal::Local(other)),
         };
-        let view = assemble(&read, &span);
+        let view = assemble(&read);
         self.cache.lock().expect("view cache lock").insert(
             shard_id,
             Cached {
