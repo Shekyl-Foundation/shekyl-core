@@ -3,7 +3,7 @@
 **Status:** OPEN — **rules-crate commits 1–9 LANDED on the branch
 2026-09-22, amended 2026-09-23** (§5: sixteen 4.F rows; `implemented 34 / validator-enforced
 150`, `by-construction 4`; genesis pinned, band 1 empty; `WrongReward → F18`;
-the split epoch is `rules::miner::EMISSION_SPLIT_EPOCH`, not a `RuleSet` field;
+the split epoch is `shekyl_economics::EMISSION_SPLIT_EPOCH`, closed over by `emission_share`, not a `RuleSet` field;
 `Emission` is derived and recorded in coverage, not stored on `ValidatedBlock`). Round 0
 pre-flight written 2026-09-21 against `dev` @ `ea140396b`; Round 0.5 the
 shim-layer sweep (§3.1); precursor P1–P4 landed as #819; Round 1
@@ -110,7 +110,7 @@ The census pins its C++ lines at `02c086f4b`; every 4.F pin has drifted
 | F18 | 1 | coinbase pays **exactly** `miner_emission + miner_fee_income` | — | `validate` | **Blocked** (F14b, F17) |
 | F19 | 1 | `frozen_segment_count` read at **parent state** or the node halts; single-read discipline | — | — | **True by construction in Rust**: `validate` runs inside the write transaction over a view branded `'id` that *is* the parent state; the reorder the C++ guards against (`m_db->height() != block_height`) is unrepresentable. Needs a status (§8 Q4) |
 | F20 | 1 | volume operand `(tx_count_sum, blocks)` over the prior `min(h, 720)` blocks; `(0, 0)` at height 0 | `TxVolume::window(sum, blocks)`; sum = `cumulative_tx_count(tip) − cumulative_tx_count(tip − 720)` | `validate` | **Land** — a definition row; two view reads (`RecordedBlock.cumulative_tx_count`) |
-| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land by construction** as `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the hardfork tables, consumed by F16. **Amended 2026-09-23:** a `RuleSet` field when a schedule step names a different epoch, not before |
+| F21 | 1 | `genesis_ng_height` is **1** (the emission-split epoch operand) | — (`hardfork.cpp:383`–`:394`) | data | **Land by construction** as `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the hardfork tables, consumed by F16. **Amended 2026-09-23:** a `RuleSet` field when a schedule step names a different epoch, not before. **Amended 2026-10-09:** the owner is `shekyl_economics::EMISSION_SPLIT_EPOCH`, closed over by `emission_share`; the chain-rules alias is deleted with the hard-fork table |
 
 Row-count check: 22 = the `pending` entries `F1`–`F21` + `F14b`.
 
@@ -363,7 +363,7 @@ exactly like pending).
   the mock; the F11 conformance harness of slice 2 covers both sides).
 - **`RuleSet` grows one parameter:** `mined_money_unlock_window: BlockCount`
   (60; F6), the C++ `#define`, because F6 reads it. CEN-F21's epoch is
-  `rules::miner::EMISSION_SPLIT_EPOCH` (1, pinned to the hardfork tables) —
+  `shekyl_economics::EMISSION_SPLIT_EPOCH` (1; the chain-rules alias was deleted 2026-10-09 with the hard-fork table it was pinned to) —
   **amended 2026-09-23:** a `RuleSet` field with no reader was copied into
   every rule-set mismatch. It joins `RuleSet` when a schedule step names a
   different epoch.
@@ -541,7 +541,7 @@ E3). Coverage over a well-formed candidate: 29 rows.
   that a mis-ordered read cannot be written> }` — stretches "site" past a
   function; **(c)** `implemented` with a rule whose check is a no-op —
   a fixture that cannot fire. **Default: (a).**
-- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; the window landed; the epoch amended 2026-09-23.** F6's unlock window (60) is a `RuleSet` field because F6 reads it, pinned by test to `cryptonote_config.h` (not a `config/` key). F21's split epoch (1) was ruled onto `RuleSet` the same day and **amended on review:** it is `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the three hardfork tables, and joins `RuleSet` when a schedule step names a different epoch. A field no row read was part of rule-set equality and was copied into `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` (the pair at 144 bytes), which is why `rust/clippy.toml` raised the workspace `large-error-threshold`; that file is deleted with the field. The same review keeps `Emission` off `ValidatedBlock`: `derive` records F11/F13/F15/F20, and the priced value is what F14b reads inside `validate`. `connect` persists F14b's paid reward, which this value is not. **Default was: yes, both.**
+- **Q5 — constants as `RuleSet` parameters. RULED yes, 2026-09-22; the window landed; the epoch amended 2026-09-23.** F6's unlock window (60) is a `RuleSet` field because F6 reads it, pinned by test to `cryptonote_config.h` (not a `config/` key). F21's split epoch (1) was ruled onto `RuleSet` the same day and **amended on review:** it was `rules::miner::EMISSION_SPLIT_EPOCH`, pinned to the three hardfork tables, and would join `RuleSet` when a schedule step names a different epoch. **Amended 2026-10-09:** the owner is `shekyl_economics::EMISSION_SPLIT_EPOCH`, closed over by `emission_share`; the alias is deleted. A field no row read was part of rule-set equality and was copied into `Stale::RuleSet` and `StoreCannot::RuleSetNotInForce` (the pair at 144 bytes), which is why `rust/clippy.toml` raised the workspace `large-error-threshold`; that file is deleted with the field. The same review keeps `Emission` off `ValidatedBlock`: `derive` records F11/F13/F15/F20, and the priced value is what F14b reads inside `validate`. `connect` persists F14b's paid reward, which this value is not. **Default was: yes, both.**
 - **Q6 — the coinbase's locus. RULED reuse `TxSlot::Miner`, 2026-09-22; landed, with `ExpectedPlace::Miner` in E2's family — the half that closes the gap Q8's mis-key slipped through.** Refusals on F1–F10 point at the miner
   transaction; `Locus::Block` is imprecise, `TxSlot::Miner` exists for the
   per-tx path. Does the block-level miner rule refuse at `Locus::Tx(TxSlot::Miner)`

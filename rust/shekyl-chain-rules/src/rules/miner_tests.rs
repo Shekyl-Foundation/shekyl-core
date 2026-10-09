@@ -754,20 +754,22 @@ fn f8_the_wire_admits_one_output_tag() {
     }
 }
 
-/// CEN-F21 as behaviour: the genesis block pays no staker share, block 1
-/// pays one, and the typed epoch here is the economics crate's constant.
+/// CEN-F21 as behaviour, on the economics crate's one constant: the genesis
+/// block pays the miner the whole emission, and block 1 pays a staker share.
 #[test]
 fn the_staker_share_starts_at_block_one() {
-    assert_eq!(
-        EMISSION_SPLIT_EPOCH,
-        BlockHeight::from_raw(shekyl_economics::EMISSION_SPLIT_EPOCH)
-    );
-    assert_eq!(EMISSION_SPLIT_EPOCH, BlockHeight::from_raw(1));
+    assert_eq!(shekyl_economics::EMISSION_SPLIT_EPOCH, 1);
     let emission = 1_024_000_000_000;
     let genesis = shekyl_economics::compute_emission_split(emission, 0);
     assert_eq!(genesis.miner_emission, emission);
     assert_eq!(genesis.staker_emission, 0);
-    let first = shekyl_economics::compute_emission_split(emission, EMISSION_SPLIT_EPOCH.to_raw());
+    let first =
+        shekyl_economics::compute_emission_split(emission, shekyl_economics::EMISSION_SPLIT_EPOCH);
     assert!(first.staker_emission > 0);
     assert_eq!(first.miner_emission + first.staker_emission, emission);
+    assert_eq!(
+        shekyl_economics::emission_share_at(0),
+        0,
+        "the shipped share the daemon reads is zero at genesis"
+    );
 }

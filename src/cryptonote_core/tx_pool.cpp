@@ -2026,13 +2026,16 @@ namespace cryptonote
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
 
-    uint64_t best_coinbase = 0, coinbase = 0;
+    uint64_t empty_block_reward = 0;
+    bool listed = false;
     total_weight = 0;
     fee = 0;
     const shekyl::tx_volume_window tx_volume = m_blockchain.get_tx_volume_window(block_height);
 
-    //baseline empty block
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, tx_volume))
+    // The reward of a template that lists nothing. A listed transaction
+    // reports 0: recomputing the coinbase is the reward-aware fill, and
+    // its owner is shekyl_block_template::Fill::admit (docs/FOLLOWUPS.md).
+    if (!get_block_reward(median_weight, total_weight, already_generated_coins, empty_block_reward, tx_volume))
     {
       MERROR("Failed to get block reward for empty block");
       return false;
@@ -2059,7 +2062,7 @@ namespace cryptonote
         warned = true;
         continue;
       }
-      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", current coinbase " << print_money(best_coinbase) << ", relay method " << (unsigned)meta.get_relay_method());
+      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", empty-block reward " << print_money(empty_block_reward) << ", relay method " << (unsigned)meta.get_relay_method());
 
       // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
       // relayable. The opt-in (m_mine_relayable_txes, set from
@@ -2100,13 +2103,9 @@ namespace cryptonote
         continue;
       }
 
-      // The shipped fill stops at the median. RULED 2026-10-05: the
-      // reward-aware fill is the design, and its owner is
-      // shekyl_block_template::Fill::admit (rust/shekyl-block-template/src/fill.rs).
-      // It goes live by the pool's template fill moving to Rust, with this
-      // function deleted, and not before the coinbase reserve is derived
-      // (docs/FOLLOWUPS.md). The inherited C++ copy of that fill sat behind
-      // a block version this chain never had, and is gone.
+      // Stop at the median. The reward-aware fill's owner is
+      // shekyl_block_template::Fill::admit; this function does not
+      // recompute the coinbase (docs/FOLLOWUPS.md).
       if (total_weight > median_weight)
       {
         LOG_PRINT_L2("  would exceed median block weight");
@@ -2169,17 +2168,20 @@ namespace cryptonote
       }
 
       bl.tx_hashes.push_back(sorted_it->second);
+      listed = true;
       total_weight += meta.weight;
       fee += meta.fee;
-      best_coinbase = coinbase;
       append_key_images(k_images, tx);
-      LOG_PRINT_L2("  added, new block weight " << total_weight << "/" << max_total_weight << ", coinbase " << print_money(best_coinbase));
+      LOG_PRINT_L2("  added, new block weight " << total_weight << "/" << max_total_weight << ", fee " << print_money(fee));
     }
     lock.commit();
 
-    expected_reward = best_coinbase;
+    // This fill listed nothing: the empty-block reward. It listed a
+    // transaction: 0. The reward-aware fill that would price the listed
+    // block is not this function (docs/FOLLOWUPS.md).
+    expected_reward = listed ? 0 : empty_block_reward;
     LOG_PRINT_L2("Block template filled with " << bl.tx_hashes.size() << " txes, weight "
-        << total_weight << "/" << max_total_weight << ", coinbase " << print_money(best_coinbase)
+        << total_weight << "/" << max_total_weight << ", expected reward " << print_money(expected_reward)
         << " (including " << print_money(fee) << " in fees)");
     return true;
   }

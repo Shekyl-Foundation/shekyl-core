@@ -159,11 +159,13 @@ expect(
     "NOT IN THE INVENTORY (1x)",
 )
 
-# A hard-fork table call is extracted; its definition and declaration are not.
-LOOKUP = (
+# A definition or a declaration of a hard-fork table function is not a call.
+# A call is refused under every landing, including a row that names it
+# `tx-version`: the vocabulary check alone would accept that row.
+DEFINITIONS = (
     "uint8_t Chain::get_ideal_hard_fork_version(uint64_t height) const\n"
     "{\n"
-    "  return m_hardfork->get_ideal_version(height);\n"
+    "  return 1;\n"
     "}\n"
     "struct S\n"
     "{\n"
@@ -171,13 +173,30 @@ LOOKUP = (
     "  uint8_t get_ideal_hard_fork_version(uint64_t height) const;\n"
     "};\n"
 )
+CALL = "  return m_hardfork->get_ideal_version(height);\n"
+CALL_ROW = (
+    "src/chain.cpp\t1\thard-fork table\talways 1\tdelete\ttx-version\t"
+    "return m_hardfork->get_ideal_version(height);\n"
+)
 expect(
-    "a table call is a row, a definition is not",
-    {"src/chain.cpp": LOOKUP},
-    HEADER
-    + "src/chain.cpp\t1\thard-fork table\talways 1\tdelete\ttx-version\t"
-    "return m_hardfork->get_ideal_version(height);\n",
+    "a table definition is not a site",
+    {"src/pool.cpp": FILL, "src/chain.cpp": DEFINITIONS},
+    HEADER + FILL_ROWS,
     0,
+)
+expect(
+    "a table call inventoried under tx-version is refused",
+    {"src/pool.cpp": FILL, "src/chain.cpp": CALL},
+    HEADER + FILL_ROWS + CALL_ROW,
+    1,
+    "not a classifiable site",
+)
+expect(
+    "a table call with no row is refused",
+    {"src/pool.cpp": FILL, "src/chain.cpp": CALL},
+    HEADER + FILL_ROWS,
+    1,
+    "not a classifiable site",
 )
 
 # A named bound, a table comparison, a persisted-row byte and a `.cc` file are

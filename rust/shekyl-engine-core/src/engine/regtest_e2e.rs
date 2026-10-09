@@ -1791,14 +1791,11 @@ async fn overfill_pool(
 /// expected at most 600000`) and the block at the bound was refused for
 /// its coinbase: the miner leg differed by `33 595` atomic units — one
 /// unit of the staker share in `10⁶` — because the C++ *regtest* measured
-/// CEN-F21's decay from height 0 while every issued network, and
-/// `EMISSION_SPLIT_EPOCH`, measure it from height 1. The regtest hardfork
-/// table was `{(1, 0), (1, 1)}` with the second row rejected by
-/// `HardFork::add_fork` (version ≤ back), a nettype-conditional
-/// consensus datum no `m_nettype` sweep could see (rule 71). Fixed in the
-/// table (`cryptonote_core.cpp`, `shekyl_e2_trace_export.cpp`) in the same
-/// PR; this test is the falsifier. Fee income agreed to the unit both
-/// times.
+/// CEN-F21's decay from height 0 while every issued network measures it
+/// from block 1. The share now starts at `shekyl_economics::EMISSION_SPLIT_EPOCH`
+/// on every network, read by the split itself. This test is the falsifier
+/// that the two producers agree on that share. Fee income agreed to the
+/// unit both times.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {

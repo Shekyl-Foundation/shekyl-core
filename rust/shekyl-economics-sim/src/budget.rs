@@ -52,8 +52,8 @@
 use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
-    base_block_reward, burn::compute_burn_split_at, calc_effective_emission_share,
-    calc_release_multiplier, params::SCALE, split_block_emission, ClosedShardCount,
+    base_block_reward, burn::compute_burn_split_at, calc_release_multiplier, emission_share,
+    params::SCALE, split_block_emission, ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
@@ -336,9 +336,8 @@ fn build_epoch_record(
     } else {
         0.0
     };
-    let share = calc_effective_emission_share(
+    let share = emission_share(
         abs_height_mid,
-        crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
         params.staker_emission_share,
         params.staker_emission_decay,
         params.blocks_per_year,

@@ -39,10 +39,9 @@
 use serde::{Deserialize, Serialize};
 use shekyl_economics::params::SCALE;
 use shekyl_economics::{
-    base_block_reward, base_emission_at, calc_burn_pct_from_activity,
-    calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
-    effective_emission, neutral_height_reaching, params_digest, split_block_emission,
-    ClosedShardCount, EconomicParams, TxVolume,
+    base_block_reward, base_emission_at, calc_burn_pct_from_activity, calc_release_multiplier,
+    compute_burn_split_at, effective_emission, emission_share, neutral_height_reaching,
+    params_digest, split_block_emission, ClosedShardCount, EconomicParams, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -208,15 +207,13 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             effective_emission(ag_start, TxVolume::per_block(tx_volume), &params)
                 .expect("sim paid emission stays within the arithmetic domain");
 
-        let emission_share = calc_effective_emission_share(
+        let share = emission_share(
             block + config.genesis_height_offset,
-            crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
             sim.staker_emission_share,
             sim.staker_emission_decay,
             blocks_per_year,
         );
-        let (_miner_emission, staker_emission) =
-            split_block_emission(effective_reward, emission_share);
+        let (_miner_emission, staker_emission) = split_block_emission(effective_reward, share);
 
         let total_staked = if stake_ratio > 0 && circulating > 0 {
             (u128::from(circulating) * u128::from(stake_ratio) / u128::from(SCALE)) as u64

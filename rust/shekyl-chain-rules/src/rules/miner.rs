@@ -40,7 +40,8 @@
 //! F2 (the wire admits one transaction version) and F8 (one output tag)
 //! are falsified in `miner_tests`. F19 (parent state is the view's brand)
 //! is falsified by the `compile_fail` doctests on `validate`. F21 is
-//! [`EMISSION_SPLIT_EPOCH`].
+//! [`shekyl_economics::EMISSION_SPLIT_EPOCH`], compile-pinned from the
+//! census and falsified by `the_staker_share_starts_at_block_one`.
 //!
 //! # What is not here
 //!
@@ -110,17 +111,6 @@ pub(crate) fn economics() -> &'static EconomicParams {
         params
     })
 }
-
-/// CEN-F21: the height the staker emission share starts at, as a
-/// [`BlockHeight`]. The value and its statement are
-/// [`shekyl_economics::EMISSION_SPLIT_EPOCH`]'s; this is that constant on
-/// the height axis, for the callers here that hold heights typed.
-///
-/// No rule passes it anywhere: `shekyl_economics::compute_emission_split`
-/// reads its own constant, so the producer and the validator cannot price
-/// the split at two epochs.
-pub const EMISSION_SPLIT_EPOCH: BlockHeight =
-    BlockHeight::from_raw(shekyl_economics::EMISSION_SPLIT_EPOCH);
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)

@@ -176,7 +176,6 @@ pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
-    EMISSION_SPLIT_EPOCH,
 };
 pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};

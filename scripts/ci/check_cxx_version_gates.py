@@ -20,7 +20,9 @@
 #
 #   1. a comparison, in either order, one of whose sides is a version operand;
 #   2. a call into the hard-fork table (`get_ideal_hard_fork_version(` and its
-#      siblings), which is how a height becomes a version.
+#      siblings). The mechanism is deleted, so a call is refused outright.
+#      No inventory row classifies one, under any landing. A definition or a
+#      pure declaration of the same name is not a call and is left alone.
 #
 # A version operand is an identifier that ends in lowercase `version`
 # (`version`, `tx.version`, `hf_version`, `socks_version()`), or the
@@ -314,6 +316,14 @@ def is_lookup_call(line):
     return not (_DECLARATION_RE.search(stripped) and _TYPE_LED_RE.match(stripped))
 
 
+# A reintroduced activation lookup is not a version comparison with a missing
+# label. The vocabulary check on `landing` would accept it under `tx-version`.
+LOOKUP_REFUSAL = (
+    "is a hard-fork table call, which is not a classifiable site. "
+    "The mechanism is deleted, and no landing accepts one."
+)
+
+
 def mask_literals(line):
     """`line` with the contents of its string and character literals blanked.
 
@@ -413,6 +423,9 @@ def read_inventory(path):
                 f"line {number}: landing `{row['landing']}` is not one of "
                 f"{', '.join(LANDINGS)}"
             )
+        if is_lookup_call(row["text"]):
+            problems.append(f"line {number}: `{row['text']}` {LOOKUP_REFUSAL}")
+            continue
         try:
             count = int(row["count"])
         except ValueError:
@@ -465,6 +478,10 @@ def main(argv=None):
         print(f"{INVENTORY} is missing", file=sys.stderr)
         return 2
     rows, problems = read_inventory(inventory_path)
+    lookups = Counter({key: count for key, count in hits.items() if is_lookup_call(key[1])})
+    hits -= lookups
+    for (path, text), count in sorted(lookups.items()):
+        problems.append(f"{path}: `{text}` ({count}x) {LOOKUP_REFUSAL}")
     if not rows and not problems:
         problems.append(
             "the inventory has no rows; if the tree has no version comparisons left, "
@@ -488,9 +505,9 @@ def main(argv=None):
         print(f"IN THE INVENTORY, NOT IN THE TREE ({count}x): {path}: {text}", file=sys.stderr)
     if unlisted:
         print(
-            "\nA version comparison or hard-fork table call has no row. Shekyl's block "
-            "version is 1 and its transaction version is 3, so a comparison against "
-            "another number selects one arm forever. Classify it in "
+            "\nA version comparison has no row. Shekyl's block version is 1 and its "
+            "transaction version is 3, so a comparison against another number selects "
+            "one arm forever. Classify it in "
             f"{INVENTORY} (docs/design/CXX_VERSION_GATES.md says how), or do not add it.",
             file=sys.stderr,
         )

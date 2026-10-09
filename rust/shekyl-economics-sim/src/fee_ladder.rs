@@ -31,9 +31,9 @@
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side). The emission-split epoch is the validator's
-//! ([`crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT`]), and [`HysteresisCq`]
-//! calls `shekyl-economics::hysteresis_step`.
+//! copy wallet-side). The emission-split epoch is closed over inside
+//! [`shekyl_economics::emission_share`], and [`HysteresisCq`] calls
+//! `shekyl-economics::hysteresis_step`.
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -46,11 +46,11 @@ use shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step,
-    paid_block_reward, projected_already_generated, quantize_pow2_ceil, relay_fee_floor,
-    round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
-    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share,
+    fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step, paid_block_reward,
+    projected_already_generated, quantize_pow2_ceil, relay_fee_floor, round_money_up_2,
+    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
@@ -74,13 +74,6 @@ const _: () = assert!(
     TX_VOLUME_WINDOW <= usize::MAX as u64,
     "TX_VOLUME_WINDOW does not fit this target's usize"
 );
-
-/// The height production feeds to `calc_effective_emission_share`: the
-/// validator's emission-split epoch, read through the crate's one accessor.
-/// An epoch of `0` here would put `σ` a whole decay step ahead of the
-/// validation path at exact year-boundary heights:
-/// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
-const GENESIS_NG_HEIGHT: u64 = crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT;
 
 /// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
 /// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)
@@ -173,9 +166,12 @@ pub(crate) fn correction_factor_ratio(
         params.burn_base_rate,
         params.burn_cap,
     );
-    let sigma = calc_effective_emission_share(
+    // Decay is measured from `EMISSION_SPLIT_EPOCH` inside `emission_share`.
+    // An origin of 0 would put σ a whole decay step ahead of the chain at an
+    // exact year boundary: `(k·BLOCKS_PER_YEAR − 0)/BPY = k`, while
+    // `(k·BPY − 1)/BPY = k − 1`.
+    let sigma = emission_share(
         height,
-        GENESIS_NG_HEIGHT,
         STAKER_EMISSION_SHARE,
         STAKER_EMISSION_DECAY,
         BLOCKS_PER_YEAR,
