@@ -302,16 +302,17 @@ GetInfoResponse {
   unrestricted listener is every part plus host, the restricted listener
   is the `view` parts and not host — written below as `Full` and `View`;
   RT-W10 maps a grant set and a host flag onto the same value. Under
-  parity,
-  `View` withholds Status and Peers, written as the four restricted
-  stand-ins of §0's second bullet, `alt_blocks_count` among the zeroed
-  counts. `tx_pool_size` is not withheld under `View`, but under parity it
+  parity, `View` withholds Status and Peers, written as the four
+  restricted stand-ins of §0's second bullet, `alt_blocks_count` among the
+  zeroed counts. `tx_pool_size` is not withheld under `View`, but under parity it
   is not one quantity either: `View` counts relayed entries and `Full`
   adds the unrelayed ones. That is one key whose meaning depends on who
   asks, which the governing principle forbids; RK-Q10 splits it. The
   difference between the two counts is the host axis, not a part.
-  them: it does not depend on the caller, and RK-D15 retires it in this
-  slice. RT-W10 replaces the input with the connection's grant. Replacing
+- **The `target_height` sentinel is not one of the restricted
+  stand-ins.** The stand-ins depend on the caller; the sentinel is written
+  for every caller, and RK-D15 retires it in this slice. RT-W10 replaces
+  `Disclosure`'s input with the connection's grant set and host flag. Replacing
   the stand-ins with absence (`RPC_CHANNEL.md` §6.1: "absent, never zero")
   is a wire change the sibling round asks of this slice; when it lands is
   RK-Q8.
