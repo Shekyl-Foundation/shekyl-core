@@ -10,7 +10,7 @@ those commits. Open work on the hard-fork mechanism's deletion also edits
 content cited does not.
 **Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §2 row
 RK-5c, §2.1.1, §5. Family `RK-` (registered); this document mints
-**RK-D13…RK-D23** (decisions) and **RK-Q1…RK-Q9** (open questions) inside
+**RK-D13…RK-D23** (decisions) and **RK-Q1…RK-Q10** (open questions) inside
 it, added to the family's index row in the commit that lands this file
 (rule 94).
 **Sibling round:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md), round R1. Its §6.1
@@ -56,6 +56,10 @@ is not. Its handler (`src/rpc/core_rpc_server.cpp:199-305`) holds policy:
   common lock (`:239`, `:266`, `:269`, `:274`). `synchronized` is read twice
   (`:208` via `is_synchronized()`, `:253` via `check_core_ready()` — the same
   predicate, two reads).
+- **One key, two quantities.** `tx_pool_size` is
+  `get_pool_transactions_count(!restricted)` (`:212`): relayed entries for
+  a restricted caller, relayed plus not-yet-relayed for any other. The
+  caller changes what the number counts, not whether it is shown.
 - **A retired idea still on the wire.** `emission_era` is four labels cut by
   `double` thresholds 0.30 / 0.60 / 0.85 of the asymptote (`:294-302`).
   There is no emission era: the idea was retired and the field outlived it
@@ -110,7 +114,7 @@ its response base (`src/rpc/core_rpc_server_commands_defs.h:274-320`).
 | | `block_weight_median` = `block_size_median` | one value, two names (RK-Q1) | `:242` |
 | | `adjusted_time` | chain facts | `:243` |
 | **Economics** → `chain` | `already_generated_coins`, `release_multiplier`, `burn_pct`, `total_burned`, `staker_emission_share_effective` | one projection function in `shekyl-economics` (RK-D19) | computed inline `:264-292` |
-| **Pool** → `pool` | `tx_pool_size` | pool facts, broadcast-only for a restricted caller | `:212` |
+| **Pool** → `pool` | `tx_pool_size` | pool facts. **Two quantities under one key today** — relayed entries for a restricted caller, relayed plus unrelayed for any other (RK-Q10) | `:212`, `get_pool_transactions_count(!restricted)` |
 | **Status** → `status` | `start_time`, `free_space`, `database_size`, `version` | node facts / build | `:245-251` |
 | | `outgoing_connections_count`, `incoming_connections_count` | the seam board, per direction (RK-Q3) | epee total − board outgoing, clearnet only |
 | | `alt_blocks_count` | chain facts snapshot (§4.2) | `:213`, `0` when restricted |
@@ -272,8 +276,10 @@ GetInfoResponse {
   from the listener flag, and RT-W10 supplies a richer one. Under parity,
   `View` withholds Status and Peers, written as the four restricted
   stand-ins of §0's second bullet, `alt_blocks_count` among the zeroed
-  counts. `tx_pool_size` is not withheld under `View`; it counts relayed
-  entries only. The `target_height` sentinel is **not** one of
+  counts. `tx_pool_size` is not withheld under `View`, but under parity it
+  is not one quantity either: `View` counts relayed entries and `Full`
+  adds the unrelayed ones. That is one key whose meaning depends on who
+  asks, which the governing principle forbids; RK-Q10 splits it.
   them: it does not depend on the caller, and RK-D15 retires it in this
   slice. RT-W10 replaces the input with the connection's grant. Replacing
   the stand-ins with absence (`RPC_CHANNEL.md` §6.1: "absent, never zero")
@@ -438,7 +444,7 @@ in commit 4:
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
 | 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7 as recommended, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
-| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
+| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
 
 Commit 2 changes the wire before parity and commits 6–8 change it after,
 each deliberately and each in its own diff — the RK-4c / RK-5b precedent
@@ -510,6 +516,7 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 | **RK-Q4** | **`has_peers` = a handshaken session, or any board row?** | **Handshaken.** A row before handshake cannot relay, which is what every reader asks. |
 | **RK-Q5** | `restricted` stays until RT-W10? | **Yes.** It is RT-W10's to retire; P's poller stops depending on it in commit 7. |
 | **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
-| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). |
+| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it, and the GUI pair opened against that commit — never piecemeal. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; whether the version fields must stay decodable on their own is the failure-mode question (rule 82) this recommendation leaves with the ruling. |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
 | **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
+| **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **Split, in commit 8+.** `tx_pool_size` becomes relayed entries only, a value for every caller, in `pool`. The unrelayed count becomes its own field in its own one-field `Hidden` part, absent for every caller without the grant that sees unrelayed entries. Three things are open inside this and are not this document's to settle alone: **(1)** which grant — #1006's pushed head (`f331b31e0`) puts unrelayed entries in `node`; the review that raised this calls the class host-only and says admin does not see it. **(2)** Until RT-W10 there are two listeners and no host identity, so either the unrestricted listener stands in for that class or the field is absent for everyone until the channel exists. **(3)** The readers whose number changes: `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` (four call sites) and `tests/stressnet/monitor.py:142` read `tx_pool_size` on an unrestricted listener and today see unrelayed entries in it; each is read at the split to decide which of the two fields it meant. |
