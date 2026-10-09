@@ -714,7 +714,14 @@ fn moving_bytes_does_not_republish_the_board() {
     let session = opened.session.take().expect("session");
     let hub = rig.hub.clone();
     let id = opened.id;
-    let pump = thread::spawn(move || drive_inbound(&hub, id, session));
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+    let pump = thread::spawn(move || {
+        drive_inbound(&hub, id, session);
+        assert!(
+            stopped_tx.send(()).is_ok(),
+            "the test dropped the stop signal"
+        );
+    });
     opened
         .inbound
         .blocking_send(vec![1, 2, 3, 4])
@@ -727,5 +734,12 @@ fn moving_bytes_does_not_republish_the_board() {
     service(&rig, true);
     assert_eq!(rig.hub.publish_count(), opened_at);
     rig.hub.close(opened.id);
+    // No dialer is installed, so `close` does not run `reader_stopped`.
+    // This test holds the inbound sender. An accepted frame returns the
+    // pump to `recv`, and that read ends when the sender drops.
+    drop(opened.inbound);
+    stopped_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("pump still parked in recv after the sender was dropped");
     pump.join().expect("pump");
 }
