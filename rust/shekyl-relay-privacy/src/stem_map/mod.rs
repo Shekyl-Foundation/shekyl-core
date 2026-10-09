@@ -22,9 +22,17 @@
 //! **W3c (`DAEMON_RELAY_PRIVACY.md` §19.2).** A source is pinned to the set of
 //! peers live at its first pin, not to a slot index. Mid-epoch churn walks that
 //! frozen set and never hands the source a peer drawn after it pinned. That is
-//! the only deliberate divergence from the C++ port; everything else is
-//! intended to match. Anything else that differs is a bug in this module, not
-//! an improvement.
+//! the first deliberate divergence from the C++ port.
+//!
+//! **The reserved slot (`DAEMON_RELAY_PRIVACY.md` §95.3, §98).** The second
+//! divergence. A map built with [`StemMap::new_with_reserved_slot`] keeps slot
+//! 0 for a class of sessions the caller names at construction and at every
+//! merge ([`StemMap::update_with_reserved`]); the map never learns what the
+//! class is. The relay names the address-hiding outbound sessions, and routes
+//! its own transactions through a pin whose candidates are all of that class
+//! ([`StemMap::pin_over`]), so an origin never stems to a peer that can see
+//! its address. Everything else is intended to match the C++. Anything else
+//! that differs is a bug in this module, not an improvement.
 
 use std::collections::BTreeMap;
 
@@ -156,6 +164,10 @@ pub struct StemMap {
     /// Per-slot count of sources currently routed through it. Length is the
     /// configured stem count, which is `>= out.len()` at all times.
     usage: Vec<usize>,
+    /// Slot 0 is reserved for the class the caller names at each merge
+    /// (`update_with_reserved`). Set by `new_with_reserved_slot`; a plain
+    /// `new` or `empty` map has no reserved slot and merges with `update`.
+    reserved: bool,
 }
 
 impl StemMap {
@@ -167,6 +179,7 @@ impl StemMap {
             out: Vec::new(),
             inbound: BTreeMap::new(),
             usage: Vec::new(),
+            reserved: false,
         }
     }
 
@@ -203,7 +216,67 @@ impl StemMap {
             out: out_connections.into_iter().map(Some).collect(),
             inbound: BTreeMap::new(),
             usage: vec![0; stems],
+            reserved: false,
         }
+    }
+
+    /// Build a map whose slot 0 is **reserved** for `reserved`: a class of
+    /// sessions the caller names here and again at every merge
+    /// ([`Self::update_with_reserved`]). The map never learns what the class
+    /// is; the relay names the address-hiding outbound sessions
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.3).
+    ///
+    /// Slot 0 is drawn uniformly from `reserved`, and is an empty slot when
+    /// `reserved` is empty (D-PR1-2 (i): it stays empty until a merge fills
+    /// it). The other slots are drawn from everything else — `rest` and the
+    /// reserved sessions not in slot 0 — exactly as [`Self::new`] draws
+    /// `stems − 1` of them. With `rest` empty this is `new` over `reserved`
+    /// (slot 0 uniform, the rest uniform over the remainder), which is how a
+    /// node whose every session hides its address reduces to the paper's
+    /// draw (§98.1). `stems == 0` routes nothing, as `new` does.
+    ///
+    /// `reserved` and `rest` are a partition: a session in both is a caller
+    /// error, caught in debug builds.
+    pub fn new_with_reserved_slot<R: RelayRng + ?Sized>(
+        mut reserved: Vec<ConnectionId>,
+        rest: Vec<ConnectionId>,
+        stems: usize,
+        rng: &mut R,
+    ) -> Self {
+        debug_assert!(
+            rest.iter().all(|r| !reserved.contains(r)),
+            "a session is in both the reserved class and the rest"
+        );
+        if stems == 0 {
+            let mut map = Self::empty();
+            map.reserved = true;
+            return map;
+        }
+        let slot0 = if reserved.is_empty() {
+            None
+        } else {
+            let pick = usize_from_u64(bounded_uniform(rng, (reserved.len() - 1) as u64));
+            Some(reserved.swap_remove(pick))
+        };
+        let mut remaining = rest;
+        remaining.extend(reserved);
+        let others = Self::new(remaining, stems - 1, rng).out;
+        let mut out = Vec::with_capacity(1 + others.len());
+        out.push(slot0);
+        out.extend(others);
+        Self {
+            out,
+            inbound: BTreeMap::new(),
+            usage: vec![0; stems],
+            reserved: true,
+        }
+    }
+
+    /// Whether slot 0 is reserved (the map was built by
+    /// [`Self::new_with_reserved_slot`]).
+    #[must_use]
+    pub fn has_reserved_slot(&self) -> bool {
+        self.reserved
     }
 
     /// Merge the current outbound connection set into the map.
@@ -278,7 +351,179 @@ impl StemMap {
         }
     }
 
-    /// The stem slots in index order, `None` for an emptied slot.
+    /// [`Self::update`] for a map with a reserved slot: `reserved` is the
+    /// class slot 0 may hold, `rest` is everything else, both as live now.
+    ///
+    /// Slots whose peer has gone are emptied. An empty **slot 0** is then
+    /// filled from `reserved` only — the **hidden-slot fill** of
+    /// `DAEMON_RELAY_PRIVACY.md` §98.3: the local pin's next live candidate
+    /// first (D-PR1-1 (c′): when the slot's peer drops, the slot takes the
+    /// pin's live alternate, so the pin's walk finds it in a slot), else a
+    /// uniform draw from the reserved sessions not already slotted, else the
+    /// slot stays empty (D-PR1-2 (i)). The other slots are backfilled from
+    /// every unslotted session, reserved or not, as `update` backfills them.
+    ///
+    /// A local alternate that the class-blind backfill has already placed in
+    /// another slot is not moved: it is not an unslotted candidate, so the
+    /// fill passes over it, and the pin's walk resolves to it where it is.
+    ///
+    /// Returns [`StemSetChange::Changed`] on the same predicate as `update`.
+    pub fn update_with_reserved<R: RelayRng + ?Sized>(
+        &mut self,
+        reserved: Vec<ConnectionId>,
+        rest: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> StemSetChange {
+        debug_assert!(
+            self.reserved,
+            "update_with_reserved on a map built without a reserved slot"
+        );
+        if self.usage.is_empty() {
+            return StemSetChange::Unchanged;
+        }
+        let mut reserved_candidates = reserved;
+        reserved_candidates.sort_unstable();
+        reserved_candidates.dedup();
+        let mut candidates: Vec<ConnectionId> = reserved_candidates.clone();
+        candidates.extend(rest);
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        let mut replaced = false;
+        for slot in &mut self.out {
+            match slot {
+                Some(id) => {
+                    if let Ok(pos) = candidates.binary_search(id) {
+                        candidates.remove(pos);
+                        if let Ok(pos) = reserved_candidates.binary_search(id) {
+                            reserved_candidates.remove(pos);
+                        }
+                    } else {
+                        *slot = None;
+                        replaced = true;
+                    }
+                }
+                None => replaced = true,
+            }
+        }
+        if self.out.is_empty() {
+            // The reserved slot exists even when nothing has filled it.
+            self.out.push(None);
+            replaced = true;
+        }
+
+        if !replaced && self.out.len() == self.usage.len() {
+            return StemSetChange::Unchanged;
+        }
+
+        let existing_outs = self.out.len();
+        if self.out[0].is_none() {
+            let chosen =
+                self.local_pin_next_among(&reserved_candidates).or_else(
+                    || match reserved_candidates.len() {
+                        0 => None,
+                        n => Some(
+                            reserved_candidates
+                                [usize_from_u64(bounded_uniform(rng, (n - 1) as u64))],
+                        ),
+                    },
+                );
+            if let Some(peer) = chosen {
+                if let Ok(pos) = reserved_candidates.binary_search(&peer) {
+                    reserved_candidates.remove(pos);
+                }
+                if let Ok(pos) = candidates.binary_search(&peer) {
+                    candidates.remove(pos);
+                }
+                self.out[0] = Some(peer);
+            }
+        }
+        for i in 1..self.usage.len() {
+            if candidates.is_empty() {
+                break;
+            }
+            let growing = self.out.len() <= i;
+            if growing || self.out[i].is_none() {
+                let last = candidates.len() - 1;
+                let pick = usize_from_u64(bounded_uniform(rng, last as u64));
+                candidates.swap(last, pick);
+                let chosen = candidates.pop().expect("candidates is non-empty");
+                if growing {
+                    self.out.push(Some(chosen));
+                } else {
+                    self.out[i] = Some(chosen);
+                }
+            }
+        }
+
+        if replaced || existing_outs < self.out.len() {
+            StemSetChange::Changed
+        } else {
+            StemSetChange::Unchanged
+        }
+    }
+
+    /// The local pin's next candidate, from its cursor, that is in `among`
+    /// (sorted). `None` when the local source has no pin or none of its
+    /// remaining candidates is there.
+    fn local_pin_next_among(&self, among: &[ConnectionId]) -> Option<ConnectionId> {
+        let pin = self.inbound.get(&None)?;
+        pin.candidates[pin.cursor..]
+            .iter()
+            .copied()
+            .find(|candidate| among.binary_search(candidate).is_ok())
+    }
+
+    /// Whether `source` has pinned this epoch.
+    #[must_use]
+    pub fn is_pinned(&self, source: SourceId) -> bool {
+        self.inbound.contains_key(&source)
+    }
+
+    /// Pin `source` over `candidates`, frozen as given, and return the
+    /// primary. The first pin over a **supplied** list
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.3): `candidates[0]` is the primary and
+    /// must occupy a slot now; the rest are the alternates the walk falls
+    /// back to, in order, and need not be slotted — the relay supplies the
+    /// local source's alternates from sessions the map has not slotted
+    /// (D-PR1-1 (c′)), and [`Self::update_with_reserved`] moves the next live
+    /// one into slot 0 when the primary drops.
+    ///
+    /// Returns `None` **without pinning** when the list is empty or its head
+    /// is not in a slot: an origination that finds nothing to pin leaves the
+    /// next one free to pin. A source already pinned is walked instead and
+    /// `candidates` is ignored, so the call is total over the epoch.
+    pub fn pin_over(
+        &mut self,
+        source: SourceId,
+        candidates: Vec<ConnectionId>,
+    ) -> Option<ConnectionId> {
+        if self.inbound.contains_key(&source) {
+            return self.resolve_pin(source);
+        }
+        let primary = *candidates.first()?;
+        let index = self.slot_of(primary)?;
+        debug_assert!(
+            candidates
+                .iter()
+                .enumerate()
+                .all(|(i, c)| !candidates[..i].contains(c)),
+            "pin candidates must be distinct"
+        );
+        self.inbound.insert(
+            source,
+            Pin {
+                candidates,
+                cursor: 0,
+                counted: Some(index),
+            },
+        );
+        self.usage[index.get()] += 1;
+        Some(primary)
+    }
+
+    /// The stem slots in index order, `None` for an emptied slot — or, in a
+    /// map with a reserved slot, for a slot 0 nothing has filled yet.
     ///
     /// This is the ordering the daemon's noise-channel iteration indexes **by
     /// position** (`levin_notify` computes `i = id - begin()` and posts to
@@ -550,5 +795,7 @@ fn usize_from_u64(v: u64) -> usize {
     usize::try_from(v).expect("draw was bounded by a usize-derived range")
 }
 
+#[cfg(test)]
+mod reserved_tests;
 #[cfg(test)]
 mod tests;
