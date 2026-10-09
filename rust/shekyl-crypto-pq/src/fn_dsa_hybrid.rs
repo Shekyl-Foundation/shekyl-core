@@ -79,7 +79,15 @@
 //! [`fn_dsa_keygen`], wiped by the crate when they drop. The crate's
 //! `small_context` feature would shrink the first to ~82 kB for ~25% more
 //! signing time; it is not enabled and has not been measured here.
-//! `the_scheme_runs_on_a_small_stack` pins the stack these two need.
+//!
+//! These are **stack** objects, and the crate hands the signing key back by
+//! value, so a caller's stack depth matters: signing needs up to 256 KiB in
+//! an optimized build and up to 640 KiB in an unoptimized one (verification
+//! needs 64 KiB and 128 KiB). `the_scheme_runs_on_a_small_stack` holds
+//! those, with its measurements. A caller that signs from deep inside a
+//! task should sign from a shallower frame, or hold a decoded key across
+//! signatures rather than decoding per signature — the choice belongs to
+//! the first consumer, the serve path's signing capability.
 
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::rng::{key_material32, HedgedOsRng};
@@ -410,7 +418,11 @@ fn fn_dsa_sign(
     rng: &mut (impl RngCore + CryptoRng),
     inner: &[u8; 64],
 ) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError> {
-    let mut signing_key = SigningKey1024::decode(secret).ok_or(CryptoError::InvalidKeyMaterial)?;
+    // Borrowed out of the `Option` it was decoded into, not moved: a move
+    // is another ~114 kB of stack in an unoptimized build, and a second
+    // copy of the key for the crate's wipe-on-drop to miss.
+    let mut decoded = SigningKey1024::decode(secret);
+    let signing_key = decoded.as_mut().ok_or(CryptoError::InvalidKeyMaterial)?;
     let mut signature = [0u8; FN_DSA_1024_SIGNATURE_LENGTH];
     // `None` means the key is invalid; the buffer has the exact length.
     signing_key
@@ -655,15 +667,31 @@ mod tests {
         let _: fn(&HybridEd25519MlDsa) = |_| {};
     }
 
-    /// Key generation and signing each hold a large local: ~48 kB of
-    /// generator scratch and a ~114 kB decoded signing key. This pins the
-    /// stack they need, in an unoptimized build, at well under the 2 MiB a
-    /// spawned thread gets by default. A regression that put either on a
-    /// deeper frame — or a crate bump that grew them — fails here instead
-    /// of overflowing a serving task's stack.
+    /// Key generation and signing each hold a large local — ~48 kB of
+    /// generator scratch, a ~114 kB decoded signing key — and an
+    /// unoptimized build copies such locals on every move. Measured on
+    /// x86_64 at this commit, the smallest stack each ran on was:
+    ///
+    /// | | unoptimized | optimized |
+    /// | --- | --- | --- |
+    /// | key generation | 512 KiB | 128 KiB |
+    /// | signing | 640 KiB | 256 KiB |
+    /// | verification | 128 KiB | 64 KiB |
+    ///
+    /// (ladder steps, so each figure is an upper bound on the need). This
+    /// test holds the whole scheme to half of the 2 MiB a spawned thread
+    /// gets by default in an unoptimized build, and a quarter of it in an
+    /// optimized one. A regression that moves the signing key again (the
+    /// first draft did, and needed 1.25 MiB), or a crate bump that grows
+    /// the context, fails here rather than as an overflow in a serving
+    /// task.
     #[test]
     fn the_scheme_runs_on_a_small_stack() {
-        const STACK_BYTES: usize = 512 * 1024;
+        const STACK_BYTES: usize = if cfg!(debug_assertions) {
+            1024 * 1024
+        } else {
+            512 * 1024
+        };
         std::thread::Builder::new()
             .stack_size(STACK_BYTES)
             .spawn(|| {
