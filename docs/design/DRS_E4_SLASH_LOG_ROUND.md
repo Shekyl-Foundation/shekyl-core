@@ -138,10 +138,10 @@ cap. Re-run with the cap: retirement at `T` is below `T − (k + n)·SEB −
 cap`; after a pop of depth `d` the deepest read is `≥ T − d − (k + n)·SEB
 + 3`, so the margin over the retired range is `cap − d + 3`: **at least
 three for every reorg the rules follow (`d ≤ cap`)**, and it reaches zero
-only at `d > cap + 3`, a depth `pop` can take only when a store was opened
-with `undo_retention > cap + 3` — retention the rules never use. That
-configuration, not `r` in general, is the band `SLK-3` accepts and names
-its reopen on.*)
+only at `d > cap + 3` — a pop no legal chain produces, since a reorg
+deeper than the cap is one the rules refuse (`pop.rs:26`, `SLK-3`). The
+three is a measurement of this bound under the current reader, not a term:
+it is recorded, not built on.*)
 
 *After PR #1007* the reader is shallower, not deeper: its slash pass
 deletes `baseline_observed` and the per-epoch fire-height read — the
@@ -250,15 +250,25 @@ changes with it.
   the check and find nothing — F19's silent-read shape, confined to `r`
   blocks that the derivation above shows no read enters (margin three).
   *With the cap as the horizon's term (`SLK-2` as ruled):* the band is
-  entered only by a pop deeper than `cap + 3`, which a store can perform
-  only if opened with `undo_retention > cap + 3` — never under
-  `production`/`under`, and never by a reorg the rules are built to
-  follow. **Default: derive from the tip, no cell; the margin is the
-  falsifier's test (below).** Reopen (rule 21) if a reader appears whose
-  depth is within the cap of the window, or if a store configuration with
-  `undo_retention > cap + 3` becomes one the rules follow — then the cell
-  is the exact check and is added as `SlashLogFloorCell` beside the undo
-  cell.
+  entered only by a pop deeper than `cap + 3` — a reorg the rules refuse,
+  so one no legal chain produces. **Default: derive from the tip, no cell;
+  the margin is the
+  falsifier's test (below).** *Ruled 2026-10-09, second pass:* the band is
+  already closed structurally, by an invariant stated where it is
+  enforced — `pop.rs:26`: *"`pop` refuses a tip below that floor with
+  `PopBelowFloor` — a capability limit, loud, never a verdict: the
+  retention is at least the in-force rule set's reorg cap (`Horizons::new`,
+  `connect`; `D_max` in production, PDM-Q11), so a legal reorg never
+  reaches it"* (and `error.rs:399-407`). Retention above the cap is
+  deliberate headroom; `pop` is driven by reorg; a reorg deeper than the
+  cap is one the rules refuse. So `d > cap + 3` needs a pop no legal chain
+  produces, and this round does not restate that invariant from a second
+  direction. **Reopen (rule 21): the rules admitting a reorg deeper than
+  the cap — `PDM-Q11`'s territory, not an operator's — or a reader whose
+  depth is within the cap of the window;** then the cell is the exact check
+  and is added as `SlashLogFloorCell` beside the undo cell. **The `+3` is a
+  measurement of the current bound, not a term**: nothing may be built on
+  it, nothing refuses at it, and it changes when the reader does.
   **RULED 2026-10-09 — approved.** A derived floor is a *recomputed
   operand*, and SO-D8 §7.4's discriminator already covers it
   (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md:1180-1184`): a recomputed operand
@@ -498,3 +508,4 @@ nothing else.
 | 2026-10-02 | **Round minted by DRS-E4 commit 10; `ARW-Q19` re-homed as `SLK-Q1` (horizon) and `SLK-Q2` (key), both POSED, neither ruled.** The re-homing is the maintainer's: DRS-E4 archives as record rather than staying live for one open question. The order of the two is fixed from `ARW-Q19`'s posing and the maintainer's two corrections on commit 8's report — the horizon is an assertion at the contract side, not a pruner, and its depth is F19's `tip − ((k + n)·SEB + D_max)` = `tip − (14·SEB + D_max)`, not `(W + 1)·SEB`. The rule-22 finding the round inherits: FOLLOWUPS' journal-horizon row read *pending* from 2026-09-22 while its condition (*"when those writers land"*) fired at DRS-E4 commit 5b (2026-09-30, `write_slashes`) and was noticed at commit 8 — and this round's own first draft wrote "landed at commit 8", the noticing date for the landing one, corrected at `git log -S'fn write_slashes'`; the premise's own text is edited in the same commit this round is minted in — `reorg.rs`'s `journal_horizon` doc and `DRS_E1_SPRUNE.md` §3 no longer say the journals have no Rust writer (rule 91's refuted-premise bullet, added this commit's sibling). |
 | 2026-10-09 | **Round-0 pre-flight run at `dev@6b23eab315` (post E6 slice 8, PR #953) — §1.1; `SLK-1…SLK-5` minted; nothing ruled.** §1's eight rows and facts (a)–(c) re-verified at source with cites; F19's bound re-derived from the Rust scan (deepest read `c − (k + n)·SEB + 2`; three blocks of margin over the retired range across the deepest pop), and found shallower still after PR #1007's settlement pass (`c − (k + 1)·SEB + 1`) — the window is kept at F19's ratified expression with a rule-21 reopen named. Findings: `SLK-1` Q1's writer-side refusal cannot fail, the contract-side assertion belongs on the read (F19's own "where the scan starts"); `SLK-2` the depth term is the store's `undo_retention`, which *is* F19's `D_max` by definition (CORRECTED the same day by the ruling, next row: the term is `RuleSet::reorg_cap`); `SLK-3` derived floor, no second cell, with the band it leaves named and bounded; `SLK-4` code opens after PR #1007 (file overlap, SI-25 → this round's row is SI-26, the reader it would pin is being deleted); `SLK-5` the `0x04` family's bound is *rows at or above the floor* and the bench witness reads from `0` only because its 1 299-block chain is under the 1 450-block window. Build shape for Q1 tabled (four commits, one PR); Q2's pre-flight recommendation is *not re-keyed* with the ruling to be recorded at the filter. **Halt per rule 26 until `SLK-Q1` and `SLK-Q2` are ruled.** |
 | 2026-10-09 | **`SLK-Q1` and `SLK-Q2` RULED (maintainer, subjects verified on `dev@6b23eab315`) — §1.2.** Q1 approved at the read with the reason restated: the read's operand (`challenge_fire_height`, hash-derived) is independent of the horizon while the writer's (the connecting height) is the horizon's own input, so only the read's arm can fail; caveat recorded that SI-26 fires on a mis-composed schedule, never on data, and its doc must say so as `slash.rs:207-209` does. **`SLK-2` corrected: the depth term is `RuleSet::reorg_cap`, not `Horizons::undo_retention`** — `Horizons::new` validates against the cap and discards it, and passing retention would let an operator setting deepen a consensus-adjacent horizon (one value, two jobs); both the read and the prune take the cap from the set in hand. `SLK-3` approved (recomputed operand, SO-D8 §7.4). `SLK-4` approved (the 10d lesson). `SLK-5` approved with the action: derive the bench file's chain lengths from the window constants in the same commit. F19's expression kept with the rule-21 reopen. Q2 not re-keyed — a confirmation of `ARW-Q17`, recorded as such. The round's shape, stated: **the horizon is a consensus expression; everything it reads comes from the consensus side.** Code opens after PR #1007. |
+| 2026-10-09 | **`SLK-3`'s band — second pass, nothing structural owed.** Three closures were offered or weighed and all refused: `max(cap, undo_retention)` in the retirement floor (reintroduces the horizon following an operator's setting — the shape `SLK-2` removed); refusing retention beyond `cap + 3` at open (freezes a measured margin as a threshold nobody ratified — the `first_spending_height` 71 / `×50` class); a `PopBeyondReorgCap` arm at `pop` (a defence against a pop nothing produces — rule 16, the very arm `SLK-1` took out of `write_slashes`; `PopBelowFloor` is legitimate for the same reason SI-26 is: its operand, the surviving log, is independent of the cap, so the two can disagree). The band is already closed by `PopBelowFloor`'s invariant, stated where it is enforced (`pop.rs:26`, `error.rs:399-407`); the reopen is re-pointed to the rules admitting a reorg deeper than the cap (`PDM-Q11`), and `+3` is recorded as a measurement, not a term. **Second time this round the answer was "the invariant already exists, stated where it is enforced"** — `SLK-2`'s cap source, now this. The shape holds, with its third clause: the store's own limits stay the store's, and stay loud. |
