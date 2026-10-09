@@ -22,6 +22,9 @@ shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+# `request_archival_shard`'s wire type and refusal codes, which `get_shard_view`
+# projects and maps (shard_view.rs).
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-types = { path = "../shekyl-types" }
 
 [lints]

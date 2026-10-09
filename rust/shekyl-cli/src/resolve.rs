@@ -188,8 +188,13 @@ pub enum ResolvedCommand {
     ShardShow {
         shard_id: u64,
     },
+    /// `shard fetch <id> [--png <path>] [--size <n>]`: the shard's view
+    /// through the wallet's daemon (a real fetch), optionally rendered to
+    /// a new PNG. `size` without `png` is refused at parse.
     ShardFetch {
         shard_id: u64,
+        png: Option<String>,
+        size: Option<u32>,
     },
 
     // -- Fees (WI-RPC-1) --
