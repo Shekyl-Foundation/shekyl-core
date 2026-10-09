@@ -323,6 +323,13 @@ pub enum SettlementCheck {
         /// The shard of the pair.
         shard: ShardId,
     },
+    /// The settlement beacon's block is not strictly below the connecting
+    /// height. The slash grace is at least the response window on every
+    /// schedule that has one, so a passed deadline puts the beacon there.
+    /// A re-pin that does not is this halt, not an empty settlement: the
+    /// block at the slash height is not invalid, and this node cannot
+    /// settle the epoch.
+    BeaconNotRecorded,
 }
 
 /// Which of a bond record's invariants a retention fold found broken —
@@ -562,6 +569,11 @@ impl fmt::Display for Corrupt {
                     f,
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected (SI-25)"
+                ),
+                SettlementCheck::BeaconNotRecorded => write!(
+                    f,
+                    "the settlement beacon of epoch {epoch} is not a block strictly below \
+                     the connecting height (SI-25)"
                 ),
             },
         }

@@ -444,12 +444,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
                 cell: "archival_budget_accruing",
             },
-            // Settlement's two checks that have an operand
-            // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3). The
-            // validator derives the rows (`ARW-Q1`), so it is the one that
-            // observes the index not folding to its digest, or its own fold
-            // overcounting; the block is not invalid, this node cannot
-            // settle the epoch.
+            // Settlement's checks that have an operand
+            // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3) and
+            // the beacon guard. The validator derives the rows (`ARW-Q1`),
+            // so it is the one that observes the index not folding to its
+            // digest, its own fold overcounting, or a beacon block that is
+            // not strictly below the connecting height. The block is not
+            // invalid; this node cannot settle the epoch.
             Corrupt::SettlementIntegrity { epoch, check } => StoreInvariant::SettlementNotSound {
                 epoch,
                 observed: match check {
@@ -457,6 +458,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                     SettlementCheck::PassesExceedCounted { persona, shard } => {
                         SettlementFault::PassesExceedCounted { persona, shard }
                     }
+                    SettlementCheck::BeaconNotRecorded => SettlementFault::BeaconNotRecorded,
                 },
             },
         };

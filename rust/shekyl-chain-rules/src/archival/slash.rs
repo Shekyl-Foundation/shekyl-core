@@ -240,9 +240,7 @@ impl super::Transition {
         if draws.is_empty() {
             return Ok(());
         }
-        let Some(beacon) = self.settlement_beacon(view, epoch)? else {
-            return Ok(());
-        };
+        let beacon = self.settlement_beacon(view, epoch)?;
         let records: BTreeMap<&PCanonicalId, &BondRecord> =
             snapshot.iter().map(|(p, record)| (p, record)).collect();
         // The persona's slash log above the epoch's first block, read once
@@ -289,15 +287,23 @@ impl super::Transition {
     /// epoch is too short to have a response window has none to wait out,
     /// and the beacon is the epoch's last block.
     ///
-    /// `None` if that block is not below the connecting height. The slash
+    /// The block must sit strictly below the connecting height. The slash
     /// grace is at least `W₂` on every schedule that has one
-    /// (`constants.rs`), so a passed deadline always puts it there; the
-    /// guard is the observability boundary stated, not a reachable arm.
+    /// (`constants.rs`), so a passed deadline always puts it there. A
+    /// re-pin that makes the arm reachable is still
+    /// [`SettlementCheck::BeaconNotRecorded`]: the block at the slash
+    /// height is not invalid, and this node cannot settle the epoch. The
+    /// pass does not advance its watermark on that fault.
+    ///
+    /// # Errors
+    ///
+    /// [`ViewRead::Corrupt`] when the beacon block is not strictly below
+    /// the connecting height, or when the view has no block recorded there.
     fn settlement_beacon<'id, V: ChainView<'id>>(
         &self,
         view: &V,
         epoch: SettlementEpoch,
-    ) -> Result<Option<[u8; SETTLEMENT_BEACON_LEN]>, ViewRead<V::Fault>> {
+    ) -> Result<[u8; SETTLEMENT_BEACON_LEN], ViewRead<V::Fault>> {
         let window = self
             .schedule
             .challenge_response_blocks()
@@ -307,10 +313,13 @@ impl super::Transition {
             .last_block(epoch.to_raw())
             .saturating_add(window);
         if at >= self.connecting.to_raw() {
-            return Ok(None);
+            return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                epoch,
+                check: SettlementCheck::BeaconNotRecorded,
+            }));
         }
         let beacon = recorded(view, BlockHeight::from_raw(at))?.hash;
-        Ok(Some(*beacon.as_bytes()))
+        Ok(*beacon.as_bytes())
     }
 
     /// The slashes logged against `persona` strictly above `height`: the

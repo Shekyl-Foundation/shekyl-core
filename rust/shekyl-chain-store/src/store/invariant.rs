@@ -294,17 +294,19 @@ pub enum StoreInvariant {
     /// The `archival_issued_draw` rows of an epoch fold to
     /// `archival_issued_digest[E]` ([`SettlementFault::IndexDrift`]); the
     /// fold counts no more passes for a pair than draws it selected
-    /// ([`SettlementFault::PassesExceedCounted`]); and
-    /// `archival_settlement` holds one row per `(persona, shard, epoch)`,
-    /// written once ([`SettlementFault::AlreadySettled`]). The first two
-    /// are observed by the validator, which computes the rows, and arrive
-    /// through `refuse_corrupt`; the third is the store's own, at the
-    /// insert. Armed by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md`
-    /// §14; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 checks 1 and 3).
+    /// ([`SettlementFault::PassesExceedCounted`]); the settlement beacon is
+    /// a block strictly below the connecting height
+    /// ([`SettlementFault::BeaconNotRecorded`]); and `archival_settlement`
+    /// holds one row per `(persona, shard, epoch)`, written once
+    /// ([`SettlementFault::AlreadySettled`]). The first three are observed
+    /// by the validator, which computes the rows, and arrive through
+    /// `refuse_corrupt`; the last is the store's own, at the insert. Armed
+    /// by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md` §14;
+    /// `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 checks 1 and 3).
     SettlementNotSound {
         /// The epoch being settled.
         epoch: shekyl_types::SettlementEpoch,
-        /// Which of the three was observed.
+        /// Which check was observed.
         observed: SettlementFault,
     },
 }
@@ -326,6 +328,11 @@ pub enum SettlementFault {
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
     },
+    /// The settlement beacon's block is not recorded strictly below the
+    /// connecting height. The slash grace puts it there on every schedule
+    /// that has a response window; a re-pin that does not is this halt,
+    /// not an empty settlement.
+    BeaconNotRecorded,
     /// `archival_settlement` already holds a row for the pair in this
     /// epoch: the epoch was settled twice.
     AlreadySettled {
@@ -599,6 +606,11 @@ impl core::fmt::Display for StoreInvariant {
                     f,
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected; the settlement fold is defective"
+                ),
+                SettlementFault::BeaconNotRecorded => write!(
+                    f,
+                    "the settlement beacon of epoch {epoch} is not recorded strictly below \
+                     the connecting height; this node cannot settle the epoch"
                 ),
                 SettlementFault::AlreadySettled { persona, shard } => write!(
                     f,
