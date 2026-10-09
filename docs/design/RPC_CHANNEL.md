@@ -536,8 +536,12 @@ node with no peers. Absence means exactly one thing here — *not disclosed
 to this caller*. A fact the node has no answer for is `null`, and `0` is a
 value: the three wire states of RK-D23, ruled in the RK-5c round
 (`DAEMON_RPC_KV_GET_INFO.md`, PR #1008, draft). **When** the withheld
-fields stop being written as zeros is that round's open question RK-Q8 and
-is not agreed here.
+fields stop being written as zeros is ruled there too (RK-Q8, 2026-10-08):
+in RK-5c itself, after `has_peers` lands — so the wire change is that
+slice's, and RT-W10 inherits absence rather than introducing it. A target
+height the core does not have is `null` on `get_info`, `get_version` and
+`sync_info` alike (RK-Q7, same date), so an absent field in a `health`
+reply is never "no target".
 
 One question draws the line between `health` and `status`: *does a client
 need this fact to decide whether it can use this node right now, and is it
@@ -553,7 +557,7 @@ network, never a node.
 |---|---|
 | `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, R4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, R4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, R3) |
-| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions, nettype |
+| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`) |
 | `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
 | `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
 | `submit` | `/submit_transaction` |
@@ -565,13 +569,13 @@ network, never a node.
 
 *Two notes on `health`, both owned by the RK-5c round (PR #1008).*
 `has_peers` is true when the node holds at least one **handshaken** session
-on any connector; what the facts read needs to say so is that round's open
-question RK-Q4. It exists because a caller without `status` no longer sees
-the peer counts, and without it could not tell a peerless daemon from a
-following one. `nettype` is listed under `health`, but RK-Q6 there
-recommends retiring it and the three network booleans from `get_info`; if
-it is ruled so, the identity source is `get_version` alone and this table's
-entry points there.
+on any connector (RK-Q4, ruled there 2026-10-08). It exists because a
+caller without `status` no longer sees the peer counts, and without it
+could not tell a peerless daemon from a following one. `nettype` and the
+three network booleans are **retired from `get_info`** (RK-Q6, ruled there
+the same day): the identity source is `get_version` alone, which `health`
+carries whole, so the grant is unchanged and only the method that answers
+moves.
 
 **Two classes that are not grants.** Every route and method is in exactly
 one grant above or in exactly one of these; no ceiling, `admin` included,
@@ -611,7 +615,7 @@ can contain either.
 | Build version string | The patch level, which tells an attacker which defects apply. The RPC contract version stays in `health` |
 | Start time | Uptime and restart times correlate this node's onion address with its clearnet address |
 | Free space, database size | A host fingerprint. Today's restricted reply rounds the size up to 5 GiB (`core_rpc_server.cpp:248-250`); under the split the field is absent |
-| Aggregate peer counts, RPC connection count | Connectivity posture over time |
+| Aggregate peer counts, RPC connection count | Connectivity posture over time. The counts are sums over **every** connector (RK-Q3, ruled in the RK-5c round 2026-10-08), where today they count clearnet sessions only, so `status` discloses the node's whole session count |
 | Alt-blocks count and hashes | Which forks this node saw |
 
 **Presets** (what an operator names at enrolment; a ceiling is a preset or
@@ -661,7 +665,8 @@ round asks three things of it and nothing more:
 - each `get_info` field is filled in Rust and is attributable to exactly
   one grant in the table above;
 - a field the caller may not see is **absent** from the reply, not zeroed,
-  and the reply type says so (which commit changes the wire is RK-Q8);
+  and the reply type says so (RK-Q8 there rules that RK-5c makes the wire
+  change);
 - the caller's authority reaches the handler as a value that can become a
   grant, not as a `restricted` boolean, so RT-W10 supplies a richer value
   without rewriting the handler.
@@ -1000,9 +1005,6 @@ construction) instead of loopback TCP.
     (§6.1), both proposed;
   - whether the incident's consumer is enrolled for `peers` to keep its
     seed-node count, or the count is dropped from the site;
-  - what `status` discloses if the RK-5c round's RK-Q3 is ruled as
-    recommended: the two aggregate peer counts become sums over every
-    connector, where today they count clearnet sessions only;
   - whether the wallet engine pages its requests within §6.3's batch
     caps. Today those caps bind only the restricted listener, so the engine
     has not met them on its usual connection; a remote wallet on the
