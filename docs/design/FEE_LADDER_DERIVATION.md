@@ -56,7 +56,7 @@ The three Shekyl mechanisms absent from the ArticMine calibration:
 3. **Emission split** — the miner receives `(1 − σ(t))` of the (penalized,
    modulated) block emission, `σ(0) = 0.15` decaying `×0.9` per year
    (`rust/shekyl-economics/src/emission_share.rs`,
-   `src/shekyl/economics.h:95-116`).
+   `compute_emission_split` in `src/shekyl/economics.h`).
 
 ### §0.1 Census collision and sequencing hold (coordination, 2026-09-03)
 
@@ -392,7 +392,7 @@ by FL-R17.
   `blockchain.cpp:4541` (`get_dynamic_base_fee_estimate_2021_scaling`).
 - Additionally — a factor the brief did not list — the miner does not
   receive the whole modulated reward: `compute_emission_split`
-  (`blockchain.cpp:1795-1798`, `src/shekyl/economics.h:95-116`) diverts
+  (`validate_miner_transaction` in `blockchain.cpp`; the wrapper is in `src/shekyl/economics.h`) diverts
   `σ(t)` (15% at genesis, ×0.9/year) to the staker pool, and the split
   operand is the modulated reward (per the F-B1c block comment at
   `blockchain.cpp:6349-6365`), so the miner bears exactly `(1−σ)` of any

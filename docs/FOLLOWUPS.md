@@ -122,10 +122,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ARCHIVAL_SHARD_COUNT_CUTOVER.md`](design/ARCHIVAL_SHARD_COUNT_CUTOVER.md) §F
   - Target: pre-genesis
 
-- **The C++ core_tests' fakechain hard-fork tables still carry `{(1, 0), (1, 1)}`, so the C++ tests run CEN-F21's epoch at 0 while the C++ daemon now runs it at 1.** `tests/core_tests/block_validation.h:373–419` (four tables) keep the inherited shape whose second row `HardFork::add_fork` rejects; the daemon's regtest table was corrected in #889 (`CHAIN_RULES_SLICE_7.md` §3.11), the tests' were not — rule 20, the C++ testing itself. Consequence, stated so it is not over-read: *"the C++ core_tests pass"* no longer asserts what the daemon does for any check that reads the staker split (coinbase amount, relay floor, `staker_emission_share_effective`). Disposition when touched: the tables become `{(1, 1)}` like the daemon's, or the divergence is named in the test. Falsify by `grep -n 'make_pair(1, 0)' tests/core_tests/block_validation.h` returning nothing.
-  - Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-F21 (the epoch's row; the finding is [`CHAIN_RULES_SLICE_7.md`](completed/CHAIN_RULES_SLICE_7.md) §3.11's, re-homed at the slice's closeout 2026-09-29)
-  - Target: pre-genesis
-
 - **State the rule for a peer-exchange address type this node does not recognise.** The union is closed (`ADDR_IPV4`, `ADDR_IPV6`, `ADDR_TOR` in `shekyl-levin` `payload/address.rs`) and freezes at genesis. A future network's address type belongs to that network's connector, so an unrecognised type needs a stated rule before then. Not decided in the transport-layer round.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md)
   - Target: pre-genesis

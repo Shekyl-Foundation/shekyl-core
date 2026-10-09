@@ -279,8 +279,8 @@ accrual side.
 
 ### 2.3 Pre-genesis posture note
 
-The hard-fork schedule is a single entry, all features from genesis
-(`src/hardforks/hardforks.cpp:38–40`; `HF_VERSION_SHEKYL_NG = 1`), and
+Every feature is active from genesis (the block version is the constant
+1; the hard-fork schedule that used to say so was deleted 2026-10-08), and
 C-1 shipped in the genesis feature set — which is what made §2.1's
 transition machinery dead-on-arrival and drove its deletion. The
 semantics remain per-block, **never** per-epoch: the accrual write and

@@ -123,7 +123,7 @@ files as their subject:
 | `cryptonote_core/tx_pool.cpp` | **11** | DRS-C surface **S-POOL** |
 | `cryptonote_core/cryptonote_core.cpp` | **12** | connect caller; DRS-B consumer |
 | `blockchain_db/blockchain_db.cpp` | **10** | base write path; DRS-C **S-CHAIN-W** |
-| `cryptonote_basic/hardfork.cpp` | **4** | DRS-P0c wart register (`hf_versions`) |
+| the hard-fork class's source file (deleted 2026-10-08) | **4** at the pin | DRS-P0c wart register (`hf_versions`) |
 
 This is not duplicated work — that would be easy to spot. It is **two
 refactoring programs aimed at the same files along different axes, neither

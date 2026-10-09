@@ -124,8 +124,9 @@ SCOPE = (
 # recorded); 166 at E6 slice 8 PR-a review (2026-10-05: the levered chain's
 # next-block height is `BlockHeight`, and `scenario_archival_tests.rs`'s
 # local `first_spending_height() -> u64` moved to `archival_driver` as
-# `BlockHeight`).
-GRANDFATHER_CEILING = 162
+# `BlockHeight`); 161 on 2026-10-08: the test that parsed the hard-fork table
+# for CEN-F21's epoch left with the table.
+GRANDFATHER_CEILING = 161
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5
