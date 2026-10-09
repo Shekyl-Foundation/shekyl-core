@@ -21,10 +21,11 @@
 
 use super::fixture::{candidate, candidate_on, recorded, root, spendable_chain};
 use super::*;
+use crate::census::CenRow;
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::validate;
-use crate::verdict::{refused, Locus, TxSlot};
+use crate::verdict::{refused, Locus, TxSlot, Verdict};
 
 /// The probe: reads the view (so a fault must travel), then refuses on a
 /// zero timestamp under the CEN-J1 label.
