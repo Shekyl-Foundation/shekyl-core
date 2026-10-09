@@ -9,12 +9,13 @@
 #
 #   ba_t5_session2_run.sh <work_dir> <probe_binary> <shekyld> <lan_peer:port> <passes>
 #
-# Two daemon states, alternated pass by pass. In `idle` only the device's
+# Three daemon states, interleaved pass by pass. In `idle` only the device's
 # resident testnet daemon runs, synced and following the tip. In `sync` a
 # second testnet daemon under this user, with its own data directory under
 # <work_dir>, resyncs the whole chain from <lan_peer>; it is wiped and
-# started again for every pass. Within a pass the four in-flight counts run
-# in an order drawn from the pass number, each serving block between two
+# started again for every pass. `nice` is `sync` with the serving process
+# started under `nice -n 19`. Within a pass the four in-flight counts run
+# in the order registered for the pass, each serving block between two
 # no-serve windows of the sync poll, so the no-serve rate is read beside the
 # serving rate under the same drift.
 #
@@ -72,11 +73,12 @@ poll_start() {  # label state
 }
 poll_stop() { touch "$WORK/stop-poll"; wait $POLL_PID 2>/dev/null; rm -f "$WORK/stop-poll"; }
 
+NICE=""  # "nice -n 19" for the nice arm
 probe() {  # label mode [VAR=value ...]
   local label=$1 mode=$2; shift 2
   envrow "start.$label"
   env BAT5_STORE="$WORK/store" BAT5_MODE="$mode" BAT5_LABEL="$label" "$@" \
-    "$PROBE" --ignored --nocapture 2>>"$ERR" | grep -E '^(OBS|PHASE|LATE|BLOCK|ABANDON|TTFB)	' >> "$OBS"
+    $NICE "$PROBE" --ignored --nocapture 2>>"$ERR" | grep -E '^(OBS|PHASE|LATE|BLOCK|ABANDON|TTFB)	' >> "$OBS"
   printf 'EXIT\t%s\t%s\t%s\n' "$label" "$mode" "${PIPESTATUS[0]}" >> "$OBS"
   envrow "end.$label"
 }
@@ -119,7 +121,7 @@ order_for_pass() {  # the four counts in the order registered for the pass
   echo "# resident daemon: $(tr '\0' ' ' < /proc/$SYS_PID/cmdline) pid $SYS_PID"
   echo "# syncing daemon: $SHEKYLD, own data dir, exclusive peer $PEER (a LAN testnet staker), in-peers 0"
   echo "# resident daemon mining_status: $(curl -s -m 5 http://127.0.0.1:12030/mining_status | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("active","threads_count")})' 2>/dev/null)"
-  echo "# in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block; no-serve windows $QUIET_S s; $PASSES passes per state"
+  echo "# states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block; no-serve windows $QUIET_S s; $PASSES passes per state"
   echo "# signature scheme: Ed25519 + ML-DSA-65 hybrid (shekyl/archival-attestation-scheme-v3)"
 } > "$OBS"
 echo "# ENV utc tag temp_mC governor cur_freq_kHz load1 busy_jiffies sync_daemon_jiffies sync_daemon_rss_kB sync_height sync_synced mem_available_kB sync_daemon_pid system_daemon_rss_kB swap_total_kB swap_free_kB" > "$ENVF"
@@ -133,23 +135,25 @@ probe prep.store load BAT5_N=8
 for pass in $(seq 1 "$PASSES"); do
   order=$(order_for_pass "$pass")
   printf 'NOTE\tpass %s order %s\n' "$pass" "$order" >> "$OBS"
-  for state in idle sync; do
-    if [ "$state" = sync ]; then sync_start || continue; fi
+  for state in idle sync nice; do
+    syncing=0; [ "$state" != idle ] && syncing=1
+    NICE=""; [ "$state" = nice ] && NICE="nice -n 19"
+    if [ $syncing = 1 ]; then sync_start || continue; fi
     envrow "pass.$state.$pass.start"
-    if [ "$state" = sync ]; then poll_start "sync.$pass.quiet" sync; sleep $QUIET_S; poll_stop; fi
+    if [ $syncing = 1 ]; then poll_start "$state.$pass.quiet" "$state"; sleep $QUIET_S; poll_stop; fi
     for n in $order; do
       label="$state.$pass.N$n"
-      [ "$state" = sync ] && poll_start "$label" sync
+      [ $syncing = 1 ] && poll_start "$label" "$state"
       probe "$label" load BAT5_N=$FETCHES BAT5_IN_FLIGHT=$n BAT5_REUSE=1
-      if [ "$state" = sync ]; then poll_stop; poll_start "sync.$pass.quiet$n" sync; sleep $QUIET_S; poll_stop; fi
+      if [ $syncing = 1 ]; then poll_stop; poll_start "$state.$pass.quiet$n" "$state"; sleep $QUIET_S; poll_stop; fi
     done
-    if [ "$pass" = 1 ]; then
-      [ "$state" = sync ] && poll_start "sync.$pass.ttfb" sync
+    if [ "$pass" = 1 ] && [ "$state" != nice ]; then
+      [ $syncing = 1 ] && poll_start "$state.$pass.ttfb" "$state"
       probe "$state.$pass.ttfb" ttfb BAT5_N=300 BAT5_REUSE=1
-      [ "$state" = sync ] && poll_stop
+      [ $syncing = 1 ] && poll_stop
     fi
     envrow "pass.$state.$pass.end"
-    [ "$state" = sync ] && sync_stop
+    [ $syncing = 1 ] && sync_stop
   done
 done
 rm -rf "$WORK/syncdata"
