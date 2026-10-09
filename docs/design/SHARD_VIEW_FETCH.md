@@ -215,11 +215,13 @@ branch.
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route | this round | 3 |
 
 Until 2c lands every fetch against the still-wired leaf-segment provider
-ends `ContentRefused` — the body `P` signs is not the tx-range body the
-client expects — and every viewer shows *"this archive could not be
-retrieved"*, a visible state, never an empty picture (rule 82). That
-interim refusal is a property of the provider, not of `P`: no consumer may
-read it as evidence against the holder (`SF-D8` amendment, 2026-10-08).
+ends refused — `Malformed::Frame` where the raw leaf bytes are not the
+frame's version byte, `ContentRefused` where they happen to be; the body
+`P` signs is not the tx-range body the client expects — and every viewer
+shows *"this archive could not be retrieved"*, a visible state, never an
+empty picture (rule 82). That interim refusal is a property of the
+provider, not of `P`: no consumer may read it as evidence against the
+holder (`SF-D8` amendment, 2026-10-08).
 
 ---
 

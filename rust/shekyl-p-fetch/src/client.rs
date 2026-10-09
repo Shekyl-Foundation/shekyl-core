@@ -194,11 +194,11 @@ impl PFetchClient {
     /// Waits for an in-flight slot first; the slot is held until the
     /// result is decided. The body is never resident whole (`SF-D8`
     /// amendment 2026-10-08): the frame is read as `version ‖ tx_count ‖
-    /// per tx (pqc_auth_count, pqc_auths_len ‖ bytes, prunable_len ‖
-    /// bytes)`, each entry's declared lengths are checked against its
-    /// retained row **before** its segments are read (a `P` declaring a
-    /// length the rows do not allow is refused without the client
-    /// allocating for it), and each entry's two segments are hashed
+    /// per tx (pqc_auth_count, pqc_auths_len, prunable_len, pqc_auths
+    /// bytes ‖ prunable bytes)`, each entry's declared lengths are checked
+    /// against its retained row **before** its segments are read (a `P`
+    /// declaring a length the rows do not allow is refused without the
+    /// client allocating for it), and each entry's two segments are hashed
     /// against the rows, folded into the view hash and handed to `sink` on
     /// the blocking pool, then dropped. The delivery digest folds every
     /// body byte, frame bytes included, under this request's nonce.

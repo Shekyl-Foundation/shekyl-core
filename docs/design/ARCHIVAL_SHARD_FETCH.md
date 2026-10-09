@@ -1520,10 +1520,12 @@ by not sending them.
   `shekyl_curve_tree::served_frame`. The leaf `StoreShardProvider`
   still exists until the wallet lane's store rebuild (`WSS-`) replaces
   it; its raw segment bytes satisfy no `ExpectedShard`, so a fetch
-  against today's wallet is `ContentRefused`, not `Miss` — named in
+  against today's wallet is a grammar refusal (`Malformed::Frame`: the
+  first leaf byte is not the frame's version byte) or, where that byte
+  happens to match, `ContentRefused` — never `Miss`. Named in
   `SHARD_VIEW_FETCH.md` §4 as the interim state, and the reason no
-  consumer may read `ContentRefused` as evidence against `P` until
-  `WSS` lands.
+  consumer may read either refusal as evidence against `P` until `WSS`
+  lands.
 
 ### `SF-D9` — `RF-R1` heading correction
 

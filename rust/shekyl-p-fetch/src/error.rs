@@ -94,10 +94,11 @@ pub enum FetchError {
     /// countersignature has verified: `P` demonstrably answered *this*
     /// request with *these* bytes. **Name another `P`.**
     ///
-    /// Against the interim leaf-segment provider every fetch ends here —
-    /// that `P` serves a body this grammar does not describe — which is a
-    /// statement about the serve side, not evidence against `P`
-    /// (`SHARD_VIEW_FETCH.md` §4).
+    /// Against the interim leaf-segment provider every fetch ends in
+    /// [`Self::Malformed`] (raw leaf bytes are not the frame's version
+    /// byte) or, where they happen to be, here — that `P` serves a body
+    /// this grammar does not describe — which is a statement about the
+    /// serve side, not evidence against `P` (`SHARD_VIEW_FETCH.md` §4).
     ContentRefused(ContentMismatch),
 }
 

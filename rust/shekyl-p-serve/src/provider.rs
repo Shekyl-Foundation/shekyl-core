@@ -299,8 +299,10 @@ pub trait ShardProvider: Send + Sync + 'static {
 /// (`PDM-Q12`, retired by `PDM-Q6` / `PDM-Q-F25`); the shard a requester
 /// names is a `W`-byte `tx_id` range (`SHT-Q2`) whose body is the
 /// `shard_frame` over archival good, and nothing this provider serves
-/// satisfies that expectation — a fetch against it is `ContentRefused`,
-/// never a verified shard. It stays until the wallet lane's store rebuild
+/// satisfies that expectation — a fetch against it is a grammar refusal
+/// (`Malformed::Frame`, where the leaf bytes are not the frame's version
+/// byte) or `ContentRefused` (where they happen to be), never a verified
+/// shard and never `Miss`. It stays until the wallet lane's store rebuild
 /// (`WSS-`, behind `WSS-Q1`) lands the provider over `P`'s body store, so
 /// that `shekyl-p-host`'s serve-set pinning keeps a provider to pin for;
 /// it is deleted with that landing, not adapted
