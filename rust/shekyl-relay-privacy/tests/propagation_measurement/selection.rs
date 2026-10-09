@@ -366,105 +366,122 @@ fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
 }
 
 /// **§98.10 (PR-1, D-PR1-1):** the local source under induced churn on the
-/// hidden stem slot, option (b) follow-the-slot against option (c) the pool
-/// frozen at the pin, with an adversary who floods onion candidates into gray
-/// and forces drops. `H` is `MIN_PROVISIONED_OUT_PEERS`, the address-hiding
-/// outbound target, consumed from its owner.
+/// hidden stem slot. Four shapes on one trial — (a) the slot peer alone,
+/// (b) follow the refilled slot, (c) the full freeze (withdrawn), (c′) the
+/// slot peer plus `stems − 1` drawn alternates (ruled) — under two churns: the
+/// targeted adversary who drops the origin's current honest hidden hop (a
+/// worst-case bound: Tor is built to hide which session that is) and random
+/// churn that drops a uniformly random live hidden session. `H` is
+/// `MIN_PROVISIONED_OUT_PEERS`, consumed from its owner; `stems` is 2.
 ///
-/// Pinned on the **shape across the flood share**: with no flood (refills at
-/// the ambient share) (c)'s without-replacement walk sits above (b)'s
-/// with-replacement draw; once the gray list is the adversary's at a quarter
-/// or more, (b) compounds past (c) at every `k ≥ 1` and the gap widens with
-/// `k`. (a), the slot peer alone, is the floor and the price is a hold on the
-/// first drop. If those shapes break, the mechanism under 98.3 changed.
+/// Pinned: **(c′)'s exposure is at most `stems / H` within tolerance at every
+/// `k`, every flood level, and both churns** — the ruling's property. Also
+/// pinned, as the shapes that chose it: under targeted churn (c) walks to
+/// certainty at `k = H − 1` and (b) exceeds (c) at `k` 1..8 once gray is a
+/// quarter adversarial; with no churn all arms are the same pin.
 #[test]
-fn hidden_slot_churn_frozen_pool_beats_follow_slot_under_a_gray_flood() {
-    use shekyl_relay_privacy::conformance::simulate_hidden_slot_churn_exposure;
+fn hidden_slot_churn_frozen_stems_exposure_is_bounded_by_stems_over_h() {
+    use shekyl_relay_privacy::conformance::{simulate_hidden_slot_churn_exposure, HiddenSlotChurn};
     use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
 
     const H: usize = MIN_PROVISIONED_OUT_PEERS as usize;
+    const STEMS: usize = 2; // CRYPTONOTE_DANDELIONPP_STEMS
     const G: f64 = 1.0 / 12.0; // one adversarial hidden session at pin time
+    let bound = STEMS as f64 / H as f64;
     let trials = 200_000;
     let drops = [0_usize, 1, 2, 4, 8, 11];
 
-    println!("\n§98.10 local source under induced churn, H={H}, g={G:.4} (a=1)");
-    for (seed, label, flood) in [
-        (0_u64, "ambient (no flood)", G),
-        (1, "gray 1/4 adversarial", 0.25),
-        (2, "gray 1/2 adversarial", 0.5),
-        (3, "gray 9/10 adversarial", 0.9),
+    for (churn_seed, churn, churn_label) in [
+        (
+            0_u64,
+            HiddenSlotChurn::Targeted,
+            "targeted: the origin's current honest hop drops",
+        ),
+        (
+            1,
+            HiddenSlotChurn::Random,
+            "random: a uniformly random live hidden session drops",
+        ),
     ] {
-        println!("  flood: {label}");
-        println!("   k   (a) slot   (a) held   (b) follow   (c) frozen   (c) held");
-        let mut follow = Vec::new();
-        let mut frozen = Vec::new();
-        for (i, k) in drops.iter().copied().enumerate() {
-            let mut rng = SplitMix64::new(0x9810 + seed * 64 + i as u64);
-            let r = simulate_hidden_slot_churn_exposure(H, G, flood, k, trials, &mut rng);
-            println!(
-                "  {:>2}   {:.4}     {:.4}     {:.4}       {:.4}       {:.4}",
-                k,
-                r.slot_only_exposure,
-                r.slot_only_held_share,
-                r.follow_slot_exposure,
-                r.frozen_pool_exposure,
-                r.frozen_pool_held_share,
-            );
-            assert!((r.effective_share - G).abs() < 1e-12);
-            if k == 0 {
-                assert!(
-                    (r.follow_slot_exposure - r.frozen_pool_exposure).abs() < 1e-9
-                        && (r.frozen_pool_exposure - r.slot_only_exposure).abs() < 1e-9,
-                    "with k = 0 the arms are the same pin"
+        println!("\n§98.10 local source, H={H}, stems={STEMS}, g={G:.4} (a=1) — {churn_label}");
+        for (seed, label, flood) in [
+            (0_u64, "ambient (no flood)", G),
+            (1, "gray 1/4 adversarial", 0.25),
+            (2, "gray 1/2 adversarial", 0.5),
+            (3, "gray 9/10 adversarial", 0.9),
+        ] {
+            println!("  flood: {label}");
+            println!("   k   (a) slot  held    (b) follow   (c) all   held    (c') stems  held");
+            let mut follow = Vec::new();
+            let mut all = Vec::new();
+            for (i, k) in drops.iter().copied().enumerate() {
+                let mut rng = SplitMix64::new(0x9810 + churn_seed * 4096 + seed * 64 + i as u64);
+                let r = simulate_hidden_slot_churn_exposure(
+                    H, STEMS, G, flood, k, churn, trials, &mut rng,
                 );
-            }
-            // (a) never moves off its first draw, and holds on any drop.
-            assert!((r.slot_only_exposure - r.effective_share).abs() < 0.01);
-            if k > 0 {
-                assert!((r.slot_only_held_share - (1.0 - r.effective_share)).abs() < 0.01);
-            }
-            follow.push(r.follow_slot_exposure);
-            frozen.push(r.frozen_pool_exposure);
-        }
-        // (c) at k is P(adversary among the first k+1 of a shuffled pool of H
-        // with one adversary) = (k+1)/H; it reaches 1 at k = H-1 and never
-        // holds while an adversary is in the pool.
-        for (i, k) in drops.iter().copied().enumerate() {
-            let expect = (k + 1) as f64 / H as f64;
-            assert!(
-                (frozen[i] - expect).abs() < 0.01,
-                "(c) must walk the frozen pool without replacement: k={k} got {} want {expect}",
-                frozen[i]
-            );
-        }
-        if (flood - G).abs() < 1e-12 {
-            // No flood: with-replacement at the ambient share is the lower
-            // curve. This is the regime the ruling pays for.
-            for i in 1..drops.len() {
-                assert!(
-                    follow[i] < frozen[i],
-                    "without a flood (b) sits below (c): k={} (b)={} (c)={}",
-                    drops[i],
-                    follow[i],
-                    frozen[i]
+                println!(
+                    "  {:>2}   {:.4}   {:.4}   {:.4}      {:.4}   {:.4}   {:.4}     {:.4}",
+                    k,
+                    r.slot_only_exposure,
+                    r.slot_only_held_share,
+                    r.follow_slot_exposure,
+                    r.frozen_all_exposure,
+                    r.frozen_all_held_share,
+                    r.frozen_stems_exposure,
+                    r.frozen_stems_held_share,
                 );
-            }
-        } else {
-            // A flood of a quarter or more: (b) compounds past (c) at every
-            // k from 1 to 8. At k = H - 1 (c) has walked the whole pool and
-            // sits at 1 by construction, so the comparison there is (b)
-            // against certainty and is not pinned.
-            for i in 1..drops.len() {
-                if drops[i] >= H - 1 {
-                    continue;
+                assert!((r.effective_share - G).abs() < 1e-12);
+
+                // The ruling's property, at every cell.
+                assert!(
+                    r.frozen_stems_exposure <= bound + 0.01,
+                    "(c') must stay within stems / H = {bound:.4}: {churn_label}, flood {flood}, k={k}, got {}",
+                    r.frozen_stems_exposure
+                );
+                // (a) never moves off its first draw.
+                assert!((r.slot_only_exposure - r.effective_share).abs() < 0.01);
+
+                if k == 0 {
+                    for e in [
+                        r.follow_slot_exposure,
+                        r.frozen_all_exposure,
+                        r.frozen_stems_exposure,
+                    ] {
+                        assert!(
+                            (e - r.slot_only_exposure).abs() < 1e-9,
+                            "with k = 0 every arm is the same pin"
+                        );
+                    }
                 }
-                assert!(
-                    follow[i] > frozen[i],
-                    "under a flood of {flood} (b) must exceed (c): k={} (b)={} (c)={}",
-                    drops[i],
-                    follow[i],
-                    frozen[i]
-                );
+                follow.push(r.follow_slot_exposure);
+                all.push(r.frozen_all_exposure);
+            }
+
+            if churn == HiddenSlotChurn::Targeted {
+                // (c) is a without-replacement walk over H with one adversary:
+                // (k + 1) / H, certain at k = H - 1. The row that withdrew it.
+                for (i, k) in drops.iter().copied().enumerate() {
+                    let expect = (k + 1) as f64 / H as f64;
+                    assert!(
+                        (all[i] - expect).abs() < 0.01,
+                        "(c) walks the full freeze without replacement: k={k} got {} want {expect}",
+                        all[i]
+                    );
+                }
+                if (flood - G).abs() >= 1e-12 {
+                    for i in 1..drops.len() {
+                        if drops[i] >= H - 1 {
+                            continue;
+                        }
+                        assert!(
+                            follow[i] > all[i],
+                            "under a flood of {flood} (b) exceeds (c) for k < H - 1: k={} (b)={} (c)={}",
+                            drops[i],
+                            follow[i],
+                            all[i]
+                        );
+                    }
+                }
             }
         }
     }

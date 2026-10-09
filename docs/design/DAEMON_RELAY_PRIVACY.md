@@ -17509,82 +17509,103 @@ crates; their tests; the C++ `levin_notify` fixtures through the daemon
 build; the freeze gate (`levin_notify.cpp` is a shrink row; this PR adds
 no line to it).
 
-### 98.10 Measured — the local source under induced churn, (b) against (c)
+### 98.10 Measured — the local source under induced churn: (a), (b), (c), (c′)
 
 `simulate_hidden_slot_churn_exposure` (`conformance/selection.rs`), pinned
-by `hidden_slot_churn_frozen_pool_beats_follow_slot_under_a_gray_flood`
+by `hidden_slot_churn_frozen_stems_exposure_is_bounded_by_stems_over_h`
 (`tests/propagation_measurement/selection.rs`). `H = 12`
-(`MIN_PROVISIONED_OUT_PEERS`), one adversarial hidden session at pin time
-(`g = 1/12`), 200k trials per cell, all arms on the same trial. The
-adversary forces the drop of the origin's hidden hop whenever that hop is
-honest; its own sessions never drop; the dialer replaces every dropped
-session from gray before the merge, and the replacement is the
-adversary's with probability *flood*. "Ambient" is *flood* `= g`: refills
-at the adversary's own share, no flood. Columns: **(a)** the slot peer
-alone (posed; holds on the first drop, 0.917 of trials at every `k ≥ 1`);
-**(b)** follow the refilled slot (posed); **(c)** the pool frozen at the
-pin (ruled). Exposure is `P(the local source is ever routed to an
-adversarial hidden hop)` within the epoch.
+(`MIN_PROVISIONED_OUT_PEERS`), `stems = 2`, one adversarial hidden session
+at pin time (`g = 1/12`), 200k trials per cell, every arm on the same
+trial. Every dropped session is replaced by the dialer from the dial
+candidates before the merge, and the replacement is the adversary's with
+probability *flood*; "ambient" is *flood* `= g`, no flood. Exposure is
+`P(the local source is ever routed to an adversarial hidden hop)` within
+the epoch; *held* is the share of trials whose pin was exhausted by the
+`k`-th drop, so the origin held (`NoOwnEdge`) until the epoch ended.
 
-| flood | `k` | (a) slot | (b) follow | (c) frozen | (c) held |
-| --- | --- | --- | --- | --- | --- |
-| ambient | 0 | 0.082 | 0.082 | 0.082 | 0 |
-| ambient | 1 | 0.083 | 0.166 | 0.167 | 0 |
-| ambient | 2 | 0.084 | 0.249 | 0.251 | 0 |
-| ambient | 4 | 0.085 | 0.399 | **0.419** | 0 |
-| ambient | 8 | 0.083 | 0.637 | **0.750** | 0 |
-| ambient | 11 | 0.084 | 0.761 | **1.000** | 0 |
-| 1/4 | 1 | 0.084 | 0.181 | 0.168 | 0 |
-| 1/4 | 2 | 0.084 | 0.280 | 0.252 | 0 |
-| 1/4 | 4 | 0.083 | 0.480 | 0.418 | 0 |
-| 1/4 | 8 | 0.083 | 0.781 | 0.750 | 0 |
-| 1/4 | 11 | 0.084 | 0.900 | **1.000** | 0 |
-| 1/2 | 1 | 0.083 | 0.198 | 0.165 | 0 |
-| 1/2 | 2 | 0.083 | 0.332 | 0.249 | 0 |
-| 1/2 | 4 | 0.084 | **0.596** | 0.416 | 0 |
-| 1/2 | 8 | 0.084 | **0.909** | 0.750 | 0 |
-| 1/2 | 11 | 0.083 | 0.980 | **1.000** | 0 |
-| 9/10 | 1 | 0.083 | 0.229 | 0.165 | 0 |
-| 9/10 | 2 | 0.082 | 0.407 | 0.248 | 0 |
-| 9/10 | 4 | 0.083 | **0.742** | 0.417 | 0 |
-| 9/10 | 8 | 0.084 | **0.990** | 0.751 | 0 |
-| 9/10 | 11 | 0.084 | 1.000 | 1.000 | 0 |
+The arms: **(a)** the slot peer alone (posed); **(b)** follow the refilled
+slot (posed); **(c)** the full freeze over every hidden outbound session
+(ruled, then withdrawn on this table); **(c′)** the slot peer plus one
+alternate drawn uniformly from the other hidden outbound sessions at the
+pin (ruled).
 
-**Reading.** (c) is a without-replacement walk over the pool fixed at the
-pin: its exposure is `(k + 1) / H` at every flood, which is the property
-the ruling bought — the flood buys the adversary nothing against a pinned
-source. (b) is a with-replacement draw over a pool each refill enriches,
-by about *flood*`/ H` per drop, and even at ambient it drifts up because
-honest sessions drop and the adversary's never do.
+Two churns. **Targeted:** the origin's current honest hidden hop drops at
+every step. This adversary knows which of the origin's Tor sessions is
+carrying its stem right now — the link Tor is built to hide — so the
+targeted rows are a **worst-case bound**, not an expected exposure.
+**Random:** a uniformly random live hidden session drops at every step;
+the drop lands on the origin's hop with probability `1 / H`.
 
-- *Under the attacker as specified* — a gray list the adversary has
-  flooded — **(c) is clearly better than (b) for `k` from 1 to 8**: at a
-  half-adversarial gray list 0.42 against 0.60 at four drops and 0.75
-  against 0.91 at eight; at nine tenths 0.42 against 0.74 and 0.75
-  against 0.99. At a quarter the gap is real and small (0.42 against
-  0.48; 0.75 against 0.78).
-- *Without a flood* **(b) is below (c) at every `k ≥ 1`**: 0.40 against
-  0.42 at four drops, 0.64 against 0.75 at eight, 0.76 against 1.00 at
-  eleven. Sampling the fixed pool without replacement reaches the
-  adversary's session sooner than re-drawing at the ambient share.
-- *At `k = H − 1`* (c) is **certain** exposure at every flood: the walk
-  has consumed every honest frozen candidate and the adversary's session
-  is still there. (c) never holds while an adversary is in the pool at
-  pin time; `(c) held` is zero in every cell. Its hold is reached only by
-  a pool with no adversary, which is the 98.5 boot case.
-- *(a)* is the floor, `g`, at every `k`, and the price is a hold in
-  `1 − g` of trials on the first drop.
+**Targeted churn** (`k = 0` is 0.083 in every arm; omitted):
 
-**Stop condition (98.8 commit 2).** "Clearly better" holds under the
-specified attacker and does not hold without one, and (c) is the worst
-of the three once the adversary can force `H − 1` drops within an epoch.
-The measurement is recorded and the PR pauses here for Rick before the
-`stem_map` API (98.8 commit 4) is built on (c)'s frozen-pool shape. The
-alternative the numbers point at, for the ruling to take or refuse: a
-frozen set of the slot peer plus a bounded number of alternates, which
-holds the flood-independence of (c) and caps the drop-bought exposure at
-`(n + 1) / H` with a hold after `n` drops — §19.2's shape, at `n = 1`
-exposure `≈ 2g` and a hold after two drops.
+| flood | `k` | (a) slot | (b) follow | (c) all | (c′) stems | (c′) held |
+| --- | --- | --- | --- | --- | --- | --- |
+| ambient | 1 | 0.084 | 0.167 | 0.168 | 0.168 | 0 |
+| ambient | 2 | 0.084 | 0.248 | 0.249 | 0.166 | 0.834 |
+| ambient | 4 | 0.083 | 0.395 | 0.419 | 0.167 | 0.833 |
+| ambient | 8 | 0.084 | 0.636 | 0.750 | 0.167 | 0.834 |
+| ambient | 11 | 0.083 | 0.761 | **1.000** | 0.166 | 0.834 |
+| 1/4 | 2 | 0.084 | 0.281 | 0.250 | 0.166 | 0.834 |
+| 1/4 | 8 | 0.083 | 0.779 | 0.750 | 0.165 | 0.835 |
+| 1/4 | 11 | 0.083 | 0.898 | **1.000** | 0.165 | 0.835 |
+| 1/2 | 2 | 0.085 | 0.329 | 0.250 | 0.167 | 0.833 |
+| 1/2 | 4 | 0.083 | **0.592** | 0.415 | 0.165 | 0.835 |
+| 1/2 | 8 | 0.083 | **0.909** | 0.750 | 0.165 | 0.835 |
+| 1/2 | 11 | 0.083 | 0.980 | **1.000** | 0.167 | 0.834 |
+| 9/10 | 2 | 0.083 | 0.409 | 0.249 | 0.165 | 0.835 |
+| 9/10 | 4 | 0.083 | **0.744** | 0.417 | 0.167 | 0.833 |
+| 9/10 | 8 | 0.084 | **0.990** | 0.750 | 0.168 | 0.832 |
+| 9/10 | 11 | 0.083 | 1.000 | **1.000** | 0.166 | 0.835 |
+
+**Random churn:**
+
+| flood | `k` | (a) slot | (a) held | (b) follow | (c) all | (c′) stems | (c′) held |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ambient | 2 | 0.083 | 0.159 | 0.097 | 0.097 | 0.096 | 0.014 |
+| ambient | 4 | 0.083 | 0.297 | 0.111 | 0.112 | 0.105 | 0.071 |
+| ambient | 8 | 0.083 | 0.501 | 0.136 | 0.139 | 0.115 | 0.237 |
+| ambient | 11 | 0.083 | 0.613 | 0.155 | 0.159 | 0.118 | 0.365 |
+| 1/4 | 4 | 0.084 | 0.294 | 0.120 | 0.111 | 0.105 | 0.070 |
+| 1/4 | 11 | 0.084 | 0.617 | 0.206 | 0.160 | 0.120 | 0.369 |
+| 1/2 | 4 | 0.085 | 0.294 | 0.137 | 0.112 | 0.106 | 0.070 |
+| 1/2 | 8 | 0.084 | 0.501 | 0.213 | 0.139 | 0.116 | 0.233 |
+| 1/2 | 11 | 0.083 | 0.615 | 0.278 | 0.159 | 0.119 | 0.367 |
+| 9/10 | 4 | 0.084 | 0.294 | 0.159 | 0.112 | 0.106 | 0.070 |
+| 9/10 | 8 | 0.083 | 0.501 | **0.281** | 0.139 | 0.115 | 0.236 |
+| 9/10 | 11 | 0.082 | 0.616 | **0.381** | 0.157 | 0.118 | 0.366 |
+
+**Reading.**
+
+- *(c′) is bounded.* Its exposure is `P(any of the stems frozen candidates
+  is adversarial) = 1 − C(H − a, stems) / C(H, stems)`, which is
+  `stems / H = 0.167` at `a = 1`; measured within 0.002 of it at every
+  flood under targeted churn from `k = 1`, and below it under random
+  churn. **Pinned** at every cell, both churns: the flood buys nothing
+  against a pinned source, and drops buy at most the one alternate. This
+  is the ruling's property.
+- *(c) was withdrawn on the targeted rows.* A without-replacement walk
+  over every hidden outbound session is `(k + 1) / H` at every flood and
+  **certain at `k = H − 1`**: the walk consumes every honest frozen
+  candidate and the adversary's session never drops.
+- *(b) compounds with the flood.* Under targeted churn it exceeds (c) at
+  `k` 1 to 8 once a quarter of the dial candidates are the adversary's
+  (0.59 against 0.42 at four drops and 0.91 against 0.75 at eight with
+  half; 0.74 and 0.99 at nine tenths), and sits below (c) with no flood.
+  Under random churn it is the only arm the flood moves: 0.16 at `k = 11`
+  ambient, 0.38 at nine tenths. (c′) at the same cell is 0.12 at every
+  flood.
+- *The price of (c′) is the hold.* Under targeted churn the origin holds
+  in 0.834 of trials from `k = 2`: both frozen candidates were honest and
+  both were dropped. That is 98.7's residual 6 — a liveness cost an
+  adversary pays `stems` targeted drops per epoch for, under the same
+  assumption as these rows. Under random churn the hold is 0.014 at two
+  drops and 0.37 at eleven, against (a)'s 0.16 and 0.61.
+- *(a)* is the floor, `g`, and holds on its first drop: 0.917 of trials
+  at every `k ≥ 1` targeted, `k / H` random.
+
+**Stop condition (98.8 commit 2) — resolved.** (c) was not clearly better
+than (b) and the PR paused; Rick withdrew (c) and ruled (c′) (98.4). The
+PR continues at 98.8 commit 6.
 
 ### 98.9 Round denominator
 
