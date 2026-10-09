@@ -278,6 +278,33 @@ GetInfoResponse {
   is a wire change the sibling round asks of this slice; when it lands is
   RK-Q8.
 
+#### Two wire types that keep the three states apart
+
+serde's defaults merge the states the table below separates, in both
+places this reply needs them distinct.
+
+- **`Nullable<T>` — required, and may be `null`.** `Option<T>` decodes a
+  `null` field and a **missing** field to the same `None`, so a field
+  dropped by contract drift would read as "no answer". That is the
+  fail-open the wallet decoder guards against by hand
+  (`rust/shekyl-engine-core/src/engine/daemon/synced_chain_facts.rs:677-690`).
+  `Nullable<T>` lives in `shekyl-rpc-types`; its deserializer **errors on
+  a missing key** and maps `null` to `None`, and it always serializes the
+  key. Every field RK-D23 makes nullable uses it. A bare `Option<T>` with
+  serde's default is not allowed on a reply field whose absence means
+  something different from its nullness.
+- **`Hidden<T>` — a part is wholly present or wholly absent.** A
+  flattened optional struct decodes to `None` whenever the struct cannot
+  be built from the keys that remain, so a Status part that arrives with
+  **one** field missing would read as "withheld" with no error — contract
+  drift turned into a grant decision. `Hidden<T>`'s deserializer returns
+  `None` only when **none** of `T`'s keys are present, `Some` when all
+  are, and an error otherwise.
+
+Both are tested per field in commit 4: `{}` fails and `{"f": null}`
+decodes for each `Nullable` field; a full reply with one Status key
+removed, and one with one Peers key removed, is an error and not `None`.
+
 #### The three wire states — RK-D23
 
 A field on this reply is in exactly one of three states, and each means one
@@ -382,7 +409,7 @@ no vector carries `emission_era`. Fixtures:
 | 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row; needs the two-node regtest the row names) | regtest |
 | 2 | **RK-D21:** `emission_era` deleted — the struct field and its `KV_SERIALIZE` (`core_rpc_server_commands_defs.h:270`, `:320`), the computation (`core_rpc_server.cpp:294-302`), and the "Emission Era" row of `docs/DESIGN_CONCEPTS.md:673` | `CORE_RPC_VERSION` bump; `git grep emission_era` → this document and CHANGELOG only |
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
-| 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate |
+| 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1 |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
 | 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7 as recommended, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
