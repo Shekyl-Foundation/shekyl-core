@@ -871,16 +871,18 @@ client never reaches the wrong network's node.
     (§4.5) is then always accurate: there is no state in which a daemon
     runs with its local leg gone.
 
-  **The socket's name — RULED (RT-O10, decision authority, 2026-10-09): a
-  hash of network and instance.** The socket is
-  `<base>/shekyl-<name>.sock`, where `<name>` is derived from the network
-  id and the instance name (`default`, or the operator's name), so the
-  instance name's length never reaches the path. Details proposed: `<name>`
-  is the first 12 bytes of cSHAKE256 under a registered customization
-  (`shekyl/rpc-socket-name-v1`, `CRYPTO_DOMAIN_REGISTRY.tsv`) over the
-  network id and the instance name, written as 24 hex characters. A daemon
-  and a client compute the same name from the same two inputs; nothing is
-  looked up.
+  **The rendezvous name — RULED (RT-O10, decision authority, 2026-10-09):
+  a hash of network and instance, on every platform.** `<name>` is derived
+  from the network id and the instance name (`default`, or the operator's
+  name). The Unix socket is `<base>/shekyl-<name>.sock`; the Windows
+  rendezvous file is `%LOCALAPPDATA%\Shekyl\shekyl-<name>` (below).
+  **One naming function and one known-answer test serve both platforms**,
+  under the registered customization `shekyl/rpc-rendezvous-name-v1`
+  (`CRYPTO_DOMAIN_REGISTRY.tsv`). **An instance name therefore reaches no
+  path anywhere.** Details proposed: `<name>` is the first 12 bytes of
+  cSHAKE256 under that customization over the network id and the instance
+  name, written as 24 hex characters. A daemon and a client compute the
+  same name from the same two inputs; nothing is looked up.
 
   *The arithmetic.* A Unix socket path is limited to 108 bytes on Linux
   and 104 on macOS, terminator included. After `<base>` the name costs
@@ -896,21 +898,24 @@ client never reaches the wrong network's node.
     named, never truncated.
 
   *What the hash costs, and its answer.* Nobody can read the path and tell
-  which network or instance it belongs to. So the daemon logs the socket
-  path beside its network and instance at every start, and a client that
-  finds nothing says which network and instance it looked for, never the
-  hash (§4.5). The readable layout this replaces —
+  which network or instance it belongs to. So the daemon logs one line at
+  every start — network, instance, rendezvous path — and **`shekyld status`
+  prints the same line**, so an operator can always ask a running node
+  where it is. A client that finds nothing says which network and instance
+  it looked for, never the hash (§4.5). The readable layout this replaces —
   `<base>/shekyl/<network>/<instance>/rpc.sock` — was 87 bytes on Linux
   and 115 on macOS at a 16-character name, and 106 on macOS for the
   default instance alone.
 
-  The 16-character limit on instance names (below) stands as ruled. It no
-  longer protects the path; it keeps names typeable and keeps the Windows
-  rendezvous directory, which does use the name, short.
+  The character set and the 16-character limit on instance names (below)
+  stand as ruled, for one reason: a name is something an operator types.
+  Path safety is no longer a reason, on any platform.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
-  rendezvous file in a per-user, per-network directory under
-  `%LOCALAPPDATA%` that only the user can read. A pipe has no containing
+  rendezvous file, `%LOCALAPPDATA%\Shekyl\shekyl-<name>`, that only the
+  user can read. `<name>` is the same derivation as the Unix socket's
+  (RT-O10, above): one function, one known-answer test, and no
+  per-network or per-instance directory. A pipe has no containing
   directory, so containment is rebuilt here: with no predictable name there
   is nothing for another user to squat, and the name does not exist until
   the daemon creates it with `first_pipe_instance`. The client's
@@ -974,18 +979,20 @@ client never reaches the wrong network's node.
   measurement runs start a second daemon of the same network beside an
   installed one, as one user, and without a named form the start-up
   refusal (§4.5) would stop them. The name is the operator's label, not a
-  nettype; the network id still keys the path (rule 71). **The name is
-  operator input that becomes part of a filesystem path**, and on Unix it
-  spends the socket-path budget. **RULED (2026-10-09):** the name is 1 to
-  16 characters from `[a-z0-9-]`, and its first character is a letter or a
-  digit. Two sets inside that class are **reserved and refused by name**:
-  `default`, which would be confused with the default instance; and the
-  Windows device names, which fit the character class and would fail as a
-  directory name on Windows — `con`, `prn`, `aux`, `nul`, `com0` to `com9`,
-  `lpt0` to `lpt9`. The character rule keeps out separators and `..`; it
-  does **not** keep out the device names, which is why they are listed.
-  Anything refused is refused at start with the rule stated, never
-  sanitised or truncated.
+  nettype; the network id still keys the rendezvous, through the hash
+  (rule 71). **RULED (2026-10-09):** the name is 1 to 16 characters from
+  `[a-z0-9-]`, and its first character is a letter or a digit. The reason
+  is typeability: an operator types this name on a command line and reads
+  it in a log. It is **not** a path-safety rule — since RT-O10 a name
+  reaches no path on any platform. `default` is **reserved and refused by
+  name**, because it would be confused with the default instance. The
+  ruling also reserved the Windows device names (`con`, `prn`, `aux`,
+  `nul`, `com0` to `com9`, `lpt0` to `lpt9`) because they would have
+  failed as a directory name on Windows; with no directory named after the
+  instance that reason is gone, and whether the reservation stays is for
+  the decision authority to confirm or strike. Until then they remain
+  refused, as ruled. Anything refused is refused at start with the rule
+  stated, never sanitised or truncated.
 - **Start-up dial on Unix.** The Windows start-up rule above applies here
   unchanged: before publishing, dial an existing socket — it answers, so
   another daemon is running, refuse and say so; nothing listens, so it is
@@ -1125,14 +1132,18 @@ construction) instead of loopback TCP.
   the deletion lands with RT-W12 and not before. It removes `hyper-rustls`
   and native-roots loading from the wallet's dependency graph
   ([`http_client.rs:240-266`](../../rust/shekyl-rpc-transport/src/http_client.rs)).
-- **RT-O10 — the Unix socket path. RULED 2026-10-09: named by a hash.**
-  The readable layout fit Linux and exceeded the macOS limit even for the
-  default instance. One socket file per daemon, directly in the per-user
-  directory, named by a hash of network id and instance, takes the
-  instance name out of the path budget on both platforms (58 of 108 bytes
-  on Linux, 86 of 104 on macOS). The hash's length and customization are
-  proposed. The macOS base length is still unmeasured; the margin is 18
-  bytes. Recorded in §7.1.
+- **RT-O10 — the rendezvous name. RULED 2026-10-09: a hash of network and
+  instance, on every platform.** It began as the Unix socket path: the
+  readable layout fit Linux and exceeded the macOS limit even for the
+  default instance. The ruling is wider than the problem that raised it.
+  The Unix socket and the Windows rendezvous file are both named
+  `shekyl-<name>`, with `<name>` from one function under
+  `shekyl/rpc-rendezvous-name-v1` and one known-answer test, so an instance
+  name reaches no path anywhere (58 of 108 bytes on Linux, 86 of 104 on
+  macOS). The daemon's start-up log and `shekyld status` print the same
+  network, instance and path line. The hash's length is proposed. The
+  macOS base length is still unmeasured; the margin is 18 bytes. Recorded
+  in §7.1.
 
 ---
 
@@ -1264,7 +1275,7 @@ construction) instead of loopback TCP.
 
 | Slice | Contents | Depends on |
 |---|---|---|
-| RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, byte equality with clatter under seeded randomness (reporting any difference in how the two ML-KEM libraries are fed), each observed failing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows; RT-P4 | ratification |
+| RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, byte equality with clatter under seeded randomness (reporting any difference in how the two ML-KEM libraries are fed), each observed failing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4 | ratification |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); deadline from RT-P6 | RT-W8 |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
