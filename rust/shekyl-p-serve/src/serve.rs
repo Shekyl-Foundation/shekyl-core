@@ -39,21 +39,30 @@
 //! persona's `HybridSignature` over the 112-byte transcript
 //! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`
 //! — the canonical [`SIGNATURE_ENVELOPE_LEN`] bytes — written **after** the
-//! `RF-D4` frame, as
-//! the last bytes of the response, both inside one `content-length`. The
-//! signer is the host's ([`PassSigner`]); this crate holds no key.
+//! body, as the last bytes of the response, both inside one
+//! `content-length`. The signer is the host's ([`PassSigner`]); this crate
+//! holds no key.
+//!
+//! **What the body is.** Whatever the [`ShardProvider`] holds for the
+//! shard: the `shekyl_wire::shard_frame` body over the shard's archival
+//! good (`SF-D8` amendment 2026-10-08). This loop neither parses nor
+//! frames it — it declares the body's length, streams it, and signs for
+//! it. The requester holds the expectation (its own skeleton rows) and
+//! refuses a body that does not meet it; nothing this end could prepend
+//! would stand in for that check. (The `RF-D4` served frame this loop used
+//! to write first is deleted: it described the retired leaf-segment unit.)
 //!
 //! **What the signature covers.** `delivery_digest` is
 //! [`pass_delivery_digest`](shekyl_archival_retention::pass_delivery_digest):
-//! a digest of the framed body this response carries, salted by the
-//! request's nonce. The persona reads the shard once, hashes each chunk
-//! as it sends it, and signs the finished digest. So the signature commits
-//! to the bytes delivered for this request and to no others. It does not
-//! show that this persona stores them; the route's topology is what prices
-//! a persona that relays.
+//! a digest of the body this response carries, salted by the request's
+//! nonce. The persona reads the shard once, hashes each chunk as it sends
+//! it, and signs the finished digest. So the signature commits to the
+//! bytes delivered for this request and to no others. It does not show
+//! that this persona stores them; the route's topology is what prices a
+//! persona that relays.
 //!
 //! **Why it is last.** It is computed from the bytes ahead of it. A
-//! requester holds the signature only once the whole frame has crossed
+//! requester holds the signature only once the whole body has crossed
 //! this persona's link, and a transfer that fails mid-body yields none.
 //!
 //! # Five answers to a complete head
@@ -103,14 +112,13 @@ use crate::serve_counters::{ServeCounterReader, ServeCounterWriter};
 use shekyl_archival_retention::{
     PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
 };
-use shekyl_curve_tree::served_frame::ServedFrameHeader;
 use shekyl_types::BlockHeight;
 
 // Sibling of this file, not `serve/delivery.rs`: the endpoint stays one
 // module, and the digest type is private to it.
 #[path = "delivery.rs"]
 mod delivery;
-use delivery::{read_and_fold, Folded, FramedDigest};
+use delivery::{read_and_fold, BodyDigest, Folded};
 
 // The route grammar this endpoint answers — `GET /shard/{id}`, the
 // `application/octet-stream` content type, the request header's name and
@@ -175,20 +183,18 @@ const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Internal read/write granularity for the shard body.
 ///
-/// **Not wire framing.** The frame is `RF-D4`'s, written once ahead of the
-/// body; this constant only sets how the already-framed payload is split
-/// across reads and writes, and the wire bytes are identical to a single
-/// write.
+/// **Not wire framing.** The body's framing is the provider's
+/// (`shekyl_wire::shard_frame`); this constant only sets how the body is
+/// split across reads and writes, and the wire bytes are identical to a
+/// single write.
 ///
 /// The loops are chunked for two reasons: peak memory per in-flight
 /// connection is one chunk rather than a whole shard — on the digest read
-/// and on the sending read alike — and resumability, which `RF-D4` did
-/// **not** rule in, so the frame carries no resumption field and adding one
-/// is still a future format change, becomes a change of framing on top of an
-/// already-incremental reader-writer instead of a rewrite. That is the §9.5
-/// discipline that a format property must never be foreclosed by what was
-/// convenient to build, and it held: the format round came and went without
-/// this loop constraining it.
+/// and on the sending read alike — and resumability, which no format round
+/// has ruled in, so adding it is still a future format change, becomes a
+/// change of framing on top of an already-incremental reader-writer
+/// instead of a rewrite. That is the §9.5 discipline that a format
+/// property must never be foreclosed by what was convenient to build.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Backoff when `accept` fails (e.g. transient FD pressure). Prevents a
@@ -607,22 +613,20 @@ fn sign_envelope(
     bytes.try_into().ok()
 }
 
-/// The committed head of a 200: status line, headers and the `RF-D4` frame
-/// header as one byte string, with the [`FramedDigest`] that has absorbed
-/// that frame. `content-length` is the frame's declared length plus the
-/// envelope, both exact before a leaf is read. `None` if the length cannot
-/// be stated or the frame cannot be digested.
-fn response_head(
-    frame: &ServedFrameHeader,
-    nonce: &[u8; PASS_NONCE_LEN],
-) -> Option<(FramedDigest, Vec<u8>)> {
+/// The committed head of a 200: status line and headers as one byte
+/// string, with the [`BodyDigest`] the body will fold through.
+/// `content-length` is the body's opened length plus the envelope, both
+/// exact before a byte is read. `None` if the sum does not fit.
+///
+/// The loop prepends nothing to the body (`SF-D8` amendment 2026-10-08):
+/// the bytes after the head are the provider's, and the requester's
+/// expectation of them is built from its own skeleton rows.
+fn response_head(body_len: u64, nonce: &[u8; PASS_NONCE_LEN]) -> Option<(BodyDigest, Vec<u8>)> {
     let content_length = u64::try_from(SIGNATURE_ENVELOPE_LEN)
         .ok()?
-        .checked_add(frame.framed_len())?;
-    let running = FramedDigest::start(frame, nonce)?;
-    let mut head = render_ok(content_length).into_bytes();
-    head.extend_from_slice(running.frame_bytes());
-    Some((running, head))
+        .checked_add(body_len)?;
+    let running = BodyDigest::start(body_len, nonce);
+    Some((running, render_ok(content_length).into_bytes()))
 }
 
 /// Complete-head resolution: parse, gate, look up, ask the signer whether
@@ -681,20 +685,19 @@ async fn resolve(
 
 /// Write the response a head resolved to.
 ///
-/// For a held shard: the head and the frame header, the body chunk by
-/// chunk as it is read, then the countersignature over what was written.
-/// The store is read once. Each chunk is folded into the delivery digest
-/// ([`FramedDigest`]) as it goes out, so the digest that is signed is the
-/// digest of the bytes on the wire by construction, and no more than one
-/// chunk of the shard is resident.
+/// For a held shard: the head, the body chunk by chunk as it is read, then
+/// the countersignature over what was written. The store is read once.
+/// Each chunk is folded into the delivery digest ([`BodyDigest`]) as it
+/// goes out, so the digest that is signed is the digest of the bytes on
+/// the wire by construction, and no more than one chunk of the shard is
+/// resident.
 ///
-/// `content-length` is [`ServedFrameHeader::framed_len`] plus
-/// [`SIGNATURE_ENVELOPE_LEN`], both exact before a single leaf is read, so
-/// the head is committed before the store is touched. Two things can go
-/// wrong after it:
+/// `content-length` is [`ShardBody::len`] plus [`SIGNATURE_ENVELOPE_LEN`],
+/// both exact before a single byte is read, so the head is committed
+/// before the store is touched. Two things can go wrong after it:
 ///
-/// * the store fails mid-body, or yields a body that is not the length its
-///   frame declares — the response ends there, short, counted in
+/// * the store fails mid-body, or yields a body that is not the length it
+///   was opened at — the response ends there, short, counted in
 ///   [`PServeEndpoint::lookup_failure_count`];
 /// * the body completes and the signer refuses, or returns an envelope of
 ///   the wrong length — the envelope is written as the **refusal trailer**
@@ -705,20 +708,13 @@ async fn resolve(
 ///
 /// The trailer is why a failure is never inferred from a response that
 /// stopped. A relay on the circuit can cut a response at any byte it likes,
-/// the frame's end included, and guard pinning puts the same relay on every
+/// the body's end included, and guard pinning puts the same relay on every
 /// retry; it cannot write bytes into the stream. So a short response is
 /// always transport, and only the persona can say it refused.
-///
-/// The frame header ([`RF-D4`]) is [`ShardBody::header`], fixed when the
-/// body was opened. The bytes written are [`FramedDigest::frame_bytes`]: the
-/// header that was hashed, not a second encoding of it.
 ///
 /// Generic over the sink so the invariant tests can stand a buffer in for
 /// the socket and say exactly how many bytes a requester took before it
 /// stopped (`serve_invariant_tests.rs`).
-///
-/// [`RF-D4`]: shekyl_curve_tree::served_frame
-/// [`ServedFrameHeader::framed_len`]: shekyl_curve_tree::served_frame::ServedFrameHeader::framed_len
 async fn write_response<W: AsyncWrite + Unpin>(
     stream: &mut W,
     resolved: Resolved,
@@ -737,15 +733,14 @@ async fn write_response<W: AsyncWrite + Unpin>(
         }
         Resolved::Held(held) => held,
     };
-    // One write for the head and the frame header, not two. The wire bytes
-    // are identical either way — this is a loopback socket into tor, whose
+    // The head is one write and one commitment point: the status line and
+    // the headers are decided together, before the store is read, and
+    // nothing of the loop's own follows them — the next byte on the wire
+    // is the provider's first. (This is a loopback socket into tor, whose
     // own cell framing quantizes everything downstream, so packet
     // boundaries here are not an observable and no privacy claim rests on
-    // this. What it buys is a single commitment point: the status line,
-    // the headers and the frame are decided together, before the store is
-    // read, leaving no seam between them for a later edit to slip
-    // something into.
-    let (mut running, head) = response_head(&body.header(), fields.nonce())
+    // the write count.)
+    let (mut running, head) = response_head(body.len(), fields.nonce())
         .ok_or_else(|| io::Error::other("response head"))?;
     write_bounded(stream, &head).await?;
     loop {
@@ -766,11 +761,11 @@ async fn write_response<W: AsyncWrite + Unpin>(
         match folded {
             Folded::Bytes(bytes) => write_bounded(stream, &bytes).await?,
             Folded::End => break,
-            Folded::PastFrame => {
-                // Do not write a byte the frame does not describe, and
-                // sign nothing.
+            Folded::PastLength => {
+                // Do not write a byte the head did not declare, and sign
+                // nothing.
                 counters.record_lookup_failure();
-                return Err(io::Error::other("shard body longer than its frame"));
+                return Err(io::Error::other("shard body longer than declared"));
             }
             Folded::StoreFault => {
                 // The head is already out; all that is left is to close.
@@ -782,7 +777,7 @@ async fn write_response<W: AsyncWrite + Unpin>(
     }
     let Some(digest) = running.finish() else {
         counters.record_lookup_failure();
-        return Err(io::Error::other("shard body shorter than its frame"));
+        return Err(io::Error::other("shard body shorter than declared"));
     };
     // Every body byte is written and hashed. Sign for exactly those bytes.
     let message = fields.transcript(shard_id, &digest);
@@ -809,7 +804,7 @@ pub enum InMemoryServe {
     /// A 200 closed by the refusal trailer.
     Unsigned,
     /// A 200 that ended short: the store failed, or the body was not the
-    /// length its frame declares.
+    /// length it was opened at.
     Truncated,
     /// The bare 400.
     BadRequest,
@@ -877,7 +872,7 @@ pub fn serve_one_in_memory(
             return refusal;
         }
     };
-    let Some((mut running, response_head)) = response_head(&body.header(), fields.nonce()) else {
+    let Some((mut running, response_head)) = response_head(body.len(), fields.nonce()) else {
         return InMemoryServe::Truncated;
     };
     out.extend_from_slice(&response_head);
@@ -888,7 +883,7 @@ pub fn serve_one_in_memory(
         match folded {
             Folded::Bytes(bytes) => out.extend_from_slice(&bytes),
             Folded::End => break,
-            Folded::PastFrame | Folded::StoreFault => return InMemoryServe::Truncated,
+            Folded::PastLength | Folded::StoreFault => return InMemoryServe::Truncated,
         }
     }
     let Some(digest) = running.finish() else {
@@ -924,7 +919,7 @@ pub fn prehead_in_memory(
     let Ok((_, fields, body)) = admit_in_memory(provider, signer, head) else {
         return false;
     };
-    let Some((_, response_head)) = response_head(&body.header(), fields.nonce()) else {
+    let Some((_, response_head)) = response_head(body.len(), fields.nonce()) else {
         return false;
     };
     out.extend_from_slice(&response_head);
@@ -936,7 +931,7 @@ pub fn prehead_in_memory(
 /// the delivery digest, as [`write_response`] does between writes. No
 /// gate, no head rendered to a buffer, no copy out, no signature. Returns
 /// the digest, or `None` if the shard is not held or is not the length
-/// its frame declares.
+/// it was opened at.
 ///
 /// `BA-T3` sets this beside the one-shot digest of the same bytes. The
 /// difference is what interleaving the hash with the chunked read costs,
@@ -951,7 +946,7 @@ pub fn read_and_fold_in_memory(
     nonce: &[u8; PASS_NONCE_LEN],
 ) -> Option<[u8; shekyl_archival_retention::PASS_DELIVERY_DIGEST_LEN]> {
     let mut body = provider.shard_bytes(shard_id).ok()??;
-    let mut running = FramedDigest::start(&body.header(), nonce)?;
+    let mut running = BodyDigest::start(body.len(), nonce);
     loop {
         let (returned, digest, folded) = read_and_fold(body, running);
         body = returned;
@@ -959,7 +954,7 @@ pub fn read_and_fold_in_memory(
         match folded {
             Folded::Bytes(_) => {}
             Folded::End => return running.finish(),
-            Folded::PastFrame | Folded::StoreFault => return None,
+            Folded::PastLength | Folded::StoreFault => return None,
         }
     }
 }

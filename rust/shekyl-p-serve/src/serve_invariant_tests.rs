@@ -61,12 +61,11 @@ use std::time::Duration;
 
 use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_curve_tree::{leaves_per_segment, ServedFrameHeader, LEAF_BYTES};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SHARD_LENGTH};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::{
-    fetch, good_get_shard_0, head_of, leaves, render_ok, resolve, write_response, PServeEndpoint,
+    fetch, filler, good_get_shard_0, head_of, render_ok, resolve, write_response, PServeEndpoint,
     Resolved, OWN_HEIGHT, SIGNATURE_ENVELOPE_LEN, WRITE_CHUNK_BYTES,
 };
 use crate::countersign::{PassKey, PassSigner, SignRefused, TestKeySigner};
@@ -112,10 +111,10 @@ impl ShardProvider for CountingProvider {
         if shard_id != 0 {
             return Ok(None);
         }
-        Ok(ShardBody::counted(
+        Ok(Some(ShardBody::counted(
             Arc::clone(&self.bytes),
             Arc::clone(&self.reads),
-        ))
+        )))
     }
 }
 
@@ -223,11 +222,19 @@ impl AsyncWrite for Requester {
     }
 }
 
-/// Bytes of a 200 that precede the first body chunk: the head and the
-/// `RF-D4` frame header, for a body of `leaves_in_body`.
-fn bytes_ahead_of_the_body(leaves_in_body: usize) -> usize {
-    let frame = ServedFrameHeader::for_segment(leaves_in_body).expect("in range");
-    render_ok(frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64).len() + frame.encoded_len()
+/// The largest body a shard can be, to the order the tests here care
+/// about: `W` archival bytes (`SHT-Q2`). The real body is `W` plus the
+/// overshoot of one transaction and the frame's per-transaction lengths,
+/// and a bound that holds at `W` holds there.
+fn full_body_bytes() -> usize {
+    usize::try_from(SHARD_LENGTH.to_raw()).expect("W fits usize")
+}
+
+/// Bytes of a 200 that precede the first body chunk: the head, and nothing
+/// else — the loop writes no frame of its own ahead of the body.
+fn bytes_ahead_of_the_body(body_bytes: usize) -> usize {
+    let content_length = u64::try_from(body_bytes + SIGNATURE_ENVELOPE_LEN).expect("fits");
+    render_ok(content_length).len()
 }
 
 /// Serve one valid, in-window request for held shard 0 to a requester that
@@ -237,13 +244,8 @@ async fn serve_to_a_requester_that_accepts(
     chunks_in_body: usize,
     body_bytes_accepted: usize,
 ) -> (usize, usize, ServeCounterReader) {
-    let leaves_in_body = chunks_in_body * WRITE_CHUNK_BYTES / LEAF_BYTES;
-    assert_eq!(
-        leaves_in_body * LEAF_BYTES,
-        chunks_in_body * WRITE_CHUNK_BYTES,
-        "the fixture's body is a whole number of chunks"
-    );
-    let provider = CountingProvider::new(leaves(leaves_in_body, 0x33));
+    let body_bytes = chunks_in_body * WRITE_CHUNK_BYTES;
+    let provider = CountingProvider::new(filler(body_bytes, 0x33));
     let signer = CountingSigner::new();
     let counters = ServeCounterReader::zeroed();
     let writer = counters.writer();
@@ -261,7 +263,7 @@ async fn serve_to_a_requester_that_accepts(
     );
     let mut requester = Requester {
         taken: 0,
-        cap: bytes_ahead_of_the_body(leaves_in_body) + body_bytes_accepted,
+        cap: bytes_ahead_of_the_body(body_bytes) + body_bytes_accepted,
     };
     let outcome = write_response(
         &mut requester,
@@ -282,10 +284,10 @@ async fn serve_to_a_requester_that_accepts(
 async fn nothing_that_scales_with_the_shard_happens_before_the_head() {
     // Everything `P` does before its first response byte, for a valid
     // in-window request for a held shard: the shard is opened once, which
-    // fixes the frame, and that is all. No chunk is read and nothing is
-    // signed, for the smallest body and for a whole segment alike.
-    for leaves_in_body in [1, leaves_per_segment()] {
-        let provider = CountingProvider::new(leaves(leaves_in_body, 0x21));
+    // fixes the length, and that is all. No chunk is read and nothing is
+    // signed, for the smallest body and for a whole shard alike.
+    for body_bytes in [1, full_body_bytes()] {
+        let provider = CountingProvider::new(filler(body_bytes, 0x21));
         let signer = CountingSigner::new();
         let writer = ServeCounterReader::zeroed().writer();
         let resolved = resolve(
@@ -296,24 +298,24 @@ async fn nothing_that_scales_with_the_shard_happens_before_the_head() {
         )
         .await;
         assert!(matches!(resolved, Resolved::Held(_)));
-        assert_eq!(provider.opens(), 1, "{leaves_in_body} leaves: one open");
+        assert_eq!(provider.opens(), 1, "{body_bytes} bytes: one open");
         assert_eq!(
             provider.reads(),
             0,
-            "{leaves_in_body} leaves: no body byte is read before the head"
+            "{body_bytes} bytes: no body byte is read before the head"
         );
         assert_eq!(
             signer.asked_to_sign(),
             0,
-            "{leaves_in_body} leaves: nothing is signed before the head"
+            "{body_bytes} bytes: nothing is signed before the head"
         );
     }
 }
 
 #[tokio::test]
 async fn a_requester_that_takes_only_the_head_costs_one_chunk_read_and_no_signature() {
-    // The requester accepts the head and the frame header and not one body
-    // byte. `P` has read the one chunk it then failed to write, and stops.
+    // The requester accepts the head and not one body byte. `P` has read
+    // the one chunk it then failed to write, and stops.
     let (reads, asked_to_sign, counters) = serve_to_a_requester_that_accepts(8, 0).await;
     assert_eq!(
         reads, 1,
@@ -362,8 +364,7 @@ async fn a_requester_that_takes_everything_costs_every_chunk_and_one_signature()
     // them. Without this, a counter that never moved would pass every
     // "no more than" above.
     let chunks_in_body = 8;
-    let leaves_in_body = chunks_in_body * WRITE_CHUNK_BYTES / LEAF_BYTES;
-    let provider = CountingProvider::new(leaves(leaves_in_body, 0x55));
+    let provider = CountingProvider::new(filler(chunks_in_body * WRITE_CHUNK_BYTES, 0x55));
     let signer = CountingSigner::new();
     let ep = PServeEndpoint::bind(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
@@ -387,7 +388,7 @@ async fn a_requester_that_takes_everything_costs_every_chunk_and_one_signature()
 
 /// `SO_SNDBUF` asked of the persona's accepted sockets, and `SO_RCVBUF`
 /// asked of the requester's. Small, so that both together are a small
-/// fraction of a segment.
+/// fraction of a shard.
 const PINNED_BUFFER_BYTES: u32 = 32 * 1024;
 
 /// Linux doubles a requested socket buffer to leave room for bookkeeping
@@ -400,17 +401,17 @@ const SEND_BUFFER_CEILING_BYTES: usize = 2 * PINNED_BUFFER_BYTES as usize;
 /// slack covers it.
 const RECEIVE_OVERSHOOT_CHUNKS: usize = 1;
 
-/// Serve a whole segment over a real socket, with both kernel buffers
+/// Serve a whole shard over a real socket, with both kernel buffers
 /// pinned, to a requester that reads the head and `body_bytes_wanted`
 /// more, then closes. Returns the chunk reads once the response has
 /// ended, the bound on them, the chunks in the body, and the endpoint
 /// and signer for the caller's assertions.
-async fn serve_a_segment_to_a_requester_that_reads(
+async fn serve_a_shard_to_a_requester_that_reads(
     body_bytes_wanted: usize,
 ) -> (usize, usize, usize, PServeEndpoint, Arc<CountingSigner>) {
-    let leaves_in_body = leaves_per_segment();
-    let total_chunks = (leaves_in_body * LEAF_BYTES).div_ceil(WRITE_CHUNK_BYTES);
-    let provider = CountingProvider::new(leaves(leaves_in_body, 0x44));
+    let body_bytes = full_body_bytes();
+    let total_chunks = body_bytes.div_ceil(WRITE_CHUNK_BYTES);
+    let provider = CountingProvider::new(filler(body_bytes, 0x44));
     let signer = CountingSigner::new();
     let ep = PServeEndpoint::bind_with_send_buffer(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
@@ -481,8 +482,7 @@ async fn a_requester_that_closes_after_the_head_costs_a_bounded_read_and_no_sign
     // shard can be. The requester reads the head and closes. The persona
     // has read no more than the two pinned buffers could take, plus the
     // one chunk it is always ahead by, and the key is never asked.
-    let (reads, bound, total_chunks, ep, signer) =
-        serve_a_segment_to_a_requester_that_reads(0).await;
+    let (reads, bound, total_chunks, ep, signer) = serve_a_shard_to_a_requester_that_reads(0).await;
     assert!(
         reads > 0,
         "the head was received, so the loop read at least one chunk"
@@ -498,14 +498,14 @@ async fn a_requester_that_closes_after_the_head_costs_a_bounded_read_and_no_sign
 
 #[tokio::test]
 async fn a_requester_that_reads_half_and_closes_costs_about_half_and_no_signature() {
-    // The requester takes half of a whole segment and closes. Left to
+    // The requester takes half of a whole shard and closes. Left to
     // autotune, the kernel could hold the other half and the persona would
     // finish and sign for a requester that had gone; with both buffers
     // pinned it cannot. The reads stop within the buffers of the half that
     // was read, and the key is never asked.
-    let half = leaves_per_segment() * LEAF_BYTES / 2;
+    let half = full_body_bytes() / 2;
     let (reads, bound, total_chunks, ep, signer) =
-        serve_a_segment_to_a_requester_that_reads(half).await;
+        serve_a_shard_to_a_requester_that_reads(half).await;
     assert!(
         reads >= half / WRITE_CHUNK_BYTES,
         "the requester read half, so the persona read at least that"

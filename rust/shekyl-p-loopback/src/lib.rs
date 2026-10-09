@@ -27,16 +27,17 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::{PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN};
 use shekyl_crypto_pq::signature::HybridPublicKey;
-use shekyl_curve_tree::LEAF_BYTES;
-use shekyl_p_fetch::{ContentRefused, ContentVerify};
 use shekyl_p_serve::{PassSigner, ProviderError, ShardBody, ShardProvider};
 use shekyl_socks::accept_userpass;
-use shekyl_types::BlockHeight;
+use shekyl_types::{ArchivalLength, BlockHeight, ShardId, TxHash, SHARD_LENGTH};
+use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx};
+use shekyl_wire::TxidParts;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub use shekyl_p_fetch::{
-    FetchError, FetchTarget, PFetchClient, RequestHeader, ServingEndpoint, Timeouts,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
+    ServingEndpoint, Timeouts, TxSink, VerifiedShard, VerifiedTx,
 };
 pub use shekyl_p_serve::PServeEndpoint;
 
@@ -67,16 +68,67 @@ const UNRESOLVED_ENDPOINT: [u8; 32] = [0x42; 32];
 /// the same endpoint. The value itself is not a protocol constant.
 pub const FIXTURE_SHARD_ID: u64 = 3;
 
-/// Bytes that fill one leaf and no more, so a served frame of this body
-/// declares `leaf_count == 1`. The modulus keeps the bytes from being a
-/// run of zeroes; a swapped envelope and frame fails a comparison with it.
+/// The txid of the one transaction in [`fixture_body`]. Any value: the
+/// client checks components against the rows it is handed, and the txid
+/// is what the view hash binds them to.
+pub const FIXTURE_TXID: TxHash = TxHash::from_bytes([0x7c; 32]);
+
+/// Length of the fixture transaction's prunable region. Short: the serve
+/// loop is body-agnostic and the client streams, so the length proves
+/// nothing beyond "a body crossed".
+const FIXTURE_PRUNABLE_LEN: usize = 128;
+
+/// The fixture transaction's prunable region. The modulus keeps the
+/// bytes from being a run of zeroes, so a body swapped with the envelope
+/// fails a comparison with it. No `pqc_auths`.
 #[must_use]
-pub fn one_leaf() -> Arc<[u8]> {
+pub fn fixture_prunable() -> Vec<u8> {
     const DISTINCT: usize = 251;
-    let bytes: Vec<u8> = (0..LEAF_BYTES)
+    (0..FIXTURE_PRUNABLE_LEN)
         .map(|i| u8::try_from(i % DISTINCT).expect("modulus fits in a byte"))
-        .collect();
-    Arc::from(bytes)
+        .collect()
+}
+
+fn fixture_frame_tx(prunable: &[u8]) -> FrameTx<'_> {
+    FrameTx {
+        pqc_auth_count: 0,
+        pqc_auths: &[],
+        prunable,
+    }
+}
+
+/// The fixture body as `P` serves it: a one-transaction `shard_frame`
+/// over [`fixture_prunable`].
+#[must_use]
+pub fn fixture_body() -> Arc<[u8]> {
+    let prunable = fixture_prunable();
+    Arc::from(encode_frame(&[fixture_frame_tx(&prunable)]))
+}
+
+/// What a requester expects of [`fixture_body`] at `shard_id`: the one
+/// row, placed so the range closes the shard (`cum_before` is the shard's
+/// end less the row's length).
+///
+/// # Panics
+///
+/// Panics if `shard_id` is the last representable shard, whose end does
+/// not fit; no test asks for it.
+#[must_use]
+pub fn fixture_expectation(shard_id: u64) -> ExpectedShard {
+    let prunable = fixture_prunable();
+    let (pqc_auth_hash, prunable_hash, archival_len) = rows_of(&fixture_frame_tx(&prunable));
+    let row = TxidParts {
+        hash: FIXTURE_TXID,
+        pqc_auth_hash,
+        prunable_hash,
+        archival_len,
+    };
+    let end = (shard_id + 1)
+        .checked_mul(SHARD_LENGTH.to_raw())
+        .expect("fixture shard end fits");
+    let cum_before = ArchivalLength::from_raw(end - archival_len.to_raw());
+    ExpectedShard::new(ShardId::from_raw(shard_id), cum_before, vec![row])
+        .expect("one row closing its shard")
 }
 
 /// A request header with the fixture nonce and anchor hash, at `anchor`.
@@ -94,22 +146,10 @@ pub fn request_header(anchor: BlockHeight) -> RequestHeader {
 /// `verifying_key` is the caller's: the bond identity, an ephemeral test
 /// key, or a key that must not verify.
 #[must_use]
-pub fn fetch_target(verifying_key: HybridPublicKey, shard_id: u64) -> FetchTarget {
+pub fn fetch_target(verifying_key: HybridPublicKey) -> FetchTarget {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes(UNRESOLVED_ENDPOINT),
         verifying_key,
-        shard_id,
-    }
-}
-
-/// [`ContentVerify`] that accepts every body. Tests that parse the frame
-/// do that on the returned bytes.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AcceptAny;
-
-impl ContentVerify for AcceptAny {
-    fn verify(&self, _shard_id: u64, _body: &[u8]) -> Result<(), ContentRefused> {
-        Ok(())
     }
 }
 
@@ -123,9 +163,7 @@ impl ShardProvider for OneShard {
         if shard_id != self.shard_id {
             return Ok(None);
         }
-        // A body that is not a whole number of leaves is a miss. Callers
-        // that want a served frame pass `one_leaf` or a multiple of it.
-        Ok(ShardBody::flat(Arc::clone(&self.body)))
+        Ok(Some(ShardBody::flat(Arc::clone(&self.body))))
     }
 }
 
@@ -230,9 +268,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_leaf_is_one_leaf_and_not_a_run_of_zeroes() {
-        let body = one_leaf();
-        assert_eq!(body.len(), LEAF_BYTES);
-        assert!(body.iter().any(|byte| *byte != 0));
+    fn the_fixture_prunable_is_not_a_run_of_zeroes() {
+        let prunable = fixture_prunable();
+        assert_eq!(prunable.len(), FIXTURE_PRUNABLE_LEN);
+        assert!(prunable.iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn the_fixture_expectation_is_one_row_closing_its_shard() {
+        let expected = fixture_expectation(FIXTURE_SHARD_ID);
+        assert_eq!(expected.shard_id().to_raw(), FIXTURE_SHARD_ID);
+        assert_eq!(expected.tx_count(), 1);
+        assert_eq!(
+            expected.archival_len().to_raw(),
+            u64::try_from(FIXTURE_PRUNABLE_LEN).unwrap()
+        );
+        assert_eq!(expected.txs()[0].hash, FIXTURE_TXID);
     }
 }

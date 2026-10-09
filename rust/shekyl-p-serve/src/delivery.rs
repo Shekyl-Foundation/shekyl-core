@@ -18,29 +18,30 @@
 //! before the first byte that it has no key answers 503 and sends nothing.
 //!
 //! One fold, rather than a hasher opened by hand at the call site, so the
-//! signed bytes are defined once: the `RF-D4` frame header, then every
-//! payload chunk, and nothing else. A body that is not exactly the length
-//! its frame declares has no digest.
+//! signed bytes are defined once: every body byte, in order, and nothing
+//! else — the loop prepends no frame of its own (`SF-D8` amendment
+//! 2026-10-08; the `RF-D4` header it used to absorb first is gone). A body
+//! that is not exactly the length it was opened at has no digest.
 //!
 //! # Where the fold runs
 //!
 //! The fold is a hash over every byte of the shard: software Keccak, tens
-//! of milliseconds for a full segment on the floor device. The serve loop
+//! of milliseconds for a full shard on the floor device. The serve loop
 //! runs it on the blocking pool, in the same hop as the store read that
 //! produced the chunk ([`read_and_fold`]), so that it does not hold an
 //! executor thread away from every other connection's task while it
 //! hashes.
 //!
 //! That is the part of the digest that scales with the shard, and it is
-//! the only part that moves. [`FramedDigest::start`], which absorbs the
-//! frame header, and [`FramedDigest::finish`], which finalizes, run on
-//! the connection's task: a fixed few Keccak permutations whatever the
-//! shard's size, and less work than a hop to the pool would be.
+//! the only part that moves. [`BodyDigest::start`] and
+//! [`BodyDigest::finish`] run on the connection's task: a fixed few Keccak
+//! permutations whatever the shard's size, and less work than a hop to the
+//! pool would be.
 //!
 //! What this module's surface enforces is narrower than "never on the
 //! executor", and it is stated exactly so nobody leans on more. The serve
 //! loop can start a digest, move it into [`read_and_fold`] and finish it.
-//! It cannot advance one: [`FramedDigest::absorb`] is private to this
+//! It cannot advance one: [`BodyDigest::absorb`] is private to this
 //! module, and so is [`fold_chunk`], its only caller outside the tests
 //! below. So **the hash cannot be separated from the read**: there is no
 //! way to read a chunk in one place and fold it in another, which is the
@@ -52,58 +53,39 @@
 //! synchronous store I/O as well as on the hash.
 
 use shekyl_archival_retention::{PassDeliveryHasher, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN};
-use shekyl_curve_tree::served_frame::ServedFrameHeader;
 
 use super::WRITE_CHUNK_BYTES;
 use crate::provider::{ProviderError, ShardBody};
 
-/// Running digest of the framed body ahead of the countersignature.
-pub(super) struct FramedDigest {
+/// Running digest of the body ahead of the countersignature.
+pub(super) struct BodyDigest {
     hasher: PassDeliveryHasher,
-    /// The frame header bytes. Absorbed into [`Self::hasher`] at
-    /// [`Self::start`], and retained so the sender writes the bytes it hashed.
-    frame_bytes: Vec<u8>,
-    /// [`ServedFrameHeader::framed_len`]: header, payload, and padding.
-    framed_len: u64,
-    /// Bytes absorbed so far, including the frame header.
+    /// The length the body was opened at ([`ShardBody::len`]).
+    len: u64,
+    /// Bytes absorbed so far.
     absorbed: u64,
 }
 
-impl FramedDigest {
-    /// Start a digest of `frame` under `nonce`, with the frame header already
-    /// absorbed.
-    ///
-    /// `None` if the header's length does not fit the running total. A frame
-    /// this crate can build does not hit that; the `Option` is the overflow
-    /// the addition is not allowed to ignore.
-    pub(super) fn start(frame: &ServedFrameHeader, nonce: &[u8; PASS_NONCE_LEN]) -> Option<Self> {
-        let frame_bytes = frame.to_bytes();
-        let absorbed = u64::try_from(frame_bytes.len()).ok()?;
-        let mut hasher = PassDeliveryHasher::new(nonce);
-        hasher.update(&frame_bytes);
-        Some(Self {
-            hasher,
-            frame_bytes,
-            framed_len: frame.framed_len(),
-            absorbed,
-        })
+impl BodyDigest {
+    /// Start a digest of a body of `len` bytes under `nonce`.
+    pub(super) fn start(len: u64, nonce: &[u8; PASS_NONCE_LEN]) -> Self {
+        Self {
+            hasher: PassDeliveryHasher::new(nonce),
+            len,
+            absorbed: 0,
+        }
     }
 
-    /// The frame header bytes absorbed at [`Self::start`].
-    pub(super) fn frame_bytes(&self) -> &[u8] {
-        &self.frame_bytes
-    }
-
-    /// Absorb the next payload chunk.
+    /// Absorb the next chunk.
     ///
-    /// `None` when the chunk would carry the running total past the frame's
-    /// declared length, or when its length does not fit a `u64`. The digest
+    /// `None` when the chunk would carry the running total past the body's
+    /// opened length, or when its length does not fit a `u64`. The digest
     /// is left unchanged in that case, so the caller stops rather than
-    /// signing or sending a body the frame does not describe.
+    /// signing or sending bytes the head did not declare.
     fn absorb(&mut self, chunk: &[u8]) -> Option<()> {
         let len = u64::try_from(chunk.len()).ok()?;
         let absorbed = self.absorbed.checked_add(len)?;
-        if absorbed > self.framed_len {
+        if absorbed > self.len {
             return None;
         }
         self.hasher.update(chunk);
@@ -111,10 +93,10 @@ impl FramedDigest {
         Some(())
     }
 
-    /// The digest, if the absorbed bytes are exactly the frame's declared
-    /// length. A short body is `None`: it is not a prefix someone may sign.
+    /// The digest, if the absorbed bytes are exactly the opened length. A
+    /// short body is `None`: it is not a prefix someone may sign.
     pub(super) fn finish(self) -> Option<[u8; PASS_DELIVERY_DIGEST_LEN]> {
-        if self.absorbed != self.framed_len {
+        if self.absorbed != self.len {
             return None;
         }
         Some(self.hasher.finalize())
@@ -123,16 +105,16 @@ impl FramedDigest {
 
 /// What folding one read of the body into the delivery digest produced.
 pub(super) enum Folded {
-    /// Bytes inside the frame, now part of the digest: write them.
+    /// Bytes inside the declared length, now part of the digest: write them.
     Bytes(Vec<u8>),
-    /// The body ended. Whether it ended at the frame's declared length is
-    /// [`FramedDigest::finish`]'s to say.
+    /// The body ended. Whether it ended at the declared length is
+    /// [`BodyDigest::finish`]'s to say.
     End,
     /// The store failed part-way.
     StoreFault,
-    /// The store yielded a byte past the frame's declared length. Not
-    /// folded, and not to be written.
-    PastFrame,
+    /// The store yielded a byte past the declared length. Not folded, and
+    /// not to be written.
+    PastLength,
 }
 
 /// Fold one read of the body into the running digest.
@@ -142,11 +124,11 @@ pub(super) enum Folded {
 /// `BA-T3` compositions run on their own thread, so the gate counts the
 /// fold the endpoint runs and not a copy of it. A second digest pass
 /// added here moves the gate; there is nowhere else to add one.
-fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
+fn fold_chunk(running: &mut BodyDigest, chunk: Result<Option<Vec<u8>>, ProviderError>) -> Folded {
     match chunk {
         Ok(Some(bytes)) => match running.absorb(&bytes) {
             Some(()) => Folded::Bytes(bytes),
-            None => Folded::PastFrame,
+            None => Folded::PastLength,
         },
         Ok(None) => Folded::End,
         Err(_) => Folded::StoreFault,
@@ -168,8 +150,8 @@ fn fold_chunk(running: &mut FramedDigest, chunk: Result<Option<Vec<u8>>, Provide
 /// at different sizes: the gate would then be counting a different loop.
 pub(super) fn read_and_fold(
     mut body: ShardBody,
-    mut running: FramedDigest,
-) -> (ShardBody, FramedDigest, Folded) {
+    mut running: BodyDigest,
+) -> (ShardBody, BodyDigest, Folded) {
     let folded = fold_chunk(&mut running, body.next_chunk(WRITE_CHUNK_BYTES));
     (body, running, folded)
 }
@@ -180,31 +162,28 @@ mod tests {
 
     use super::*;
 
-    fn one_leaf() -> (ServedFrameHeader, Vec<u8>) {
-        let frame = ServedFrameHeader::for_segment(1).expect("one leaf is a segment");
-        let payload_len =
-            usize::try_from(frame.framed_len()).expect("length fits") - frame.encoded_len();
-        (frame, vec![0x5a; payload_len])
+    fn body() -> Vec<u8> {
+        (0..5_000u32)
+            .map(|i| u8::try_from(i % 251).expect("fits"))
+            .collect()
     }
 
     #[test]
-    fn the_digest_is_the_frame_then_the_payload_at_every_split() {
-        let (frame, payload) = one_leaf();
+    fn the_digest_is_the_body_at_every_split() {
+        let payload = body();
+        let len = u64::try_from(payload.len()).unwrap();
         let nonce = [0x03u8; PASS_NONCE_LEN];
-        let mut whole = FramedDigest::start(&frame, &nonce).expect("start");
-        assert_eq!(whole.frame_bytes(), frame.to_bytes());
-        whole.absorb(&payload).expect("payload fits the frame");
+        let mut whole = BodyDigest::start(len, &nonce);
+        whole.absorb(&payload).expect("payload fits");
         let digest = whole.finish().expect("exact length");
-        let mut framed = frame.to_bytes();
-        framed.extend_from_slice(&payload);
         assert_eq!(
             digest,
-            pass_delivery_digest(&nonce, &framed),
+            pass_delivery_digest(&nonce, &payload),
             "the fold is the one-shot digest of the bytes ahead of the signature"
         );
 
-        for split in 0..=payload.len() {
-            let mut running = FramedDigest::start(&frame, &nonce).expect("start");
+        for split in (0..=payload.len()).step_by(97) {
+            let mut running = BodyDigest::start(len, &nonce);
             running.absorb(&payload[..split]).expect("prefix fits");
             running.absorb(&payload[split..]).expect("rest fits");
             assert_eq!(running.finish(), Some(digest), "split at {split}");
@@ -213,61 +192,28 @@ mod tests {
 
     #[test]
     fn a_short_body_and_a_long_one_have_no_digest() {
-        let (frame, payload) = one_leaf();
+        let payload = body();
+        let len = u64::try_from(payload.len()).unwrap();
         let nonce = [0x03u8; PASS_NONCE_LEN];
 
-        let mut short = FramedDigest::start(&frame, &nonce).expect("start");
+        let mut short = BodyDigest::start(len, &nonce);
         short
             .absorb(&payload[..payload.len() - 1])
             .expect("prefix fits");
         assert!(short.finish().is_none(), "a short body is not signed");
 
-        let mut long = FramedDigest::start(&frame, &nonce).expect("start");
+        let mut long = BodyDigest::start(len, &nonce);
         long.absorb(&payload).expect("exact payload fits");
         assert!(
             long.absorb(&[0]).is_none(),
-            "a byte past the frame is refused before it is absorbed"
+            "a byte past the declared length is refused before it is absorbed"
         );
     }
 
     #[test]
-    fn a_later_holder_rebuilds_the_write_zero_frame_from_the_leaves() {
-        let nonce = [0x11u8; PASS_NONCE_LEN];
-        for leaves in [0usize, 1, 3] {
-            let frame = ServedFrameHeader::for_segment(leaves).expect("in range");
-            let payload_len = usize::try_from(frame.segment_bytes()).expect("length fits");
-            let payload = vec![0x5a; payload_len];
-            let rebuilt =
-                ServedFrameHeader::for_segment(payload.len() / shekyl_curve_tree::LEAF_BYTES)
-                    .expect("the leaf count is the byte length");
-            assert_eq!(
-                rebuilt, frame,
-                "write-zero padding makes the header a function of the leaves"
-            );
-            let mut framed = rebuilt.to_bytes();
-            framed.extend_from_slice(&payload);
-            let mut running = FramedDigest::start(&rebuilt, &nonce).expect("start");
-            running.absorb(&payload).expect("payload fits the frame");
-            assert_eq!(
-                running.finish(),
-                Some(pass_delivery_digest(&nonce, &framed)),
-                "{leaves} leaves: the holder recomputes the digest from the leaves and the nonce"
-            );
-        }
-    }
-
-    #[test]
-    fn an_empty_segment_digests_to_its_header_alone() {
-        let frame = ServedFrameHeader::for_segment(0).expect("empty segment");
+    fn an_empty_body_digests_to_the_nonce_alone() {
         let nonce = [0x03u8; PASS_NONCE_LEN];
-        let running = FramedDigest::start(&frame, &nonce).expect("start");
-        assert_eq!(
-            u64::try_from(running.frame_bytes().len()).expect("header length"),
-            frame.framed_len()
-        );
-        assert_eq!(
-            running.finish(),
-            Some(pass_delivery_digest(&nonce, &frame.to_bytes()))
-        );
+        let running = BodyDigest::start(0, &nonce);
+        assert_eq!(running.finish(), Some(pass_delivery_digest(&nonce, &[])));
     }
 }

@@ -38,16 +38,21 @@ the prunable witness entry is `nonce[32] ‖ anchor_height_le[8] ‖ D[32] ‖
 HybridSignature`. The challenge
 tuple and `cb_out_key` are not in the fetch signature: the fetch proves
 `P` served, not which miner asked. `SF-D8` also ruled the carrier: the
-HTTP body is the unchanged `RF-D4` frame followed by a fixed-length
-outer envelope holding the canonical `HybridSignature`, last because it
-covers a digest of everything ahead of it; response
-headers stay exactly `content-type` and `content-length`, which covers
-envelope plus frame. The 2026-08-21 status above remains the record of
-what landed then; the message and the envelope landed with `SF`. **The `RF-D4` section below is left as the CLOSED record
-of the inner frame; where it calls that frame the whole body ("no
-envelope", `served response :=`) it is superseded in scope by `SF-D8`
-and is rewritten by the implementation PR that lands the envelope.**
-Each superseded line carries its own marker.
+HTTP body is the shard body followed by a fixed-length outer envelope
+holding the canonical `HybridSignature`, last because it covers a digest
+of everything ahead of it; response headers stay exactly `content-type`
+and `content-length`, which covers envelope plus body. *(Records-was: on
+2026-09-13 the body ahead of the envelope was "the unchanged `RF-D4`
+frame"; the `SF-D8` amendment of 2026-10-08 replaced it with the
+`SHT-Q2` tx-range body framed per transaction in
+`shekyl_wire::shard_frame`, and the serve loop now writes the provider's
+bytes unframed — `ServedFrameHeader` is deleted.)* The 2026-08-21 status
+above remains the record of what landed then; the message and the
+envelope landed with `SF`. **The `RF-D4` section below is left as the
+CLOSED record of the retired inner frame; where it calls that frame the
+whole body ("no envelope", `served response :=`) it is superseded in
+scope by `SF-D8`, and where it describes the frame itself it is
+RETIRED 2026-10-08.** Each superseded line carries its own marker.
 
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
@@ -1268,7 +1273,7 @@ subject. The byte-parity arm is owed regardless of how the rest of `A` lands.
 
 ---
 
-### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`
+### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`; FRAME RETIRED 2026-10-08 (`SF-D8` amendment, `SHT-Q2`)
 
 **At round open (2026-08-18) there was no format.** `shekyl-p-serve` streamed
 a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
@@ -1398,7 +1403,11 @@ oversized declaration *before* draining it — the check would arrive after the
 bytes did. The self-delimiting frame is what makes the bound a pre-allocation
 test rather than a post-hoc complaint.
 
-**Implemented 2026-08-20 — `shekyl_curve_tree::served_frame::ServedFrameHeader`.**
+**Implemented 2026-08-20 — `shekyl_curve_tree::served_frame::ServedFrameHeader`.
+RETIRED 2026-10-08: the module is deleted; the body ahead of the envelope
+is `shekyl_wire::shard_frame` per `SF-D8` as amended, and `shekyl-p-serve`
+writes the provider's bytes without a frame of its own. What follows is
+the record of the leaf-segment frame as it shipped.**
 
 **Where it lives, and why not with the server.** The encoder is in the serving
 path; the decoder will be in a fetcher that does not exist yet. Putting the codec

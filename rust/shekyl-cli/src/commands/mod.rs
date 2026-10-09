@@ -404,10 +404,14 @@ pub fn run(
                 chain::cmd_shard_show(daemon_client, shard_id),
                 chain::show_shard,
             ),
-            ResolvedCommand::ShardFetch { shard_id } => present(
+            ResolvedCommand::ShardFetch {
+                shard_id,
+                png,
+                size,
+            } => present(
                 &presentation,
                 "shard fetch",
-                chain::cmd_shard_fetch(daemon_client, shard_id),
+                chain::cmd_shard_fetch(&rpc, shard_id, png.as_deref(), size),
                 chain::show_fetch,
             ),
 

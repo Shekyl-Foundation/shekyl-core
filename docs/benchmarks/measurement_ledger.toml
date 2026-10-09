@@ -269,6 +269,8 @@ cleared = [
   { through = "9cb164d28e", reason = "SH-2 (PR #990): the six serve counters become one clonable ServeCounterReader the endpoint owns; the accept loop increments the same atomics and the getters delegate. The verdict is over what an abandoned request costs the serve path, and no read, hash, sign or socket operation on that path is added, removed or reordered; the counter stores it already made are the same stores." },
   { through = "8238319ac3", reason = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. The floor verdict is what an abandoned request costs, and no read, hash, sign or socket operation on that path is added, removed or reordered. The two extra arc clones are not part of the verdict's arms." },
   { through = "112a9a62bf", reason = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only; no executable code changed, and the verdict's arms are untouched." },
+  { through = "24f769906", reason = "SF-D8 amendment (PR #1015): the body streams unframed. What leaves the serve path is the RF-D4 frame header — one ~20-byte hasher update and one small write per response; the body length now comes from the provider. The verdict is what an abandoned request costs over one that serves nothing, and on that path no read, hash pass over the body, signature or socket operation is added, removed or reordered. The verdict is bound to W, which this commit does not change." },
+  { through = "11a2d409f", reason = "Doc comment in provider.rs on what a leaf-segment body is refused as. No executable code changed; the verdict's arms are untouched." },
 ]
 
 [[path_set]]
@@ -302,6 +304,14 @@ stale_through = [
   { through = "9cb164d28e", note = "SH-2 (PR #990): the six serve counters in serve.rs move from loose Arc<AtomicU64> locals into one clonable ServeCounterReader the endpoint owns and hands out; the accept loop increments the same atomics it did, and the endpoint's count getters delegate to the reader. Reads of the counters happen on the serving task's health probe, off this path. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path; not measured." },
   { through = "8238319ac3", note = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. Increments stay a relaxed fetch_add of one on the same six atomics at the same events. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path. Not measured." },
   { through = "112a9a62bf", note = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only. No read, hash, sign or socket operation changed. Not measured." },
+  { through = "24f769906", note = "SF-D8 amendment (PR #1015): the serve path streams the body unframed. The RF-D4 frame header is no longer built, written or absorbed into the delivery digest; the body length comes from the provider and the digest is over the body alone. One ~20-byte hasher update and one small write leave the serve path; reads, the hash pass over the body, the signature and the socket I/O are the same. The client stops parsing a frame header before the body. Not measured." },
+  { through = "3ccb5a225", note = "Fetch Sub-PR 2 client (PR #1015): the body is the tx-range frame, verified as it streams. Per transaction the client hashes the two segments it reads (txid_parts against the retained txs_prunable_hash / txs_pqc_auth_hash rows) and folds them into the view hash, with one transaction resident; this replaces buffering the whole body and recomputing the leaf-segment root over it. Client CPU is a hash pass over the same bytes in a different shape (two per-tx digests and one fold, in place of one Merkle recompute); peak memory drops from the whole body to one transaction plus a read chunk. The serve path is unchanged. Not measured (BA-T6 is the client's floor run)." },
+  { through = "11a2d409f", note = "Doc comments only, in shekyl-p-fetch client.rs and error.rs and shekyl-p-serve provider.rs, describing the frame grammar and what a leaf-segment body is refused as. No executable serve or fetch code changed; no cost moved." },
+  { through = "a17110c27", note = "Merge of dev into PR #1015: the client's dial carries the read's SOCKS credentials (6068ba31e9, heard above) with this branch's typed shard id; a doc comment on MAX_INFLIGHT records that the circuit-per-read cost is unmeasured. The resolution adds no read, hash, sign or socket operation beyond what each side already had." },
+  { through = "6f4988ca5e", note = "The fetch client's pre-read length check takes pqc_auth_count and refuses a count that is not zero exactly when pqc_auths_len is zero, before the body is read. A canonical frame is read, hashed and checked as before. The serve path is untouched. Not measured." },
+  { through = "96f49b7c99", note = "The streaming reader's one varint call site maps VarintFault into FrameError::Varint. Same bytes, same refusal, same order. Not measured." },
+  { through = "a63cf0c8d6", note = "The streaming body reader moves from the fetch client into its own module. Same reads, same hashes, same order. Not measured." },
+  { through = "1b309eae79", note = "A stall's io::Error is shared through Arc so one flight's refusal can be cloned onto every waiter. No read, hash, sign or socket operation changes. Not measured." },
 ]
 
 [[constant]]
@@ -646,6 +656,7 @@ stale_through = [
   { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
   { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
   { through = "7c30a39804", note = "PR #996: the layer-0 comments in frontier.rs, assemble.rs and types.rs, and CT6_PROVING_STATE.md, now say the path API takes points and the circuit tape hashes scalars. No executable code in these paths changed, so no cost moved. Not measured." },
+  { through = "24f769906", note = "SF-D8 amendment (PR #1015): served_frame.rs is deleted from shekyl-curve-tree and the serving read in redb_backend.rs no longer derives a frame header for the segment it serves. That is the serving side of the store; the spend path — tree build, path assembly, the prover — is untouched. Not measured." },
 ]
 
 [[constant]]
@@ -690,6 +701,11 @@ path_set = "wss-open"
 [[path_set]]
 id = "shard-render"
 spec = ["rust/shekyl-shard-visual/src"]
+cleared = [
+  { through = "fc2d5eeba", reason = "SV-D (PR #1015): a doc comment on ShardAggregate::shard_hash names the view hash. No code changed on the render path." },
+  { through = "ca38266f8", reason = "SV-D (PR #1015): a new binary, shekyl-shard-render, behind the `cli` feature, which calls the library's render_candidate_png on a JSON view from stdin; the crate doc is rewritten. The library's render path is untouched, and the binary is not on the shipped graph of any wallet." },
+  { through = "5f857fadf", reason = "Doc comments in candidate.rs and params.rs, re-keyed off the Stage 5 framing. No code changed." },
+]
 
 [[constant]]
 name = "shard_render_floor_targets"
@@ -780,7 +796,9 @@ name = "serve_prehead_work_floor"
 defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
 needle = "| Work before the first byte | under 1 ms | 0.19 ms p50 time to first byte at one in flight, daemon idle, a bound from above on the whole pre-head step (`BA-T5` session 2, 2026-10-09); 1.85 ms p50 beside a syncing daemon | **held** |"
 measured_by = ["BA-T3", "BA-T5"]
-status = "current"
+status = "stale"
+stale_since = "24f769906"
+carrier = "BA-T5 (BA-T3). The 2026-10-09 capture prices time to first byte on the framed serve. Streaming the body unframed (24f769906) drops the RF-D4 frame header before the first byte, so that reading no longer prices this tree."
 capture = "docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"
 capture_rev = "301ed05b73"
 rev_source = "capture header, the tree line"

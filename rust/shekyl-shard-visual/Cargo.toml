@@ -7,11 +7,23 @@ license.workspace = true
 repository.workspace = true
 description = "Deterministic shard identity visuals (candidate.v1 compositor)"
 
+[features]
+# `shekyl-shard-render`: the stdin-JSON → stdout-PNG renderer a web host
+# deploys beside its site (SHARD_VIEW_FETCH.md SV-D, the web viewer). Off
+# by default so library consumers (the wallets) do not pull serde_json.
+cli = ["dep:serde_json"]
+
+[[bin]]
+name = "shekyl-shard-render"
+path = "src/bin/render.rs"
+required-features = ["cli"]
+
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 png = "0.18"
 imageproc = "0.25"
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
 sha3 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
