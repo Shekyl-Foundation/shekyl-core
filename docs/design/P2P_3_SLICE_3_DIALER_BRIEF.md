@@ -566,12 +566,19 @@ passed.* This table cites that file so the two cannot drift. The one
 exception is a line in this brief, new in the PR, of exactly this
 form, naming the row's full anchor or the file path:
 `**UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>`.
-Nothing looser is read. At the cutover the same list is the deletion
-gate: every body and calls row's function is absent, and the cutover
-PR removes those rows. A shrink row is retired only when its file is
-deleted; `net_node.inl` outlives the dial path, since slice 4 and RD
-still edit it, and `levin_notify.cpp` is RD's. *Records-was: the
-cutover PR empties the file.*
+Nothing looser is read. **Scope (Rick, 2026-10-09):** a line naming a
+function covers that function's row and nothing else. Editing a frozen
+function inside one of these files takes two lines, one naming the
+anchor and one naming the file, because the two rules guard two
+different things. At the cutover the same list is the deletion gate:
+every body and calls row's function is absent, and the cutover PR
+removes those rows. A shrink row is retired only when its file is
+deleted, and deleted means gone: `git diff --name-status -M` over the
+tree reports no rename or copy from the path, and no file under
+`src/` at head holds half or more of the file's distinct code lines.
+`net_node.inl` outlives the dial path, since slice 4 and RD still edit
+it, and `levin_notify.cpp` is RD's. *Records-was: the cutover PR
+empties the file.*
 
 `do_handshake_with_peer` is the outbound invoke. Its callers are the
 two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`

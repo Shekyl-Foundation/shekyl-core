@@ -40,6 +40,13 @@
 # skipped, because a gate that finds nothing to compare reports the same
 # green as a gate that compared everything.
 #
+# A shrink row passes as deleted only when its file is gone, not renamed:
+# `git diff --name-status -M base head` over the tree (a pathspec naming the
+# old path alone would hide the rename and report a plain D) must show no
+# rename or copy from the path, and no file under src/ at head may hold half
+# or more of the base file's distinct code lines. A split that leaves one
+# half somewhere is a move, not a deletion.
+#
 # THE ONE EXCEPTION is a line in the dialer brief of exactly this form:
 #
 #   **UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>
@@ -47,7 +54,10 @@
 # It must be new in the PR (absent at the base revision) and name the full
 # anchor from the list, or the shrink row's file path. A matching line lets
 # that row change, add lines, or be removed while its subject is still
-# present. Nothing looser is read.
+# present. Nothing looser is read. Scope (Rick, 2026-10-09): a line naming a
+# function covers that function's row and nothing else. Editing a frozen
+# function inside a shrink file takes two lines, one naming the anchor and
+# one naming the file, because the two rules guard two different things.
 #
 # The list is read at the base revision, so a PR that edits the list is
 # still judged against the list it started from. The cutover removes the
@@ -267,6 +277,19 @@ def normalised_code(text: str) -> str:
     return "\n".join(" ".join(line.split()) for line in strip_comments(text).splitlines()) + "\n"
 
 
+STRUCTURE_ONLY = re.compile(r"^[{}();,]*$")
+
+
+def content_lines(text: str) -> set[str]:
+    """The distinct normalised code lines of `text` that say something: a
+    line of braces and punctuation is structure every file shares."""
+    return {
+        line
+        for line in normalised_code(text).splitlines()
+        if line and not STRUCTURE_ONLY.match(line)
+    }
+
+
 def added_code_lines(repo: Path, base_text: str, head_text: str) -> list[str]:
     """Code lines present at head and not at base, as git's line diff sees
     them over the normalised texts. A pure deletion adds none; an in-place
@@ -383,12 +406,15 @@ class Head:
     """What the head revision holds: the frozen tree for the name search, and
     any other file a row names, read on demand."""
 
-    def __init__(self, repo: Path, sha: str, texts: dict[str, str]):
+    def __init__(self, repo: Path, base_sha: str, sha: str, texts: dict[str, str]):
         self.repo = repo
+        self.base_sha = base_sha
         self.sha = sha
         self.texts = texts
         self._stripped = {path: strip_comments_and_literals(text) for path, text in texts.items()}
         self._extra: dict[str, str | None] = {}
+        self._renames: dict[str, list[str]] | None = None
+        self._src: dict[str, str] | None = None
 
     def text(self, path: str) -> str | None:
         if path in self.texts:
@@ -396,6 +422,28 @@ class Head:
         if path not in self._extra:
             self._extra[path] = git_show(self.repo, self.sha, path)
         return self._extra[path]
+
+    def renames_from(self, path: str) -> list[str]:
+        """Destinations git reports as a rename or copy of `path`, read from
+        `git diff --name-status -M base head` over the whole tree. A pathspec
+        naming only `path` would report a plain deletion."""
+        if self._renames is None:
+            done = git(self.repo, "diff", "--name-status", "-M", "-C", self.base_sha, self.sha)
+            if done.returncode != 0:
+                raise GateError(f"git diff --name-status failed: {done.stderr.strip()}")
+            renames: dict[str, list[str]] = {}
+            for line in done.stdout.splitlines():
+                fields = line.split("\t")
+                if len(fields) == 3 and fields[0][:1] in ("R", "C"):
+                    renames.setdefault(fields[1], []).append(f"{fields[0]} {fields[2]}")
+            self._renames = renames
+        return self._renames.get(path, [])
+
+    def src_texts(self) -> dict[str, str]:
+        """Every file under src/ at head, for the survival check."""
+        if self._src is None:
+            self._src = tree_texts(self.repo, self.sha, "src")
+        return self._src
 
     def names(self, name: str) -> list[str]:
         """Files where `name` is a whole identifier outside comments and
@@ -510,13 +558,41 @@ def callee_gone(row: Row, head: Head, what: str) -> Verdict:
     return Verdict(True, f"PASS  {row.describe()}: {what}")
 
 
+SURVIVAL_SHARE = 0.5
+
+
+def file_gone(repo: Path, head: Head, row: Row, base_text: str, what: str) -> Verdict:
+    """The shrink row's file is absent at head. Was it deleted, or moved?"""
+    moved = head.renames_from(row.path)
+    if moved:
+        return Verdict(
+            False,
+            f"FAIL  {row.describe()}: renamed, not deleted ({', '.join(moved)}); "
+            f"the file is gone only when no path carries it",
+        )
+    base_lines = content_lines(base_text)
+    if base_lines:
+        carriers = []
+        for path, text in head.src_texts().items():
+            shared = len(base_lines & content_lines(text))
+            if shared / len(base_lines) >= SURVIVAL_SHARE:
+                carriers.append(f"{path} ({shared} of {len(base_lines)} code lines)")
+        if carriers:
+            return Verdict(
+                False,
+                f"FAIL  {row.describe()}: the file is gone but its code survives under src/: "
+                f"{'; '.join(carriers)}: renamed or split, not deleted",
+            )
+    return Verdict(True, f"PASS  {row.describe()}: {what}")
+
+
 def judge_shrink(
-    repo: Path, row: Row, base_text: str | None, head_text: str | None, unfrozen: set[str]
+    repo: Path, row: Row, base_text: str | None, head_text: str | None, head: Head, unfrozen: set[str]
 ) -> Verdict:
     if base_text is None:
         return Verdict(False, f"FAIL  {row.describe()}: absent at base (rule 47)")
     if head_text is None:
-        return Verdict(True, f"PASS  {row.describe()}: file deleted")
+        return file_gone(repo, head, row, base_text, "file deleted")
     before = code_line_count(base_text)
     after = code_line_count(head_text)
     added = added_code_lines(repo, base_text, head_text)
@@ -544,7 +620,9 @@ def judge_removed(row: Row, base_text: str | None, head: Head, unfrozen: set[str
     """A row present at base and absent at head."""
     if row.kind == "shrink":
         if head.text(row.path) is None:
-            return Verdict(True, f"PASS  {row.describe()}: row retired, file deleted")
+            if base_text is None:
+                return Verdict(False, f"FAIL  {row.describe()}: absent at base (rule 47)")
+            return file_gone(head.repo, head, row, base_text, "row retired, file deleted")
         if row.subject in unfrozen:
             return Verdict(True, f"PASS  {row.describe()}: row retired under an UNFREEZE line naming the file")
         return Verdict(
@@ -640,7 +718,7 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
     for note in notes:
         print(note)
 
-    head_tree = Head(repo, head_sha, tree_texts(repo, head_sha, FROZEN_TREE))
+    head_tree = Head(repo, base_sha, head_sha, tree_texts(repo, head_sha, FROZEN_TREE))
     base_texts = {row.path: git_show(repo, base_sha, row.path) for row in judged + added + removed}
 
     verdicts: list[Verdict] = []
@@ -651,7 +729,9 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
             verdicts.append(judge_calls(row, base_texts[row.path], head_tree, unfrozen))
         else:
             verdicts.append(
-                judge_shrink(repo, row, base_texts[row.path], head_tree.text(row.path), unfrozen)
+                judge_shrink(
+                    repo, row, base_texts[row.path], head_tree.text(row.path), head_tree, unfrozen
+                )
             )
     for row in removed:
         verdicts.append(judge_removed(row, base_texts[row.path], head_tree, unfrozen))

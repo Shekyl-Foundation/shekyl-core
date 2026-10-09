@@ -87,7 +87,22 @@ NOTIFY_TEXT = """void notify::flush()
   // the relay timing
   schedule.flush();
 }
+void notify::stem(const tx& t)
+{
+  const auto plan = relay.plan(t);
+  write(plan.target, t.bytes);
+}
+void notify::fluff(const tx& t)
+{
+  for (auto& peer : peers) write(peer, t.bytes);
+  pool.set_relayed(t.id);
+}
 """
+NOTIFY_FLUSH = NOTIFY_TEXT[: NOTIFY_TEXT.index("void notify::stem")]
+NOTIFY_REST = NOTIFY_TEXT[NOTIFY_TEXT.index("void notify::stem") :]
+MOVED = "src/cryptonote_protocol/relay_notify.cpp"
+MOVED_TOO = "src/cryptonote_protocol/relay_fluff.cpp"
+PADDING = "".join(f"void notify::pad_{i}() {{ counters[{i}] += {i} * 7; }}\n" for i in range(40))
 
 SHRINK_ROWS = f"shrink\t{INL}\nshrink\t{HDR}\nshrink\t{NOTIFY}\n"
 FUNCTION_ROWS = (
@@ -395,6 +410,33 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         {INL: INL_TEXT + "  int extra_code_line;\n", BRIEF: BRIEF_TEXT + "\n" + UNFREEZE_INL},
         0,
         "under an UNFREEZE line naming the file",
+    ),
+    (
+        "a real deletion of a shrink file passes",
+        {NOTIFY: None},
+        0,
+        "levin_notify.cpp: shrink-only: file deleted",
+    ),
+    (
+        "a plain rename of a shrink file fails: renamed, not deleted",
+        {NOTIFY: None, MOVED: NOTIFY_TEXT},
+        1,
+        "renamed, not deleted (R100 src/cryptonote_protocol/relay_notify.cpp)",
+    ),
+    (
+        "a rename with edits fails: renamed, not deleted",
+        {NOTIFY: None, MOVED: NOTIFY_TEXT.replace("schedule.flush();", "schedule.flush_now();")},
+        1,
+        "renamed, not deleted",
+    ),
+    (
+        "a split into two files fails: the code survives under src/",
+        # The larger half is padded with new code, so git's byte similarity
+        # stays under its rename threshold and this is the survival check's
+        # own verdict, not git's.
+        {NOTIFY: None, MOVED: NOTIFY_FLUSH, MOVED_TOO: NOTIFY_REST + PADDING},
+        1,
+        "renamed or split, not deleted",
     ),
     (
         "the cutover shape passes: every function deleted, the shrink rows kept",

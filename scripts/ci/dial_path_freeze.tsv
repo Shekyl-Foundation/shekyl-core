@@ -18,9 +18,11 @@
 # The one exception is a line in the dialer brief, new in the PR, of exactly
 # this form, naming the row's full anchor or the shrink row's file path:
 #   **UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>
-# The cutover removes the body and calls rows; the gate then reports the
-# function freeze discharged. A shrink row is retired only when its file is
-# deleted: net_node.inl outlives the dial path.
+# A line naming a function covers that row and nothing else; editing a frozen
+# function inside a shrink file takes a second line naming the file. The
+# cutover removes the body and calls rows; the gate then reports the function
+# freeze discharged. A shrink row is retired only when its file is deleted,
+# not renamed or split: net_node.inl outlives the dial path.
 #
 # Columns, tab-separated:
 #   kind    body   the function from its anchor to its closing brace
