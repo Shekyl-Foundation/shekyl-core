@@ -112,13 +112,27 @@ pub fn request_archival_shard_request(
 /// - [`ShardViewRefusal::Unavailable`] → `CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`;
 /// - [`ShardViewRefusal::SkeletonAbsent`] → `CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT`;
 /// - [`ShardViewRefusal::Fault`] → the facts fault, as every native method
-///   reports one.
+///   reports one;
+/// - a view whose `shard_id` is not the one asked for →
+///   [`FactsFault::Inconsistent`]. The facts source answers for the shard it
+///   was asked about; a view of another shard is the source contradicting
+///   itself (a cache or adapter mix-up), and it is reported as this daemon's
+///   fault rather than projected as a fact about the request.
 pub async fn request_archival_shard(
     facts: &dyn ShardViewFacts,
     request: RequestArchivalShardRequest,
 ) -> Result<RequestArchivalShardResponse, RpcFault> {
-    match facts.view(ShardId::from_raw(request.shard_id)).await {
-        Ok(view) => Ok(project(&view)),
+    let asked = ShardId::from_raw(request.shard_id);
+    match facts.view(asked).await {
+        Ok(view) if view.shard_id == asked => Ok(project(&view)),
+        Ok(view) => {
+            tracing::error!(
+                asked = asked.to_raw(),
+                answered = view.shard_id.to_raw(),
+                "shard view facts answered for a different shard"
+            );
+            Err(RpcFault::Facts(FactsFault::Inconsistent))
+        }
         Err(refusal) => Err(refuse(&refusal)),
     }
 }
@@ -298,6 +312,18 @@ mod tests {
                 .unwrap_err();
             assert_eq!(code_of(&fault), code, "{refusal:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_view_of_another_shard_is_the_facts_contradicting_themselves() {
+        // The scripted source answers shard 3 to every question.
+        let facts = Scripted(Ok(view()));
+        assert_eq!(
+            request_archival_shard(&facts, RequestArchivalShardRequest { shard_id: 4 })
+                .await
+                .unwrap_err(),
+            RpcFault::Facts(FactsFault::Inconsistent)
+        );
     }
 
     #[tokio::test]
