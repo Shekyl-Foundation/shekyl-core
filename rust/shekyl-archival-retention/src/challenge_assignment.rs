@@ -104,7 +104,7 @@ pub enum AssignmentError {
     /// `λ_target = 0` schedules nothing and is a misconfiguration, not an
     /// epoch with no work. Unreachable from [`ChallengeUrn::new`] and
     /// [`assign_epoch`]: they read [`CHALLENGES_PER_PAIR_PER_EPOCH`], which
-    /// `attestation.rs` const-asserts at or above `SERVE_THRESHOLD_PASSES`.
+    /// `constants.rs` const-asserts equal to settlement's `COUNTED_DRAWS`.
     /// Reachable only through the `#[cfg(test)]` constructor, where the
     /// tests pin it.
     #[error("λ_target must be positive")]

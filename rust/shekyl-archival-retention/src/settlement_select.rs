@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Settlement's two hash constructions: which three of a pair's issued
-//! draws count, and the running digest of an epoch's issued draws.
+//! Settlement's fold and its two hash constructions: which three of a
+//! pair's issued draws count, the row they settle, and the running digest
+//! of an epoch's issued draws.
 //!
 //! Design: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 //! §9.3 (the selection) and §10 (the digest). Both are consensus: every node
@@ -30,7 +31,9 @@
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
-use shekyl_types::archival::{COUNTED_DRAWS, ISSUED_DIGEST_LEN};
+use shekyl_types::archival::{
+    IssuedDraw, SettlementRow, SettlementRowError, COUNTED_DRAWS, ISSUED_DIGEST_LEN,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 /// cSHAKE256 customization for [`select_counted`] (rule 30: one label, one
@@ -135,6 +138,43 @@ fn candidate(
     value % remaining
 }
 
+/// Settle one pair's epoch from its counted draws.
+///
+/// `draws` is the pair's issued draws **that count** for it (spec §9.3
+/// step 2: those issued while the pair held the shard), in `(h, j)` order.
+/// `Ok(None)` when there is none: such a pair has no row, and absence is
+/// not a miss. Otherwise the row: NonObservation below [`COUNTED_DRAWS`];
+/// else `passes` is the number of the three selected draws
+/// ([`select_counted`]) whose pass was admitted.
+///
+/// A pass on a draw the selection did not pick does not count, which is
+/// the point: the pair cannot know mid-epoch which three will be.
+///
+/// # Errors
+///
+/// None reachable: the fold counts at most [`COUNTED_DRAWS`] passes and
+/// only when at least that many draws were issued. The row's constructor
+/// is fallible, and its refusal is passed up and not unwrapped. The slash
+/// pass halts on it as a store-invariant fault (spec §9.5, check 3), never
+/// clamps and never skips the row.
+pub fn settle_pair(
+    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    persona: &PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+    draws: &[IssuedDraw],
+) -> Result<Option<SettlementRow>, SettlementRowError> {
+    if draws.is_empty() {
+        return Ok(None);
+    }
+    let passes = select_counted(beacon, persona, shard, epoch, draws.len()).map_or(0, |counted| {
+        counted
+            .iter()
+            .fold(0u8, |passes, &at| passes + u8::from(draws[at].passed))
+    });
+    SettlementRow::settle(passes, draws.len()).map(Some)
+}
+
 /// One issued draw's term in its epoch's digest:
 /// `cSHAKE256_32(ISSUED_INDEX_CUSTOMIZATION,
 /// persona[32] ‖ shard_le[8] ‖ epoch_le[8] ‖ h_le[8] ‖ j_le[4])`.
@@ -234,6 +274,101 @@ mod tests {
                 "at {n} issued"
             );
         }
+    }
+
+    fn draws(passed: &[bool]) -> Vec<IssuedDraw> {
+        passed
+            .iter()
+            .zip(0u64..)
+            .map(|(&passed, i)| IssuedDraw {
+                revealed_at: BlockHeight::from_raw(1_000 + i),
+                passed,
+            })
+            .collect()
+    }
+
+    fn settle(passed: &[bool]) -> Option<SettlementRow> {
+        settle_pair(
+            &[0x33; 32],
+            &PCanonicalId::from_bytes([0x44; 32]),
+            ShardId::from_raw(7),
+            SettlementEpoch::from_raw(5),
+            &draws(passed),
+        )
+        .expect("the fold cannot overcount")
+    }
+
+    #[test]
+    fn a_pair_with_no_counted_draw_has_no_row() {
+        assert_eq!(settle(&[]), None);
+    }
+
+    #[test]
+    fn fewer_than_three_counted_draws_is_not_observed_whatever_passed() {
+        use shekyl_types::archival::SettlementOutcome::NonObservation;
+        for passed in [&[false][..], &[true], &[false, false], &[true, true]] {
+            let row = settle(passed).expect("a row");
+            assert_eq!(row.outcome(), NonObservation, "{passed:?}");
+            assert_eq!(row.passes(), 0);
+            assert_eq!(usize::from(row.issued()), passed.len());
+        }
+    }
+
+    #[test]
+    fn only_passes_on_the_three_selected_draws_count() {
+        use shekyl_types::archival::SettlementOutcome::{Missed, Served};
+        // Ten draws under the specification's vector: positions 6, 3, 8.
+        let selected = [6usize, 3, 8];
+        assert_eq!(select(0x33, 0x44, 7, 10), Some(selected));
+
+        // Seven passes, none on a selected draw: Missed with none counted.
+        let mut passed = [true; 10];
+        for at in selected {
+            passed[at] = false;
+        }
+        let row = settle(&passed).expect("a row");
+        assert_eq!((row.outcome(), row.passes(), row.issued()), (Missed, 0, 10));
+
+        // One selected pass is still Missed; two is Served; three is three.
+        let mut passed = [false; 10];
+        passed[6] = true;
+        let row = settle(&passed).expect("a row");
+        assert_eq!((row.outcome(), row.passes()), (Missed, 1));
+        passed[8] = true;
+        let row = settle(&passed).expect("a row");
+        assert_eq!((row.outcome(), row.passes()), (Served, 2));
+        passed[3] = true;
+        let row = settle(&passed).expect("a row");
+        assert_eq!((row.outcome(), row.passes()), (Served, 3));
+    }
+
+    #[test]
+    fn exactly_three_draws_are_all_counted() {
+        use shekyl_types::archival::SettlementOutcome::{Missed, Served};
+        for (passed, outcome, passes) in [
+            ([false, false, false], Missed, 0),
+            ([false, true, false], Missed, 1),
+            ([true, false, true], Served, 2),
+            ([true, true, true], Served, 3),
+        ] {
+            let row = settle(&passed).expect("a row");
+            assert_eq!(
+                (row.outcome(), row.passes(), row.issued()),
+                (outcome, passes, 3)
+            );
+        }
+    }
+
+    #[test]
+    fn issued_saturates_in_the_row_and_not_in_the_selection() {
+        // 1,000 draws: the vector selects 896, 786, 146, positions the
+        // row's saturated byte could not name.
+        assert_eq!(select(0x33, 0x44, 7, 1000), Some([896, 786, 146]));
+        let mut passed = vec![false; 1000];
+        passed[896] = true;
+        passed[146] = true;
+        let row = settle(&passed).expect("a row");
+        assert_eq!((row.passes(), row.issued()), (2, 255));
     }
 
     fn hex(bytes: &[u8]) -> String {

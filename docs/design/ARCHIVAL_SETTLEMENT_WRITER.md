@@ -732,8 +732,8 @@ every pair the draw did not reach as a miss.
 
 | Subject | State | Where |
 | --- | --- | --- |
-| The fold | `settle_epoch(passes, issued)`: a count against a count, NonObservation below 2. No Rust consensus path calls it; its callers are the FFI and one test | `rust/shekyl-archival-retention/src/attestation.rs:192-203`; `rust/shekyl-ffi/src/archival_ffi/settlement.rs:60`, `:127` |
-| The row | Two types until step 2 of §14.4 deletes the first. The count fold's `SettlementRow([u8; 3])` (floor 2, refuses `issued > 255`), reached only from the FFI. And the stored row: `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused; decoding re-settles the counts and refuses an outcome they do not give | `rust/shekyl-archival-retention/src/settlement_row.rs:142-176`; `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
+| The fold | `settle_pair(beacon, P, shard, E, draws)`: takes a pair's counted draws in `(h, j)` order, selects three by the beacon (`select_counted`), and counts the passes among them. No row for no draws; NonObservation below three. Nothing calls it yet outside its tests. The count fold `settle_epoch` it replaces is deleted (`SO-D10e`) | `rust/shekyl-archival-retention/src/settlement_select.rs` |
+| The row | `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused. Decoding re-settles the counts and refuses an outcome they do not give. It is the only `SettlementRow`: the count fold's type and its FFI are deleted | `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
 | The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No writer reaches any of the three yet | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/codec/schema_version.rs` |
 | The slash fold | Decides on any pass: `passed` is this block's credits, or `pass_count(P, s, E).any()`. The window walk-back uses the same read | `rust/shekyl-chain-rules/src/archival/mod.rs:303-320`; `archival/slash.rs:154-178`, `:246-281` |
 | Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
@@ -742,7 +742,7 @@ every pair the draw did not reach as a miss.
 | A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`); nothing sets it yet. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands | `rust/shekyl-chain-store/src/schema.rs:553`; `store/archival_write.rs:183-211` |
 | The block's archival writes | `ArchivalDelta` has no settlement field. `ChainView` reads the row (A14), one epoch's issued draws in `(P, shard, h, j)` order (A15) and the epoch's digest (A16) | `archival/delta.rs:51-58`; `rust/shekyl-chain-rules/src/view.rs` (`settlement_row`, `issued_draws`, `issued_digest`); `rust/shekyl-chain-store/src/store/archival_reads.rs` |
 | Pruning | The Rust store prunes no archival table by epoch. `prune_archival_epochs_before` is C++ only | `rust/shekyl-chain-store/src/store/prune.rs:132` |
-| The C++ side | `set_archival_settlement` and `get_archival_settlement` exist with no production caller. The revert and the prune of the table are wired | `src/blockchain_db/lmdb/db_lmdb.cpp:6681-6765`, `:5866-5885`, `:6976-6988` |
+| The C++ side | No writer and no reader: `set_`/`get_archival_settlement`, the two FFI exports they called and their unit tests are deleted (`SO-D10e`). The table's handle, its revert and its prune remain and run over a table nothing writes, until `DEL-008` | `src/blockchain_db/lmdb/db_lmdb.cpp` (`delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch`); `docs/design/archival_forcing_cells.tsv` |
 
 ### 14.2 The defect this pre-flight exists for
 
@@ -799,12 +799,14 @@ live validator; the C++ daemon stays consensus, on the beacon, until
    of `D` reaches, and the prune. Each is one contiguous range, and inside
    it one pair's draws are adjacent in the `(h, j)` order the selection is
    defined over.
-2. **The list fold, and the `SO-D10e` deletions.** The selection of three
-   counted draws by beacon and the digest term are in
-   `rust/shekyl-archival-retention/src/settlement_select.rs`, with the
-   specification's vectors. The outcome over the three, the row's floor of
-   3, and the deletion of the count fold, its FFI, the C++ writer and
-   their tests land together.
+2. **The list fold, and the `SO-D10e` deletions. LANDED** (§14.1 rows
+   *The fold*, *The row*, *The C++ side*). The selection of three counted
+   draws by beacon, the fold over them (`settle_pair`) and the digest term
+   are in `rust/shekyl-archival-retention/src/settlement_select.rs`, with
+   the specification's vectors. The count fold, its row type, its two FFI
+   exports, the C++ writer and reader and their unit tests are deleted.
+   The urn's per-pair target is asserted equal to the draws settlement
+   counts while both exist.
 3. **The slash fold reads the row.** The writer in the slash pass, the
    delta field, the store write in phase 9 ahead of the slash writes
    (`SO-D7`: write the row, then fold it), the walk-back of `SO-D10b`, the

@@ -454,7 +454,7 @@ observations belong on the record:
 - **it has no production caller.** The symbol resolves only to the
   interface declaration, the `testdb` stub, and this definition — the same
   unwired shape the census recorded for `set_archival_settlement`
-  (CEN-L8). An unwired writer's atomicity is a claim about code nobody
+  (CEN-L8; that writer was since deleted, `SO-D10e`). An unwired writer's atomicity is a claim about code nobody
   runs, which is worth knowing before the Rust store reproduces it.
 
 **`drop_hard_fork_info`** (`:4675`): intended to delete **both** hard-fork
@@ -505,6 +505,9 @@ slash pass rather than at epoch close). An unwired writer's atomicity is
 a claim about code nobody runs, exactly as with
 `correct_block_cumulative_difficulties` above; both are recorded so the
 Rust store ports a *decision* rather than a dormant path.
+**UPDATE 2026-10-08 (`SO-D10e`):** the decision is taken — `set_archival_settlement`
+is deleted, not ported. The C++ store has no settlement writer; the writer is
+the Rust slash pass's (`SO-D10`, `design/ARCHIVAL_SETTLEMENT_WRITER.md`).
 
 **`Blockchain::regtest_inject_archival_serve_credit`** (`blockchain.cpp:5238`):
 a live RPC-reachable writer — `on_inject_archival_serve_credit`
@@ -1107,7 +1110,7 @@ every row of the table that follows:
 | `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 | excluded | append-mostly |
 | `archival_r_market` | epoch-close put; `delete_archival_r_market_for_epoch` — **pop-side** revert (`:8528`); `delete_archival_r_market_before_epoch` — retention prune | §2/§3/§5a | excluded | small |
 | `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune); FAKECHAIN-fenced RPC injector `regtest_inject_archival_serve_credit` (§5c) | §2/§3/§5a/§5c | excluded | small |
-| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c | excluded | small |
+| `archival_settlement` | no writer — `set_archival_settlement` was deleted (`SO-D10e`); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c | excluded | small |
 | `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put (§5c) | §2/§3/§5c | excluded | set-shaped |
 | `archival_sigma_work` | epoch-close put; `delete_archival_sigma_work_for_epoch` — **pop-side** revert (`:8529`); `delete_archival_sigma_work_before_epoch` — retention prune | §2/§3/§5a | excluded | small |
 | `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 | excluded | set-shaped |
@@ -1284,7 +1287,8 @@ is the whole justification, and it is a domain claim, not a safety claim.
   pre-images held by `undo_log`; a cache the fold recomputes — E4 §3.4),
   so there is no state to compare and the exclusion is recorded in the
   snapshot's own `Disposition::Excluded` arm, not silently; **one held** —
-  `archival_settlement`, no writer on either side until SO-D8. The clause
+  `archival_settlement`, no writer on either side: the C++ one is deleted
+  (`SO-D10e`) and the Rust one (`SO-D10`) is not wired yet. The clause
   that the instrument *watch LMDB run those paths* is what the `0x04`
   record is: the C++'s own reading, committed as data in every captured
   trace (E4 commit 7 re-captures the six). The settlement paragraphs below
@@ -1296,7 +1300,9 @@ is the whole justification, and it is a domain claim, not a safety claim.
   rather than quietly reverted, because it was published.
 
   **What the settlement KAT does and does not establish.**
-  [`tests/unit_tests/archival_settlement_table.cpp`](../tests/unit_tests/archival_settlement_table.cpp)
+  `tests/unit_tests/archival_settlement_table.cpp` (deleted under `SO-D10e`,
+  with `set_archival_settlement`; this paragraph and the next describe it as
+  it stood)
   drives its **revert** half through the production hook —
   `revert_archival_slashes_at_height`, which reaches
   `delete_archival_settlement_for_epoch` — after a real

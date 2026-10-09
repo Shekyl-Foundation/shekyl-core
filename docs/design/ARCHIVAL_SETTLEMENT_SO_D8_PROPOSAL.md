@@ -779,7 +779,8 @@ by exact-get, each `h` tied to a draw by the membership gate,
 arithmetic. All three layers guard **Q3** — whether the drawable-set
 reconstruction is stable between admission at `h_incl` and settlement at
 the slash deadline, hundreds of blocks later. That rationale is written
-at the site (`SettleError`, this section, the writer caller).
+at the site (this section, the writer caller; `SettleError`, which also
+carried it, was deleted under `SO-D10e`).
 
 ### 6.1 Which direction costs a bond, and which layer sees it
 
@@ -834,9 +835,10 @@ digest and the list would agree. A wrong `D` is the way that happens, and
    wire field, no consensus surface, no validity coupling — the cell is
    written, never read by validation.
 3. **`passes ≤ issued`, FATAL, never clamped** — retained beneath both as
-   a cheap backstop. `settle_epoch` (`attestation.rs`) already returns
-   `SettleError::MorePassesThanIssued`; `SettlementRow::settle` refuses
-   to compose a row.
+   a cheap backstop. `SettlementRow::settle` refuses to compose a row
+   (`SettlementRowError::MorePassesThanCounted`, tighter than
+   `passes ≤ issued` and implying it); `settle_epoch` and its `SettleError`
+   were deleted under `SO-D10e`.
 
 ### 6.3 Amendments of 2026-09-16 (examination against `dev@5fde3b1ce`)
 
@@ -888,9 +890,9 @@ pass runs inside the connect batch (`connect.rs:31,:417`, `[E4 hook]
 accrual row, slash, epoch close`). A poisoned batch means **the block at
 the slash height is not written on this node — because the writer
 halted, not because the block is invalid.** Other nodes connect it. The
-old `SettleError` text — "must reject (the block, upstream)" — was
-written when the writer ran inside `add_block`; there is no verdict to
-issue here, and the records were admitted and connected long ago.
+old `SettleError` text (deleted with the type, `SO-D10e`) — "must reject
+(the block, upstream)" — was written when the writer ran inside
+`add_block`; there is no verdict to issue here, and the records were admitted and connected long ago.
 
 **Forbidden explicitly: clamping, and skipping.** Skip writes no row;
 absent reads as NonObservation (`SO-D5`'s inversion), which is the most
@@ -956,8 +958,8 @@ miss; what issues nothing is an absent reveal.
 
 ### 6.7 Fixture, and what is carried elsewhere
 
-**Fixture.** Not a unit test of `settle_epoch` — that returns the error
-trivially and proves nothing. Two cases, each shown refusing through the
+**Fixture.** Not a unit test of `SettlementRow::settle` — that returns the
+error trivially and proves nothing. Two cases, each shown refusing through the
 Fault path: an index perturbed after admission (one pair's list with its
 length left at three or more, so that only the selection moves), and a
 `D` **re-walked from divergent journals**. The second is also the only end-to-end test that Q3's
@@ -1895,7 +1897,10 @@ gates do **not** all wait on the second:
    return code.
 2. **S-ARCH (DRS-E4) has ported the settlement write path** — today's
    `set_archival_settlement` four-tuple is still LMDB-only production
-   (known-unwired, `DAEMON_REDB_STORE.md` §3.5). Membership and per-draw dedup are the two gates
+   (known-unwired, `DAEMON_REDB_STORE.md` §3.5). **UPDATE 2026-10-08 (`SO-D10e`):**
+   the C++ writer and reader are deleted, not ported; the Rust store's
+   table and `ChainView::settlement_row` exist, and the writer is
+   `ARCHIVAL_SETTLEMENT_WRITER.md` §14's (`SO-D10`). Membership and per-draw dedup are the two gates
    that wait here, with the writer call site. S-ARCH remains priority 7
    of 9 and gated on the P0b journal audit — **UPDATE 2026-09-23: that gate
    lifted 2026-09-05 (P0b RECONCILED) and was re-read by S-ARCH's Round-0

@@ -445,9 +445,9 @@ that are per-pair-epoch by design (`archival_slash_applied`,
 Three-valued settlement verdict per `(P_id, shard_id, settlement_epoch)`
 (`SO-D1`/`SO-D2`). **One row per pair with `issued >= 1`** — a pair the urn
 never reached is recorded by its ABSENCE, which is what makes *absent ⇒ never
-issued* a theorem about the writer rather than an inference. `issued = 0` is
-refused at the boundary (`SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO`), on both
-the write and the read.
+issued* a theorem about the writer rather than an inference. `issued = 0` has
+no row: `SettlementRow::settle` refuses it (`SettlementRowError::NothingIssued`),
+and `SettlementRow::from_bytes` refuses it on the read.
 
 | Property | Value |
 |---|---|
@@ -455,20 +455,23 @@ the write and the read.
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
 | Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
 | Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
-| Writers | `set_archival_settlement` — **not wired to production yet** (`SO-D8`); when it lands it runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event |
-| Readers | `get_archival_settlement` |
+| Writers | **None in this store.** `set_archival_settlement` was deleted (`SO-D10e`); settlement is the Rust validator's (`SO-D10`, `ARCHIVAL_SETTLEMENT_WRITER.md` §14), whose writer runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event, and is not wired yet |
+| Readers | **None in this store.** `get_archival_settlement` was deleted (`SO-D10e`); the Rust store's read is `ChainView::settlement_row` |
 | Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
 | Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
 | Encoder | key `shekyl::db::ArchivalPairEpochKey`; **value encoded in Rust only** |
 | Introduced | HF1 (Shekyl genesis) |
 
-**C++ never composes the value.** Rust folds `(passes, issued)` and emits the
-three bytes (`shekyl_archival_settlement_row`), so a row whose outcome
-contradicts its counts is not a state this side can express. The FFI writes
-nothing on any refusal, so a caller that ignored the return code still cannot
-store a fabricated settlement. The 3-byte length is a fixed-size FFI contract
-agreed at compile time on both sides (`SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES`,
-rule 40).
+**C++ never composes the value, and no longer writes or reads it.** The row
+FFI and its length macro were deleted with the C++ writer and reader
+(`SO-D10e`); the revert and the prune run over a table nothing writes, until
+`DEL-008`. The row is `shekyl_types::archival::SettlementRow`
+(`rust/shekyl-types/src/archival/settlement.rs`), and `SettlementRow::settle`
+is the only way to produce its three bytes, so a row whose outcome contradicts
+its counts is not a state that can be expressed. `passes` is counted among
+three draws selected by a beacon
+(`shekyl_archival_retention::settlement_select::settle_pair`): NonObservation
+below 3 issued, Served at 2 passes, `issued` saturating at 255.
 
 **Keyed by `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`.** `SO-D2`
 ruled the two byte-identical so one key could probe both tables; `PC-D4` then

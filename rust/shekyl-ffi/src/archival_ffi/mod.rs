@@ -34,7 +34,6 @@ mod emission;
 mod epoch_close;
 mod schedule;
 mod serve_credit;
-mod settlement;
 mod shard_coverage;
 
 pub use attestation::{ShekylArchivalAttestationVerifyCtx, ShekylArchivalPidPubkey};
@@ -60,7 +59,6 @@ pub use epoch_close::*;
 pub use schedule::*;
 #[allow(unused_imports)]
 pub use serve_credit::*;
-pub use settlement::*;
 pub use shard_coverage::*;
 
 #[cfg(test)]

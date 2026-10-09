@@ -27,10 +27,9 @@ replacement KAT that forces apply/revert to run)"*, because — in the same
 section's words — **"a backend can omit all apply/revert hooks and still pass
 core digests."** `LMDB_WRITE_ATOMICITY_AUDIT.md` records that
 *"the replacement KAT that rule requires does not exist yet."* **That still
-holds for all sixteen families**, and §3.5 says precisely why it holds for
-settlement even though a KAT exists: the KAT forces the **revert** through a
-production hook but only ever seeds the **apply** side through the writer,
-which is not the apply path.
+holds for all sixteen families**, and for settlement it holds outright: the
+C++ writer and the unit KAT that reached its revert were deleted (`SO-D10e`),
+so no test forces either half (§3.4, §3.5).
 
 **The diff does not discharge that bar; it consumes it.** Empty-vs-empty
 passes a digest comparison. The corpus is the half that makes the comparison
@@ -93,19 +92,23 @@ over a table nothing writes. They separate only by what would unblock them:
 
 | Table | Apply excluded because | Blocker |
 | --- | --- | --- |
-| `archival_settlement` (§3.1–3.2) | `set_archival_settlement` has no production caller | **SO-D8** |
+| `archival_settlement` (§3.1–3.2) | no writer in this store — `set_archival_settlement` was deleted (`SO-D10e`) | **none in this store**; settlement is the Rust validator's (`SO-D10`), and the table goes with `DEL-008` |
 | `archival_attestation_witness` (§4.1) | no emitter exists; the supplement is never populated locally | **Phase 2/3 template writer** |
 | `archival_alt_attestation_witness` (§4.1) | same emitter gap, alt-chain side | **Phase 2/3 template writer** |
 
-Two blockers, so they discharge separately rather than together. The witness
+Two categories, so they close separately rather than together. The witness
 pair was found by answering a question this round had first filed as open.
 
-### 3.1 `archival_settlement` apply — no production caller
+### 3.1 `archival_settlement` apply — no writer in this store
 
-`set_archival_settlement` has no production caller; `db_lmdb.cpp:7668` says so
-in terms. **No block sequence can fire its apply path**, so this is a
-pre-existing exclusion that the corpus inherits, not a corpus defect. It is
-held under the writer round's §5.1 pending SO-D8.
+The C++ store has no settlement writer at all: `set_archival_settlement` was
+deleted under `SO-D10e`, and settlement is the Rust validator's
+(`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`). **No block sequence can fire
+an apply path that does not exist**, so this is an exclusion the corpus
+inherits, not a corpus defect. The register reads
+`EXCLUDED:no-writer-in-this-store`, anchored at the table handle
+`LMDB_ARCHIVAL_SETTLEMENT` in `db_lmdb.cpp`, which stays with the revert and
+the prune until `DEL-008`.
 
 ### 3.2 `archival_settlement` revert — vacuous, which is the subtler half
 
@@ -127,15 +130,18 @@ discriminable and this exclusion would be wrong. It does not — its only write
 is `mdb_cursor_del` on `archival_settlement` itself, no counter, no
 `properties` write, no side effect.
 
-**Both halves are excluded under one named exclusion, discharged together when
-SO-D8 lands.**
+**Both halves are excluded** — the apply as `EXCLUDED:no-writer-in-this-store`,
+the revert as `EXCLUDED:vacuous-over-never-written-table` — **and neither
+discharges in this store:** the table is never written here, and it goes with
+`DEL-008`.
 
 ### 3.3 A refused shortcut, and the tree's own precedent
 
 A test-only raw writer that forced settlement rows would make both cells
 forceable. **Refused**, and the tree has already refused it in this exact
-place. The note at `db_lmdb.cpp:7486-7494` sits just above
-`delete_archival_settlement_for_epoch` itself and reads:
+place. At this document's pin a note at `db_lmdb.cpp:7486-7494` sat just above
+`delete_archival_settlement_for_epoch` itself (it was deleted with the writer
+it names, `SO-D10e`) and read:
 
 > ... this CALL SITE is a corruption tripwire with no red-side test --
 > `set_archival_settlement` cannot write a row that fails it, so the state is
@@ -152,15 +158,12 @@ rather than this lane's preference.
 
 ### 3.4 What already exists, and what it is missing
 
-A replacement KAT for settlement is **not** absent.
-`tests/unit_tests/archival_settlement_table.cpp` reaches both halves, but
-**not equally**, and the difference is what §3.5 turns on. Its **revert** runs
-through production: `SlashRevertDropsEveryEpochInTheFoldedSpanAndRewindsBelowIt`
-(`:207`) performs a real `process_archival_slash_at_height` fold and then calls
-`revert_archival_slashes_at_height` (`:251`), which reaches
-`delete_archival_settlement_for_epoch`. Its **apply** does not: all twelve
-`set_archival_settlement` calls go straight onto the store handle, which is the
-writer rather than the apply path.
+A replacement KAT for settlement **is absent**. The KAT that reached both
+halves (`archival_settlement_table.cpp`) was deleted with the writer it seeded
+rows through, as was `archival_settlement_testdb.cpp` (`SO-D10e`). The revert
+still runs from `revert_archival_slashes_at_height`, but only ever over an
+empty table, so no test forces it (§3.2); the apply has nothing to force
+(§3.1).
 
 This lane first proposed making that fixture backend-parametric — it is
 `TempArchivalLMDB<DBT>`, already a template — and **E1's owner declined, on
@@ -213,6 +216,12 @@ therefore unmet**, and stays so until **SO-D8**. Other families may genuinely
 meet the gate; settlement is the one that cannot. Its being the family that
 fails every bar today is not coincidence — it is the same missing writer each
 time.
+
+**UPDATE 2026-10-08 (`SO-D10e`):** the KAT and `set_archival_settlement` are
+deleted, so neither half is forced by any test and the gate is unmet outright,
+not half met. It is not met on the C++ side at any later point either: the
+settlement writer is the Rust validator's (`ARCHIVAL_SETTLEMENT_WRITER.md`
+§14, `SO-D10`).
 
 **Correction 2 — the trailing clause is reference-side, not cross-backend.**
 This lane read *"digests must still see production LMDB behavior for those
@@ -440,8 +449,9 @@ character-identical to the established one, and the digit case is a red-bite.
 Existing archival test assets at this pin: **one** `core_tests` generator
 (`archival_budget_conservation`) and **fifteen** `unit_tests` files, including
 `archival_serve_credit_equivalence`, `archival_emission_ct_balance`,
-`archival_segment_freeze`, `archival_attestation_verify`,
-`archival_settlement_table`, and the shared `archival_lmdb_test_helpers.h`.
+`archival_segment_freeze`, `archival_attestation_verify`, and the shared
+`archival_lmdb_test_helpers.h` (`archival_settlement_table`, listed here at
+the pin, was deleted under `SO-D10e`).
 
 The unit tests are mostly **direct-call** KATs over a temp LMDB, not block
 sequences, so they fill cells the way §3.4 does — by reaching a hook without a
@@ -514,10 +524,11 @@ agreement with 7b on `ApplyPolicy`; the TLB decision.
   rather than duplicating it.
 - The sufficiency control — blocked on `ApplyPolicy` landing in
   `shekyl-chain-store` (ruled in, not yet built).
-- Settlement's two **corpus** cells, **and its extraction gate** — both
-  blocked on **SO-D8**, which is the writer landing. Nothing in this round
-  moves them. Its revert is already forced through a production hook; the
-  apply half is what SO-D8 unblocks.
+- Settlement's two **corpus** cells, **and its extraction gate** — excluded,
+  and unblocked by nothing in this store: the C++ writer and its KAT are
+  deleted (`SO-D10e`), no test forces the revert, and the cells stay excluded
+  until `DEL-008`. The settlement writer is the Rust validator's
+  (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`).
 - The attestation-witness families — **no longer an open validity question.**
   §4.1 answers it: there is no producer at this pin, so the blocker is the
   **Phase 2/3 template writer**, not the cost of constructing valid bytes.
