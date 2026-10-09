@@ -1,7 +1,13 @@
 # DRS-E4 slash-log round — the log's horizon and its key (`SLK-`)
 
 **Status:** OPEN — **`SLK-Q1` and `SLK-Q2` RULED 2026-10-09 (§1.2); code
-not yet started, opens after PR #1007 (`SLK-4`).** UPDATE 2026-10-09
+open — PR #1007 merged (`SLK-4` lifted), the four-commit build in
+progress.** UPDATE 2026-10-09 (re-check after #1007, `dev@bf6d277efe`):
+F19's reopen criterion fired in the direction it anticipated and was
+**declined on evidence** — the window walks settlement rows to
+`SETTLEMENT_RETENTION_EPOCHS`; the log is read for the settling epoch only;
+the two bounds share no operand; a widening to 26 epochs was proposed and
+refused at source (§1.1, §6). UPDATE 2026-10-09
 (ruling): Q1 — assertion at the read (SI-26, fires on a mis-composed
 schedule, never on data), retirement in the boundary batch, **the cap from
 `RuleSet::reorg_cap`** (the pre-flight's `undo_retention` corrected,
@@ -158,7 +164,27 @@ a retention to one reader's current shape is the inherited-figure move
 rule 16 warns against. Reopen criterion (rule 21): a ruling that the
 settlement rows, not the log, are the only history the window may consult
 — then `(k + 1)·SEB + D_max` is the expression and `journal_horizon`'s doc
-changes with it.
+changes with it. **MET AND DECLINED 2026-10-09** (re-check at
+`dev@bf6d277efe`, after #1007 merged): `SO-D10b` is that ruling as
+literally read — `settlement_window_slashable` consults settlement rows
+only (`outcome`, `slash.rs:386-400`; `in_standing`, the bond record) and
+is floored at their own retention, `SETTLEMENT_RETENTION_EPOCHS = MAX_CLAIM_AGE_W`
+= 26 (`failure_window.rs:268`, `:526`) — so the condition fired in the
+tightening direction. The expression is **kept** at `(k + n)·SEB + D_max`:
+the ruling of the same day declined re-pinning a ratified bound to one
+reader's current shape, and the condition's firing does not change that
+reason. The row stands as met-and-declined so it cannot read as pending
+(the defect that produced three DRS-E4 findings). The same re-check
+refused the *opposite* move: the window's 26-epoch reach and the log's
+read live in different functions over different epochs (`settle` /
+`counted` read the log for the settling epoch `E` alone — `h_open(E)`,
+`:260-261`; `E`'s own draws' `issuing_height`, `:366-374`), so the
+walk's reach is not a depth the log is asked about, `14 ≥ 26` is a
+relation nothing depends on, and no assert ties the two retentions.
+`journal_horizon` has **no production caller** on `dev` (every hit is
+`reorg.rs`'s own tests), so no slash-log row is retired today: commit 2
+lands the horizon's first enforcement, not a belt beneath an existing
+prune, and SI-26 sits beneath *that*.
 
 **Findings.**
 
@@ -375,6 +401,9 @@ one correction, the substantive one:
 - **`SLK-Q2` — RULED: not re-keyed**, a confirmation of `ARW-Q17`.
 
 Code opens after PR #1007 merges (`SLK-4`), in the four-commit shape above.
+**Opened 2026-10-09** — #1007 merged (`02241936ae`); the branch rebased onto
+`dev@bf6d277efe`; the re-check recorded in §1.1's bound paragraph and §6
+preceded commit 1.
 
 **Review-round denominator.** Surfaces examined that yielded nothing:
 `store/pop.rs` and `store/connect.rs` name no slash-log table (the pop path
@@ -509,3 +538,4 @@ nothing else.
 | 2026-10-09 | **Round-0 pre-flight run at `dev@6b23eab315` (post E6 slice 8, PR #953) — §1.1; `SLK-1…SLK-5` minted; nothing ruled.** §1's eight rows and facts (a)–(c) re-verified at source with cites; F19's bound re-derived from the Rust scan (deepest read `c − (k + n)·SEB + 2`; three blocks of margin over the retired range across the deepest pop), and found shallower still after PR #1007's settlement pass (`c − (k + 1)·SEB + 1`) — the window is kept at F19's ratified expression with a rule-21 reopen named. Findings: `SLK-1` Q1's writer-side refusal cannot fail, the contract-side assertion belongs on the read (F19's own "where the scan starts"); `SLK-2` the depth term is the store's `undo_retention`, which *is* F19's `D_max` by definition (CORRECTED the same day by the ruling, next row: the term is `RuleSet::reorg_cap`); `SLK-3` derived floor, no second cell, with the band it leaves named and bounded; `SLK-4` code opens after PR #1007 (file overlap, SI-25 → this round's row is SI-26, the reader it would pin is being deleted); `SLK-5` the `0x04` family's bound is *rows at or above the floor* and the bench witness reads from `0` only because its 1 299-block chain is under the 1 450-block window. Build shape for Q1 tabled (four commits, one PR); Q2's pre-flight recommendation is *not re-keyed* with the ruling to be recorded at the filter. **Halt per rule 26 until `SLK-Q1` and `SLK-Q2` are ruled.** |
 | 2026-10-09 | **`SLK-Q1` and `SLK-Q2` RULED (maintainer, subjects verified on `dev@6b23eab315`) — §1.2.** Q1 approved at the read with the reason restated: the read's operand (`challenge_fire_height`, hash-derived) is independent of the horizon while the writer's (the connecting height) is the horizon's own input, so only the read's arm can fail; caveat recorded that SI-26 fires on a mis-composed schedule, never on data, and its doc must say so as `slash.rs:207-209` does. **`SLK-2` corrected: the depth term is `RuleSet::reorg_cap`, not `Horizons::undo_retention`** — `Horizons::new` validates against the cap and discards it, and passing retention would let an operator setting deepen a consensus-adjacent horizon (one value, two jobs); both the read and the prune take the cap from the set in hand. `SLK-3` approved (recomputed operand, SO-D8 §7.4). `SLK-4` approved (the 10d lesson). `SLK-5` approved with the action: derive the bench file's chain lengths from the window constants in the same commit. F19's expression kept with the rule-21 reopen. Q2 not re-keyed — a confirmation of `ARW-Q17`, recorded as such. The round's shape, stated: **the horizon is a consensus expression; everything it reads comes from the consensus side.** Code opens after PR #1007. |
 | 2026-10-09 | **`SLK-3`'s band — second pass, nothing structural owed.** Three closures were offered or weighed and all refused: `max(cap, undo_retention)` in the retirement floor (reintroduces the horizon following an operator's setting — the shape `SLK-2` removed); refusing retention beyond `cap + 3` at open (freezes a measured margin as a threshold nobody ratified — the `first_spending_height` 71 / `×50` class); a `PopBeyondReorgCap` arm at `pop` (a defence against a pop nothing produces — rule 16, the very arm `SLK-1` took out of `write_slashes`; `PopBelowFloor` is legitimate for the same reason SI-26 is: its operand, the surviving log, is independent of the cap, so the two can disagree). The band is already closed by `PopBelowFloor`'s invariant, stated where it is enforced (`pop.rs:26`, `error.rs:399-407`); the reopen is re-pointed to the rules admitting a reorg deeper than the cap (`PDM-Q11`), and `+3` is recorded as a measurement, not a term. **Second time this round the answer was "the invariant already exists, stated where it is enforced"** — `SLK-2`'s cap source, now this. The shape holds, with its third clause: the store's own limits stay the store's, and stay loud. |
+| 2026-10-09 | **Re-check after PR #1007 merged (`02241936ae`; branch rebased onto `dev@bf6d277efe`) — F19's reopen fired, was re-read, and was declined on evidence; a widening proposed and refused at source.** The merge introduced `SETTLEMENT_RETENTION_EPOCHS = MAX_CLAIM_AGE_W` = 26 epochs (`failure_window.rs:268`), one constant for the settlement rows' prune and the failure window's floor (`settlement_retention_floor`, `:299-310`; the walk stops at `candidate < floor`, `:526`). Against the slash log's `(k + n)·SEB + D_max` = 14 epochs + cap, a reading was proposed that the slash pass could ask the log about a height in the 14–26 band and read pruned as never-slashed, with three changes: widen to `max(k + n, SETTLEMENT_RETENTION_EPOCHS)·SEB + D_max`, add a const assert tying the two retentions, and record SI-26 as vindicated by a live instance. **Traced at source and refused, all three.** The two bounds have no shared operand: the walk (`window_slashable`, `slash.rs:441-456`) hands `settlement_window_slashable` the bond record (`in_standing` → `good_through`) and the settlement row (`outcome`, `:386-400`) and never reads the log; the log's two reads are for the settling epoch `E` alone — `h_open(E)` (`:260-261`) and `E`'s own draws' `issuing_height ≥ h_open(E)` (`:366-374`) — with deepest row `E·SEB + 1`, inside the window by twelve epochs. The 26-epoch reach is a depth the *settlement table* is asked about, floored at exactly its own retention (`SO-D10b`'s one-constant shape, which is the right one and stands). So the widening would re-pin a ratified expression (`PDM-Q-F19`) to a bound no reader needs on a premise the code refutes; the assert would state `14 ≥ 26` between two tables with no shared reader, false and load-bearing for nothing; and SI-26's justification reverts to the ruling's caveat — fires on a mis-composed schedule, not on data, with commit 3's short fakechain pair as its falsifier. The maintainer confirmed at `dev@bf6d277ef` ("the inference, not the cites") and ruled all three refused. **The reopen itself is recorded MET AND DECLINED**, not pending: `SO-D10b` is the ruling the criterion named, in the tightening direction, and the same-day ruling against re-pinning to one reader's shape holds — F19 stays at `(k + n)·SEB + D_max`. Found alongside: `journal_horizon` has **no production caller** on `dev`, so no slash-log row is retired today; commit 2 is the horizon's first enforcement (the retirement commit says so), and SI-26 is beneath that, not beneath an existing prune. **First entry in this program where a reopen fired and came back "checked, declined".** A reopen that only widens teaches nothing; one that can decline is an instrument. The failure mode on the other side is named too: two bounds read in one file and one pass were chained because they were adjacent — the wrong-subject failure (`05-system-thinking`, `cumulative_tx_count` against storage ids), caught here by tracing the operand each function actually reads. Independent of this finding and worth the next review's first paragraph: the two gathers fail in opposite directions on a pruned row — C++ serve-credit bit → MISS, an honest archiver slashed; Rust settlement row → NON-OBSERVATION, a failed archiver escapes (`failure_window.rs:235-245` and the assert's message) — bounded until `DEL-008` deletes the C++ walk. |
