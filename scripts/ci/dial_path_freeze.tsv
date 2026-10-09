@@ -3,24 +3,31 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# The frozen C++ dial path (Ruling A, 2026-10-08). Every row is a function
-# the P2P-3 slice 3 cutover deletes. Until that PR, a change to a row's body
-# fails `check_dial_path_freeze.py`; deleting the function passes. This file
-# is the list the dialer brief's deletion table cites
-# (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md, "What is deleted").
+# The frozen C++ dial path (Ruling A, 2026-10-08). Every body and calls row
+# is a function the P2P-3 slice 3 cutover deletes. Until that PR, a change to
+# a row's body fails `check_dial_path_freeze.py`; deleting the function
+# passes, where deleted means the bare name is gone from src/p2p outside
+# comments and literals. The two shrink rows are the files that may not grow
+# (Rick, 2026-10-08): a change may not raise their count of non-blank,
+# non-comment lines. This file is the list the dialer brief's deletion table
+# cites (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md, "What is deleted").
 #
-# Removing a row while its function is still present needs a dated ruling by
-# Rick in the dialer brief naming the function; the gate looks for it. When
-# the cutover has deleted every function here, it empties this file, and the
-# gate reports the freeze discharged.
+# The one exception is a line in the dialer brief, new in the PR, of exactly
+# this form, naming the row's full anchor or the shrink row's file path:
+#   **UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>
+# When the cutover has deleted every function here, it empties this file,
+# and the gate reports the freeze discharged.
 #
 # Columns, tab-separated:
 #   kind   body   the function from its anchor to its closing brace
 #          calls  the lines inside that function that call the fourth column
+#          shrink the file's code-line count may not go up
 #   file   repository path
 #   anchor the definition's qualified name up to its opening parenthesis;
-#          it must occur once in the file
+#          it must occur once in the file (body and calls rows)
 #   callee (calls rows only) the function those frozen lines call
+shrink	src/p2p/net_node.inl
+shrink	src/p2p/net_node.h
 body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::connections_maker(
 body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::make_new_connection_from_peerlist(
 body	src/p2p/net_node.inl	node_server<t_payload_net_handler>::connect_to_seed(
