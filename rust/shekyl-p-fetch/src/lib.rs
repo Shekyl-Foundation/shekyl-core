@@ -82,6 +82,7 @@
 //! view-hash fold, and nothing from the serving side.
 //! `scripts/ci/check_p_fetch_dep_cut.py` holds the edges.
 
+mod body;
 pub mod client;
 pub mod error;
 pub mod header;
