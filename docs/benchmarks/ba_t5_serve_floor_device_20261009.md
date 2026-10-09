@@ -38,8 +38,17 @@ discarded and are not in the capture. This registration amends the
 method — the sync rate is read from the daemon's own log, the serving
 blocks are longer so a window holds enough points, and the window
 validity rule is restated in those terms — and nothing else. It is the
-registration that stands: pushed before the device is claimed again, not
-edited afterwards. Both earlier texts are in the branch history.
+registration that stands, with one further amendment: **the second start
+(01:44Z) was stopped at 02:04Z, in its first nice pass.** Its idle and
+sync passes were sound and its sync windows all valid, but at nice 19
+beside a syncing daemon the serve runs at about 6 responses per second,
+so a 2,048-fetch block took 332 s, and four of them with their windows
+cannot sit inside a 13-minute sync: the later cells of every nice pass
+would have been void and the session incomplete. Nice blocks are 512
+fetches, about 85 s, which a window of about ten points covers. The
+second start's 12 blocks are discarded and are not in the capture; the
+numbers it showed are not quoted in the reading. This text is pushed
+before the third start. Every earlier text is in the branch history.
 
 ## The questions
 
@@ -64,8 +73,9 @@ edited afterwards. Both earlier texts are in the branch history.
 ### What is measured, per cell
 
 A cell is one daemon state and one in-flight count N, at full segment
-from the on-disk store, 2,048 whole fetches per block, at least three
-blocks per cell. For each block: responses per second; CPU per response;
+from the on-disk store, 2,048 whole fetches per block (512 in the nice
+state, where the serve is slow by design), at least three blocks per
+cell. For each block: responses per second; CPU per response;
 the endpoint's refusals; p50, p90, p99 and maximum wake lateness on the
 endpoint's executor; and, when the daemon is syncing, its sync rate in
 blocks per second over the block's window, read from its own height.
@@ -160,7 +170,8 @@ beside the measurement. The same block is run under sync and recorded.
   the first, and the target not reached at the last point. A void
   window's block is reported and excluded from its cell's sync-rate
   median. A serving block of 2,048 fetches is 35 to 70 seconds under sync,
-  so a window holds four to nine points.
+  and one of 512 at nice 19 about 85 seconds, so a window holds four to
+  ten points.
 - **The sync-speed trial** that set this up: the second daemon synced the
   2,228-block testnet chain from the LAN staker at 2.7 to 2.9 blocks per
   second, about 13 minutes end to end, at 3.3 cores, board 46 to 70 °C.

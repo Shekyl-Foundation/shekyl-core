@@ -35,6 +35,7 @@ SYNC_PID=""
 IN_FLIGHT="8 16 32 64"
 QUIET_S=45
 FETCHES=2048
+FETCHES_NICE=512  # at nice 19 beside a syncing daemon the serve runs at about 6/s
 
 info() { curl -s -m 3 "http://127.0.0.1:$1/get_info"; }
 field() { python3 -c 'import sys,json
@@ -124,7 +125,7 @@ order_for_pass() {  # the four counts in the order registered for the pass
   echo "# resident daemon: $(tr '\0' ' ' < /proc/$SYS_PID/cmdline) pid $SYS_PID"
   echo "# syncing daemon: $SHEKYLD, own data dir, exclusive peer $PEER (a LAN testnet staker), in-peers 0"
   echo "# resident daemon mining_status: $(curl -s -m 5 http://127.0.0.1:12030/mining_status | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("active","threads_count")})' 2>/dev/null)"
-  echo "# states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block; no-serve windows $QUIET_S s; $PASSES passes per state"
+  echo "# states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block ($FETCHES_NICE at nice 19); no-serve windows $QUIET_S s; $PASSES passes per state"
   echo "# sync rate from the syncing daemon's own stdout log (Synced H/T lines), not its RPC, which answers in 6 to 9 s under sync load"
   echo "# signature scheme: Ed25519 + ML-DSA-65 hybrid (shekyl/archival-attestation-scheme-v3)"
 } > "$OBS"
@@ -141,14 +142,14 @@ for pass in $(seq 1 "$PASSES"); do
   printf 'NOTE\tpass %s order %s\n' "$pass" "$order" >> "$OBS"
   for state in idle sync nice; do
     syncing=0; [ "$state" != idle ] && syncing=1
-    NICE=""; [ "$state" = nice ] && NICE="nice -n 19"
+    NICE=""; fetches=$FETCHES; [ "$state" = nice ] && { NICE="nice -n 19"; fetches=$FETCHES_NICE; }
     if [ $syncing = 1 ]; then sync_start || continue; fi
     envrow "pass.$state.$pass.start"
     if [ $syncing = 1 ]; then poll_start "$state.$pass.quiet" "$state"; sleep $QUIET_S; poll_stop; fi
     for n in $order; do
       label="$state.$pass.N$n"
       [ $syncing = 1 ] && poll_start "$label" "$state"
-      probe "$label" load BAT5_N=$FETCHES BAT5_IN_FLIGHT=$n BAT5_REUSE=1
+      probe "$label" load BAT5_N=$fetches BAT5_IN_FLIGHT=$n BAT5_REUSE=1
       if [ $syncing = 1 ]; then poll_stop; poll_start "$state.$pass.quiet$n" "$state"; sleep $QUIET_S; poll_stop; fi
     done
     if [ "$pass" = 1 ] && [ "$state" != nice ]; then
