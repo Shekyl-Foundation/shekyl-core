@@ -250,10 +250,16 @@ fn check_whole(shard_id: u64, out: &[u8]) {
 /// which is why it is a bound and not the step's own cost.
 async fn time_to_first_byte(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> u64 {
     let mut s = TcpStream::connect(addr).await.expect("connect");
+    // The clock starts before the request is written, so the interval the
+    // endpoint may already be working in — from the kernel taking the last
+    // request byte to this task's return from the write — is inside the
+    // reading, not outside it. The write of a few hundred bytes to a
+    // loopback socket is then part of the figure, which keeps it a bound
+    // from above on the endpoint's pre-head work.
+    let sent = Instant::now();
     s.write_all(&request_head(shard_id, nonce))
         .await
         .expect("write request");
-    let sent = Instant::now();
     let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
     let mut first = [0u8; 1024];
     let n = s.read(&mut first).await.expect("read the first bytes");
