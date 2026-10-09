@@ -10,16 +10,15 @@
 use super::{emission, refused_listed, refused_lone, with_inputs, KI};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::harness::assert_refused;
 use crate::harness::fixture::{
-    anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
-    mask_committing, multiple_of_g, point, serve_credit_only, spendable_chain, G, TWO_G,
+    balanced_emission, coinbase, emission_vin, join_market, listed, mask_committing, multiple_of_g,
+    point, serve_credit_only, G, TWO_G,
 };
-use crate::harness::{assert_refused, formed_on, judged};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{TxContext, H17, H7};
 use crate::rules::TxRule;
-use crate::trust::Trust;
-use crate::validate::{tx_form, validate};
+use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -56,11 +55,13 @@ fn emission_tx(reward: u64) -> Transaction {
 /// alone because the whole form needs the balance fixtured here. Narrowing
 /// this test narrows that one.
 ///
-/// The join connects; the emission's form passes and its connect is not
-/// judged here: a claim needs the claimant's record and a **settled**
-/// epoch (CEN-L7 re-runs claimability at the connect), which no chain
-/// short enough for a unit test carries — the connected claim is the
-/// scenario driver's (`DRS_E4_ARCHIVAL_WRITER.md` §5.2, commit 5).
+/// Neither connect is judged here. The emission's needs the claimant's
+/// record and a **settled** epoch (CEN-L7 re-runs claimability at the
+/// connect), which no chain short enough for a unit test carries; the
+/// join's is funded by a fixture spend, which CEN-I13 refuses on any view
+/// (slice 6 row 6). Both connected forms are the scenario driver's
+/// (`shekyl-chain-ingest`'s `scenario_join_tests`;
+/// `DRS_E4_ARCHIVAL_WRITER.md` §5.2, commit 5).
 #[test]
 fn balanced_bond_post_and_emission_fixtures_pass() {
     for tx in [bond_post_tx(), emission_tx(5)] {
@@ -68,27 +69,6 @@ fn balanced_bond_post_and_emission_fixtures_pass() {
             .unwrap_or_else(|r| panic!("the balanced fixture passes: {r}"));
         assert!(form.contains(CenRow::H21) && form.contains(CenRow::H22));
     }
-    refused_listed_never(&bond_post_tx());
-}
-
-/// The transaction, listed first, connects — on the youngest chain that
-/// can list a spend, anchored on it. A spend's reference and an emission's
-/// reference (CEN-J21, including no fee input) are a block the chain holds.
-fn refused_listed_never(tx: &Transaction) {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        let formed = formed_on(
-            &chain,
-            candidate_on(&chain, vec![anchored_on(&chain, tx.clone())]),
-        );
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .unwrap_or_else(|r| panic!("the fixture connects: {r}"));
-    });
 }
 
 // ---- CEN-H7 -------------------------------------------------------------
@@ -255,7 +235,6 @@ fn h18_the_balance_is_over_the_hidden_amounts_not_only_the_blindings() {
     assert!(tx_form(&balanced, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("the amounts sum")
         .contains(CenRow::H18));
-    refused_listed_never(&balanced);
     let with_fee = with_pseudo_out(2, mask_committing(5, 9));
     assert!(tx_form(&with_fee, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("the amounts and the fee sum")

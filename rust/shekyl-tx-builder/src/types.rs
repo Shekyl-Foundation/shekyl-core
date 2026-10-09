@@ -312,13 +312,20 @@ pub struct TreeContext {
     pub tree_depth: u8,
 }
 
+/// Consensus authentication version for a hybrid spend or extra slot.
+///
+/// `shekyl_wire::PqcAuth` requires this value; [`crate::sign_pqc_auths`] and
+/// [`crate::open_spend`] write it, and a placeholder slot hashed in phase 1
+/// carries the same version as the signature that later replaces it.
+pub const PQC_AUTH_VERSION: u8 = 1;
+
 /// Per-input PQC authentication data (hybrid signature).
 ///
 /// Contains the serialized hybrid signature (Ed25519 + ML-DSA-65) and the
 /// serialized public key needed for verification.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PqcAuth {
-    /// Authentication version (currently 1).
+    /// Authentication version. Production slots use [`PQC_AUTH_VERSION`].
     pub auth_version: u8,
     /// Serialized hybrid signature (Ed25519 + ML-DSA-65) in canonical encoding.
     #[serde(with = "hex_blob")]

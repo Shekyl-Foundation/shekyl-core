@@ -82,11 +82,15 @@
 //! # What is fixture here
 //!
 //! The serve credit's Ed25519 countersignature (no Rust countersigner
-//! exists; CEN-J1/J10 pending), and the FCMP proof's consensus-side
-//! verification (CEN-I15 pending; the driver self-verifies it against the
-//! wallet-side root). Neither is what L7 judges. Everything L7 reads — the
-//! post's fields, the persona's standing, the block's own posts — is the
-//! production object over the production view.
+//! exists; CEN-J1/J10 pending). That is not what L7 judges. Everything L7
+//! reads — the post's fields, the persona's standing, the block's own
+//! posts — is the production object over the production view. (*Was*,
+//! until slice 6 row 6 on 2026-10-08: the funding spend's FCMP proof was
+//! fixture too, the consensus-side verify pending on this class. It is
+//! CEN-J27's now — the bond post's funding half, the reference context and
+//! the proof over the funding spends as one row — and the honest join in
+//! `posts_for_a_persona_with_no_record_are_refused_on_the_store` is its
+//! pass, the same join with one proof byte flipped its refusal.)
 
 use std::sync::Arc;
 
@@ -97,7 +101,7 @@ use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::store::{StoreCannot, StoreError};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
@@ -105,9 +109,9 @@ use crate::metrics::Metrics;
 use crate::pipeline::{run, PipelineConfig, PipelineFault};
 use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
-use crate::scenario_spend::Spender;
 use crate::source::{IngestEvent, Injection, ServeCredit};
 use crate::test_support::{cleanup, open_store, tmp, trace_of, trace_read, Scripted};
+use shekyl_harness_spender::Spender;
 
 /// The settlement epoch open at `height` under the genesis rule set — the
 /// epoch a join at `height` records and a credit at `height` is keyed by.
@@ -127,7 +131,11 @@ fn epoch_at(height: BlockHeight) -> SettlementEpoch {
 /// J16's too, not G10's (module docs). The serve credit is **CEN-J4**'s
 /// (E6 slice 8 row 3): the one bond-state read the transaction pass makes,
 /// ahead of the fold — *was* L7's until row 3 landed, the pin slice 8's
-/// row 2 held.
+/// row 2 held. The funding half is **CEN-J27**'s (slice 6 row 6): the
+/// honest join records it, and the same join with one byte of its funding
+/// proof flipped is refused on it at the transaction — after the post rows,
+/// which read nothing the flip changed, and before the signatures, whose
+/// preimage covers the prunable region too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     let connecting = first_spending_height();
@@ -215,12 +223,39 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
         at_post,
     );
 
+    // CEN-J27 on the pipeline: the honest join with one byte of its
+    // funding-spend FCMP++ proof flipped. The prunable region is outside
+    // the prefix, so the post rows (J13–J15, which read the post and the
+    // view) admit the body as before; the funding half is the first row
+    // that reads what changed, and it refuses at the transaction before
+    // the signatures (I18, whose preimage also covers the prunable) are
+    // asked. The block does not connect.
+    let mut corrupt_funding_proof = honest.clone();
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut corrupt_funding_proof.ct
+    {
+        p.fcmp_proof[0] ^= 0x01;
+    }
+    refused_at(
+        scenario.mine_listing(vec![corrupt_funding_proof]).await,
+        CenRow::J27,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+
     // Positive control on the same chain: the honest join connects, so the
-    // refusals above were the posts', not the height's or the funding's.
+    // refusals above were the posts', not the height's or the funding's —
+    // and its funding half is judged, not skipped: J27 is in the verdict.
     let block = scenario
         .mine_listing(vec![honest])
         .await
         .unwrap_or_else(|outcome| panic!("the honest join connects: {outcome}"));
+    assert!(
+        block.judged_by.contains(&CenRow::J27),
+        "the funding half (CEN-J27) judged the honest join"
+    );
     assert_eq!(block.archival.records().len(), 1);
     assert_eq!(block.archival.records()[0].persona(), &persona.id());
 
@@ -238,7 +273,10 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
 /// at its post.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
-    let connecting = first_spending_height();
+    // Two spends in one block, of coinbases 0 and 1: the block connects
+    // where the later of the two is mature, one past coinbase 0's first
+    // spending height.
+    let connecting = first_spending_height() + BlockCount::ONE;
     let mut scenario = Scenario::open("scenario-archival-g10");
     let mined = scenario
         .mine(ChainCount::from_next_height(connecting).to_raw())
