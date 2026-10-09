@@ -33,12 +33,15 @@ pub use shekyl_thread_ledger::{RuntimeBudget, ThreadName, ThreadNameError};
 /// One live runtime.
 ///
 /// [`shutdown`](Self::shutdown) is how a daemon stops it: the wait for a
-/// blocking task is bounded by the timeout the caller passes. Drop is the
-/// unbounded fallback. Tokio waits forever for a `spawn_blocking` task that
-/// is still running, and it panics if that wait happens inside an
-/// asynchronous context (`Cannot drop a runtime in a context where blocking
-/// is not allowed`). A `Pool` is therefore never dropped from inside a task,
-/// including a task on this pool. Call `shutdown` from outside the pool.
+/// blocking task is bounded by the timeout the caller passes.
+/// [`shutdown_background`](Self::shutdown_background) stops it without
+/// waiting, and that call is safe from inside a task. Drop is the unbounded
+/// fallback. Tokio waits forever for a `spawn_blocking` task that is still
+/// running, and it panics if that wait happens inside an asynchronous
+/// context (`Cannot drop a runtime in a context where blocking is not
+/// allowed`). A `Pool` is therefore never dropped from inside a task,
+/// including a task on this pool. Call `shutdown` from outside the pool, or
+/// `shutdown_background` when the caller is inside a task and must not wait.
 ///
 /// Fields drop in declaration order, so the runtime is first and the ledger
 /// row covers that shutdown. The row has no join of its own.
@@ -57,9 +60,10 @@ impl Pool {
     /// Stop the workers and wait at most `timeout` for blocking tasks.
     ///
     /// The ledger row leaves after that wait. `timeout` is the caller's
-    /// bound. This crate does not contain one. A call from inside a task
-    /// panics for the same reason drop does: the wait is not allowed in an
-    /// asynchronous context.
+    /// bound. This crate does not contain one. A **non-zero** timeout from
+    /// inside a task panics for the same reason drop does: the wait is not
+    /// allowed in an asynchronous context. A zero timeout does not wait;
+    /// that is [`Self::shutdown_background`].
     ///
     /// A blocking task still running when the wait ends keeps its OS
     /// thread. That thread is detached, and the row is already gone, so
@@ -71,6 +75,18 @@ impl Pool {
         let Pool { runtime, row } = self;
         runtime.shutdown_timeout(timeout);
         drop(row);
+    }
+
+    /// Stop the workers and return without waiting.
+    ///
+    /// Safe from inside a task. Tokio treats a zero timeout as "do not
+    /// block" and returns before the check that refuses a blocking wait
+    /// (`shutdown_timeout(Duration::ZERO)` is its `shutdown_background`).
+    /// A blocking task still running keeps its OS thread, detached, and
+    /// the ledger row drops immediately — the same undercount
+    /// [`Self::shutdown`] documents when a wait expires.
+    pub fn shutdown_background(self) {
+        self.shutdown(Duration::ZERO);
     }
 }
 
@@ -283,5 +299,42 @@ mod tests {
             "shutdown waited for the blocking task"
         );
         assert!(ledger().iter().all(|row| row.id != id));
+    }
+
+    /// A zero wait is the shutdown a task may call. The blocking hop keeps
+    /// its thread; this task returns without joining it.
+    #[test]
+    fn shutdown_background_from_inside_a_task_returns_without_waiting() {
+        let outer = runtime(
+            budget(1, 1),
+            &thread_name("sk-rt-outer"),
+            ThreadStart::none(),
+        )
+        .expect("outer runtime");
+        let inner = runtime(
+            budget(1, 1),
+            &thread_name("sk-rt-inner"),
+            ThreadStart::none(),
+        )
+        .expect("inner runtime");
+        let id = inner.ledger_id();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        inner.block_on(async move {
+            tokio::task::spawn_blocking(move || {
+                started_tx.send(()).expect("test thread");
+                std::thread::sleep(Duration::from_millis(500));
+            });
+        });
+        started_rx.recv().expect("blocking task started");
+        let began = Instant::now();
+        outer.block_on(async move {
+            inner.shutdown_background();
+        });
+        assert!(
+            began.elapsed() < Duration::from_millis(200),
+            "shutdown_background waited for the blocking task"
+        );
+        assert!(ledger().iter().all(|row| row.id != id));
+        drop(outer);
     }
 }

@@ -95,15 +95,16 @@ impl PriorityFailures {
 /// The serving runtime, owned by the host for the host's life.
 ///
 /// **Dropping this never blocks the dropping thread and never panics in an
-/// async context.** Tokio refuses to drop a runtime from inside a task of
-/// any runtime (it would wait for blocking tasks where waiting is not
-/// allowed), and the host is dropped from the engine's runtime on every
-/// path — ordered shutdown, a failed start after the pool exists, a panic
-/// unwinding through the serving task. So the drop detaches the bounded
-/// [`Pool::shutdown`] onto a plain OS thread, which needs no runtime
-/// context and works during unwinding. The host declares this as its last
-/// field, so the endpoint and its accept task are gone before the pool
-/// that ran them is told to stop.
+/// async context.** A runtime cannot be dropped from inside a task, and the
+/// host is dropped from the engine's runtime on every path that is not the
+/// ordered shutdown — a failed start after the pool exists, a panic
+/// unwinding through the serving task. Drop therefore stops the pool with
+/// [`Pool::shutdown_background`]: a zero wait, which returns before Tokio's
+/// check that a blocking wait is not allowed, including while a panic is
+/// already unwinding. In-flight blocking hops keep their threads, detached,
+/// the same as an ordered shutdown whose wait expired. The host declares
+/// this as its last field, so the endpoint and its accept task are gone
+/// before the pool that ran them is told to stop.
 pub(crate) struct ServingPool(Option<Pool>);
 
 impl ServingPool {
@@ -161,9 +162,9 @@ impl ServingPool {
     /// after the endpoint is dropped, so that when shutdown resolves the
     /// accept task has been dropped with the runtime and the listener is
     /// closed, not merely told to close. The wait runs on the calling
-    /// runtime's blocking pool because a runtime cannot be shut down from
-    /// inside an async context. Drop is the detached fallback for every
-    /// other path.
+    /// runtime's blocking pool: a non-zero wait is not allowed on an async
+    /// worker. Drop is the zero-wait fallback for every other path, and
+    /// that one is safe on the worker itself.
     pub(crate) async fn stop(mut self) {
         if let Some(pool) = self.0.take() {
             tokio::task::spawn_blocking(move || pool.shutdown(SERVING_SHUTDOWN_WAIT))
@@ -175,22 +176,8 @@ impl ServingPool {
 
 impl Drop for ServingPool {
     fn drop(&mut self) {
-        let Some(pool) = self.0.take() else {
-            return;
-        };
-        let stopped = std::thread::Builder::new()
-            .name("sk-serving-stop".to_owned())
-            .spawn(move || pool.shutdown(SERVING_SHUTDOWN_WAIT));
-        if let Err(pool_leaked) = stopped {
-            // No thread to shut the pool down on. Dropping it here could be
-            // inside an async context, which panics, and a panic in a drop
-            // during unwinding aborts the process. The idle threads and the
-            // ledger row stay until process exit; that is the lesser harm.
-            tracing::warn!(
-                error = %pool_leaked,
-                "could not spawn the serving runtime's shutdown thread; its idle threads \
-                 stay until the process exits"
-            );
+        if let Some(pool) = self.0.take() {
+            pool.shutdown_background();
         }
     }
 }
@@ -302,9 +289,10 @@ mod tests {
         drop(pool);
     }
 
-    /// Dropping the pool from inside an async context does not panic: the
-    /// shutdown is detached. This is the path a failed start and an
-    /// unwinding serving task both take.
+    /// Dropping the pool from inside an async context does not panic and
+    /// does not wait for a blocking hop. This is the path a failed start
+    /// and an unwinding serving task both take. The hop stays detached;
+    /// unordered drop does not join it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dropping_the_pool_inside_a_task_does_not_panic() {
         let failures = PriorityFailures::new();
