@@ -15,11 +15,17 @@
 //! - **the cache** (`SV-D5`) — one closed shard's view is a pure function
 //!   of its body and its span, so it is computed once per close and kept,
 //!   keyed on the hash of the block that closed it; a reorg past that
-//!   height changes the hash and the entry is dropped and re-fetched;
+//!   height changes the hash and the entry is dropped and re-fetched.
+//!   A refusal is not cached: it is true of this attempt, not of the shard;
 //! - **the refusals** — an open shard is a typed answer, never a fetch
 //!   ([`ViewRefusal::Open`]); a shard nobody could serve is a typed answer
 //!   with the attempts behind it ([`ViewRefusal::Unavailable`]), never an
 //!   empty picture (`SV-D2`: the skeleton alone is not a view).
+//!
+//! Two callers of one shard share one flight. The leader publishes the
+//! outcome, view or refusal, and every waiter takes that outcome. When
+//! the leader drops — it finished, or its read was cancelled — the flight
+//! leaves the map. A refusal leaves with it.
 //!
 //! A view fetch is a real fetch — the point of the surface is that it
 //! generates shard-fetch traffic — so the body streams through a
@@ -30,6 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_p_fetch::DiscardTxs;
 use shekyl_types::{ArchivalLength, BlockHash, ShardId, ShardView};
+use tokio::sync::watch;
 
 use crate::facts::{FactsFault, HolderSource, ShardFacts, ShardStanding};
 use crate::read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
@@ -56,7 +63,7 @@ fn assemble(read: &Read) -> ShardView {
 
 /// Why a view was not produced. Each is a state the viewer shows, never a
 /// blank.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ViewRefusal {
     /// The shard is still filling (`shard_id == open_shard`) or does not
     /// exist yet (`shard_id > open_shard`). `remaining_to_close` is how many
@@ -89,15 +96,56 @@ struct Cached {
     close_hash: BlockHash,
 }
 
-/// The view desk: the cache in front of the scheduler.
+/// One view computation for a shard, shared by every caller that arrives
+/// while it runs. The outcome is published once — a view or a refusal —
+/// and the flight is forgotten when the leader drops, so a refusal is not
+/// kept and a cancelled leader does not leave the shard occupied.
+struct Flight {
+    outcome: watch::Sender<Option<SharedView>>,
+}
+
+/// The leader's permit. Dropping it without [`Leader::publish`] removes
+/// the flight, which drops the sender; waiters see the close and one of
+/// them may lead the next flight.
+struct Leader {
+    shard_id: ShardId,
+    flight: Arc<Flight>,
+    flights: Arc<Mutex<HashMap<ShardId, Arc<Flight>>>>,
+}
+
+impl Leader {
+    fn publish(&self, shared: SharedView) {
+        // A late subscriber still reads the last value after the sender
+        // drops with the leader, so publishing before the flight is removed
+        // is the whole hand-off. `Err` means every waiter has gone; the
+        // leader still returns the outcome itself.
+        let _published = self.flight.outcome.send(Some(shared));
+    }
+}
+
+impl Drop for Leader {
+    fn drop(&mut self) {
+        let mut flights = self.flights.lock().expect("view flight lock");
+        if flights
+            .get(&self.shard_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.flight))
+        {
+            flights.remove(&self.shard_id);
+        }
+    }
+}
+
+type SharedView = Arc<Result<ShardView, ViewRefusal>>;
+
+/// The view desk: the cache in front of the scheduler, and one flight per
+/// shard currently being read.
 pub struct ViewDesk<F, H> {
     scheduler: Arc<FetchScheduler<F, H>>,
     budget: NeedBudget,
     cache: Mutex<HashMap<ShardId, Cached>>,
-    /// One gate per shard with a view in progress, so two viewers asking
-    /// for the same shard at once cost one fetch: the second waits on the
-    /// first and then reads the cache.
-    in_progress: Mutex<HashMap<ShardId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Flights in progress, shared with each [`Leader`] so a cancelled
+    /// read removes its own entry and no other shard's.
+    flights: Arc<Mutex<HashMap<ShardId, Arc<Flight>>>>,
 }
 
 impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
@@ -107,7 +155,7 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
             scheduler,
             budget,
             cache: Mutex::new(HashMap::new()),
-            in_progress: Mutex::new(HashMap::new()),
+            flights: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -118,30 +166,49 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
 
     /// The view of shard `shard_id`: from the cache when the block that
     /// closed it still has the hash it had, otherwise through a fresh read.
-    /// Concurrent calls for one shard share one read.
+    ///
+    /// Concurrent calls for one shard share that read's outcome, including
+    /// a refusal. The refusal is not cached: a caller that arrives after
+    /// the flight has ended leads a new one. A cache hit does not open a
+    /// flight's fetch — the leader's cache check is the one that decides,
+    /// and the read it then starts takes its own skeleton snapshot.
     ///
     /// # Errors
     ///
     /// [`ViewRefusal`]: the shard is open, could not be retrieved, or the
     /// daemon could not form the request.
     pub async fn view(&self, shard_id: ShardId) -> Result<ShardView, ViewRefusal> {
-        let gate = Arc::clone(
-            self.in_progress
-                .lock()
-                .expect("in-progress lock")
-                .entry(shard_id)
-                .or_default(),
-        );
-        let result = {
-            let _held = gate.lock().await;
-            self.view_uncontended(shard_id).await
-        };
-        let mut in_progress = self.in_progress.lock().expect("in-progress lock");
-        // Only this call holds the gate: nobody is waiting behind it.
-        if Arc::strong_count(&gate) == 2 {
-            in_progress.remove(&shard_id);
+        loop {
+            let (leader, mut waiting) = self.enlist(shard_id);
+            let Some(leader) = leader else {
+                match shared_view(&mut waiting).await {
+                    Some(shared) => return owned_view(&shared),
+                    // The leader was cancelled before it published. This
+                    // caller may lead the next flight.
+                    None => continue,
+                }
+            };
+            let shared = Arc::new(self.view_uncontended(shard_id).await);
+            leader.publish(Arc::clone(&shared));
+            return owned_view(&shared);
         }
-        result
+    }
+
+    /// Join the flight for `shard_id`, or open one and return its leader.
+    fn enlist(&self, shard_id: ShardId) -> (Option<Leader>, watch::Receiver<Option<SharedView>>) {
+        let mut flights = self.flights.lock().expect("view flight lock");
+        if let Some(flight) = flights.get(&shard_id) {
+            return (None, flight.outcome.subscribe());
+        }
+        let (outcome, waiting) = watch::channel(None);
+        let flight = Arc::new(Flight { outcome });
+        flights.insert(shard_id, Arc::clone(&flight));
+        let leader = Leader {
+            shard_id,
+            flight,
+            flights: Arc::clone(&self.flights),
+        };
+        (Some(leader), waiting)
     }
 
     async fn view_uncontended(&self, shard_id: ShardId) -> Result<ShardView, ViewRefusal> {
@@ -212,6 +279,28 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
     /// Views kept. For tests and the daemon's status line.
     pub fn cached_count(&self) -> usize {
         self.cache.lock().expect("view cache lock").len()
+    }
+}
+
+/// Wait until the flight publishes, or until its leader drops without
+/// publishing. `None` is the second case: the caller may lead next.
+async fn shared_view(waiting: &mut watch::Receiver<Option<SharedView>>) -> Option<SharedView> {
+    loop {
+        if let Some(shared) = waiting.borrow().clone() {
+            return Some(shared);
+        }
+        if waiting.changed().await.is_err() {
+            // The sender is gone. A publish that raced the drop is still
+            // the receiver's last value; an abandon leaves `None`.
+            return waiting.borrow().clone();
+        }
+    }
+}
+
+fn owned_view(shared: &SharedView) -> Result<ShardView, ViewRefusal> {
+    match shared.as_ref() {
+        Ok(view) => Ok(*view),
+        Err(refusal) => Err(refusal.clone()),
     }
 }
 

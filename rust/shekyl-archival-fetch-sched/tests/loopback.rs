@@ -11,6 +11,7 @@
 //! at the budget.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -136,6 +137,8 @@ impl ShardFacts for Facts {
 /// `n` holder ids, all resolving (through the shim) to the one endpoint.
 struct Holders {
     holders: Mutex<Vec<Holder>>,
+    /// How many needs have asked who holds the shard.
+    lookups: AtomicUsize,
 }
 
 impl Holders {
@@ -148,6 +151,7 @@ impl Holders {
             .collect();
         Self {
             holders: Mutex::new(holders),
+            lookups: AtomicUsize::new(0),
         }
     }
 
@@ -158,6 +162,7 @@ impl Holders {
 
 impl HolderSource for Holders {
     fn holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
         Ok(self.holders.lock().unwrap().clone())
     }
 }
@@ -336,6 +341,35 @@ async fn no_bonded_holder_is_typed_and_dials_nothing() {
 }
 
 #[tokio::test]
+async fn read_from_dials_its_assigned_holder_even_when_the_urn_is_empty() {
+    let s = stack(FIXTURE_SHARD_ID, 3).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .find(|holder| holder.id.to_bytes()[0] == 3)
+        .expect("tag 3 was bonded");
+    let read = s
+        .scheduler
+        .read_from(&assigned, SHARD, Arc::new(DiscardTxs), NeedBudget::DEFAULT)
+        .await
+        .expect("the assigned holder is dialled first");
+    assert_eq!(read.holder, assigned.id);
+
+    // The drawable set is empty. `read` would be `NoHolders`; `read_from`
+    // still dials the holder the caller named.
+    s.holders.clear();
+    let read = s
+        .scheduler
+        .read_from(&assigned, SHARD, Arc::new(DiscardTxs), NeedBudget::DEFAULT)
+        .await
+        .expect("an empty urn does not refuse an assigned holder");
+    assert_eq!(read.holder, assigned.id);
+    assert_eq!(s.endpoint.served_count(), 2);
+}
+
+#[tokio::test]
 async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
     let s = stack(FIXTURE_SHARD_ID, 2).await;
     let desk = ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT);
@@ -447,5 +481,167 @@ async fn concurrent_views_of_one_shard_share_one_fetch() {
     let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
     assert_eq!(a, b);
     assert_eq!(s.endpoint.served_count(), 1);
-    assert_eq!(*s.facts.shard_reads.lock().unwrap(), 3);
+    // The leader reads the skeleton twice: the cache check, then the
+    // scheduler's own snapshot. A waiter that shares the flight adds
+    // none. A caller that arrives after the flight has ended adds the
+    // cache hit, which is the third read.
+    let reads = *s.facts.shard_reads.lock().unwrap();
+    assert!(
+        reads == 2 || reads == 3,
+        "shared flight or a cache hit after it, got {reads} skeleton reads"
+    );
+}
+
+/// Two viewers of a shard nobody can serve share one walk, and the refusal
+/// is not kept: a caller that arrives after the flight dials again.
+#[tokio::test]
+async fn concurrent_unavailable_views_share_one_walk_and_the_refusal_is_not_cached() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let (release, mut release_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let accepts = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                tokio::select! {
+                    _ = &mut release_rx => {
+                        drop(held);
+                        return;
+                    }
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((socket, _)) => {
+                                accepts.fetch_add(1, Ordering::SeqCst);
+                                held.push(socket);
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let client = PFetchClient::with_timeouts(proxy, ephemeral_timeouts());
+    let facts = Arc::new(Facts::new());
+    let key = shekyl_crypto_pq::signature::HybridPublicKey {
+        ed25519: [1; 32],
+        ml_dsa: Vec::new(),
+    };
+    let holders = Arc::new(Holders::new(2, &key));
+    let scheduler = Arc::new(FetchScheduler::new(facts, Arc::clone(&holders), client));
+    let desk = Arc::new(ViewDesk::new(scheduler, budget(1, 0)));
+
+    let one = {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(SHARD).await })
+    };
+    let two = {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(SHARD).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while accepts.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the leader dialled");
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        1,
+        "the waiter started a second walk"
+    );
+    assert_eq!(holders.lookups.load(Ordering::SeqCst), 1);
+
+    // The leader's dial fails. Both viewers take that one refusal.
+    release
+        .send(())
+        .expect("the proxy is still holding the leader's dial");
+    let (one, two) = (one.await.unwrap(), two.await.unwrap());
+    let (Err(one), Err(two)) = (one, two) else {
+        panic!("a black-hole dial served a view");
+    };
+    assert!(
+        matches!(one, ViewRefusal::Unavailable { shard_id, .. } if shard_id == SHARD),
+        "{one:?}"
+    );
+    assert_eq!(one.to_string(), two.to_string());
+    assert_eq!(accepts.load(Ordering::SeqCst), 1);
+
+    // The refusal left with the flight. The next caller asks who holds
+    // the shard again — a cached refusal would not — and the proxy is
+    // gone, so the dial fails without a second accept.
+    let again = desk.view(SHARD).await.unwrap_err();
+    assert!(
+        matches!(again, ViewRefusal::Unavailable { shard_id, .. } if shard_id == SHARD),
+        "{again:?}"
+    );
+    assert_eq!(holders.lookups.load(Ordering::SeqCst), 2);
+    assert_eq!(accepts.load(Ordering::SeqCst), 1);
+    assert_eq!(desk.cached_count(), 0);
+}
+
+/// Cancelling the leader removes the flight. The next caller dials; it
+/// does not wait on a sender nobody will publish to.
+#[tokio::test]
+async fn a_cancelled_leader_frees_the_flight() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    {
+        let accepts = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                accepts.fetch_add(1, Ordering::SeqCst);
+                held.push(socket);
+            }
+        });
+    }
+    let client = PFetchClient::with_timeouts(proxy, ephemeral_timeouts());
+    let facts = Arc::new(Facts::new());
+    let key = shekyl_crypto_pq::signature::HybridPublicKey {
+        ed25519: [1; 32],
+        ml_dsa: Vec::new(),
+    };
+    let holders = Arc::new(Holders::new(1, &key));
+    let scheduler = Arc::new(FetchScheduler::new(facts, holders, client));
+    let desk = Arc::new(ViewDesk::new(scheduler, budget(1, 0)));
+
+    let leader = {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(SHARD).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while accepts.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the leader dialled");
+    leader.abort();
+    assert!(leader.await.unwrap_err().is_cancelled());
+
+    let next = {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(SHARD).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while accepts.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the next caller dialled; the cancelled flight was still occupied");
+    next.abort();
+    assert!(next.await.unwrap_err().is_cancelled());
+    assert_eq!(desk.cached_count(), 0);
 }
