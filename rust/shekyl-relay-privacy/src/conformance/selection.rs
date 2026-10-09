@@ -531,3 +531,200 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         independent_reference: 1.0 - (1.0 - effective_share).powf((forced_rerolls + 1) as f64),
     }
 }
+
+/// **§98.10 (PR-1, D-PR1-1):** exposure of the *local source* under induced
+/// churn when its first hop is the hidden stem slot, against an adversary who
+/// floods onion candidates into the gray list and forces drops.
+///
+/// The sibling of [`InducedChurnExposure`] for the §95.3 routing. There the
+/// pool was the whole outbound set and the frozen set was the `stems` slot
+/// peers; here the pool is the address-hiding class alone and the question is
+/// what the local source's pin should freeze. Two arms were put (98.4) and both
+/// are measured on the same trial:
+///
+/// - **`follow_slot_exposure` — (b), posed.** The hidden slot refills with a
+///   uniform draw from the hidden sessions live at the merge, and the local
+///   source rides whatever the slot holds. Each forced drop is a fresh roll
+///   over a pool the flood has had one more refill to enrich.
+/// - **`frozen_pool_exposure` — (c), ruled.** The local source's first pin
+///   freezes every hidden session live at that moment, slot peer first and the
+///   rest shuffled; each forced drop walks to the next frozen candidate. A
+///   session the dialer opened after the pin never serves it. Exhaustion
+///   holds (`NoOwnEdge`) for the rest of the epoch; `frozen_pool_held_share`
+///   is how often that happened.
+/// - **`slot_only_exposure` — (a), posed, reference.** The frozen set is the
+///   slot peer alone: no re-roll ever, and a hold after the first drop
+///   (`slot_only_held_share`).
+///
+/// **The adversary.** Holds `round(g · H)` of the `H` hidden sessions at the
+/// epoch's start. Forces the drop of the origin's current hidden hop whenever
+/// that hop is honest; its own sessions never drop. Every dropped session is
+/// replaced by the dialer from gray before the next merge, and the replacement
+/// is the adversary's with probability `flood_share` — the flood. With
+/// `flood_share` at the ambient share `g` there is no flood; with it near one
+/// the gray list is the adversary's.
+///
+/// What the measurement is for is the **shape across `flood_share`**: (b) is
+/// a with-replacement draw whose adversarial fraction rises by about
+/// `flood_share / H` per drop, (c) is a without-replacement walk over a pool
+/// fixed at pin time. Where the flood is weak, without-replacement is the
+/// worse of the two; where it is strong, the fixed pool is the only thing
+/// the adversary cannot enrich. The crossover is a number, and it is what
+/// §98.10 reports.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `hidden_degree < 2`, or either share is
+/// outside `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HiddenSlotChurnExposure {
+    /// `H` — the origin's address-hiding outbound degree (the dialer floor is
+    /// `MIN_PROVISIONED_OUT_PEERS`, 12).
+    pub hidden_degree: usize,
+    /// Nominal `g` — the adversary's share of the hidden sessions at pin time.
+    pub adversarial_share: f64,
+    /// Effective integer share `round(g · H) / H` the trial places.
+    pub effective_share: f64,
+    /// Probability that a dialer refill from gray is the adversary's.
+    pub flood_share: f64,
+    /// How many drops of the origin's honest hidden hop the adversary forces.
+    pub forced_drops: usize,
+    /// `P(the local source is ever routed to an adversarial hidden hop)` when
+    /// the local source follows the refilled slot — option (b).
+    pub follow_slot_exposure: f64,
+    /// The same when the local source walks the hidden pool frozen at its
+    /// first pin — option (c), ruled.
+    pub frozen_pool_exposure: f64,
+    /// Share of trials in which (c)'s frozen set was exhausted and the local
+    /// source held until the epoch.
+    pub frozen_pool_held_share: f64,
+    /// The same exposure when the frozen set is the slot peer alone — option
+    /// (a), the reference floor.
+    pub slot_only_exposure: f64,
+    /// Share of trials in which (a) held: one or more forced drops happened
+    /// while its single candidate was honest.
+    pub slot_only_held_share: f64,
+}
+
+/// Measure [`HiddenSlotChurnExposure`]; see the type for the arms and the
+/// adversary.
+#[must_use]
+pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
+    hidden_degree: usize,
+    adversarial_share: f64,
+    flood_share: f64,
+    forced_drops: usize,
+    trials: usize,
+    rng: &mut R,
+) -> HiddenSlotChurnExposure {
+    assert!(trials > 0, "need at least one trial");
+    assert!(hidden_degree >= 2, "need at least two hidden sessions");
+    assert!(
+        (0.0..=1.0).contains(&adversarial_share),
+        "adversarial share must be in [0, 1]"
+    );
+    assert!(
+        (0.0..=1.0).contains(&flood_share),
+        "flood share must be in [0, 1]"
+    );
+
+    const FLOOD_DENOM: u64 = 10_000;
+    let h = hidden_degree;
+    let a = (adversarial_share * h as f64).round() as usize;
+    let flood_num = (flood_share * FLOOD_DENOM as f64).round() as u64;
+
+    let mut follow_hits = 0_usize;
+    let mut frozen_hits = 0_usize;
+    let mut frozen_held = 0_usize;
+    let mut slot_hits = 0_usize;
+    let mut slot_held = 0_usize;
+
+    for _ in 0..trials {
+        // The hidden sessions at pin time: the adversary holds the first `a`.
+        // A session is (id, adversarial). Ids above `h` are dialer refills.
+        let mut live: Vec<(usize, bool)> = (0..h).map(|id| (id, id < a)).collect();
+        let mut next_id = h;
+
+        // Slot 0 at the epoch: uniform over the hidden class, as the reserved
+        // slot's constructor draws it. The local source pins to it.
+        let pinned = usize_from(bounded_uniform(rng, (h - 1) as u64));
+        let primary = live[pinned];
+
+        // --- (a): the slot peer alone.
+        let slot_exposed = primary.1;
+        let mut slot_was_held = false;
+
+        // --- (c): the pool frozen at the pin — primary first, the rest in a
+        // shuffled order fixed now. Refills are not in it.
+        let mut frozen: Vec<(usize, bool)> = Vec::with_capacity(h);
+        frozen.push(primary);
+        let mut rest: Vec<(usize, bool)> =
+            live.iter().copied().filter(|s| s.0 != primary.0).collect();
+        for i in (1..rest.len()).rev() {
+            let pick = usize_from(bounded_uniform(rng, i as u64));
+            rest.swap(i, pick);
+        }
+        frozen.extend(rest);
+        let mut frozen_cursor = 0_usize;
+        let mut frozen_exposed = primary.1;
+        let mut frozen_was_held = false;
+
+        // --- (b): the local source rides the slot, which refills uniformly
+        // from the hidden sessions live at the merge.
+        let mut follow_occupant = primary;
+        let mut follow_exposed = primary.1;
+
+        for _ in 0..forced_drops {
+            // (a) and (c) share the drop sequence with (b) only in count: each
+            // arm's current hop is what the adversary drops, when honest.
+            if !slot_exposed {
+                slot_was_held = true;
+            }
+
+            if !frozen_exposed {
+                // The current frozen hop is honest and drops; the walk goes to
+                // the next frozen candidate. Nothing else in the frozen set has
+                // dropped in this model, so the next candidate is live.
+                frozen_cursor += 1;
+                match frozen.get(frozen_cursor) {
+                    Some(next) => frozen_exposed |= next.1,
+                    None => {
+                        frozen_was_held = true;
+                    }
+                }
+            }
+
+            if !follow_exposed {
+                // The occupant drops; the dialer replaces it from gray before
+                // the merge; the slot refills uniformly from what is live.
+                live.retain(|s| s.0 != follow_occupant.0);
+                let refill_adversarial = bernoulli(rng, flood_num, FLOOD_DENOM);
+                live.push((next_id, refill_adversarial));
+                next_id += 1;
+                let pick = usize_from(bounded_uniform(rng, (live.len() - 1) as u64));
+                follow_occupant = live[pick];
+                follow_exposed |= follow_occupant.1;
+            }
+        }
+
+        follow_hits += usize::from(follow_exposed);
+        frozen_hits += usize::from(frozen_exposed);
+        frozen_held += usize::from(frozen_was_held);
+        slot_hits += usize::from(slot_exposed);
+        slot_held += usize::from(slot_was_held);
+    }
+
+    let t = trials as f64;
+    HiddenSlotChurnExposure {
+        hidden_degree: h,
+        adversarial_share,
+        effective_share: a as f64 / h as f64,
+        flood_share,
+        forced_drops,
+        follow_slot_exposure: follow_hits as f64 / t,
+        frozen_pool_exposure: frozen_hits as f64 / t,
+        frozen_pool_held_share: frozen_held as f64 / t,
+        slot_only_exposure: slot_hits as f64 / t,
+        slot_only_held_share: slot_held as f64 / t,
+    }
+}

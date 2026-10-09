@@ -17467,6 +17467,83 @@ crates; their tests; the C++ `levin_notify` fixtures through the daemon
 build; the freeze gate (`levin_notify.cpp` is a shrink row; this PR adds
 no line to it).
 
+### 98.10 Measured — the local source under induced churn, (b) against (c)
+
+`simulate_hidden_slot_churn_exposure` (`conformance/selection.rs`), pinned
+by `hidden_slot_churn_frozen_pool_beats_follow_slot_under_a_gray_flood`
+(`tests/propagation_measurement/selection.rs`). `H = 12`
+(`MIN_PROVISIONED_OUT_PEERS`), one adversarial hidden session at pin time
+(`g = 1/12`), 200k trials per cell, all arms on the same trial. The
+adversary forces the drop of the origin's hidden hop whenever that hop is
+honest; its own sessions never drop; the dialer replaces every dropped
+session from gray before the merge, and the replacement is the
+adversary's with probability *flood*. "Ambient" is *flood* `= g`: refills
+at the adversary's own share, no flood. Columns: **(a)** the slot peer
+alone (posed; holds on the first drop, 0.917 of trials at every `k ≥ 1`);
+**(b)** follow the refilled slot (posed); **(c)** the pool frozen at the
+pin (ruled). Exposure is `P(the local source is ever routed to an
+adversarial hidden hop)` within the epoch.
+
+| flood | `k` | (a) slot | (b) follow | (c) frozen | (c) held |
+| --- | --- | --- | --- | --- | --- |
+| ambient | 0 | 0.082 | 0.082 | 0.082 | 0 |
+| ambient | 1 | 0.083 | 0.166 | 0.167 | 0 |
+| ambient | 2 | 0.084 | 0.249 | 0.251 | 0 |
+| ambient | 4 | 0.085 | 0.399 | **0.419** | 0 |
+| ambient | 8 | 0.083 | 0.637 | **0.750** | 0 |
+| ambient | 11 | 0.084 | 0.761 | **1.000** | 0 |
+| 1/4 | 1 | 0.084 | 0.181 | 0.168 | 0 |
+| 1/4 | 2 | 0.084 | 0.280 | 0.252 | 0 |
+| 1/4 | 4 | 0.083 | 0.480 | 0.418 | 0 |
+| 1/4 | 8 | 0.083 | 0.781 | 0.750 | 0 |
+| 1/4 | 11 | 0.084 | 0.900 | **1.000** | 0 |
+| 1/2 | 1 | 0.083 | 0.198 | 0.165 | 0 |
+| 1/2 | 2 | 0.083 | 0.332 | 0.249 | 0 |
+| 1/2 | 4 | 0.084 | **0.596** | 0.416 | 0 |
+| 1/2 | 8 | 0.084 | **0.909** | 0.750 | 0 |
+| 1/2 | 11 | 0.083 | 0.980 | **1.000** | 0 |
+| 9/10 | 1 | 0.083 | 0.229 | 0.165 | 0 |
+| 9/10 | 2 | 0.082 | 0.407 | 0.248 | 0 |
+| 9/10 | 4 | 0.083 | **0.742** | 0.417 | 0 |
+| 9/10 | 8 | 0.084 | **0.990** | 0.751 | 0 |
+| 9/10 | 11 | 0.084 | 1.000 | 1.000 | 0 |
+
+**Reading.** (c) is a without-replacement walk over the pool fixed at the
+pin: its exposure is `(k + 1) / H` at every flood, which is the property
+the ruling bought — the flood buys the adversary nothing against a pinned
+source. (b) is a with-replacement draw over a pool each refill enriches,
+by about *flood*`/ H` per drop, and even at ambient it drifts up because
+honest sessions drop and the adversary's never do.
+
+- *Under the attacker as specified* — a gray list the adversary has
+  flooded — **(c) is clearly better than (b) for `k` from 1 to 8**: at a
+  half-adversarial gray list 0.42 against 0.60 at four drops and 0.75
+  against 0.91 at eight; at nine tenths 0.42 against 0.74 and 0.75
+  against 0.99. At a quarter the gap is real and small (0.42 against
+  0.48; 0.75 against 0.78).
+- *Without a flood* **(b) is below (c) at every `k ≥ 1`**: 0.40 against
+  0.42 at four drops, 0.64 against 0.75 at eight, 0.76 against 1.00 at
+  eleven. Sampling the fixed pool without replacement reaches the
+  adversary's session sooner than re-drawing at the ambient share.
+- *At `k = H − 1`* (c) is **certain** exposure at every flood: the walk
+  has consumed every honest frozen candidate and the adversary's session
+  is still there. (c) never holds while an adversary is in the pool at
+  pin time; `(c) held` is zero in every cell. Its hold is reached only by
+  a pool with no adversary, which is the 98.5 boot case.
+- *(a)* is the floor, `g`, at every `k`, and the price is a hold in
+  `1 − g` of trials on the first drop.
+
+**Stop condition (98.8 commit 2).** "Clearly better" holds under the
+specified attacker and does not hold without one, and (c) is the worst
+of the three once the adversary can force `H − 1` drops within an epoch.
+The measurement is recorded and the PR pauses here for Rick before the
+`stem_map` API (98.8 commit 4) is built on (c)'s frozen-pool shape. The
+alternative the numbers point at, for the ruling to take or refuse: a
+frozen set of the slot peer plus a bounded number of alternates, which
+holds the flood-independence of (c) and caps the drop-bought exposure at
+`(n + 1) / H` with a hold after `n` drops — §19.2's shape, at `n = 1`
+exposure `≈ 2g` and a hold after two drops.
+
 ### 98.9 Round denominator
 
 Examined and yielding nothing: `relay_zone_ffi/mod.rs` (the plan mapping
