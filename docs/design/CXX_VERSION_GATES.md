@@ -22,7 +22,7 @@ text.
 Monero gates behaviour on its hard-fork numbers. Shekyl restarted the block
 version at 1, so a branch behind `version >= N` with `N ≥ 2` never runs and
 its `else` arm is what ships. The reward-aware template fill sat dead behind
-`version >= 5` from the reboot until 2026-10-04, by which time the economics
+`version >= 5` from the reboot, and by 2026-10-04 the economics
 sim had modelled it as production
 ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.1). Nothing had
 classified the other comparisons. This sweep does, and the gate keeps a new
@@ -36,10 +36,9 @@ same thing.
 
 | Operand | Shekyl's value | What pins it |
 | --- | --- | --- |
-| Block major version | 1 | The hard-fork schedule holds version 1 alone (`src/hardforks/hardforks.cpp`). `HardFork::accepts_header` requires a block's major version to **equal** the schedule's at its height and its minor version to equal 0, so an accepted block's major is 1; the template takes its own from the table |
+| Block major version | 1 | `CURRENT_BLOCK_MAJOR_VERSION`. `header_version_is_valid` (`blockchain.cpp`) requires a block's major version to **equal** it and its minor version to equal 0, on the main path and the alternative-chain path; the template writes both constants. There is no height schedule |
 | Block minor version | 0 | Reserved (CEN-B2, ruled 2026-10-06). It was Monero's fork vote and any value validated; both validators now refuse every value but 0, and the templates write it |
 | Transaction version | 3, once admitted | `ver_non_input_consensus` and `check_tx_inputs` both bound it at 3 exactly, including where the bound is a local (`min_tx_version`, `max_tx_version`) rather than the literal 3. **The parser does not**: `transaction_prefix` refuses 0 and anything above 3, and still reads a version-1 or version-2 blob |
-| A hard-fork table lookup, and the table's own comparisons | 1, or the height the table gives | The same single-entry table. A lookup is a row, and so is a comparison inside `HardFork` (the major version must equal the schedule at the block's height, the minor version must equal the reserved constant) and a comparison of the `hf_version` that lookup returns (the pool revalidated on connect and on pop, the non-input-consensus cache) |
 | Other things named `version` | their own | The LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, the SOCKS protocol version, the PQC `auth_version`, a CLI argument. Not chain versions; extracted and rowed so nothing named `version` is unclassified |
 
 The transaction row is the one that needs care. A comparison such as
@@ -55,21 +54,20 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 
 | Token | Meaning |
 | --- | --- |
-| `move-to-rust` | A dead arm that is the design. The owner moves to Rust and the C++ and its gate are deleted with it |
 | `delete` | A dead arm that is not the design: pre-fork Monero behaviour nobody wants, deleted once its blocker is gone |
 | `collapse` | A live arm. The gate is noise; it collapses to the one arm |
 | `none` | A row for another operand |
 
 ## 4. Where each row lands
 
-`landing` is a token too: `template-fill`, `tx-version`, `hardfork`, `none`. Counted 2026-10-06, when the extractor was widened to a comparison on any version name (a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion`, the bootstrap file version) and to `.cc`. The 2026-10-05 sweep had 66 rows; it required one side to be an integer or an uppercase `VERSION` token, and these were the rows that requirement hid.
+`landing` is a token too: `tx-version`, `none`. Counted 2026-10-08, after the hard-fork mechanism left.
 
-| Token | Rows, 2026-10-06 | What it is |
+| Token | Rows, 2026-10-08 | What it is |
 | --- | --- | --- |
-| `template-fill` | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
 | `tx-version` | 28 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 9 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
-| `hardfork` | 31 | §5 |
-| `none` | 14 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument |
+| `none` | 15 | Other operands: the block-version rule itself (CEN-B1 and CEN-B2, two rows), the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version` |
+
+**Executed 2026-10-08: the `hardfork` and `template-fill` landings** (§5). Thirty-one rows were the hard-fork mechanism and two were `tx_pool.cpp`'s `version >= 5`. Both tokens are retired with their rows, and so is the `move-to-rust` disposition, which only the fill's two rows carried. The extractor still reads a hard-fork table call as a row, so one that came back would have no token to land on.
 
 **Executed 2026-10-08: the `cen-f21` landing.** Four rows resolved the staker-emission epoch through `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. The epoch is `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself, and no C++ site looks it up or passes it. The token is retired with its rows.
 
@@ -94,43 +92,46 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 ## 5. The hard-fork mechanism is deleted
 
 **RULED 2026-10-06 (Rick):** "delete the fork table - when we need one, we
-will write a fresh one, not try to recycle Monero's."
+will write a fresh one, not try to recycle Monero's." Executed 2026-10-08.
+
+Block version is 1. A future consensus change is a design document first,
+and the deletion deliberately leaves no activation machinery behind.
 
 This supersedes the 2026-09-23 ruling that kept the vote window (census §10
-R4, "activation mechanism KEPT"), confirmed as a supersession the same day.
-The vote window is gone. `HardFork::accepts_header` compares the major
-version with the height schedule and the minor version with the reserved
-constant 0 (CEN-B2); `check`, `check_for_height` and `add` all call it.
-The class and its tables follow.
+R4, "activation mechanism KEPT"), confirmed as a supersession 2026-10-06.
 
-The rows landing at `hardfork` are the machinery, not gates on a number:
-`HardFork` itself, the comparisons inside it, the wrappers that expose it,
-the version it hands the template, the `hf_version` read from it and
-compared where the pool is revalidated (on connect and on pop) and where
-non-input consensus is skipped because the transaction already passed at
-that fork, and the start-up loop that pops blocks made under an older fork.
-The handshake's `top_version` is written and read by nobody. All of them are
-`delete`.
+What left, in one change, because removing it a row at a time would have
+left a fork mechanism with pieces missing:
 
-They go in one PR, because collapsing them a row at a time would leave a
-fork mechanism with pieces missing. What that PR has to carry, beyond
-removing the class:
+- **The class and its table.** `HardFork`, `src/hardforks/`, every wrapper
+  on `Blockchain` and `core`, the start-up loop that popped blocks made
+  under an older fork, and the pool revalidation on a fork change.
+- **The version parameter.** `hf_version` was threaded through the pool,
+  non-input consensus, the reward, the coinbase builder and the unlock
+  check, and selected nothing. The pool supplement's "verified at this
+  fork" cache is a flag.
+- **The block-version rule is stated directly** (CEN-B1, CEN-B2):
+  `header_version_is_valid` compares against the two constants.
+- **The `HF_VERSION_*` constants.** All four were 1 and none gated anything.
+- **The RPC surface.** `hard_fork_info` and `get_version.hard_forks`
+  (`CORE_RPC_VERSION` 3.43), the console command, and the fork clauses of
+  the `status` and dynamic-stats lines. No wallet read any of it.
+- **The handshake's `top_version`**, in the C++ and in `shekyl-levin`. A
+  peer that still sends it is read with the key ignored.
+- **CEN-B7**, the one-time warning on a block version above the last
+  scheduled one. A higher version is refused by CEN-B1; there is nothing
+  to warn about.
+- **The template fill's version gate.** Removing the parameter left
+  `version >= 5` with no operand. It collapsed to the arm that ships, and
+  the inherited C++ copy of the reward-aware fill is deleted. The design's
+  owner is `shekyl_block_template::Fill::admit`; it goes live by the pool's
+  fill moving to Rust (RULED 2026-10-05), as before.
 
-- **The block-version rule stays, stated directly.** `HardFork::check` is
-  what requires a block's major version to equal 1 today. The rule moves to
-  where blocks are validated, as a comparison against the constant, and its
-  CEN row is updated to say so.
-- **CEN-F21's epoch stopped being a table lookup** (done 2026-10-08, §4).
-  The split reads `shekyl_economics::EMISSION_SPLIT_EPOCH` and takes no
-  epoch argument, so the `core_tests` chains that passed 0 are priced at
-  the daemon's epoch.
-- **The persisted fork tables and the RPC that reports them go too**: LMDB's
-  `hf_versions`, the `hard_fork_info` surface, and the handshake field. The
-  first is a schema change and follows the serialization policy.
-- **Tests that fork to version 2.** `core_tests` builds fakechain tables at
-  `HF_VERSION_VIEW_TAGS + 1`. Those tests are of a mechanism that will not
-  exist; each is kept for the rule it really exercises, on a chain at
-  version 1, or deleted.
+What stayed, with its reason: LMDB still declares and opens `hf_versions`
+and `hf_starting_heights`, and nothing writes or reads them. The redb
+store's schema and digest domain are defined against the LMDB table list,
+and its own `hf_versions` (the rule set in force per height, a Shekyl
+design) shares the name. The row is in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
 
 ## 6. What the output-count gate was guarding
 

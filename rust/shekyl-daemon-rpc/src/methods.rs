@@ -17,7 +17,7 @@ use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
-    GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
     CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
     CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
@@ -34,7 +34,7 @@ use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse, CORE_RPC_ERROR_CODE_CORE_BUSY,
+    CORE_RPC_ERROR_CODE_CORE_BUSY,
 };
 
 /// Why a native method could not answer. Maps onto the transport's existing
@@ -110,7 +110,7 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 }
 
 /// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
-/// current and target heights, hard-fork schedule.
+/// current and target heights, and the identity tuple.
 ///
 /// `target_height` is the core's target. `0` means the core reported none,
 /// not that the node is synchronized.
@@ -122,21 +122,12 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
     // in-process read cannot (VC-R17). Both facts are process-lifetime
     // constants besides.
     let identity = facts.identity()?;
-    let hard_forks = facts
-        .hardforks()?
-        .into_iter()
-        .map(|hf| HardForkEntry {
-            hf_version: hf.version,
-            height: hf.height.to_raw(),
-        })
-        .collect();
     Ok(GetVersionResponse {
         status: RpcStatus::ok(),
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
         target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
-        hard_forks,
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
         // asking C++ for it would give one value two sources.
@@ -777,13 +768,12 @@ fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFaul
     Ok(requested)
 }
 
-/// The request parsers for the five RK-5b methods.
+/// The request parsers for the four RK-5b methods.
 ///
 /// Each names **its own** fields, because a caller that sent the wrong shape
 /// needs to know what this method wanted, not what the last one did.
-/// `get_last_block_header` and `hard_fork_info` accept absent params — the
-/// tip and the next fork are what they answer with no arguments.
-/// `get_block_headers_range` does **not**: a range has no empty form, so
+/// `get_last_block_header` accepts absent params — the tip is what it
+/// answers with no arguments. `get_block_headers_range` does **not**: a range has no empty form, so
 /// absent params and `{}` are refused rather than answered as genesis.
 ///
 /// # Errors
@@ -826,19 +816,6 @@ pub fn block_headers_range_request(
         params,
         "Wrong parameters, expected an object with start_height and end_height \
          (non-negative integers) and optional fill_pow_hash (boolean)",
-    )
-}
-
-/// See [`last_block_header_request`].
-///
-/// # Errors
-///
-/// As [`last_block_header_request`].
-pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfoRequest, RpcFault> {
-    object_params(
-        params,
-        "Wrong parameters, expected an object with optional version (1-255); \
-         omit it to ask about the next scheduled version",
     )
 }
 
@@ -897,16 +874,16 @@ pub fn get_last_block_header(
     let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
-    // guarded `on_get_last_block_header` alone among this slice's five —
+    // guarded `on_get_last_block_header` alone among this slice's methods —
     // deliberately, and the reason survives the port: this is the one method
     // that answers "the tip", which on an unsynchronised node is the top of a
-    // partial chain presented as the top of the chain. The other four take an
-    // explicit height or hash, where the caller already named what it wanted
-    // and a partial chain simply does not have it.
+    // partial chain presented as the top of the chain. The other header
+    // methods take an explicit height or hash, where the caller already named
+    // what it wanted and a partial chain simply does not have it.
     //
     // The C++ answered `status = BUSY` with a **default-constructed header**,
-    // which `shekyl-rpc-client`'s `get_hardfork_version` read straight
-    // through as major version 0. Refusing is the ruling already applied to
+    // which a client reading a header field without the status beside it
+    // took for a block of major version 0 and a zero hash. Refusing is the ruling already applied to
     // `fill_pow_hash`: a method that declines to answer must not report
     // success (`5b0c32f51`).
     if !tip.synchronized {
@@ -1053,29 +1030,6 @@ pub fn get_block_headers_range(
     Ok(GetBlockHeadersRangeResponse {
         status: RpcStatus::ok(),
         headers,
-    })
-}
-
-/// `hard_fork_info`.
-///
-/// A projection. The voting fields are carried exactly as the daemon reports
-/// them, and the two versions are reported apart — see the type.
-pub fn hard_fork_info(
-    facts: &dyn ChainFacts,
-    request: &HardForkInfoRequest,
-) -> Result<HardForkInfoResponse, RpcFault> {
-    let info = facts.hard_fork_info(request.version.map(core::num::NonZeroU8::get))?;
-    Ok(HardForkInfoResponse {
-        status: RpcStatus::ok(),
-        queried_version: info.queried_version,
-        active_version: info.active_version,
-        enabled: info.enabled,
-        window: info.window,
-        votes: info.votes,
-        threshold: info.threshold,
-        voting: info.voting,
-        state: info.state,
-        earliest_height: info.earliest_height,
     })
 }
 
@@ -1409,7 +1363,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
-        ChainTip, DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
+        ChainTip, DaemonIdentity, FeeEstimate, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
@@ -1427,7 +1381,6 @@ pub(crate) mod tests {
     /// the caller's height would pass every one of them.
     pub(crate) struct FakeFacts {
         pub tip: Result<ChainTip, FactsFault>,
-        pub forks: Result<Vec<HardFork>, FactsFault>,
         /// Length of the fake chain for `block_hash_at`'s bound.
         pub hash_chain_height: ChainCount,
         /// When set, `block_hash_at` faults instead of answering.
@@ -1442,9 +1395,6 @@ pub(crate) mod tests {
         pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
-        /// What `hard_fork_info` was asked about, including whether the
-        /// caller supplied a version at all.
-        pub asked_fork_version: std::sync::Mutex<Option<Option<u8>>>,
         /// The last `grace_blocks` `fee_estimate` was asked for.
         pub asked_grace: AtomicU64,
         /// The hash `block_at` was asked for, when it was asked by hash.
@@ -1494,27 +1444,6 @@ pub(crate) mod tests {
                     nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
                     genesis_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
                 })
-            })
-        }
-        fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
-            self.forks.clone()
-        }
-        fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
-            // The double records the request and answers a fixed shape. It
-            // does not re-derive "0 means next" — that resolution belongs to
-            // the daemon, and a fake that reimplemented it would be asserting
-            // its own copy of the rule.
-            *self.asked_fork_version.lock().expect("not poisoned") = Some(requested);
-            Ok(HardForkInfo {
-                queried_version: requested.unwrap_or(7),
-                active_version: 3,
-                enabled: true,
-                window: 10080,
-                votes: 42,
-                threshold: 0,
-                voting: 9,
-                state: 2,
-                earliest_height: 1_234_000,
             })
         }
 
@@ -1685,10 +1614,6 @@ pub(crate) mod tests {
                 synchronized,
                 release_build: false,
             }),
-            forks: Ok(vec![HardFork {
-                version: 1,
-                height: BlockHeight::from_raw(0),
-            }]),
             hash_chain_height: ChainCount::from_raw(1_234_567),
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
@@ -1699,7 +1624,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_fork_version: std::sync::Mutex::new(None),
             asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
@@ -2083,10 +2007,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v19` = 3.42). A bump that
+        // Head of the `get_version` chain (`_v20` = 3.43). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v19.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v20.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2114,7 +2038,6 @@ pub(crate) mod tests {
     fn facts_fault_is_not_answered_with_zeros() {
         let f = FakeFacts {
             tip: Err(FactsFault::NotReady),
-            forks: Ok(vec![]),
             hash_chain_height: ChainCount::ZERO,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
@@ -2125,7 +2048,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_fork_version: std::sync::Mutex::new(None),
             asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
@@ -2288,7 +2210,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The five RK-5b params parsers each accept absent params and their own
+    /// The four RK-5b params parsers each accept absent params and their own
     /// object, and refuse every other shape — an array included.
     ///
     /// The array rows are the ones with a defect behind them: serde's derive
@@ -2325,17 +2247,6 @@ pub(crate) mod tests {
         }
 
         assert_eq!(
-            hard_fork_info_request(&json!(null)).unwrap().version,
-            None,
-            "absent params ask about the active fork"
-        );
-        assert_eq!(
-            hard_fork_info_request(&json!({"version": 7}))
-                .unwrap()
-                .version,
-            core::num::NonZeroU8::new(7)
-        );
-        assert_eq!(
             fee_estimate_request(&json!({"grace_blocks": 5}))
                 .unwrap()
                 .grace_blocks,
@@ -2357,7 +2268,6 @@ pub(crate) mod tests {
                 last_block_header_request(&bad).err(),
                 block_header_by_hash_request(&bad).err(),
                 block_headers_range_request(&bad).err(),
-                hard_fork_info_request(&bad).err(),
                 fee_estimate_request(&bad).err(),
             ] {
                 let RpcFault::Refused(refusal) =
@@ -2370,7 +2280,6 @@ pub(crate) mod tests {
         }
 
         // And a field of the wrong type inside a well-shaped object.
-        assert!(hard_fork_info_request(&json!({"version": "7"})).is_err());
         assert!(block_headers_range_request(&json!({"start_height": -1})).is_err());
     }
 
@@ -2685,17 +2594,16 @@ pub(crate) mod tests {
     /// the top of a partial chain.
     ///
     /// The C++ `CHECK_CORE_READY()` guarded **this method alone** among the
-    /// slice's five, and the reason survives: this is the one that answers
+    /// slice's methods, and the reason survives: this is the one that answers
     /// "the tip", which on a syncing node is the top of what has arrived so
-    /// far presented as the top of the chain. The other four take an explicit
-    /// height or hash, where the caller named what it wanted.
+    /// far presented as the top of the chain. The other header methods take
+    /// an explicit height or hash, where the caller named what it wanted.
     ///
     /// The C++ answered `status = BUSY` with a **default-constructed**
-    /// header, and that was a live trap rather than a tidy convention:
-    /// `shekyl-rpc-client`'s `get_hardfork_version` reads
-    /// `block_header.major_version` without checking the status, so an
-    /// unsynchronised daemon told it the fork version was 0. A refusal cannot
-    /// be read as an answer.
+    /// header, and that was a live trap rather than a tidy convention: a
+    /// client reading `block_header` without checking the status beside it
+    /// was told the tip was a block of major version 0 with a zero hash. A
+    /// refusal cannot be read as an answer.
     #[test]
     fn an_unsynchronized_node_refuses_to_report_a_tip() {
         let unsynced = facts(false, 900_000);
@@ -2708,7 +2616,7 @@ pub(crate) mod tests {
         // syncing node does not pay for a question it will not answer.
         assert_eq!(unsynced.header_reads.load(Ordering::Relaxed), 0);
 
-        // The other four have no readiness check, because the C++ gave them
+        // The other three have no readiness check, because the C++ gave them
         // none — asserted, so that "port what is there" stays a fact about
         // this diff rather than a claim about it.
         let range = GetBlockHeadersRangeRequest {
@@ -2717,7 +2625,6 @@ pub(crate) mod tests {
             fill_pow_hash: false,
         };
         assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
-        assert!(hard_fork_info(&unsynced, &HardForkInfoRequest { version: None }).is_ok());
         assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
         assert!(get_block_header_by_hash(
             &unsynced,
@@ -2872,41 +2779,6 @@ pub(crate) mod tests {
         // the caller can re-ask rather than guess.
         assert!(refusal.message.contains("1000"), "{}", refusal.message);
         assert!(refusal.message.contains("999"), "{}", refusal.message);
-    }
-
-    /// The request's absent version reaches the facts layer as `None` — the
-    /// handler does not substitute a sentinel on the way down, and the
-    /// resolved answer comes back up.
-    #[test]
-    fn hard_fork_info_forwards_the_absence_and_reports_the_resolution() {
-        let f = facts(false, 0);
-        let out = hard_fork_info(&f, &HardForkInfoRequest { version: None }).expect("info");
-        assert_eq!(
-            *f.asked_fork_version.lock().expect("not poisoned"),
-            Some(None),
-            "the handler must forward 'no version given', not a 0"
-        );
-        assert_ne!(
-            out.queried_version, 0,
-            "the reply never carries the sentinel"
-        );
-        assert_ne!(
-            out.queried_version, out.active_version,
-            "the two versions are separate fields, not one under two names"
-        );
-
-        let out = hard_fork_info(
-            &f,
-            &HardForkInfoRequest {
-                version: core::num::NonZeroU8::new(4),
-            },
-        )
-        .expect("info");
-        assert_eq!(
-            *f.asked_fork_version.lock().expect("not poisoned"),
-            Some(Some(4))
-        );
-        assert_eq!(out.queried_version, 4, "an explicit version is echoed");
     }
 
     /// `grace_blocks` past the ceiling is refused before the FFI call, so a

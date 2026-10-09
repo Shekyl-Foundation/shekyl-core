@@ -86,13 +86,10 @@ INVENTORY_COLUMNS = (
 DISPOSITIONS = (
     "collapse",
     "delete",
-    "move-to-rust",
     "none",
 )
 LANDINGS = (
     "tx-version",
-    "hardfork",
-    "template-fill",
     "none",
 )
 

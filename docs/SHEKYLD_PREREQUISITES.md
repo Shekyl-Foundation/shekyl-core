@@ -337,9 +337,8 @@ lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.
 `shekyld` does not expose a fee policy version in any form. There is
 no `fee_version` field on `get_fee_estimate`'s response, no
 `fee_policy_id` on `get_info`, and no separate `get_fee_policy_version`
-RPC. The closest available signals are the daemon binary version
-(`get_version` JSON-RPC) and the consensus hard-fork metadata
-(`hard_fork_info` JSON-RPC), neither of which is a fee-rules epoch.
+RPC. The closest available signal is the daemon binary version
+(`get_version` JSON-RPC), which is not a fee-rules epoch.
 
 ### Evidence of absence
 

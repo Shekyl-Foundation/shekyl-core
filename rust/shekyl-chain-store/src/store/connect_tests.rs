@@ -8,7 +8,7 @@
 //! digest-equal, and every belt fired from a hand-built violation.
 //!
 //! Blocks go through the real `validate` under `RuleSet::GENESIS` — the
-//! rules landed so far (E6 slice 1: A2, B1, B2, B5, B6, B7) pass every
+//! rules landed so far (E6 slice 1: A2, B1, B2, B5, B6) pass every
 //! well-formed fixture here, and coverage records exactly those rows — so
 //! `connect` is exercised through its public signature. Every store here is
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.

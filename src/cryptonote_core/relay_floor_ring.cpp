@@ -134,8 +134,7 @@ bool Blockchain::relay_floor_at(uint64_t height, uint64_t long_term_median,
   // M_r-neutral reward: M_r lives inside C. Weight-1 makes the penalty inert,
   // so R depends on already_generated_coins alone.
   uint64_t base_reward = 0;
-  if (!get_block_reward(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, 1, already_generated_coins, base_reward,
-      get_current_hard_fork_version()))
+  if (!get_block_reward(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, 1, already_generated_coins, base_reward))
     return false;
 
   const uint64_t c = fee_correction_from(height, already_generated_coins, tx_volume);

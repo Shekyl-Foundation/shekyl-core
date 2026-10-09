@@ -144,8 +144,6 @@ namespace
     }
 
     virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { if (!blocks.empty()) blocks.pop_back(); }
-    virtual void set_hard_fork_version(uint64_t height, uint8_t version) override { if (height >= hf.size()) hf.resize(height + 1); hf[height] = version; }
-    virtual uint8_t get_hard_fork_version(uint64_t height) const override { if (height >= hf.size()) return 255; return hf[height]; }
 
     virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
     virtual void trim_curve_tree(uint64_t) override {}
@@ -170,7 +168,6 @@ namespace
 
   private:
     std::vector<block_t> blocks;
-    std::vector<uint8_t> hf;
   };
 
 }
@@ -178,18 +175,8 @@ namespace
 static std::unique_ptr<cryptonote::Blockchain> init_blockchain(const std::vector<test_event_entry> & events, cryptonote::network_type nettype)
 {
   std::unique_ptr<cryptonote::Blockchain> bc;
-  v_hardforks_t hardforks;
-  cryptonote::test_options test_options_tmp{nullptr, 0};
+  const cryptonote::test_options test_options_tmp{0};
   const cryptonote::test_options * test_options = &test_options_tmp;
-  if (!extract_hard_forks(events, hardforks))
-  {
-    MDEBUG("Extracting hard-forks from blocks");
-    extract_hard_forks_from_blocks(events, hardforks);
-  }
-
-  hardforks.push_back(std::make_pair((uint8_t)0, (uint64_t)0));  // terminator
-  test_options_tmp.hard_forks = hardforks.data();
-  test_options = &test_options_tmp;
 
   cryptonote::tx_memory_pool txpool(*bc);
   bc.reset(new cryptonote::Blockchain(txpool));
@@ -258,7 +245,7 @@ uint64_t test_generator::get_already_generated_coins(const cryptonote::block& bl
   return get_already_generated_coins(blk_hash);
 }
 
-void test_generator::add_block(const cryptonote::block& blk, size_t txs_weight, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward, uint8_t hf_version, const std::vector<cryptonote::transaction>& txs)
+void test_generator::add_block(const cryptonote::block& blk, size_t txs_weight, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward, const std::vector<cryptonote::transaction>& txs)
 {
   const size_t block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
   const crypto::hash id = get_block_hash(blk);
@@ -473,10 +460,9 @@ std::vector<cryptonote::transaction> test_generator::find_txs_in_events(const st
 
 bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
                                      const cryptonote::account_base& miner_acc, uint64_t timestamp, uint64_t already_generated_coins,
-                                     std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
-                                     const std::optional<uint8_t>& hf_ver)
+                                     std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list)
 {
-  blk.major_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MAJOR_VERSION;
+  blk.major_version = CURRENT_BLOCK_MAJOR_VERSION;
   blk.minor_version = CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
@@ -518,7 +504,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // pinned in shekyl-ffi). A test that configures a non-neutral asymptote
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1,
         /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}))
       return false;
 
@@ -531,7 +517,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
 
   //blk.tree_root_hash = get_tx_tree_hash(blk);
 
-  fill_nonce(blk, get_test_difficulty(hf_ver), height);
+  fill_nonce(blk, get_test_difficulty(), height);
   // Mirror Blockchain::validate_miner_transaction's base_reward out-param so the
   // harness's already_generated_coins stays byte-identical to the daemon's LMDB
   // accumulation. For h>=1 (fix alpha, :1609) that out-param is the FULL emission
@@ -548,9 +534,9 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   {
     get_block_reward(misc_utils::median(block_weights), target_block_weight,
                      already_generated_coins, accum_reward,
-                     hf_ver ? *hf_ver : 1, /*tx_volume=*/{});
+                     /*tx_volume=*/{});
   }
-  add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward, hf_ver ? *hf_ver : 1,
+  add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward,
     std::vector<cryptonote::transaction>(tx_list.begin(), tx_list.end()));
 
   return true;
@@ -565,18 +551,17 @@ bool test_generator::construct_block(cryptonote::block& blk, const cryptonote::a
 
 bool test_generator::construct_block(cryptonote::block& blk, const cryptonote::block& blk_prev,
                                      const cryptonote::account_base& miner_acc,
-                                     const std::list<cryptonote::transaction>& tx_list/* = std::list<cryptonote::transaction>()*/,
-                                     const std::optional<uint8_t>& hf_ver)
+                                     const std::list<cryptonote::transaction>& tx_list/* = std::list<cryptonote::transaction>()*/)
 {
   uint64_t height = std::get<txin_gen>(blk_prev.miner_tx.vin.front()).height + 1;
   crypto::hash prev_id = get_block_hash(blk_prev);
   // Keep difficulty unchanged
-  uint64_t timestamp = blk_prev.timestamp + current_difficulty_window(hf_ver);
+  uint64_t timestamp = blk_prev.timestamp + current_difficulty_window();
   uint64_t already_generated_coins = get_already_generated_coins(prev_id);
   std::vector<size_t> block_weights;
   get_last_n_block_weights(block_weights, prev_id, CRYPTONOTE_REWARD_BLOCKS_WINDOW);
 
-  return construct_block(blk, height, prev_id, miner_acc, timestamp, already_generated_coins, block_weights, tx_list, hf_ver);
+  return construct_block(blk, height, prev_id, miner_acc, timestamp, already_generated_coins, block_weights, tx_list);
 }
 
 bool test_generator::construct_block_manually(block& blk, const block& prev_block, const account_base& miner_acc,
@@ -585,7 +570,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
                                               const crypto::hash& prev_id/* = crypto::hash()*/, const difficulty_type& diffic/* = 1*/,
                                               const transaction& miner_tx/* = transaction()*/,
                                               const std::vector<crypto::hash>& tx_hashes/* = std::vector<crypto::hash>()*/,
-                                              size_t txs_weight/* = 0*/, size_t max_outs/* = 0*/, uint8_t hf_version/* = 1*/,
+                                              size_t txs_weight/* = 0*/, size_t max_outs/* = 0*/,
                                               uint64_t fees/* = 0*/)
 {
   blk.major_version = actual_params & bf_major_ver ? major_ver : CURRENT_BLOCK_MAJOR_VERSION;
@@ -600,7 +585,6 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   // harness (FOLLOWUPS F-H principle). bf_max_outs still lets a test state a
   // deliberate violation.
   max_outs          = actual_params & bf_max_outs ? max_outs : 1;
-  hf_version        = actual_params & bf_hf_version ? hf_version : 1;
   fees              = actual_params & bf_tx_fees ? fees : 0;
 
   size_t height = get_block_height(prev_block) + 1;
@@ -615,14 +599,14 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   {
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs,
         /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}))
       return false;
   }
 
   //blk.tree_root_hash = get_tx_tree_hash(blk);
 
-  difficulty_type a_diffic = actual_params & bf_diffic ? diffic : get_test_difficulty(hf_version);
+  difficulty_type a_diffic = actual_params & bf_diffic ? diffic : get_test_difficulty();
   fill_nonce(blk, a_diffic, height);
 
   // construct_block_manually always builds h>=1 (prev_block+1); accumulate the
@@ -631,9 +615,9 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   uint64_t full_base_reward = 0;
   get_block_reward(misc_utils::median(block_weights),
                    txs_weight + get_transaction_weight(blk.miner_tx),
-                   already_generated_coins, full_base_reward, hf_version,
+                   already_generated_coins, full_base_reward,
                    /*tx_volume=*/{});
-  add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward, hf_version,
+  add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward,
     find_txs_in_events(blk.tx_hashes));
 
   return true;
@@ -697,7 +681,7 @@ static bool write_coinbase_extra(transaction& tx, const crypto::public_key& tx_p
 
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const account_public_address& miner_address, transaction& tx, uint64_t fee,
-                                 uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/,
+                                 keypair* p_txkey/* = 0*/,
                                  size_t median_block_weight/* = 0*/, size_t txs_weight/* = 0*/)
 {
   CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
@@ -731,7 +715,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     in.height = height;
 
     uint64_t block_reward;
-    if (!get_block_reward(median_block_weight, /*current_block_weight=*/0, already_generated_coins, block_reward, hf_version, /*tx_volume=*/{}))
+    if (!get_block_reward(median_block_weight, /*current_block_weight=*/0, already_generated_coins, block_reward, /*tx_volume=*/{}))
       return false;
 
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height);
@@ -867,49 +851,6 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
 
   tx.invalidate_hashes();
   return true;
-}
-
-bool extract_hard_forks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks)
-{
-  for(auto & ev : events)
-  {
-    if (std::holds_alternative<event_replay_settings>(ev))
-    {
-      const auto & rep_settings = std::get<event_replay_settings>(ev);
-      if (rep_settings.hard_forks)
-      {
-        const auto & hf = *rep_settings.hard_forks;
-        std::copy(hf.begin(), hf.end(), std::back_inserter(hard_forks));
-      }
-    }
-  }
-
-  return !hard_forks.empty();
-}
-
-bool extract_hard_forks_from_blocks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks)
-{
-  int hf = -1;
-  int64_t height = 0;
-
-  for(auto & ev : events)
-  {
-    if (!std::holds_alternative<block>(ev))
-    {
-      continue;
-    }
-
-    const block *blk = &std::get<block>(ev);
-    if (blk->major_version != hf)
-    {
-      hf = blk->major_version;
-      hard_forks.push_back(std::make_pair(blk->major_version, (uint64_t)height));
-    }
-
-    height += 1;
-  }
-
-  return !hard_forks.empty();
 }
 
 void get_confirmed_txs(const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx, map_hash2tx_t& confirmed_txs)

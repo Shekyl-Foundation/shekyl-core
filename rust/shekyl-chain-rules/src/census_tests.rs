@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use crate::census::{CenRow, Flag, PolicyRow, Row, RowStatus};
-use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::topology::A2;
 use crate::rules::Rule;
 
@@ -106,7 +106,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::B4,
             CenRow::B5,
             CenRow::B6,
-            CenRow::B7,
             CenRow::C1,
             CenRow::C2,
             CenRow::C3,
@@ -275,7 +274,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(<B2 as Rule>::ROW, CenRow::B2);
     assert_eq!(<B5 as Rule>::ROW, CenRow::B5);
     assert_eq!(<B6 as Rule>::ROW, CenRow::B6);
-    assert_eq!(<B7 as Rule>::ROW, CenRow::B7);
 }
 
 #[test]
@@ -312,8 +310,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 154 → 153 on 2026-10-04: CEN-J17 (the `HoldingsUpdate` add / drop
     // arms, a post kind REJECTED 2026-09-20 and deleted by E4's ARW-14) went
     // to bucket 3 (E6 slice 8 Q1 (a)) — a row whose subject is gone does
-    // not inflate the denominator.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // not inflate the denominator. 153 → 152 on 2026-10-08: CEN-B7 (the
+    // one-time warning on a block version above the last scheduled one)
+    // went to bucket 3 with the hard-fork mechanism: a higher version is
+    // refused by B1, and there is nothing to warn about.
+    assert_eq!(CenRow::ALL.len(), 152);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

@@ -8,9 +8,8 @@
 //!
 //! [`RuleSetId`] is **its own space** (`CHAIN_RULES_CRATE.md` §4.2, round-1
 //! ruling Q5). It coincides with `BlockHeader.major_version` today because
-//! the shipped hardfork table has one entry — the same inertness that hid
-//! the `on_block_popped` defect — and the coincidence is a fact about the
-//! table, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
+//! there is one rule set and one block version, and the coincidence is a
+//! fact about that, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
 //! and no reading of the header version anywhere here: the header version
 //! a rule set *admits* is one of its parameters ([`RuleSet::header_major_version`],
 //! landed with CEN-B1 in slice 1), never its identity.
@@ -477,8 +476,7 @@ pub struct RuleSchedule {
 }
 
 impl RuleSchedule {
-    /// The identity schedule: the genesis rules at every height. What the
-    /// shipped one-entry hardfork table means.
+    /// The identity schedule: the genesis rules at every height.
     const IDENTITY: Self = Self {
         genesis: RuleSetId::GENESIS,
         steps: &[],

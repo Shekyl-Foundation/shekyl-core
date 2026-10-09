@@ -290,7 +290,6 @@ fn spawn_peer(
                 cumulative_difficulty: 0,
                 cumulative_difficulty_top64: 0,
                 top_id: [0u8; 32],
-                top_version: 0,
             },
             nonce: [0x42; 32],
         };

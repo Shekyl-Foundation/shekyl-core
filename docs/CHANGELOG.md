@@ -24,6 +24,44 @@
   - The gitian workflow takes a `package_dry_run` input that runs the package job on a dispatch without publishing.
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
 
+### The hard-fork mechanism is deleted
+
+Ruled 2026-10-06 (Rick): "delete the fork table - when we need one, we will
+write a fresh one, not try to recycle Monero's." Block version is 1. A future
+consensus change is a design document first, and this change deliberately
+leaves no activation machinery behind.
+
+- **No behaviour changes for a valid chain.** A block's version must be
+  `1.0`, as before (CEN-B1, CEN-B2); the rule is now one comparison against
+  the two constants, with no height schedule behind it. The captured replay
+  chains are unchanged.
+- **The staker emission share starts at block 1** (ruled 2026-10-08): the
+  genesis block pays no staker share, and the share's decay is measured from
+  block 1. The epoch is one constant, `shekyl_economics::EMISSION_SPLIT_EPOCH`;
+  it was an argument the C++ looked up in the fork table.
+- **Removed from the daemon:** the `HardFork` class and its table; the
+  block-version parameter threaded through the pool, transaction checks,
+  reward and coinbase builder; the start-up loop that popped blocks made
+  under an older fork; the "you may be running an old daemon" warning on a
+  higher block version (CEN-B7, such a block is refused); the
+  `HF_VERSION_*` constants.
+- **Wire, `CORE_RPC_VERSION` 3.43:** the `hard_fork_info` method is deleted
+  and `get_version` no longer carries `hard_forks`. No wallet read either.
+- **Wire, p2p:** the handshake no longer carries `top_version`. A peer that
+  still sends it is read with the key ignored.
+- **Daemon console:** the `hard_fork_info` command is removed; `status` no
+  longer prints a fork version or a countdown; `print_blockchain_dynamic_stats`
+  no longer prints `Block versions` and `Voting for`.
+- **`shekyl-blockchain-import`:** `--drop-hard-fork` is removed.
+- **Template fill:** the inherited C++ copy of the reward-aware fill, which
+  sat behind a block version this chain never had, is deleted. The fill that
+  ships is unchanged; the reward-aware fill is still the design and still
+  arrives with the fill's move to Rust (`FOLLOWUPS.md`).
+- **Not removed:** LMDB still declares `hf_versions` and
+  `hf_starting_heights`, unused, until the redb cutover (`FOLLOWUPS.md`).
+  The redb store's `hf_versions` is the rule set in force per height and is
+  not this mechanism.
+
 ### Consensus — the header's minor version is reserved at 0
 
 - A block's `minor_version` must be `0` (CEN-B2). The byte was Monero's

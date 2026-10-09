@@ -334,7 +334,6 @@ census_rows! {
         B4 implemented(crate::rules::attestation::B4),
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
-        B7 implemented(crate::rules::header::B7),
         // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition
         // recorded at `C3::window`.
         C1 implemented(crate::rules::timestamps::C1),

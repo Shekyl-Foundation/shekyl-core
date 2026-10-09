@@ -142,7 +142,7 @@ namespace cryptonote
 
 
     /**
-     * @copydoc add_tx(transaction&, tx_verification_context&, bool, bool, uint8_t)
+     * @copydoc add_tx(transaction&, tx_verification_context&, relay_method, bool, bool)
      *
      * @param id the transaction's hash
      * @tx_relay how the transaction was received
@@ -150,7 +150,7 @@ namespace cryptonote
      */
     bool add_tx(transaction &tx, const crypto::hash &id, const cryptonote::blobdata &blob,
       size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      bool nic_verified = false);
 
     /**
      * @brief add a transaction to the transaction pool
@@ -164,19 +164,17 @@ namespace cryptonote
      * @param tvc return-by-reference status about the transaction verification
      * @tx_relay how the transaction was received
      * @param relayed was this transaction from the network or a local client?
-     * @param version the version used to create the transaction
-     * @param nic_verified_hf_version hard fork which "tx" is known to pass non-input consensus test
+     * @param nic_verified "tx" is known to pass the non-input consensus test
      *
-     * If "nic_verified_hf_version" parameter is equal to "version" parameter, then we skip the
-     * asserting `ver_non_input_consensus(tx)`, which greatly speeds up block popping and returning
-     * txs to mempool for txs which we know will pass the test. If nothing is known about how "tx"
-     * passes the non-input consensus tests (e.g. for newly received relayed txs), then leave
-     * "nic_verified_hf_version" as its default value of 0 (there is no v0 fork).
+     * If "nic_verified" is set, then we skip asserting `ver_non_input_consensus(tx)`, which
+     * greatly speeds up block popping and returning txs to mempool for txs which we know will
+     * pass the test. If nothing is known about how "tx" passes the non-input consensus tests
+     * (e.g. for newly received relayed txs), then leave "nic_verified" as its default.
      *
      * @return true if the transaction passes validations, otherwise false
      */
     bool add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      bool nic_verified = false);
 
     /**
      * @brief RPC-submit commit tail: insert an engine-verified transaction
@@ -356,7 +354,7 @@ namespace cryptonote
      *
      * @return true
      */
-    bool fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward, uint8_t version);
+    bool fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward);
 
     /**
      * @brief get a list of all transactions in the pool
@@ -518,15 +516,13 @@ namespace cryptonote
     /**
      * @brief remove transactions from the pool which are no longer valid
      *
-     * With new versions of the currency, what conditions render a transaction
-     * invalid may change.  This function clears those which were received
-     * before a version change and no longer conform to requirements.
-     *
-     * @param version the version the transactions must conform to
+     * Re-runs admission on every transaction the pool holds and drops
+     * those this binary refuses. Called once at start-up, on the pool as
+     * it was persisted.
      *
      * @return the number of transactions removed
      */
-    size_t validate(uint8_t version);
+    size_t validate();
 
      /**
       * @brief return the cookie

@@ -37,7 +37,8 @@ the most recent slice to run one** (`get_last_block_header`,
 to see how a capture was set up, check out the commit that added
 `tests/unit_tests/rpc_oracle_vectors.cpp` in the slice you care about —
 `git log --diff-filter=A --follow -- tests/unit_tests/rpc_oracle_vectors.cpp`
-lists every one of them.
+lists every one of them. `hard_fork_info` and its two vectors were deleted
+with the method at 3.43, so that capture has no file here.
 
 Once a method's C++ is deleted there is nothing left to capture from *for that
 method*, so a later shape change to it cannot be re-captured and must be argued
@@ -57,16 +58,18 @@ paragraph above could inherit the constraint backwards and treat an
 un-recapturable method as frozen; it is not. **A `_v2` is derived, never authored.** Each pair carries a delta test that
 re-derives `_v2` from `_v1`, so a hand-edited `_v2` fails rather than standing
 as its own authority — demonstrated, not assumed: changing
-`get_fee_estimate_v2.json`'s `quantization_mask` and `hard_fork_info_v2.json`'s
-renamed field both turn their delta tests red. Three delta shapes exist, and
+`get_fee_estimate_v2.json`'s `quantization_mask` turns its delta test red.
+Three delta shapes exist, and
 RK-5b added the third:
 
 - **subtraction** — `_v2` is `_v1` minus exactly these fields
   (`v2_is_v1_minus_exactly_the_two_retired_members`,
-  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`)
+  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`,
+  `the_get_version_side_cases_are_their_predecessors_minus_exactly_hard_forks`)
 - **substitution** — `_v1` with one value replaced
   (`the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
-  which walks every link of that chain rather than its newest pair)
+  which walks every link of that chain rather than its newest pair, and
+  names per link any member that bump adds or removes)
 - **transform, plus a named extension** — for a change of *shape*, where no
   subtraction from `_v1` produces `_v2`. `by_hash_v2_is_v1_reshaped_into_slots`
   writes the reshaping as code; the cases `_v1` structurally cannot express —
@@ -88,7 +91,11 @@ destroy the one property that makes it an oracle. The `_v2` is instead held
 honest by `the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
 which substitutes the live constant across every consecutive pair and requires
 each result to equal its successor exactly — so a file may differ from its
-predecessor by that constant and by nothing else, no link may be skipped, and
-the newest may not go stale against the constant. It replaced a per-pair test
+predecessor by that constant and by the members that link declares added or
+removed, no link may be skipped, and the newest may not go stale against the
+constant. `get_version_absent_target_v1.json` is the one `_v1` here that is
+not a C++ capture: it is `get_version_synced_v6.json` minus `hard_forks`
+(3.43), derived by the subtraction test above, and takes a new case name
+because `synced_v7` onward carry a target. It replaced a per-pair test
 that was renamed at each bump, which is how a chain with a missing vector
 passed.

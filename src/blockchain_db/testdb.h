@@ -66,7 +66,6 @@ public:
   virtual void block_rtxn_stop() const override {}
   virtual void block_rtxn_abort() const override {}
 
-  virtual void drop_hard_fork_info() override {}
   virtual bool block_exists(const crypto::hash& h, uint64_t *height) const override { return false; }
   virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const override { return cryptonote::t_serializable_object_to_blob(get_block_from_height(height)); }
   virtual cryptonote::blobdata get_block_blob(const crypto::hash& h) const override { return cryptonote::blobdata(); }
@@ -162,9 +161,6 @@ public:
                         , const crypto::hash& blk_hash
                         ) override { }
   virtual cryptonote::block get_block_from_height(const uint64_t& height) const override { return cryptonote::block(); }
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version) override {}
-  virtual uint8_t get_hard_fork_version(uint64_t height) const override { return 0; }
-  virtual void check_hard_fork_info() override {}
 
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob) override {}

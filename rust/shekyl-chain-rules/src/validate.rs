@@ -55,7 +55,7 @@ use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::D4;
-use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
 use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::reward;
@@ -140,7 +140,7 @@ pub fn form<S: Substrate>(
     // then the coinbase's shape (4.F — one field of the block, judged here
     // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, B7, G2, F1, F3, F7, F9, F10);
+    judge_form!(cx, coverage; B1, B2, G2, F1, F3, F7, F9, F10);
 
     // Two definitions, after the cheap refusals and outside any
     // transaction. The identity first (B6: one keccak over the hashing

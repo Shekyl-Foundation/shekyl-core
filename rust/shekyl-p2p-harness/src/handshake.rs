@@ -73,6 +73,5 @@ fn sync() -> CoreSyncData {
         cumulative_difficulty: 2,
         cumulative_difficulty_top64: 0,
         top_id: [TOP_ID_BYTE; 32],
-        top_version: 0,
     }
 }

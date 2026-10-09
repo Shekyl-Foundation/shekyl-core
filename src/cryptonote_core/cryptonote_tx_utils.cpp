@@ -60,7 +60,7 @@ using namespace crypto;
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -82,7 +82,7 @@ namespace cryptonote
     in.height = height;
 
     uint64_t block_reward;
-    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, hard_fork_version, tx_volume))
+    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, tx_volume))
     {
       LOG_PRINT_L0("Block is too big");
       return false;

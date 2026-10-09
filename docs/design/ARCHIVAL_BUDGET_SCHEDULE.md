@@ -449,7 +449,8 @@ same file) drives accrual amounts through the real
 final block's row, plus pop/re-connect byte-identity of the frozen row.
 
 B1's **full-connect-path counterpart** landed 2026-07-09:
-`archival_budget_conservation_boundary`
+`archival_budget_conservation` (named `…_boundary` until 2026-10-08, when
+its mid-chain block-version crossing left with the hard-fork mechanism)
 (`tests/core_tests/archival_budget_conservation.{h,cpp}`, chaingen
 harness; CI: the `conservation` subcommand of
 `run_economics_c2a_prime.sh`). It drives `handle_block_to_main_chain`

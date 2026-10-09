@@ -285,11 +285,7 @@ struct BlockchainAndPool
 
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
 }
 
@@ -1518,7 +1514,7 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
   ASSERT_EQ(fx.commit(competitor, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
 
   tx_verification_context tvc{};
-  // version == nic_verified_hf_version skips ver_non_input_consensus (the
+  // nic_verified skips ver_non_input_consensus (the
   // shape tx carries no real proofs); the double-spend gate sits before
   // check_tx_inputs, so it fires ahead of input verification.
   //
@@ -1530,7 +1526,7 @@ TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
   // fee now lives in the transaction (`settle_fee`), so reaching this gate
   // is a property of the fixture rather than of the current fee schedule.
   EXPECT_FALSE(fx.bap.txpool.add_tx(mine.tx, tvc, relay_method::local,
-    /*relayed=*/false, /*version=*/1, /*nic_verified_hf_version=*/1));
+    /*relayed=*/false, /*nic_verified=*/true));
   EXPECT_TRUE(tvc.m_verifivation_failed);
   EXPECT_TRUE(tvc.m_double_spend)
     << "legacy path pins the foreign-key-image conflict on tvc.m_double_spend";

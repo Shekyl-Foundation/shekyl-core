@@ -38,7 +38,7 @@ mod tests;
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
 use shekyl_types::{ArchivalLength, PrunableHash};
-use status::{hard_fork_info, show_status};
+use status::show_status;
 
 /// Rendered; `out` holds the text to print as success output.
 pub const SHEKYL_DAEMON_CONSOLE_OK: i32 = 0;
@@ -755,18 +755,6 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             alt_chain_info(&source, tip, above, last_blocks, unix_now())
         }
         "status" => show_status(&source, unix_now()),
-        // The C++ parser accepts no argument or 1..=255 and forwards 0 for
-        // the first; `None` asks about the next scheduled version, which is
-        // what a zero meant.
-        "hard_fork_info" => {
-            let Some(version) = args.get(1).and_then(|a| a.parse::<u8>().ok()) else {
-                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
-            };
-            // `NonZeroU8::new` *is* the "0 means the next fork" rule, so the
-            // console no longer spells it out: the sentinel cannot survive
-            // into the request type.
-            hard_fork_info(&source, core::num::NonZeroU8::new(version))
-        }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {

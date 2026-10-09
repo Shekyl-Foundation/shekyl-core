@@ -383,7 +383,6 @@ fn rust_client_handshakes_with_shekyld() {
             cumulative_difficulty: 0,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
-            top_version: 0,
         },
         nonce: CLIENT_NONCE,
     };

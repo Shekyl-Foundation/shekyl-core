@@ -476,41 +476,6 @@ pub trait Rpc: Sync + Clone {
         async move { self.post(route, params).await }
     }
 
-    /// Get the active blockchain protocol version.
-    ///
-    /// This is specifically the major version within the most recent block header.
-    fn get_hardfork_version(&self) -> impl Send + Future<Output = Result<u8, RpcError>> {
-        async move {
-            // The shared wire type, for the reason `get_fee_rate` gives: a
-            // locally-declared reply struct is invisible to the daemon's
-            // oracle vectors and parity tests, which is how a removed field
-            // reached a runtime parse failure once already. This one read a
-            // two-field subset, so it would not have *broken* — it would have
-            // kept working while quietly disagreeing about what a header is.
-            let reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
-                self.json_rpc_call("get_last_block_header", None).await?;
-            // **A non-OK status is a refusal, whatever the header holds**, and
-            // this is the exact trap that made the daemon side of this slice
-            // refuse rather than answer `BUSY`: `CHECK_CORE_READY()` returned
-            // `status = BUSY` with a *default-constructed* header, and reading
-            // `major_version` straight through reported fork version 0.
-            //
-            // The daemon this ships with no longer does that — it refuses with
-            // `CORE_BUSY`, which arrives here as a JSON-RPC error. This guard
-            // is for every *other* daemon: an older build, or one this wallet
-            // was merely pointed at. Fixing the producer and trusting every
-            // peer to be the fixed producer is not a fix. Same shape as
-            // `get_height` and `get_block_hash` below.
-            if !reply.status.is_ok() {
-                return Err(RpcError::InvalidNode(format!(
-                    "get_last_block_header returned status {}",
-                    reply.status.0
-                )));
-            }
-            Ok(reply.block_header.major_version)
-        }
-    }
-
     /// Get the height of the Shekyl blockchain.
     ///
     /// The height is defined as the amount of blocks on the blockchain. For a blockchain with only
@@ -582,6 +547,17 @@ pub trait Rpc: Sync + Clone {
                     Some(json!({ "height": number })),
                 )
                 .await?;
+            // **A non-OK status is a refusal, whatever the header holds.**
+            // The C++ `CHECK_CORE_READY()` answered `status = BUSY` beside a
+            // *default-constructed* header, and reading the hash straight
+            // through would report 32 zero bytes for a syncing node.
+            //
+            // The daemon this ships with refuses with `CORE_BUSY`, which
+            // arrives here as a JSON-RPC error. This guard is for every
+            // *other* daemon: an older build, or one this wallet was merely
+            // pointed at. Fixing the producer and trusting every peer to be
+            // the fixed producer is not a fix. Pinned by
+            // `tests/reply_status.rs`.
             if !reply.status.is_ok() {
                 return Err(RpcError::InvalidNode(format!(
                     "get_block_header_by_height refused: {}",

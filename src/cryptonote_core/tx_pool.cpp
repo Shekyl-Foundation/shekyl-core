@@ -84,7 +84,6 @@ namespace cryptonote
     //      will work correctly.
     time_t const MIN_RELAY_TIME = (60 * 5); // only start re-relaying transactions after that many seconds
     time_t const MAX_RELAY_TIME = (60 * 60 * 4); // at most that many seconds between resends
-    float const ACCEPT_THRESHOLD = 1.0f;
 
     //! Max DB check interval for relayable txes
     constexpr const std::chrono::minutes max_relayable_check{2};
@@ -145,11 +144,6 @@ namespace cryptonote
         return MIN_RELAY_TIME;
       // Unknown origin connector: the longest measured transit.
       return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds());
-    }
-
-    uint64_t template_accept_threshold(uint64_t amount)
-    {
-      return amount * ACCEPT_THRESHOLD;
     }
 
     // external lock must be held for the comparison+set to work properly
@@ -222,7 +216,7 @@ namespace cryptonote
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
     const crypto::hash &id, const cryptonote::blobdata &blob, size_t tx_weight,
     tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-    uint8_t version, uint8_t nic_verified_hf_version)
+    bool nic_verified)
   {
     const bool kept_by_block = (tx_relay == relay_method::block);
 
@@ -231,7 +225,7 @@ namespace cryptonote
 
     PERF_TIMER(add_tx);
 
-    if (version != nic_verified_hf_version && !cryptonote::ver_non_input_consensus(tx, tvc, version))
+    if (!nic_verified && !cryptonote::ver_non_input_consensus(tx, tvc))
     {
       LOG_PRINT_L1("transaction " << id << " failed non-input consensus rule checks");
       tvc.m_verifivation_failed = true; // should already be set, but just in case
@@ -527,15 +521,15 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay,
-    bool relayed, uint8_t version, uint8_t nic_verified_hf_version)
+    bool relayed, bool nic_verified)
   {
     crypto::hash h = null_hash;
     cryptonote::blobdata bl;
     t_serializable_object_to_blob(tx, bl);
     if (bl.size() == 0 || !get_transaction_hash(tx, h))
       return false;
-    return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed, version,
-      nic_verified_hf_version);
+    return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed,
+      nic_verified);
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
@@ -2027,7 +2021,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //TODO: investigate whether boolean return is appropriate
-  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward, uint8_t version)
+  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -2038,16 +2032,14 @@ namespace cryptonote
     const shekyl::tx_volume_window tx_volume = m_blockchain.get_tx_volume_window(block_height);
 
     //baseline empty block
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume))
+    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, tx_volume))
     {
       MERROR("Failed to get block reward for empty block");
       return false;
     }
 
 
-    size_t max_total_weight_pre_v5 = (130 * median_weight) / 100 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-    size_t max_total_weight_v5 = 2 * median_weight - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-    size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
+    size_t max_total_weight = (130 * median_weight) / 100 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     std::unordered_set<crypto::key_image> k_images;
     std::unordered_set<std::string> archival_keys;
 
@@ -2108,49 +2100,17 @@ namespace cryptonote
         continue;
       }
 
-      // start using the optimal filling algorithm from v5
-      //
-      // NOT LIVE: Shekyl's block version is 1 (src/hardforks/hardforks.cpp),
-      // so this arm never runs and the else arm below is the shipped fill.
-      // RULED 2026-10-05: this reward-aware fill is the design. It goes live
-      // by the fill moving to its Rust owner, with this function and its
-      // gate deleted, not by flipping the gate; and not before the coinbase
-      // reserve is derived (docs/FOLLOWUPS.md).
-      //
-      // This comparison has a Rust owner: shekyl_block_template::Fill::admit
-      // (rust/shekyl-block-template/src/fill.rs), which the economics sim
-      // calls. This copy is deleted when the pool's template fill moves to
-      // Rust (DRS_E1_SPOOL.md); do not repair a divergence by editing it.
-      // Known divergence: template_accept_threshold rounds best_coinbase to
-      // the nearest float, so within that rounding this copy can admit a
-      // body that lowers the coinbase or refuse one that raises it; the
-      // owner compares exactly.
-      if (version >= 5)
+      // The shipped fill stops at the median. RULED 2026-10-05: the
+      // reward-aware fill is the design, and its owner is
+      // shekyl_block_template::Fill::admit (rust/shekyl-block-template/src/fill.rs).
+      // It goes live by the pool's template fill moving to Rust, with this
+      // function deleted, and not before the coinbase reserve is derived
+      // (docs/FOLLOWUPS.md). The inherited C++ copy of that fill sat behind
+      // a block version this chain never had, and is gone.
+      if (total_weight > median_weight)
       {
-        // If we're getting lower coinbase tx,
-        // stop including more tx
-        uint64_t block_reward;
-        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume))
-        {
-          LOG_PRINT_L2("  would exceed maximum block weight");
-          continue;
-        }
-        coinbase = block_reward + fee + meta.fee;
-        if (coinbase < template_accept_threshold(best_coinbase))
-        {
-          LOG_PRINT_L2("  would decrease coinbase to " << print_money(coinbase));
-          continue;
-        }
-      }
-      else
-      {
-        // If we've exceeded the penalty free weight,
-        // stop including more tx
-        if (total_weight > median_weight)
-        {
-          LOG_PRINT_L2("  would exceed median block weight");
-          break;
-        }
+        LOG_PRINT_L2("  would exceed median block weight");
+        break;
       }
 
       // "local" and "stem" txes are filtered above
@@ -2224,7 +2184,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
-  size_t tx_memory_pool::validate(uint8_t version)
+  size_t tx_memory_pool::validate()
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -2233,7 +2193,7 @@ namespace cryptonote
     m_added_txs_by_id.clear();
     m_added_txs_start_time = (time_t)0;
 
-    MINFO("Validating txpool contents for v" << (unsigned)version);
+    MINFO("Validating txpool contents");
 
     LockedTXN lock(m_blockchain.get_db());
 
@@ -2268,9 +2228,9 @@ namespace cryptonote
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version))
+        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed))
         {
-          MINFO("Failed to re-validate tx " << e.txid << " for v" << (unsigned)version << ", dropped");
+          MINFO("Failed to re-validate tx " << e.txid << ", dropped");
           continue;
         }
         m_blockchain.update_txpool_tx(e.txid, e.meta);

@@ -36,7 +36,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         ))
         .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
-        // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
+        // Slice 1's block rows — B1, B2 from the stateless stage, A2,
         // B5 from the view-bound one, B6 from the derivation — slice 2's
         // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
@@ -63,7 +63,6 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::B4,
                 CenRow::B5,
                 CenRow::B6,
-                CenRow::B7,
                 CenRow::C1,
                 CenRow::C2,
                 CenRow::C3,
@@ -386,7 +385,6 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
             CenRow::B1,
             CenRow::B2,
             CenRow::B6,
-            CenRow::B7,
             CenRow::D2,
             CenRow::F1,
             CenRow::F3,

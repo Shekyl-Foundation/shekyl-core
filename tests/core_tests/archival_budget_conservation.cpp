@@ -27,13 +27,13 @@ struct height_row
 
 } // namespace
 
-archival_budget_conservation_boundary::archival_budget_conservation_boundary()
+archival_budget_conservation::archival_budget_conservation()
 {
   m_miner.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-  REGISTER_CALLBACK("verify_conservation", archival_budget_conservation_boundary::verify_conservation);
+  REGISTER_CALLBACK("verify_conservation", archival_budget_conservation::verify_conservation);
 }
 
-bool archival_budget_conservation_boundary::generate(std::vector<test_event_entry>& events) const
+bool archival_budget_conservation::generate(std::vector<test_event_entry>& events) const
 {
   const uint64_t ts_start = 1338224400;
 
@@ -43,12 +43,12 @@ bool archival_budget_conservation_boundary::generate(std::vector<test_event_entr
   return true;
 }
 
-bool archival_budget_conservation_boundary::verify_conservation(
+bool archival_budget_conservation::verify_conservation(
     cryptonote::core& c,
     size_t /*ev_index*/,
     const std::vector<test_event_entry>& /*events*/)
 {
-  DEFINE_TESTS_ERROR_CONTEXT("archival_budget_conservation_boundary::verify_conservation");
+  DEFINE_TESTS_ERROR_CONTEXT("archival_budget_conservation::verify_conservation");
 
   auto& bc = c.get_blockchain_storage();
   BlockchainDB& db = bc.get_db();
@@ -79,20 +79,14 @@ bool archival_budget_conservation_boundary::verify_conservation(
   for (unsigned n = 0; n < k_chain_blocks; ++n)
   {
     const uint64_t height = db.height();
-    const uint8_t hf_ver = height >= k_fork_height ? k_post_fork_version : 1;
     const uint64_t already_generated = db.get_block_already_generated_coins(height - 1);
 
     cryptonote::block blk;
-    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, hf_ver, blk));
-    CHECK_AND_ASSERT_MES(blk.major_version == hf_ver, false,
-        "[" << perr_context << "] " << "fixture must cross the fork boundary");
+    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, blk));
 
     // ── The conservation identity, in labeled form ─────────────────────────
     // Independent recompute of every leg from the block's OWN operands
-    // (height and prior cumulative supply; major_version stopped being an
-    // operand when the unreachable hf_version gate was deleted from
-    // shekyl/economics.h, and is asserted above only to prove the fixture
-    // really crosses the fork boundary for the pop/reconnect leg). The staker inflow
+    // (height and prior cumulative supply). The staker inflow
     // accrues unconditionally (the pre-activation burn leg is deleted —
     // emission is a genesis fact), so the labeled form now pins the
     // destination outright: the whole inflow in the accrual row, nothing
@@ -158,13 +152,11 @@ bool archival_budget_conservation_boundary::verify_conservation(
   const uint64_t top_height = db.height();
   CHECK_TEST_CONDITION(top_height == k_chain_blocks + 1);
 
-  // ── Pop across the boundary, reconnect, assert byte-identical rows ──────
+  // ── Pop, reconnect, assert byte-identical rows ──────────────────────────
   // Accrual-row pop symmetry through the production path (§3.1: removal in
-  // BlockchainDB::pop_block), and the boundary replayed through the rewound
-  // fork machinery on reconnect.
+  // BlockchainDB::pop_block).
   bc.pop_blocks(k_pop_count);
   CHECK_TEST_CONDITION(db.height() == top_height - k_pop_count);
-  CHECK_TEST_CONDITION(db.height() - 1 < k_fork_height);  // rewound below the fork
 
   for (uint64_t h = db.height(); h < top_height; ++h)
   {

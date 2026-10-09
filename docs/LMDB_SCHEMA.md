@@ -1028,22 +1028,26 @@ Bidirectional mapping: tree position → global output index. Inverse of `output
 
 ### `hf_versions`
 
-Per-height hard fork version.
+Declared and opened; nothing writes or reads it. It held the per-height
+hard-fork version until the hard-fork mechanism was deleted (2026-10-08).
+The declaration stays until the redb cutover: the redb store's schema and
+digest domain are defined against this table list, and its own
+`hf_versions` (the rule set in force per height) shares the name
+(`FOLLOWUPS.md`).
 
 | Property | Value |
 |---|---|
 | LMDB name | `"hf_versions"` |
 | Flags | `MDB_INTEGERKEY` |
 | Key | `uint64_t` height (8 bytes) |
-| Value | `uint8_t` hard fork version (1 byte) |
-| Writers | `set_hard_fork_version` (via `TXN_BLOCK_PREFIX`, joins active batch) |
-| Readers | `get_hard_fork_version` |
-| Note | Entries are not removed on block pop (known issue; see `LMDB_WRITE_ATOMICITY_AUDIT.md`). Overwritten on re-add. |
+| Value | `uint8_t` (1 byte) in databases written before 2026-10-08 |
+| Writers | none |
+| Readers | none |
 | Introduced | Genesis (DB v0) |
 
 ### `hf_starting_heights`
 
-Scratch table used during initialization. Dropped after use.
+Never used. Dropped at every writable open; kept declared for the same reason as `hf_versions`.
 
 | Property | Value |
 |---|---|

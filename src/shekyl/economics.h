@@ -1,35 +1,9 @@
 // Shekyl four-component economics helpers for C++ consensus code.
 // Wraps FFI calls to the Rust shekyl-economics crate.
 //
-// NO HARD-FORK GATING LIVES HERE, and the absence is deliberate. Both
-// helpers used to open with `if (hf_version < HF_VERSION_SHEKYL_NG || …)`.
-// That arm was unreachable on every network:
-//
-//   * HF_VERSION_SHEKYL_NG is 1 (cryptonote_config.h);
-//   * mainnet/testnet/stagenet each declare exactly ONE fork entry,
-//     `{ version 1, height 1, … }` (hardforks.cpp);
-//   * blocks below the first fork take HardFork's `original_version`, which
-//     all three Blockchain constructions pass as 1, and
-//     CURRENT_BLOCK_MAJOR_VERSION is 1;
-//   * construct_miner_tx defaults hard_fork_version to 1, and no caller
-//     anywhere passes 0.
-//
-// So no version below HF_VERSION_SHEKYL_NG can reach these helpers, and the
-// `hf_version` parameters those branches justified are gone with them (rules
-// 15 and 60: v3-from-genesis carries no pre-genesis ladder). Core tests that
-// cross v1 -> v2 are unaffected — version 2 selects the same arm.
-//
-// Deliberately phrased without the comparison spelled out as code. The
-// consensus-invariants workflow greps `src/` for legacy version branches as
-// TEXT, so a comment quoting the retired expression trips a gate that is
-// otherwise exactly right to be strict. Describe the retired branch; do not
-// reproduce it.
-//
-// REOPENING CRITERION (rule 21): a future hard fork that changes economics
-// SEMANTICS reintroduces gating. When it does, the gate belongs in
-// shekyl-economics next to the math it selects, per rule 20 — not as a new
-// C++ branch here. Re-adding a parameter now to "keep the option open" is
-// the pre-provisioned flexibility rule 21 rejects.
+// No version gating lives here. The block version is the constant 1 and
+// these helpers take no version; the split epoch and the share constants
+// are shekyl-economics' (rule 20).
 
 #pragma once
 
