@@ -128,7 +128,8 @@ left a fork mechanism with pieces missing:
   fill moving to Rust (RULED 2026-10-05), as before.
 
 What stayed, with its reason: LMDB still declares and opens `hf_versions`
-and `hf_starting_heights`, and nothing writes or reads them. The redb
+and `hf_starting_heights`. Nothing reads them, and the only write is the
+inherited drop of `hf_starting_heights` at every writable open (DRS-W5). The redb
 store's schema and digest domain are defined against the LMDB table list,
 and its own `hf_versions` (the rule set in force per height, a Shekyl
 design) shares the name. The row is in [`FOLLOWUPS.md`](../FOLLOWUPS.md).

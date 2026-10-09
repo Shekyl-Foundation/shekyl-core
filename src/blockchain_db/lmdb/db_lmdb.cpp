@@ -1675,8 +1675,10 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   if (!(mdb_flags & MDB_RDONLY))
     lmdb_db_open(txn, LMDB_HF_STARTING_HEIGHTS, MDB_CREATE, m_hf_starting_heights, "Failed to open db handle for m_hf_starting_heights");
 
-  // Declared and opened, never written or read: the hard-fork mechanism
-  // that used both tables is deleted. The two declarations stay because
+  // The hard-fork mechanism that used these two tables is deleted. Nothing
+  // reads either. `hf_versions` is never written; `hf_starting_heights` is
+  // still dropped at every writable open, below, which is the runtime fact
+  // the store audit records as DRS-W5. The two declarations stay because
   // the redb store's schema and digest domain are defined against this
   // table list (scripts/ci/check_redb_schema_bijection.py), and its
   // `hf_versions` (the rule set in force per height) is in that domain.
