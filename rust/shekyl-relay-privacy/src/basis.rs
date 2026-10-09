@@ -3,110 +3,89 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Where a timing value's number came from.
+//! The basis a derived timing value rests on.
 //!
 //! Ruling B (`docs/design/DAEMON_RELAY_PRIVACY.md` §97, 2026-10-08): nothing
-//! derived while C++ is in the path is valid for Rust. A timing value is one
-//! of four things, and the register in that section lists every value this
-//! crate and `shekyl-transport-layer` carry, with its basis:
+//! derived while C++ is in the path is valid for Rust. A derivation consumes
+//! one of three bases, weakest first, and the value carries the weakest of
+//! its inputs:
 //!
-//! - a **model** result, a property of a rule the conformance suite measured;
-//! - a value measured or derived on the **C++ path**, which is re-measured on
-//!   the Rust path before anything is derived from it;
-//! - a value measured on the **Rust path**;
-//! - an **assumption** nobody has measured, written down and labelled as one.
+//! - [`AdmissibleBasis::Assumption`] — written down, never measured;
+//! - [`AdmissibleBasis::Model`] — a property of a rule the conformance suite
+//!   measured;
+//! - [`AdmissibleBasis::RustPath`] — measured on the Rust path.
 //!
-//! [`crate::verify_cost::Provenance`] and [`crate::verify_cost::TreeBasis`]
-//! already label where a verification cost came from (§81.2). This module is
-//! the same idea for time, with one addition: a privacy-constant derivation
-//! consumes [`DerivationMs`], and that type is built only from a
-//! [`Timing`] whose basis implements [`DerivationInput`]. [`CppPath`] does
-//! not. The refusal is the compiler's, not a comment's:
+//! A C++-path reading is not a variant. [`DerivationMs`] has nowhere to put
+//! it, and naming one does not compile:
 //!
-//! ```compile_fail,E0277
-//! use shekyl_relay_privacy::basis::{CppPath, DerivationMs, Timing};
-//! let measured_on_cpp: Timing<CppPath> = Timing::new(715.0);
-//! let _ = DerivationMs::admit(measured_on_cpp);
+//! ```compile_fail,E0599
+//! use shekyl_relay_privacy::basis::AdmissibleBasis;
+//! let _ = AdmissibleBasis::CppPath;
 //! ```
 //!
-//! Both traits are sealed, so a crate cannot mint its own marker with
-//! `BASIS = TimingBasis::CppPath` and implement [`DerivationInput`] for it:
+//! The shipped hop's scheduling term is a C++-path claim of 0. It stays an
+//! omission in [`crate::verify_cost::adopted_hop_ms`], not an input: this
+//! type has no way to carry it, and the register says so.
 //!
-//! ```compile_fail,E0277
-//! use shekyl_relay_privacy::basis::{Basis, DerivationInput, TimingBasis};
-//! #[derive(Clone, Copy)]
-//! struct Mine;
-//! impl Basis for Mine {
-//!     const BASIS: TimingBasis = TimingBasis::CppPath;
-//! }
-//! impl DerivationInput for Mine {}
+//! Outside this crate a value is built only by [`DerivationMs::assumption`],
+//! [`DerivationMs::model`], or [`DerivationMs::rust_path`].
+//! [`DerivationMs::derive`] is crate-private, so a caller cannot take an
+//! admitted basis and attach it to some other number:
+//!
+//! ```compile_fail,E0624
+//! use shekyl_relay_privacy::basis::DerivationMs;
+//! let transit = DerivationMs::assumption(50);
+//! let _ = transit.derived(715);
 //! ```
 //!
-//! and the admissible three compile:
-//!
 //! ```
-//! use shekyl_relay_privacy::basis::{Assumption, DerivationMs, Model, RustPath, Timing, TimingBasis};
-//! assert_eq!(DerivationMs::admit(Timing::<Model>::new(3_250.0)).basis(), TimingBasis::Model);
-//! assert_eq!(DerivationMs::admit(Timing::<RustPath>::new(40.0)).ms(), 40);
-//! assert_eq!(DerivationMs::admit(Timing::<Assumption>::new(50.0)).basis(), TimingBasis::Assumption);
+//! use shekyl_relay_privacy::basis::{AdmissibleBasis, DerivationMs};
+//! assert_eq!(DerivationMs::model(3_250).basis(), AdmissibleBasis::Model);
+//! assert_eq!(DerivationMs::rust_path(40).ms(), 40);
+//! assert_eq!(
+//!     DerivationMs::assumption(50).basis(),
+//!     AdmissibleBasis::Assumption
+//! );
 //! ```
 
-use core::marker::PhantomData;
-
-/// Where a timing value's number came from.
+/// Where a derived timing value's number came from.
+///
+/// Declared weakest first. [`Self::weaker`] is that order: an assumption
+/// beside a measurement is an assumption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TimingBasis {
+pub enum AdmissibleBasis {
+    /// Never measured. Written down, and labelled as written down.
+    Assumption,
     /// A conformance output: a property of a rule, not of an implementation.
     /// It transfers to Rust when a conformance test shows the Rust code
     /// implements that rule. It is not re-run.
     Model,
-    /// Measured, or derived from a measurement, with C++ in the path. The C++
-    /// carries defects that distort timing (dials on the two-worker io pool;
-    /// the post-handshake cause race), so this is not a reference. It is
-    /// re-measured on the Rust path, and nothing is derived from it until
-    /// then.
-    CppPath,
     /// Measured on the Rust path.
     RustPath,
-    /// Never measured. Written down, and labelled as written down.
-    Assumption,
 }
 
-impl TimingBasis {
+impl AdmissibleBasis {
     /// The register's spelling of this basis.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Model => "Model",
-            Self::CppPath => "CppPath",
-            Self::RustPath => "RustPath",
             Self::Assumption => "Assumption",
+            Self::Model => "Model",
+            Self::RustPath => "RustPath",
         }
     }
 
-    /// Whether a privacy-constant derivation may consume a value with this
-    /// basis. The same answer as the type system gives through
-    /// [`DerivationInput`], for a reader holding the enum.
-    #[must_use]
-    pub const fn admissible(self) -> bool {
-        !matches!(self, Self::CppPath)
-    }
-
-    /// How much a value with this basis can bear, for derivation. From the
-    /// weakest: an assumption, then a model result, then a Rust-path
-    /// measurement. A derived value takes the weakest of its inputs, so
-    /// adding one assumption to a measurement yields an assumption.
-    /// `CppPath` has no rank: it is not admitted, and asking is a defect.
+    /// Weakest first: an assumption, then a model result, then a Rust-path
+    /// measurement.
     const fn rank(self) -> u8 {
         match self {
             Self::Assumption => 0,
             Self::Model => 1,
             Self::RustPath => 2,
-            Self::CppPath => panic!("a CppPath value has no place in a derivation"),
         }
     }
 
-    /// The weaker of two admissible bases.
+    /// The weaker of two bases.
     #[must_use]
     pub const fn weaker(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
@@ -117,151 +96,41 @@ impl TimingBasis {
     }
 }
 
-/// The seal: a supertrait in a private module, which no other crate can
-/// name and so no other crate can implement. Without it a downstream crate
-/// could mint a marker with `BASIS = CppPath`, implement [`DerivationInput`]
-/// for it, and walk a C++-path number through [`DerivationMs::admit`].
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for super::Model {}
-    impl Sealed for super::CppPath {}
-    impl Sealed for super::RustPath {}
-    impl Sealed for super::Assumption {}
-}
-
-/// A basis at the type level, so a function's bound can name it. Sealed:
-/// the four markers in this module are the only implementors.
-pub trait Basis: Copy + sealed::Sealed {
-    /// The enum value this marker stands for.
-    const BASIS: TimingBasis;
-}
-
-/// A basis a privacy-constant derivation may consume. Sealed through
-/// [`Basis`].
+/// Whole milliseconds a privacy-constant derivation may consume, with the
+/// basis those milliseconds rest on.
 ///
-/// [`Model`], [`RustPath`] and [`Assumption`] implement it. [`CppPath`]
-/// does not, and that absence is the mechanism: a `Timing<CppPath>` has no
-/// path into [`DerivationMs`].
-pub trait DerivationInput: Basis {}
-
-/// [`TimingBasis::Model`] as a type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Model;
-/// [`TimingBasis::CppPath`] as a type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct CppPath;
-/// [`TimingBasis::RustPath`] as a type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct RustPath;
-/// [`TimingBasis::Assumption`] as a type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Assumption;
-
-impl Basis for Model {
-    const BASIS: TimingBasis = TimingBasis::Model;
-}
-impl Basis for CppPath {
-    const BASIS: TimingBasis = TimingBasis::CppPath;
-}
-impl Basis for RustPath {
-    const BASIS: TimingBasis = TimingBasis::RustPath;
-}
-impl Basis for Assumption {
-    const BASIS: TimingBasis = TimingBasis::Assumption;
-}
-
-impl DerivationInput for Model {}
-impl DerivationInput for RustPath {}
-impl DerivationInput for Assumption {}
-
-/// Milliseconds with their basis in the type.
-///
-/// This is what a constant is declared as. The number is the number; the
-/// type parameter says where it came from, so a reader at the use site sees
-/// the basis without opening the doc comment.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Timing<B: Basis> {
-    ms: f64,
-    basis: PhantomData<B>,
-}
-
-impl<B: Basis> Timing<B> {
-    /// A labelled value.
-    #[must_use]
-    pub const fn new(ms: f64) -> Self {
-        Self {
-            ms,
-            basis: PhantomData,
-        }
-    }
-
-    /// The milliseconds.
-    #[must_use]
-    pub const fn ms(self) -> f64 {
-        self.ms
-    }
-
-    /// The basis, as the enum.
-    #[must_use]
-    pub const fn basis(self) -> TimingBasis {
-        B::BASIS
-    }
-}
-
-/// Whole milliseconds a privacy-constant derivation may consume.
-///
-/// Built outside this crate only by [`DerivationMs::admit`], whose bound
-/// excludes [`CppPath`]. Inside the crate a derivation builds one with
-/// [`DerivationMs::derive`], which takes the weakest basis of its inputs.
-/// The basis travels with the value so the derivation's output can say
-/// what it rests on.
-///
-/// There is no public way to attach a basis to a bare number. `derived` is
-/// crate-private, so this does not compile outside the crate (E0624, a
-/// private method; the test pins the code so an absent method could not
-/// pass for the refusal):
-///
-/// ```compile_fail,E0624
-/// use shekyl_relay_privacy::basis::{Assumption, DerivationMs, Timing};
-/// let transit = DerivationMs::admit(Timing::<Assumption>::new(50.0));
-/// let _ = transit.derived(715);
-/// ```
+/// Built outside this crate by [`Self::assumption`], [`Self::model`], or
+/// [`Self::rust_path`]. Inside the crate a derivation builds one with
+/// [`Self::derive`], which takes the weakest basis of its inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DerivationMs {
     ms: u32,
-    basis: TimingBasis,
+    basis: AdmissibleBasis,
 }
 
 impl DerivationMs {
-    /// Admit a labelled value to derivation.
-    ///
-    /// Only a `Timing<B>` with `B: DerivationInput` is accepted; passing a
-    /// `Timing<CppPath>` does not compile.
-    ///
-    /// # Panics
-    ///
-    /// When `ms` is not a whole number of milliseconds representable as
-    /// `u32`. The embargo tables are keyed by whole milliseconds, and no
-    /// shipped transit has been fractional; a fractional value here is a
-    /// new constant that needs its own row, not a rounding.
+    /// A labelled whole-millisecond value.
     #[must_use]
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        clippy::cast_lossless,
-        clippy::float_cmp
-    )]
-    pub const fn admit<B: DerivationInput>(timing: Timing<B>) -> Self {
-        let whole = timing.ms as u32;
-        assert!(
-            timing.ms == whole as f64,
-            "a derivation input is a whole number of milliseconds"
-        );
-        Self {
-            ms: whole,
-            basis: B::BASIS,
-        }
+    pub const fn new(ms: u32, basis: AdmissibleBasis) -> Self {
+        Self { ms, basis }
+    }
+
+    /// Written down, never measured.
+    #[must_use]
+    pub const fn assumption(ms: u32) -> Self {
+        Self::new(ms, AdmissibleBasis::Assumption)
+    }
+
+    /// A model result.
+    #[must_use]
+    pub const fn model(ms: u32) -> Self {
+        Self::new(ms, AdmissibleBasis::Model)
+    }
+
+    /// Measured on the Rust path.
+    #[must_use]
+    pub const fn rust_path(ms: u32) -> Self {
+        Self::new(ms, AdmissibleBasis::RustPath)
     }
 
     /// The milliseconds.
@@ -270,27 +139,25 @@ impl DerivationMs {
         self.ms
     }
 
-    /// The basis the value was admitted with.
+    /// The basis the value was built with.
     #[must_use]
-    pub const fn basis(self) -> TimingBasis {
+    pub const fn basis(self) -> AdmissibleBasis {
         self.basis
     }
 
-    /// A value a derivation inside this crate produced from inputs with the
-    /// given bases. It takes the weakest of them ([`TimingBasis::weaker`]):
-    /// the hop is a Rust-path verification floor plus an assumed transit,
-    /// and it reads as an assumption.
+    /// A value a derivation inside this crate produced from `inputs`. It
+    /// takes the weakest of them ([`AdmissibleBasis::weaker`]): the hop is a
+    /// Rust-path verification floor plus an assumed transit, and it reads as
+    /// an assumption.
     ///
-    /// Crate-private on purpose. A public version would attach any admitted
-    /// value's basis to any number, and `model.derived(cpp_measured)` would
-    /// turn a C++-path reading into a model result.
+    /// Crate-private on purpose. A public version would attach any admissible
+    /// basis to any number.
     ///
     /// # Panics
     ///
-    /// With no inputs, or with a `CppPath` among them: neither is a
-    /// derivation this crate performs.
+    /// With no inputs. A derivation names what it rests on.
     #[must_use]
-    pub(crate) const fn derive(ms: u32, inputs: &[TimingBasis]) -> Self {
+    pub(crate) const fn derive(ms: u32, inputs: &[AdmissibleBasis]) -> Self {
         assert!(!inputs.is_empty(), "a derived value names its inputs");
         let mut basis = inputs[0];
         let mut i = 1;
@@ -298,12 +165,12 @@ impl DerivationMs {
             basis = basis.weaker(inputs[i]);
             i += 1;
         }
-        Self { ms, basis }
+        Self::new(ms, basis)
     }
 
-    /// A value derived from this one alone, keeping its basis. Its only
-    /// callers are the sensitivity probes below, so it is built with them;
-    /// a shipped build derives through [`Self::derive`] alone.
+    /// This basis on a new number. Its only callers are the sensitivity
+    /// probes below, so it is built with them; a shipped build derives
+    /// through [`Self::derive`] alone.
     #[cfg(any(test, feature = "conformance"))]
     #[must_use]
     pub(crate) const fn derived(self, ms: u32) -> Self {
@@ -316,7 +183,7 @@ impl DerivationMs {
     /// build.
     #[cfg(any(test, feature = "conformance"))]
     #[must_use]
-    pub const fn checked_add_ms(self, extra: u32) -> Option<Self> {
+    pub(crate) const fn checked_add_ms(self, extra: u32) -> Option<Self> {
         match self.ms.checked_add(extra) {
             Some(ms) => Some(self.derived(ms)),
             None => None,
@@ -329,45 +196,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_enum_and_the_markers_agree_on_which_bases_derive() {
-        assert_eq!(Model::BASIS, TimingBasis::Model);
-        assert_eq!(CppPath::BASIS, TimingBasis::CppPath);
-        assert_eq!(RustPath::BASIS, TimingBasis::RustPath);
-        assert_eq!(Assumption::BASIS, TimingBasis::Assumption);
-        for basis in [
-            TimingBasis::Model,
-            TimingBasis::RustPath,
-            TimingBasis::Assumption,
-        ] {
-            assert!(
-                basis.admissible(),
-                "{} is a derivation input",
-                basis.label()
-            );
-        }
-        assert!(!TimingBasis::CppPath.admissible());
+    fn the_labels_are_the_register_spellings() {
+        assert_eq!(AdmissibleBasis::Assumption.label(), "Assumption");
+        assert_eq!(AdmissibleBasis::Model.label(), "Model");
+        assert_eq!(AdmissibleBasis::RustPath.label(), "RustPath");
     }
 
     #[test]
-    fn an_admitted_value_keeps_its_number_and_its_basis() {
-        let admitted = DerivationMs::admit(Timing::<Assumption>::new(1_625.0));
-        assert_eq!(admitted.ms(), 1_625);
-        assert_eq!(admitted.basis(), TimingBasis::Assumption);
-        assert_eq!(Timing::<Model>::new(3_250.0).basis(), TimingBasis::Model);
+    fn a_value_keeps_the_number_and_the_basis_it_was_built_with() {
+        let assumed = DerivationMs::assumption(1_625);
+        assert_eq!(assumed.ms(), 1_625);
+        assert_eq!(assumed.basis(), AdmissibleBasis::Assumption);
+        assert_eq!(DerivationMs::model(3_250).basis(), AdmissibleBasis::Model);
+        assert_eq!(DerivationMs::rust_path(40).ms(), 40);
     }
 
     #[test]
-    fn a_derived_value_carries_the_basis_it_was_derived_from() {
-        let transit = DerivationMs::admit(Timing::<RustPath>::new(40.0));
+    fn a_probe_keeps_its_basis_when_the_number_moves() {
+        let transit = DerivationMs::rust_path(40);
         let hop = transit.derived(165);
-        assert_eq!((hop.ms(), hop.basis()), (165, TimingBasis::RustPath));
+        assert_eq!((hop.ms(), hop.basis()), (165, AdmissibleBasis::RustPath));
         assert_eq!(hop.checked_add_ms(10), Some(transit.derived(175)));
         assert_eq!(hop.checked_add_ms(u32::MAX), None);
     }
 
     #[test]
     fn a_derived_value_takes_the_weakest_basis_of_its_inputs() {
-        use TimingBasis::{Assumption, Model, RustPath};
+        use AdmissibleBasis::{Assumption, Model, RustPath};
         assert_eq!(
             DerivationMs::derive(1, &[RustPath, Assumption]).basis(),
             Assumption
@@ -384,12 +239,5 @@ mod tests {
         assert_eq!(DerivationMs::derive(1, &[RustPath]).basis(), RustPath);
         assert_eq!(RustPath.weaker(Model), Model);
         assert_eq!(Model.weaker(Assumption), Assumption);
-    }
-
-    #[test]
-    #[should_panic(expected = "whole number of milliseconds")]
-    fn a_fractional_input_is_refused_rather_than_rounded() {
-        let admitted = DerivationMs::admit(Timing::<Model>::new(49.5));
-        unreachable!("49.5 ms was admitted as {} ms", admitted.ms());
     }
 }

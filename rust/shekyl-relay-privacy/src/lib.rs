@@ -173,7 +173,7 @@ pub mod verify_cost;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
-pub use basis::{DerivationInput, DerivationMs, Timing, TimingBasis};
+pub use basis::{AdmissibleBasis, DerivationMs};
 pub use derive::{
     derive_embargo, full_travel_probability, marginal_preemption_profile, EmbargoDerivation,
 };

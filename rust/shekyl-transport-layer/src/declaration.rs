@@ -452,7 +452,7 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             // carried forward from §21 and labelled at §86.2; it has never
             // been measured on either path.
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
-            transit_ms: Assessment::Assessed(DerivationMs::admit(ADOPTED_TRANSIT)),
+            transit_ms: Assessment::Assessed(ADOPTED_TRANSIT),
             cover_class: Assessment::Assessed(CoverClass::OpenLink),
         },
         NetworkColumn::Tor => Declaration {
@@ -473,7 +473,7 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             // not keep a second copy. Tor's 1625 ms is §63.2's upper bound,
             // taken on faith (§89.5).
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
-            transit_ms: Assessment::Assessed(DerivationMs::admit(ANON_ZONE_TRANSIT)),
+            transit_ms: Assessment::Assessed(ANON_ZONE_TRANSIT),
             cover_class: Assessment::Assessed(CoverClass::Volume),
         },
     }

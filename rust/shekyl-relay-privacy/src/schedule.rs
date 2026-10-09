@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
         let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-            crate::basis::DerivationMs::admit(crate::verify_cost::ANON_ZONE_TRANSIT),
+            crate::verify_cost::ANON_ZONE_TRANSIT,
         ));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
@@ -1052,9 +1052,7 @@ mod tests {
             crate::verify_cost::ADOPTED_TRANSIT,
             crate::verify_cost::ANON_ZONE_TRANSIT,
         ] {
-            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-                crate::basis::DerivationMs::admit(transit),
-            ));
+            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit));
             assert!(
                 ADOPTED_PROPAGATION_TIMEOUT_SECS
                     >= t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),

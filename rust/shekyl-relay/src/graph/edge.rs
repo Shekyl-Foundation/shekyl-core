@@ -555,7 +555,7 @@ fn stem_records(connector: ConnectorId, transit: DerivationMs) {
 fn a_clearnet_stem_records_the_clearnet_embargo() {
     stem_records(
         ConnectorId::Clearnet,
-        DerivationMs::admit(shekyl_relay_privacy::verify_cost::ADOPTED_TRANSIT),
+        shekyl_relay_privacy::verify_cost::ADOPTED_TRANSIT,
     );
 }
 
@@ -563,7 +563,7 @@ fn a_clearnet_stem_records_the_clearnet_embargo() {
 fn a_tor_stem_records_the_tor_embargo() {
     stem_records(
         ConnectorId::Tor,
-        DerivationMs::admit(shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT),
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT,
     );
 }
 
@@ -585,7 +585,7 @@ fn the_longest_transit_is_the_max_of_the_assessed_entries() {
     assert!(saw, "no connector has an assessed transit");
     assert_eq!(
         longest,
-        DerivationMs::admit(shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT)
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT
     );
 }
 
@@ -597,7 +597,7 @@ fn both_built_transits_are_labelled_assumptions() {
         let transit = transit_ms(*connector).expect("both built columns stem");
         assert_eq!(
             transit.basis(),
-            shekyl_relay_privacy::basis::TimingBasis::Assumption,
+            shekyl_relay_privacy::basis::AdmissibleBasis::Assumption,
             "{connector:?}"
         );
     }

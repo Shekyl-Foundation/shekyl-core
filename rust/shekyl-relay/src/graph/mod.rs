@@ -72,7 +72,7 @@ pub fn longest_transit() -> DerivationMs {
 /// walks a geometric mass until the tail cutoff, and the stem path asks
 /// the question once per peer per decision. The first ask for a transit
 /// builds the table; every later ask clones the [`Arc`].
-type EmbargoTables = Mutex<Vec<(DerivationMs, Arc<EmbargoTimer>)>>;
+type EmbargoTables = Mutex<Vec<(u32, Arc<EmbargoTimer>)>>;
 
 fn embargo_tables() -> &'static EmbargoTables {
     static TABLES: OnceLock<EmbargoTables> = OnceLock::new();
@@ -88,13 +88,13 @@ fn embargo_timer(declaration: &Declaration) -> Option<Arc<EmbargoTimer>> {
     let mut guard = tables
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == transit) {
+    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == transit.ms()) {
         return Some(Arc::clone(timer));
     }
     let timer = Arc::new(EmbargoTimer::adopted(
         &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(transit),
     ));
-    guard.push((transit, Arc::clone(&timer)));
+    guard.push((transit.ms(), Arc::clone(&timer)));
     Some(timer)
 }
 
