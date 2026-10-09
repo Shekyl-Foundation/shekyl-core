@@ -292,7 +292,7 @@ The client pins the daemon's static bundle in advance; the daemon learns
 the client's identity in the handshake and checks it against its enrolled
 set. That is the **XK** shape. Its hybrid form is not ours: the `clatter`
 library ships it as a named pattern, `noise_hybrid_xk`
-(`src/handshakepattern.rs:1238-1255` at commit
+(clatter's `handshakepattern.rs:1238-1255`, at commit
 `9a8d15c4f80d5911ca0403aa22e0de99ea59df08`, v3.0.0), built by combining
 classical XK with PQNoise's pqXK (Angel et al., *Post-Quantum Noise*,
 ePrint 2022/539) under PQNoise's ordering rule: *within a message `ekem`
@@ -315,14 +315,14 @@ key**, hashed and mixed in that order (clatter's README, "Tokens `e` and
 side's `e` is an ephemeral X25519 key and an ephemeral ML-KEM
 encapsulation key. One consequence is read from the source, not the
 README: the daemon's `e` carries an ephemeral ML-KEM key that nothing in
-this pattern encapsulates to (`src/handshakestate/hybrid.rs:460-490`
+this pattern encapsulates to (clatter's `handshakestate/hybrid.rs:460-490`
 generates and sends both keys for either side). It costs 1,184 bytes and
 one key generation per handshake and is kept, because dropping it would be
 a different pattern from the one cross-checked below.
 
 **Protocol name:** `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`,
 following clatter's naming scheme. (Its README example writes `X25519`;
-its code emits `25519`, the Noise name — `src/crypto_impl/x25519.rs:12-14`
+its code emits `25519`, the Noise name — clatter's `crypto_impl/x25519.rs:12-14`
 — and the name is hashed into the transcript, so the code is what counts.)
 The prologue (§4.4) is unchanged.
 
