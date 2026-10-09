@@ -266,12 +266,15 @@ GetInfoResponse {
     #[serde(flatten)] chain:     InfoChain,                // grant: chain
     #[serde(flatten)] economics: InfoEconomics,            // grant: chain; RK-D19
     #[serde(flatten)] pool:      InfoPool,                 // grant: pool
-    #[serde(flatten)] status:    Hidden<InfoStatus>,       // grant: status
+    #[serde(flatten)] node:      Hidden<InfoStatus>,       // grant: status
     #[serde(flatten)] peers:     Hidden<InfoPeers>,        // grant: peers
     restricted: bool,                                      // transitional, RT-W10
 }
 ```
 
+- `status` is the reply's `RpcStatus`, as on every method; the node-status
+  part is the field `node`, of type `InfoStatus`, and is flattened, so its
+  name never reaches the wire.
 - Each part is seen under exactly one of the grants `RPC_CHANNEL.md` §6.1
   proposes (`health`, `chain`, `pool`, `status`, `peers`; §2.1). When
   RT-W10 lands, a grant selects parts; the handler is not rewritten, and
