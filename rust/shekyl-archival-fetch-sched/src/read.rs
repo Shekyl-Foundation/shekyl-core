@@ -16,8 +16,9 @@
 //! ([`FetchError::next_move`]):
 //!
 //! - a **stall** redials the same `P` with the same header, up to
-//!   [`NeedBudget::stall_redials`] times — nothing was decided, and a fresh
-//!   nonce would mint a pass record for an exchange that never happened;
+//!   [`NeedBudget::stall_redials`] times across this need's attempts
+//!   against that `P` — nothing was decided, and a fresh nonce would mint
+//!   a pass record for an exchange that never happened;
 //! - a first **rejection** redials the same `P` once with a header built
 //!   from a freshly derived anchor; a second is a failed read;
 //! - a **miss** or a **failed read** draws the next holder.
@@ -55,6 +56,15 @@ pub struct NeedBudget {
     pub holders: NonZeroUsize,
     /// Redials of the same holder with the same header after a stall.
     /// `0` means a stall moves to the next holder at once.
+    ///
+    /// Counted **per holder within the need**, not per header: a first
+    /// 400 earns a fresh anchor and a new circuit, and a stall on that
+    /// circuit draws on the same budget the stalls before the 400 did.
+    /// The budget is what one `P` may cost the requester — `SF-D6`'s
+    /// "2 retries (three attempts)" is sized so that a `P` which
+    /// truncates every attempt holds a witness for three reads, not
+    /// `CHALLENGE_RESPONSE_BLOCKS` — and a `P` that can reset it by
+    /// answering 400 between stalls has doubled it.
     pub stall_redials: u32,
 }
 
