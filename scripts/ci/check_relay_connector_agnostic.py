@@ -4,16 +4,28 @@
 # All rights reserved.
 # BSD-3-Clause
 
-"""Production shekyl-relay does not name Clearnet or Tor.
+"""Production shekyl-relay and shekyl-relay-privacy name no connector.
 
-This catches direct naming: `ConnectorId::Clearnet`, `ConnectorId::Tor`,
-`NetworkColumn::Clearnet`, `NetworkColumn::Tor`, a position comparison
-`.index() ==`, and `ALL[<literal>]`. It does not cover a renamed import
+Tor is a connector, not a Dandelion++ variant (DAEMON_RELAY_PRIVACY.md
+§98.4, structure ruling 2026-10-09). The relay keys on declaration
+cells (`address_hidden_from_peer`, `cover_class`), never on which
+connector produced them.
+
+This catches direct naming: any `ConnectorId::<Variant>` or
+`NetworkColumn::<Variant>` — a variant is an upper-case path segment
+whose second character is not upper-case, so `ConnectorId::ALL` and
+`ConnectorId::COUNT` (the whole-list constants a connector-agnostic
+walk uses) pass and `ConnectorId::Tor`, `::Clearnet`, or a connector
+added later fail — plus a position comparison `.index() ==` and
+`ALL[<literal>]`. It does not cover a renamed import
 (`use ConnectorId::Tor as Hidden`).
 
-Those spellings under `rust/shekyl-relay/src` may appear only in the
-test modules. A hit anywhere else is a branch on connector identity.
-Zero hits in the test modules means this gate's subject is gone.
+Those spellings under `rust/shekyl-relay/src` and
+`rust/shekyl-relay-privacy/src` may appear only in `#[cfg(test)]`
+code: a file declared by `#[cfg(test)] mod name;` or lines inside an
+inline `#[cfg(test)] mod name { ... }`. A hit anywhere else is a branch
+on connector identity. Zero hits in test code across both roots means
+this gate's subject is gone.
 """
 
 from __future__ import annotations
@@ -24,10 +36,15 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "rust" / "shekyl-relay" / "src"
+SRCS = (
+    ("rust/shekyl-relay/src", ROOT / "rust" / "shekyl-relay" / "src"),
+    ("rust/shekyl-relay-privacy/src", ROOT / "rust" / "shekyl-relay-privacy" / "src"),
+)
+# A variant: `::` then an upper-case letter not followed by another
+# upper-case letter. `ALL` and `COUNT` are not variants.
 PAT = re.compile(
-    r"ConnectorId::(Clearnet|Tor)"
-    r"|NetworkColumn::(Clearnet|Tor)"
+    r"ConnectorId::[A-Z](?:[a-z0-9]\w*)?\b"
+    r"|NetworkColumn::[A-Z](?:[a-z0-9]\w*)?\b"
     r"|\.index\(\)\s*=="
     r"|ALL\[\d+\]"
 )
@@ -214,24 +231,36 @@ def test_line_spans(lines: list[str]) -> set[int]:
     return spans
 
 
-def scan(root: Path) -> tuple[list[str], list[str]]:
+def scan(root: Path, label: str = "") -> tuple[list[str], list[str]]:
+    """Hits under `root`, reported as `label/path:line` (`path:line` unlabelled)."""
     production: list[str] = []
     tests: list[str] = []
     if not root.is_dir():
         return production, tests
     whole = test_files(root)
     for path in sorted(root.rglob("*.rs")):
-        rel = path.relative_to(root).as_posix()
+        rel_in_root = path.relative_to(root).as_posix()
+        rel = f"{label}/{rel_in_root}" if label else rel_in_root
         lines = rust_code(path.read_text(encoding="utf-8")).splitlines()
         inline = test_line_spans(lines)
         for number, line in enumerate(lines, 1):
             if not PAT.search(line):
                 continue
             hit = f"{rel}:{number}"
-            if rel in whole or number in inline:
+            if rel_in_root in whole or number in inline:
                 tests.append(hit)
             else:
                 production.append(hit)
+    return production, tests
+
+
+def scan_all(roots: tuple[tuple[str, Path], ...]) -> tuple[list[str], list[str]]:
+    production: list[str] = []
+    tests: list[str] = []
+    for label, root in roots:
+        found_production, found_tests = scan(root, label)
+        production.extend(found_production)
+        tests.extend(found_tests)
     return production, tests
 
 
@@ -265,6 +294,7 @@ def selftest() -> int:
         )
         samples = (
             "let _ = ConnectorId::Tor;\n",
+            "let _ = ConnectorId::I2p;\n",
             "let _ = NetworkColumn::Clearnet;\n",
             "let _ = id.index() == 0;\n",
             "let _ = ALL[1];\n",
@@ -283,6 +313,27 @@ def selftest() -> int:
         if judge(production, tests) != 0:
             print("selftest: a test-only tree was refused", file=sys.stderr)
             return 1
+        (graph / "mod.rs").write_text(
+            "fn prod() { let _ = ConnectorId::ALL.len() + ConnectorId::COUNT; }\n"
+            "#[cfg(test)]\nmod tests;\n",
+            encoding="utf-8",
+        )
+        production, tests = scan(root)
+        if judge(production, tests) != 0:
+            print("selftest: the whole-list constants were judged a variant", file=sys.stderr)
+            return 1
+        (graph / "mod.rs").write_text("fn prod() {}\n#[cfg(test)]\nmod tests;\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp2:
+            second = Path(tmp2)
+            (second / "stem_map").mkdir()
+            (second / "stem_map" / "mod.rs").write_text(
+                "fn prod() { let _ = ConnectorId::Tor; }\n",
+                encoding="utf-8",
+            )
+            production, tests = scan_all((("first", root), ("second", second)))
+            if judge(production, tests) == 0 or production != ["second/stem_map/mod.rs:1"]:
+                print(f"selftest: a hit in the second root was not reported: {production}", file=sys.stderr)
+                return 1
         (graph / "tests.rs").write_text("fn t() {}\n", encoding="utf-8")
         production, tests = scan(root)
         if judge(production, tests) == 0:
@@ -335,8 +386,9 @@ def selftest() -> int:
             print("selftest: a comment or a literal was judged production", file=sys.stderr)
             return 1
     print(
-        "relay connector gate selftest: production hit, test-only, empty subject, "
-        "string brace, comment exemption, and literal"
+        "relay connector gate selftest: production hit (named and unnamed variant), "
+        "test-only, whole-list constants, second root, empty subject, string brace, "
+        "comment exemption, and literal"
     )
     return 0
 
@@ -347,7 +399,7 @@ def main() -> int:
     if len(sys.argv) != 1:
         print(f"usage: {sys.argv[0]} [--selftest]", file=sys.stderr)
         return 2
-    return judge(*scan(SRC))
+    return judge(*scan_all(SRCS))
 
 
 if __name__ == "__main__":
