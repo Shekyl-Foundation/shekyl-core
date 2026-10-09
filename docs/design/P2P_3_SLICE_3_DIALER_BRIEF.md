@@ -551,17 +551,27 @@ these functions do not change. The list is
 two dial calls inside `idle_worker`, and `scripts/ci/check_dial_path_freeze.py`
 compares each body with the base revision on every PR to `dev`: a
 change fails, a deletion passes, a row it cannot find at base fails.
-Deleted means gone: the bare name matches nothing under `src/p2p` at
-head outside comments and string literals, and the body does not
-survive under another signature. **`net_node.inl` and `net_node.h`
-are shrink-only (Rick, 2026-10-08):** a change to either may not raise
-its count of non-blank, non-comment lines. This table cites that file
-so the two cannot drift. The one exception is a line in this brief,
-new in the PR, of exactly this form, naming the row's full anchor or
-the file path: `**UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path>
-— <reason>`. Nothing looser is read. At the cutover the same list is
-the deletion gate, every row absent, and the cutover PR empties the
-file.
+Deleted means gone: the row's witness identifier (its bare name, or
+`open_outcome` for `zone_server::open`, whose bare name is an ordinary
+word) matches nothing under `src/p2p` at head outside comments and
+string literals, and the body does not survive under another
+signature. **`net_node.inl`, `net_node.h` and
+`src/cryptonote_protocol/levin_notify.cpp` take deletions only (Rick,
+2026-10-09):** a change may add no code lines to them. A comment-only
+addition is free; an edited line, or logic swapped for a call into
+Rust, is an added code line, so each PR that moves something to Rust
+carries one dated `UNFREEZE` line naming the file. *Records-was,
+2026-10-08: the two p2p files were shrink-only, which an in-place edit
+passed.* This table cites that file so the two cannot drift. The one
+exception is a line in this brief, new in the PR, of exactly this
+form, naming the row's full anchor or the file path:
+`**UNFREEZE (Rick, YYYY-MM-DD):** <anchor or file path> — <reason>`.
+Nothing looser is read. At the cutover the same list is the deletion
+gate: every body and calls row's function is absent, and the cutover
+PR removes those rows. A shrink row is retired only when its file is
+deleted; `net_node.inl` outlives the dial path, since slice 4 and RD
+still edit it, and `levin_notify.cpp` is RD's. *Records-was: the
+cutover PR empties the file.*
 
 `do_handshake_with_peer` is the outbound invoke. Its callers are the
 two dial sites (`:1677`, `:1735`). Inbound is `handle_handshake`
@@ -582,7 +592,7 @@ keep the callers named below.
 | `m_conn_fails_cache`, `record_addr_failed`, `record_addr_success` | cache `net_node.h:788`; `record_addr_failed` `:1763`; `record_addr_success` `:1776` | `rg -n -e m_conn_fails_cache -e record_addr_failed -e record_addr_success src/p2p` returns nothing |
 | The dial path in `idle_worker` | `idle_worker` is `:2303`. The fill call is `:2306`. The gray-probe call is `:2307` | `rg -n -e connections_maker -e gray_peerlist_housekeeping src/p2p` returns nothing. `idle_worker` itself stays until its other gates move |
 | `gray_peerlist_housekeeping` and its interval | function `:3336`, declaration `net_node.h:713`, interval `:756`. The comment at `net_node.inl:1091` names the function and goes with it | `rg -n -e gray_peerlist_housekeeping -e m_gray_peerlist_housekeeping_interval src/p2p` returns nothing. Before deletion that command hits the declaration, the interval, the `idle_worker` call, the definition, and that comment |
-| `zone_server::open` | `zone_server.h:382` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing |
+| `zone_server::open` and its `open_outcome` result type | `zone_server.h:382`; `struct open_outcome` at `:376` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing, and `rg -n -w open_outcome src/p2p` returns nothing: the struct is the freeze row's witness and goes with the function |
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |

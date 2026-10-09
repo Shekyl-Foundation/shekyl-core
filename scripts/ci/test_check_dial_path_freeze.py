@@ -22,6 +22,7 @@ BRIEF = "docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md"
 INL = "src/p2p/net_node.inl"
 HDR = "src/p2p/net_node.h"
 ZONE = "src/p2p/zone_server.h"
+NOTIFY = "src/cryptonote_protocol/levin_notify.cpp"
 
 ALPHA = """  template<class t>
   bool node_server<t>::alpha(int n)
@@ -62,23 +63,39 @@ HDR_TEXT = """struct node_server
 };
 """
 
-ZONE_TEXT = """struct zone_server
+# `open` is an ordinary word: the file system handle below uses it too, and
+# a log string names it. The row's witness is `open_outcome`.
+ZONE_TEXT = """struct open_outcome { bool ok; };
+struct zone_server
 {
   open_outcome open(const address& a, context& out)
   {
-    return open_outcome::ok;
+    MINFO("seam open refused");
+    return open_outcome{true};
   }
+  void load() { src_file.open(path); }
+};
+"""
+ZONE_WITHOUT_OPEN = """struct zone_server
+{
+  void load() { src_file.open(path); }
 };
 """
 
-LIST_TEXT = (
-    "# frozen\n"
-    f"shrink\t{INL}\n"
-    f"shrink\t{HDR}\n"
+NOTIFY_TEXT = """void notify::flush()
+{
+  // the relay timing
+  schedule.flush();
+}
+"""
+
+SHRINK_ROWS = f"shrink\t{INL}\nshrink\t{HDR}\nshrink\t{NOTIFY}\n"
+FUNCTION_ROWS = (
     f"body\t{INL}\tnode_server<t>::alpha(\n"
-    f"body\t{ZONE}\topen_outcome open(\n"
+    f"body\t{ZONE}\topen_outcome open(\topen_outcome\n"
     f"calls\t{INL}\tnode_server<t>::idle_worker(\talpha\n"
 )
+LIST_TEXT = "# frozen\n" + SHRINK_ROWS + FUNCTION_ROWS
 
 INL_TEXT = ALPHA + IDLE + BETA
 BRIEF_TEXT = "# brief\n"
@@ -141,9 +158,11 @@ BASE: dict[str, str | None] = {
     INL: INL_TEXT,
     HDR: HDR_TEXT,
     ZONE: ZONE_TEXT,
+    NOTIFY: NOTIFY_TEXT,
     LIST: LIST_TEXT,
     BRIEF: BRIEF_TEXT,
 }
+ROWS = 6
 
 # alpha gone everywhere: definition, declaration, and the call in idle_worker.
 WITHOUT_ALPHA = {
@@ -156,7 +175,7 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "an untouched tree passes with every row unchanged",
         {},
         0,
-        "5 rows judged, 0 failed",
+        f"{ROWS} rows judged, 0 failed",
     ),
     (
         "a body edit inside a frozen function fails and shows the diff",
@@ -205,21 +224,42 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
     ),
     (
         "deleting every frozen file passes every row in them",
-        {INL: None, HDR: None, ZONE: None},
+        {INL: None, HDR: None, ZONE: None, NOTIFY: None},
         0,
-        "5 rows judged, 0 failed",
+        f"{ROWS} rows judged, 0 failed",
     ),
     (
-        "a frozen function elsewhere in the file is still found and judged",
+        "a frozen function moved within the file is still found; the move adds lines",
         {INL: BETA + IDLE + ALPHA},
-        0,
+        1,
         "alpha: unchanged",
     ),
     (
-        "editing an unfrozen function without growing the file passes",
+        "an in-place edit with an equal line count is an added code line",
         {INL: ALPHA + IDLE + BETA.replace("return true;", "return false;")},
+        1,
+        "1 code line(s) added",
+    ),
+    (
+        "swapping logic for a call into Rust fails without an UNFREEZE line",
+        {INL: ALPHA + IDLE + BETA.replace("return true;", "return shekyl_beta();")},
+        1,
+        "net_node.inl takes deletions only",
+    ),
+    (
+        "swapping logic for a call into Rust passes under an UNFREEZE line naming the file",
+        {
+            INL: ALPHA + IDLE + BETA.replace("return true;", "return shekyl_beta();"),
+            BRIEF: BRIEF_TEXT + "\n" + UNFREEZE_INL,
+        },
         0,
-        "5 rows judged, 0 failed",
+        "added under an UNFREEZE line naming the file",
+    ),
+    (
+        "a pure deletion passes",
+        {INL: ALPHA + IDLE},
+        0,
+        "net_node.inl: shrink-only: ",
     ),
     (
         "editing a frozen call line fails",
@@ -234,25 +274,28 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "the calls are gone but `alpha` is still named",
     ),
     (
-        "editing an unfrozen call line in the enclosing function passes",
+        "editing an unfrozen call line leaves the calls row unchanged and adds a code line",
         {INL: ALPHA + IDLE.replace("::beta, this", "::beta, this, 2") + BETA},
-        0,
+        1,
         "inside idle_worker: unchanged",
     ),
     (
         "a header-defined frozen body is judged like an .inl one",
-        {ZONE: ZONE_TEXT.replace("open_outcome::ok", "open_outcome::fail")},
+        {ZONE: ZONE_TEXT.replace("open_outcome{true}", "open_outcome{false}")},
         1,
         "open: body changed",
     ),
     (
-        "a word that is only a string literal elsewhere does not keep a deleted function alive",
-        {ZONE: ZONE_TEXT.replace(
-            "  open_outcome open(const address& a, context& out)\n  {\n    return open_outcome::ok;\n  }\n",
-            '  const char* note = "open";\n',
-        )},
+        "with a witness, the bare word surviving as a file handle and a log string does not block the deletion",
+        {ZONE: ZONE_WITHOUT_OPEN},
         0,
         "open: deleted",
+    ),
+    (
+        "with a witness, the witness surviving blocks the deletion",
+        {ZONE: "struct open_outcome { bool ok; };\n" + ZONE_WITHOUT_OPEN},
+        1,
+        "`open_outcome` is still named",
     ),
     (
         "a row the base does not have fails rather than being skipped",
@@ -273,8 +316,17 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "row retired under an UNFREEZE line",
     ),
     (
-        "a body change under a new UNFREEZE line naming the full anchor passes",
+        "a body change under an UNFREEZE line naming the anchor still adds a code line to the file",
         {INL: ALPHA.replace("return tail > 0;", "return tail >= 0;") + IDLE + BETA, BRIEF: BRIEF_TEXT + "\n" + UNFREEZE_ALPHA},
+        1,
+        "changed under an UNFREEZE line",
+    ),
+    (
+        "a body change under UNFREEZE lines naming the anchor and the file passes",
+        {
+            INL: ALPHA.replace("return tail > 0;", "return tail >= 0;") + IDLE + BETA,
+            BRIEF: BRIEF_TEXT + "\n" + UNFREEZE_ALPHA + UNFREEZE_INL,
+        },
         0,
         "changed under an UNFREEZE line",
     ),
@@ -306,13 +358,13 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "growing a shrink-only file by one code line fails",
         {INL: INL_TEXT + "  int extra_code_line;\n"},
         1,
-        "non-blank, non-comment lines. src/p2p/net_node.inl is shrink-only",
+        "1 code line(s) added",
     ),
     (
-        "a net shrink with lines added passes",
+        "a net shrink that still adds a code line fails",
         {INL: ALPHA + IDLE + "  int one_added_line;\n"},
-        0,
-        "net_node.inl: shrink-only: ",
+        1,
+        "net_node.inl takes deletions only",
     ),
     (
         "a comment-only addition passes",
@@ -321,10 +373,22 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "net_node.inl: shrink-only: ",
     ),
     (
+        "editing a comment in a shrink file is not an added code line",
+        {HDR: HDR_TEXT.replace("  // the dial path\n", "  // the dial path, frozen until the cutover\n")},
+        0,
+        "net_node.h: shrink-only: 6 -> 6 code lines, none added",
+    ),
+    (
         "deleting comments does not buy room: code lines are what is counted",
         {HDR: HDR_TEXT.replace("  // the dial path\n", "  bool extra();\n")},
         1,
-        "net_node.h is shrink-only",
+        "net_node.h takes deletions only",
+    ),
+    (
+        "levin_notify.cpp is held to the same rule",
+        {NOTIFY: NOTIFY_TEXT.replace("schedule.flush();", "schedule.flush_now();")},
+        1,
+        "levin_notify.cpp takes deletions only",
     ),
     (
         "growth under a new UNFREEZE line naming the file passes",
@@ -333,16 +397,34 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "under an UNFREEZE line naming the file",
     ),
     (
+        "the cutover shape passes: every function deleted, the shrink rows kept",
+        {**WITHOUT_ALPHA, ZONE: ZONE_WITHOUT_OPEN, LIST: "# frozen\n" + SHRINK_ROWS},
+        0,
+        "row retired, function deleted",
+    ),
+    (
+        "a shrink row removed while its file exists fails",
+        {LIST: LIST_TEXT.replace(f"shrink\t{INL}\n", "")},
+        1,
+        "row removed while the file is still present",
+    ),
+    (
+        "after the cutover the function freeze is discharged and the shrink rows still judge",
+        {INL: IDLE + BETA + "  int grown;\n"},
+        1,
+        "function freeze is discharged",
+    ),
+    (
         "an UNFREEZE line that was already at base does not count",
         {INL: INL_TEXT + "  int extra_code_line;\n"},
         1,
         "already present at base, not counted",
     ),
     (
-        "an empty list at base is the discharged freeze",
+        "an empty list at base is nothing frozen",
         {},
         0,
-        "freeze is discharged",
+        "nothing is frozen",
     ),
 ]
 
@@ -353,6 +435,9 @@ def main() -> int:
         base = dict(BASE)
         if name.startswith("an empty list"):
             base[LIST] = "# nothing left\n"
+        if name.startswith("after the cutover"):
+            base[LIST] = "# frozen\n" + SHRINK_ROWS
+            base[INL] = IDLE + BETA
         if name.startswith("an UNFREEZE line that was already at base"):
             base[BRIEF] = BRIEF_TEXT + "\n" + UNFREEZE_INL
         repo = repo_with(base, head)
@@ -365,9 +450,12 @@ def main() -> int:
 
     # The list introduced by the change itself: read at head, judged against
     # the base bodies, so the gate passes its own first PR.
-    repo = repo_with({INL: INL_TEXT, HDR: HDR_TEXT, ZONE: ZONE_TEXT, BRIEF: BRIEF_TEXT}, {LIST: LIST_TEXT})
+    repo = repo_with(
+        {INL: INL_TEXT, HDR: HDR_TEXT, ZONE: ZONE_TEXT, NOTIFY: NOTIFY_TEXT, BRIEF: BRIEF_TEXT},
+        {LIST: LIST_TEXT},
+    )
     rc, out = gate(repo)
-    ok = rc == 0 and "introduced by this change" in out and "5 rows judged, 0 failed" in out
+    ok = rc == 0 and "introduced by this change" in out and f"{ROWS} rows judged, 0 failed" in out
     print(("ok   " if ok else "FAIL ") + "a list introduced at head is judged against base bodies")
     if not ok:
         failures += 1

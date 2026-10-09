@@ -4,7 +4,8 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Freezes the C++ dial path until the P2P-3 slice 3 cutover deletes it.
+# Freezes the C++ dial path until the P2P-3 slice 3 cutover deletes it, and
+# holds the C++ files the Rust lanes are replacing to deletions only.
 #
 # WHY. Ruling A (2026-10-08): the dial path in src/p2p is being replaced by
 # the Rust dialer, and every fix landed on it since 2026-09-20 kept alive a
@@ -13,23 +14,27 @@
 #
 #   body    a function, compared from its anchor to its closing brace;
 #   calls   the lines inside a function that call another;
-#   shrink  a file whose count of non-blank, non-comment lines may not go up
-#           (net_node.inl and net_node.h are shrink-only, Rick 2026-10-08).
+#   shrink  a file to which a change may add no code lines (Rick,
+#           2026-10-09: net_node.inl, net_node.h, levin_notify.cpp).
 #
 # For a body or calls row, the base and head revisions are compared:
 #
 #   present at both and different   FAIL
-#   gone at head                    PASS, and "gone" means gone: the bare
-#                                   name matches nothing under src/p2p at
-#                                   head outside comments and string
+#   gone at head                    PASS, and "gone" means gone: the witness
+#                                   identifier (the bare name unless the row
+#                                   names one) matches nothing under src/p2p
+#                                   at head outside comments and string
 #                                   literals, and the base body does not
 #                                   survive under another signature
 #   anchor gone, name still present FAIL  (renamed or re-signed, not deleted)
 #   unchanged                       PASS
 #
-# For a shrink row, the file's code-line count at head may not exceed its
-# count at base. Comment and blank lines are not code lines; the gate's own
-# scanner decides which is which, the same scanner that matches braces.
+# For a shrink row, the diff from base to head may add no code lines.
+# Deletions are free. A comment-only addition is free. An in-place edit of a
+# code line is an added code line, and so is replacing logic with a call
+# into Rust: that is visible as one dated UNFREEZE line per PR that moves
+# something. Comments are stripped and whitespace collapsed by the gate's
+# own scanner before the two texts are diffed.
 #
 # Rule 47: a row the gate cannot find at the base revision fails. It is not
 # skipped, because a gate that finds nothing to compare reports the same
@@ -41,14 +46,15 @@
 #
 # It must be new in the PR (absent at the base revision) and name the full
 # anchor from the list, or the shrink row's file path. A matching line lets
-# that row change, grow, or be removed while its subject is still present.
-# Nothing looser is read.
+# that row change, add lines, or be removed while its subject is still
+# present. Nothing looser is read.
 #
 # The list is read at the base revision, so a PR that edits the list is
-# still judged against the list it started from. When the base revision's
-# list is empty, every frozen function is gone and the freeze is discharged:
-# the gate says so and passes. That is the state the cutover PR leaves
-# behind; the gate and the list are deleted after it.
+# still judged against the list it started from. The cutover removes the
+# body and calls rows; when none remain at base the function freeze is
+# discharged and the gate says so. A shrink row is retired only when its
+# file is deleted: net_node.inl outlives the dial path, and the no-added-
+# lines rule is what keeps the next lane from growing it.
 #
 # Rule 46: nothing here reads a verdict through a pipe. git is run directly
 # and its exit status is checked.
@@ -60,6 +66,7 @@ import difflib
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,12 +86,20 @@ class Row:
     path: str
     anchor: str
     callee: str | None
+    witness: str | None = None
 
     @property
     def name(self) -> str:
         """The bare function name: the last `::` segment before the `(`."""
         head = self.anchor.rstrip("(")
         return head.rsplit("::", 1)[-1].split()[-1]
+
+    @property
+    def gone_marker(self) -> str:
+        """The identifier whose absence from src/p2p means the function is
+        gone: the witness when the row names one (a bare name like `open`
+        is an ordinary word), the bare name otherwise."""
+        return self.witness or self.name
 
     def describe(self) -> str:
         if self.kind == "calls":
@@ -108,6 +123,8 @@ def parse_list(text: str, where: str) -> list[Row]:
         fields = line.split("\t")
         if fields[0] == "body" and len(fields) == 3:
             rows.append(Row("body", fields[1], fields[2], None))
+        elif fields[0] == "body" and len(fields) == 4:
+            rows.append(Row("body", fields[1], fields[2], None, fields[3]))
         elif fields[0] == "calls" and len(fields) == 4:
             rows.append(Row("calls", fields[1], fields[2], fields[3]))
         elif fields[0] == "shrink" and len(fields) == 2:
@@ -243,6 +260,35 @@ def code_line_count(text: str) -> int:
     return sum(1 for line in strip_comments(text).splitlines() if line.strip())
 
 
+def normalised_code(text: str) -> str:
+    """`text` with comments gone and each line's whitespace collapsed, so a
+    comment edit beside code, or a re-indentation, is not a changed line.
+    Blank and comment-only lines become empty lines."""
+    return "\n".join(" ".join(line.split()) for line in strip_comments(text).splitlines()) + "\n"
+
+
+def added_code_lines(repo: Path, base_text: str, head_text: str) -> list[str]:
+    """Code lines present at head and not at base, as git's line diff sees
+    them over the normalised texts. A pure deletion adds none; an in-place
+    edit adds the edited line."""
+    with tempfile.TemporaryDirectory(prefix="freeze-diff-") as scratch:
+        before = Path(scratch) / "base"
+        after = Path(scratch) / "head"
+        before.write_text(normalised_code(base_text))
+        after.write_text(normalised_code(head_text))
+        done = git(repo, "diff", "--no-index", "--unified=0", "--", str(before), str(after))
+    # git diff --no-index: 0 no differences, 1 differences, anything else an error.
+    if done.returncode not in (0, 1):
+        raise GateError(f"git diff --no-index failed: {done.stderr.strip()}")
+    added: list[str] = []
+    for line in done.stdout.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            body = line[1:].strip()
+            if body:
+                added.append(body)
+    return added
+
+
 def word(name: str) -> re.Pattern[str]:
     """`name` as a whole identifier: what `rg -w` matches."""
     return re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
@@ -334,11 +380,22 @@ class Verdict:
 
 
 class Head:
-    """What the head revision holds under the frozen tree."""
+    """What the head revision holds: the frozen tree for the name search, and
+    any other file a row names, read on demand."""
 
-    def __init__(self, texts: dict[str, str]):
+    def __init__(self, repo: Path, sha: str, texts: dict[str, str]):
+        self.repo = repo
+        self.sha = sha
         self.texts = texts
         self._stripped = {path: strip_comments_and_literals(text) for path, text in texts.items()}
+        self._extra: dict[str, str | None] = {}
+
+    def text(self, path: str) -> str | None:
+        if path in self.texts:
+            return self.texts[path]
+        if path not in self._extra:
+            self._extra[path] = git_show(self.repo, self.sha, path)
+        return self._extra[path]
 
     def names(self, name: str) -> list[str]:
         """Files where `name` is a whole identifier outside comments and
@@ -357,11 +414,11 @@ class Head:
 
 def gone(row: Row, base_fn: Function, head: Head, what: str) -> Verdict:
     """The function anchored at `row.anchor` is absent at head. Is it gone?"""
-    survivors = head.names(row.name)
+    survivors = head.names(row.gone_marker)
     if survivors:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: anchor absent but `{row.name}` is still named at head "
+            f"FAIL  {row.describe()}: anchor absent but `{row.gone_marker}` is still named at head "
             f"outside comments ({', '.join(survivors)}): renamed or re-signed, not deleted",
         )
     carriers = head.body_survives(base_fn)
@@ -380,7 +437,7 @@ def judge_body(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) 
     base_fn = extract_function(base_text, row.anchor)
     if base_fn is None:
         return Verdict(False, f"FAIL  {row.describe()}: not found at base (rule 47)")
-    head_text = head.texts.get(row.path)
+    head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
         return gone(row, base_fn, head, "deleted")
@@ -418,7 +475,7 @@ def judge_calls(row: Row, base_text: str | None, head: Head, unfrozen: set[str])
             False,
             f"FAIL  {row.describe()}: no call to {row.callee} inside {row.name} at base (rule 47)",
         )
-    head_text = head.texts.get(row.path)
+    head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
         enclosing = gone(row, base_fn, head, f"{row.name} deleted")
@@ -453,32 +510,40 @@ def callee_gone(row: Row, head: Head, what: str) -> Verdict:
     return Verdict(True, f"PASS  {row.describe()}: {what}")
 
 
-def judge_shrink(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
+def judge_shrink(
+    repo: Path, row: Row, base_text: str | None, head_text: str | None, unfrozen: set[str]
+) -> Verdict:
     if base_text is None:
         return Verdict(False, f"FAIL  {row.describe()}: absent at base (rule 47)")
-    head_text = head.texts.get(row.path)
     if head_text is None:
         return Verdict(True, f"PASS  {row.describe()}: file deleted")
     before = code_line_count(base_text)
     after = code_line_count(head_text)
-    if after <= before:
-        return Verdict(True, f"PASS  {row.describe()}: {before} -> {after} code lines")
+    added = added_code_lines(repo, base_text, head_text)
+    if not added:
+        return Verdict(
+            True,
+            f"PASS  {row.describe()}: {before} -> {after} code lines, none added",
+        )
     if row.subject in unfrozen:
         return Verdict(
             True,
-            f"PASS  {row.describe()}: {before} -> {after} code lines under an UNFREEZE line naming the file",
+            f"PASS  {row.describe()}: {len(added)} code line(s) added under an UNFREEZE line naming the file",
         )
+    shown = "\n".join(f"  + {line}" for line in added[:8])
+    more = f"\n  ... and {len(added) - 8} more" if len(added) > 8 else ""
     return Verdict(
         False,
-        f"FAIL  {row.describe()}: {before} -> {after} non-blank, non-comment lines. "
-        f"{row.path} is shrink-only (Rick, 2026-10-08); a change may not raise its code-line count",
+        f"FAIL  {row.describe()}: {len(added)} code line(s) added ({before} -> {after} code lines). "
+        f"{row.path} takes deletions only (Rick, 2026-10-09); an added or edited code line needs "
+        f"**UNFREEZE (Rick, YYYY-MM-DD):** {row.path} — <reason> in {DEFAULT_BRIEF}\n{shown}{more}",
     )
 
 
 def judge_removed(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
     """A row present at base and absent at head."""
     if row.kind == "shrink":
-        if row.path not in head.texts:
+        if head.text(row.path) is None:
             return Verdict(True, f"PASS  {row.describe()}: row retired, file deleted")
         if row.subject in unfrozen:
             return Verdict(True, f"PASS  {row.describe()}: row retired under an UNFREEZE line naming the file")
@@ -493,7 +558,7 @@ def judge_removed(row: Row, base_text: str | None, head: Head, unfrozen: set[str
     base_fn = extract_function(base_text, row.anchor)
     if base_fn is None:
         return Verdict(False, f"FAIL  {row.describe()}: not found at base (rule 47)")
-    head_text = head.texts.get(row.path)
+    head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
         verdict = gone(row, base_fn, head, "row retired, function deleted")
@@ -556,14 +621,16 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
     base_rows = parse_list(base_list, f"base:{list_path}") if base_list is not None else []
     head_rows = parse_list(head_list, f"head:{list_path}") if head_list is not None else []
 
-    if base_list is not None and not base_rows:
-        print(
-            "the freeze list is empty at base: every frozen function is gone and the "
-            "freeze is discharged. Delete this gate and the list."
-        )
-        return 0
-
     judged = base_rows if base_list is not None else head_rows
+    if base_list is not None and not any(row.kind in ("body", "calls") for row in base_rows):
+        print(
+            "no body or calls rows remain at base: every frozen function is gone and the "
+            "function freeze is discharged. The shrink rows stay as long as their files do."
+        )
+        if not base_rows:
+            print("the list is empty; nothing is frozen. Delete this gate and the list.")
+            return 0
+
     added = [row for row in head_rows if row not in judged]
     removed = [row for row in base_rows if row not in head_rows] if base_list is not None else []
 
@@ -573,7 +640,7 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
     for note in notes:
         print(note)
 
-    head_tree = Head(tree_texts(repo, head_sha, FROZEN_TREE))
+    head_tree = Head(repo, head_sha, tree_texts(repo, head_sha, FROZEN_TREE))
     base_texts = {row.path: git_show(repo, base_sha, row.path) for row in judged + added + removed}
 
     verdicts: list[Verdict] = []
@@ -583,7 +650,9 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
         elif row.kind == "calls":
             verdicts.append(judge_calls(row, base_texts[row.path], head_tree, unfrozen))
         else:
-            verdicts.append(judge_shrink(row, base_texts[row.path], head_tree, unfrozen))
+            verdicts.append(
+                judge_shrink(repo, row, base_texts[row.path], head_tree.text(row.path), unfrozen)
+            )
     for row in removed:
         verdicts.append(judge_removed(row, base_texts[row.path], head_tree, unfrozen))
 
