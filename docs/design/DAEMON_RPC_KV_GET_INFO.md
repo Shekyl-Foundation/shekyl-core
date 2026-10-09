@@ -10,7 +10,7 @@ those commits. Open work on the hard-fork mechanism's deletion also edits
 content cited does not.
 **Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §2 row
 RK-5c, §2.1.1, §5. Family `RK-` (registered); this document mints
-**RK-D13…RK-D22** (decisions) and **RK-Q1…RK-Q8** (open questions) inside
+**RK-D13…RK-D23** (decisions) and **RK-Q1…RK-Q8** (open questions) inside
 it, added to the family's index row in the commit that lands this file
 (rule 94).
 **Sibling round:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md), round R1. Its §6.1
@@ -78,6 +78,7 @@ and unmaintainable. Every decision below is that principle applied.
 | **RK-D16** | **Economics fields are ported, not redesigned**, into a flexible typed Rust structure the economics lane evolves on its own (EUP is in assessment; no parameter or field-meaning changes are authorized here). |
 | **RK-D17** | **RK-5c lands before RT-W10.** Recorded in `RPC_CHANNEL.md` §6.1 at #1006's head. |
 | **RK-D21** | **`emission_era` is removed, not ported.** There never was an emission era: the chain is pre-genesis and the idea was retired. The field, its four labels and its thresholds are deleted from the C++ reply **before** the oracle capture, so nothing in Rust — no type, no enum, no function, no fixture — ever carries it. |
+| **RK-D23** | **`0` is a value; "no result" is `None` / `null`.** Zero is a valid answer for most quantities, so using it to mean "there is no answer" is ambiguous. In Rust the absence is `Option`; on the JSON wire it is `null`. This is RK-D15's principle stated generally, and it decides how every absence in this slice is written (§4.1, RK-Q7, RK-Q9). A standing rule for it is being drafted separately; this document cites RK-D23 either way. |
 
 ---
 
@@ -276,6 +277,21 @@ GetInfoResponse {
   the stand-ins with absence (`RPC_CHANNEL.md` §6.1: "absent, never zero")
   is a wire change the sibling round asks of this slice; when it lands is
   RK-Q8.
+
+#### The three wire states — RK-D23
+
+A field on this reply is in exactly one of three states, and each means one
+thing:
+
+| On the wire | Meaning |
+| --- | --- |
+| a value, including `0` | the answer |
+| `null` | there is no answer (the core has no target; a computation refused) |
+| field absent | not disclosed to this caller (a `Hidden` part) — or, for any other field, contract drift |
+
+Parity (commit 4) does not have these yet: it writes today's sentinel and
+stand-ins. Each later commit that changes the wire moves fields onto this
+table, and none moves a field off it.
 
 ### 4.2 Facts — RK-D3 / RK-D7, one snapshot per family
 
