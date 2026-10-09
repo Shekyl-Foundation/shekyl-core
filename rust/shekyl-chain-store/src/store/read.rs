@@ -56,7 +56,9 @@ use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
-use super::archival_reads::{self, PassCount, ServedShard};
+use super::archival_reads::{
+    self, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
 use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
@@ -1010,6 +1012,29 @@ impl ReadSnapshot<'_> {
     ) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A14.** What `epoch` settled for `(persona, shard)`. `None` is a
+    /// pair no draw was issued to, or an epoch not settled yet.
+    pub fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::settlement_row(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order.
+    pub fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A16.** The running digest of the draws issued in `epoch`;
+    /// [`IssuedDigest::ZERO`] when none was.
+    pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// The archival state as of this snapshot, as the E2 trace carries it

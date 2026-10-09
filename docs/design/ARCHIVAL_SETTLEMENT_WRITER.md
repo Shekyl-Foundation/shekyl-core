@@ -733,14 +733,14 @@ every pair the draw did not reach as a miss.
 | Subject | State | Where |
 | --- | --- | --- |
 | The fold | `settle_epoch(passes, issued)`: a count against a count, NonObservation below 2. No Rust consensus path calls it; its callers are the FFI and one test | `rust/shekyl-archival-retention/src/attestation.rs:192-203`; `rust/shekyl-ffi/src/archival_ffi/settlement.rs:60`, `:127` |
-| The row | `SettlementRow([u8; 3])`, built only by `settle(passes, issued)`; refuses `issued = 0` and `issued > 255` | `rust/shekyl-archival-retention/src/settlement_row.rs:142-176` |
-| The table | `archival_settlement` is catalogued in the Rust store at ordinal 19 as `Unshaped`: no codec, no writer, no reader, not created at seal | `rust/shekyl-chain-store/src/schema.rs:556-559`, `:70-74` |
+| The row | Two types until step 2 of §14.4 deletes the first. The count fold's `SettlementRow([u8; 3])` (floor 2, refuses `issued > 255`), reached only from the FFI. And the stored row: `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused; decoding re-settles the counts and refuses an outcome they do not give | `rust/shekyl-archival-retention/src/settlement_row.rs:142-176`; `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
+| The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No writer reaches any of the three yet | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/codec/schema_version.rs` |
 | The slash fold | Decides on any pass: `passed` is this block's credits, or `pass_count(P, s, E).any()`. The window walk-back uses the same read | `rust/shekyl-chain-rules/src/archival/mod.rs:303-320`; `archival/slash.rs:154-178`, `:246-281` |
 | Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
 | When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
 | `issued` | No source. The urn has no caller; the slash pass still reads the one-challenge beacon geometry | `archival/slash.rs:183-240`; `rust/shekyl-archival-retention/src/challenge_assignment.rs` (no caller outside its crate) |
-| A pass, per draw | No source. A pass row is keyed `(P, shard, epoch, including height)`. Nothing names the draw it answers | `rust/shekyl-chain-store/src/schema.rs:553`; `store/archival_write.rs:183-211` |
-| The block's archival writes | `ArchivalDelta` has no settlement field, and `ChainView` has no settlement read | `archival/delta.rs:51-58`; `rust/shekyl-chain-rules/src/view.rs:406-507` |
+| A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`); nothing sets it yet. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands | `rust/shekyl-chain-store/src/schema.rs:553`; `store/archival_write.rs:183-211` |
+| The block's archival writes | `ArchivalDelta` has no settlement field. `ChainView` reads the row (A14), one epoch's issued draws in `(P, shard, h, j)` order (A15) and the epoch's digest (A16) | `archival/delta.rs:51-58`; `rust/shekyl-chain-rules/src/view.rs` (`settlement_row`, `issued_draws`, `issued_digest`); `rust/shekyl-chain-store/src/store/archival_reads.rs` |
 | Pruning | The Rust store prunes no archival table by epoch. `prune_archival_epochs_before` is C++ only | `rust/shekyl-chain-store/src/store/prune.rs:132` |
 | The C++ side | `set_archival_settlement` and `get_archival_settlement` exist with no production caller. The revert and the prune of the table are wired | `src/blockchain_db/lmdb/db_lmdb.cpp:6681-6765`, `:5866-5885`, `:6976-6988` |
 
@@ -785,12 +785,20 @@ live validator; the C++ daemon stays consensus, on the beacon, until
 
 ### 14.4 Build order
 
-1. **Tables and the view read.** `archival_settlement` shaped as
-   `([u8; 32], u64, u64) → Coded<SettlementRow>`, the tuple form of the
+1. **Tables and the view read. LANDED** (§14.1 rows *The row*, *The
+   tables*, *The block's archival writes*). `archival_settlement` shaped
+   as `([u8; 32], u64, u64) → Coded<SettlementRow>`, the tuple form of the
    48-byte key (`SO-D2`), in the order the store already uses for
-   `archival_slash_applied`. The issued-draw index: a pair's issued draws,
-   each with its pass fact, and the epoch's digest cell. `SCHEMA_VERSION`
-   21 → 22. The view reads for both.
+   `archival_slash_applied`. The issued-draw index, each row with its pass
+   fact, and the epoch's digest cell. `SCHEMA_VERSION` 21 → 22. The view
+   reads for all three.
+
+   The index is keyed **epoch first**, `(E, P, shard, h, j)`. Every reader
+   takes one epoch: the settlement walk, the digest it checks, which must
+   cover every stored draw of the epoch and not only those of pairs a walk
+   of `D` reaches, and the prune. Each is one contiguous range, and inside
+   it one pair's draws are adjacent in the `(h, j)` order the selection is
+   defined over.
 2. **The list fold, and the `SO-D10e` deletions.** The selection of three
    counted draws by beacon and the digest term are in
    `rust/shekyl-archival-retention/src/settlement_select.rs`, with the

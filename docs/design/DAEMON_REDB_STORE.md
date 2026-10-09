@@ -1393,7 +1393,8 @@ grader's snapshot oracle. Digest v0's read set is unchanged, and its
 §10 stays true; that document's §11 archival-families UPDATE carries the
 per-table disposition (nine families and the last-slash cell in the
 snapshot; six `NOT_PORTED` journals dissolved with no state to compare;
-`archival_settlement` held, SO-D8). "Digests must still *see* production
+`archival_settlement` outside the snapshot: the C++ store has no
+production settlement writer to compare with, `SO-D10`). "Digests must still *see* production
 LMDB behavior" is met in the form the rule anticipated for an exclusion: the
 rows are the C++'s own reading, committed as data in every captured trace
 (E4 commit 7 re-captures the six). The rule's text above is kept as the

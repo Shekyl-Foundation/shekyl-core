@@ -31,8 +31,8 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META,
-    TXS_PQC_AUTH_HASH, UNDO_LOG,
+    self, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN,
+    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS, TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -179,9 +179,27 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // presence for, and creating them would make "no writer yet" a fact the
     // file could not tell from "empty".
     assert!(
-        snap.open_table(ARCHIVAL_SETTLEMENT).is_err(),
-        "archival_settlement is Unshaped and not sealed"
+        snap.open_table(TXS).is_err(),
+        "txs is Unshaped and not sealed"
     );
+    // Settlement's three tables are sealed and empty: a chain on which no
+    // epoch has settled and no draw was issued is told from a file that
+    // lacks them (`SO-D10`).
+    assert!(snap
+        .open_table(ARCHIVAL_SETTLEMENT)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
+    assert!(snap
+        .open_table(ARCHIVAL_ISSUED_DRAW)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
+    assert!(snap
+        .open_table(ARCHIVAL_ISSUED_DIGEST)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
     // S-CURVE's shaped curve tables are sealed; the summary is a **written**
     // row, not an empty table (`SCU-Q1`, SCU-1).
     assert!(snap
@@ -224,10 +242,10 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // the undo log, the per-height accrual rows a view of the emission
     // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
     // §3.3, §3.4) and **shaped** `archival_slash_log` and
-    // `archival_slash_applied`. What remains `Unshaped` is the two dead
-    // tables (`txs`, `hf_starting_heights`) and `archival_settlement`, held
-    // for SO-D8's cutover with its blocker named.
-    assert_eq!(unshaped, 3, "the §11.1(f) count at this layout");
+    // `archival_slash_applied`. 3 → 2 at layout 22: `SO-D10` **shaped**
+    // `archival_settlement`. What remains `Unshaped` is the two dead tables
+    // (`txs`, `hf_starting_heights`).
+    assert_eq!(unshaped, 2, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -407,23 +425,29 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
 #[test]
 fn the_rust_only_tables_are_catalogued_last_and_named() {
     let ordinal = schema::ordinal_of("txs_pqc_auth_hash").expect("catalogued");
-    let last = schema::ordinal_of("txs_archival_len").expect("catalogued");
+    let archival_len = schema::ordinal_of("txs_archival_len").expect("catalogued");
+    let issued_draw = schema::ordinal_of("archival_issued_draw").expect("catalogued");
+    let last = schema::ordinal_of("archival_issued_digest").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
     let catalogue_len =
         u32::try_from(schema::catalogue().len()).expect("catalogue length fits in a table ordinal");
     // `txs_pqc_auth_hash` was appended last (A3); `txs_archival_len`
-    // (`SHT-Q2`) was appended after it, so the two hold the final slots.
-    assert_eq!(ordinal.index() + 1, last.index());
+    // (`SHT-Q2`) was appended after it, and `SO-D10`'s two index tables
+    // after that, so the four hold the final slots in that order.
+    assert_eq!(ordinal.index() + 1, archival_len.index());
+    assert_eq!(archival_len.index() + 1, issued_draw.index());
+    assert_eq!(issued_draw.index() + 1, last.index());
     assert_eq!(
         last.index() + 1,
         catalogue_len,
-        "txs_archival_len is the final catalogue slot"
+        "archival_issued_digest is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the five Rust-only tables
+    // 33 LMDB mirrors plus the seven Rust-only tables
     // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
-    // `txs_pqc_auth_hash`, `txs_archival_len`) at SCHEMA_VERSION 19 — 47
+    // `txs_pqc_auth_hash`, `txs_archival_len`, `archival_issued_draw`,
+    // `archival_issued_digest`) at SCHEMA_VERSION 22 — 47
     // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
     // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
     // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
@@ -431,8 +455,9 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // tables (layout 15, `schema::NOT_PORTED`) and added
     // `curve_tree_leaf_counts`; 44 when `SHT-Q2` added `txs_archival_len`
     // (layout 18); 38 since DRS-E4 did not port seven archival tables and
-    // added `archival_budget_accruing` (layout 19).
-    assert_eq!(catalogue_len, 38);
+    // added `archival_budget_accruing` (layout 19); 40 since `SO-D10` added
+    // the issued-draw index and its digest (layout 22).
+    assert_eq!(catalogue_len, 40);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -441,7 +466,9 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "curve_tree_leaf_counts",
             "undo_log",
             "txs_pqc_auth_hash",
-            "txs_archival_len"
+            "txs_archival_len",
+            "archival_issued_draw",
+            "archival_issued_digest"
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

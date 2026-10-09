@@ -775,10 +775,13 @@ with it:
 
 - **Per block `h`:** `count(h)`, `carry(h)`, the visible shortfall at
   `h`, and whether `h`'s seed has been revealed.
-- **Per pair, per epoch:** its issued draws as `(h, j, h_reveal)`, where
-  `h_reveal` is the block that first admitted `h`'s seed. The count
+- **Per pair, per epoch:** its issued draws as `(h, j, h_reveal, passed)`,
+  where `h_reveal` is the block that first admitted `h`'s seed and
+  `passed` is whether a record for the draw has been admitted. The count
   visible at any `h′` is the number with `h_reveal < h′`. The first
-  carrier for `h` derives every draw of `h` and writes them all.
+  carrier for `h` derives every draw of `h` and writes them all. The
+  store keys the rows `(E, P, s, h, j)`: one epoch is one range, and
+  inside it a pair's draws are adjacent in `(h, j)` order.
 
 - **Per epoch, one 32-byte cell: the running digest of the issued
   draws.** It starts at zero. Each issued draw adds
@@ -803,8 +806,11 @@ with it:
   and after all three, in any order,
   `053b7619b7c9a1dee912ba0905b91ccb33b8eeb958117c98456e36ea41e99ec8`.
 
-A record's admitted pass is the existing serve-credit row, re-keyed
-`(P, s, E, h, j)`.
+A record's admitted pass is the `passed` bit of its draw's index row, and
+nothing else (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10c`). The serve-credit
+row keyed `(P, s, E, h)` is not kept beside it: admission re-keys or
+deletes that table when it lands. The digest covers issuance only, so
+setting the bit does not move it.
 
 **Reorg.** A pop reverts the batch: the reveals a popped block admitted
 are un-issued, the counts of blocks above the fork point are discarded

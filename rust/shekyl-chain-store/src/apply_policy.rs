@@ -93,8 +93,9 @@ macro_rules! archival_families {
 archival_families! {
     /// `archival_serve_credit`
     ServeCredit => "archival_serve_credit",
-    /// `archival_settlement` — apply is unforceable (no production caller)
-    /// and its revert is vacuous over an unwritten table. Named exclusion.
+    /// `archival_settlement` — in the C++ store, apply is unforceable (no
+    /// production caller) and its revert is vacuous over an unwritten
+    /// table. Named exclusion. The Rust store's rows are `SO-D10`'s.
     Settlement => "archival_settlement",
     /// `archival_attestation_witness`
     AttestationWitness => "archival_attestation_witness",

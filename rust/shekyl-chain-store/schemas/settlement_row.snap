@@ -1,0 +1,13 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+codec = settlement_row
+fixed_width = 3
+[fixtures]
+not_observed_one_issued = 030001
+not_observed_two_issued = 030002
+missed_no_pass = 020003
+missed_one_pass = 020103
+served_two_passes = 010204
+served_three_passes = 010309
+served_issued_saturated = 0102ff

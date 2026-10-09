@@ -167,10 +167,12 @@ use shekyl_units::AtomicUnits;
 
 use crate::codec::{
     AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
-    CurveTreeState, LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket,
-    RuleSetInForce, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
-    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    CurveTreeState, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, Present,
+    PropertyCellBytes, RMarket, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
+    Unshaped,
 };
+use crate::ids::IssuedDrawTuple;
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
@@ -407,6 +409,21 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          CSR-3a divergence that ruling registers. Out of the digest domain: a length of the \
          txs_prunable and txs_pqc_auths rows the digest already folds",
     ),
+    (
+        "archival_issued_draw",
+        "the issued-draw index of the secret per-block draw (ARCHIVAL_SERVE_CREDIT_SPEC.md §10): \
+         each draw a revealed seed issued to a pair, with its reveal height and whether a pass \
+         record was admitted for it. Settlement selects its three counted draws from these rows \
+         and reads no seed. The C++ challenge path is a public urn with nothing to index, and \
+         is deleted with its consensus role (DEL-008), so LMDB never holds it",
+    ),
+    (
+        "archival_issued_digest",
+        "the running digest of each epoch's issued draws, folded when a draw is indexed and \
+         checked by the settlement walk over archival_issued_draw (spec §9.5 check 1): the \
+         store's guard that the index settlement reads is the one admission wrote. A function \
+         of the archival_issued_draw rows, and absent from LMDB for the same reason they are",
+    ),
 ];
 
 /// One table's identity as redb records it in the file: name and the
@@ -553,9 +570,14 @@ tables! {
     pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<([u8; 32], u64, u64, u64), Present> =
         TableDefinition::new("archival_serve_credit");
 
-    /// `archival_settlement` — default flags. On the abstract interface since
-    /// 2026-09-13 (SO-D8 promotion); was `BlockchainLMDB`-only before that.
-    pub const ARCHIVAL_SETTLEMENT: TableDefinition<&[u8], Unshaped> =
+    /// `archival_settlement` — default flags in LMDB over the packed
+    /// `P_id ‖ BE64(shard) ‖ BE64(epoch)` (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// `SO-D2`); here the tuple `([u8; 32], u64, u64)`, the same order and
+    /// [`ARCHIVAL_SLASH_APPLIED`]'s key. One [`SettlementRow`] per pair per
+    /// settled epoch: `outcome ‖ passes ‖ issued`. A pair with no issued
+    /// draw has no row, and absence is not a miss. Written by the slash
+    /// pass ahead of the slash it decides (`SO-D10`).
+    pub const ARCHIVAL_SETTLEMENT: TableDefinition<([u8; 32], u64, u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_settlement");
 
     /// `archival_attestation_witness` — INTEGERKEY; a block's stored witness
@@ -696,6 +718,29 @@ tables! {
     /// of the block. Appended last (ordinal 43).
     pub const TXS_ARCHIVAL_LEN: TableDefinition<u64, Coded<ArchivalLength>> =
         TableDefinition::new("txs_archival_len");
+
+    /// `archival_issued_draw` — **Rust-only** ([`RUST_ONLY_TABLES`]); the
+    /// issued-draw index (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10). Keyed
+    /// `(epoch, persona, shard, issuing height, draw)`
+    /// ([`IssuedDrawKey`](crate::ids::IssuedDrawKey)), which redb orders
+    /// component-wise. Epoch-major, so one epoch's index is one contiguous
+    /// range — what the settlement walk reads, what the digest covers and
+    /// what a prune drops — and inside it one pair's draws are contiguous
+    /// in `(h, j)` order, the order settlement's selection takes them in.
+    /// The value is the [`IssuedDraw`]: the height the draw became
+    /// visible at, and **the one home of the fact that it was passed**
+    /// (`SO-D10c`). Appended last but one (ordinal 38).
+    pub const ARCHIVAL_ISSUED_DRAW: TableDefinition<IssuedDrawTuple, Coded<IssuedDraw>> =
+        TableDefinition::new("archival_issued_draw");
+
+    /// `archival_issued_digest` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// epoch → the running [`IssuedDigest`] of every draw issued in it,
+    /// folded as each is indexed and compared by the settlement walk
+    /// against the rows [`ARCHIVAL_ISSUED_DRAW`] then holds (spec §9.5,
+    /// check 1). An epoch with no issued draw has no row, which reads as
+    /// [`IssuedDigest::ZERO`]. Appended last (ordinal 39).
+    pub const ARCHIVAL_ISSUED_DIGEST: TableDefinition<u64, Coded<IssuedDigest>> =
+        TableDefinition::new("archival_issued_digest");
 }
 
 #[cfg(test)]

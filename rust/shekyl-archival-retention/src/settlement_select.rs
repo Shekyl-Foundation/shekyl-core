@@ -30,6 +30,7 @@
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
+use shekyl_types::archival::{COUNTED_DRAWS, ISSUED_DIGEST_LEN};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 /// cSHAKE256 customization for [`select_counted`] (rule 30: one label, one
@@ -39,15 +40,8 @@ pub const SETTLEMENT_SELECT_CUSTOMIZATION: &[u8] = b"shekyl/archival-settlement-
 /// cSHAKE256 customization for [`issued_draw_term`].
 pub const ISSUED_INDEX_CUSTOMIZATION: &[u8] = b"shekyl/archival-issued-index-v1";
 
-/// Draws counted per pair at settlement. Fewer issued than this is not an
-/// observation.
-pub const COUNTED_DRAWS: usize = 3;
-
 /// The settlement beacon's width: one block hash.
 pub const SETTLEMENT_BEACON_LEN: usize = 32;
-
-/// Width of an [`IssuedDigest`].
-pub const ISSUED_DIGEST_LEN: usize = 32;
 
 /// Attempts at one position before the candidate in hand is accepted. The
 /// same cap as the draw's own selection, so the loop is total. A rejection
@@ -164,45 +158,10 @@ pub fn issued_draw_term(
     out
 }
 
-/// The running digest of one epoch's issued draws: the sum of their
-/// [`issued_draw_term`]s as 256-bit little-endian integers, modulo `2^256`.
-///
-/// It starts at [`IssuedDigest::ZERO`]. Folding the same terms in any order
-/// gives the same digest.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct IssuedDigest([u8; ISSUED_DIGEST_LEN]);
-
-impl IssuedDigest {
-    /// The digest of no draws.
-    pub const ZERO: Self = Self([0; ISSUED_DIGEST_LEN]);
-
-    /// The digest a store holds.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; ISSUED_DIGEST_LEN]) -> Self {
-        Self(bytes)
-    }
-
-    /// The bytes a store holds.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; ISSUED_DIGEST_LEN] {
-        &self.0
-    }
-
-    /// Add one draw's term.
-    pub fn fold(&mut self, term: &[u8; ISSUED_DIGEST_LEN]) {
-        let mut carry = 0u16;
-        for (acc, add) in self.0.iter_mut().zip(term) {
-            let sum = u16::from(*acc) + u16::from(*add) + carry;
-            *acc = sum.to_le_bytes()[0];
-            carry = sum >> 8;
-        }
-        // The carry out of the top byte is the reduction modulo 2^256.
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_types::archival::IssuedDigest;
 
     fn persona(byte: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([byte; 32])
@@ -319,15 +278,6 @@ mod tests {
             other.fold(t);
         }
         assert_eq!(hex(other.as_bytes()), all);
-    }
-
-    #[test]
-    fn the_sum_wraps_at_two_to_the_256() {
-        let mut digest = IssuedDigest::from_bytes([0xff; 32]);
-        let mut one = [0u8; 32];
-        one[0] = 1;
-        digest.fold(&one);
-        assert_eq!(digest, IssuedDigest::ZERO);
     }
 
     #[test]
