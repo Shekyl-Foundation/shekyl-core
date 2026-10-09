@@ -130,8 +130,11 @@ SCOPE = (
 # row 6, store conversion (2026-10-07: `connect_fixtures::spendable_prefix`
 # became `prefix_to(BlockHeight, …)`, and the fixture surface it grew —
 # `height_maturing`, `Grown::height` / `images_at` / `block` — was typed at
-# birth rather than recorded).
-GRANDFATHER_CEILING = 160
+# birth rather than recorded); 152 at the I13/I15 fixture split (2026-10-08:
+# moving `at` / `anchor` onto `Grown` and the validator-tree reads onto
+# `GrownTree` typed those ordinals as `BlockHeight` instead of re-recording
+# them).
+GRANDFATHER_CEILING = 152
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

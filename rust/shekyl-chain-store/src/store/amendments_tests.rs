@@ -363,7 +363,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         &spendable_prefix(vec![vec![four_part], vec![body(three_part)]]),
     );
     let expected = connected
-        .get(at(FIRST_SPEND_HEIGHT))
+        .get(at(BlockHeight::from_raw(FIRST_SPEND_HEIGHT)))
         .and_then(|block| block.first())
         .expect("the first spend block lists the join")
         .txid_parts()

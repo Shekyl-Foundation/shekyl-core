@@ -379,7 +379,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let mut alt_cand = candidate_over(
         root_going_into(&store, top),
         top,
-        main[at(s)],
+        main[at(BlockHeight::from_raw(s))],
         vec![alt_spend],
     );
     let main_top_pays = fixture::paid(&main_top.miner_transaction)

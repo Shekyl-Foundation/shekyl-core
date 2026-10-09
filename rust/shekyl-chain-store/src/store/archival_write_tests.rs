@@ -612,7 +612,7 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     // The credit, one block above the join it names: J4 reads the table
     // the policy skipped.
     let height = FIRST_SPEND_HEIGHT + 1;
-    let credit = anchor(&grown.hashes, height, credit);
+    let credit = anchor(&grown.hashes, BlockHeight::from_raw(height), credit);
     let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -717,7 +717,7 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     // claimant is the spender's, so its slot is the persona's identity
     // (CEN-J20) under its own signature.
     let claim = fixture::signed_claiming(
-        anchor(&grown.hashes, height, claim),
+        anchor(&grown.hashes, BlockHeight::from_raw(height), claim),
         &fixture::Claimant {
             identity: claimant.identity(),
             sign: &|hash| claimant.identity_signature(hash),

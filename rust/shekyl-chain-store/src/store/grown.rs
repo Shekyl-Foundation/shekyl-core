@@ -168,9 +168,9 @@ pub(in super::super) fn credited(slot: u32) -> (Listed, Transaction) {
 pub(in super::super) const FIRST_SPEND_HEIGHT: u64 =
     first_spending_height(&RuleSet::GENESIS).to_raw();
 
-/// A fixture height as an index into a hash list.
-pub(in super::super) fn at(height: u64) -> usize {
-    usize::try_from(height).expect("a fixture height fits usize")
+/// A fixture block's ordinal as an index into a hash list.
+pub(in super::super) fn at(height: BlockHeight) -> usize {
+    usize::try_from(height.to_raw()).expect("a fixture height fits usize")
 }
 
 /// Coinbase-only blocks through the height below `height`, then `listed`
@@ -212,8 +212,12 @@ pub(in super::super) const fn height_maturing(n: u64) -> BlockHeight {
 /// the crate that judges it; it panics below `REFERENCE_BLOCK_MIN_AGE`.
 /// Spends are not anchored here: a spend is **built** at its height, by
 /// [`Grown::spend_of`], reference and proof together.
-pub(in super::super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-    fixture::anchored_at(hashes, height, tx)
+pub(in super::super) fn anchor(
+    hashes: &[BlockHash],
+    height: BlockHeight,
+    tx: Transaction,
+) -> Transaction {
+    fixture::anchored_at(hashes, height.to_raw(), tx)
 }
 
 /// A chain as the store connected it, with the wallet-side tree a real
@@ -282,7 +286,7 @@ impl Grown {
     /// The key images the block connected at `height` spent, in listing
     /// order ([`key_images`] over its listed bodies).
     pub(in super::super) fn images_at(&self, height: BlockHeight) -> &[[u8; 32]] {
-        &self.images[at(height.to_raw())]
+        &self.images[at(height)]
     }
 
     /// The coinbases matured for the block connecting next and spent by no
@@ -421,7 +425,7 @@ impl Grown {
             bytes
         });
         let key = ProvedKey {
-            reference: self.hashes[at(reference.to_raw())],
+            reference: self.hashes[at(reference)],
             coinbase,
             connecting,
             fee,
@@ -451,7 +455,7 @@ impl Grown {
     /// built ([`Self::join`]), each [`Listed::Body`] anchored
     /// ([`anchor`]).
     pub(in super::super) fn realise(&mut self, listed: &[Listed]) -> Vec<Transaction> {
-        let height = self.height().to_raw();
+        let height = self.height();
         listed
             .iter()
             .map(|entry| match entry {
@@ -491,8 +495,7 @@ impl Grown {
         rules: &RuleSet,
         txs: &[Transaction],
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-        let height = self.height().to_raw();
-        let cand = candidate_at(view, height, self.tip(), txs.to_vec())?;
+        let cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
         let judged = judge_under(view, cand, rules)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
@@ -523,7 +526,7 @@ impl Grown {
 impl Grown {
     /// The block connected at `height`, as judged.
     pub(in super::super) fn block(&self, height: BlockHeight) -> &Block {
-        &self.blocks[at(height.to_raw())].0
+        &self.blocks[at(height)].0
     }
 
     /// The tip popped, as the store's `pop` leaves the chain: its hash,
@@ -567,13 +570,14 @@ pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
 /// carrying the batch's root going into that height. Genesis is endowed.
 fn candidate_at<'b, 'id>(
     view: &BatchView<'b, 'id>,
-    height: u64,
+    height: BlockHeight,
     previous: BlockHash,
     txs: Vec<Transaction>,
 ) -> Result<Candidate, StoreError> {
-    let root = batch_root_going_into(view, height)?;
-    let mut cand = candidate_over(root, height, previous, txs);
-    if height == 0 {
+    let raw = height.to_raw();
+    let root = batch_root_going_into(view, raw)?;
+    let mut cand = candidate_over(root, raw, previous, txs);
+    if height == BlockHeight::ZERO {
         endow_genesis(&mut cand);
     }
     Ok(cand)

@@ -147,11 +147,12 @@ impl Growing {
         listed: Vec<Transaction>,
         make: impl FnOnce(CurveTreeRoot, u64, BlockHash, &[Transaction], u64) -> Block,
     ) -> &(Block, Vec<Transaction>) {
-        let height = self.height().to_raw();
+        let height = self.height();
+        let raw = height.to_raw();
         let previous = self.hashes.last().copied().unwrap_or(BlockHash::NULL);
         let root = self.tree.root_going_into(height);
-        let reward = reward_for(&self.tree, root, height, previous, &listed);
-        let block = make(root, height, previous, &listed, reward);
+        let reward = reward_for(&self.tree, root, raw, previous, &listed);
+        let block = make(root, raw, previous, &listed, reward);
         self.record(block, listed)
     }
 
@@ -161,7 +162,7 @@ impl Growing {
         self.tree.push(&block, &listed);
         self.spender.push_agreeing(
             &Linked::new(&block, &listed),
-            self.tree.root_going_into(height.to_raw()),
+            self.tree.root_going_into(height),
         );
         self.hashes.push(block.hash());
         self.built.push((block, listed));

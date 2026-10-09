@@ -242,7 +242,9 @@ impl Builder {
         for (h, slots) in (from..=to).zip(joins) {
             for i in slots {
                 assert_eq!(
-                    self.listed[at(h)][i].archival_len().to_raw(),
+                    self.listed[at(BlockHeight::from_raw(h))][i]
+                        .archival_len()
+                        .to_raw(),
                     JOIN_LEN,
                     "height {h} slot {i}: the chain's join length moved — re-derive every \
                      table in this module"
@@ -414,7 +416,9 @@ fn the_join_length_the_model_assumes_is_the_chains() {
         }
     });
     assert_eq!(
-        b.listed[at(BASE + 5)][0].archival_len().to_raw(),
+        b.listed[at(BlockHeight::from_raw(BASE + 5))][0]
+            .archival_len()
+            .to_raw(),
         JOIN_LEN,
         "the chain's join length moved — re-derive every table in this module"
     );
@@ -673,7 +677,10 @@ fn chain_to_300(path: &std::path::Path) -> (ChainStore, Builder, Connected, Conn
     let mut b = Builder::new();
     let to_299 = b.connect_sized(&store, 0, BASE + 199, 0, spec_300);
     assert_eq!(
-        to_299[at(200)].pruned.expect("a boundary").shards(),
+        to_299[at(BlockHeight::from_raw(200))]
+            .pruned
+            .expect("a boundary")
+            .shards(),
         0..0,
         "epoch 2's boundary discards nothing: shard 0 closed in epoch 1"
     );
@@ -725,7 +732,7 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
         // join is 4-part, so it has the pqc region the prune discards by
         // shard.
         let early = snap
-            .tx_record(&b.listed[at(BASE + 5)][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 5))][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(
@@ -738,7 +745,7 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
         // hold or discard; its archival good is the prunable region alone,
         // held (id `BASE + 281` above).
         let late = snap
-            .tx_record(&b.listed[at(BASE + 250)][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 250))][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(late.pqc_auths, None, "a credit carries no pqc region");
@@ -1149,7 +1156,9 @@ fn a_transaction_starting_exactly_at_k_w_opens_shard_k() {
     let store = short_store(&path);
     let mut b = Builder::under(SHORT);
     let out = b.connect_sized(&store, 0, BASE + 30, 0, short_spec(0));
-    let pruned = out[at(BASE + 30)].pruned.expect("a boundary");
+    let pruned = out[at(BlockHeight::from_raw(BASE + 30))]
+        .pruned
+        .expect("a boundary");
     assert_eq!(pruned.shards(), 0..1, "D(13) is shard 0");
     for id in [BASE + 47, BASE + 48, BASE + 49] {
         assert_eq!(prunable_state(&store, id), Some(false), "id {id}: below W");
@@ -1191,13 +1200,15 @@ fn a_maximal_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in
     let out = b.connect_sized(&store, 0, BASE + 50, 0, short_spec(max));
     let model = b.model();
     // It starts at 5 900 000 and ends past 6 000 000.
-    let (_, start, len) = model.txs()[at(BASE + 95)];
+    let (_, start, len) = model.txs()[at(BlockHeight::from_raw(BASE + 95))];
     assert_eq!((start, len), (5_900_000, max));
     assert!(
         start < 2 * Model::W && start + len > 2 * Model::W,
         "it straddles 2·W"
     );
-    let pruned = out[at(BASE + 50)].pruned.expect("a boundary");
+    let pruned = out[at(BlockHeight::from_raw(BASE + 50))]
+        .pruned
+        .expect("a boundary");
     assert_eq!(pruned.shards(), 1..2, "D(15) is shard 1");
     assert_eq!(
         prunable_state(&store, BASE + 95),
@@ -2024,7 +2035,7 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     {
         let snap = store.begin_read().expect("read");
         let discarded = snap
-            .tx_record(&b.listed[at(BASE + 5)][0].hash())
+            .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 5))][0].hash())
             .expect("read")
             .expect("recorded");
         assert_eq!(
@@ -2078,7 +2089,7 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
     };
     b.connect_sized(&store, 0, BASE + 199, 0, spec);
 
-    let credit_hash = b.listed[at(BASE + 6)][0].hash();
+    let credit_hash = b.listed[at(BlockHeight::from_raw(BASE + 6))][0].hash();
     let id_of = |hash: &shekyl_types::TxHash| {
         store
             .begin_read()
@@ -2093,7 +2104,7 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
     let credit = id_of(&credit_hash);
     assert!(
         matches!(
-            b.listed[at(BASE + 6)][0].ct,
+            b.listed[at(BlockHeight::from_raw(BASE + 6))][0].ct,
             Ct::Fcmp {
                 prunable: Some(_),
                 ..

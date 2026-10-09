@@ -119,38 +119,41 @@ impl GrownTree {
     /// The root the header connecting at `height` must carry (CEN-B5):
     /// the root going into `height`.
     #[must_use]
-    pub fn root_going_into(&self, height: u64) -> CurveTreeRoot {
-        self.roots[at(height)]
+    pub fn root_going_into(&self, height: BlockHeight) -> CurveTreeRoot {
+        self.roots[at(height.to_raw())]
     }
 
     /// The root after block `height`'s drain — what its connect writes at
-    /// `height + 1`.
+    /// the next height.
     #[must_use]
-    pub fn root_after(&self, height: u64) -> CurveTreeRoot {
-        self.roots[at(height + 1)]
+    pub fn root_after(&self, height: BlockHeight) -> CurveTreeRoot {
+        let next = height
+            .checked_add(BlockCount::ONE)
+            .expect("a fixture height has a successor");
+        self.roots[at(next.to_raw())]
     }
 
     /// Block `height`'s weight and long-term weight as this chain derives
     /// them — what the store's `block_info` would hold.
     #[must_use]
-    pub fn weights_of(&self, height: u64) -> RecordedWeights {
-        self.weights[at(height)]
+    pub fn weights_of(&self, height: BlockHeight) -> RecordedWeights {
+        self.weights[at(height.to_raw())]
     }
 
     /// The long-term effective median in force for block `height` — the
     /// value the validator's verdict carries for it and the trace's row
     /// records.
     #[must_use]
-    pub fn median_for(&self, height: u64) -> LongTermWeight {
-        self.medians[at(height)]
+    pub fn median_for(&self, height: BlockHeight) -> LongTermWeight {
+        self.medians[at(height.to_raw())]
     }
 
     /// The gross emission through block `height` as this chain derives it
     /// — the parent's plus the paid reward (CEN-F14b, G12): what the
     /// validator's verdict carries and the trace's row records.
     #[must_use]
-    pub fn coins_generated_at(&self, height: u64) -> AtomicUnits {
-        self.blocks[at(height)].coins_generated
+    pub fn coins_generated_at(&self, height: BlockHeight) -> AtomicUnits {
+        self.blocks[at(height.to_raw())].coins_generated
     }
 
     /// What block `height` burned as this chain derives it (CEN-F17 over
@@ -172,15 +175,20 @@ impl GrownTree {
     /// accruing row is removed and the budget row written); the fixtures
     /// stay short of one, and this asserts it.
     #[must_use]
-    pub fn archival_snapshot_after(&self, height: u64) -> ArchivalSnapshot {
+    pub fn archival_snapshot_after(&self, height: BlockHeight) -> ArchivalSnapshot {
+        let raw = height.to_raw();
+        let next = height
+            .checked_add(BlockCount::ONE)
+            .expect("a fixture height has a successor")
+            .to_raw();
         let schedule = SettlementSchedule::GENESIS;
         assert!(
-            schedule.close_due_at_height(height + 1).is_none(),
+            schedule.close_due_at_height(next).is_none(),
             "the synthetic fixtures stay short of a settlement close"
         );
-        let epoch = schedule.epoch_at_height(height);
+        let epoch = schedule.epoch_at_height(raw);
         let open = schedule.open_height(epoch);
-        let total = self.accrual[at(open)..=at(height)]
+        let total = self.accrual[at(open)..=at(raw)]
             .iter()
             .try_fold(AtomicUnits::ZERO, |sum, a| sum.checked_add(*a))
             .expect("a fixture chain's accrual fold fits u64");

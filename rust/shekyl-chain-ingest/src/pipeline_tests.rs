@@ -799,13 +799,13 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     let main_tree = GrownTree::over(&r.main);
     let fork_tree = GrownTree::over(&r.after);
     assert_eq!(
-        main_tree.root_after(diverges_at - 1),
-        fork_tree.root_after(diverges_at - 1),
+        main_tree.root_after(h(diverges_at - 1)),
+        fork_tree.root_after(h(diverges_at - 1)),
         "below the fork's first matured outputs the two trees are one"
     );
     assert_ne!(
-        main_tree.root_after(diverges_at),
-        fork_tree.root_after(diverges_at),
+        main_tree.root_after(h(diverges_at)),
+        fork_tree.root_after(h(diverges_at)),
         "the fixture's fork grows a different tree once its outputs mature"
     );
     let trace = Arc::new(trace_of(&r.after, true));
@@ -1037,7 +1037,7 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
         obs.archival.rows_equal,
         u64::try_from(
             GrownTree::over(&r.after)
-                .archival_snapshot_after(f + 4)
+                .archival_snapshot_after(h(f + 4))
                 .row_count()
         )
         .expect("fits"),
@@ -1065,16 +1065,16 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
-                    tree.coins_generated_at(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&[0xEE; 32]).expect("a wrong checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
             .expect("the true archival rows: this control is the digest's alone");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
@@ -1137,22 +1137,26 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
-            let root = if hh == 1 { wrong } else { tree.root_after(hh) };
+            let root = if hh == 1 {
+                wrong
+            } else {
+                tree.root_after(h(hh))
+            };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
                     root,
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
-                    tree.coins_generated_at(hh),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
             .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
@@ -1182,7 +1186,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         report.roots.diverged().copied().collect::<Vec<_>>(),
         vec![crate::pipeline::RootDivergence {
             at: h(1),
-            ours: tree.root_after(1),
+            ours: tree.root_after(h(1)),
             theirs: wrong,
         }]
     );
@@ -1226,26 +1230,30 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
     let path = tmp("pipeline-weights-oracle-control");
     let chain = chain(3);
     let tree = GrownTree::over(&chain);
-    let wrong = LongTermWeight::from_raw(tree.median_for(1).to_raw() + 1);
+    let wrong = LongTermWeight::from_raw(tree.median_for(h(1)).to_raw() + 1);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
-            let median = if hh == 1 { wrong } else { tree.median_for(hh) };
+            let median = if hh == 1 {
+                wrong
+            } else {
+                tree.median_for(h(hh))
+            };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
                     median,
-                    tree.coins_generated_at(hh),
+                    tree.coins_generated_at(h(hh)),
                 ),
             )
             .expect("facts");
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
             .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
@@ -1272,18 +1280,18 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         3,
         "every connected height compared"
     );
-    let ours = tree.weights_of(1);
+    let ours = tree.weights_of(h(1));
     assert_eq!(
         report.weights.diverged().copied().collect::<Vec<_>>(),
         vec![WeightDivergence {
             at: h(1),
             ours: shekyl_chain_rules::Weights {
                 medians: shekyl_chain_rules::EffectiveMedian {
-                    long_term_effective_median: tree.median_for(1),
+                    long_term_effective_median: tree.median_for(h(1)),
                     // A young, light chain: the effective median is the
                     // zone, as the long-term one is.
                     effective_median: shekyl_types::BlockWeight::from_raw(
-                        tree.median_for(1).to_raw()
+                        tree.median_for(h(1)).to_raw()
                     ),
                 },
                 weight: ours.weight,
@@ -1316,22 +1324,22 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
     let path = tmp("pipeline-emission-oracle-control");
     let chain = chain(3);
     let tree = GrownTree::over(&chain);
-    let wrong = AtomicUnits::from_raw(tree.coins_generated_at(2).to_raw() + 1);
+    let wrong = AtomicUnits::from_raw(tree.coins_generated_at(h(2)).to_raw() + 1);
     let trace = {
         let mut w = TraceWriter::new(Vec::new()).expect("header");
         for hh in 0..3u64 {
             let coins = if hh == 2 {
                 wrong
             } else {
-                tree.coins_generated_at(hh)
+                tree.coins_generated_at(h(hh))
             };
             w.push_facts(
                 h(hh),
                 &crate::test_support::facts_at(
                     hh,
-                    tree.root_after(hh),
-                    tree.weights_of(hh),
-                    tree.median_for(hh),
+                    tree.root_after(h(hh)),
+                    tree.weights_of(h(hh)),
+                    tree.median_for(h(hh)),
                     coins,
                 ),
             )
@@ -1339,7 +1347,7 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
             .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
@@ -1368,11 +1376,14 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
     assert_eq!(diverged.len(), 1);
     assert_eq!(diverged[0].at, h(2));
     assert_eq!(diverged[0].theirs.coins_generated, wrong);
-    assert_eq!(diverged[0].ours.coins_generated, tree.coins_generated_at(2));
+    assert_eq!(
+        diverged[0].ours.coins_generated,
+        tree.coins_generated_at(h(2))
+    );
     // The verdict's chain: the paid reward is what advanced the parent.
     assert_eq!(
         diverged[0].ours.coins_generated.to_raw(),
-        tree.coins_generated_at(1).to_raw() + diverged[0].ours.paid.to_raw()
+        tree.coins_generated_at(h(1)).to_raw() + diverged[0].ours.paid.to_raw()
     );
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
@@ -1400,10 +1411,10 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         for hh in 0..3u64 {
             let mut facts: Facts = crate::test_support::facts_at(
                 hh,
-                tree.root_after(hh),
-                tree.weights_of(hh),
-                tree.median_for(hh),
-                tree.coins_generated_at(hh),
+                tree.root_after(h(hh)),
+                tree.weights_of(h(hh)),
+                tree.median_for(h(hh)),
+                tree.coins_generated_at(h(hh)),
             );
             if hh == 2 {
                 facts.burned = AtomicUnits::from_raw(1);
@@ -1412,7 +1423,7 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         }
         w.push_checkpoint(&expected_state(&chain))
             .expect("the true checkpoint");
-        w.push_archival_snapshot(&tree.archival_snapshot_after(2))
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(2)))
             .expect("the true archival rows");
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };

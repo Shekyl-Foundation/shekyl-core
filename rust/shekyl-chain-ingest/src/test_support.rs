@@ -465,14 +465,15 @@ impl TraceEconomics {
     /// The row: what the chain determined (`tree`, at `height`) beside
     /// what it did not (`self`).
     fn over(self, tree: &GrownTree, height: u64) -> Facts {
-        let weights = tree.weights_of(height);
+        let at_height = h(height);
+        let weights = tree.weights_of(at_height);
         Facts {
             weight: weights.weight,
             long_term_weight: weights.long_term_weight,
-            coins_generated: tree.coins_generated_at(height),
-            burned: tree.burned_at(h(height)),
-            root_after: tree.root_after(height),
-            long_term_effective_median: tree.median_for(height),
+            coins_generated: tree.coins_generated_at(at_height),
+            burned: tree.burned_at(at_height),
+            root_after: tree.root_after(at_height),
+            long_term_effective_median: tree.median_for(at_height),
             cumulative_difficulty: self.cumulative_difficulty,
         }
     }
@@ -576,8 +577,8 @@ pub fn trace_pinned(
                     .and_then(|t| u64::try_from(t).ok())
                     .expect("a checkpoint of the tree needs a tip: the chain is empty");
                 (
-                    digest_of(chain, tree.root_after(tip).as_bytes()),
-                    tree.archival_snapshot_after(tip),
+                    digest_of(chain, tree.root_after(h(tip)).as_bytes()),
+                    tree.archival_snapshot_after(h(tip)),
                 )
             }
             Pinned::Read { digest, archival } => (digest, archival.clone()),
@@ -629,7 +630,7 @@ fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &[u8; 32]) -> 
 /// The redb-shaped digest one would expect after `chain`.
 pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     let last = u64::try_from(chain.len() - 1).expect("a chain has a tip");
-    digest_of(chain, GrownTree::over(chain).root_after(last).as_bytes())
+    digest_of(chain, GrownTree::over(chain).root_after(h(last)).as_bytes())
 }
 
 pub fn open_store(path: &std::path::Path) -> ChainStore {

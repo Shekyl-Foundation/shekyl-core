@@ -100,7 +100,7 @@ fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
         tip.recorded.expect("recorded"),
         shekyl_chain_rules::Tip {
             height: h(FIRST_SPEND_HEIGHT),
-            hash: hashes[at(FIRST_SPEND_HEIGHT)],
+            hash: hashes[at(h(FIRST_SPEND_HEIGHT))],
         }
     );
     assert_eq!(tip.connect, ConnectState::Live);
@@ -291,10 +291,10 @@ fn block_returns_the_body_verified_against_the_recorded_identity() {
     let AtHeight::Recorded(body) = snap.block(h(spend_block)).expect("read") else {
         panic!("height {spend_block} is recorded");
     };
-    assert_eq!(body.hash, hashes[at(spend_block)]);
+    assert_eq!(body.hash, hashes[at(h(spend_block))]);
     assert_eq!(
         body.block.hash(),
-        hashes[at(spend_block)],
+        hashes[at(h(spend_block))],
         "the body hashes to its identity"
     );
     assert_eq!(body.block.transaction_hashes.len(), 1);

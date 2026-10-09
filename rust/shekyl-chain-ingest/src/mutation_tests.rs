@@ -853,7 +853,7 @@ fn the_unheld_root_is_not_a_fixture_root() {
     let root = candidate.block.header.curve_tree_root;
     assert_eq!(root.as_bytes(), &UNHELD_ROOT);
     assert_ne!(root, CurveTreeRoot::EMPTY);
-    assert_ne!(root, GrownTree::over(&chain).root_going_into(AT));
+    assert_ne!(root, GrownTree::over(&chain).root_going_into(h(AT)));
 }
 
 #[test]
