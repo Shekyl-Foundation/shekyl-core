@@ -82,28 +82,18 @@ pub fn select_counted(
     if issued < COUNTED_DRAWS {
         return None;
     }
-    // The list is `0..issued` with at most three positions moved, so only
-    // the moves are held: a pair with many issued draws costs three hashes,
-    // not an array of its length.
-    let mut moved: Vec<(usize, usize)> = Vec::with_capacity(2 * COUNTED_DRAWS);
-    let at = |moved: &[(usize, usize)], position: usize| {
-        moved
-            .iter()
-            .rev()
-            .find(|(p, _)| *p == position)
-            .map_or(position, |(_, value)| *value)
-    };
-    let mut counted = [0usize; COUNTED_DRAWS];
-    for (k, slot) in counted.iter_mut().enumerate() {
+    // The caller already holds every counted draw (`settle_pair`'s `draws`).
+    // The selection is the partial Fisher–Yates on that list, and the three
+    // positions it leaves at the front are the draws that count.
+    let mut list: Vec<usize> = (0..issued).collect();
+    for k in 0..COUNTED_DRAWS {
         let remaining = u64::try_from(issued - k).expect("a list length fits a u64");
         let offset = usize::try_from(candidate(beacon, persona, shard, epoch, k, remaining))
             .expect("an offset below the list length fits a usize");
-        let chosen = at(&moved, k + offset);
-        let displaced = at(&moved, k);
-        moved.push((k + offset, displaced));
-        moved.push((k, chosen));
-        *slot = chosen;
+        list.swap(k, k + offset);
     }
+    let mut counted = [0usize; COUNTED_DRAWS];
+    counted.copy_from_slice(&list[..COUNTED_DRAWS]);
     Some(counted)
 }
 
@@ -247,32 +237,6 @@ mod tests {
             let [a, b, c] = select(0x33, 0x44, 7, n).expect("three or more");
             assert!(a < n && b < n && c < n, "a position past a list of {n}");
             assert!(a != b && a != c && b != c, "a draw counted twice at {n}");
-        }
-    }
-
-    /// The sparse bookkeeping is the same shuffle as swapping a whole list.
-    #[test]
-    fn holding_only_the_moves_is_the_whole_list_shuffle() {
-        for n in COUNTED_DRAWS..60 {
-            let mut list: Vec<usize> = (0..n).collect();
-            for k in 0..COUNTED_DRAWS {
-                let remaining = u64::try_from(n - k).unwrap();
-                let offset = usize::try_from(candidate(
-                    &[0x33; 32],
-                    &persona(0x44),
-                    ShardId::from_raw(7),
-                    SettlementEpoch::from_raw(5),
-                    k,
-                    remaining,
-                ))
-                .unwrap();
-                list.swap(k, k + offset);
-            }
-            assert_eq!(
-                select(0x33, 0x44, 7, n),
-                Some([list[0], list[1], list[2]]),
-                "at {n} issued"
-            );
         }
     }
 
