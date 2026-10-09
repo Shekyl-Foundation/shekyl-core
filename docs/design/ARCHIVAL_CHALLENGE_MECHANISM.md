@@ -2342,7 +2342,11 @@ this mechanism.
 
 **Ledger.** A constant row `serving_priority_nice` (the Linux nice
 value, 19) on a new path set `serving-runtime` covering the serving
-runtime's construction and the priority crate. The row is *estimated*
+runtime's construction and the priority crate. The budget constants are
+rows of their own on that path set, `serving_workers` (`2`) and
+`serving_blocking` (`MAX_INFLIGHT`), both *unmeasured* until the
+confirming run is the first measurement of this budget. The nice row is
+*estimated*
 until the confirming run lands — a band of 0.90 to 1.00 for the share of
 its no-serve sync rate the daemon keeps, from the external-nice arm —
 and only a *current* row listens to its path set, so a later change to

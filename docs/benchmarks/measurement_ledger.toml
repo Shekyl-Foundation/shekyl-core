@@ -388,6 +388,24 @@ basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"]
 carrier = "The confirming floor block after SH-3 merges (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8): the syncing daemon, N = 8 and N = 64, with the thread-level mechanism in place of the external nice. Its capture makes this row current, and only a current row listens to its path set; until then a change to the priority setup does not trip the ledger."
 path_set = "serving-runtime"
 
+[[constant]]
+name = "serving_workers"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_WORKERS: usize = 2;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). A structural floor: two workers because the executor work per response is small and the path is CPU-bound on the blocking side. Unmeasured until the confirming floor block, which is the first measurement of this budget."
+path_set = "serving-runtime"
+
+[[constant]]
+name = "serving_blocking"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_BLOCKING: usize = MAX_INFLIGHT;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). One blocking thread per permitted connection, because each connection has at most one hop in flight. The cap is MAX_INFLIGHT, recorded separately as p_serve_max_inflight. Unmeasured until the confirming floor block."
+path_set = "serving-runtime"
+
 [[path_set]]
 id = "p-serve"
 spec = [
