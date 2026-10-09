@@ -105,14 +105,14 @@ pub struct Read {
 
 /// One dial that did not end in a verified shard, kept so the caller can
 /// log what happened to whom. Not evidence against the holder.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Attempt {
     pub holder: PCanonicalId,
     pub error: FetchError,
 }
 
 /// Why a need ended without a shard.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ReadFailure {
     /// The skeleton could not be read.
     #[error(transparent)]
@@ -186,43 +186,19 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
     ) -> Result<Read, ReadFailure> {
-        let closed = self.closed(shard_id)?;
-        let holders = self.holders.holders_of(shard_id)?;
-        if holders.is_empty() {
-            return Err(ReadFailure::NoHolders { shard_id });
-        }
-        let mut urn = Urn::new(holders);
-        let mut attempts = Vec::new();
-        let mut tried = 0usize;
-        while tried < budget.holders.get() {
-            let Some(holder) = urn.draw()? else { break };
-            tried += 1;
-            match self
-                .attempt(&holder, &closed.expected, Arc::clone(&sink), budget)
-                .await?
-            {
-                Ok((shard, header)) => {
-                    return Ok(Read {
-                        shard,
-                        holder: holder.id,
-                        header,
-                        close: closed.close,
-                        span: closed.span,
-                    });
-                }
-                Err(errors) => attempts.extend(errors),
-            }
-        }
-        Err(ReadFailure::Exhausted { attempts })
+        self.drive(shard_id, sink, budget, None).await
     }
 
     /// Read shard `shard_id` from an assigned holder first — a challenge's
     /// named `P` — drawing others only if it fails. The assigned holder is
-    /// not drawn again.
+    /// not drawn again. An empty drawable set still dials the assigned
+    /// holder: the challenge named it, and the urn being empty is not
+    /// [`ReadFailure::NoHolders`].
     ///
     /// # Errors
     ///
-    /// As [`Self::read`].
+    /// As [`Self::read`], except [`ReadFailure::NoHolders`], which a drawn
+    /// read returns when the urn starts empty and this one does not.
     pub async fn read_from(
         &self,
         assigned: &Holder,
@@ -230,19 +206,49 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
     ) -> Result<Read, ReadFailure> {
+        self.drive(shard_id, sink, budget, Some(assigned)).await
+    }
+
+    /// The one need. `assigned` is dialled first and removed from the urn
+    /// when the caller named a holder; otherwise the urn is drawn from the
+    /// start, and an empty urn is [`ReadFailure::NoHolders`] before any
+    /// dial. The stall budget is the attempt's, counted per holder across
+    /// a fresh anchor — this loop does not reset it.
+    async fn drive(
+        &self,
+        shard_id: ShardId,
+        sink: Arc<dyn TxSink>,
+        budget: NeedBudget,
+        assigned: Option<&Holder>,
+    ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
-        let mut urn = Urn::new(self.holders.holders_of(shard_id)?);
-        urn.exclude(assigned.id);
+        let holders = self.holders.holders_of(shard_id)?;
+        if assigned.is_none() && holders.is_empty() {
+            return Err(ReadFailure::NoHolders { shard_id });
+        }
+        let mut urn = Urn::new(holders);
+        if let Some(assigned) = assigned {
+            urn.exclude(assigned.id);
+        }
         let mut attempts = Vec::new();
         let mut tried = 0usize;
-        let mut next = Some(assigned.clone());
-        while let Some(holder) = next.take() {
+        // Dialled before the urn, then cleared so every later holder is drawn.
+        let mut first = assigned.cloned();
+        while tried < budget.holders.get() {
+            let holder = if let Some(holder) = first.take() {
+                holder
+            } else {
+                match urn.draw()? {
+                    Some(holder) => holder,
+                    None => break,
+                }
+            };
             tried += 1;
             match self
                 .attempt(&holder, &closed.expected, Arc::clone(&sink), budget)
                 .await?
             {
-                Ok((shard, header)) => {
+                HolderOutcome::Served(shard, header) => {
                     return Ok(Read {
                         shard,
                         holder: holder.id,
@@ -251,10 +257,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                         span: closed.span,
                     });
                 }
-                Err(errors) => attempts.extend(errors),
-            }
-            if tried < budget.holders.get() {
-                next = urn.draw()?;
+                HolderOutcome::Spent(errors) => attempts.extend(errors),
             }
         }
         Err(ReadFailure::Exhausted { attempts })
@@ -288,17 +291,19 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
     }
 
-    /// Every dial of one holder within this need. `Ok(Ok(..))` is a
-    /// verified shard; `Ok(Err(errors))` is this holder done with, errors
-    /// in dial order; `Err` is a fault of the requester's own (facts,
-    /// entropy) that ends the need.
+    /// Every dial of one holder within this need.
+    /// [`HolderOutcome::Served`] is a verified shard;
+    /// [`HolderOutcome::Spent`] is this holder done with, errors in dial
+    /// order. `Err` is a fault of the requester's own (facts, entropy)
+    /// that ends the need — a different type from a spent holder, so `?`
+    /// cannot turn one into the other.
     async fn attempt(
         &self,
         holder: &Holder,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Result<(VerifiedShard, RequestHeader), Vec<Attempt>>, ReadFailure> {
+    ) -> Result<HolderOutcome, ReadFailure> {
         let mut header = self.fresh_header()?;
         let mut stalls = 0u32;
         let mut rejected_before = false;
@@ -309,7 +314,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 .fetch(&holder.target, &header, expected, Arc::clone(&sink))
                 .await
             {
-                Ok(shard) => return Ok(Ok((shard, header))),
+                Ok(shard) => return Ok(HolderOutcome::Served(shard, header)),
                 Err(error) => error,
             };
             let next = error.next_move(rejected_before);
@@ -318,15 +323,27 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 error,
             });
             match next {
+                // The stall count is this holder's across the need, including
+                // stalls from before a 400 minted a fresh header. Resetting
+                // it there would let one `P` double what it may cost.
                 NextMove::RetrySameHeader if stalls < budget.stall_redials => stalls += 1,
                 NextMove::RetryFreshAnchor => {
                     rejected_before = true;
                     header = self.fresh_header()?;
                 }
                 NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => {
-                    return Ok(Err(errors));
+                    return Ok(HolderOutcome::Spent(errors));
                 }
             }
         }
     }
+}
+
+/// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder
+/// moves the need on, and a requester fault ends it.
+enum HolderOutcome {
+    /// The body verified. The header is the one `P` signed over.
+    Served(VerifiedShard, RequestHeader),
+    /// This holder is done with. The attempts are in dial order.
+    Spent(Vec<Attempt>),
 }
