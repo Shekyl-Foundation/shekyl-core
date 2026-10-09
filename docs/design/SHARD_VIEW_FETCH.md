@@ -184,7 +184,11 @@ A closed shard no drawn holder served is `CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILAB
 (-22) with the attempt count; the per-attempt errors are the daemon's log
 (`SF-D12`), not the wire's. The cache key is the close block's hash alone —
 `close_height` is a function of the shard under one chain, so the pair adds
-nothing the hash does not already distinguish.
+nothing the hash does not already distinguish. **A viewer's key is
+`(shard_id, shard_hash)`** (amended 2026-10-09 on review): the close block's
+hash is not on the wire, and `close_height` alone would keep a stale picture
+across a reorg that replaces the closing block at the same height; the view
+hash moves with the body, which is what a cached picture is a function of.
 
 ### `SV-D6` — PROPOSED: the method stays restricted
 

@@ -67,8 +67,10 @@ pub struct ShardViewResult {
     pub coinbase_output_count: u64,
     /// Last block's timestamp minus the first's, in seconds.
     pub time_range_seconds: u64,
-    /// The block that closed the shard. Two views of one id that differ
-    /// here are views across a reorg; a viewer caching by id keys on this.
+    /// The block that closed the shard: where it sits on the chain, and
+    /// the height a rendering-spec version pins to. Not a cache key — a
+    /// viewer keys on `(shard_id, shard_hash)`, because a reorg at this
+    /// very height changes the hash and leaves the height where it was.
     pub close_height: u64,
 }
 
@@ -143,12 +145,22 @@ pub async fn fetch_shard_view<D: Rpc>(
 /// `answer` is what [`shekyl_rpc_client::Rpc::json_rpc_call_or_refusal`]
 /// returns: the outer `Err` is the transport, the inner the daemon's typed
 /// refusal. A refusal code outside the method's three is the daemon
-/// breaking its contract — `-29209`, never a guess at a nearer code.
+/// breaking its contract — `-29209`, never a guess at a nearer code. So is
+/// a `result` whose `status` is not `OK`: the daemon this ships with refuses
+/// through `error`, and a `BUSY` arriving as a `result` is some other
+/// daemon's reply, whose fields are not a view and are never rendered.
 pub fn shard_view_from_daemon(
     answer: Result<Result<RequestArchivalShardResponse, JsonRpcRefusal>, RpcError>,
 ) -> Result<ShardViewResult, WalletRpcError> {
     match answer {
-        Ok(Ok(response)) => Ok(response.into()),
+        Ok(Ok(response)) if response.status.is_ok() => Ok(response.into()),
+        Ok(Ok(response)) => {
+            tracing::warn!(
+                status = %response.status.0,
+                "request_archival_shard answered a result whose status is not OK"
+            );
+            Err(WalletRpcError::DaemonProtocolViolation)
+        }
         Ok(Err(refusal)) => Err(shard_view_refusal(refusal)),
         Err(transport) => Err(from_daemon_fault(transport.fault(), &transport.to_string())),
     }
@@ -252,6 +264,16 @@ mod tests {
         let public = refused(CORE_RPC_ERROR_CODE_RESTRICTED);
         assert_eq!(public.code(), WalletRpcErrorCode::ShardViewNotOffered);
         assert_eq!(public.data().unwrap()["cause"], "restricted");
+    }
+
+    #[test]
+    fn a_result_whose_status_is_not_ok_is_a_protocol_violation_not_a_view() {
+        let busy = RequestArchivalShardResponse {
+            status: RpcStatus("BUSY".to_owned()),
+            ..response()
+        };
+        let err = shard_view_from_daemon(Ok(Ok(busy))).unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::DaemonProtocolViolation);
     }
 
     #[test]

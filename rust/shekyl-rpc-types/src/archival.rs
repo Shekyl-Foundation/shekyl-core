@@ -62,8 +62,10 @@ pub struct RequestArchivalShardResponse {
     pub coinbase_output_count: u64,
     /// Last block's timestamp minus the first's, saturating.
     pub time_range_seconds: u64,
-    /// The block whose connection closed the shard. Two views of one id
-    /// with different `close_height` are views across a reorg (`SV-D5`).
+    /// The block whose connection closed the shard (`SV-D5`): where it
+    /// sits on the chain, and the height a rendering-spec version pins
+    /// to. The reorg-sensitive identity of a view is `shard_hash`, not
+    /// this: a block replaced at the same height moves the hash alone.
     pub close_height: u64,
 }
 

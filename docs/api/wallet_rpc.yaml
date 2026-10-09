@@ -3625,8 +3625,10 @@ components:
         The daemon's aggregate without its `status` envelope. Every field
         is a deterministic function of the shard's body and the public
         skeleton (SV-D4): two honest daemons answer one closed shard
-        identically, so a viewer may cache the result by
-        (shard_id, close_height).
+        identically, so a viewer may cache the result — and anything drawn
+        from it — by (shard_id, shard_hash). The view hash is the identity
+        that moves with the body: a reorg that replaces a block at the same
+        height leaves close_height where it was and changes shard_hash.
       properties:
         shard_id:
           type: integer
@@ -3668,5 +3670,7 @@ components:
           type: integer
           format: int64
           description: >
-            The block that closed the shard. Two answers for one
-            shard_id that differ here are views across a reorg.
+            The block that closed the shard: where it sits on the chain,
+            and the height a rendering-spec version is pinned to. Not a
+            cache key — a reorg at this very height changes shard_hash
+            and not this.
