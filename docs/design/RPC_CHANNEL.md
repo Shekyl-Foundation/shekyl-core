@@ -516,7 +516,7 @@ internals); the log may be specific.
 | A daemon was just started and has not published its rendezvous yet | Nothing — the client waits for the publication (an event, not a poll that fails), bounded by the daemon's startup; on expiry: "The node did not finish starting. Its log records why." | Startup progress |
 | Unix: no per-user session directory (started under `sudo -u`, cron, or a container) | (Daemon, at start) "This node has no place for its local socket: there is no login session. Install it as a service, keep your session alive after logout (`loginctl enable-linger`), or name a socket directory." Refuses to start | Same line |
 | An explicit socket directory is not owned by this user, is not private to it, or cannot hold a socket | (Daemon, at start) "The socket directory PATH cannot be used: REASON." Refuses to start; never adopts or repairs it | Same line |
-| An instance name that breaks the naming rule (§7.1) | (Daemon, at start) "An instance name is 1 to 16 lower-case letters, digits or hyphens, starting with a letter or digit." For a reserved name: "NAME is reserved and cannot be an instance name." Refuses to start | Same line |
+| An instance name that breaks the naming rule (§7.1) | (Daemon, at start) "An instance name is 1 to 16 lower-case letters, digits or hyphens, starting with a letter or digit." For `default`: "'default' names the default instance and cannot be an instance name." Refuses to start | Same line |
 | Unix: the daemon's socket or its directory disappears while it runs (the session ended, or something removed it) | Clients: "No Shekyl node is running on this computer for NETWORK." — accurate, because the daemon has stopped | "local socket PATH is gone (REASON); shutting down" then a clean shutdown |
 | Starting a daemon while one is already running for this user and network | (Daemon, at start) "A Shekyl node is already running for you on NETWORK. To run a second one beside it, give it a name." Refuses to start | Same line, with the existing node's start time |
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
@@ -965,10 +965,14 @@ client never reaches the wrong network's node.
   both hide the logon-session SID the DACL relies on; only a raw token read
   (`GetTokenInformation`, `TokenGroups`, `SE_GROUP_LOGON_ID`) shows it. A
   check written against either tool will report the design unworkable.
-- **Service mode, both platforms:** a machine-wide rendezvous in the
-  service's data home, readable by users, naming the loopback channel
-  address and the daemon's public bundle. A same-user socket or pipe is
-  never served by a service.
+- **Service mode, both platforms:** a machine-wide rendezvous file,
+  `<service data home>/shekyl-<name>`, readable by users, naming the
+  loopback channel address and the daemon's public bundle. `<name>` is the
+  RT-O10 derivation — the same function and the same known-answer test as
+  the Unix socket and the Windows rendezvous file. **The service data home
+  is its containment** (RT-16: an ACL admitting the service account and
+  Administrators to write; nobody else can place a file there). A same-user
+  socket or pipe is never served by a service.
 - **Named instances** (proposed). The rendezvous above is the **default
   instance**: one per user and network, or one per machine and network for
   a service, and the only thing "this computer" resolves to. A daemon
@@ -985,14 +989,21 @@ client never reaches the wrong network's node.
   is typeability: an operator types this name on a command line and reads
   it in a log. It is **not** a path-safety rule — since RT-O10 a name
   reaches no path on any platform. `default` is **reserved and refused by
-  name**, because it would be confused with the default instance. The
-  ruling also reserved the Windows device names (`con`, `prn`, `aux`,
-  `nul`, `com0` to `com9`, `lpt0` to `lpt9`) because they would have
-  failed as a directory name on Windows; with no directory named after the
-  instance that reason is gone, and whether the reservation stays is for
-  the decision authority to confirm or strike. Until then they remain
-  refused, as ruled. Anything refused is refused at start with the rule
+  name**, because it would be confused with the default instance; nothing
+  else is reserved. Anything refused is refused at start with the rule
   stated, never sanitised or truncated.
+
+  **Invariant (decision authority, 2026-10-09): an instance name never
+  becomes a path component or an OS object name.** Any surface that needs a
+  per-instance name — a socket, a rendezvous file, a pipe, a lock, a
+  service or unit name, a log file — uses the RT-O10 derivation, never the
+  name itself. This is what makes the name rule a typeability rule and
+  nothing more: no character an operator could type can reach the
+  filesystem or an object namespace, so there is no list of dangerous
+  names to keep. The earlier reservation of the Windows device names
+  (`con`, `prn`, `aux`, `nul`, `com0` to `com9`, `lpt0` to `lpt9`) is
+  **struck**: it guarded a directory named after the instance, and no such
+  directory exists.
 - **Start-up dial on Unix.** The Windows start-up rule above applies here
   unchanged: before publishing, dial an existing socket — it answers, so
   another daemon is running, refuse and say so; nothing listens, so it is
@@ -1138,9 +1149,11 @@ construction) instead of loopback TCP.
   default instance. The ruling is wider than the problem that raised it.
   The Unix socket and the Windows rendezvous file are both named
   `shekyl-<name>`, with `<name>` from one function under
-  `shekyl/rpc-rendezvous-name-v1` and one known-answer test, so an instance
-  name reaches no path anywhere (58 of 108 bytes on Linux, 86 of 104 on
-  macOS). The daemon's start-up log and `shekyld status` print the same
+  `shekyl/rpc-rendezvous-name-v1` and one known-answer test, and so is the
+  service-mode rendezvous in the service's data home. An instance name
+  reaches no path anywhere (58 of 108 bytes on Linux, 86 of 104 on macOS);
+  §7.1 states that as an invariant, and the Windows device-name
+  reservation it made unnecessary is struck. The daemon's start-up log and `shekyld status` print the same
   network, instance and path line. The hash's length is proposed. The
   macOS base length is still unmeasured; the margin is 18 bytes. Recorded
   in §7.1.
@@ -1240,6 +1253,11 @@ construction) instead of loopback TCP.
 - **A shortened network component on macOS only.** It fits with five bytes
   to spare against an unmeasured base length, and gives the two Unix
   platforms different layouts for one mechanism.
+- **A list of reserved instance names for path safety** (the Windows
+  device names). A list guards one known hazard and misses the next; the
+  invariant that a name never becomes a path component or an OS object
+  name removes the hazard class (§7.1). `default` stays reserved for a
+  different reason: confusion with the default instance.
 - **A predictable per-user pipe name.** Another user can squat it before the
   daemon starts; the random name in a user-only rendezvous removes the name
   to squat (§7.1).
