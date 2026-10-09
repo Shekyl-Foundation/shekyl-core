@@ -115,11 +115,11 @@ use crate::schema;
 
 use super::{
     post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
-    Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
-    LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket,
-    Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, IssuedDigest,
+    IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell,
+    PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth,
+    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -679,6 +679,53 @@ impl Fixtures for RMarket {
         vec![
             ("zero_coholders_written", RMarket::from_raw(0)),
             ("distinct", RMarket::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+impl Fixtures for SettlementRow {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let row = |passes, issued| SettlementRow::settle(passes, issued).expect("a row");
+        vec![
+            ("not_observed_one_issued", row(0, 1)),
+            ("not_observed_two_issued", row(0, 2)),
+            ("missed_no_pass", row(0, 3)),
+            ("missed_one_pass", row(1, 3)),
+            ("served_two_passes", row(2, 4)),
+            ("served_three_passes", row(3, 9)),
+            ("served_issued_saturated", row(2, 1000)),
+        ]
+    }
+}
+impl Fixtures for IssuedDraw {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "unpassed",
+                IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    passed: false,
+                },
+            ),
+            (
+                "passed",
+                IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    passed: true,
+                },
+            ),
+        ]
+    }
+}
+impl Fixtures for IssuedDigest {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("no_draws", IssuedDigest::ZERO),
+            (
+                "distinct",
+                IssuedDigest::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i + 1).expect("fits")
+                })),
+            ),
         ]
     }
 }
@@ -1275,6 +1322,9 @@ snapshotted_codecs! {
     RMarket => codec_snapshot_r_market,
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
     SlashLogEntry => codec_snapshot_slash_log_entry,
+    SettlementRow => codec_snapshot_settlement_row,
+    IssuedDraw => codec_snapshot_issued_draw,
+    IssuedDigest => codec_snapshot_issued_digest,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
     ArchivalLength => codec_snapshot_archival_length,

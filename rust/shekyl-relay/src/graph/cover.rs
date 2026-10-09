@@ -3,11 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Cover and measured transit, read from the connector's declaration.
+//! Cover and transit, read from the connector's declaration.
 //!
 //! Neither cell is chosen by naming a connector. An unassessed transit
-//! is a connector this relay does not stem on.
+//! is a connector this relay does not stem on. An assessed transit carries
+//! its basis; today both built columns are assumptions
+//! (`DAEMON_RELAY_PRIVACY.md` §97).
 
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_transport_layer::{declaration, Assessment, ConnectorId, CoverClass};
 
 /// The ruling recorded on `connector`'s declaration.
@@ -31,13 +34,14 @@ pub fn any_open_link(configured: &[ConnectorId]) -> bool {
         .any(|connector| matches!(cover_class(connector), Some(CoverClass::OpenLink)))
 }
 
-/// Measured transit for `connector`, in milliseconds.
+/// The declared transit for `connector`, with its basis.
 ///
 /// [`None`] is a connector this relay does not stem on.
+/// *Records-was: `measured_transit_ms`, returning a bare `f64`.*
 #[must_use]
-pub fn measured_transit_ms(connector: ConnectorId) -> Option<f64> {
-    match declaration(connector.column()).measured_transit_ms() {
-        Assessment::Assessed(ms) => Some(f64::from(ms)),
+pub const fn transit_ms(connector: ConnectorId) -> Option<DerivationMs> {
+    match declaration(connector.column()).transit_ms() {
+        Assessment::Assessed(transit) => Some(transit),
         Assessment::NotAssessed => None,
     }
 }

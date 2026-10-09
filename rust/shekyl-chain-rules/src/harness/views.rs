@@ -15,7 +15,8 @@ use core::convert::Infallible;
 
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_types::archival::{
-    BondRecord, Holdings, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+    BondRecord, Holdings, IndexedDraw, IssuedDigest, PassCount, RMarket, ServedShard,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
@@ -401,5 +402,22 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
 
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
         self.inner.budget_accruing(epoch)
+    }
+
+    fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, Infallible> {
+        self.inner.settlement_row(persona, shard, epoch)
+    }
+
+    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, Infallible> {
+        self.inner.issued_draws(epoch)
+    }
+
+    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Infallible> {
+        self.inner.issued_digest(epoch)
     }
 }

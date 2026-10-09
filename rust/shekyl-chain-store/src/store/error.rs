@@ -40,7 +40,8 @@ use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, LeafCountFault, LeafDensity, SlashFault, StoreInvariant, UndoFault,
+    AccrualFault, CellFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
+    StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -396,6 +397,14 @@ pub enum StoreCannot {
         /// The persona the injection named.
         persona: PCanonicalId,
     },
+    /// The regtest draw issue
+    /// (`ChainStore::regtest_issue_draws`) named a draw the index already
+    /// holds. The door adds draws; re-issuing one would fold its term into
+    /// the digest a second time.
+    DrawAlreadyIssued {
+        /// The persona the draw names.
+        persona: PCanonicalId,
+    },
     /// `pop` at `tip` cannot run: the height is below the pop floor
     /// (S-CHAIN-W §5.4, SCW-7).
     ///
@@ -567,13 +576,18 @@ impl core::fmt::Display for StoreCannot {
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
             Self::InjectionOffFakechain => f.write_str(
-                "regtest serve-credit injection refused: the node's trust carries a release's \
-                 anchors, so this is not a Fakechain",
+                "regtest injection refused: the node's trust carries a release's anchors, so \
+                 this is not a Fakechain",
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
-                "regtest serve-credit injection refused: persona {persona} has no bond record, \
-                 and a credit without one is SI-15 at the next read"
+                "regtest injection refused: persona {persona} has no bond record, and a credit \
+                 or a draw without one is a row the reads refuse"
+            ),
+            Self::DrawAlreadyIssued { persona } => write!(
+                f,
+                "regtest draw issue refused: the index already holds this draw for persona \
+                 {persona}"
             ),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,

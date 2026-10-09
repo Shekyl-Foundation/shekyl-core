@@ -336,7 +336,7 @@ moving; at the pin only the first row has one.
 | Argon2id default: 64 MiB, t = 3 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs:135` | "under ~500 ms on a commodity desktop" | Not on the floor | No | BA-G12, BA-T17 |
 | Spend edge ≤ max(2 s, 15 % of proving); open edge ≤ 5 s | `docs/design/WALLET_SIDE_STORE.md:815`, `:816` | Maintainer judgment, stated as such | floor, 2026-09-27, ungraded | No | `docs/FOLLOWUPS.md:1253`, BA-T19 |
 | Key-dispatch ratio ≤ 1.05 | [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) | Mailbox overhead against decapsulation | CI runner | The baseline arm only | BA-I8, BA-T28 |
-| Serve-side `MAX_INFLIGHT = 64` | `rust/shekyl-p-serve/src/serve.rs:122` | Nothing: a declared placeholder | Did not bind at ≤ 32 readers on x86 hosts, on the spike's serve loop | No | BA-G1, BA-T5 |
+| Serve-side `MAX_INFLIGHT = 64` | `rust/shekyl-p-serve/src/serve.rs:122` | Nothing: a declared placeholder | Did not bind at ≤ 32 readers on x86 hosts, on the spike's serve loop; on the floor device at N = 64 exactly, one refusal in 6,144 for a requester that reconnects as its last stream closes (`BA-T5` session 2, 2026-10-09) | No | BA-G1, BA-T5, BA-Q4 |
 | Fetch-side `MAX_INFLIGHT = 8` | `rust/shekyl-p-fetch/src/client.rs:60` | Largest non-churning width, and floor memory by arithmetic | 2026-09-16; device not recorded; pre-#954 | No | BA-G2, BA-T6 |
 | `archival_shard_length_bytes = 3 000 000` | `config/consensus_constants.json:40` | Fetch time and miss rate by size | internal node and floor, pre-#954 | No | BA-G3, BA-T7 |
 | `archival_attestation_anchor_lag_blocks = 4` | `config/consensus_constants.json:37` | Fetch span plus skew | internal node, pre-#954 | No | BA-G3, BA-T7 |
@@ -404,7 +404,7 @@ a live node.
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, four `crypto_bench_serve_*` functions (manifest §12) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. Not yet run: 32 and 64 in flight | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. **Session 2, 2026-10-09**, a discovery run by ruling (no pass lines; predictions recorded against measurements): [`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md). N in {8, 16, 32, 64} with the daemon idle, syncing the chain beside the probe, and syncing with the probe at nice 19; time to first byte at one in flight. Serving under sync runs at 70 % of idle throughput with the daemon keeping about a third (31 to 37 %) of its no-serve sync rate; nice 19 gives the daemon 90 to 97 % back at a seventh to a fifth of the serving throughput; throughput flat from N = 16, p99 lateness rising steeply with N (× 2 to × 3 across each of the first two doublings, × 1.1 to × 1.4 across the last); TTFB 0.19 ms p50 idle; one refusal in 6,144 at N = 64. Five of seven predictions held | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
 | **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
@@ -625,7 +625,7 @@ device measured the single-pass tree the same day
 | Median per response, one in flight | 40 to 60 ms | 67.2 ms | **falsified** |
 | Digest cost inside the stream | 23.9 ms, its cost alone | 43 ms (67.2 − 24.6) | 19 ms unexplained |
 | Responses per second, eight in flight | 37 to 60 | 49.7, median of six blocks (`BA-T5`, 2026-10-07) | **held** |
-| Work before the first byte | under 1 ms | not isolated on the floor; a whole abandoned request is 2.2 ms over one that serves nothing (`BA-T5`, 2026-10-07) | open |
+| Work before the first byte | under 1 ms | 0.19 ms p50 time to first byte at one in flight, daemon idle, a bound from above on the whole pre-head step (`BA-T5` session 2, 2026-10-09); 1.85 ms p50 beside a syncing daemon | **held** |
 
 The prediction assumed the digest costs the same inside the stream as
 alone. It does not. BA-T3 narrows where the difference can be: on x86 the
@@ -648,9 +648,12 @@ The predictions are in the measurement ledger. Two are retired
 estimates, each beside the floor capture that settled it and with a
 verdict the check computes: the per-response figure (falsified by run 3)
 and throughput at eight in flight (held, by the first run of `BA-T5`,
-2026-10-07). The third, work before the first byte, is still an open
-estimate: that run bounded it from above at 2.2 ms, which includes one
-chunk read and hashed, and an upper bound above the band settles nothing.
+2026-10-07). The third, work before the first byte, was an open estimate
+after that run, which bounded it from above at 2.2 ms with one chunk read
+and hashed inside the figure; `BA-T5` session 2 (2026-10-09) measured
+time to first byte at one in flight at 0.19 ms p50 with the daemon idle,
+a bound from above inside the band, and the estimate is a measured
+constant on that capture (`serve_prehead_work_floor`).
 The run's record also explains run 3's two disagreeing blocks
 (the executor-side hash made throughput bimodal) and puts the digest
 alone at 23.9 ms of a 57.7 ms response.
@@ -672,8 +675,26 @@ second at eight in flight. The cost an unpaid request can impose is about
 whole. The control over how many such requests one rendezvous circuit can
 make is the serving onion's stream cap, 8 per circuit with the circuit
 closed past it (`SERVING_MAX_STREAMS`), a carried placeholder: its value
-is part of this question, beside `MAX_INFLIGHT`. 32 and 64 in flight have
-not been run.
+is part of this question, beside `MAX_INFLIGHT`.
+
+*Inputs from `BA-T5` session 2 (2026-10-09, a discovery run by the ruling
+of 2026-10-08; it sets nothing).* The sweep N in {8, 16, 32, 64} on the
+floor device, daemon idle and syncing
+([`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md)):
+throughput is flat from N = 16 in every state (idle 51 → 55 → 57 → 55
+responses/s; under sync 37 → 41 → 41 → 40), so beyond 16 the cap buys
+no throughput on this device; p99 executor wake lateness rises steeply
+with N (idle 5.5 → 11.7 → 35.8 → 51.6 ms; sync 7.2 → 14.3 → 45.0 →
+60.0 ms: × 2 to × 3 across each of the first two doublings, × 1.3 to
+× 1.4 across the last), so each doubling costs latency; CPU per response is 66
+to 72 ms at every N. At N = 64 = `MAX_INFLIGHT`, a requester that opens
+its next connections the instant its last stream closes was refused once
+in 6,144 under sync and never with the daemon idle: the in-flight permit
+is dropped after the stream, so for such a requester the cap is N − ε.
+Whether the permit should outlive the stream, and what resource the
+constant bounds (on this device, latency, not throughput or CPU), are
+this question's to rule. N = 128 was not run: no test-only override of
+the constant exists, and none was added.
 
 **BA-Q5 — Re-measure `W`, `L`, the retry budget and the read capacity on the
 v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an

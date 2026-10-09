@@ -105,7 +105,6 @@ set(unit_tests_sources
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
-  archival_settlement_testdb.cpp
   archival_attestation_verify.cpp
   archival_pass_anchor.cpp
   archival_reward_emission.cpp
@@ -116,7 +115,6 @@ set(unit_tests_sources
   fork_choice_vectors.cpp
   reorg_watermark.cpp
   sync_orphan_arm.cpp
-  archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
   archival_bond_record_v7_corpus.cpp
   archival_claim_source_rpc.cpp

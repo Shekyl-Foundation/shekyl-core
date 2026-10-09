@@ -57,8 +57,28 @@ jobs:
     name: "Grep gates (bundled)"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # The revision the dial-path freeze compares against: the base branch
+      # tip on a pull request, the group's base in the merge queue, the
+      # previous tip on a push. Empty is a failure below, not a skip.
+      FREEZE_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
     steps:
       - uses: actions/checkout@v5
+
+      # Ruling A (2026-10-08): the C++ dial path is frozen until the slice 3
+      # cutover deletes it, and the gate reads each frozen body at the base
+      # revision. The checkout above is depth 1, so that revision is fetched
+      # here. It rides this job because the job has no path filter: a "small
+      # fix" to a frozen function would come in through another lane.
+      - name: Fetch the base revision for the dial-path freeze
+        shell: bash
+        run: |
+          set -u
+          if [ -z "${FREEZE_BASE}" ]; then
+            echo "no base revision for the dial-path freeze on event ${GITHUB_EVENT_NAME}"
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin "${FREEZE_BASE}"
 
       - name: Install ripgrep and PyYAML
         run: |
@@ -147,6 +167,17 @@ jobs:
           # workflow edit.
           run_one "Matrix jobs are not gated at the job level" \
             python3 scripts/ci/check_matrix_job_gating.py
+
+          # Ruling A (2026-10-08, P2P-3): every function on
+          # scripts/ci/dial_path_freeze.tsv is deleted by the slice 3 cutover
+          # and changes to none of them land before it. Each body is compared
+          # with the base revision fetched above. The self-test runs first and
+          # bites every verdict, including the rule-47 case of a row the base
+          # does not have.
+          run_one "Ruling A: dial-path freeze self-test" \
+            python3 scripts/ci/test_check_dial_path_freeze.py
+          run_one "Ruling A: the C++ dial path is frozen until its deletion" \
+            python3 scripts/ci/check_dial_path_freeze.py --base "${FREEZE_BASE}"
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh

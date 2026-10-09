@@ -85,7 +85,8 @@ mod alt_tests;
 pub use alt::{AltBlock, AltBlockError, AltBlockFacts};
 pub use archival::{
     AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_KEY_BYTES,
+    HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, MAX_BOND_KEY_BYTES,
 };
 pub(crate) use chain::stored_timelock;
 pub use chain::{

@@ -53,8 +53,9 @@
 
 use shekyl_types::archival::{
     BadInterval, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError, HoldingsKind,
-    RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_BAD_INTERVALS,
-    MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    IssuedDigest, IssuedDraw, RMarket, SettlementRow, SettlementRowError, SigmaWorkMilli,
+    SlashLogEntry, SlashedHolding, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -289,5 +290,100 @@ impl Canonical for SlashLogEntry {
             epoch,
             holding,
         })
+    }
+}
+
+/// `archival_settlement`'s row (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D2`):
+///
+/// ```text
+/// outcome   u8    0x01 Served, 0x02 Missed, 0x03 NonObservation
+/// passes    u8    passes among the counted draws
+/// issued    u8    draws issued to the pair, saturated at 255
+/// ```
+///
+/// The bytes are the type's own ([`SettlementRow::to_bytes`]). Decoding
+/// re-settles the two counts and refuses a stored outcome they do not give,
+/// so a row this codec returns is one the writer could have written.
+impl Canonical for SettlementRow {
+    const NAME: &'static str = "settlement_row";
+    const FIXED_WIDTH: Option<usize> = Some(SETTLEMENT_ROW_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        Self::from_bytes(bytes).map_err(|e| CodecError::Invalid {
+            codec: Self::NAME,
+            reason: match e {
+                SettlementRowError::BadLength { .. } => "a settlement row is three bytes",
+                SettlementRowError::UnknownOutcome { .. } => "outcome byte names no outcome",
+                SettlementRowError::NothingIssued => {
+                    "a row with no issued draw; such a pair has no row"
+                }
+                SettlementRowError::MorePassesThanCounted { .. } => {
+                    "more passes than counted draws"
+                }
+                SettlementRowError::OutcomeDisagrees => {
+                    "the stored outcome is not what the counts give"
+                }
+            },
+        })
+    }
+}
+
+/// `archival_issued_draw`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10;
+/// `SO-D10c`). Layout:
+///
+/// ```text
+/// revealed_at   u64 LE   the block that admitted the issuing block's seed
+/// passed        u8       0 = no pass record admitted, 1 = one admitted
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for IssuedDraw {
+    const NAME: &'static str = "issued_draw";
+    const FIXED_WIDTH: Option<usize> = Some(9);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.revealed_at.to_raw().to_le_bytes());
+        out.push(u8::from(self.passed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let revealed_at = BlockHeight::from_raw(r.u64()?);
+        let passed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("pass flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the issued draw"));
+        }
+        Ok(Self {
+            revealed_at,
+            passed,
+        })
+    }
+}
+
+/// `archival_issued_digest`'s row: the 32 bytes of the epoch's running sum,
+/// little-endian (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
+impl Canonical for IssuedDigest {
+    const NAME: &'static str = "issued_digest";
+    const FIXED_WIDTH: Option<usize> = Some(ISSUED_DIGEST_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let digest = r.array::<ISSUED_DIGEST_LEN>("buffer ends inside the digest")?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the digest"));
+        }
+        Ok(Self::from_bytes(digest))
     }
 }
