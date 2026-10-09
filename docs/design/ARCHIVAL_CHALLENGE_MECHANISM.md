@@ -2243,9 +2243,14 @@ by default.
    - **Windows:** `SetThreadPriority(GetCurrentThread(),
      THREAD_PRIORITY_LOWEST)`. Not `THREAD_MODE_BACKGROUND_BEGIN`, which
      also lowers the thread's I/O and memory priority.
-   - Everything else (the BSDs, Android) takes the unix `setpriority`
-     path; a platform with no mapping is a compile-time hole, not a
-     silent no-op.
+   - **Android** shares Linux's per-thread nice. **The other unix
+     targets (the BSDs)** have no mapping under normal scheduling:
+     `setpriority(PRIO_PROCESS, 0, …)` there is the whole process, and
+     the only per-thread alternative is the idle class, which the ruling
+     forbids. On those targets the call reports *unsupported* and the
+     failure path below applies: serving continues at normal priority,
+     counted and warned about. Not a silent no-op, and not a build break
+     on a platform the wallet otherwise supports.
 
    *Rule 17.* No new dependency: `libc 0.2` (unix) and `windows-sys 0.61`
    with `Win32_System_Threading` (windows) are already workspace

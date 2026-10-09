@@ -22,7 +22,7 @@ use shekyl_levin::{
     DEFAULT_MAX_PACKET_SIZE,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
+use shekyl_runtime::{runtime, RuntimeBudget, ThreadName, ThreadStart};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Sockets};
 
@@ -69,6 +69,7 @@ pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
             blocking: nonzero(HOST_BLOCKING)?,
         },
         &ThreadName::new("p2p-harness").map_err(|err| Error::new(err.to_string()))?,
+        ThreadStart::none(),
     )?;
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|_| {});
     let mut listener = listen(

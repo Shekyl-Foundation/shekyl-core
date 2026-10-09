@@ -14,8 +14,8 @@ use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObs
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeCounters,
-    ServeObligation, ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, PriorityFailures,
+    ServeCounters, ServeObligation, ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -157,9 +157,20 @@ pub struct ServingHandle {
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
     posture: watch::Receiver<Option<ServingPosture>>,
+    priority_failures: PriorityFailures,
 }
 
 impl ServingHandle {
+    /// Serving-runtime threads that could not lower their CPU priority
+    /// (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). Zero on every
+    /// supported platform; a non-zero count is the one thing the operator
+    /// is shown when the platform refused, beside the warning the host
+    /// logged. Born with this handle, so it reads after a failed start too.
+    #[must_use]
+    pub fn priority_not_lowered(&self) -> u32 {
+        self.priority_failures.count()
+    }
+
     /// The operator alarm board this lifecycle reports through.
     ///
     /// **Held here because this is what the embedder holds.** The board's
@@ -259,6 +270,10 @@ where
     // established what it serves, so the standoff window reads "not
     // serving" — which it is.
     let (posture_tx, posture_rx) = watch::channel(None);
+    // Born here, beside the handle the embedder reads, and handed to the
+    // host: the count of serving threads the platform would not lower is
+    // readable whether or not the host ever started (SH-3).
+    let priority_failures = PriorityFailures::new();
     let join = tokio::spawn(run_serving_task(
         tor,
         serving,
@@ -270,6 +285,7 @@ where
         ServingSetup {
             config,
             store_fs_path,
+            priority_failures: priority_failures.clone(),
         },
         cancel_token.clone(),
         slot_guard,
@@ -279,6 +295,7 @@ where
         cancel_token,
         join: Some(join),
         alarms,
+        priority_failures,
     }
 }
 
@@ -311,6 +328,9 @@ struct ServingSetup {
     /// different mount, and the disk that matters is the one the
     /// corpus lands on.
     store_fs_path: PathBuf,
+    /// The handle's counter of serving threads the platform would not
+    /// lower, handed to the host at start (SH-3).
+    priority_failures: PriorityFailures,
 }
 
 async fn run_serving_task<P>(
@@ -331,6 +351,7 @@ async fn run_serving_task<P>(
     let ServingSetup {
         config,
         store_fs_path,
+        priority_failures,
     } = setup;
     // All three conditions are watched from the moment the task exists, so
     // a wallet sitting in the launch standoff reads "not serving yet"
@@ -349,7 +370,7 @@ async fn run_serving_task<P>(
 
     // `start_host` has already reported why it failed, and every reason it
     // gives up on is one this task cannot retry (its inputs are consumed).
-    let Some(host) = start_host(tor, serving, pinner, &alarms).await else {
+    let Some(host) = start_host(tor, serving, pinner, &alarms, &priority_failures).await else {
         return;
     };
 
@@ -561,11 +582,12 @@ async fn start_host<P>(
     serving: PersonaServing,
     pinner: P,
     alarms: &OperatorAlarms,
+    priority_failures: &PriorityFailures,
 ) -> Option<PersonaServingHost<P>>
 where
     P: ServeSetPinner + Send + Sync + 'static,
 {
-    match PersonaServingHost::start(tor, serving, pinner).await {
+    match PersonaServingHost::start(tor, serving, pinner, priority_failures).await {
         Ok(host) => Some(host),
         Err(HostError::Pin(PinError::MembersAlreadyPruned { shard_ids })) => {
             // Terminal by the store's own contract: chain replay, not retry.

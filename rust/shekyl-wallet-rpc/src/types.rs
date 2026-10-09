@@ -809,6 +809,13 @@ pub struct StakingInfoResult {
     /// standoff is not yet serving anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posture: Option<String>,
+    /// Serving-runtime threads that could not lower their CPU priority
+    /// (`SH-3`: serving runs below the daemon's priority by default). `0`
+    /// on every supported platform; a non-zero count means part of serving
+    /// runs at normal priority beside the daemon, and the wallet logged one
+    /// warning saying why. Absent when no serving lifecycle is parked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serving_priority_not_lowered: Option<u32>,
 }
 
 /// `get_drain_balance` result (WI-RPC-5 archival staking actions).

@@ -253,6 +253,20 @@ impl CadenceHandle {
             .and_then(ServingHandle::posture)
     }
 
+    /// Serving-runtime threads that could not lower their CPU priority
+    /// (`SH-3`), or `None` when no serving lifecycle is parked. Zero is the
+    /// expected reading; a non-zero count means part of serving runs at
+    /// normal priority beside the daemon. Same brief-lock snapshot as
+    /// [`Self::serving_posture`].
+    #[must_use]
+    pub fn serving_priority_not_lowered(&self) -> Option<u32> {
+        self.serving
+            .lock()
+            .expect("serving slot lock")
+            .as_ref()
+            .map(ServingHandle::priority_not_lowered)
+    }
+
     /// Fire the cancel token. Idempotent. The task observes it at the next
     /// poll (or mid-`select!`) and exits after any in-flight leg completes.
     pub fn cancel(&self) {

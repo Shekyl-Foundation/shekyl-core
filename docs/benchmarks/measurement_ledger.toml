@@ -370,6 +370,25 @@ rev_source = "not recorded in the capture; the last commit before the run's firs
 path_set = "archival-serve-fetch"
 
 [[path_set]]
+id = "serving-runtime"
+spec = [
+  "rust/shekyl-thread-priority/src",
+  "rust/shekyl-p-host/src/runtime.rs",
+]
+
+[[constant]]
+name = "serving_priority_nice"
+defined_in = "rust/shekyl-thread-priority/src/lib.rs"
+needle = "pub const SERVING_NICE: i32 = 19;"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 0.9, high = 1.0, unit = "share of the no-serve sync rate the daemon keeps" }
+basis = "BA-T5 session 2's nice arm: the serving process started under an external nice 19 beside a daemon syncing the chain on the floor device. The daemon kept 93, 98, 93 and 94 % of its no-serve sync rate at N = 8, 16, 32, 64 (cell medians over three passes), and serving delivered 5 to 8 responses per second. The shipped mechanism lowers the serving runtime's threads from inside the process to the same nice value, and nothing else; the share is expected to reproduce."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"]
+carrier = "The confirming floor block after SH-3 merges (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8): the syncing daemon, N = 8 and N = 64, with the thread-level mechanism in place of the external nice. Its capture makes this row current, and only a current row listens to its path set; until then a change to the priority setup does not trip the ledger."
+path_set = "serving-runtime"
+
+[[path_set]]
 id = "p-serve"
 spec = [
   "rust/shekyl-p-serve/src",

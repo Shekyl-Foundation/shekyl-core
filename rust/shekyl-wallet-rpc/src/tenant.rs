@@ -299,6 +299,16 @@ impl Tenant {
             .as_ref()
             .and_then(CadenceHandle::serving_posture)
     }
+
+    /// Serving-runtime threads the platform would not lower (`SH-3`), or
+    /// `None` when no serving lifecycle is parked. The same snapshot
+    /// discipline as [`Self::serving_posture`]: never waits on the task.
+    pub(crate) fn serving_priority_not_lowered(&self) -> Option<u32> {
+        self.tasks
+            .cadence
+            .as_ref()
+            .and_then(CadenceHandle::serving_priority_not_lowered)
+    }
 }
 
 impl std::fmt::Debug for Tenant {

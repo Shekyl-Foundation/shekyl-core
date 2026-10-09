@@ -19,8 +19,10 @@
 
 #![deny(unsafe_code)]
 
+use std::fmt;
 use std::io;
 use std::ops::Deref;
+use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_thread_ledger::{LedgerId, RuntimeRow};
@@ -80,21 +82,64 @@ impl Deref for Pool {
     }
 }
 
+/// What every thread of a runtime runs once, as it starts and before it
+/// takes work — worker and blocking threads alike.
+///
+/// The one use today is the serving runtime's threads lowering their own
+/// CPU priority (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). This
+/// crate does not know what the hook does; it only guarantees where it
+/// runs. [`ThreadStart::none`] is the ordinary runtime.
+#[derive(Clone, Default)]
+pub struct ThreadStart(Option<Arc<dyn Fn() + Send + Sync>>);
+
+impl ThreadStart {
+    /// No hook: threads start as Tokio starts them.
+    #[must_use]
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    /// Run `hook` on every thread of the runtime as it starts.
+    #[must_use]
+    pub fn new(hook: impl Fn() + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(hook)))
+    }
+}
+
+impl fmt::Debug for ThreadStart {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "ThreadStart(hook)"
+        } else {
+            "ThreadStart(none)"
+        })
+    }
+}
+
 /// Build one multi-thread runtime and record its budget.
 ///
 /// `name` is the OS thread name and the ledger label. The ledger row
 /// lives as long as the returned [`Pool`], including the workers'
 /// shutdown. A name that is empty or contains a NUL is a [`ThreadName`]
-/// error, so this function never builds a runtime for one.
-pub fn runtime(budget: RuntimeBudget, name: &ThreadName) -> io::Result<Pool> {
+/// error, so this function never builds a runtime for one. `on_thread_start`
+/// runs on each of the runtime's threads before it takes work.
+pub fn runtime(
+    budget: RuntimeBudget,
+    name: &ThreadName,
+    on_thread_start: ThreadStart,
+) -> io::Result<Pool> {
     let row = shekyl_thread_ledger::record_runtime(name, budget);
-    let runtime = Builder::new_multi_thread()
+    let mut builder = Builder::new_multi_thread();
+    builder
         .worker_threads(budget.workers.get())
         .max_blocking_threads(budget.blocking.get())
         .thread_name(name.as_str())
         .enable_io()
-        .enable_time()
-        .build()?;
+        .enable_time();
+    if let Some(hook) = on_thread_start.0 {
+        builder.on_thread_start(move || hook());
+    }
+    let runtime = builder.build()?;
     Ok(Pool { runtime, row })
 }
 
@@ -106,7 +151,59 @@ mod tests {
 
     use shekyl_thread_ledger::{ledger, RowKind};
 
-    use super::{runtime, RuntimeBudget, ThreadName};
+    use super::{runtime, RuntimeBudget, ThreadName, ThreadStart};
+
+    #[test]
+    fn the_thread_start_hook_runs_on_every_worker_and_blocking_thread() {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+        use std::thread::ThreadId;
+
+        let seen: std::sync::Arc<Mutex<HashSet<ThreadId>>> = Default::default();
+        let hook_seen = std::sync::Arc::clone(&seen);
+        let pool = runtime(
+            budget(2, 2),
+            &thread_name("sk-rt-hook"),
+            ThreadStart::new(move || {
+                hook_seen
+                    .lock()
+                    .expect("set")
+                    .insert(std::thread::current().id());
+            }),
+        )
+        .expect("runtime");
+        // Threads report their own ids from inside a task and a blocking
+        // task; every one of them must have run the hook first.
+        let (tx, rx) = std::sync::mpsc::channel();
+        pool.block_on(async {
+            let mut tasks = Vec::new();
+            for _ in 0..4 {
+                let worker_tx = tx.clone();
+                tasks.push(tokio::spawn(async move {
+                    worker_tx.send(std::thread::current().id()).expect("report");
+                }));
+                let blocking_tx = tx.clone();
+                tasks.push(tokio::task::spawn_blocking(move || {
+                    std::thread::sleep(Duration::from_millis(20));
+                    blocking_tx
+                        .send(std::thread::current().id())
+                        .expect("report");
+                }));
+            }
+            for task in tasks {
+                task.await.expect("task");
+            }
+        });
+        drop(tx);
+        let working: HashSet<ThreadId> = rx.iter().collect();
+        let hooked = seen.lock().expect("set").clone();
+        assert!(!working.is_empty());
+        assert!(
+            working.is_subset(&hooked),
+            "a thread took work without running the start hook: {working:?} vs {hooked:?}"
+        );
+        drop(pool);
+    }
 
     fn budget(workers: usize, blocking: usize) -> RuntimeBudget {
         RuntimeBudget {
@@ -121,7 +218,12 @@ mod tests {
 
     #[test]
     fn the_budget_is_recorded_and_built() {
-        let pool = runtime(budget(2, 3), &thread_name("sk-rt-budget")).expect("runtime");
+        let pool = runtime(
+            budget(2, 3),
+            &thread_name("sk-rt-budget"),
+            ThreadStart::none(),
+        )
+        .expect("runtime");
         assert_eq!(pool.metrics().num_workers(), 2);
         let id = pool.ledger_id();
         let row = ledger().into_iter().find(|row| row.id == id).expect("row");
@@ -139,7 +241,8 @@ mod tests {
 
     #[test]
     fn one_worker_is_one_thread() {
-        let pool = runtime(budget(1, 1), &thread_name("sk-rt-one")).expect("runtime");
+        let pool =
+            runtime(budget(1, 1), &thread_name("sk-rt-one"), ThreadStart::none()).expect("runtime");
         assert_eq!(pool.metrics().num_workers(), 1);
         let ids = pool.block_on(async {
             let mut tasks = Vec::new();
@@ -158,7 +261,12 @@ mod tests {
 
     #[test]
     fn shutdown_returns_while_a_blocking_task_is_still_running() {
-        let pool = runtime(budget(1, 1), &thread_name("sk-rt-stop")).expect("runtime");
+        let pool = runtime(
+            budget(1, 1),
+            &thread_name("sk-rt-stop"),
+            ThreadStart::none(),
+        )
+        .expect("runtime");
         let id = pool.ledger_id();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         pool.block_on(async move {

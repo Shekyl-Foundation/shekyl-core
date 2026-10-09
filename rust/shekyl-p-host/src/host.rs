@@ -18,6 +18,7 @@ use shekyl_tor_control_wallet::service::{
 use tokio::sync::watch;
 
 use crate::daemon_tip::DaemonTipCache;
+use crate::runtime::{PriorityFailures, ServingPool};
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
 use crate::PassKey;
@@ -320,6 +321,12 @@ pub struct PersonaServingHost<P: ServeSetPinner> {
     /// the call site, and the caller most likely to hit it is the retry after
     /// a failure.
     refresh_gate: tokio::sync::Mutex<()>,
+    /// The serving runtime (`SH-3`): the accept loop, every connection and
+    /// every blocking hop run here, at lowered CPU priority. **Last field
+    /// on purpose**: fields drop in declaration order, so the endpoint and
+    /// its accept task are gone before the pool that ran them is told to
+    /// stop, and the pool's drop detaches that stop onto its own thread.
+    runtime: ServingPool,
 }
 
 impl<P: ServeSetPinner> PersonaServingHost<P> {
@@ -348,13 +355,23 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// # Errors
     ///
     /// [`HostError::Pin`] if the serve-set could not be pinned,
-    /// [`HostError::Bind`] if the loopback listener cannot be created, and
-    /// [`HostError::NonLoopbackTarget`] if the bound address is refused as
-    /// an onion target.
+    /// [`HostError::Bind`] if the serving runtime or the loopback listener
+    /// cannot be created, and [`HostError::NonLoopbackTarget`] if the bound
+    /// address is refused as an onion target.
+    ///
+    /// # The serving runtime
+    ///
+    /// The endpoint is bound **on the host's own runtime**
+    /// ([`crate::runtime`], `SH-3`), so the accept loop and everything it
+    /// spawns run there, at lowered CPU priority, and not on the runtime
+    /// this call was made from. `priority_failures` is the caller's counter
+    /// for threads the platform refused to lower; it is readable through
+    /// the serving status whether or not this call returns a host.
     pub async fn start(
         mut tor: WalletTorControlConfig,
         serving: PersonaServing,
         pinner: P,
+        priority_failures: &PriorityFailures,
     ) -> Result<Self, HostError> {
         // The pins are taken here, from the pinner this host keeps. Nothing
         // is handed in already-pinned, so there is no way to start a host
@@ -372,8 +389,21 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // one (`WSS-24`; the reasoning is in `signer`'s module doc).
         let provider = StoreShardProvider::new(pinned.reader().clone());
         let signer = HostSigner::new(serving.tip, serving.key);
-        let endpoint = PServeEndpoint::bind(Arc::new(provider), Arc::new(signer))
+        // The serving runtime first, then the bind *on* it: `tokio::spawn`
+        // inside `bind` lands the accept loop on the runtime the bind future
+        // runs on, and every connection task and blocking hop follows the
+        // accept loop. Awaited through the join handle, never `block_on`,
+        // because this call is itself inside the engine's runtime.
+        let pool = ServingPool::build(priority_failures).map_err(|e| HostError::Bind {
+            detail: e.to_string(),
+        })?;
+        let endpoint = pool
+            .handle()
+            .spawn(PServeEndpoint::bind(Arc::new(provider), Arc::new(signer)))
             .await
+            .map_err(|join| HostError::Bind {
+                detail: join.to_string(),
+            })?
             .map_err(|e| HostError::Bind {
                 detail: e.to_string(),
             })?;
@@ -398,6 +428,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
             pinned: Mutex::new(pinned),
             refresh_failures: AtomicU32::new(0),
             refresh_gate: tokio::sync::Mutex::new(()),
+            runtime: pool,
         })
     }
 
@@ -582,6 +613,10 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     pub async fn shutdown(self) {
         self.tor.shutdown().await;
         drop(self.endpoint);
+        // Then the serving runtime, awaited: the accept task is dropped with
+        // it, so the listener is closed — not merely told to close — by
+        // the time this returns (`SH-3`).
+        self.runtime.stop().await;
     }
 }
 

@@ -13,7 +13,7 @@
 use std::num::NonZeroUsize;
 use std::os::raw::c_char;
 
-use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
+use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName, ThreadStart};
 
 /// Structural floor, the same pair the transport runtime is built with.
 /// Tokio's unset worker count and its 512 blocking cap are the defaults
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         tracing::error!("daemon-rpc: thread name refused");
         return std::ptr::null_mut();
     };
-    let Ok(rt) = runtime(daemon_rpc_budget(), &name) else {
+    let Ok(rt) = runtime(daemon_rpc_budget(), &name, ThreadStart::none()) else {
         tracing::error!("daemon-rpc: failed to build the tokio runtime");
         return std::ptr::null_mut();
     };

@@ -69,7 +69,7 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let (view, posture) = read_view_with_posture(tenants).await?;
+    let (view, posture, serving_priority_not_lowered) = read_view_with_posture(tenants).await?;
     let result = StakingInfoResult {
         staking_enabled: view.staking_enabled,
         balance: balance_result(&view),
@@ -79,6 +79,7 @@ pub(crate) async fn staking_info(
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         recovery_pending_reopen: view.recovery_pending_reopen,
         posture: posture_str(posture),
+        serving_priority_not_lowered,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
@@ -160,14 +161,22 @@ async fn read_view(
 /// into the engine's sealed-state aggregation.
 async fn read_view_with_posture(
     tenants: &tokio::sync::Mutex<TenantState>,
-) -> Result<(StakingReadView, Option<ServingPosture>), WalletRpcError> {
-    let (shared, posture) = {
+) -> Result<(StakingReadView, Option<ServingPosture>, Option<u32>), WalletRpcError> {
+    let (shared, posture, priority_not_lowered) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (shared, state.tenant.serving_posture())
+        (
+            shared,
+            state.tenant.serving_posture(),
+            state.tenant.serving_priority_not_lowered(),
+        )
     };
     let engine = shared.read().await;
-    Ok((read_view_under_guard(&engine)?, posture))
+    Ok((
+        read_view_under_guard(&engine)?,
+        posture,
+        priority_not_lowered,
+    ))
 }
 
 /// The wire spelling of a serving posture — the contract's values,

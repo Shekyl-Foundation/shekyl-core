@@ -32,8 +32,8 @@ use shekyl_curve_tree::{
 };
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
-    PinnedServeSet, RefusingKey, ReportedSet, ServeCounters, ServeObligation, ServeSetPinner,
-    Staleness, StalenessBound,
+    PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
+    ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
 use shekyl_tor_control_wallet::service::{
@@ -525,6 +525,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("host starts without a working tor — the endpoint does not need one");
@@ -653,6 +654,7 @@ async fn shutdown_stops_the_listener() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -727,6 +729,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -782,6 +785,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             tip: Arc::clone(&tip),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1121,6 +1125,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1187,6 +1192,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1231,6 +1237,7 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             tip: tip_at(10_000),
         },
         DeadPinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect_err("a dead pinner cannot start a host");
@@ -1298,6 +1305,7 @@ async fn host_staleness_uses_the_live_witness() {
             tip: tip_at(10_000),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1730,6 +1738,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             tip: Arc::clone(&tip),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");

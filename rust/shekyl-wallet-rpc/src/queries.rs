@@ -235,7 +235,7 @@ pub(crate) async fn get_wallet_info(
     // the embedder's fact (the handle is parked here, not on the engine),
     // and taking it now means the tenant lock is never re-entered under the
     // engine guard below.
-    let (name, shared, serving_posture) = {
+    let (name, shared, serving_posture, serving_priority_not_lowered) = {
         let state = tenants.lock().await;
         let name = state
             .tenant
@@ -243,7 +243,12 @@ pub(crate) async fn get_wallet_info(
             .ok_or(WalletRpcError::WalletNotOpen)?
             .to_owned();
         let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, engine, state.tenant.serving_posture())
+        (
+            name,
+            engine,
+            state.tenant.serving_posture(),
+            state.tenant.serving_priority_not_lowered(),
+        )
     };
 
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
@@ -297,6 +302,7 @@ pub(crate) async fn get_wallet_info(
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
             recovery_pending_reopen: staking_view.recovery_pending_reopen,
             posture: crate::staking::posture_str(serving_posture),
+            serving_priority_not_lowered,
         });
 
         let daemon = engine.daemon().clone();

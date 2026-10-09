@@ -26,7 +26,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
+use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName, ThreadStart};
 
 use shekyl_tor_control_client::binary::{self, TorBinaryError};
 use shekyl_tor_control_client::control::{OnionPow, ServiceId, TorExit};
@@ -130,7 +130,8 @@ impl BlockingDaemonTor {
             workers: NonZeroUsize::new(1).expect("one worker"),
             blocking: NonZeroUsize::new(1).expect("blocking floor"),
         };
-        let runtime = runtime(budget, &name).map_err(BlockingStartError::Runtime)?;
+        let runtime =
+            runtime(budget, &name, ThreadStart::none()).map_err(BlockingStartError::Runtime)?;
 
         let daemon_config = DaemonTorConfig {
             tor_binary,
