@@ -21,28 +21,44 @@ pub struct EmissionSplit {
     pub staker_emission: u64,
 }
 
-/// The emission split (CEN-F16): the effective share at `current_height`,
-/// measured from `epoch`, then [`split_block_emission`].
+/// CEN-F21: the height the staker emission share starts at.
 ///
-/// The share constants are this crate's generated params, not caller
-/// arguments. `epoch` is CEN-F21's `genesis_ng_height` (1 on every shipped
-/// network). Zero emission is the split at zero: both legs are zero,
-/// because [`split_block_emission`] returns the emission unchanged and a
-/// zero staker leg when the emission is zero.
+/// The genesis block (height 0) pays no staker share; the staker emission
+/// share begins at block 1 and its decay is measured from there.
+///
+/// One owner. [`emission_share_at`] and [`compute_emission_split`] read it,
+/// and neither takes it as an argument: a caller-supplied epoch is how two
+/// chains once disagreed about the split at the same height.
+pub const EMISSION_SPLIT_EPOCH: u64 = 1;
+
+/// The staker emission share in force at `height`, in [`SCALE`] units.
+///
+/// Zero below [`EMISSION_SPLIT_EPOCH`]; from there the shipped initial
+/// share, decayed by the shipped annual rate
+/// ([`calc_effective_emission_share`]).
 #[must_use]
-pub fn compute_emission_split(
-    block_emission: u64,
-    current_height: u64,
-    epoch: u64,
-) -> EmissionSplit {
-    let effective_share = calc_effective_emission_share(
-        current_height,
-        epoch,
+pub fn emission_share_at(height: u64) -> u64 {
+    if height < EMISSION_SPLIT_EPOCH {
+        return 0;
+    }
+    calc_effective_emission_share(
+        height,
+        EMISSION_SPLIT_EPOCH,
         STAKER_EMISSION_SHARE,
         STAKER_EMISSION_DECAY,
         BLOCKS_PER_YEAR,
-    );
-    let (miner_emission, staker_emission) = split_block_emission(block_emission, effective_share);
+    )
+}
+
+/// The emission split (CEN-F16): [`emission_share_at`] the height, then
+/// [`split_block_emission`].
+///
+/// Below [`EMISSION_SPLIT_EPOCH`] the share is zero and the whole emission
+/// is the miner's. Zero emission is the split at zero: both legs are zero.
+#[must_use]
+pub fn compute_emission_split(block_emission: u64, current_height: u64) -> EmissionSplit {
+    let (miner_emission, staker_emission) =
+        split_block_emission(block_emission, emission_share_at(current_height));
     EmissionSplit {
         miner_emission,
         staker_emission,
@@ -122,7 +138,7 @@ mod tests {
     /// Zero emission is the split at zero: both legs are zero.
     #[test]
     fn zero_emission_splits_to_nothing() {
-        let split = compute_emission_split(0, 1_000_000, 1);
+        let split = compute_emission_split(0, 1_000_000);
         assert_eq!(
             split,
             EmissionSplit {
@@ -132,25 +148,51 @@ mod tests {
         );
     }
 
+    /// The ruling, as behaviour: genesis pays no staker share, and block 1
+    /// pays the initial share undecayed.
+    #[test]
+    fn genesis_pays_no_staker_share_and_block_one_pays_the_initial_share() {
+        let emission = 1_638_400_000_000;
+        assert_eq!(emission_share_at(0), 0);
+        assert_eq!(
+            compute_emission_split(emission, 0),
+            EmissionSplit {
+                miner_emission: emission,
+                staker_emission: 0
+            }
+        );
+        assert_eq!(emission_share_at(1), STAKER_EMISSION_SHARE);
+        let first = compute_emission_split(emission, 1);
+        assert_eq!(
+            first.staker_emission,
+            split_block_emission(emission, STAKER_EMISSION_SHARE).1
+        );
+        assert!(first.staker_emission > 0);
+        assert_eq!(
+            u128::from(emission_share_at(EMISSION_SPLIT_EPOCH + BLOCKS_PER_YEAR)),
+            u128::from(STAKER_EMISSION_SHARE) * u128::from(STAKER_EMISSION_DECAY)
+                / u128::from(SCALE),
+            "one year of decay ends one year after block 1, not after genesis"
+        );
+    }
+
     /// The composition the C++ shim owned (S6): the effective share at the
     /// height feeds the split; the legs sum to the emission; the staker leg
     /// decays with the height (CEN-F16 as the shipped constants define it).
     #[test]
     fn emission_split_composes_the_share_at_the_height() {
         let emission = 1_638_400_000_000;
-        let at_genesis = compute_emission_split(emission, 1, 1);
+        let at_epoch = compute_emission_split(emission, EMISSION_SPLIT_EPOCH);
+        assert_eq!(at_epoch.miner_emission + at_epoch.staker_emission, emission);
         assert_eq!(
-            at_genesis.miner_emission + at_genesis.staker_emission,
-            emission
-        );
-        assert_eq!(
-            at_genesis.staker_emission,
+            at_epoch.staker_emission,
             split_block_emission(emission, STAKER_EMISSION_SHARE).1,
             "at the epoch the share is the initial share"
         );
-        let a_decade_on = compute_emission_split(emission, 1 + 10 * BLOCKS_PER_YEAR, 1);
+        let a_decade_on =
+            compute_emission_split(emission, EMISSION_SPLIT_EPOCH + 10 * BLOCKS_PER_YEAR);
         assert!(
-            a_decade_on.staker_emission < at_genesis.staker_emission,
+            a_decade_on.staker_emission < at_epoch.staker_emission,
             "the staker leg decays"
         );
         assert_eq!(
@@ -266,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_split_at_genesis() {
+    fn test_split_at_epoch() {
         let (miner, staker) = split_block_emission(1_000_000_000, 150_000);
         // 15% to stakers = 150M, 85% to miners = 850M
         assert_eq!(staker, 150_000_000);

@@ -44,7 +44,7 @@ namespace cryptonote
   // silently-wrong split the moment the asymptote is non-neutral, priced at
   // template build and refused at connect — a chain halt. Every call site must
   // state its n; production reads it via Blockchain::parent_frozen_segment_count.
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, shekyl::tx_volume_window tx_volume = {}, shekyl::supply_facts supply = {}, uint64_t genesis_ng_height = 0);
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, shekyl::tx_volume_window tx_volume = {}, shekyl::supply_facts supply = {});
 
   struct tx_block_template_backlog_entry
   {

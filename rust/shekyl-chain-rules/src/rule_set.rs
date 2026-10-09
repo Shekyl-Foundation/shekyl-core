@@ -117,8 +117,7 @@ impl RuleSetId {
 /// validator read the latch; a replay of a capture made under the lever,
 /// in a process that had not armed it, refused the first claim under L7
 /// (`DRS_E4_ARCHIVAL_WRITER.md` §5 ARW-15). CEN-F21's split epoch is
-/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
-/// when a schedule step names a different epoch.
+/// `shekyl_economics::EMISSION_SPLIT_EPOCH`, not a field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,

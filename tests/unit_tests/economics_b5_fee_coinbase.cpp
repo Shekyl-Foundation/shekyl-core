@@ -130,8 +130,7 @@ B5Operands expected_operands(const Blockchain& bc)
   EXPECT_GT(tx_volume.blocks, 0u);
   EXPECT_TRUE(get_block_reward(median, 0, kAlreadyGenerated, ops.base_reward,
     kHfVersion, tx_volume));
-  ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
-    /*genesis_ng_height=*/0);
+  ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight);
   // n = 0 is the same parent-state operand the production check reads:
   // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
   // Nothing has been burned on B5TestDB's chain, so the derived supply is

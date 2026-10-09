@@ -92,7 +92,6 @@ DISPOSITIONS = (
 LANDINGS = (
     "tx-version",
     "hardfork",
-    "cen-f21",
     "template-fill",
     "none",
 )

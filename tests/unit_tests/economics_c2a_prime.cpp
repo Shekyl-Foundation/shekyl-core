@@ -104,14 +104,12 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
     for (const uint64_t height : height_grid) {
       // Q_miner_base / Q_staker_emission via the production split.
       const shekyl::EmissionSplit split =
-          shekyl::compute_emission_split(q_full, height, /*genesis_ng_height=*/0);
+          shekyl::compute_emission_split(q_full, height);
       const uint64_t q_miner_base = split.miner_emission;
       const uint64_t q_staker_emission = split.staker_emission;
 
       // Cross-check against the Rust FFI primitives the helper wraps.
-      const uint64_t share = shekyl_calc_emission_share(
-          height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY,
-          SHEKYL_BLOCKS_PER_YEAR);
+      const uint64_t share = shekyl_emission_share_at(height);
       const ShekylEmissionSplit rust_split =
           shekyl_split_block_emission(q_full, share);
       EXPECT_EQ(q_miner_base, rust_split.miner_emission)
@@ -179,7 +177,7 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
         0, kStandardBlockWeight, ag_full, q_sub, 1, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     const shekyl::EmissionSplit split =
-        shekyl::compute_emission_split(q_sub, height, 0);
+        shekyl::compute_emission_split(q_sub, height);
 
     ag_full = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_full + q_sub);
     ag_miner = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_miner + split.miner_emission);

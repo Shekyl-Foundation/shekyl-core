@@ -754,40 +754,20 @@ fn f8_the_wire_admits_one_output_tag() {
     }
 }
 
-/// CEN-F21's epoch is the one schedule's height. Issued networks share
-/// `hard_fork_schedule`; a per-network copy is how that height could drift.
-/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns it.
-/// Read from the table, not restated beside [`EMISSION_SPLIT_EPOCH`].
+/// CEN-F21 as behaviour: the genesis block pays no staker share, block 1
+/// pays one, and the typed epoch here is the economics crate's constant.
 #[test]
-fn the_emission_split_epoch_is_the_hardfork_tables_first_row() {
-    let hardforks_cpp = include_str!("../../../../src/hardforks/hardforks.cpp");
-    let table = "hard_fork_schedule";
-    let start = hardforks_cpp
-        .find(&format!("const hardfork_t {table}[] = {{"))
-        .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
-    let body = &hardforks_cpp[start..];
-    let end = body.find("};").expect("the table closes");
-    let rows: Vec<&str> = body[..end]
-        .lines()
-        .skip(1)
-        .map(str::trim)
-        .filter(|l| l.starts_with('{'))
-        .collect();
-    assert_eq!(
-        rows.len(),
-        1,
-        "{table} has one row (all features from genesis)"
-    );
-    // `{ version, height, time }`
-    let fields: Vec<&str> = rows[0]
-        .trim_matches(|c| c == '{' || c == '}' || c == ',')
-        .split(',')
-        .map(str::trim)
-        .collect();
-    let height: u64 = fields[1].parse().expect("the row's height is an integer");
+fn the_staker_share_starts_at_block_one() {
     assert_eq!(
         EMISSION_SPLIT_EPOCH,
-        BlockHeight::from_raw(height),
-        "{table}"
+        BlockHeight::from_raw(shekyl_economics::EMISSION_SPLIT_EPOCH)
     );
+    assert_eq!(EMISSION_SPLIT_EPOCH, BlockHeight::from_raw(1));
+    let emission = 1_024_000_000_000;
+    let genesis = shekyl_economics::compute_emission_split(emission, 0);
+    assert_eq!(genesis.miner_emission, emission);
+    assert_eq!(genesis.staker_emission, 0);
+    let first = shekyl_economics::compute_emission_split(emission, EMISSION_SPLIT_EPOCH.to_raw());
+    assert!(first.staker_emission > 0);
+    assert_eq!(first.miner_emission + first.staker_emission, emission);
 }

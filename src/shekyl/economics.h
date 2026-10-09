@@ -117,11 +117,10 @@ struct EmissionSplit {
 
 inline EmissionSplit compute_emission_split(
     uint64_t block_emission,
-    uint64_t current_height,
-    uint64_t genesis_ng_height)
+    uint64_t current_height)
 {
     const ShekylEmissionSplit split =
-        shekyl_compute_emission_split(block_emission, current_height, genesis_ng_height);
+        shekyl_compute_emission_split(block_emission, current_height);
     return {split.miner_emission, split.staker_emission};
 }
 

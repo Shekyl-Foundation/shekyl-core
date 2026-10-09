@@ -18,7 +18,6 @@ use shekyl_chain_rules::harness::{
 };
 use shekyl_chain_rules::{
     form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
-    EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
@@ -115,7 +114,6 @@ fn genesis_era_emission() -> EmissionOperands {
         median_weight: FULL_REWARD_ZONE,
         tx_volume: TxVolume::ZERO,
         closed_shards: ClosedShardCount::ZERO,
-        emission_split_epoch: EMISSION_SPLIT_EPOCH,
     }
 }
 
@@ -350,7 +348,6 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
         total_fees: fees,
         supply,
         closed_shards: cx.emission.closed_shards,
-        split_epoch: cx.emission.emission_split_epoch.to_raw(),
         params: &params,
     })
     .expect("the kernel prices the template's operands");
@@ -634,7 +631,6 @@ fn amount_at(
         total_fees: 0,
         supply,
         closed_shards: ClosedShardCount::ZERO,
-        split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
         params,
     })
     .expect("in the penalty zone, below twice the median")

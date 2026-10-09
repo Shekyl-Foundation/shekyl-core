@@ -65,9 +65,6 @@ bool archival_budget_conservation_boundary::verify_conservation(
         == get_outs_money_amount(genesis.miner_tx));
   }
 
-  const uint64_t genesis_ng_height =
-      bc.get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-
   test_generator generator;
   std::vector<cryptonote::block> chain_blocks;
   std::vector<height_row> rows;
@@ -104,7 +101,7 @@ bool archival_budget_conservation_boundary::verify_conservation(
     // only the row-level equality catches it (the F-B1b class).
     const uint64_t q_full = expected_full_subsidy(already_generated);
     const shekyl::EmissionSplit em_split =
-        shekyl::compute_emission_split(q_full, height, genesis_ng_height);
+        shekyl::compute_emission_split(q_full, height);
 
     // Fee-free fixture — a disclosed COVERAGE GAP, not just a fixture fact:
     // production's redirected quantity is

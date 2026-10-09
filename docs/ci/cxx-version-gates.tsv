@@ -35,8 +35,6 @@ src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeep
 src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	return db.get_hard_fork_version(height);
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	b.major_version = m_hardfork->get_current_version();
-src/cryptonote_core/blockchain.cpp	2	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 src/cryptonote_core/blockchain.cpp	2	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t hf_version = m_hardfork->get_current_version();
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
 src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t ideal_hf_version = get_ideal_hard_fork_version(top_height);
@@ -61,7 +59,6 @@ src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the compariso
 src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_ideal_hard_fork_version(uint64_t height) const { return m_hardfork->get_ideal_version(height); }
 src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_next_hard_fork_version() const { return m_hardfork->get_next_version(); }
 src/cryptonote_core/cryptonote_core.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
-src/cryptonote_core/relay_floor_ring.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 src/cryptonote_core/tx_pool.cpp	1	hard-fork table	the mechanism's own bookkeeping: skip non-input consensus when the tx already passed it at this fork	delete	hardfork	if (version != nic_verified_hf_version && !cryptonote::ver_non_input_consensus(tx, tvc, version))
 src/cryptonote_core/tx_pool.cpp	1	block major version	always false at 1: the reward-aware arm is dead, the pre-v5 arm ships	move-to-rust	template-fill	if (version >= 5)
 src/cryptonote_core/tx_pool.cpp	1	block major version	always false at 1: the reward-aware arm is dead, the pre-v5 arm ships	move-to-rust	template-fill	size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
@@ -76,5 +73,4 @@ src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
-src/rpc/core_rpc_server.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 src/rpc/rpc_facts_ffi.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();

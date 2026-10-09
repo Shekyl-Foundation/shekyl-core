@@ -147,8 +147,6 @@ pub struct EmissionOperands {
     /// Closed transaction-shard count for the burn escalation (CEN-F17),
     /// read at parent state by `shekyl_chain_rules::closed_shards_before`.
     pub closed_shards: ClosedShardCount,
-    /// The height the staker share's decay is measured from (CEN-F21).
-    pub emission_split_epoch: BlockHeight,
 }
 
 /// Everything a template is a function of. Pure: two contexts with the same
@@ -523,7 +521,6 @@ fn price_and_pay(
         total_fees: total_fees.to_raw(),
         supply,
         closed_shards: e.closed_shards,
-        split_epoch: e.emission_split_epoch.to_raw(),
         params: cx.params,
     })
     .map_err(reward_error)?;

@@ -1510,8 +1510,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   }
 
   // Component 4: split emission between miner and staker pool.
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income.
@@ -1791,13 +1790,12 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // Parent-state facts the supply is derived from in Rust (FL-R16c); the
   // template and connect read the same two so they agree by construction.
   const shekyl::supply_facts supply{already_generated_coins, m_db->get_total_burned()};
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1806,7 +1804,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     const size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -5828,10 +5826,8 @@ leave:
   uint64_t block_burn_amount = 0;
   if (blockchain_height > 0)
   {
-    const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        base_reward, blockchain_height, genesis_ng_height);
+        base_reward, blockchain_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_window(blockchain_height),

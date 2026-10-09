@@ -60,7 +60,7 @@ using namespace crypto;
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply, uint64_t genesis_ng_height) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -89,7 +89,7 @@ namespace cryptonote
     }
 
     // Component 4: split emission between miner and staker pool
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height);
     block_reward = em_split.miner_emission;
 
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)

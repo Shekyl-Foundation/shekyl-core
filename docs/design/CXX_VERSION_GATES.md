@@ -62,15 +62,16 @@ One token per row. The gate rejects any other word, so a sentence in the cell ca
 
 ## 4. Where each row lands
 
-`landing` is a token too: `template-fill`, `tx-version`, `cen-f21`, `hardfork`, `none`. Counted 2026-10-06, when the extractor was widened to a comparison on any version name (a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion`, the bootstrap file version) and to `.cc`. The 2026-10-05 sweep had 66 rows; it required one side to be an integer or an uppercase `VERSION` token, and these were the rows that requirement hid.
+`landing` is a token too: `template-fill`, `tx-version`, `hardfork`, `none`. Counted 2026-10-06, when the extractor was widened to a comparison on any version name (a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion`, the bootstrap file version) and to `.cc`. The 2026-10-05 sweep had 66 rows; it required one side to be an integer or an uppercase `VERSION` token, and these were the rows that requirement hid.
 
 | Token | Rows, 2026-10-06 | What it is |
 | --- | --- | --- |
 | `template-fill` | 2 | `tx_pool.cpp`'s `version >= 5`. RULED 2026-10-05; sequenced after the coinbase reserve ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2 c, d) |
 | `tx-version` | 28 | The parser refuses every version but 3. Then 19 comparisons collapse to their one arm and 9 are deleted as dead, the version-1 serialisation arms among them. The admission bound in `ver_non_input_consensus` is one of the 19: both locals are 3. The two checks in `check_tx_inputs` are a second statement of it, and they are two of the 10. Its validation surface is the transaction wire format: `core_tests`, the wire parity vectors and the Rust parser's own refusals |
-| `cen-f21` | 4 | `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. Live and consensus: it resolves the height the staker emission share decays from. It collapses to the Rust owner's `EMISSION_SPLIT_EPOCH`, with the `core_tests` fork tables that still disagree with the daemon about it (`docs/FOLLOWUPS.md`) |
 | `hardfork` | 31 | §5 |
 | `none` | 14 | Other operands: the LMDB schema version, a persisted row's `kVersion`, the bootstrap file version, SOCKS, the PQC `auth_version`, a CLI argument |
+
+**Executed 2026-10-08: the `cen-f21` landing.** Four rows resolved the staker-emission epoch through `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)`. The epoch is `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself, and no C++ site looks it up or passes it. The token is retired with its rows.
 
 **Executed in the 2026-10-05 sweep.** These comparisons are gone, so they have no row:
 
@@ -119,12 +120,10 @@ removing the class:
   what requires a block's major version to equal 1 today. The rule moves to
   where blocks are validated, as a comparison against the constant, and its
   CEN row is updated to say so.
-- **CEN-F21's epoch stops being a table lookup.** The four `cen-f21` rows
-  resolve the staker-emission epoch through
-  `get_earliest_ideal_height_for_version`. They take the Rust owner's
-  `EMISSION_SPLIT_EPOCH`, and the `core_tests` fork tables that disagree
-  with the daemon about that height (`docs/FOLLOWUPS.md`) are settled in the
-  same change, since the tables are what is being deleted.
+- **CEN-F21's epoch stopped being a table lookup** (done 2026-10-08, §4).
+  The split reads `shekyl_economics::EMISSION_SPLIT_EPOCH` and takes no
+  epoch argument, so the `core_tests` chains that passed 0 are priced at
+  the daemon's epoch.
 - **The persisted fork tables and the RPC that reports them go too**: LMDB's
   `hf_versions`, the `hard_fork_info` surface, and the handshake field. The
   first is a schema change and follows the serialization policy.
