@@ -38,6 +38,11 @@
 //! let _ = transit.derived(715);
 //! ```
 //!
+//! ```compile_fail,E0624
+//! use shekyl_relay_privacy::basis::{AdmissibleBasis, DerivationMs};
+//! let _ = DerivationMs::new(50, AdmissibleBasis::RustPath);
+//! ```
+//!
 //! ```
 //! use shekyl_relay_privacy::basis::{AdmissibleBasis, DerivationMs};
 //! assert_eq!(DerivationMs::model(3_250).basis(), AdmissibleBasis::Model);
@@ -109,9 +114,9 @@ pub struct DerivationMs {
 }
 
 impl DerivationMs {
-    /// A labelled whole-millisecond value.
-    #[must_use]
-    pub const fn new(ms: u32, basis: AdmissibleBasis) -> Self {
+    /// Shared by the named constructors and by [`Self::derive`]. Private so
+    /// a caller cannot attach a basis the named constructors do not spell.
+    const fn new(ms: u32, basis: AdmissibleBasis) -> Self {
         Self { ms, basis }
     }
 
