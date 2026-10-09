@@ -574,7 +574,9 @@ serving two granularities because their shapes happened to coincide.
 with **`ArchivalPairEpochKey`** now. This paragraph read "they need their own
 48-byte key type once that key widens", which was the state while #554 was
 unmerged and became a false outstanding action the moment the conversion
-landed.
+landed. **UPDATE 2026-10-08 (`SO-D10e`):** `set_archival_settlement` and
+`get_archival_settlement` are deleted; the two deletes remain and still key
+with `ArchivalPairEpochKey`.
 
 The follow-through recurred on **every** merge from #554 — four times, the last
 in a schema document rather than in code — because each settlement accessor is

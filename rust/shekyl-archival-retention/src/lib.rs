@@ -24,7 +24,9 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
+//! - [`attestation`] — the kept per-record discriminant ([`AttestationKind`]).
+//! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
+//!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
 //! - [`attestation_admission`] — the block-level admission body
 //!   ([`AttestationSet`]: parse, root, countersignatures) the daemon FFI
@@ -72,7 +74,7 @@ pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod segment_freeze;
 pub mod serve_eligibility;
-pub mod settlement_row;
+pub mod settlement_select;
 pub mod shard_coverage;
 pub mod shard_view_hash;
 pub mod wire;
@@ -83,9 +85,7 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{
-    settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
-};
+pub use attestation::AttestationKind;
 pub use attestation_admission::{
     AttestationRootError, AttestationSet, AttestationSetError, CountersignatureRefusal,
 };
@@ -176,10 +176,6 @@ pub use pass_anchor::{
     PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
 };
-pub use settlement_row::{
-    RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,
-    SETTLEMENT_ROW_LEN,
-};
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
 // deliberately not re-exported — a crate-root import must not silently resolve
@@ -192,8 +188,9 @@ pub use emission_wire::{
 };
 pub use error::VerifyError;
 pub use failure_window::{
-    failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
-    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    failure_window_slashable, settlement_retention_floor, settlement_window_slashable,
+    BaselineObservation, FailureWindowError, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};

@@ -2063,34 +2063,14 @@ public:
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const = 0;
 
-  // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md SO-D1/SO-D2/SO-D6) ──
+  // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md §14, SO-D10e) ──────
   //
-  // Per-pair-epoch VERDICT table, distinct from the per-challenge EVIDENCE
-  // ledger above: `outcome‖passes‖issued` (3 B, Rust-encoded) keyed
-  // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1 "never issued ⇒
-  // non-observation", NOT a miss — the reader must not collapse the two.
-  //
-  // Pure virtual so a store that forgot the table fails to compile. The
-  // writer's production call site is a rule-22 hold on SO-D8 (§5.1). The
-  // revert (`revert_archival_slashes_at_height`) and the retention prune
-  // (`prune_archival_epochs_before`) are wired. Redb's table denominator is
-  // the SHEKYL_LMDB_TABLES X-macro, not this interface.
-
-  /// Fold `(passes, issued)` through the Rust encoder and store the row for
-  /// `(P_id, shard, E)`. Refuses (throws) rather than storing if the fold
-  /// refuses — C++ never composes an outcome byte (rule 36).
-  virtual void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) = 0;
-
-  /// Read a settlement row. Returns false when absent (SO-D1 never-issued).
-  /// When true, `out_row` holds a canonical
-  /// `SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES` row. The width is the FFI
-  /// compile-time constant so a Rust-side SETTLEMENT_ROW_LEN change breaks
-  /// every override. Integrity checks on stored bytes are the backend's,
-  /// not this signature's.
-  virtual bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch,
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const = 0;
+  // The `archival_settlement` table has no writer and no reader in this
+  // store: settlement is the Rust validator's (SO-D10), and the count fold
+  // that wrote here was deleted with its FFI. What stays is the table's
+  // handle, its revert and its prune, which run over an empty table until
+  // DEL-008 deletes the archival C++ path. Redb's table denominator is the
+  // SHEKYL_LMDB_TABLES X-macro, not this interface.
 
   /// Drop every settlement row for one epoch — the SO-D6 revert. Rows are a
   /// memoised derivation over final chain state, so a reorg crossing a fold

@@ -222,6 +222,13 @@ warning describes the interim.
 
 ### RT-4 — Mechanism: pinned mutual TLS with a server-side fingerprint allowlist
 
+> **Under re-ruling — do not implement (2026-10-08).** Round R1,
+> [`RPC_CHANNEL.md`](RPC_CHANNEL.md), is a draft that proposes replacing
+> this mechanism with a hybrid post-quantum Noise channel (RT-10, RT-11).
+> RT-4 stands as ruled until R1 is ratified, but RT-W4 and RT-W6 are held:
+> building pinned mutual TLS now would build what that round replaces.
+> This note records a pending decision, not a ruling.
+
 Each endpoint generates its own keypair locally. Public-key fingerprints are
 exchanged out of band. The server holds an allowlist of client fingerprints;
 each client pins the server's fingerprint. No CA.
@@ -555,9 +562,9 @@ before its green was trusted.**
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
 | RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
-| RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — unblocked |
+| RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — **held 2026-10-08: under re-ruling in [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (R1, draft). Do not implement** |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **LANDED 2026-08-22** (PR #533: `2fb5fad61` removes `--public-node`, `/get_public_nodes`, the P2P advertisement and bumps `CORE_RPC_VERSION`; `7279cf360` deletes the residue — `set_rpc_port`/`m_rpc_port`, `rpc_credits_per_hash`, `print_pl publicrpc`; bootstrap-daemon disposition `20c869b1d`) UPDATE 2026-08-31: the P2P wire half — `rpc_port` / `rpc_credits_per_hash` in `basic_node_data` and the peerlist entry, which #533 had left serialized at zero — deleted, peerlist store v7 drop-on-load (PR #587); the RT-9 disposition is now complete on both halves |
-| RT-W6 | RT-8 onion listener | RT-W4 | open |
+| RT-W6 | RT-8 onion listener | RT-W4 | open — **held with RT-W4** (2026-10-08, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) R1, draft) |
 | RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **LANDED 2026-08-23** (PR #542; `shekyl_rpc_transport::network_posture::{operator_warning, daemon_disclosures}`; CLI on stderr after its session validates the address, server in its log at `run_server` before it binds; the proxied-daemon case, the mapped-loopback cross-pin with `listen`, and both wirings — the server's under a capturing subscriber, the CLI's on the built binary — each observed red; verify: `git grep operator_warning rust/`). Carried, with its trigger already fired: the GUI dials `HttpRpc::new` directly and says nothing; the one-call GUI fix and the outbound `ValidatedEndpoint` seam are FOLLOWUPS V3.2 |
 
 RT-W1 is ruled, independent, small, and strictly reduces attack surface. It

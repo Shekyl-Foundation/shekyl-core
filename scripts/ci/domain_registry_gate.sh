@@ -290,7 +290,13 @@ count_pattern() {
 # W-byte shard's archival bytes) -- plus one inline #[cfg(test)] site: the
 # fold-equals-one-shot test rebuilds the documented preimage with
 # `cshake256_32` under the same label.
-MECH1_EXPECTED=61
+# Settlement (2026-10-08): 61 -> 63. Two production sites in
+# rust/shekyl-archival-retention/src/settlement_select.rs -- `candidate`
+# (shekyl/archival-settlement-select-v1, the counted-draw selection) and
+# `issued_draw_term` (shekyl/archival-issued-index-v1, one draw's term in
+# its epoch's digest). The tests call those through `select_counted` and
+# `issued_draw_term`; none adds a site.
+MECH1_EXPECTED=63
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

@@ -47,11 +47,13 @@
 //! OBS      label mode size in_flight micros bytes
 //! PHASE    label size phase micros          (phase: read | hash | sign)
 //! LATE     label mode size in_flight n p50_us p90_us p99_us p999_us max_us
-//! BLOCK    label mode size in_flight n wall_ms cpu_ms served
+//! BLOCK    label mode size in_flight n wall_ms cpu_ms served refused
+//! TTFB     label size n p50_us p90_us p99_us max_us
 //! ABANDON  label size provider n cpu_us_per_request loopback_bytes_per_request served_delta
 //! ```
 //!
-//! `BAT5_MODE`: `phase`, `load`, `cold`, `abandon`, `sustain`, `idle`.
+//! `BAT5_MODE`: `phase`, `load`, `cold`, `abandon`, `sustain`, `idle`,
+//! `ttfb`.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -181,6 +183,16 @@ fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
 /// `content-length` bytes, no fewer and no more. A response cut short
 /// anywhere, the head and frame included, is a failed block and is not
 /// timed as a served one.
+///
+/// Returns 0 for a connection the endpoint closed without writing a byte.
+/// That is what a refusal looks like from outside: past `MAX_INFLIGHT` the
+/// accept loop drops the stream and says nothing, by design. At N equal to
+/// the cap it happens at a batch boundary — the requester has seen every
+/// stream of the last batch close, but a connection task's permit is
+/// dropped after its stream is, and on a loaded board the reconnect can
+/// land first. A block records those (the endpoint's `refused` count is on
+/// its `BLOCK` row; the `OBS` row carries the 0) and goes on; it does not
+/// retry, because a retry would change the offered load.
 async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(&request_head(shard_id, nonce))
@@ -188,6 +200,18 @@ async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
         .expect("write request");
     let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
     s.read_to_end(&mut out).await.expect("read response");
+    if out.is_empty() {
+        return 0;
+    }
+    check_whole(shard_id, &out);
+    out.len()
+}
+
+/// The response is a 200 and exactly as long as it says it is: the head,
+/// then `content-length` bytes, no fewer and no more. A response cut
+/// short anywhere, the head and frame included, is a failed block and is
+/// not timed as a served one.
+fn check_whole(shard_id: u64, out: &[u8]) {
     let head_end = out
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -211,7 +235,40 @@ async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
         declared > size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
         "the declared length does not cover the shard, its frame and the envelope"
     );
-    out.len()
+}
+
+/// One whole fetch, timed from the last request byte written to the first
+/// response byte received: the time to first byte, as a requester sees
+/// it. The whole body is then read and checked as [`fetch`] checks it, so
+/// this is a served response and not an abandoned one. Returns the TTFB
+/// in microseconds.
+///
+/// At one in flight nothing else is queued ahead of this request, so the
+/// TTFB bounds from above every serial step `P` takes before its first
+/// byte: accept, parse, gate, open, pre-flight, and rendering the head.
+/// It also holds the loopback round trip and the executor's scheduling,
+/// which is why it is a bound and not the step's own cost.
+async fn time_to_first_byte(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> u64 {
+    let mut s = TcpStream::connect(addr).await.expect("connect");
+    // The clock starts before the request is written, so the interval the
+    // endpoint may already be working in — from the kernel taking the last
+    // request byte to this task's return from the write — is inside the
+    // reading, not outside it. The write of a few hundred bytes to a
+    // loopback socket is then part of the figure, which keeps it a bound
+    // from above on the endpoint's pre-head work.
+    let sent = Instant::now();
+    s.write_all(&request_head(shard_id, nonce))
+        .await
+        .expect("write request");
+    let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
+    let mut first = [0u8; 1024];
+    let n = s.read(&mut first).await.expect("read the first bytes");
+    let ttfb = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
+    assert!(n > 0, "closed before the first byte");
+    out.extend_from_slice(&first[..n]);
+    s.read_to_end(&mut out).await.expect("read the rest");
+    check_whole(shard_id, &out);
+    ttfb
 }
 
 /// Send a valid head, read the status line and nothing more, close.
@@ -425,10 +482,15 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
     let (size, _) = size_of(shard_id);
     clients.block_on(async {
         for i in 0..warm_up {
-            fetch(addr, shard_id, nonce(0x11, i)).await;
+            // One in flight: a refusal here is a serve fault, not the cap.
+            assert!(
+                fetch(addr, shard_id, nonce(0x11, i)).await > 0,
+                "a warm-up fetch was refused"
+            );
         }
     });
     let served_before = served.endpoint.served_count();
+    let refused_before = served.endpoint.refused_count();
     served.sample(true);
     let cpu0 = cpu_micros();
     let t0 = Instant::now();
@@ -456,8 +518,9 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
     let cpu_ms = (cpu_micros() - cpu0) / 1_000;
     served.sample(false);
     println!(
-        "BLOCK\t{label}\t{mode}\t{size}\t{in_flight}\t{n}\t{wall_ms}\t{cpu_ms}\t{}",
-        served.endpoint.served_count() - served_before
+        "BLOCK\t{label}\t{mode}\t{size}\t{in_flight}\t{n}\t{wall_ms}\t{cpu_ms}\t{}\t{}",
+        served.endpoint.served_count() - served_before,
+        served.endpoint.refused_count() - refused_before
     );
     served.print_lateness(label, mode, size, in_flight);
 }
@@ -553,6 +616,7 @@ fn ba_t5_floor_probe() {
         "cold" => {
             let t = Instant::now();
             let got = clients.block_on(fetch(addr, 0, nonce(0x44, 0)));
+            assert!(got > 0, "the cold fetch was refused at one in flight");
             println!(
                 "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
                 t.elapsed().as_micros()
@@ -609,6 +673,7 @@ fn ba_t5_floor_probe() {
                 }
                 let t = Instant::now();
                 let got = clients.block_on(fetch(addr, 0, nonce(0x77, i)));
+                assert!(got > 0, "a sustain fetch was refused at one in flight");
                 println!(
                     "OBS\t{label}\tsustain\tfull-store\t1\t{}\t{got}",
                     t.elapsed().as_micros()
@@ -628,10 +693,37 @@ fn ba_t5_floor_probe() {
             }
             served.sample(false);
             println!(
-                "BLOCK\t{label}\tsustain\tfull-store\t1\t{i}\t{}\t{}\t{}",
+                "BLOCK\t{label}\tsustain\tfull-store\t1\t{i}\t{}\t{}\t{}\t{}",
                 start.elapsed().as_millis(),
                 (cpu_micros() - cpu0) / 1_000,
-                served.endpoint.served_count()
+                served.endpoint.served_count(),
+                served.endpoint.refused_count()
+            );
+        }
+        // Time to first byte at one in flight, full segment from the store,
+        // each fetch whole. Per sample as an OBS row of mode `ttfb` whose
+        // microseconds are the TTFB, then one TTFB summary row.
+        "ttfb" => {
+            let n = env_usize("BAT5_N", 300);
+            for i in 0..5 {
+                assert!(
+                    clients.block_on(fetch(addr, 0, nonce(0x11, i))) > 0,
+                    "a warm-up fetch was refused"
+                );
+            }
+            let mut samples = Vec::with_capacity(n);
+            for i in 0..n {
+                let us = clients.block_on(time_to_first_byte(addr, 0, nonce(0x66, i)));
+                println!("OBS\t{label}\tttfb\tfull-store\t1\t{us}\t{}", size_of(0).1);
+                samples.push(us);
+            }
+            samples.sort_unstable();
+            println!(
+                "TTFB\t{label}\tfull-store\t{n}\t{}\t{}\t{}\t{}",
+                percentile(&samples, 500),
+                percentile(&samples, 900),
+                percentile(&samples, 990),
+                samples.last().copied().unwrap_or(0)
             );
         }
         // Nothing served: what the lateness task reads on an idle endpoint.

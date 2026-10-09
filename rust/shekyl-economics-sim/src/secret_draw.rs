@@ -46,8 +46,10 @@ use crate::mn_feasibility::{
 };
 
 /// Draws counted per pair at settlement, and the count a pair must reach to
-/// be observed at all.
+/// be observed at all: the daemon's constant, in the width this module's
+/// per-pair counts use.
 pub const COUNTED_DRAWS: u8 = 3;
+const _: () = assert!(COUNTED_DRAWS as usize == shekyl_types::archival::COUNTED_DRAWS);
 
 /// A pair that is not visibly short is drawn at `1 / FULL_WEIGHT_DIVISOR`
 /// the weight of one that is. PROVISIONAL (the brief's §2 item 3).

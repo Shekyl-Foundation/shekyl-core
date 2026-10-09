@@ -6290,3 +6290,94 @@ and replaced by pointers; what each still owns is the specification's
    owned by the RPC lane (data) and the GUI lane (presentation).
 
 ---
+
+## 2026-10-08 — The settlement writer is wired ahead of the secret draw, on an empty issued-draw index (`SO-D10`)
+
+**Decision (maintainer, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§14).** The serve-credit specification puts the settlement writer before
+the draw; the writer document's §5.1 said the writer could not be live
+before the cutover. Grounded at `dev@98fbd20acb`, the writer's two inputs
+did not exist in the Rust path: nothing issued a draw, and a pass row named
+no draw. Seven sub-items were posed and all are ruled as recommended, with
+conditions.
+
+1. **`SO-D10a`: the writer reads the issued-draw index, which is empty
+   until the draw lands.** No beacon-era stand-in. From the change that
+   switches the readers until the draw lands, the Rust validator slashes
+   nothing. The C++ daemon stays consensus, on the beacon, until `DEL-008`.
+   *Supersedes* §5.1's "cannot be live before the cutover": its three
+   reasons were about a beacon-era wiring, and none arises when the input
+   is the index from the first commit.
+2. **`SO-D10b`: the failure window's walk-back skips an unobserved epoch
+   inside a standing run**, and stops only where the record says the run
+   began. *Replaces* stopping at the first epoch that is not an
+   observation. Stopping is exploitable: a colluding producer can withhold
+   one reveal, push a non-server's pair below three issued draws, and
+   clear its window. Skipping is the genesis-frozen rule as written: `m`
+   misses within the last `n` observations.
+3. **`SO-D10c`: the draw's index entry carries the pass fact, and the
+   pass fact has exactly one home.** When admission lands, the
+   `(P, s, E, h)` serve-credit table is re-keyed or deleted, never kept
+   beside the index's pass bit. The issued-index digest covers issuance
+   only; a pass is set later, inside `W₂`.
+4. **`SO-D10d`: accrual reads the row in its own change**, after the slash
+   fold does and before the draw. **The draw cannot go live until it has
+   landed**: no Rust consensus pays on any pass while it slashes on rows.
+   Slash timing stays as designed, the pass for `E` at `(E+2)·SEB − 1`.
+5. **`SO-D10e`: the count fold, its FFI, the C++ writer and their tests
+   are deleted with the list fold** (rule 15). The LMDB table's handle,
+   revert and prune stay for `DEL-008`. The row's NonObservation floor
+   becomes 3.
+6. **`SO-D10f`: a Fakechain-only hook issues draws and marks passes**, and
+   the two Rust slash tests are re-driven through it. **The comparison
+   against the LMDB beacon-era slash fixture is retired.** The C++ is not
+   canonical, and keeping the any-pass fold alive to feed the comparison
+   is the wrong trade.
+7. **`SO-D10g`: the drawable-set check lands with admission.** Named
+   blocker: no drawable set exists for the writer to re-walk.
+
+**Build order.** Tables and the view read; the list fold with the
+`SO-D10e` deletions; the slash fold reads the row; `SO-D10d`; admission
+and the draw.
+
+**Posed to the economics sim, not a blocker (`ESR-12`).** Whether settling
+`E` at `h_close(E) + W₂ + 1` is better than the inherited
+`(E+2)·SEB − 1`. A material gain comes back as a re-pin of slash timing
+and the grace coupling, not as a move.
+
+**Where.** `docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §14; the draw's gate
+on `DEL-008` and in the SO-D8 proposal's §8.0; `ESR-12` in
+`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.16.
+
+---
+
+## 2026-10-09 — The failure window's walk stops at the retention horizon (`SO-D10b`, amended)
+
+**Decision (maintainer, relayed 2026-10-09, on the choice
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§14.4 step 3 posed).** `SO-D10b` ruled that the walk passes over an
+unobserved epoch and stops only where the record says the run began. That
+removed the walk's old bound of `n − 1` epochs, so it could read below the
+horizon a prune of settlement rows would use. The walk now also stops at
+that horizon.
+
+- **One constant.** The walk's bound and the settlement rows' prune
+  horizon are the same constant, `SETTLEMENT_RETENTION_EPOCHS`, and it is
+  const-asserted against `n` and a stated minimum observation rate, so the
+  reasoning is in code and not in prose.
+- **Why it is acceptable.** The window needs 13 observations and the
+  horizon leaves 26 epochs to find them in. The bound shortens a walk only
+  when fewer than half a pair's epochs are observed. At the simulated
+  observation rate, 0.96 or better, 13 observations span about 14 epochs.
+  A slash missed below one half observed is accepted: the network has
+  larger problems than one free rider at that point.
+- **Why now.** Adding the bound when pruning lands would be a consensus
+  change at that point (rule 07). In the rule from the first commit, the
+  prune is not one.
+
+**Cost recorded.** A pair with ten misses, more than a retention window of
+unobserved epochs, and one more miss has eleven recorded misses and is not
+slashed.
+
+---

@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, ChainValid, RuleSet};
+use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet};
 use shekyl_harness_spender::{
     complete_tree, first_spending_height, Linked, MinerWallet, Persona, PostedBond, Spender,
 };
@@ -32,7 +32,9 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 
 use super::super::store_tests::TestErr;
 use super::super::*;
-use super::{batch_root_going_into, candidate_over, judge_under, root_going_into};
+use super::{
+    batch_root_going_into, candidate_over, judge_or_corrupt, judge_under, root_going_into,
+};
 
 /// What a fixture block lists. A chain is a `&[Vec<Listed>]`, one entry
 /// per height from genesis; `connect_chain*` realises each block's entries
@@ -499,6 +501,18 @@ impl Grown {
         let judged = judge_under(view, cand, rules)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
+    }
+
+    /// Judge an empty block connecting next under `rules`, for a fixture
+    /// that built a corrupt state on purpose: the validator's [`Corrupt`]
+    /// comes back as a value. Records nothing — the block does not connect.
+    pub(in super::super) fn judge_empty_or_corrupt<'b, 'id>(
+        &self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+    ) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
+        let cand = candidate_at(view, self.height(), self.tip(), Vec::new())?;
+        judge_or_corrupt(view, cand, rules)
     }
 
     /// Record `block`, connected listing `listed`, on both trees — holding
