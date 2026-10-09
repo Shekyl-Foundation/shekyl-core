@@ -812,13 +812,14 @@ pub struct StakingInfoResult {
     /// Serving-runtime threads whose priority-lowering call the OS refused
     /// (`SH-3`: serving runs below the daemon's priority by default). It
     /// reports the result of that call, thread by thread, and nothing
-    /// more: `0` means every serving thread asked for the lower priority
-    /// and got it; a non-zero count means that many threads run at normal
-    /// priority, and the wallet logged one warning saying why. It does not
-    /// say whether the lowering yields CPU to the daemon — nice orders
-    /// threads within one scheduling group, so that depends on the two
-    /// processes sharing one (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
-    /// Absent when no serving lifecycle is parked.
+    /// more. Absent when no serving lifecycle is parked. `0` is the steady
+    /// reading: every serving thread that has started was lowered.
+    /// Blocking threads start only when a connection needs one, so zero
+    /// does not claim every thread that will ever exist. A positive count
+    /// means that many threads run at normal priority, serving continues,
+    /// and the wallet logged one warning naming the cause. It does not say
+    /// whether the daemon received more CPU (`ARCHIVAL_CHALLENGE_MECHANISM.md`
+    /// §9.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serving_priority_not_lowered: Option<u32>,
 }
