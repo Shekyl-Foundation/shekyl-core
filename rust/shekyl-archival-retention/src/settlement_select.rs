@@ -240,12 +240,12 @@ mod tests {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    fn term(p: u8, height: u64, draw: u32) -> [u8; ISSUED_DIGEST_LEN] {
+    fn term(p: u8, issuing_height: BlockHeight, draw: u32) -> [u8; ISSUED_DIGEST_LEN] {
         issued_draw_term(
             &persona(p),
             ShardId::from_raw(7),
             SettlementEpoch::from_raw(5),
-            BlockHeight::from_raw(height),
+            issuing_height,
             draw,
         )
     }
@@ -253,9 +253,9 @@ mod tests {
     /// The vectors of the specification's §10.
     #[test]
     fn the_digest_matches_the_specifications_vectors() {
-        let first = term(0x44, 1_000_000, 0);
-        let second = term(0x44, 1_000_000, 1);
-        let third = term(0x45, 1_000_001, 0);
+        let first = term(0x44, BlockHeight::from_raw(1_000_000), 0);
+        let second = term(0x44, BlockHeight::from_raw(1_000_000), 1);
+        let third = term(0x45, BlockHeight::from_raw(1_000_001), 0);
 
         let mut digest = IssuedDigest::ZERO;
         digest.fold(&first);
@@ -282,10 +282,10 @@ mod tests {
 
     #[test]
     fn a_draw_that_differs_in_one_field_has_a_different_term() {
-        let base = term(0x44, 1_000_000, 0);
-        assert_ne!(base, term(0x45, 1_000_000, 0));
-        assert_ne!(base, term(0x44, 1_000_001, 0));
-        assert_ne!(base, term(0x44, 1_000_000, 1));
+        let base = term(0x44, BlockHeight::from_raw(1_000_000), 0);
+        assert_ne!(base, term(0x45, BlockHeight::from_raw(1_000_000), 0));
+        assert_ne!(base, term(0x44, BlockHeight::from_raw(1_000_001), 0));
+        assert_ne!(base, term(0x44, BlockHeight::from_raw(1_000_000), 1));
         let other_shard = issued_draw_term(
             &persona(0x44),
             ShardId::from_raw(8),
