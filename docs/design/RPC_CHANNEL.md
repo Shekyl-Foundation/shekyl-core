@@ -9,7 +9,7 @@ decision authority on 2026-10-08 and are recorded as ruled. §4–§8
 `file:line` below was read at that commit.
 **Token family:** continues `RT-` from
 [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) (R0): rulings
-`RT-10…RT-16`, open items `RT-O5…RT-O9` (RT-O5 and RT-O5′ ruled into RT-15), probes `RT-P4…RT-P8`, slices
+`RT-10…RT-16`, open items `RT-O5…RT-O10` (RT-O5 and RT-O5′ ruled into RT-15; RT-O6, RT-O7, RT-O8 ruled 2026-10-09; RT-O9 ruled in four parts, `RT-O9.1`…`RT-O9.4`, its table open; RT-O10 open), probes `RT-P4…RT-P8`, slices
 `RT-W8…RT-W14`. No new family (rule 94); the index row for `RT-` is
 extended in the commit that lands this round.
 **Decision authority:** Rick.
@@ -218,6 +218,8 @@ grant goes over the channel.
 ### RT-16 — Two supported run modes; never SYSTEM, never root
 
 1. **As the logged-in user** — the default. No elevation; stops at logout.
+   On Unix this is enforced, not assumed: the daemon stops when its
+   session's rendezvous goes (§7.1).
 2. **As a service under a dedicated low-privilege account** — opt-in;
    survives logout. On Windows a per-service virtual account; on Unix a
    dedicated unprivileged user, the posture of the Linux packaging.
@@ -284,43 +286,97 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 
 ## 4. Mechanism — the handshake (proposed)
 
-### 4.1 Pattern: classical XK ∪ pqXK, with hybrid forward secrecy
+### 4.1 Pattern: `hybridXK` — RULED (RT-O7, 2026-10-09)
 
 The client pins the daemon's static bundle in advance; the daemon learns
 the client's identity in the handshake and checks it against its enrolled
-set. That is the **XK** shape. Its post-quantum counterpart is PQNoise's
-**pqXK** (Angel et al., *Post-Quantum Noise*, ePrint 2022/539, Fig. 2),
-where `skem` replaces the static DH tokens and `ekem` replaces `ee`. The
-proposal runs both, mixing every shared secret into one chaining key:
+set. That is the **XK** shape. Its hybrid form is not ours: the `clatter`
+library ships it as a named pattern, `noise_hybrid_xk`
+(`src/handshakepattern.rs:1238-1255` at commit
+`9a8d15c4f80d5911ca0403aa22e0de99ea59df08`, v3.0.0), built by combining
+classical XK with PQNoise's pqXK (Angel et al., *Post-Quantum Noise*,
+ePrint 2022/539) under PQNoise's ordering rule: *within a message `ekem`
+always precedes `skem`, which always precedes all public keys and the
+payload.* The channel adopts that token order unchanged:
 
 ```
-<- s, s1                      pre-message: daemon's X25519 static, ML-KEM static ek
--> e, e1, es, skem            client eph X25519, eph ML-KEM ek; DH(e, rs); encaps to rs1
-<- e, ee, ekem1               daemon eph X25519; DH(e, re); encaps to client e1
--> s, s1, se                  client statics (encrypted); DH(s, re)   payload: grant request
-<- skem                       encaps to client s1                     payload: grant
+<- s                          pre-message: the daemon's static bundle
+...
+-> skem, e, es                encaps to the daemon's static KEM key; client ephemerals; DH(e, rs)
+<- ekem, e, ee                encaps to the client's ephemeral KEM key; daemon ephemerals; DH(e, re)
+-> s, se                      client statics (encrypted); DH(s, re)   payload: grant request
+<- skem                       encaps to the client's static KEM key   payload: grant
 -> (first transport record)   proves the client decapsulated the last skem
 ```
 
+**`e` and `s` each carry two keys: the X25519 key, then the ML-KEM-768
+key**, hashed and mixed in that order (clatter's README, "Tokens `e` and
+`s` handling"). So the pre-message `s` is the whole static bundle, and each
+side's `e` is an ephemeral X25519 key and an ephemeral ML-KEM
+encapsulation key. One consequence is read from the source, not the
+README: the daemon's `e` carries an ephemeral ML-KEM key that nothing in
+this pattern encapsulates to (`src/handshakestate/hybrid.rs:460-490`
+generates and sends both keys for either side). It costs 1,184 bytes and
+one key generation per handshake and is kept, because dropping it would be
+a different pattern from the one cross-checked below.
+
+**Protocol name:** `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`,
+following clatter's naming scheme. (Its README example writes `X25519`;
+its code emits `25519`, the Noise name — `src/crypto_impl/x25519.rs:12-14`
+— and the name is hashed into the transcript, so the code is what counts.)
+The prologue (§4.4) is unchanged.
+
 - **Daemon authentication** is complete when message 2 decrypts: its key
-  depends on `es` (classical) and the message-1 `skem` (post-quantum).
+  depends on the message-1 `skem` (post-quantum) and `es` (classical).
 - **Client authentication** is classical at message 3 (`se`) and hybrid
   when the client's first transport record decrypts. The daemon acts on
   nothing before then — that record *is* the first request (§6.2).
 - **Cost:** two round trips before the first request; three
-  encapsulate/decapsulate pairs plus one ephemeral ML-KEM keygen; ~5.8 KB
-  of handshake (ML-KEM-768: 1,184 B ek, 1,088 B ct). Paid once per channel
-  session; §8 keeps sessions alive.
+  encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
+  On the wire: message 1 is 2,320 bytes (1,088 ciphertext, 32 + 1,184
+  ephemerals, 16 tag); message 2 the same; message 3 is 1,280 bytes plus
+  its payload (both statics encrypted); message 4 is 1,120 bytes plus its
+  payload — about 7.0 KB in all. Paid once per channel session; §8 keeps
+  sessions alive.
 
-**This composition is ours.** Its components are analyzed — classical XK
-in the fACCE model (Dowling–Rösler–Schwenk), pqXK in PQNoise — and the
-combiner is the usual one (each secret mixed into `ck` through HKDF, so
-the keys hold if either input holds; impersonation needs both X25519 and
-ML-KEM broken). XK ∪ pqXK in this token order is not analyzed anywhere we
-know of, and may have no external vectors: the register's PW-2 row
-([`P2P_2_REQUIREMENTS_REGISTER.md:170`](P2P_2_REQUIREMENTS_REGISTER.md))
-grounds the reference implementation (NoisePQC++) as covering NN, XX, IK
-and KK — not XK. Hence RT-P7 is a stated gate (§9).
+**What is and is not established about this pattern.** No published test
+vectors exist for any hybrid Noise pattern. clatter is an independent
+implementation of this exact pattern; agreement between two
+implementations is evidence, not authority, and clatter states that it
+"has not received any formal audit" (its README). The components are
+analyzed — classical XK in the fACCE model (Dowling–Rösler–Schwenk), pqXK
+in PQNoise — and the combiner is the usual one: each secret is mixed into
+`ck` through HKDF, so the keys hold if either input holds and impersonation
+needs both X25519 and ML-KEM broken.
+
+**Three anchors** carry the claim. Each is a check that must be **observed
+failing under a named edit** before its pass is trusted:
+
+1. **The classical half:** `Noise_XK_25519_ChaChaPoly_BLAKE2s` from the
+   community vectors (`cacophony.txt`, which clatter's own harness uses and
+   which already anchors the P2P handshake's symmetric state).
+2. **The hybrid pattern as a whole:** byte-for-byte against clatter's
+   `noise_hybrid_xk`, both sides driven from the same seeded randomness.
+   Read at source for this round, **not yet run**: clatter's ML-KEM backend
+   (RustCrypto `ml-kem` 0.3.2) and ours (`fips203` 0.4.3) draw the same
+   randomness in the same order — key generation `d` then `z`, 32 bytes
+   each (`ml-kem` `decapsulation_key.rs:107-114`; `fips203`
+   `ml_kem.rs:156-162`), encapsulation one 32-byte `m`
+   (`encapsulation_key.rs:78-84`; `ml_kem.rs:226`) — and both X25519 sides
+   draw one 32-byte scalar. Within a message clatter draws in token order:
+   for message 1, the `skem` encapsulation, then the X25519 ephemeral, then
+   the ML-KEM ephemeral. Two things RT-W8 must still show before byte
+   equality is claimed: that an implementation of ours drawing in that
+   order reproduces clatter's bytes, and that one seeded stream can feed
+   both libraries, which take different versions of the `rand_core`
+   traits. If either fails, the difference is reported — a weaker
+   comparison is not substituted and called this anchor.
+3. **The design:** the ProVerif model (RT-P7), which gates RT-W9.
+
+**clatter is a test-only cross-check, never a production dependency** —
+the P2P round's read-not-depend posture for `snow` (PW-7a). That is encoded
+as a check that can fail: a gate asserting clatter is absent from every
+non-dev dependency graph in the workspace (RT-W8).
 
 ### 4.2 Why XK, and not KN, KK, or IK
 
@@ -344,8 +400,9 @@ and KK — not XK. Hence RT-P7 is a stated gate (§9).
 holds it, and enrolment moves it in the clear (§5). So there are two kinds
 of stranger:
 
-- **Without the bundle.** Message 1's empty payload carries an AEAD tag
-  under a key mixed from `es` and `skem`; a sender who lacks the bundle
+- **Without the bundle.** Message 1 opens with `skem` and ends with an
+  empty payload under an AEAD tag whose key is mixed from that `skem` and
+  from `es`; a sender who lacks the bundle
   cannot produce a valid one. The daemon sends no byte before message 1
   authenticates, and any failure closes the connection without reply. A
   scanner sees a port that accepts TCP and says nothing.
@@ -360,13 +417,15 @@ of stranger:
 sender — bundle or not — makes the daemon do two operations with its
 **long-term** keys on attacker-chosen input:
 
-1. X25519 with the static key against an attacker-chosen `e`
+1. X25519 with the static key against an attacker-chosen `e` (the `es`
+   token)
    (`x25519-dalek`, constant-time by construction). A low-order `e` gives
    an all-zero result; it is refused and never mixed, as the P2P handshake
    already does (`noise.rs:504`, `low_order_x25519_does_not_mix`). The same
    refusal applies to `se` in message 3, where the key is also long-term.
 2. **ML-KEM-768 decapsulation with the static decapsulation key against an
-   attacker-chosen ciphertext.** A timing difference here is a remote
+   attacker-chosen ciphertext** — the first thing message 1 asks for, since
+   `skem` leads it. A timing difference here is a remote
    oracle on the long-term key (KyberSlash was exactly this class, in
    implementations). Requirements: decapsulation is constant-time in the
    pinned crate, **demonstrated** by RT-P4, not assumed; ML-KEM's implicit
@@ -402,7 +461,29 @@ is needed is decided from RT-P6's measurement, not before it.
   `AsyncWrite` over seal/open, with backpressure, record splitting for
   large bodies (block batches), and orderly half-close — is the core
   engineering of RT-W9, and RT-P5 proves it first.
-- **Length concealment:** RT-O6.
+- **Length concealment — RULED (RT-O6, 2026-10-09): bucketed padding, in
+  the record layer.** *Harm:* a remote wallet's `submit_transaction` is one
+  upload of about 13 KB, a distinctive size for a post-quantum transaction.
+  A path observer learns when the wallet sent and can correlate that with
+  the transaction's appearance on the network. *Mechanism:* every channel
+  record is padded up to one of a small set of size classes, inside the
+  AEAD, so a submission is indistinguishable from a block-fetch response of
+  the same class.
+  - **One framing, shared with P2P.** The P2P transport's record framing is
+    ruled fixed-window (`P2P_TRANSPORT_LAYER.md`, D14 item 4): one window is
+    one record, its plaintext starts with an authenticated 2-byte occupancy,
+    and the rest is padding. That is this mechanism with a single class. It
+    is **not built yet** — `channel.rs` still carries the interim
+    length-prefixed framing, pending that round's size measurement — so
+    there is no module to reuse today. The extracted record-layer crate
+    (above) carries one implementation, parameterised by its class table:
+    one window for P2P, the RPC's classes for the channel. A second framing
+    is not built.
+  - **The class sizes are not chosen here.** They are derived from the
+    record-size distribution measured in RT-P5 and RT-P6 (§9).
+  - **Timing stays visible** — when a connection opens and how long a burst
+    lasts. Cover traffic is out of scope. *Rule-21 reopen:* a measured
+    timing correlation on a real wallet leg.
 
 ### 4.5 Failure modes (rule 82)
 
@@ -433,9 +514,10 @@ internals); the log may be specific.
 | Target "this computer", no rendezvous for this user or the machine on this network | "No Shekyl node is running on this computer for NETWORK." If a rendezvous exists for another network: "A node is running for OTHER_NETWORK." | — |
 | Rendezvous present, nothing listening (the daemon stopped without cleaning up) | "The Shekyl node on this computer is not running (it stopped unexpectedly). Start it again." The stale rendezvous is reported, not treated as a fault | The next start replaces it |
 | A daemon was just started and has not published its rendezvous yet | Nothing — the client waits for the publication (an event, not a poll that fails), bounded by the daemon's startup; on expiry: "The node did not finish starting. Its log records why." | Startup progress |
-| Unix: no session runtime directory (started under `sudo -u`, cron, or a container) | (Daemon, at start) "This node has no place for its local socket: there is no login session. Install it as a service, keep your session alive after logout (`loginctl enable-linger`), or name a socket directory." Refuses to start | Same line |
+| Unix: no per-user session directory (started under `sudo -u`, cron, or a container) | (Daemon, at start) "This node has no place for its local socket: there is no login session. Install it as a service, keep your session alive after logout (`loginctl enable-linger`), or name a socket directory." Refuses to start | Same line |
 | An explicit socket directory is not owned by this user, is not private to it, or cannot hold a socket | (Daemon, at start) "The socket directory PATH cannot be used: REASON." Refuses to start; never adopts or repairs it | Same line |
-| An instance name that breaks the naming rule (§7.1) | (Daemon, at start) "An instance name may contain only lower-case letters, digits and hyphens, at most 32 characters." Refuses to start | Same line |
+| An instance name that breaks the naming rule (§7.1) | (Daemon, at start) "An instance name is 1 to 16 lower-case letters, digits or hyphens, starting with a letter or digit." For a reserved name: "NAME is reserved and cannot be an instance name." Refuses to start | Same line |
+| Unix: the daemon's socket or its directory disappears while it runs (the session ended, or something removed it) | Clients: "No Shekyl node is running on this computer for NETWORK." — accurate, because the daemon has stopped | "local socket PATH is gone (REASON); shutting down" then a clean shutdown |
 | Starting a daemon while one is already running for this user and network | (Daemon, at start) "A Shekyl node is already running for you on NETWORK. To run a second one beside it, give it a name." Refuses to start | Same line, with the existing node's start time |
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
@@ -463,7 +545,7 @@ R0 RT-7 stands: generated material only, never typed from memory.
   proposed `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and
   `shekyld rpc-revoke FINGERPRINT`. No CA, no issuance key (R0 RT-4's
   argument carries over).
-- **Who may enrol, and how far (RULED, R1).** Enrolment is the `enrol`
+- **Who may enrol, and how far (RULED, RT-O9.1).** Enrolment is the `enrol`
   grant, carried by the `admin` preset only. **An enrolled ceiling can
   never exceed the enroller's own effective grant** — otherwise every
   boundary in §6.1 is one enrol call from `admin`. The same bound applies
@@ -471,7 +553,7 @@ R0 RT-7 stands: generated material only, never typed from memory.
 - **Who may revoke** (proposed). A key may revoke only enrolments whose
   ceiling lies within its own effective grant. Otherwise a narrow `enrol`
   holder could revoke the operator's admin keys — a denial of service
-  through the boundary R1 just drew.
+  through the boundary RT-O9.1 just drew.
 - **Who needs a key.** Same-user callers need none (RT-15). Keys exist for
   callers of a service-mode daemon, other users, other machines, and the
   tunnel.
@@ -518,9 +600,11 @@ R0 RT-7 stands: generated material only, never typed from memory.
 
 **Direction (decision authority, 2026-10-08): named grants, with node
 status split out of every view.** Four rulings of the same date shape the
-table and are marked **RULED** where they apply: enrolment is its own grant
-(R1), test levers belong to no grant (R2), anonymity data is host-only and
-not a grant (R3), and cost is a resource policy separate from grants (R4,
+table and are marked **RULED** where they apply. They are numbered as
+parts of the open item they answer, `RT-O9.1`…`RT-O9.4`, because a bare
+`R1` already means "round 1" in this document: enrolment is its own grant
+(RT-O9.1), test levers belong to no grant (RT-O9.2), anonymity data is host-only and
+not a grant (RT-O9.3), and cost is a resource policy separate from grants (RT-O9.4,
 §6.3). Granular grants are the rule: presets bundle grants to make
 administration easy, but permissions coupled in one grant are hard to
 separate later. The rest of the assignment is proposed (RT-O9).
@@ -555,17 +639,17 @@ network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, R4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, R4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
-| `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, R3) |
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
+| `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
 | `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`) |
 | `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
 | `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
 | `submit` | `/submit_transaction` |
-| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, R4) |
+| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
 | `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
 | `bans` | `set_bans`, `get_bans`, `banned` |
 | `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard` |
-| `enrol` | `rpc-enrol`, `rpc-revoke` (R1). Carried by the `admin` preset only |
+| `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
 
 *Two notes on `health`, both owned by the RK-5c round (PR #1008).*
 `has_peers` is true when the node holds at least one **handshaken** session
@@ -581,7 +665,7 @@ moves.
 one grant above or in exactly one of these; no ceiling, `admin` included,
 can contain either.
 
-- **Host-only data (RULED, R3).** `/get_stem_tallies` — per-successor relay
+- **Host-only data (RULED, RT-O9.3).** `/get_stem_tallies` — per-successor relay
   outcome counts, whose consumer is a human tuning `n_min`, `cut` and
   `cooldown` (`handlers/json.rs:489-506`) — and **unrelayed pool
   entries**: stem-phase and not-yet-broadcast transactions, including ones
@@ -596,7 +680,7 @@ can contain either.
   which of its own credentials is asking, not from the network a request
   arrived on. Reason: no remote job needs this data, and it is exactly what
   Dandelion++ exists to hide.
-- **Armed test levers (R2 RULED; the arming is proposed).**
+- **Armed test levers (RT-O9.2 RULED; the arming is proposed).**
   `generateblocks` and `inject_archival_serve_credit` are not production
   capabilities. The regtest harnesses depend on `generateblocks`
   (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
@@ -644,11 +728,11 @@ preset it landed in. The plaintext loopback listener is fixed at `view`
   node's rate limits and traffic totals. `/get_limit` is on both
   listeners today.
 - **`/get_stem_tallies` and unrelayed pool entries leave the grant model**
-  for the host-only class (R3). Today any caller of the unrestricted
+  for the host-only class (RT-O9.3). Today any caller of the unrestricted
   listener receives them.
-- **`get_coinbase_tx_sum` and `calc_pow` stop being admin-only** (R4): they
+- **`get_coinbase_tx_sum` and `calc_pow` stop being admin-only** (RT-O9.4): they
   were restricted for their cost, which §6.3 now bounds directly.
-- **The test levers are in no grant** (R2); `generateblocks` is admin-only
+- **The test levers are in no grant** (RT-O9.2); `generateblocks` is admin-only
   today and `inject_archival_serve_credit` is served on both listeners.
 - **`get_info.restricted` is retired.** The connection's grant is returned
   in the handshake (§6.2); a boolean cannot describe it.
@@ -701,7 +785,7 @@ and the method handlers becomes the connection's grant; the two gate tests
 (`server.rs:787`, `json_rpc.rs`
 `admin_methods_are_refused_only_on_the_restricted_listener`) re-key to it.
 
-### 6.3 Resource policy (RULED, R4 — independent of §6.1)
+### 6.3 Resource policy (RULED, RT-O9.4 — independent of §6.1)
 
 What a caller **may** ask for is its grant. How **much** work one request
 may cost is this policy. They are separate: today's restriction encodes
@@ -757,32 +841,51 @@ client never reaches the wrong network's node.
 - **Unix, run-as-me:** the socket itself, at a fixed name inside a `0700`
   per-user, per-network directory. The directory is the containment (R0
   §1.1 item 1); nobody else can place an object at that name, so no random
-  component is needed. **The directory lives under the session runtime
-  directory** (`XDG_RUNTIME_DIR`): its lifetime is the login session's,
-  which is run-as-me's own lifetime (RT-16), it is local to the machine,
-  and a reboot clears it. Three cases follow (proposed):
-  - **No runtime directory** — under `sudo -u`, cron, and most containers.
-    The daemon refuses to start and names the three ways forward: service
-    mode, for a daemon meant to run unattended; `loginctl enable-linger`,
-    for an operator deliberately keeping a run-as-me daemon past logout; or
-    an explicit socket directory.
-  - **An explicit socket directory**, named by the operator, for test and
-    container runs that have no session. The daemon asserts it rather than
-    adopting it: owned by the daemon's user, mode `0700`, on a local
-    filesystem that accepts sockets — or it refuses to start and says
-    which condition failed. A client reaches such a daemon only when told
-    the same directory; it is never what "this computer" resolves to.
-  - **The runtime directory removed under a running daemon** — a daemon
-    left in a terminal multiplexer, without lingering, when its user's last
-    session ends. The daemon keeps running and loses its local leg; a
-    client then reports that no node is running (§4.5), which is wrong.
-    Named, not prevented: the daemon cannot stop the session manager from
-    removing the directory. It notices the loss and logs it, and the
-    refusal above is why a fresh start in that state says so.
+  component is needed. **RULED (2026-10-09): the directory lives under
+  the per-user session directory, and the daemon's life is its
+  rendezvous's.**
+  - **Where.** Linux: `XDG_RUNTIME_DIR`. macOS:
+    `confstr(_CS_DARWIN_USER_TEMP_DIR)`, which has no `XDG_RUNTIME_DIR`.
+    Each is local to the machine, private to the user, and cleared with
+    the session or at reboot — run-as-me's own lifetime (RT-16).
+  - **Neither exists** — under `sudo -u`, cron, and most containers. The
+    daemon refuses to start and names the three ways forward: service mode,
+    for a daemon meant to run unattended; `loginctl enable-linger`, for an
+    operator deliberately keeping a run-as-me daemon past logout; or an
+    explicit socket directory.
+  - **An explicit, operator-named socket directory — RULED (decision
+    authority, 2026-10-09).** CI runners and other session-less test hosts
+    have no runtime directory, and the regtest harnesses start `shekyld`
+    there. The daemon asserts the directory rather than adopting it: owned
+    by the daemon's user, mode `0700`, on a local filesystem that accepts
+    sockets — or it refuses to start and says which condition failed. A
+    client reaches such a daemon only when told the same directory; it is
+    never what "this computer" resolves to.
+  - **The daemon watches its own rendezvous.** If the socket or its
+    directory disappears — the session ended under a daemon left in a
+    terminal multiplexer, or something removed it — the daemon logs why and
+    **shuts down cleanly**. So RT-16's sentence is exactly true: a
+    run-as-me daemon stops when its session ends. And "no node is running"
+    (§4.5) is then always accurate: there is no state in which a daemon
+    runs with its local leg gone.
 
-  A Unix socket path has a short fixed limit (about 100 bytes), so a path
-  that would exceed it is refused at start with the path and the limit
-  named, never truncated.
+  **The path budget.** A Unix socket path is limited to 108 bytes on Linux
+  and 104 on macOS, terminator included; a path over the limit is refused
+  at start with the path and the limit named, never truncated. Layout
+  (proposed): `<base>/shekyl/<network>/<instance>/rpc.sock`, where
+  `<network>` is the 16-byte network id in hex (32 characters) and
+  `<instance>` is `default` or a name of at most 16 characters (below).
+  After `<base>` that is 7 + 33 + 17 + 9 = 66 bytes at the longest name.
+  - *Linux.* `<base>` is `/run/user/<uid>`, at most 20 bytes for a 32-bit
+    uid. 20 + 66 + 1 = **87 of 108**: 21 bytes of margin.
+  - *macOS.* `<base>` is typically 48 bytes
+    (`/var/folders/xx/` + a 30-character name + `/T`; from the platform's
+    documented layout, **not measured** — the estate has no macOS host).
+    48 + 66 + 1 = **115 of 104: eleven bytes over.** The default instance
+    alone (`default`, 7 characters) is 106, two over. So the 16-character
+    name does not fit on macOS under this layout, and neither does the
+    default. The name limit is not changed here; the macOS layout is open
+    (RT-O10).
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
   rendezvous file in a per-user, per-network directory under
@@ -852,11 +955,16 @@ client never reaches the wrong network's node.
   refusal (§4.5) would stop them. The name is the operator's label, not a
   nettype; the network id still keys the path (rule 71). **The name is
   operator input that becomes part of a filesystem path**, and on Unix it
-  spends the socket-path budget, so it is restricted: lower-case letters,
-  digits and hyphens only, at most 32 characters, starting with a letter
-  or digit. Anything else is refused at start with the rule stated — never
-  sanitised or truncated — so a separator, a `..`, or a reserved Windows
-  device name cannot reach the rendezvous path.
+  spends the socket-path budget. **RULED (2026-10-09):** the name is 1 to
+  16 characters from `[a-z0-9-]`, and its first character is a letter or a
+  digit. Two sets inside that class are **reserved and refused by name**:
+  `default`, which would be confused with the default instance; and the
+  Windows device names, which fit the character class and would fail as a
+  directory name on Windows — `con`, `prn`, `aux`, `nul`, `com0` to `com9`,
+  `lpt0` to `lpt9`. The character rule keeps out separators and `..`; it
+  does **not** keep out the device names, which is why they are listed.
+  Anything refused is refused at start with the rule stated, never
+  sanitised or truncated.
 - **Start-up dial on Unix.** The Windows start-up rule above applies here
   unchanged: before publishing, dial an existing socket — it answers, so
   another daemon is running, refuse and say so; nothing listens, so it is
@@ -895,9 +1003,9 @@ construction) instead of loopback TCP.
 | # | Question | How | Revisits on failure |
 |---|---|---|---|
 | RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions | §4.3; the crate choice for the channel's static key |
-| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Scratch crate: stream adapter over `seal`/`open`; a block-batch response larger than many records; backpressure under a slow reader; half-close; a request split across records; observed failing with the adapter's record splitting removed | RT-W9's adapter design |
-| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1 | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
-| RT-P7 | Does §4.1's token order reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
+| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Scratch crate: stream adapter over `seal`/`open`; a block-batch response larger than many records; backpressure under a slow reader; half-close; a request split across records; observed failing with the adapter's record splitting removed; **and the record-size distribution** of real RPC traffic (wallet sync, a submission, block batches), which the padding classes are derived from (RT-O6) | RT-W9's adapter design |
+| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of padding each record to each candidate size class | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
+| RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
 | RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` ACL admits the service account and Administrators only; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
 
 ---
@@ -976,22 +1084,38 @@ construction) instead of loopback TCP.
   — yet under the default policy it can read an exported seed. One policy
   for the one function (`NR` at creation for every caller) is the obvious
   fix; it is the wallet lane's to rule, with WP-D8 reopened.
-- **RT-O6 — length concealment.** The path observer sees request and
-  response sizes and timing; for a syncing wallet those track block sizes.
-  In scope for the channel, or accepted and named?
-- **RT-O7 — vectors.** RT-P7 checks the design; vectors check the code.
-  Rule 30 pins vectors before implementation. With no external source for
-  XK ∪ pqXK (PW-2), the proposal is a second, test-only implementation
-  written from §4.1 alone as the differential against the production one,
-  plus the existing cacophony cross-check for the classical NN path. Also
-  the protocol-name string, which is part of the transcript. Implementation
-  hazards already known: the `fips203` `DummyRng` issue pinned around in
+- **RT-O6 — length concealment. RULED 2026-10-09:** in scope, as bucketed
+  padding in the record layer, sharing the P2P transport's framing; class
+  sizes from RT-P5 and RT-P6; timing stays visible, cover traffic out of
+  scope with a rule-21 reopen. Recorded in §4.4.
+- **RT-O7 — the pattern and its vectors. RULED 2026-10-09:** the pattern
+  is clatter's `hybridXK` in its canonical token order, and the claim rests
+  on three anchors — the community XK vectors, byte equality with clatter
+  under shared seeded randomness, and the ProVerif model. The test-only
+  second implementation proposed earlier is withdrawn; clatter replaces it,
+  test-only, with a gate asserting it is in no production dependency graph.
+  Recorded in §4.1. Implementation hazards already known and unchanged: the
+  `fips203` `DummyRng` issue pinned around in
   `shekyl-crypto-pq/Cargo.toml:55-58`; RT-P4.
-- **RT-O8 — the `https://` arm of the daemon client.**
-  [`http_client.rs:240-266`](../../rust/shekyl-rpc-transport/src/http_client.rs)
-  builds a native-roots TLS connector for `https://` daemon endpoints.
-  Under RT-10 no supported posture uses it; deletion takes `rustls`'s
-  native-certs path out of the wallet graph.
+- **RT-O8 — the `https://` arm of the daemon client. RULED 2026-10-09:
+  deleted, in RT-W12.** No supported posture uses TLS to a daemon; its only
+  use was R0's reverse-proxy remote story, which the channel replaces.
+  Deleting it before the channel client exists would strand that path, so
+  the deletion lands with RT-W12 and not before. It removes `hyper-rustls`
+  and native-roots loading from the wallet's dependency graph
+  ([`http_client.rs:240-266`](../../rust/shekyl-rpc-transport/src/http_client.rs)).
+- **RT-O10 — the macOS socket path. Open.** §7.1's arithmetic: under the
+  layout `<base>/shekyl/<network>/<instance>/rpc.sock` the Linux path fits
+  with 21 bytes to spare, and the macOS path is over the 104-byte limit
+  even for the default instance. The ruled 16-character name limit is not
+  changed. Candidates: (a) a shorter network component on macOS — the first
+  8 bytes of the id, 16 hex characters, leaves 5 bytes at the longest name,
+  which is thin and rests on an unmeasured base length; (b) one socket file
+  per daemon directly in the per-user directory, named by a short hash of
+  network id and instance, which removes the name from the budget on every
+  platform (about 86 bytes on macOS) at the cost of a path nobody can read;
+  (c) measure the macOS base first, on a real host, before choosing. The
+  estate has no macOS host today.
 - **RT-O9 — the grant table. Blocks RT-W10 until confirmed.** The form is
   directed and four rulings are recorded (2026-10-08, §6.1, §6.3): named
   grants; `status` split from `health`; `enrol` its own grant; test levers
@@ -1048,6 +1172,10 @@ construction) instead of loopback TCP.
 - Shipped Windows guidance that points operators at Task Scheduler
   (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced
   by RT-16's two run modes (the scheduled task is rejected, §12).
+- The daemon client's `https://` arm
+  (`rust/shekyl-rpc-transport/src/http_client.rs:240-266`) and with it
+  `hyper-rustls` and native-roots loading in the wallet's graph — deleted
+  in RT-W12, not before (RT-O8).
 - `shekyl-rt-p2-spike` (R0 marked it disposable).
 - `IMPLEMENTATION_INDEX.md` `RT-` row.
 
@@ -1063,6 +1191,18 @@ construction) instead of loopback TCP.
   configuration it owns every configuration (decision authority,
   2026-10-08).
 - **KN, KK, IK.** §4.2.
+- **Our own token order for the hybrid pattern** (`-> e, e1, es, skem`, in
+  this round's first draft). It put `skem` after the public keys, against
+  PQNoise's ordering rule, and it was a composition nobody else
+  implements. The canonical `hybridXK` order is adopted (§4.1, RT-O7).
+- **A test-only second implementation as the differential.** Two
+  implementations by one team share one team's reading of the pattern;
+  clatter is independent (§4.1).
+- **clatter, or any Noise library, as a production dependency.** Read, not
+  depended on (PW-7a's posture for `snow`); test-only, with a gate.
+- **Leaving record sizes visible**, and **cover traffic** to hide timing.
+  The first leaks when a wallet sends; the second is out of scope with a
+  named reopen (§4.4, RT-O6).
 - **Classical static authentication with hybrid forward secrecy only.**
   RT-11.
 - **Refusing wildcard binds on the channel listener.** A judgment of the
@@ -1108,11 +1248,11 @@ construction) instead of loopback TCP.
 - **An `anonymity` grant** holding the stem tallies and unrelayed pool
   entries, for measurement tooling. A grant can be put in a ceiling and
   used from another machine; no remote job needs this data, and it is what
-  Dandelion++ hides. It is host-only, not a grant (R3, §6.1).
+  Dandelion++ hides. It is host-only, not a grant (RT-O9.3, §6.1).
 - **Enrolment inside `node`.** A `node` holder could enrol itself an
-  `admin` key and step around every other boundary (R1).
+  `admin` key and step around every other boundary (RT-O9.1).
 - **Encoding cost as authority** — keeping `get_coinbase_tx_sum` and
-  `calc_pow` admin-only because they are expensive (R4, §6.3).
+  `calc_pow` admin-only because they are expensive (RT-O9.4, §6.3).
 - **A reload signal or editable file for the enrolled set.** A revocation
   that waits for a reload is a revocation that can be forgotten (§5).
 
@@ -1122,10 +1262,10 @@ construction) instead of loopback TCP.
 
 | Slice | Contents | Depends on |
 |---|---|---|
-| RT-W8 | RT-P7 model; RT-O7 vectors and differential; registry rows; RT-P4 | ratification |
-| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); deadline from RT-P6 | RT-W8 |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
+| RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, byte equality with clatter under seeded randomness (reporting any difference in how the two ML-KEM libraries are fed), each observed failing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows; RT-P4 | ratification |
+| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); deadline from RT-P6 | RT-W8 |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 |
-| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet` | RT-W9 |
+| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8) | RT-W9 |
 | RT-W13 | §11 sweep | lands with RT-W10 |
 | RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8 |
