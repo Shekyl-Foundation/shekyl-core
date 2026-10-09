@@ -267,7 +267,6 @@ namespace cryptonote
       uint64_t burn_pct;
       uint64_t total_burned;
       uint64_t staker_emission_share_effective;
-      std::string emission_era;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
@@ -317,7 +316,6 @@ namespace cryptonote
         KV_SERIALIZE(burn_pct)
         KV_SERIALIZE(total_burned)
         KV_SERIALIZE(staker_emission_share_effective)
-        KV_SERIALIZE(emission_era)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

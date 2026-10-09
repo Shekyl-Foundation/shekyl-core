@@ -670,7 +670,6 @@ The economic system should be visible and comprehensible to participants through
 
 | Element | Description |
 |---|---|
-| Emission Era | Named phase: Founding, Growth, Maturity, Tail |
 | Emission progress | Percentage of total supply released, with era boundaries |
 | Current release tempo | Release multiplier (e.g., "1.12x — moderately active chain") |
 | Burn rate | Current effective burn percentage |

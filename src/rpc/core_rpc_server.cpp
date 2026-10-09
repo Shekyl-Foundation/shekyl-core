@@ -291,16 +291,6 @@ namespace cryptonote
     res.staker_emission_share_effective = shekyl_calc_emission_share(
         res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
-    double emission_pct = (double)res.already_generated_coins / (double)SHEKYL_EMISSION_CURVE_ASYMPTOTE;
-    if (emission_pct < 0.30)
-      res.emission_era = "Founding";
-    else if (emission_pct < 0.60)
-      res.emission_era = "Growth";
-    else if (emission_pct < 0.85)
-      res.emission_era = "Maturity";
-    else
-      res.emission_era = "Tail";
-
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
