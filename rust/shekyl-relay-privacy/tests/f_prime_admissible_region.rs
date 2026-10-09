@@ -92,6 +92,7 @@
 // an integer millisecond reading. Same disposition as `d9_alpha.rs`.
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, FloodParams, FloodReach, FLOOD_TICK_MS,
 };
@@ -362,9 +363,7 @@ fn dependents_at_each_candidate_boundary() {
     use shekyl_relay_privacy::schedule::{
         EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
     };
-    use shekyl_relay_privacy::verify_cost::{
-        ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-    };
+    use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
     // The two columns are the two shipped transit assumptions. A third
     // assumption is a new constant and a new column, not a silent extra
     // class in an array.
@@ -388,25 +387,25 @@ fn dependents_at_each_candidate_boundary() {
         (12_375, "S91 A: anon transit, beta = 0"),
         (13_625, "S91 A: anon transit, beta* = p90"),
     ] {
-        let embargo_secs = |transit: f64| {
+        let embargo_secs = |transit: DerivationMs| {
             EmbargoTimer::adopted(&DandelionParams {
-                fluff_return_ms: f_prime,
+                fluff_return_ms: DerivationMs::model(f_prime),
                 ..DandelionParams::adopted_for_transit_ms(transit)
             })
             .mean_secs()
         };
-        let clearnet = embargo_secs(ADOPTED_TRANSIT_ASSUMPTION_MS);
-        let anon = embargo_secs(ANON_ZONE_TRANSIT_ASSUMPTION_MS);
+        let clearnet = embargo_secs(ADOPTED_TRANSIT);
+        let anon = embargo_secs(ANON_ZONE_TRANSIT);
 
-        // The wallet wait is the longer of the two measured transits.
+        // The wallet wait is the longer of the two declared transits.
         // *Records-was:* §89.2 took it over the worst `RelayZone`.
         let worst_transit = if anon >= clearnet {
-            ANON_ZONE_TRANSIT_ASSUMPTION_MS
+            ANON_ZONE_TRANSIT
         } else {
-            ADOPTED_TRANSIT_ASSUMPTION_MS
+            ADOPTED_TRANSIT
         };
         let wait = EmbargoTimer::adopted(&DandelionParams {
-            fluff_return_ms: f_prime,
+            fluff_return_ms: DerivationMs::model(f_prime),
             ..DandelionParams::adopted_for_transit_ms(worst_transit)
         })
         .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
@@ -695,7 +694,7 @@ fn leak_at_each_candidate_region() {
     let mut rows = Vec::new();
     for f_prime in [3_250_u32, 3_500, 4_500, 4_750, 5_000] {
         let params = DandelionParams {
-            fluff_return_ms: f_prime,
+            fluff_return_ms: DerivationMs::model(f_prime),
             ..DandelionParams::adopted()
         };
         let e = EmbargoTimer::adopted(&params);
@@ -819,7 +818,7 @@ fn leak_at_each_candidate_region() {
     // column a reading against the wrong embargo.
     for (f_prime, _) in &rows {
         let p = DandelionParams {
-            fluff_return_ms: *f_prime,
+            fluff_return_ms: DerivationMs::model(*f_prime),
             ..DandelionParams::adopted()
         };
         let d = derive_embargo(
@@ -865,9 +864,10 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
             .expect("every candidate boundary is a swept row")
     };
 
-    #[allow(clippy::cast_possible_truncation)]
     let params_at = |f_prime: u64| DandelionParams {
-        fluff_return_ms: f_prime as u32,
+        fluff_return_ms: DerivationMs::model(
+            u32::try_from(f_prime).expect("F' is a whole millisecond count"),
+        ),
         ..DandelionParams::adopted()
     };
 

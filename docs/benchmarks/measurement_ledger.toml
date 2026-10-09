@@ -249,7 +249,7 @@ spec = ["rust/shekyl-relay-privacy/src/params.rs"]
 [[constant]]
 name = "fluff_return_ms"
 defined_in = "rust/shekyl-relay-privacy/src/params.rs"
-needle = "fluff_return_ms: 3_250,"
+needle = "pub const FLUFF_RETURN: DerivationMs = DerivationMs::model(3_250);"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). A simulated figure from an earlier graph; its own comment says it has not been re-measured."
@@ -441,7 +441,10 @@ stale_through = [
   { through = "eba86c7ff9", note = "The refused-dial test holds a bound socket that is not listening, so a parallel test cannot accept the port. Only that test changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
-  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime takes a ThreadStart hook. The clearnet tests pass ThreadStart::none(), so their runtime threads start exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime takes a ThreadStart hook. The clearnet tests pass ThreadStart::none(), so their runtime threads start exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -499,7 +502,10 @@ stale_through = [
   { through = "8fa5ba8bbb", note = "The Tor writer is joined once, on the select arm that already took it. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. The dial and the gap wait are unchanged. Not re-measured." },
-  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime takes a ThreadStart hook. shekyl-tor's tests pass ThreadStart::none(), so their runtime threads start exactly as before; no production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. The dial and the gap wait are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime takes a ThreadStart hook. shekyl-tor's tests pass ThreadStart::none(), so their runtime threads start exactly as before; no production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]

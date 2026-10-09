@@ -4,15 +4,19 @@
 // BSD-3-Clause
 
 //! Tests for the archival reads (`store/archival_reads.rs`, DRS-E1 S-ARCH
-//! A1–A10; DRS-E4 A11–A13). No writer exists yet for these tables (E4's), so every
-//! planted state is written raw through the schema's own table handles and
-//! asserted on a fresh snapshot — the reads' contract is with the bytes a
-//! writer will leave, not with any writer.
+//! A1–A10; DRS-E4 A11–A13; `SO-D10` A14–A16). Every planted state is
+//! written raw through the schema's own table handles and asserted on a
+//! fresh snapshot: the reads' contract is with the bytes a writer leaves,
+//! not with any writer, so the reads are tested apart from the writers
+//! (`archival_write_tests`, `slash_scan_bench_tests`).
 
 use redb::Value;
 use shekyl_chain_rules::AtHeight;
 use shekyl_store_codec::Coded;
-use shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES;
+use shekyl_types::archival::{
+    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
+    MAX_ATTESTATION_WITNESS_BYTES,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -24,11 +28,11 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 fn persona(fill: u8) -> PCanonicalId {
@@ -662,6 +666,171 @@ fn a13_budget_accruing_is_the_open_epochs_row_and_none_otherwise() {
     );
     assert_eq!(snap.budget_accruing(epoch(3)).unwrap(), None);
     assert_eq!(snap.budget_accruing(epoch(5)).unwrap(), None);
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// A14–A16 — settlement's reads (`SO-D10`). Every row is planted: the reads
+// are tested apart from the slash pass that writes the rows
+// (`slash_scan_bench_tests`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a14_settlement_row_is_the_exact_triple_and_absent_is_not_a_miss() {
+    let path = tmp("arch-a14");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let p = persona(0xa4);
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .settlement_row(&p, shard(7), epoch(3))
+            .unwrap(),
+        None
+    );
+    drop(store);
+    let missed = SettlementRow::settle(1, 5).expect("a row");
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        t.insert(
+            SettlementKey::new(p, shard(7), epoch(3)).key(),
+            missed.encoded().as_encoded(),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let read = snap
+        .settlement_row(&p, shard(7), epoch(3))
+        .unwrap()
+        .expect("planted");
+    assert_eq!(read, missed);
+    assert_eq!(read.outcome(), SettlementOutcome::Missed);
+    // Every other coordinate is another pair or epoch, and has no row.
+    assert_eq!(snap.settlement_row(&p, shard(7), epoch(4)).unwrap(), None);
+    assert_eq!(snap.settlement_row(&p, shard(8), epoch(3)).unwrap(), None);
+    assert_eq!(
+        snap.settlement_row(&persona(0xa5), shard(7), epoch(3))
+            .unwrap(),
+        None
+    );
+    drop(snap);
+    drop(store);
+
+    // A stored outcome its own counts do not give is not a row (SI-7):
+    // Served on one pass of three.
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        t.insert(
+            SettlementKey::new(p, shard(7), epoch(3)).key(),
+            <Coded<SettlementRow> as Value>::from_bytes(&[0x01u8, 1, 3]),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let err = store
+        .begin_read()
+        .unwrap()
+        .settlement_row(&p, shard(7), epoch(3))
+        .unwrap_err();
+    assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
+    cleanup(&path);
+}
+
+#[test]
+fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
+    let path = tmp("arch-a15");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert_eq!(
+        store.begin_read().unwrap().issued_draws(epoch(5)).unwrap(),
+        vec![]
+    );
+    drop(store);
+
+    let (lo, hi) = (persona(0x01), persona(0xc0));
+    let draw = |persona, shard_n, h, j, revealed, passed| IndexedDraw {
+        persona,
+        shard: shard(shard_n),
+        issuing_height: BlockHeight::from_raw(h),
+        draw: j,
+        state: IssuedDraw {
+            revealed_at: BlockHeight::from_raw(revealed),
+            passed,
+        },
+    };
+    // Epoch 5's rows, in the order the read must return them.
+    let expected = vec![
+        draw(lo, 7, 100, 0, 101, false),
+        draw(lo, 7, 100, 3, 101, true),
+        draw(lo, 7, 102, 1, 110, false),
+        draw(lo, 9, 90, 0, 91, true),
+        draw(hi, 2, 95, 2, 96, false),
+    ];
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DRAW).expect("t");
+        let mut put = |e: u64, d: &IndexedDraw| {
+            t.insert(
+                IssuedDrawKey::new(epoch(e), d.persona, d.shard, d.issuing_height, d.draw).key(),
+                d.state.encoded().as_encoded(),
+            )
+            .expect("insert");
+        };
+        // Planted in reverse; neighbours in epochs 4 and 6 for the same
+        // pair must not appear.
+        for d in expected.iter().rev() {
+            put(5, d);
+        }
+        put(4, &draw(lo, 7, 100, 0, 101, true));
+        put(6, &draw(hi, 2, 95, 2, 96, true));
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    assert_eq!(snap.issued_draws(epoch(5)).unwrap(), expected);
+    assert_eq!(snap.issued_draws(epoch(4)).unwrap().len(), 1);
+    assert_eq!(snap.issued_draws(epoch(7)).unwrap(), vec![]);
+    drop(snap);
+    drop(store);
+
+    // A pass flag that is neither 0 nor 1 faults the walk (SI-7): a
+    // settlement that skipped the row would count a different list.
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DRAW).expect("t");
+        t.insert(
+            IssuedDrawKey::new(epoch(5), lo, shard(7), BlockHeight::from_raw(100), 3).key(),
+            <Coded<IssuedDraw> as Value>::from_bytes(&[0u8, 0, 0, 0, 0, 0, 0, 0, 2]),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let err = store
+        .begin_read()
+        .unwrap()
+        .issued_draws(epoch(5))
+        .unwrap_err();
+    assert!(is_si7_undecodable(&err, "archival_issued_draw"), "{err}");
+    cleanup(&path);
+}
+
+#[test]
+fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
+    let path = tmp("arch-a16");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert_eq!(
+        store.begin_read().unwrap().issued_digest(epoch(5)).unwrap(),
+        IssuedDigest::ZERO
+    );
+    drop(store);
+    let digest = IssuedDigest::from_bytes([0x5a; 32]);
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DIGEST).expect("t");
+        t.insert(5u64, digest.encoded().as_encoded())
+            .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    assert_eq!(snap.issued_digest(epoch(5)).unwrap(), digest);
+    assert_eq!(snap.issued_digest(epoch(4)).unwrap(), IssuedDigest::ZERO);
+    assert_eq!(snap.issued_digest(epoch(6)).unwrap(), IssuedDigest::ZERO);
     cleanup(&path);
 }
 

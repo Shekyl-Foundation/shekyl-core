@@ -17071,7 +17071,11 @@ Each item is open. Its carrier is the only thing that closes it.
    peer of that node. The flush delay stays the production draw; the
    test does not subtract a modelled transit. **Where:** a testnet
    node that publishes an onion, and one clearnet peer it is connected
-   to. Not a host under a quiet claim. **What moves the input:** if
+   to. Not a host under a quiet claim. **On the Rust path, after RD
+   (Ruling B, §97, 2026-10-08):** the fluff and the flush are C++
+   (`levin_notify.cpp`) until RD lands, and a p90 taken while they are
+   is a `CppPath` reading. It does not close this item, and nothing is
+   derived from it. **What moves the input:** if
    the measured Tor-return p90 exceeds 3250 ms, the provisional value
    is short and `F′` moves with its dependents in one later change
    (§90). If that p90 is at or under 3250 ms, the value stays for
@@ -17117,3 +17121,70 @@ Each item is open. Its carrier is the only thing that closes it.
    has closed and the slice has landed. Closing the brief's review
    is not this item.
 
+## 97. The measurement-basis register — RULED 2026-10-08 (Ruling B)
+
+**Ruling B (Rick, 2026-10-08).** Nothing derived while C++ is in the
+path is valid for Rust. Timing and pathway numbers measured or derived
+with C++ in the path are re-done on the Rust path. The reference is the
+model, not the C++: the C++ carries defects that distort timing (dials
+on the two-worker io pool; the post-handshake cause race), so "behaves
+like the C++" is not the test.
+
+Every timing value a derivation consumes is one of three bases,
+weakest first, and the code carries the label as `AdmissibleBasis`
+(`shekyl-relay-privacy/src/basis.rs`):
+
+- **Assumption** — never measured. Written down and labelled as written
+  down. `Assessment::Assessed` on a D7 cell means someone wrote the
+  number down; it does not mean measured.
+- **Model** — a conformance output, a property of a rule. Not re-run.
+  It transfers to Rust when a conformance test shows the Rust code
+  implements that rule.
+- **RustPath** — measured on the Rust path.
+
+A C++-path reading is not a basis `DerivationMs` can carry. Naming
+`AdmissibleBasis::CppPath` does not compile (`compile_fail,E0599`).
+The register still uses the word **CppPath** for a row that was
+measured or derived with C++ in the path: that row is re-measured on
+the Rust path before anything is derived from it. The type refuses
+the value; the prose records the debt.
+
+**When it is re-done.** The slice 3 cutover (PR-3) moves dialing only.
+Stem forwarding, fluff, the flush and the embargo stay in C++
+(`levin_notify.cpp`) until **RD**. So dial pacing and handshake timing
+are measured after PR-3; privacy timing is measured once, after RD.
+Measuring either on the C++ path now produces a number this register
+would label `CppPath` and nothing could consume. RD closes only when
+every `CppPath` row below that touches relay timing has a `RustPath`
+measurement (`P2P_3_IMPLEMENTATION_ROUND.md` §4.2).
+
+This section mints no identifier family. A value whose basis cannot be
+established from its provenance is `Assumption`, with the reason in the
+row. Pins below were read at `98fbd20acb`.
+
+| Value | Where it lives | Basis | What consumes it | Re-measured when, where |
+| --- | --- | --- | --- | --- |
+| Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
+| Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
+| `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **CppPath.** The 0 says a stem forward is dispatched at once on the C++ zone strand (`dandelionpp_notify`). That is a claim about `levin_notify.cpp`, not about the Rust `Driver`. The type cannot refuse an omitted term, so it is carried here as a stated omission | `time_between_hop_ms`, through the omission | After RD, on the Rust path: the `Driver`'s decision-to-write span under load. D5's leg 4 (timer lateness, `P2P_TRANSPORT_LAYER.md`) is that instrument once the Rust `Driver` runs; its interim asio run is itself `CppPath` |
+| Verification floor: 124.5 ms (1 input, genesis), 399.2 ms (8, genesis); 143.3 and 791.9 ms at depth 7 | `verify_cost.rs` `SPEC_VERIFY_COST`, cells at `:349` to `:353` | **RustPath.** The Rust verifier on the Pi 4 (`Provenance::MeasuredPi4`, §85.3). The depth-7 cells are `TreeBasis::SynthesizedProjection`, a prior against a synthesized tree (§81.2), and 44 of the 48 cells are unpopulated in-tree (FOLLOWUPS, "populate the 48-cell Pi verification surface") | `adopted_hop_ms` (the modal cell is the hop's floor) | Not by RD. §81.3's schedule: re-measure on the spec machine against the actual tree as depth grows, the projection as the prior |
+| `time_between_hop_ms`, 175 ms clearnet, 1750 ms Tor | `params.rs` `DandelionParams::adopted_for_transit_ms`; the field is a `DerivationMs` | **Derived**: RustPath verification plus Assumption transit, plus the CppPath scheduling term above as an omission. `adopted_hop_ms_with_transit` returns a `DerivationMs` with the weakest of its inputs (`AdmissibleBasis`: Assumption, then Model, then RustPath; `VERIFICATION_FLOOR_BASIS` is RustPath), so the adopted hop reads `Assumption`. Outside the crate a value is built only by `assumption`, `model`, or `rust_path`; `derive` is crate-private, held by a `compile_fail,E0624` doctest. `DandelionParams::inherited` stores `INHERITED_HOP` (175 ms, `DerivationMs::assumption`) directly | `EmbargoTimer::adopted` | Re-derived when RD lands the scheduling term; §94.10's two-commit procedure (input first, pins second) |
+| `fluff_return_ms`, 3250 ms | `params.rs` `FLUFF_RETURN` (`DerivationMs::model`) | **Model.** F-7's transit-free p90 first passage at degree 12, `FloodReach::OutboundOnly`, provisional under §96 item 2. The C++ transports the flush today, but the number is the instrument's, not a reading of that transport. The value carries the basis | The embargo derivation (`F′`); `ADOPTED_PROPAGATION_TIMEOUT_SECS` | Not re-run as a model. Its operational replacement is §96 item 2, on the Rust path after RD (a Tor-return arm and a clearnet peer). The model re-run with `EveryPeer` reach and Tor transit is the FOLLOWUPS row that item names |
+| Flush averages: `FLUFF_AVERAGE_IN_SECS` 5, `FLUFF_AVERAGE_OUT_QUARTER_SECS` 10, `FLUFF_AVERAGE_IN_QUARTER_SECS` 20 | `params.rs:597` to `:603` | **Assumption** for the parameters: inherited from the paper's implementation, never derived for Shekyl. The **realised** flush distribution (decision to bytes on the wire) is implementation timing and is **CppPath**: `levin_notify.cpp` transports every flush today | `FluffScheduler` (`DandelionParams::inherited`), the flood model's flush draw | The parameters are parameters and are not measured. The realised distribution is measured after RD on the Rust path, and compared with the drawn one |
+| Dandelion++ epoch: `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` 10 min, `EPOCH_RANGE` 30 s, `STEMS` 2 | `src/cryptonote_config.h:115` to `:117`, read by `public_zone_params()` in `levin_notify.cpp`; mirrored by `DandelionParams::inherited` | **Assumption.** The paper's parameters, inherited. Epoch length is a privacy parameter (§23), not a reading | `EpochScheduler`, `StemMap` width | Not measured. Reopened by a design round, not by a run |
+| Embargo tick, `DEFAULT_EMBARGO_TICK_MILLIS` 250 | `schedule.rs:435` | **Assumption.** A discretisation choice argued on instant preemption; §94.10 says the step-density argument is its own round | `derive_embargo` | Not a measurement. §94.10's tick round |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2297 s | `schedule.rs:473` | **Derived** from the Tor transit row, the hop row and `fluff_return_ms`: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
+| `INHERITED_EMBARGO_SECS`, 39 s | `params.rs:486` | **Assumption.** The inherited daemon's `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE`, kept as the records-was the tests pin against | Tests only: `adopted_params_change_provenance_not_behaviour` and the FFI's "not the inherited 39 s" assertion. No production consumer | Not measured; it is the number F-1 replaced |
+| Carrier cadence: `NOISE_MIN_DELAY_MS` 3333, `NOISE_DELAY_JITTER_MS` 3334, `MEAN_CADENCE_MS` 5000 | `params/carrier.rs:136`, `:178`, `:189` | **Derived** from the 16 KiB/s bandwidth ceiling, which is a ruling (`COVER_TRAFFIC_RESTORATION.md` §2.8, §3.1), so **Assumption**-based. The realised cadence is **CppPath**: C++ transports each window | `NoiseCadence`, the carrier schedule, behind `set_carrier_development` (off in every shipped build) | §3.1c's budget-versus-actual reading, after RD on the Rust path, development flag only |
+| Connector deadlines (`transport_spans`): clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s; Tor dial 9.1 s, gap 2.6 s | `src/p2p/net_node.inl:3525` to `:3529`; D9 (`P2P_TRANSPORT_LAYER.md`, 2026-09-30) and `docs/benchmarks/p2p_cutover_crossbuild_20260929.md` | **CppPath.** The distributions were taken with the C++ dial path in front (`idle_worker` on the two-worker io pool, the starvation defect the dialer brief records) and the C++ Levin handshake inside the gap. The 700 ms GEO-satellite RTT ceiling in the clearnet form is an **Assumption**, stated. **Ruled 2026-10-08 (Rick):** the clearnet gap of 1.430 s and the Tor gap of 2.6 s are the outbound handshake's only clock, armed by the connector | The connector's armed deadlines (`shekyl_zone_params`), the shutdown wait; the dialer's handshake clock | After PR-3, on the Rust dialer, per connector, under D9's measurement conditions; into this register |
+| Levin invoke timer, `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` 5000 ms | `src/cryptonote_config.h:199`; armed at `net_node.inl:1414` inside `do_handshake_with_peer` and at `:2696` inside `try_get_support_flags` | **Assumption.** Inherited. **Not the dialer's clock (Rick, 2026-10-08):** the outbound handshake's only clock is each connector's transport gap, the D9 row above | The C++ outbound handshake invoke; the support-flags invoke | Not re-measured. The outbound arm goes with `do_handshake_with_peer` at PR-3; the inbound support-flags arm stays until slice 4 |
+| Dial wake spacing | No code yet. Ruled 2026-09-25 as a jittered per-dial wake (`P2P_3_IMPLEMENTATION_ROUND.md` §4.2 slice 3, PWD-B2's per-connection shape). Today's pace is the C++ `m_connections_maker_interval` idle maker and the 60 s housekeeping timer (`net_node.h`) | **Assumption.** The shape is ruled; no number is measured | The fill (dialer brief) | After PR-3, on the Rust dialer: dial pacing, into this register |
+| In-flight dial bound | No code yet. Interim one dial per connector (dialer brief, 2026-10-08) | **Assumption.** The fill is one dial per wake, so the interim needs no measurement | The fill | After PR-3, on the Rust dialer: measured and raised, into this register |
+| D5 thread budgets: transport `workers` 2, `blocking` 1; `executor_workers` 2 | `net_node.inl:3532` to `:3533` and `:1236`; D5 (`P2P_TRANSPORT_LAYER.md`) | **Assumption.** Each is a placeholder "the run record replaces". None of D5's four legs is recorded yet | `shekyl_zone_params`, the asio executor pool | D5's legs on the floor device. Legs 1 to 3 time the Rust transport and are RustPath when run; leg 4 on the interim asio executor is CppPath and is re-run on the Rust `Driver` after the timing-engine round |
+
+*Records-was, folded here from `FOLLOWUPS.md` 2026-10-08:* a row asked
+for a derivation check that `fluff_return_ms` equals the max over
+measured zones. That check was zone-keyed, and it would have asserted
+that a provisional, transit-free model value equals a transit, encoding
+the provisional number as truth. §96 item 2 carries what that row
+wanted: the operational replacement for 3250 ms, on the Rust path.

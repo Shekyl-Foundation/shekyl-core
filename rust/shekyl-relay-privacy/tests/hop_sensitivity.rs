@@ -28,12 +28,11 @@
 //! clearnet-parity hop and more above it — so a global would under-provision
 //! it, the privacy-losing direction. That is why the second test below is now
 //! about *separateness* rather than headroom.
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-use shekyl_relay_privacy::verify_cost::{
-    ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-};
+use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
 
 /// The adopted embargo, in whole seconds, for a given parameter set.
 ///
@@ -60,7 +59,7 @@ fn hop_sensitivity() {
     let base_s = embargo_secs(&DandelionParams::inherited());
     for hop in [175_u32, 300, 500, 875, 1050, 1750] {
         let mut p = DandelionParams::inherited();
-        p.time_between_hop_ms = hop;
+        p.time_between_hop_ms = DerivationMs::model(hop);
         let s = embargo_secs(&p);
         println!(
             "  {hop:>6}   {s:>8}   {:>+7.0}%{}",
@@ -135,8 +134,8 @@ fn hop_sensitivity() {
 /// edit collapsing them back to one global would break.
 #[test]
 fn the_anonymity_embargo_is_derived_from_its_own_hop() {
-    let clearnet = DandelionParams::adopted_for_transit_ms(ADOPTED_TRANSIT_ASSUMPTION_MS);
-    let anon = DandelionParams::adopted_for_transit_ms(ANON_ZONE_TRANSIT_ASSUMPTION_MS);
+    let clearnet = DandelionParams::adopted_for_transit_ms(ADOPTED_TRANSIT);
+    let anon = DandelionParams::adopted_for_transit_ms(ANON_ZONE_TRANSIT);
 
     let clearnet_s = embargo_secs(&clearnet);
     let anon_s = embargo_secs(&anon);
@@ -144,11 +143,11 @@ fn the_anonymity_embargo_is_derived_from_its_own_hop() {
     println!("\n  zone       hop_ms   embargo(s)");
     println!(
         "  clearnet   {:>6}   {clearnet_s:>10}",
-        clearnet.time_between_hop_ms
+        clearnet.time_between_hop_ms.ms()
     );
     println!(
         "  anon       {:>6}   {anon_s:>10}",
-        anon.time_between_hop_ms
+        anon.time_between_hop_ms.ms()
     );
 
     // Nothing here sets `fluff_probability_pct`. Both sides read the shipped
@@ -161,7 +160,7 @@ fn the_anonymity_embargo_is_derived_from_its_own_hop() {
     );
 
     assert!(
-        anon.time_between_hop_ms > clearnet.time_between_hop_ms,
+        anon.time_between_hop_ms.ms() > clearnet.time_between_hop_ms.ms(),
         "the anonymity hop must exceed clearnet's — a rendezvous path is six \
          relays where clearnet is one direct connection"
     );

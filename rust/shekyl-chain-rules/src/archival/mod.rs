@@ -109,7 +109,8 @@ pub(crate) use arm::BondArm;
 pub(crate) use close::{accrue, gather_epoch_snapshot, recorded_credits, EpochSnapshot};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
-    Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
+    Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
+    Slash,
 };
 pub(crate) use slash::apply_slash;
 
@@ -117,7 +118,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
-use shekyl_types::archival::{BondRecord, Holdings, PassCount};
+use shekyl_types::archival::{BondRecord, Holdings, SettlementRow};
 use shekyl_types::{BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -219,6 +220,9 @@ struct Transition {
     epoch: SettlementEpoch,
     posts: BTreeMap<PCanonicalId, Post>,
     serve_credits: Vec<ServeCreditKey>,
+    /// The rows this block's slash pass has settled, keyed in the order
+    /// the delta carries them: epoch, then persona, then shard.
+    settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
     slashes: Vec<Slash>,
     slash_watermark: Option<SettlementEpoch>,
 }
@@ -231,6 +235,7 @@ impl Transition {
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
             serve_credits: Vec::new(),
+            settled: BTreeMap::new(),
             slashes: Vec::new(),
             slash_watermark: None,
         }
@@ -297,28 +302,6 @@ impl Transition {
             .collect())
     }
 
-    /// Whether `(persona, shard, epoch)` has a pass — recorded, or earned
-    /// by this block (the C++ wrote the block's credits before the scan
-    /// read them).
-    fn passed<'id, V: ChainView<'id>>(
-        &self,
-        view: &V,
-        persona: PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<bool, ViewRead<V::Fault>> {
-        if self
-            .serve_credits
-            .iter()
-            .any(|k| k.persona == persona && k.shard == shard && k.epoch == epoch)
-        {
-            return Ok(true);
-        }
-        view.pass_count(&persona, shard, epoch)
-            .map(PassCount::any)
-            .map_err(ViewRead::View)
-    }
-
     fn into_delta(self, accrual: Accrual, close: Option<EpochClose>) -> ArchivalDelta {
         let records = self
             .posts
@@ -331,9 +314,20 @@ impl Transition {
                 })
             })
             .collect();
+        let settlements = self
+            .settled
+            .into_iter()
+            .map(|((epoch, persona, shard), row)| Settlement {
+                persona,
+                shard,
+                epoch,
+                row,
+            })
+            .collect();
         ArchivalDelta::new(
             records,
             self.serve_credits,
+            settlements,
             self.slashes,
             self.slash_watermark,
             accrual,

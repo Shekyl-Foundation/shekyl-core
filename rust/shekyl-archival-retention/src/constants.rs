@@ -22,12 +22,20 @@
 /// is not a parameter a caller supplies, and the urn and the settlement
 /// threshold below cannot be given different values.
 ///
-/// Jointly pinned with [`crate::SERVE_THRESHOLD_PASSES`] — 2-of-3 is one
-/// decision, and `attestation.rs` const-asserts the two properties that make
-/// it one: the threshold must be reachable, and it must be a strict majority.
-/// Re-pinning either requires re-running §3's derivation, the `(m, n)` window
-/// re-pin, and the economics-sim arithmetic that scales with it.
+/// Jointly pinned with settlement's
+/// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS): the urn's
+/// target is the number of draws settlement counts, and the assert below
+/// keeps them one number while both exist. The threshold's own two
+/// properties — reachable, and a strict majority — are asserted beside it
+/// in `shekyl_types::archival`. Re-pinning requires re-running §3's
+/// derivation, the `(m, n)` window re-pin, and the economics-sim arithmetic
+/// that scales with it.
 pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
+
+const _: () = assert!(
+    CHALLENGES_PER_PAIR_PER_EPOCH as usize == shekyl_types::archival::COUNTED_DRAWS,
+    "the urn's per-pair target and the draws settlement counts are one decision"
+);
 
 /// `k` — the slash grace after `H_close`, **in settlement epochs**: the
 /// slash fold for epoch `E` runs at the first block strictly above

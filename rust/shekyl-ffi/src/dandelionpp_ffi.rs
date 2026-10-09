@@ -54,12 +54,13 @@ fn connector_embargo() -> &'static ConnectorEmbargo {
         let by_index = shekyl_relay::ConnectorId::ALL
             .iter()
             .map(|connector| {
-                shekyl_relay::measured_transit_ms(*connector)
-                    .map(|ms| EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms)))
+                shekyl_relay::transit_ms(*connector).map(|transit| {
+                    EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit))
+                })
             })
             .collect();
         let longest = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-            shekyl_relay::longest_measured_transit(),
+            shekyl_relay::longest_transit(),
         ));
         ConnectorEmbargo { by_index, longest }
     })
@@ -67,9 +68,9 @@ fn connector_embargo() -> &'static ConnectorEmbargo {
 
 /// The embargo for the connector a stem was forwarded on.
 ///
-/// A known connector with measured transit uses that window. An unknown
+/// A known connector with a declared transit uses that window. An unknown
 /// byte, including `0xff`, or a connector with no measurement, uses the
-/// longest measured transit. That is the fail-safe: a short window would
+/// longest declared transit. That is the fail-safe: a short window would
 /// fluff a stem before an honest successor is allowed to re-relay.
 fn embargo_for_connector(connector: u8) -> &'static EmbargoTimer {
     let table = connector_embargo();
@@ -81,7 +82,7 @@ fn embargo_for_connector(connector: u8) -> &'static EmbargoTimer {
 }
 
 /// One embargo duration in seconds, drawn from the forwarded connector's
-/// measured transit. See [`embargo_for_connector`].
+/// declared transit. See [`embargo_for_connector`].
 #[no_mangle]
 pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64 {
     let mut rng = SecureRelayRng;
@@ -123,15 +124,14 @@ pub extern "C" fn shekyl_dandelionpp_embargo_draw_seconds_for_connector(connecto
 /// is the wallet asking whether a transaction is still in flight; §89.6
 /// records it.
 ///
-/// The zone-keyed draw is gone. This returns the longest measured transit's
+/// The zone-keyed draw is gone. This returns the longest declared transit's
 /// wait: the wallet does not know which connector carried the transaction, and
 /// a shorter wait would un-reserve a live spend.
 #[no_mangle]
 pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
     static TIMEOUT_SECS: OnceLock<u64> = OnceLock::new();
     *TIMEOUT_SECS.get_or_init(|| {
-        let params =
-            DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_measured_transit());
+        let params = DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_transit());
         u64::from(
             EmbargoTimer::adopted(&params).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
         )
@@ -160,7 +160,7 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 /// [`shekyl_relay_privacy::params::origin_retry_one_in`] is
 /// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`: the
 /// origin asks *"has my stem probably completed?"* at the confidence the
-/// network already uses to answer it. On the longest measured transit that is
+/// network already uses to answer it. On the longest declared transit that is
 /// the 1-in-10 survival quantile, **1148 s**, against a 346 s median — so the
 /// retry no longer fires while most embargoes along its own stem are running,
 /// which the shipped 300 s did.
@@ -179,8 +179,8 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 ///
 /// The pool does not store the connector that carried the stem, so this
 /// call does not name one. The wait is the 1-in-10 quantile of
-/// [`shekyl_relay::longest_measured_transit`]: unknown origin connector,
-/// so the conservative wait. A connector measured longer than today's
+/// [`shekyl_relay::longest_transit`]: unknown origin connector,
+/// so the conservative wait. A connector declared longer than today's
 /// longest raises the interval without a new argument.
 /// # Cost
 ///
@@ -192,8 +192,7 @@ pub extern "C" fn shekyl_dandelionpp_propagation_timeout_seconds() -> u64 {
 pub extern "C" fn shekyl_dandelionpp_origin_retry_interval_seconds() -> u64 {
     static RETRY_SECS: OnceLock<u64> = OnceLock::new();
     *RETRY_SECS.get_or_init(|| {
-        let params =
-            DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_measured_transit());
+        let params = DandelionParams::adopted_for_transit_ms(shekyl_relay::longest_transit());
         u64::from(
             EmbargoTimer::adopted(&params)
                 .judge_failed_after_secs(shekyl_relay_privacy::params::origin_retry_one_in()),
@@ -229,7 +228,7 @@ mod tests {
     /// The defect this constant exists to fix, asserted rather than described.
     ///
     /// What edit reds it: move the exported quantile to or below the longest
-    /// measured transit's median. Concretely, DECREASE
+    /// declared transit's median. Concretely, DECREASE
     /// [`shekyl_relay_privacy::params::origin_retry_one_in`] — at `one_in == 2`
     /// the export IS the median and `retry > median` fails — or shrink the
     /// adopted timer.
@@ -249,22 +248,22 @@ mod tests {
     /// tests are not substitutes: this one says the VALUE is right, that one
     /// says the value is USED.
     #[test]
-    fn the_origin_retry_clears_the_longest_measured_embargo_median() {
+    fn the_origin_retry_clears_the_longest_declared_embargo_median() {
         let retry = shekyl_dandelionpp_origin_retry_interval_seconds();
         let median = u64::from(
             EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-                shekyl_relay::longest_measured_transit(),
+                shekyl_relay::longest_transit(),
             ))
             .judge_failed_after_secs(2),
         );
         assert!(
             retry > median,
-            "an origin must not re-emit inside the longest measured embargo median: \
+            "an origin must not re-emit inside the longest declared embargo median: \
              interval {retry} s against median {median} s"
         );
         assert_eq!(
             retry, 1_148,
-            "the 1-in-10 quantile of the longest measured transit"
+            "the 1-in-10 quantile of the longest declared transit"
         );
         assert!(
             retry > 300,
@@ -306,24 +305,24 @@ mod tests {
     }
 
     /// The pool does not store a connector, so the retry is the longest
-    /// measured transit and is at least as long as every measured connector.
+    /// declared transit and is at least as long as every connector with one.
     #[test]
-    fn an_unknown_origin_waits_the_longest_measured_transit() {
+    fn an_unknown_origin_waits_the_longest_declared_transit() {
         let retry = shekyl_dandelionpp_origin_retry_interval_seconds();
         let one_in = origin_retry_one_in();
         let longest = u64::from(
             EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-                shekyl_relay::longest_measured_transit(),
+                shekyl_relay::longest_transit(),
             ))
             .judge_failed_after_secs(one_in),
         );
         assert_eq!(retry, longest);
         for connector in shekyl_relay::ConnectorId::ALL {
-            let Some(ms) = shekyl_relay::measured_transit_ms(*connector) else {
+            let Some(transit) = shekyl_relay::transit_ms(*connector) else {
                 continue;
             };
             let secs = u64::from(
-                EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms))
+                EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit))
                     .judge_failed_after_secs(one_in),
             );
             assert!(
@@ -360,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn the_connector_embargo_follows_measured_transit() {
+    fn the_connector_embargo_follows_declared_transit() {
         use shekyl_relay::ConnectorId;
         let clear = u8::try_from(ConnectorId::Clearnet.index()).expect("index fits");
         let tor = u8::try_from(ConnectorId::Tor.index()).expect("index fits");
@@ -421,16 +420,16 @@ mod tests {
             "FFI timeout must equal ADOPTED_PROPAGATION_TIMEOUT_SECS ({ADOPTED_PROPAGATION_TIMEOUT_SECS})"
         );
 
-        // Longest measured transit, not clearnet: the wallet cannot know
+        // Longest declared transit, not clearnet: the wallet cannot know
         // which connector carried the transaction, so the one wait it gets
-        // must clear every measured transit. Under-waiting un-reserves the
+        // must clear every declared transit. Under-waiting un-reserves the
         // inputs of a live transaction (§89.6).
         for connector in shekyl_relay::ConnectorId::ALL {
-            let Some(ms) = shekyl_relay::measured_transit_ms(*connector) else {
+            let Some(transit) = shekyl_relay::transit_ms(*connector) else {
                 continue;
             };
             let secs = u64::from(
-                EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(ms))
+                EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit))
                     .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
             );
             assert!(

@@ -369,7 +369,9 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
   derived denominator, not a pass multiset. Pass-priority retires.
   *(The rule to build is the specification's §9.3: three counted draws
   selected at close, fewer than three issued is NonObservation. What
-  follows is `settle_epoch` as landed.)*
+  follows is `settle_epoch` as it landed; it was deleted under `SO-D10e`,
+  and that rule is built as `settlement_select::settle_pair` with
+  `SettlementRow::settle`.)*
   **The threshold sub-decision is RATIFIED (2026-08-11): absolute-2.**
   `settle_epoch(passes, issued)`, three-valued: Served iff passes ≥ 2,
   full stop; issued < 2 settles **NonObservation** (a pair the urn could
@@ -389,7 +391,8 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
   tolerates short issuance by design.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
-  design.
+  design. **UPDATE 2026-10-08 (`SO-D10e`):** `EpochSettlement` is deleted
+  whole; the outcome type is `shekyl_types::archival::SettlementOutcome`.
 - `CHALLENGES_PER_EPOCH = 1` — **DONE (2026-08-11), and the framing here
   was wrong in a way worth recording.** This bullet read as though λ were
   *gated* on the (m, n) re-derivation; it is not. λ = 3 is ruled by §3,
@@ -1237,7 +1240,9 @@ the round kept trying to add forensics underneath it.
   verifies the *claimant's* signature on the vin; no attestation record or
   countersignature appears anywhere in the signature. (2) The settlement
   fold is structurally incapable of reaching one — `settle_epoch` takes
-  `&[AttestationKind]` (the §4 type seam). (3) LMDB-side pruning is
+  `&[AttestationKind]` (the §4 type seam). **UPDATE 2026-10-08 (`SO-D10e`):**
+  `settle_epoch` is deleted; `settle_pair` takes `&[IssuedDraw]`, a
+  per-draw `passed` flag and no record, so the layer holds. (3) LMDB-side pruning is
   already landed: `delete_archival_attestation_witness_before_height`
   drops the admission-only `r` + signatures beyond the reorg window, its
   comment naming the seam ("Settlement reads the kept tx_extra headers,
@@ -1540,7 +1545,11 @@ settlement writer (item 9's schema is genuinely open).
   timing is superseded, the writer runs inside the slash scheduler's per-epoch
   pass. What remains is **`SO-D8`**: `set_archival_settlement` has the table,
   the value encoding and the revert, and **no production caller**. The hold is
-  a wiring cutover, not an open schema question.
+  a wiring cutover, not an open schema question. **UPDATE 2026-10-08 (`SO-D10e`):**
+  `set_archival_settlement` and the C++ value encoding are deleted; the
+  writer is the Rust slash pass's, `ARCHIVAL_SETTLEMENT_WRITER.md` §14
+  (`SO-D10`), and is wired. What it waits on is a block path that issues
+  a draw: until the secret draw lands the issued-draw index is empty.
 
 **Recorded rather than edited down to the two survivors**, because the list's
 own framing is the useful part: it named a hold whose blocker was *the format
@@ -1554,6 +1563,10 @@ sitting," §7.1 then ratified absolute-2 (2026-08-11), and the fold shipped
 as `settle_epoch(passes, issued)` in `attestation.rs`. Recorded rather than
 silently deleted, because the entry's own framing — a hold whose blocker was
 a *decision*, not a design round — is what let it clear in one sitting.
+**UPDATE 2026-10-08 (`SO-D10e`):** that fold is deleted. Its replacement is
+`settlement_select::settle_pair`: passes counted among three selected draws,
+NonObservation below 3 issued, Served at 2 (`ARCHIVAL_SETTLEMENT_WRITER.md`
+§14).
 
 ### 9.5.1 Two inputs the assignment cutover acquired elsewhere (2026-08-24)
 
@@ -1889,6 +1902,10 @@ reading it, which is what the reopen criterion asks. **The ruling names its
 dependency: it stands on `J9` landing with SO-D8 Slice C.** Until then
 nothing reaches settlement (`set_archival_settlement` has no production
 caller, `FOLLOWUPS.md` CEN-L8 row), so nothing is exposed in the interval.
+**UPDATE 2026-10-08 (`SO-D10e`):** `set_archival_settlement` is deleted; the C++
+store has no settlement writer. The Rust slash pass writes settlement rows,
+but no block path issues a draw yet, so it has nothing to settle and the
+interval claim holds.
 The reopen criterion above is unchanged: a second production pinner, a
 test-support constructor that escapes `#[cfg(test)]`, or an FFI surface that
 accepts a reported set from outside the process each re-open this item at

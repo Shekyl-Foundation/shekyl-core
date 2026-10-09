@@ -13,26 +13,8 @@
 //! that plan does not match on the connector.
 
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::verify_cost::{
-    ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-};
-
-/// A transit assumption that is a whole number of milliseconds.
-///
-/// The declaration stores `u32`. The assumption is `f64` because the
-/// embargo math is. The assert is the cast being exact.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless,
-    clippy::float_cmp
-)]
-const fn whole_ms(ms: f64) -> u32 {
-    let whole = ms as u32;
-    assert!(ms == whole as f64);
-    whole
-}
+use shekyl_relay_privacy::basis::DerivationMs;
+use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
 
 /// A column of the declaration table, including the column that has no
 /// connector yet.
@@ -111,6 +93,11 @@ connectors! {
 }
 
 /// An assessed value, or a cell nobody has assessed.
+///
+/// Assessed means someone wrote the cell down. It does not mean measured.
+/// A cell whose value has a basis carries it in the value
+/// ([`Declaration::transit_ms`] is a [`DerivationMs`]); a cell without one
+/// is a declaration of what the network provides, not a reading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Assessment<T> {
     /// Someone has written down what this network does.
@@ -311,8 +298,9 @@ pub struct Declaration {
     inbound_identity: Assessment<InboundIdentity>,
     deadline_inputs: Assessment<DeadlineInput>,
     rendezvous: Assessment<Rendezvous>,
-    /// Milliseconds. Not assessed means the relay does not stem here.
-    measured_transit_ms: Assessment<u32>,
+    /// Whole milliseconds with their basis. Not assessed means the relay
+    /// does not stem here.
+    transit_ms: Assessment<DerivationMs>,
     cover_class: Assessment<CoverClass>,
 }
 
@@ -387,13 +375,17 @@ impl Declaration {
     pub const fn rendezvous(self) -> Assessment<Rendezvous> {
         self.rendezvous
     }
-    /// Measured transit, in milliseconds.
+    /// Transit, in whole milliseconds, with its basis.
     ///
-    /// [`Assessment::NotAssessed`] means the relay does not stem on this
-    /// connector.
+    /// [`Assessment::Assessed`] means someone wrote the number down. It does
+    /// not mean measured: the value's [`DerivationMs::basis`] says what it
+    /// is, and both built columns carry an assumption
+    /// (`DAEMON_RELAY_PRIVACY.md` §97). [`Assessment::NotAssessed`] means
+    /// the relay does not stem on this connector.
+    /// *Records-was: this cell was `measured_transit_ms`, a bare `u32`.*
     #[must_use]
-    pub const fn measured_transit_ms(self) -> Assessment<u32> {
-        self.measured_transit_ms
+    pub const fn transit_ms(self) -> Assessment<DerivationMs> {
+        self.transit_ms
     }
     /// The relay's cover ruling recorded on this column.
     ///
@@ -413,7 +405,7 @@ impl Declaration {
     #[must_use]
     pub const fn synthetic(
         address_hidden_from_peer: Assessment<YesNo>,
-        measured_transit_ms: Assessment<u32>,
+        transit_ms: Assessment<DerivationMs>,
         cover_class: Assessment<CoverClass>,
     ) -> Self {
         Self {
@@ -431,7 +423,7 @@ impl Declaration {
             inbound_identity: Assessment::NotAssessed,
             deadline_inputs: Assessment::NotAssessed,
             rendezvous: Assessment::NotAssessed,
-            measured_transit_ms,
+            transit_ms,
             cover_class,
         }
     }
@@ -455,9 +447,12 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tcp),
             inbound_identity: Assessment::Assessed(InboundIdentity::SocketAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
-            // The numbers are `verify_cost`'s. This column does not keep a second copy.
+            // The number and its basis are `verify_cost`'s. This column does
+            // not keep a second copy. Clearnet's 50 ms is an assumption
+            // carried forward from §21 and labelled at §86.2; it has never
+            // been measured on either path.
             rendezvous: Assessment::Assessed(Rendezvous::NotApplicable),
-            measured_transit_ms: Assessment::Assessed(whole_ms(ADOPTED_TRANSIT_ASSUMPTION_MS)),
+            transit_ms: Assessment::Assessed(ADOPTED_TRANSIT),
             cover_class: Assessment::Assessed(CoverClass::OpenLink),
         },
         NetworkColumn::Tor => Declaration {
@@ -474,9 +469,11 @@ pub const fn declaration(which: NetworkColumn) -> Declaration {
             stream: Assessment::Assessed(StreamKind::Tor),
             inbound_identity: Assessment::Assessed(InboundIdentity::ZoneNoAddress),
             deadline_inputs: Assessment::Assessed(DeadlineInput::MeasuredPerConnector),
-            // The numbers are `verify_cost`'s. This column does not keep a second copy.
+            // The number and its basis are `verify_cost`'s. This column does
+            // not keep a second copy. Tor's 1625 ms is §63.2's upper bound,
+            // taken on faith (§89.5).
             rendezvous: Assessment::Assessed(Rendezvous::Enabled),
-            measured_transit_ms: Assessment::Assessed(whole_ms(ANON_ZONE_TRANSIT_ASSUMPTION_MS)),
+            transit_ms: Assessment::Assessed(ANON_ZONE_TRANSIT),
             cover_class: Assessment::Assessed(CoverClass::Volume),
         },
     }
@@ -574,7 +571,7 @@ mod tests {
                 Rendezvous::NotApplicable => "not applicable",
                 Rendezvous::Enabled => "enabled",
             }),
-            cell(column.measured_transit_ms(), |_| "assessed milliseconds"),
+            cell(column.transit_ms(), |_| "assessed milliseconds"),
             cell(column.cover_class(), |value| match value {
                 CoverClass::OpenLink => "substitution envelope",
                 CoverClass::Volume => "volume cover",
