@@ -58,6 +58,7 @@
 use shekyl_archival_retention::{
     ARCHIVAL_REORG_DEPTH_BLOCKS, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
+use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockCount, BlockHeight};
 
 /// The genesis rule set's reorg cap: the deepest reorganisation a node on
@@ -87,18 +88,68 @@ const _: () = assert!(
 /// and reorg cap**.
 ///
 /// Minted here because `D_max` lives here and `k`, `n` and `SEB` live in
-/// `shekyl-archival-retention`. Its consumer is the slash log's retirement
-/// site — `write_slashes`' batch in `shekyl-chain-store` (the writer landed
-/// 2026-09-30, DRS-E4 commit 5b; the other six journals dissolved into
-/// `undo_log`, which S-PRUNE retires at `D_max`) — and that assertion is
-/// what remains to build: `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`. Until it
-/// lands this function has no caller. `shekyl_archival_failure_window_params`
-/// is *not* this — it returns the m-of-n `(m, n, serve_budget)`. A session
-/// running a shortened schedule (the store's `Horizons`) uses
-/// [`journal_horizon_under`] with its own pair.
+/// `shekyl-archival-retention`. Of the seven journals only the slash log
+/// survived as a table (the other six dissolved into `undo_log`, which
+/// S-PRUNE retires at `D_max`), and its two sites take the expression as
+/// a [`SlashLogFloor`] under the rule set in hand: the slash pass's read
+/// (`SLK-Q1`, SI-26) and the boundary batch's retirement. This production
+/// form is the expression on the genesis pair for documentation and tests;
+/// `shekyl_archival_failure_window_params` is *not* this — it returns the
+/// m-of-n `(m, n, serve_budget)`.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
     journal_horizon_under(tip, SETTLEMENT_EPOCH_BLOCKS, D_MAX)
+}
+
+/// The slash log's retirement floor at a tip, under a schedule and a reorg
+/// cap: rows **at or above** it are retained, rows below it may be retired
+/// (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`). `None` inside while
+/// the chain is shorter than the window — no row has aged out yet.
+///
+/// The value of [`journal_horizon_under`], typed so the two sites that hold
+/// it cannot take a bare height for it (`05-system-thinking`: a quantity
+/// two crates need is a type). Both sites compute it from the **rule set in
+/// hand** — the pass from the set the archival transition runs, the prune
+/// from the set `connect` holds — never from a store setting (`SLK-2`: the
+/// horizon is a consensus expression; everything it reads comes from the
+/// consensus side). The store compares against it and does not source it.
+///
+/// The pass computes it at the connecting height, the floor this connect's
+/// own boundary would retire below; the retirement that actually ran is at
+/// the last boundary at or below it, whose floor is no higher, so the
+/// read's check is at least as strict as what the table has undergone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlashLogFloor(Option<BlockHeight>);
+
+impl SlashLogFloor {
+    /// No row retired: the floor of a chain shorter than the window, and
+    /// of a read whose table no prune has touched.
+    pub const NONE: Self = Self(None);
+
+    /// The floor at `tip` under `epoch_blocks` per epoch and `reorg_cap`:
+    /// `tip − ((k + n)·SEB + reorg_cap)`.
+    #[must_use]
+    pub fn under(
+        tip: BlockHeight,
+        epoch_blocks: SettlementEpochBlocks,
+        reorg_cap: BlockCount,
+    ) -> Self {
+        Self(journal_horizon_under(tip, epoch_blocks.get(), reorg_cap))
+    }
+
+    /// The lowest retained height, or `None` while nothing is retired.
+    #[must_use]
+    pub const fn height(self) -> Option<BlockHeight> {
+        self.0
+    }
+
+    /// The floor, when a row at `height` is below it — retired, or
+    /// retirable by the next boundary. `None` while there is no floor, and
+    /// for a height at or above it.
+    #[must_use]
+    pub fn retiring(self, height: BlockHeight) -> Option<BlockHeight> {
+        self.0.filter(|floor| height < *floor)
+    }
 }
 
 /// [`journal_horizon`] under a session's schedule: `tip − ((k + n)·SEB +
@@ -175,6 +226,34 @@ mod tests {
             ),
             journal_horizon(BlockHeight::from_raw(short + 3)),
             "the production pair is the one-argument form"
+        );
+    }
+
+    #[test]
+    fn the_floor_is_the_horizon_typed_and_retires_strictly_below_itself() {
+        let epoch = SettlementEpochBlocks::new(100).expect("non-zero");
+        let cap = BlockCount::from_raw(50);
+        let short = (SLASH_GRACE_EPOCHS + u64::from(FAILURE_WINDOW_N)) * 100 + 50;
+        // Under the window: no floor, nothing retires — the same answer as
+        // the constant for a table no prune has touched.
+        let none = SlashLogFloor::under(BlockHeight::from_raw(short - 1), epoch, cap);
+        assert_eq!(none, SlashLogFloor::NONE);
+        assert_eq!(none.height(), None);
+        assert_eq!(none.retiring(BlockHeight::ZERO), None);
+        // At the window + 3 the floor is 3: rows at 3 are retained, rows at
+        // 2 are retired — the retirement's range is `..(floor, 0)` and the
+        // read's soundness is `start ≥ floor`, both read off this one edge.
+        let floor = SlashLogFloor::under(BlockHeight::from_raw(short + 3), epoch, cap);
+        assert_eq!(floor.height(), Some(BlockHeight::from_raw(3)));
+        assert_eq!(
+            floor.retiring(BlockHeight::from_raw(2)),
+            Some(BlockHeight::from_raw(3))
+        );
+        assert_eq!(floor.retiring(BlockHeight::from_raw(3)), None);
+        assert_eq!(
+            floor.height(),
+            journal_horizon_under(BlockHeight::from_raw(short + 3), 100, cap),
+            "the type carries the function's value, not a second expression"
         );
     }
 }

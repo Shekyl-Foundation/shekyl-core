@@ -126,6 +126,7 @@ use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, RecordInvariant, ViewRead};
+use crate::reorg::SlashLogFloor;
 use crate::rule_set::RuleSet;
 use crate::rules::Rule;
 use crate::verdict::{Locus, TxSlot, Verdict};
@@ -153,6 +154,10 @@ impl Rule for L7 {
 /// challenge seals, which epoch's deadline `count` passes, whether this
 /// block closes one — is `rule_set.settlement_schedule()`'s (`ARW-15`):
 /// the validator never reads the process-latched schedule the daemon arms.
+/// The slash log's retirement floor the pass reads under is the same
+/// set's — its schedule and its `reorg_cap` ([`SlashLogFloor`], `SLK-Q1`,
+/// `SLK-2`): the horizon is a consensus expression, and this is the
+/// consensus side.
 ///
 /// `Ok(Ok(delta))` records CEN-L7 in `coverage`. `Ok(Err(_))` is a refusal
 /// at an input's locus. `Err(_)` is the view's fault or a [`Corrupt`]
@@ -165,7 +170,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     accrual: AtomicUnits,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<ArchivalDelta>, ViewRead<V::Fault>> {
-    let mut transition = Transition::new(connecting, rule_set.settlement_schedule());
+    let mut transition = Transition::new(connecting, rule_set);
     for (n, tx) in candidate.transactions.iter().enumerate() {
         for (i, input) in tx.prefix.inputs.iter().enumerate() {
             let locus = Locus::Input {
@@ -215,6 +220,9 @@ struct Transition {
     /// The rule set's epoch geometry — every `H_open` / `H_close` /
     /// deadline / close-due read below is this one's.
     schedule: SettlementSchedule,
+    /// The slash log's retirement floor at `connecting` under the same
+    /// rule set — the operand every A2 read hands the store (SI-26).
+    slash_floor: SlashLogFloor,
     /// The epoch `connecting` sits in — the open epoch; the JoinMarket's
     /// join epoch and add epoch; the claim's `current_settled`.
     epoch: SettlementEpoch,
@@ -228,10 +236,12 @@ struct Transition {
 }
 
 impl Transition {
-    fn new(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
+    fn new(connecting: BlockHeight, rule_set: &RuleSet) -> Self {
+        let schedule = rule_set.settlement_schedule();
         Self {
             connecting,
             schedule,
+            slash_floor: SlashLogFloor::under(connecting, schedule.blocks(), rule_set.reorg_cap()),
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
             serve_credits: Vec::new(),

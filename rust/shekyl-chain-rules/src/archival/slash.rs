@@ -325,6 +325,22 @@ impl super::Transition {
     /// The slashes logged against `persona` strictly above `height`: the
     /// recorded ones (A2) and this block's own, which sit at the connecting
     /// height and so are above every height the pass asks about.
+    ///
+    /// The read carries the log's retirement floor under the rule set this
+    /// pass runs (`slash_floor`, `SLK-Q1`), and the store refuses a range
+    /// that starts below it (SI-26) instead of folding a retired range as
+    /// "never slashed". Its operand is independent of the floor — `height`
+    /// is an epoch's open height or a draw's issuing height, neither
+    /// derived from the horizon — so the arm *can* fail where a writer-side
+    /// comparison could not (`SLK-1`). It does not fail on data: every
+    /// height asked about here is inside the settling epoch `E`, which sits
+    /// `(k + 1)` epochs below the connecting height while the floor sits
+    /// `(k + n)` epochs and a reorg cap below it, so the arm is reached only
+    /// by a mis-composed schedule — `SLASH_GRACE_EPOCHS`, `FAILURE_WINDOW_N`,
+    /// the epoch and the cap no longer composing to a window the pass reads
+    /// inside. Like the `h_seal >= self.connecting` guard above, it is the
+    /// observability boundary stated, not a reachable arm: read as input
+    /// validation it is dead, and it is not input validation.
     fn slashed_after<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -332,7 +348,7 @@ impl super::Transition {
         height: BlockHeight,
     ) -> Result<Vec<SlashLogEntry>, ViewRead<V::Fault>> {
         let mut log = view
-            .slash_log_after(&persona, height)
+            .slash_log_after(&persona, height, self.slash_floor)
             .map_err(ViewRead::View)?;
         log.extend(
             self.slashes

@@ -333,8 +333,9 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: crate::SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Infallible> {
-        self.inner.slash_log_after(persona, height)
+        self.inner.slash_log_after(persona, height, floor)
     }
 
     fn last_served_epoch(

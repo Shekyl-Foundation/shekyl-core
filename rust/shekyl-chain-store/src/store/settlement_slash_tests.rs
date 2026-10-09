@@ -34,7 +34,7 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
     assert_eq!(snap.total_burned().expect("read"), AtomicUnits::ZERO);
     for p in ids_in_table_order(chain.personas) {
         assert!(snap
-            .slash_log_after(&p, BlockHeight::from_raw(0))
+            .slash_log_after(&p, BlockHeight::from_raw(0), slash_floor_at(&snap))
             .expect("read")
             .is_empty());
         assert!(snap

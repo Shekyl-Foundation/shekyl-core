@@ -309,6 +309,31 @@ pub enum StoreInvariant {
         /// Which check was observed.
         observed: SettlementFault,
     },
+    /// **SI-26** — the slash log is read only where it is kept. An A2 read
+    /// (`slash_log_after`, rows strictly above `asked`) whose range starts
+    /// below the log's retirement floor would fold a retired range as
+    /// "never slashed" and report a removed shard as held; the store
+    /// refuses it instead of answering (`PDM-Q-F19` — *asserted where the
+    /// scan starts*; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`).
+    ///
+    /// The floor is the caller's — computed on the consensus side from the
+    /// rule set it runs (`SlashLogFloor`, `SLK-2`) — and this store compares;
+    /// it does not source. The two operands are independent: `asked` is an
+    /// epoch's open height or a draw's issuing height, the floor is the
+    /// horizon's expression, so this arm *can* fail where a comparison at
+    /// the writer (whose operand is the horizon's own input) could not
+    /// (`SLK-1`). It fires on a **mis-composed schedule**, never on data —
+    /// the pass reads inside the settling epoch, `(k + 1)` epochs below the
+    /// tip, while the floor is `(k + n)` epochs and a reorg cap below it —
+    /// so a hit says the grace, the window, the epoch and the cap no longer
+    /// compose to a window the pass reads inside. A reader's defect; fatal,
+    /// never a verdict on the block.
+    SlashLogReadBelowFloor {
+        /// The height the read asked for rows strictly above.
+        asked: shekyl_types::BlockHeight,
+        /// The lowest retained height under the caller's rule set.
+        floor: shekyl_types::BlockHeight,
+    },
 }
 
 /// What an SI-25 check observed (payload of
@@ -447,6 +472,7 @@ impl StoreInvariant {
             Self::AccruingNotSingular { .. } => 23,
             Self::ArchivalLengthsDisagree { .. } => 24,
             Self::SettlementNotSound { .. } => 25,
+            Self::SlashLogReadBelowFloor { .. } => 26,
         }
     }
 }
@@ -618,6 +644,12 @@ impl core::fmt::Display for StoreInvariant {
                      settles once"
                 ),
             },
+            Self::SlashLogReadBelowFloor { asked, floor } => write!(
+                f,
+                "archival_slash_log was asked for rows strictly above {asked} while rows below \
+                 {floor} may be retired; the slash pass reads outside the window its own rule \
+                 set keeps — the schedule is mis-composed, not the data"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -659,6 +691,7 @@ impl core::error::Error for StoreInvariant {
             | Self::AccruingNotSingular { .. }
             | Self::ArchivalLengthsDisagree { .. }
             | Self::SettlementNotSound { .. }
+            | Self::SlashLogReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

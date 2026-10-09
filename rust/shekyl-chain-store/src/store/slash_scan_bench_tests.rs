@@ -106,7 +106,9 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Corrupt, FakechainSchedule, RuleSet, SettlementCheck, Trust};
+use shekyl_chain_rules::{
+    Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor, Trust,
+};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
@@ -203,6 +205,22 @@ fn credit_epoch(slot: u64) -> u64 {
         .settlement_schedule()
         .epoch_at_height(join_height(slot).to_raw())
         + 1
+}
+
+/// The slash log's retirement floor at `snap`'s tip under `RULES` — the
+/// operand a reader of the log hands A2 (SI-26). The chains here are under
+/// the window (`SLK-5`: the witness reads from `0` only because this is
+/// `None`), so a read from `0` is sound; a chain that crosses it makes the
+/// same read a fault, which is the point of carrying the floor rather than
+/// `SlashLogFloor::NONE`.
+fn slash_floor_at(snap: &ReadSnapshot<'_>) -> SlashLogFloor {
+    let tip = snap
+        .tip()
+        .expect("read")
+        .recorded
+        .expect("a built chain has a tip")
+        .height;
+    SlashLogFloor::under(tip, RULES.settlement_schedule().blocks(), RULES.reorg_cap())
 }
 
 /// The `personas` bench personas' ids **in bond-table order** — the order
@@ -523,7 +541,7 @@ impl SlashedChain {
                 "slash_applied({p:?}, 0, {m})"
             );
             let log = snap
-                .slash_log_after(&p, BlockHeight::from_raw(0))
+                .slash_log_after(&p, BlockHeight::from_raw(0), slash_floor_at(&snap))
                 .expect("read");
             assert_eq!(log.len(), 1, "one slash logged for {p:?}: {log:?}");
             assert_eq!(log[0].shard, ShardId::from_raw(0));
