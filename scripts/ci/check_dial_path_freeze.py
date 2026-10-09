@@ -451,6 +451,11 @@ class Head:
         pattern = word(name)
         return sorted(path for path, text in self._stripped.items() if pattern.search(text))
 
+    def anchored_in(self, anchor: str) -> list[str]:
+        """Files under the frozen tree that hold the anchor itself: a frozen
+        definition moved to another file is still the dial path."""
+        return sorted(path for path, text in self.texts.items() if anchor in text)
+
     def body_survives(self, function: Function) -> list[str]:
         """Files where the base body appears, whitespace-normalised. Short
         bodies are skipped: `{ return true; }` proves nothing."""
@@ -461,7 +466,14 @@ class Head:
 
 
 def gone(row: Row, base_fn: Function, head: Head, what: str) -> Verdict:
-    """The function anchored at `row.anchor` is absent at head. Is it gone?"""
+    """The function anchored at `row.anchor` is absent from `row.path` at
+    head. Is it gone?"""
+    moved = head.anchored_in(row.anchor)
+    if moved:
+        return Verdict(
+            False,
+            f"FAIL  {row.describe()}: the definition moved to {', '.join(moved)}, not deleted",
+        )
     survivors = head.names(row.gone_marker)
     if survivors:
         return Verdict(

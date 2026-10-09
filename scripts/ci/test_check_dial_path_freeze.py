@@ -232,6 +232,16 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "body survives under another signature",
     ),
     (
+        "moving a frozen function to another file fails: the definition moved, not deleted",
+        {
+            INL: IDLE + BETA,
+            "src/p2p/dial_helpers.inl": ALPHA,
+            HDR: HDR_TEXT.replace("  bool alpha(int n);\n", ""),
+        },
+        1,
+        "the definition moved to src/p2p/dial_helpers.inl, not deleted",
+    ),
+    (
         "re-signing a frozen function fails: the anchor is gone, the name is not",
         {INL: INL_TEXT.replace("node_server<t>::alpha(int n)", "node_server<t>::alpha (int n)")},
         1,

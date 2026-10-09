@@ -23,10 +23,23 @@
 //! [`Timing`] whose basis implements [`DerivationInput`]. [`CppPath`] does
 //! not. The refusal is the compiler's, not a comment's:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0277
 //! use shekyl_relay_privacy::basis::{CppPath, DerivationMs, Timing};
 //! let measured_on_cpp: Timing<CppPath> = Timing::new(715.0);
 //! let _ = DerivationMs::admit(measured_on_cpp);
+//! ```
+//!
+//! Both traits are sealed, so a crate cannot mint its own marker with
+//! `BASIS = TimingBasis::CppPath` and implement [`DerivationInput`] for it:
+//!
+//! ```compile_fail,E0277
+//! use shekyl_relay_privacy::basis::{Basis, DerivationInput, TimingBasis};
+//! #[derive(Clone, Copy)]
+//! struct Mine;
+//! impl Basis for Mine {
+//!     const BASIS: TimingBasis = TimingBasis::CppPath;
+//! }
+//! impl DerivationInput for Mine {}
 //! ```
 //!
 //! and the admissible three compile:
@@ -104,13 +117,27 @@ impl TimingBasis {
     }
 }
 
-/// A basis at the type level, so a function's bound can name it.
-pub trait Basis: Copy {
+/// The seal: a supertrait in a private module, which no other crate can
+/// name and so no other crate can implement. Without it a downstream crate
+/// could mint a marker with `BASIS = CppPath`, implement [`DerivationInput`]
+/// for it, and walk a C++-path number through [`DerivationMs::admit`].
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Model {}
+    impl Sealed for super::CppPath {}
+    impl Sealed for super::RustPath {}
+    impl Sealed for super::Assumption {}
+}
+
+/// A basis at the type level, so a function's bound can name it. Sealed:
+/// the four markers in this module are the only implementors.
+pub trait Basis: Copy + sealed::Sealed {
     /// The enum value this marker stands for.
     const BASIS: TimingBasis;
 }
 
-/// A basis a privacy-constant derivation may consume.
+/// A basis a privacy-constant derivation may consume. Sealed through
+/// [`Basis`].
 ///
 /// [`Model`], [`RustPath`] and [`Assumption`] implement it. [`CppPath`]
 /// does not, and that absence is the mechanism: a `Timing<CppPath>` has no
@@ -190,9 +217,11 @@ impl<B: Basis> Timing<B> {
 /// what it rests on.
 ///
 /// There is no public way to attach a basis to a bare number. `derived` is
-/// crate-private, so this does not compile outside the crate:
+/// crate-private, so this does not compile outside the crate (E0624, a
+/// private method; the test pins the code so an absent method could not
+/// pass for the refusal):
 ///
-/// ```compile_fail
+/// ```compile_fail,E0624
 /// use shekyl_relay_privacy::basis::{Assumption, DerivationMs, Timing};
 /// let transit = DerivationMs::admit(Timing::<Assumption>::new(50.0));
 /// let _ = transit.derived(715);
@@ -272,7 +301,10 @@ impl DerivationMs {
         Self { ms, basis }
     }
 
-    /// A value derived from this one alone, keeping its basis.
+    /// A value derived from this one alone, keeping its basis. Its only
+    /// callers are the sensitivity probes below, so it is built with them;
+    /// a shipped build derives through [`Self::derive`] alone.
+    #[cfg(any(test, feature = "conformance"))]
     #[must_use]
     pub(crate) const fn derived(self, ms: u32) -> Self {
         Self::derive(ms, &[self.basis])
