@@ -186,9 +186,10 @@ must not meet errors merely from connecting). A client is configured with
 exactly one target — **"this computer"** (the default) or an explicit node
 address — and connects to that target or reports why it cannot. It never
 falls back from one leg or node to another. "This computer" resolves to the
-single local daemon — the **default instance**, which RT-16 guarantees is
-unique (a deliberately named second instance is reached only by naming it,
-§7.1) — through that
+single local daemon — the **default instance** (a deliberately named second
+instance is reached only by naming it, §7.1). Its uniqueness is a
+requirement on RT-16's start-up exclusion, which is still proposed; it is
+not yet a guarantee. "This computer" resolves through that
 daemon's **rendezvous** (§7.1): a per-user rendezvous for a run-as-me
 daemon (the socket or pipe), a machine-wide one for a service (its loopback
 channel address and public bundle). There is never a choice between two
@@ -267,20 +268,45 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   register the service first, because its account name does not resolve
   until it exists; then create the data home **fresh** — never adopt a
   path the installer did not create in this run, since any unelevated user
-  can pre-create it and keep the right to rewrite its ACL; then break
-  inheritance and assert the ACL, because a new `%ProgramData%`
-  subdirectory inherits write access for every user.
+  can pre-create it and keep the right to rewrite its ACL. **The directory
+  is created with its final owner and protected DACL in the
+  `SECURITY_ATTRIBUTES` passed to `CreateDirectoryW`**, never created and
+  tightened afterwards: a new `%ProgramData%` subdirectory inherits write
+  access for every user, so even a moment between creating it and breaking
+  inheritance lets an unelevated process place its own entries or a
+  reparse point inside. The installer reads the descriptor back and
+  compares it before the service is started. This is the directory form of
+  §7.1's rule for the rendezvous file — a descriptor applied after creation
+  is not the same as one applied at it — and, like that rule, it is
+  confirmed by measurement, not assumed (RT-P8 item 6; proposed until
+  then).
 - **Switching modes** moves or re-syncs the chain data; the uniform pruning
   posture keeps a re-sync bounded.
-- **The two modes do not run side by side** on one installation (proposed):
-  two daemons would be two nodes with two bundles, and a client enrolled
-  with one meets silence from the other, which reads as a wrong key
-  (§4.5). The service installer refuses while a run-as-me daemon is
-  running, and the run-as-me daemon refuses to start while the service is
-  installed and running — the daemon knowing its own installation, not
-  judging the operator's network. The refusal covers the **default
-  instance** only: a named instance (§7.1) is a deliberate second node
-  with its own rendezvous, and it starts beside either mode.
+- **One default instance per machine and network: the service takes
+  precedence** (proposed). Two default daemons would be two nodes with two
+  bundles, and a client enrolled with one meets silence from the other,
+  which reads as a wrong key (§4.5). A check made only at install or only
+  at start cannot prevent that: a service that was stopped can start after
+  a run-as-me daemon did, and a service account cannot see into another
+  user's session to look for one. So the rule is symmetric in effect
+  rather than in mechanism:
+  - **A run-as-me default daemon refuses to start** while a service
+    default instance for its network is answering at the machine-wide
+    rendezvous (§7.1), which every user can read.
+  - **A run-as-me default daemon watches the machine-wide rendezvous**, as
+    it watches its own (§7.1). When a service default instance appears
+    there, it logs why and shuts down cleanly. The service never has to
+    find it.
+  - **Clients resolve one way during any overlap:** a rendezvous counts
+    only while its listener answers and passes the peer check; if both a
+    service and a run-as-me default answer, "this computer" is the
+    service. A failed peer check on either is still a hard stop (RT-15).
+
+  The service wins because installing and starting it is the machine
+  administrator's deliberate act — the daemon knowing its own
+  installation, not judging the operator's network. The rule covers the
+  **default instance** only; a named instance (§7.1) is a deliberate
+  second node and is governed by the rules there.
 
 ---
 
@@ -504,7 +530,8 @@ internals); the log may be specific.
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
 | Handshake deadline expired | Yes | "The node did not complete the handshake in time." | Timeout, with the stage reached |
-| The other run mode's daemon is answering at the address (two daemons, two bundles) | No — reads as the first row | As the first row | Prevented, not diagnosed: the two modes refuse to run side by side (RT-16) |
+| Both a service and a run-as-me default daemon answer for one network (the overlap before the run-as-me daemon stands down) | Yes — both rendezvous answer | Nothing: "this computer" resolves to the service (RT-16). A client enrolled only with the run-as-me node is told "The node answered but has not enrolled this client", as that row | Run-as-me daemon: "a service node for NETWORK is now running on this computer; shutting down" then a clean shutdown |
+| Starting a run-as-me default daemon while a service default instance answers for its network | (Daemon, at start) "A Shekyl node is already running on this computer as a service for NETWORK." Refuses to start | Same line |
 | Session closed by revocation (§5) | Yes | "The node revoked this client's enrolment." | "revoked FINGERPRINT; closed N open sessions" |
 
 **The local leg and target resolution (RT-15).**
@@ -582,11 +609,16 @@ R0 RT-7 stands: generated material only, never typed from memory.
 - **Recovering a lost console key** (proposed; service mode). Enrolment
   runs only over the channel, so an operator who loses the console key and
   holds no other admin-ceiling key has no way back in through it. The way
-  back is offline and local: with the service **stopped**, an administrator
-  runs a reset command that generates a new console key, replaces the old
-  console enrolment with it, and writes the new private half under the same
-  ACL. It refuses while the daemon is running, touches no other enrolment,
-  and is logged at the next start. This is a command that changes daemon
+  back is offline and local: an administrator runs a reset command that
+  generates a new console key, replaces the old console enrolment with it,
+  and writes the new private half under the same ACL. **It takes the data
+  home's exclusive lock — the same lock the daemon takes at start and
+  holds for its life (§7) — and holds it through the whole replacement.**
+  So it cannot run beside a daemon, and a service that starts while it is
+  running waits or fails on the lock rather than reading a half-replaced
+  enrolment. Checking that the service is stopped and then writing would
+  leave exactly that gap. It touches no other enrolment and is logged at
+  the next start. This is a command that changes daemon
   state, not a file edited by hand, so the rule above stands. Who may run
   it is who may write the service's data home — an OS permission the
   operator already manages.
@@ -619,8 +651,9 @@ count (`core_rpc_server.cpp:213-232`), which a reader cannot tell from a
 node with no peers. Absence means exactly one thing here — *not disclosed
 to this caller*. A fact the node has no answer for is `null`, and `0` is a
 value: the three wire states of RK-D23, ruled in the RK-5c round
-(`DAEMON_RPC_KV_GET_INFO.md`, PR #1008, draft). **When** the withheld
-fields stop being written as zeros is ruled there too (RK-Q8, 2026-10-08):
+([`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md), ratified
+2026-10-09). **When** the withheld fields stop being written as zeros is
+ruled there too (RK-Q8, 2026-10-09):
 in RK-5c itself, after `has_peers` lands — so the wire change is that
 slice's, and RT-W10 inherits absence rather than introducing it. A target
 height the core does not have is `null` on `get_info`, `get_version` and
@@ -651,9 +684,9 @@ network, never a node.
 | `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard` |
 | `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
 
-*Two notes on `health`, both owned by the RK-5c round (PR #1008).*
+*Two notes on `health`, both owned by the RK-5c round.*
 `has_peers` is true when the node holds at least one **handshaken** session
-on any connector (RK-Q4, ruled there 2026-10-08). It exists because a
+on any connector (RK-Q4, ruled there 2026-10-09). It exists because a
 caller without `status` no longer sees the peer counts, and without it
 could not tell a peerless daemon from a following one. `nettype` and the
 three network booleans are **retired from `get_info`** (RK-Q6, ruled there
@@ -699,7 +732,7 @@ can contain either.
 | Build version string | The patch level, which tells an attacker which defects apply. The RPC contract version stays in `health` |
 | Start time | Uptime and restart times correlate this node's onion address with its clearnet address |
 | Free space, database size | A host fingerprint. Today's restricted reply rounds the size up to 5 GiB (`core_rpc_server.cpp:248-250`); under the split the field is absent |
-| Aggregate peer counts, RPC connection count | Connectivity posture over time. The counts are sums over **every** connector (RK-Q3, ruled in the RK-5c round 2026-10-08), where today they count clearnet sessions only, so `status` discloses the node's whole session count |
+| Aggregate peer counts, RPC connection count | Connectivity posture over time. The counts are sums over **every** connector (RK-Q3, ruled in the RK-5c round 2026-10-09), where today they count clearnet sessions only, so `status` discloses the node's whole session count |
 | Alt-blocks count and hashes | Which forks this node saw |
 
 **Presets** (what an operator names at enrolment; a ceiling is a preset or
@@ -742,8 +775,10 @@ still a C++ handler, and it is the one reply that must be filled field by
 grant. Carrying a grant into C++ would widen the one boolean that crosses
 the FFI today into a structure the cutover then deletes. So the daemon's
 KV cutover slice that moves `get_info`
-([`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md), RK-5c — design
-open, being drafted in its own lane) lands **before** RT-W10, and this
+([`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md), RK-5c; its
+pre-flight, [`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md), was
+ratified 2026-10-09 and records this ordering as RK-D17) lands **before**
+RT-W10, and this
 round asks three things of it and nothing more:
 
 - each `get_info` field is filled in Rust and is attributable to exactly
@@ -823,6 +858,13 @@ the admin listener.
   `browser_boundary`, off by default (RT-15).
 - **The onion** (R0 RT-8) is unchanged in spirit: reachability, not a
   security model; the channel runs inside it.
+- **One daemon per data home, by lock** (proposed). A daemon takes an
+  exclusive lock on its data home before it reads any state and holds it
+  until it exits. Every offline tool that changes daemon state — the
+  console-key reset (§5) is the first — takes the same lock. The lock is
+  the single answer to three questions: two daemons on one data home, a
+  named instance pointed at the default's state (§7.1), and an offline
+  command racing a start.
 - **Every new surface is Rust-owned** (rule 20). The channel listener's
   flags, the key paths, the enrolled set, and `rpc-enrol` / `rpc-revoke`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added
@@ -979,7 +1021,23 @@ client never reaches the wrong network's node.
   started with an explicit instance name publishes its rendezvous under
   that name instead and is reached only by a client told the same name. It
   never answers for "this computer" and is never chosen by a client that
-  did not ask for it, so RT-15's single target holds. Reason: test and
+  did not ask for it, so RT-15's single target holds.
+
+  **A name is a label for a second node, not the second node** (proposed).
+  A named instance needs everything a node owns, and none of it is
+  derived from the name: its own **data home** — chain store, channel
+  bundle, console key, enrolled set and Tor state all live there — and its
+  own **P2P and channel listener addresses**. A named instance must be
+  started with an explicit data home; started without one it refuses,
+  rather than defaulting to the default instance's. Sharing is caught, not
+  assumed away: every daemon takes its data home's exclusive lock before
+  reading any state and holds it for its life (§7), so a second daemon on
+  the same data home fails at start and says who holds it; a listener
+  address already in use fails its bind and says so. Nothing is namespaced
+  automatically, because a second node's resources are the operator's
+  decision and a derived default would hide where a node's state lives.
+
+  Reason for the form: test and
   measurement runs start a second daemon of the same network beside an
   installed one, as one user, and without a named form the start-up
   refusal (§4.5) would stop them. The name is the operator's label, not a
@@ -1050,7 +1108,7 @@ construction) instead of loopback TCP.
 | RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Scratch crate: stream adapter over `seal`/`open`; a block-batch response larger than many records; backpressure under a slow reader; half-close; a request split across records; observed failing with the adapter's record splitting removed; **and the record-size distribution** of real RPC traffic (wallet sync, a submission, block batches), which the padding classes are derived from (RT-O6) | RT-W9's adapter design |
 | RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of padding each record to each candidate size class | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
 | RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
-| RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` ACL admits the service account and Administrators only; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
+| RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` data home is created with its owner and protected DACL in one `CreateDirectoryW` call, reads back as admitting the service account and Administrators only, and an unelevated process racing the creation cannot place an entry inside; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
 
 ---
 
@@ -1112,22 +1170,26 @@ construction) instead of loopback TCP.
   DACL — so re-asserting the ACL on an existing directory is not enough.
   **The installer never adopts an existing path:** one it did not create
   in this run is moved aside, reported, and replaced by a fresh directory
-  owned by Administrators with the asserted ACL (proposed; the ownership
-  point is design reasoning, not measured). The real service ACL is unrun
-  (needs elevation).
+  owned by Administrators, created **with** its protected descriptor and
+  not tightened after creation (RT-16; proposed — the ownership point and
+  the atomic creation are design reasoning, not measured). The lane's own
+  run broke inheritance after creating the directory, which is the order
+  RT-16 now rules out. The real service ACL is unrun (needs elevation).
 - **Not runnable yet:** item 1 is blocked on RT-W10 — no rendezvous exists
   in the tree, and the lane declined to substitute a model and report it as
   item 1; item 7 is unimplemented.
 
 ## 10. Open questions
 
-- **Finding for the Windows wallet lane (not ruled here).** The same
-  `create_owner_only_file` writes the **exported seed file** (WP-D8) with
-  no mandatory label. The wallet pipe already refuses low-integrity
-  callers, so a same-user low-integrity process is inside that threat model
-  — yet under the default policy it can read an exported seed. One policy
-  for the one function (`NR` at creation for every caller) is the obvious
-  fix; it is the wallet lane's to rule, with WP-D8 reopened.
+- **A finding against WP-D8, owned where WP-D8 lives.** The same
+  `create_owner_only_file` writes the **exported seed file** with no
+  mandatory label, and the measurement behind §7.1's label rule says a
+  same-user low-integrity process can read a file with that descriptor.
+  The wallet pipe already refuses such a caller, so it is inside that
+  round's threat model. This round does not rule on it. It is recorded in
+  the owning text — [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
+  WP-D8, reopened 2026-10-09 with the measurement and the proposed fix —
+  and carried in `FOLLOWUPS.md` under that document.
 - **RT-O6 — length concealment. RULED 2026-10-09:** in scope, as bucketed
   padding in the record layer, sharing the P2P transport's framing; class
   sizes from RT-P5 and RT-P6; timing stays visible, cover traffic out of
