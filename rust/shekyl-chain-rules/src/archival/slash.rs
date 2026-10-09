@@ -28,25 +28,12 @@
 //!
 //! # The window (`SO-D10b`)
 //!
-//! From a Missed epoch the walk steps back through the pair's earlier
-//! rows. Served and Missed are observations. NonObservation and an absent
-//! row are **passed over**, not a stop: stopping would let a producer
-//! withhold one reveal, push a non-server's pair below three issued draws
-//! in one epoch, and clear its window. The walk stops where the record
-//! says the run began ([`good_through`] false: before the join, or across
-//! a reinstatement), at `FAILURE_WINDOW_N` observations, once the serve
-//! budget is exceeded, and at the retention horizon.
-//!
-//! **The horizon (ruled 2026-10-09).** While the walk stopped at the first
-//! unobserved epoch it read at most `n − 1` epochs back. A walk that
-//! passes over unobserved epochs can go further, to rows a store may
-//! delete, and a deleted row reads the same as an absent one. So the walk
-//! reads no epoch below [`settlement_retention_floor`]: the horizon the
-//! settlement rows' own prune uses, one constant for both, in the rule
-//! now so that the prune is not a consensus change when it lands. It
-//! shortens a walk only when fewer than half a pair's epochs are observed
-//! (`failure_window.rs`, `WINDOW_MIN_OBSERVATION_PER_MILLE`), and it bounds
-//! the walk's cost at the retention's length.
+//! From a Missed epoch, [`settlement_window_slashable`] gathers the pair's
+//! earlier observations. What counts as an observation, where the walk
+//! stops, and the retention horizon ruled 2026-10-09 live with the
+//! arithmetic in `shekyl-archival-retention::failure_window`. This pass
+//! supplies the standing predicate ([`good_through`]) and the settlement-row
+//! read, and the floor ([`settlement_retention_floor`]) the gather stops at.
 //!
 //! # The stale snapshot
 //!
@@ -61,9 +48,8 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    failure_window_slashable, good_through, holds_shard_at, settlement_retention_floor,
-    slash_open_interval_to_append, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_BOND_BAD_INTERVALS,
+    good_through, holds_shard_at, settlement_retention_floor, settlement_window_slashable,
+    slash_open_interval_to_append, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -254,9 +240,7 @@ impl super::Transition {
         if draws.is_empty() {
             return Ok(());
         }
-        let Some(beacon) = self.settlement_beacon(view, epoch)? else {
-            return Ok(());
-        };
+        let beacon = self.settlement_beacon(view, epoch)?;
         let records: BTreeMap<&PCanonicalId, &BondRecord> =
             snapshot.iter().map(|(p, record)| (p, record)).collect();
         // The persona's slash log above the epoch's first block, read once
@@ -303,15 +287,23 @@ impl super::Transition {
     /// epoch is too short to have a response window has none to wait out,
     /// and the beacon is the epoch's last block.
     ///
-    /// `None` if that block is not below the connecting height. The slash
+    /// The block must sit strictly below the connecting height. The slash
     /// grace is at least `W₂` on every schedule that has one
-    /// (`constants.rs`), so a passed deadline always puts it there; the
-    /// guard is the observability boundary stated, not a reachable arm.
+    /// (`constants.rs`), so a passed deadline always puts it there. A
+    /// re-pin that makes the arm reachable is still
+    /// [`SettlementCheck::BeaconNotRecorded`]: the block at the slash
+    /// height is not invalid, and this node cannot settle the epoch. The
+    /// pass does not advance its watermark on that fault.
+    ///
+    /// # Errors
+    ///
+    /// [`ViewRead::Corrupt`] when the beacon block is not strictly below
+    /// the connecting height, or when the view has no block recorded there.
     fn settlement_beacon<'id, V: ChainView<'id>>(
         &self,
         view: &V,
         epoch: SettlementEpoch,
-    ) -> Result<Option<[u8; SETTLEMENT_BEACON_LEN]>, ViewRead<V::Fault>> {
+    ) -> Result<[u8; SETTLEMENT_BEACON_LEN], ViewRead<V::Fault>> {
         let window = self
             .schedule
             .challenge_response_blocks()
@@ -321,10 +313,13 @@ impl super::Transition {
             .last_block(epoch.to_raw())
             .saturating_add(window);
         if at >= self.connecting.to_raw() {
-            return Ok(None);
+            return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                epoch,
+                check: SettlementCheck::BeaconNotRecorded,
+            }));
         }
         let beacon = recorded(view, BlockHeight::from_raw(at))?.hash;
-        Ok(Some(*beacon.as_bytes()))
+        Ok(*beacon.as_bytes())
     }
 
     /// The slashes logged against `persona` strictly above `height`: the
@@ -440,9 +435,9 @@ impl super::Transition {
         self.window_slashable(view, persona, record, shard, epoch)
     }
 
-    /// The failure window from a Missed `epoch` (module docs, *The
-    /// window*): the pair's earlier observations, most recent first, at
-    /// most `FAILURE_WINDOW_N` of them.
+    /// The failure window from a Missed `epoch`. The gather, and where it
+    /// stops, is [`settlement_window_slashable`]; this pass names the
+    /// record's standing and the row each earlier epoch settled.
     fn window_slashable<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -451,36 +446,13 @@ impl super::Transition {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
-        let window = usize::try_from(FAILURE_WINDOW_N).expect("a u32 fits a usize");
-        let floor = settlement_retention_floor(self.schedule, self.connecting).to_raw();
-        let mut observations = vec![BaselineObservation::missed(epoch.to_raw())];
-        let mut passes_seen = 0u32;
-        let mut e = epoch.to_raw();
-        while observations.len() < window && e > floor {
-            e -= 1;
-            let earlier = SettlementEpoch::from_raw(e);
-            if !in_standing(record, earlier) {
-                break;
-            }
-            match self.outcome(view, persona, shard, earlier)? {
-                Some(SettlementOutcome::Served) => {
-                    observations.push(BaselineObservation::served(e));
-                    passes_seen += 1;
-                    if passes_seen > FAILURE_WINDOW_SERVE_BUDGET {
-                        break;
-                    }
-                }
-                Some(SettlementOutcome::Missed) => {
-                    observations.push(BaselineObservation::missed(e));
-                }
-                // Not an observation, and not where the run began.
-                Some(SettlementOutcome::NonObservation) | None => {}
-            }
-        }
-        // The sequence always holds the decision epoch and never more than
-        // the window: the fold's two refusals are unreachable from here.
-        Ok(failure_window_slashable(&observations)
-            .expect("the gathered window holds the decision epoch and at most FAILURE_WINDOW_N observations"))
+        let floor = settlement_retention_floor(self.schedule, self.connecting);
+        settlement_window_slashable(
+            epoch,
+            floor,
+            |earlier| in_standing(record, earlier),
+            |earlier| self.outcome(view, persona, shard, earlier),
+        )
     }
 
     /// Apply one slash to the persona's post-image and record it.

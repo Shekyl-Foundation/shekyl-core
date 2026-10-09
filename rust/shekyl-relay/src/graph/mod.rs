@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
@@ -37,7 +38,7 @@ use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 mod cover;
 mod own_edge;
 
-pub use cover::{any_open_link, cover_class, measured_transit_ms};
+pub use cover::{any_open_link, cover_class, transit_ms};
 
 /// One opaque transaction blob shared across every peer that accepted a fluff
 /// batch.
@@ -47,20 +48,22 @@ pub use cover::{any_open_link, cover_class, measured_transit_ms};
 /// de-duplication on flush compare by content (`Arc<[u8]>: Ord`).
 pub type TxBlob = Arc<[u8]>;
 
-/// The longest measured connector transit, in milliseconds.
+/// The longest declared connector transit.
 ///
 /// The origin retry does not know which connector carried the stem — the
 /// pool does not store one — so it waits this long rather than naming a
-/// connector. An unmeasured connector is not in the max. A later connector
-/// with a longer measurement raises the wait without a new call site.
+/// connector. A connector with no assessed transit is not in the max. A
+/// later connector with a longer transit raises the wait without a new call
+/// site. *Records-was: `longest_measured_transit`, an `f64`; the values
+/// were never measurements (§97).*
 #[must_use]
-pub fn longest_measured_transit() -> f64 {
+pub fn longest_transit() -> DerivationMs {
     ConnectorId::ALL
         .iter()
         .copied()
-        .filter_map(measured_transit_ms)
-        .max_by(f64::total_cmp)
-        .expect("a connector with a measured transit")
+        .filter_map(transit_ms)
+        .max_by_key(|transit| transit.ms())
+        .expect("a connector with an assessed transit")
 }
 
 /// One embargo table per assessed transit, for the life of the process.
@@ -78,20 +81,20 @@ fn embargo_tables() -> &'static EmbargoTables {
 
 /// The observation window for `declaration`, when its transit cell is assessed.
 fn embargo_timer(declaration: &Declaration) -> Option<Arc<EmbargoTimer>> {
-    let Assessment::Assessed(ms) = declaration.measured_transit_ms() else {
+    let Assessment::Assessed(transit) = declaration.transit_ms() else {
         return None;
     };
     let tables = embargo_tables();
     let mut guard = tables
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == ms) {
+    if let Some((_, timer)) = guard.iter().find(|(key, _)| *key == transit.ms()) {
         return Some(Arc::clone(timer));
     }
     let timer = Arc::new(EmbargoTimer::adopted(
-        &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(f64::from(ms)),
+        &shekyl_relay_privacy::params::DandelionParams::adopted_for_transit_ms(transit),
     ));
-    guard.push((ms, Arc::clone(&timer)));
+    guard.push((transit.ms(), Arc::clone(&timer)));
     Some(timer)
 }
 
@@ -628,7 +631,7 @@ impl Relay {
     /// (`None` = locally originated, matching `in_mapping_[nil]`).
     ///
     /// The observation window is drawn from the successor's connector at
-    /// `now`. A connector with no measured transit records nothing. The
+    /// `now`. A connector with no assessed transit records nothing. The
     /// question is the one the pool's embargo asks of the same peer (*did
     /// you propagate this?*). Domain ownership stays in this crate (rule 20):
     /// the FFI only marshals bytes and a clock.
@@ -654,8 +657,8 @@ impl Relay {
         }
     }
 
-    /// Mean of the embargo drawn for `connector`, when that connector has a
-    /// measured transit.
+    /// Mean of the embargo drawn for `connector`, when that connector has an
+    /// assessed transit.
     #[cfg(test)]
     pub fn embargo_mean_secs(&self, connector: ConnectorId) -> Option<u32> {
         let _ = self;
@@ -779,22 +782,19 @@ impl Relay {
         self.fluff.forget(*id);
     }
 
-    /// Outbound, and the connector has a measured transit. An unmeasured
-    /// connector is not a stem candidate. The cell is the question; the
+    /// Outbound, and the connector has an assessed transit. A connector
+    /// without one is not a stem candidate. The cell is the question; the
     /// embargo table is built when a stem is recorded, not while listing.
     fn stem_candidate(peer: &PeerFluff) -> bool {
         peer.direction == PeerDirection::Outbound
-            && matches!(
-                peer.declaration.measured_transit_ms(),
-                Assessment::Assessed(_)
-            )
+            && matches!(peer.declaration.transit_ms(), Assessment::Assessed(_))
     }
 
     /// Established outbound sessions. Inbound peers are not stem candidates.
     ///
     /// The set is this zone's session registry. A handshake-complete peer
     /// that is still synchronizing is included: recorded height is not a
-    /// filter, and neither is `state_normal`. A connector with no measured
+    /// filter, and neither is `state_normal`. A connector with no assessed
     /// transit is not included.
     fn outbound_ids(&self) -> Vec<ConnectionId> {
         self.contexts

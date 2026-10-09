@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The GUI wallet cannot decode a 3.42 `get_info` reply.** `already_generated_coins` has been a JSON number since #1005 and the GUI decodes it as a string, so the wallet reports its daemon disconnected and chain health fails. No interim fix (2026-10-08): testnet is not exercising the GUI, so the break is accepted until RK-5c's amount-encoding commit (RK-Q2) and its GUI pair land. RK-Q2 was ruled 2026-10-09 (decimal strings); blocked on RK-5c reaching that commit.
+  - Owner: [`DAEMON_RPC_KV_GET_INFO.md`](design/DAEMON_RPC_KV_GET_INFO.md) §3.3
+  - Target: pre-genesis
+
 - **Re-derive `fluff_return_ms` with Tor transit on production `EveryPeer`.** It waits for the next relay-privacy round, on the item that already carries replacing 3250. Blocked on the Rust cutover — falsify by a converged 512-node `EveryPeer` per-connector reading (`DAEMON_RELAY_PRIVACY.md` §96 item 2). 3250 stays provisional pending the operational test named there.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
@@ -375,6 +379,10 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Rust wallet stack: no Windows support (blocks Windows wallet [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)**
+  - Target: pre-genesis
+
+- **Windows: a low-integrity process running as the user can read an exported seed file.** `create_owner_only_file` sets no no-read-up label (WP-D8, reopened 2026-10-09). Blocked on a ruling and on a Windows run that observes the low-integrity read refused.
+  - Owner: [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md) WP-D8
   - Target: pre-genesis
 
 - **Daemon RPC: restricted-method dual-list single-source** (added 2026-07-10).
@@ -957,9 +965,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path.** LV-1 and LV-2a/2b have landed. **UPDATE 2026-10-07:** steps b and c are closed. Step c is code-anchored on this tree: no `for_each_connection(` call, `peer_sync_idle_maker` posts, `m_current_number_of_` is absent, and the peers-monitor thread is gone. *Records-was 2026-10-07: step b closed on #991 and step c remains. Records-was 2026-10-06: steps b and c remain.* **UPDATE 2026-10-06:** step a is `Connection` in `shekyl-seam` (PR #978). *Records-was: LV-3 is not started, and the object was scoped as PWD-I8's category, struck 2026-09-21.* The [`IMPLEMENTATION_INDEX`](design/IMPLEMENTATION_INDEX.md) `LV-` row recorded that it "still gates on its own design round" — **a round that did not exist**. It exists as of 2026-09-21: P2P-3, with LV-3 as slice 5. *Records-was: slice 1, superseded 2026-09-21.* Scoped as the connection becoming a **typed, owned Rust object** — explicitly **not** a port of `p2p_connection_context`, which would carry the category error across the FFI boundary intact (rule 16). `tests/unit_tests/levin.cpp` is not ported either: it is a puppet for `levin_notify.cpp`, and it goes with that shim when LV-3 makes the connection a Rust object and `send_txs` a plan handed to the seam. [`LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md) is LV-2's record.
   - Target: pre-genesis
   - Owner: [`P2P_3_IMPLEMENTATION_ROUND.md`](design/P2P_3_IMPLEMENTATION_ROUND.md) §4 slice 1; the slice brief is [`LV3_CONNECTION_OBJECT.md`](design/LV3_CONNECTION_OBJECT.md)
-
-- **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
-  - Target: pre-genesis
 
 - **Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.** Ruled, not deferred — the never-sent map would otherwise advertise a 50 MB packet limit against the 100 MB the transport enforces, and PWD-T6 names the authoritative limits so there is one source. The struct keeps its live fields; `handshake_interval`, `config_id` and `send_peerlist_sz` are also write-only but belong to PWD-B1/B2 and PWD-I2. PWC-F3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6
   - Target: pre-genesis

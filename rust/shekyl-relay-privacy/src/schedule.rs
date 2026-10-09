@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
         let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+            crate::verify_cost::ANON_ZONE_TRANSIT,
         ));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
@@ -1049,14 +1049,15 @@ mod tests {
         // transit it was derived from is how 874 s came to be wrong for the
         // anonymity path. *Records-was:* this loop named `RelayZone`.
         for transit in [
-            crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+            crate::verify_cost::ADOPTED_TRANSIT,
+            crate::verify_cost::ANON_ZONE_TRANSIT,
         ] {
             let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit));
             assert!(
                 ADOPTED_PROPAGATION_TIMEOUT_SECS
                     >= t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
-                "{transit} ms needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s"
+                "{} ms needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s",
+                transit.ms()
             );
         }
     }

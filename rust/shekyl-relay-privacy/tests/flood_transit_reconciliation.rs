@@ -104,7 +104,7 @@ fn ratio(a: u64, b: u64) -> f64 {
 /// stops being interpretable.
 #[test]
 fn the_shipped_fluff_return_is_the_transit_less_reading() {
-    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms);
+    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms.ms());
     let transit_less = p90_at(0);
     assert_eq!(
         transit_less, shipped,
@@ -129,7 +129,7 @@ fn the_shipped_fluff_return_is_the_transit_less_reading() {
 /// forecloses it.
 #[test]
 fn every_sampled_transit_exceeds_the_shipped_fluff_return() {
-    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms);
+    let shipped = u64::from(DandelionParams::adopted().fluff_return_ms.ms());
     println!("\n  transit_ms |  p90_ms | vs shipped {shipped}");
     println!("  -----------+---------+------------");
     let mut prev = 0_u64;

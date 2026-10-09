@@ -249,7 +249,7 @@ spec = ["rust/shekyl-relay-privacy/src/params.rs"]
 [[constant]]
 name = "fluff_return_ms"
 defined_in = "rust/shekyl-relay-privacy/src/params.rs"
-needle = "fluff_return_ms: 3_250,"
+needle = "pub const FLUFF_RETURN: DerivationMs = DerivationMs::model(3_250);"
 measured_by = ["BA-T9"]
 status = "unmeasured"
 carrier = "BA-T9 (BA-G8). A simulated figure from an earlier graph; its own comment says it has not been re-measured."
@@ -382,7 +382,7 @@ defined_in = "rust/shekyl-p-serve/src/serve.rs"
 needle = "pub const MAX_INFLIGHT: usize = 64;"
 measured_by = ["BA-T5"]
 status = "unmeasured"
-carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment; no run has varied or derived it."
+carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment. Session 2 of BA-T5 (docs/benchmarks/ba_t5_serve_floor_device_20261009.md, 2026-10-09, a discovery run by ruling) swept N in {8, 16, 32, 64} on the floor device with the daemon idle and syncing: throughput is flat from N = 16 in every state, p99 wake lateness rises steeply with N (more than doubling across each of the first two doublings, by a third to a half across the last), and at N = 64 = MAX_INFLIGHT a requester that reconnects as its last stream closes was refused once in 6,144, because the permit is dropped after the stream. The run sets nothing; the constant stays unmeasured until BA-Q4 is ruled on that evidence."
 path_set = "p-serve"
 
 [[path_set]]
@@ -423,6 +423,8 @@ stale_through = [
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -481,6 +483,8 @@ stale_through = [
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. The dial and the gap wait are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. The dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -774,13 +778,12 @@ path_set = "serve-floor-verdict"
 [[constant]]
 name = "serve_prehead_work_floor"
 defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
-needle = "| Work before the first byte | under 1 ms | not isolated on the floor; a whole abandoned request is 2.2 ms over one that serves nothing (`BA-T5`, 2026-10-07) | open |"
+needle = "| Work before the first byte | under 1 ms | 0.19 ms p50 time to first byte at one in flight, daemon idle, a bound from above on the whole pre-head step (`BA-T5` session 2, 2026-10-09); 1.85 ms p50 beside a syncing daemon | **held** |"
 measured_by = ["BA-T3", "BA-T5"]
-status = "estimated"
-estimate = { low = 0.0, high = 1.0, unit = "ms per request" }
-basis = "Nothing before the 200 head reads or hashes the body: parse, anchor gate, shard open, pre-flight, head. BA-T3 counts that at 13,579 instructions against 191,348,047 for a full response, 0.007 %. The floor has so far bounded it from above only: BA-T5's first run put a whole abandoned full-segment request at 2.2 ms of CPU over a request for a shard that is not held, and that figure also holds one chunk read, one chunk hashed and a refused write. An upper bound above the band does not settle the estimate either way."
-basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"]
-carrier = "BA-T5, a block that stops the clock at the head: time the pre-head step alone on the floor device (the bench-internals composition BA-T3 counts), with an on-disk store."
+status = "current"
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"
+capture_rev = "301ed05b73"
+rev_source = "capture header, the tree line"
 path_set = "archival-serve-fetch"
 
 [[retired_estimate]]
