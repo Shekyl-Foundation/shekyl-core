@@ -167,7 +167,9 @@ pub enum Mutation {
     /// One byte of a listed spend's first `pqc_auths` slot's signature
     /// flipped. CEN-I18, at that input. The signature is forged and the
     /// body left alone: a driven chain's spends are signed once, by the
-    /// wallet, and the body-changed-under-a-signature case is the mock's.
+    /// wallet. The body-changed-under-a-signature case is
+    /// `scenario_spend_tests`' (a moved twin listed behind its original)
+    /// through the stack, and the rules crate's on the signature sequence.
     ForgedSignature,
     /// A body an earlier block already carries, listed again (the header
     /// lists its hash). CEN-G1's chain arm, at the slot — **before** the

@@ -72,7 +72,7 @@ use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
     mine_to, EPOCH_BLOCKS,
 };
-use crate::scenario_spend::{Owner, Recipient, Spender};
+use shekyl_harness_spender::{Owner, Recipient, Spender};
 
 /// The fill spends coinbases from here up; the funding spend rides
 /// coinbase 0, below it.

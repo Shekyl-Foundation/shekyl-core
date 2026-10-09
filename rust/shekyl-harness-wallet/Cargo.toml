@@ -1,0 +1,42 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-harness-wallet"
+description = "Test support: the deterministic miner wallet every fixture coinbase pays, the recipients a scenario pays, and a coinbase composed as that wallet will scan it. Never a production dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Reached from test surfaces and nothing shipped: the rules crate's
+# `harness` feature (a TEST_ONLY feature, check_test_only_features.py), and
+# the `[dev-dependencies]` of the store and the ingest once the spending
+# half (the sibling crate below) lands and they depend on it. The crate
+# lives under the rules crate's no-store belt
+# (`check_chain_rules_no_store.sh`, over `cargo tree -e normal,dev`): no
+# `redb`, no `shekyl-chain-store`, no `shekyl-curve-tree`, directly or
+# transitively. The spending half of the harness — the tree walk and the
+# membership proof — needs the curve tree and so cannot live here; it is
+# the sibling crate's, which depends on this one and never the reverse.
+[dependencies]
+# `construct_output` (output key, commitment, encrypted amount and label,
+# KEM ciphertexts, PQC leaf entry), the hybrid KEM key types, and the
+# seed derivations the deterministic wallet is built from. Already in the
+# rules crate's closure.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `Transaction` and the coinbase `tx_extra` grammar's one constructor
+# (`build_coinbase_extra`). Already in the rules crate's closure.
+shekyl-wire = { path = "../shekyl-wire" }
+# `b·G` for the spend public key and `r·G` for the tx public key, and the
+# X25519 half of the KEM target as `shekyl-crypto-pq`'s own test keygen
+# derives it (`keypair_generate`: raw scalar times basepoint). The `zeroize`
+# feature gives `Scalar` its `Zeroize` impl (rule 35). Already in the rules
+# crate's closure.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

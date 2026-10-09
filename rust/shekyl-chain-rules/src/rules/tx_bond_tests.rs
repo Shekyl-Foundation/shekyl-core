@@ -227,9 +227,15 @@ fn slot_carrying(mut tx: Transaction, key: Vec<u8>) -> Transaction {
 /// another persona's identity key — or the poster's own bond-spend key —
 /// is refused on J13 at the post's **vin**, through `tx_against`; the same
 /// join with its identity key in the slot passes the row and records all
-/// four. The Reinstate arm's mis-key is the driver's: with no record, J18
-/// refuses the post before J13 reads its key (the C++'s order, verify then
-/// pin), so the arm is reachable here only through a record.
+/// five on the sequence. Through `tx_against` whole that join reaches the
+/// funding half and is refused there (CEN-J27, at the transaction): the
+/// fixture's funding spend carries no proof over a tree the mock never
+/// planted. The refusal row being J27 and not J13 is the order's witness
+/// — the post rows ran, and passed, first. The accept whole is the
+/// driver's (`scenario_join_tests`, slice 6 row 6). The Reinstate arm's
+/// mis-key is the driver's too: with no record, J18 refuses the post
+/// before J13 reads its key (the C++'s order, verify then pin), so the
+/// arm is reachable here only through a record.
 #[test]
 fn j13_a_join_signs_with_the_identity_key() {
     let chain = spendable_chain();
@@ -259,11 +265,16 @@ fn j13_a_join_signs_with_the_identity_key() {
                 POST_VIN,
             );
         }
-        let against = defined(tx_against(&join, TxSlot::Lone, &view, &RuleSet::GENESIS))
-            .expect("the fixture join signs with its identity key at the floor");
+        let (verdict, coverage) = judged_post(&join, &view);
+        verdict.expect("the fixture join signs with its identity key at the floor");
         for row in POST_ROWS {
-            assert!(against.contains(row), "{row} recorded on the fixture join");
+            assert!(coverage.contains(row), "{row} recorded on the fixture join");
         }
+        assert_refused(
+            defined(tx_against(&join, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            CenRow::J27,
+            Locus::Tx { slot: TxSlot::Lone },
+        );
     });
 }
 
@@ -448,10 +459,14 @@ fn admissible_chain() -> MockChain {
 
 /// CEN-J15's accept at the pool's slot: a compact join of a shard that is
 /// closed, final (`close + cap ≤ parent`, at the boundary: equal) and
-/// priced at the last settled epoch passes the row and records all five,
-/// through `judge_bond_post` and through `tx_against`. The complete-tree
-/// fixture join passes on the same chain with no price planted — a
-/// complete tree gathers nothing.
+/// priced at the last settled epoch passes the row and records all five
+/// on the sequence. The complete-tree fixture join passes on the same
+/// chain with no price planted — a complete tree gathers nothing. Through
+/// `tx_against` whole each is refused on CEN-J27 at the transaction — the
+/// funding half, after the post rows: the fixture's funding spend has no
+/// proof and the mock no tree. J27 and not J15 is the admission's witness
+/// through the pipeline; the accept whole is the driver's
+/// (`scenario_join_tests`).
 #[test]
 fn j15_admits_a_compact_join_of_a_closed_final_priced_shard() {
     let chain = admissible_chain();
@@ -468,8 +483,11 @@ fn j15_admits_a_compact_join_of_a_closed_final_priced_shard() {
             for row in POST_ROWS {
                 assert!(coverage.contains(row), "{name}: {row} recorded");
             }
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS))
-                .unwrap_or_else(|refused| panic!("{name} through tx_against: {refused}"));
+            assert_refused(
+                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                CenRow::J27,
+                Locus::Tx { slot: TxSlot::Lone },
+            );
         }
     });
 }

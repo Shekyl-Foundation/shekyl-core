@@ -44,7 +44,7 @@ use shekyl_chain_rules::{
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader};
 
-use super::connect_fixtures::batch_root_going_into;
+use super::connect_fixtures::{batch_root_going_into, priced};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
@@ -83,13 +83,19 @@ impl Substrate for BenchSubstrate {
     }
 }
 
-/// The fixtures' `judge`, under the bench's substrate: the seed an honest
-/// driver claims, `form`, then `validate` — a refusal is a bench bug.
+/// The fixtures' `judge`, under the bench's substrate: the coinbase priced
+/// to the verdict's figure (CEN-F18 holds it exact; the fixtures'
+/// `judge_under` prices too), the seed an honest driver claims, `form`,
+/// then `validate` — a refusal is a bench bug. *Records-was:* unpriced
+/// until PR #1003's nightly lane ran the bench and F18 refused block 0;
+/// F18 landed after the bench was written, and no lane ran the bench to
+/// say so.
 fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
     substrate: &BenchSubstrate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    let candidate = priced(view, candidate)?;
     let connecting = match view.tip()? {
         None => BlockHeight::from_raw(0),
         Some(tip) => BlockHeight::from_raw(tip.height.to_raw() + 1),
@@ -133,7 +139,14 @@ fn candidate(height: u64, previous: BlockHash, root: CurveTreeRoot) -> Candidate
             previous,
             nonce: 7,
             curve_tree_root: root,
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            // The committed empty set (CEN-B4 recomputes it; a coinbase-only
+            // block carries no pass records). *Records-was:* `[0x33; 32]`
+            // from before B4 landed (2026-10-06, slice 8 row 10) — B4 then
+            // refused the bench's block 0, and no lane ran the bench to say
+            // so until `nightly.yml`'s `store-ignored` job did (PR #1003).
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         },
         miner_transaction: fixture::coinbase(height),
         transaction_hashes: Vec::new(),
