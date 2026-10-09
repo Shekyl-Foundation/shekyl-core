@@ -994,16 +994,21 @@ client never reaches the wrong network's node.
   stated, never sanitised or truncated.
 
   **Invariant (decision authority, 2026-10-09): an instance name never
-  becomes a path component or an OS object name.** Any surface that needs a
-  per-instance name — a socket, a rendezvous file, a pipe, a lock, a
-  service or unit name, a log file — uses the RT-O10 derivation, never the
-  name itself. This is what makes the name rule a typeability rule and
-  nothing more: no character an operator could type can reach the
-  filesystem or an object namespace, so there is no list of dangerous
-  names to keep. The earlier reservation of the Windows device names
-  (`con`, `prn`, `aux`, `nul`, `com0` to `com9`, `lpt0` to `lpt9`) is
-  **struck**: it guarded a directory named after the instance, and no such
-  directory exists.
+  becomes a filesystem path component or an IPC object name.** A socket, a
+  rendezvous file, a pipe, a lock, shared memory, a log file — each uses
+  the RT-O10 derivation, never the name itself. This is what makes the
+  name rule a typeability rule and nothing more: no character an operator
+  could type can reach the filesystem or an IPC namespace, so there is no
+  list of dangerous names to keep. The earlier reservation of the Windows
+  device names (`con`, `prn`, `aux`, `nul`, `com0` to `com9`, `lpt0` to
+  `lpt9`) is **struck**: it guarded a directory named after the instance,
+  and no such directory exists.
+
+  **Operator-facing registration names may carry the instance name
+  directly** — a Windows service name, a systemd unit name. The instance
+  character set is already valid in both, and the operator must be able to
+  read them: a service list that showed a hash would not say which node it
+  is.
 - **Start-up dial on Unix.** The Windows start-up rule above applies here
   unchanged: before publishing, dial an existing socket — it answers, so
   another daemon is running, refuse and say so; nothing listens, so it is
@@ -1255,8 +1260,8 @@ construction) instead of loopback TCP.
   platforms different layouts for one mechanism.
 - **A list of reserved instance names for path safety** (the Windows
   device names). A list guards one known hazard and misses the next; the
-  invariant that a name never becomes a path component or an OS object
-  name removes the hazard class (§7.1). `default` stays reserved for a
+  invariant that a name never becomes a filesystem path component or an
+  IPC object name removes the hazard class (§7.1). `default` stays reserved for a
   different reason: confusion with the default instance.
 - **A predictable per-user pipe name.** Another user can squat it before the
   daemon starts; the random name in a user-only rendezvous removes the name
