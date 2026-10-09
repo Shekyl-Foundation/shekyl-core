@@ -49,6 +49,8 @@
 //! Pi verification surface"). Until a cell is populated it refuses — which
 //! is the same §83.3 posture the table will keep at its depth edge forever.
 
+use crate::basis::{Assumption, DerivationMs, Timing};
+
 /// Where a cell's number comes from — a **field**, not a comment (§87.2).
 ///
 /// The shortcut this arc keeps catching is a value measured on a fast machine
@@ -462,20 +464,28 @@ impl SpecVerifyCost {
 /// When it is measured (whenever convenient — it is a refinement, not a
 /// gate, §86.2): a **quantile, not a mean**, with `F`'s asymmetry —
 /// under-estimating shortens the embargo, the privacy-losing direction.
+/// Under Ruling B (§97) that measurement is taken on the Rust path; a
+/// reading with C++ in the path is not what replaces this.
 pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;
+
+/// [`ADOPTED_TRANSIT_ASSUMPTION_MS`] with its basis in the type: an
+/// assumption (§86.2; the register, §97). This is the value a derivation
+/// consumes, through [`DerivationMs::admit`]; the bare `f64` is the number.
+pub const ADOPTED_TRANSIT: Timing<Assumption> = Timing::new(ADOPTED_TRANSIT_ASSUMPTION_MS);
 
 /// Row names for the flood instrument.
 ///
 /// Not a connector identity. The privacy crate stays dependency-free, so it
 /// does not import `ConnectorId`. These variants name flood-instrument rows.
-/// Production transit is the D7 declaration's measured-transit cell, which
-/// is these constants. A new measurement is a variant here; it does not by
-/// itself make a connector stemmable.
+/// Production transit is the D7 declaration's `transit_ms` cell, which is
+/// these constants with their basis. Neither row is a measurement: both are
+/// assumptions (§97). A new reading is a variant here; it does not by itself
+/// make a connector stemmable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MeasuredConnector {
-    /// [`ADOPTED_TRANSIT_ASSUMPTION_MS`].
+    /// [`ADOPTED_TRANSIT`].
     Clearnet,
-    /// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`].
+    /// [`ANON_ZONE_TRANSIT`].
     Tor,
 }
 
@@ -484,12 +494,12 @@ impl MeasuredConnector {
     pub const ALL: [Self; 2] = [Self::Clearnet, Self::Tor];
 }
 
-/// Measured transit for one [`MeasuredConnector`].
+/// The transit assumption for one [`MeasuredConnector`] row, with its basis.
 #[must_use]
-pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> f64 {
+pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> Timing<Assumption> {
     match connector {
-        MeasuredConnector::Clearnet => ADOPTED_TRANSIT_ASSUMPTION_MS,
-        MeasuredConnector::Tor => ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+        MeasuredConnector::Clearnet => ADOPTED_TRANSIT,
+        MeasuredConnector::Tor => ANON_ZONE_TRANSIT,
     }
 }
 
@@ -556,17 +566,26 @@ pub const fn transit_ms_for_connector(connector: MeasuredConnector) -> f64 {
 /// between two Shekyl nodes — the anonymity zone addresses peers by `.onion`
 /// (`src/net/tor_address.h`), so no exit relay appears in the topology a stem
 /// will ever traverse. A clearnet-vs-exit delta measures a different path and
-/// must not be substituted (§89.5).
+/// must not be substituted (§89.5). Under Ruling B (§97) it is taken on the
+/// Rust path.
 pub const ANON_ZONE_TRANSIT_ASSUMPTION_MS: f64 = 1_625.0;
+
+/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] with its basis in the type: an
+/// assumption (§89.5; the register, §97). This is the value a derivation
+/// consumes, through [`DerivationMs::admit`]; the bare `f64` is the number.
+pub const ANON_ZONE_TRANSIT: Timing<Assumption> = Timing::new(ANON_ZONE_TRANSIT_ASSUMPTION_MS);
 
 /// The adopted `hop` for a transaction shape: measured verification floor
 /// plus the labelled transit assumption, rounded to whole milliseconds.
 ///
-/// Composition per §71.3: `hop = transit + verification + scheduling`, and
-/// the scheduling term is structurally ~0 on this path — a stem forward is
-/// dispatched immediately on the zone strand (`dandelionpp_notify` plans and
-/// sends with no deliberate per-hop delay; the fluff scheduler's draw
-/// belongs to `F`, not here).
+/// Composition per §71.3: `hop = transit + verification + scheduling`. The
+/// scheduling term is carried as 0. **That 0 is a `CppPath` claim** (§97):
+/// it says a stem forward is dispatched at once on the C++ zone strand
+/// (`dandelionpp_notify` plans and sends with no deliberate per-hop delay;
+/// the fluff scheduler's draw belongs to `F`, not here). It describes the
+/// C++ relay, not the Rust one, and is re-measured on the Rust path after
+/// RD. It is not an input the type admits, which is why it appears here as
+/// a stated omission rather than as a `Timing`.
 ///
 /// # What this is and is not (§66.3, honestly)
 ///
@@ -584,7 +603,7 @@ pub const ANON_ZONE_TRANSIT_ASSUMPTION_MS: f64 = 1_625.0;
 /// Propagates the table's refusal — an unpopulated or out-of-domain cell
 /// must not silently become a hop value (§83.3).
 pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal> {
-    adopted_hop_ms_with_transit(n_in, depth, ADOPTED_TRANSIT_ASSUMPTION_MS)
+    adopted_hop_ms_with_transit(n_in, depth, DerivationMs::admit(ADOPTED_TRANSIT))
 }
 
 /// [`adopted_hop_ms`] with the transit term supplied by the caller.
@@ -596,10 +615,12 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal>
 /// measured surface — and why §63.2's keeper holds in code as well as in
 /// prose, `hop` being transport-bound while the cost inside it is not.
 ///
-/// Callers pass [`ADOPTED_TRANSIT_ASSUMPTION_MS`] for clearnet or
-/// [`ANON_ZONE_TRANSIT_ASSUMPTION_MS`] for Tor; prefer
-/// [`crate::params::DandelionParams::adopted_for`] over calling this directly,
-/// so the zone chooses the constant rather than the call site.
+/// The transit is a [`DerivationMs`]: a labelled value whose basis the type
+/// admits to derivation. A `CppPath` reading cannot be passed here (§97).
+/// Callers admit [`ADOPTED_TRANSIT`] for clearnet or [`ANON_ZONE_TRANSIT`]
+/// for Tor; prefer [`crate::params::DandelionParams::adopted_for_transit_ms`]
+/// over calling this directly, so the connector chooses the constant rather
+/// than the call site.
 ///
 /// # Errors
 ///
@@ -608,16 +629,16 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<u32, VerifyCostRefusal>
 pub fn adopted_hop_ms_with_transit(
     n_in: usize,
     depth: u32,
-    transit_ms: f64,
+    transit: DerivationMs,
 ) -> Result<u32, VerifyCostRefusal> {
     let f = SPEC_VERIFY_COST.f_ms(n_in, depth)?;
     // CLIPPY: exact — every populated cell is const-asserted plausible
-    // (positive, finite, < 10 s) and both shipped transit constants are
-    // finite and positive, so `f + transit` stays well inside u32 with
-    // neither truncation nor sign loss. A NaN cannot reach this cast; it
-    // cannot build (see the const guard).
+    // (positive, finite, < 10 s) and the transit is a whole `u32`, so
+    // `f + transit` stays well inside u32 with neither truncation nor sign
+    // loss. A NaN cannot reach this cast; it cannot build (see the const
+    // guard).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    Ok((f + transit_ms).round() as u32)
+    Ok((f + f64::from(transit.ms())).round() as u32)
 }
 
 #[cfg(test)]
@@ -826,17 +847,36 @@ mod tests {
 
     #[test]
     fn measured_connector_rows_name_their_transit_assumptions() {
+        let clearnet = transit_ms_for_connector(MeasuredConnector::Clearnet);
+        let tor = transit_ms_for_connector(MeasuredConnector::Tor);
         assert_eq!(
-            transit_ms_for_connector(MeasuredConnector::Clearnet).to_bits(),
+            clearnet.ms().to_bits(),
             ADOPTED_TRANSIT_ASSUMPTION_MS.to_bits()
         );
         assert_eq!(
-            transit_ms_for_connector(MeasuredConnector::Tor).to_bits(),
+            tor.ms().to_bits(),
             ANON_ZONE_TRANSIT_ASSUMPTION_MS.to_bits()
         );
-        assert!(
-            transit_ms_for_connector(MeasuredConnector::Tor)
-                > transit_ms_for_connector(MeasuredConnector::Clearnet)
+        assert!(tor.ms() > clearnet.ms());
+        // Neither row is a measurement (§97). The type says so at every use.
+        assert_eq!(clearnet.basis(), crate::basis::TimingBasis::Assumption);
+        assert_eq!(tor.basis(), crate::basis::TimingBasis::Assumption);
+    }
+
+    /// The hop a derivation produces carries the transit's basis forward in
+    /// the type of its input: the same number admitted as a model result and
+    /// as an assumption yields the same hop, and a `CppPath` value cannot be
+    /// admitted at all (the `compile_fail` doctest on `crate::basis`).
+    #[test]
+    fn the_hop_derivation_consumes_only_admitted_transit() {
+        let as_assumption = DerivationMs::admit(ADOPTED_TRANSIT);
+        let as_model = DerivationMs::admit(Timing::<crate::basis::Model>::new(
+            ADOPTED_TRANSIT_ASSUMPTION_MS,
+        ));
+        assert_eq!(
+            adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_assumption),
+            adopted_hop_ms_with_transit(1, GENESIS_TREE_DEPTH, as_model)
         );
+        assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(175));
     }
 }

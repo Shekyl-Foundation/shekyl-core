@@ -358,13 +358,12 @@ fn tail_shape_at_the_boundary_mass() {
 /// of the derivation, so it has to be re-read at every candidate.
 #[test]
 fn dependents_at_each_candidate_boundary() {
+    use shekyl_relay_privacy::basis::DerivationMs;
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::{
         EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
     };
-    use shekyl_relay_privacy::verify_cost::{
-        ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-    };
+    use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
     // The two columns are the two shipped transit assumptions. A third
     // assumption is a new constant and a new column, not a silent extra
     // class in an array.
@@ -388,22 +387,22 @@ fn dependents_at_each_candidate_boundary() {
         (12_375, "S91 A: anon transit, beta = 0"),
         (13_625, "S91 A: anon transit, beta* = p90"),
     ] {
-        let embargo_secs = |transit: f64| {
+        let embargo_secs = |transit: DerivationMs| {
             EmbargoTimer::adopted(&DandelionParams {
                 fluff_return_ms: f_prime,
                 ..DandelionParams::adopted_for_transit_ms(transit)
             })
             .mean_secs()
         };
-        let clearnet = embargo_secs(ADOPTED_TRANSIT_ASSUMPTION_MS);
-        let anon = embargo_secs(ANON_ZONE_TRANSIT_ASSUMPTION_MS);
+        let clearnet = embargo_secs(DerivationMs::admit(ADOPTED_TRANSIT));
+        let anon = embargo_secs(DerivationMs::admit(ANON_ZONE_TRANSIT));
 
-        // The wallet wait is the longer of the two measured transits.
+        // The wallet wait is the longer of the two declared transits.
         // *Records-was:* §89.2 took it over the worst `RelayZone`.
         let worst_transit = if anon >= clearnet {
-            ANON_ZONE_TRANSIT_ASSUMPTION_MS
+            DerivationMs::admit(ANON_ZONE_TRANSIT)
         } else {
-            ADOPTED_TRANSIT_ASSUMPTION_MS
+            DerivationMs::admit(ADOPTED_TRANSIT)
         };
         let wait = EmbargoTimer::adopted(&DandelionParams {
             fluff_return_ms: f_prime,

@@ -455,19 +455,23 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS)
+        Self::adopted_for_transit_ms(crate::basis::DerivationMs::admit(
+            crate::verify_cost::ADOPTED_TRANSIT,
+        ))
     }
 
-    /// The adopted parameter set for one measured transit term.
+    /// The adopted parameter set for one transit term.
     ///
-    /// The embargo draw uses this with the forwarded connector's measured
-    /// transit. Only `time_between_hop_ms` changes.
+    /// The embargo draw uses this with the forwarded connector's declared
+    /// transit. Only `time_between_hop_ms` changes. The transit is a
+    /// [`crate::basis::DerivationMs`]: it carries its basis, and a value
+    /// measured with C++ in the path cannot be admitted (§97).
     #[must_use]
-    pub fn adopted_for_transit_ms(transit_ms: f64) -> Self {
+    pub fn adopted_for_transit_ms(transit: crate::basis::DerivationMs) -> Self {
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(
             1,
             crate::verify_cost::GENESIS_TREE_DEPTH,
-            transit_ms,
+            transit,
         )
         .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {
@@ -805,9 +809,9 @@ mod tests {
     fn the_clearnet_transit_is_the_adopted_set() {
         assert_eq!(
             DandelionParams::adopted(),
-            DandelionParams::adopted_for_transit_ms(
-                crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
-            ),
+            DandelionParams::adopted_for_transit_ms(crate::basis::DerivationMs::admit(
+                crate::verify_cost::ADOPTED_TRANSIT
+            )),
             "adopted() is the clearnet transit assumption"
         );
         assert_eq!(
@@ -819,9 +823,9 @@ mod tests {
 
     #[test]
     fn the_longer_transit_takes_the_longer_hop() {
-        let anon = DandelionParams::adopted_for_transit_ms(
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-        );
+        let anon = DandelionParams::adopted_for_transit_ms(crate::basis::DerivationMs::admit(
+            crate::verify_cost::ANON_ZONE_TRANSIT,
+        ));
         // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
         // input is that connector's measured transit.
         assert_eq!(anon.time_between_hop_ms, 1_750);

@@ -11,14 +11,14 @@
 
 use super::*;
 
+use shekyl_relay_privacy::basis::{Assumption, DerivationMs, Timing};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
-use shekyl_relay_privacy::verify_cost::{
-    ADOPTED_TRANSIT_ASSUMPTION_MS, ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-};
+use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
 use shekyl_transport_layer::YesNo;
 
-const SYNTHETIC_TRANSIT_MS: u32 = 900;
+/// A fixture, so an assumption: nothing measured 900 ms anywhere.
+const SYNTHETIC_TRANSIT: Timing<Assumption> = Timing::new(900.0);
 
 fn id(byte: u8) -> ConnectionId {
     let mut bytes = [0u8; 16];
@@ -26,7 +26,7 @@ fn id(byte: u8) -> ConnectionId {
     ConnectionId::from_bytes(bytes)
 }
 
-fn hidden_column(transit: Assessment<u32>) -> Declaration {
+fn hidden_column(transit: Assessment<DerivationMs>) -> Declaration {
     Declaration::synthetic(
         Assessment::Assessed(YesNo::Yes),
         transit,
@@ -47,14 +47,14 @@ fn relay(rng: &mut SplitMix64) -> Relay {
 }
 
 #[test]
-fn the_built_columns_keep_the_measured_transits() {
+fn the_built_columns_keep_the_declared_transits() {
     assert_eq!(
-        measured_transit_ms(ConnectorId::Clearnet),
-        Some(ADOPTED_TRANSIT_ASSUMPTION_MS)
+        transit_ms(ConnectorId::Clearnet),
+        Some(DerivationMs::admit(ADOPTED_TRANSIT))
     );
     assert_eq!(
-        measured_transit_ms(ConnectorId::Tor),
-        Some(ANON_ZONE_TRANSIT_ASSUMPTION_MS)
+        transit_ms(ConnectorId::Tor),
+        Some(DerivationMs::admit(ANON_ZONE_TRANSIT))
     );
 }
 
@@ -62,7 +62,7 @@ fn the_built_columns_keep_the_measured_transits() {
 fn a_synthetic_column_drives_stem_own_edge_and_embargo() {
     let mut rng = SplitMix64::new(9);
     let mut relay = relay(&mut rng);
-    let measured = hidden_column(Assessment::Assessed(SYNTHETIC_TRANSIT_MS));
+    let measured = hidden_column(Assessment::Assessed(DerivationMs::admit(SYNTHETIC_TRANSIT)));
     let unmeasured = hidden_column(Assessment::NotAssessed);
     // Labelled clearnet. Clearnet does not hide the address and its transit
     // is 50 ms. The column says otherwise.

@@ -125,13 +125,14 @@ pub struct FloodParams {
 /// revision spelled these as literals (`50`, `1_625`) beside doc text naming
 /// the constants — a duplicate that drifts the instant either assumption is
 /// adjusted, leaving the flood simulating a network the derivation has stopped
-/// describing.
+/// describing. Both rows are assumptions (§97); the instrument simulates
+/// under them and does not measure them.
 /// Both constants are finite, positive and far below 2^53; the cast cannot
 /// truncate meaningfully or lose a sign.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn transit_for(connector: crate::verify_cost::MeasuredConnector) -> u64 {
-    crate::verify_cost::transit_ms_for_connector(connector) as u64
+    crate::verify_cost::transit_ms_for_connector(connector).ms() as u64
 }
 
 #[cfg(test)]
