@@ -20,21 +20,26 @@
 # For a body or calls row, the base and head revisions are compared:
 #
 #   present at both and different   FAIL
-#   gone at head                    PASS, and "gone" means gone: the witness
-#                                   identifier (the bare name unless the row
-#                                   names one) matches nothing under src/p2p
-#                                   at head outside comments and string
-#                                   literals, and the base body does not
-#                                   survive under another signature
+#   gone at head                    PASS, and "gone" means gone: one scan of
+#                                   every file under src/, with comments and
+#                                   literals stripped, finds neither the
+#                                   anchor, nor the witness identifier (the
+#                                   bare name unless the row names one), nor
+#                                   the base body under another signature
 #   anchor gone, name still present FAIL  (renamed or re-signed, not deleted)
 #   unchanged                       PASS
+#
+# Moving a frozen function out of src/p2p and into another directory under
+# src/ is still the dial path. The identity scan is that one stripped view;
+# it is loaded only when a row is absent, not on an unchanged tree.
 #
 # For a shrink row, the diff from base to head may add no code lines.
 # Deletions are free. A comment-only addition is free. An in-place edit of a
 # code line is an added code line, and so is replacing logic with a call
 # into Rust: that is visible as one dated UNFREEZE line per PR that moves
-# something. Comments are stripped and whitespace collapsed by the gate's
-# own scanner before the two texts are diffed.
+# something. That diff strips comments only and keeps literals, so a string
+# edit is still an added code line. The identity scan strips literals too:
+# a log line that quotes a deleted name is not the function.
 #
 # Rule 47: a row the gate cannot find at the base revision fails. It is not
 # skipped, because a gate that finds nothing to compare reports the same
@@ -82,7 +87,8 @@ from pathlib import Path
 
 DEFAULT_LIST = "scripts/ci/dial_path_freeze.tsv"
 DEFAULT_BRIEF = "docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md"
-FROZEN_TREE = "src/p2p"
+# Where a frozen definition, its name, or its body may still be the dial path.
+IDENTITY_TREE = "src"
 UNFREEZE = re.compile(r"^\*\*UNFREEZE \(Rick, \d{4}-\d{2}-\d{2}\):\*\* (?P<subject>.+?) — (?P<reason>.+)$")
 
 
@@ -91,37 +97,63 @@ class GateError(Exception):
 
 
 @dataclass(frozen=True)
-class Row:
-    kind: str
+class Body:
+    """A function, compared from its anchor to its closing brace."""
+
     path: str
     anchor: str
-    callee: str | None
     witness: str | None = None
 
-    @property
-    def name(self) -> str:
-        """The bare function name: the last `::` segment before the `(`."""
-        head = self.anchor.rstrip("(")
-        return head.rsplit("::", 1)[-1].split()[-1]
 
-    @property
-    def gone_marker(self) -> str:
-        """The identifier whose absence from src/p2p means the function is
-        gone: the witness when the row names one (a bare name like `open`
-        is an ordinary word), the bare name otherwise."""
-        return self.witness or self.name
+@dataclass(frozen=True)
+class Calls:
+    """The lines inside a function that call `callee`."""
 
-    def describe(self) -> str:
-        if self.kind == "calls":
-            return f"{self.path}: calls to {self.callee} inside {self.name}"
-        if self.kind == "shrink":
-            return f"{self.path}: shrink-only"
-        return f"{self.path}: {self.name}"
+    path: str
+    anchor: str
+    callee: str
 
-    @property
-    def subject(self) -> str:
-        """What an UNFREEZE line must name to lift this row."""
-        return self.path if self.kind == "shrink" else self.anchor
+
+@dataclass(frozen=True)
+class Shrink:
+    """A file to which a change may add no code lines."""
+
+    path: str
+
+
+Row = Body | Calls | Shrink
+
+
+def bare_name(anchor: str) -> str:
+    """The bare function name: the last `::` segment before the `(`."""
+    head = anchor.rstrip("(")
+    return head.rsplit("::", 1)[-1].split()[-1]
+
+
+def gone_marker(row: Body | Calls) -> str:
+    """The identifier whose absence from src/ means the function is gone.
+
+    A body row may name a witness: a bare name like `open` is an ordinary
+    word, and the witness is what the deletion has to remove.
+    """
+    if isinstance(row, Body) and row.witness:
+        return row.witness
+    return bare_name(row.anchor)
+
+
+def describe(row: Row) -> str:
+    if isinstance(row, Calls):
+        return f"{row.path}: calls to {row.callee} inside {bare_name(row.anchor)}"
+    if isinstance(row, Shrink):
+        return f"{row.path}: shrink-only"
+    return f"{row.path}: {bare_name(row.anchor)}"
+
+
+def subject_of(row: Row) -> str:
+    """What an UNFREEZE line must name to lift this row."""
+    if isinstance(row, Shrink):
+        return row.path
+    return row.anchor
 
 
 def parse_list(text: str, where: str) -> list[Row]:
@@ -132,13 +164,13 @@ def parse_list(text: str, where: str) -> list[Row]:
             continue
         fields = line.split("\t")
         if fields[0] == "body" and len(fields) == 3:
-            rows.append(Row("body", fields[1], fields[2], None))
+            rows.append(Body(fields[1], fields[2]))
         elif fields[0] == "body" and len(fields) == 4:
-            rows.append(Row("body", fields[1], fields[2], None, fields[3]))
+            rows.append(Body(fields[1], fields[2], fields[3]))
         elif fields[0] == "calls" and len(fields) == 4:
-            rows.append(Row("calls", fields[1], fields[2], fields[3]))
+            rows.append(Calls(fields[1], fields[2], fields[3]))
         elif fields[0] == "shrink" and len(fields) == 2:
-            rows.append(Row("shrink", fields[1], "", None))
+            rows.append(Shrink(fields[1]))
         else:
             raise GateError(f"{where}:{number}: malformed row: {line!r}")
     return rows
@@ -343,10 +375,6 @@ class Function:
     text: str
     body: str
 
-    @property
-    def normalised_body(self) -> str:
-        return " ".join(self.body.split())
-
 
 def extract_function(text: str, anchor: str) -> Function | None:
     """The definition anchored at `anchor`: its text from line start to
@@ -403,25 +431,22 @@ class Verdict:
 
 
 class Head:
-    """What the head revision holds: the frozen tree for the name search, and
-    any other file a row names, read on demand."""
+    """The head revision. A row's own file is read on demand. The identity
+    scan of src/ is loaded only when a subject is absent."""
 
-    def __init__(self, repo: Path, base_sha: str, sha: str, texts: dict[str, str]):
+    def __init__(self, repo: Path, base_sha: str, sha: str):
         self.repo = repo
         self.base_sha = base_sha
         self.sha = sha
-        self.texts = texts
-        self._stripped = {path: strip_comments_and_literals(text) for path, text in texts.items()}
-        self._extra: dict[str, str | None] = {}
+        self._files: dict[str, str | None] = {}
         self._renames: dict[str, list[str]] | None = None
         self._src: dict[str, str] | None = None
+        self._stripped: dict[str, str] | None = None
 
     def text(self, path: str) -> str | None:
-        if path in self.texts:
-            return self.texts[path]
-        if path not in self._extra:
-            self._extra[path] = git_show(self.repo, self.sha, path)
-        return self._extra[path]
+        if path not in self._files:
+            self._files[path] = git_show(self.repo, self.sha, path)
+        return self._files[path]
 
     def renames_from(self, path: str) -> list[str]:
         """Destinations git reports as a rename or copy of `path`, read from
@@ -440,146 +465,159 @@ class Head:
         return self._renames.get(path, [])
 
     def src_texts(self) -> dict[str, str]:
-        """Every file under src/ at head, for the survival check."""
+        """Every file under src/ at head."""
         if self._src is None:
-            self._src = tree_texts(self.repo, self.sha, "src")
+            self._src = tree_texts(self.repo, self.sha, IDENTITY_TREE)
         return self._src
 
+    def stripped_src(self) -> dict[str, str]:
+        """src/ with comments and literals stripped: the one view the anchor,
+        the name, and the body are searched on."""
+        if self._stripped is None:
+            self._stripped = {
+                path: strip_comments_and_literals(text) for path, text in self.src_texts().items()
+            }
+        return self._stripped
+
     def names(self, name: str) -> list[str]:
-        """Files where `name` is a whole identifier outside comments and
-        literals: `rg -n -w <name> src/p2p`, read by the gate's own scanner."""
+        """Files under src/ where `name` is a whole identifier outside
+        comments and literals."""
         pattern = word(name)
-        return sorted(path for path, text in self._stripped.items() if pattern.search(text))
+        return sorted(path for path, text in self.stripped_src().items() if pattern.search(text))
 
     def anchored_in(self, anchor: str) -> list[str]:
-        """Files under the frozen tree that hold the anchor itself: a frozen
-        definition moved to another file is still the dial path."""
-        return sorted(path for path, text in self.texts.items() if anchor in text)
+        """Files under src/ whose code holds the anchor. A comment that
+        quotes it does not: the search reads the stripped view. A definition
+        moved anywhere under src/ is still the dial path."""
+        return sorted(path for path, text in self.stripped_src().items() if anchor in text)
 
     def body_survives(self, function: Function) -> list[str]:
-        """Files where the base body appears, whitespace-normalised. Short
-        bodies are skipped: `{ return true; }` proves nothing."""
+        """Files under src/ where the base body appears once comments,
+        literals, and whitespace are gone. Short bodies are skipped:
+        `{ return true; }` proves nothing."""
         if code_line_count(function.body) < 3:
             return []
-        needle = function.normalised_body
-        return sorted(path for path, text in self.texts.items() if needle in " ".join(text.split()))
+        needle = " ".join(strip_comments_and_literals(function.body).split())
+        return sorted(
+            path for path, text in self.stripped_src().items() if needle in " ".join(text.split())
+        )
 
 
-def gone(row: Row, base_fn: Function, head: Head, what: str) -> Verdict:
+def gone(row: Body | Calls, base_fn: Function, head: Head, what: str) -> Verdict:
     """The function anchored at `row.anchor` is absent from `row.path` at
     head. Is it gone?"""
     moved = head.anchored_in(row.anchor)
     if moved:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: the definition moved to {', '.join(moved)}, not deleted",
+            f"FAIL  {describe(row)}: the definition moved to {', '.join(moved)}, not deleted",
         )
-    survivors = head.names(row.gone_marker)
+    marker = gone_marker(row)
+    survivors = head.names(marker)
     if survivors:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: anchor absent but `{row.gone_marker}` is still named at head "
-            f"outside comments ({', '.join(survivors)}): renamed or re-signed, not deleted",
+            f"FAIL  {describe(row)}: anchor absent but `{marker}` is still named at head "
+            f"outside comments and literals ({', '.join(survivors)}): renamed or re-signed, not deleted",
         )
     carriers = head.body_survives(base_fn)
     if carriers:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: anchor absent but the body survives under another "
+            f"FAIL  {describe(row)}: anchor absent but the body survives under another "
             f"signature ({', '.join(carriers)}): renamed, not deleted",
         )
-    return Verdict(True, f"PASS  {row.describe()}: {what}")
+    return Verdict(True, f"PASS  {describe(row)}: {what}")
 
 
-def judge_body(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
+def judge_body(row: Body, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
     if base_text is None:
-        return Verdict(False, f"FAIL  {row.describe()}: {row.path} is absent at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: {row.path} is absent at base (rule 47)")
     base_fn = extract_function(base_text, row.anchor)
     if base_fn is None:
-        return Verdict(False, f"FAIL  {row.describe()}: not found at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: not found at base (rule 47)")
     head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
         return gone(row, base_fn, head, "deleted")
     if head_fn.text == base_fn.text:
-        return Verdict(True, f"PASS  {row.describe()}: unchanged")
-    if row.subject in unfrozen:
-        return Verdict(True, f"PASS  {row.describe()}: changed under an UNFREEZE line naming it")
+        return Verdict(True, f"PASS  {describe(row)}: unchanged")
+    if subject_of(row) in unfrozen:
+        return Verdict(True, f"PASS  {describe(row)}: changed under an UNFREEZE line naming it")
     diff = "\n".join(
         difflib.unified_diff(
             base_fn.text.splitlines(),
             head_fn.text.splitlines(),
-            fromfile=f"base:{row.path}:{row.name}",
-            tofile=f"head:{row.path}:{row.name}",
+            fromfile=f"base:{row.path}:{bare_name(row.anchor)}",
+            tofile=f"head:{row.path}:{bare_name(row.anchor)}",
             lineterm="",
             n=1,
         )
     )
     return Verdict(
         False,
-        f"FAIL  {row.describe()}: body changed; the dial path is frozen "
+        f"FAIL  {describe(row)}: body changed; the dial path is frozen "
         f"(Ruling A, 2026-10-08). Delete it with the cutover or leave it.\n{diff}",
     )
 
 
-def judge_calls(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
-    assert row.callee is not None
+def judge_calls(row: Calls, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
+    name = bare_name(row.anchor)
     if base_text is None:
-        return Verdict(False, f"FAIL  {row.describe()}: {row.path} is absent at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: {row.path} is absent at base (rule 47)")
     base_fn = extract_function(base_text, row.anchor)
     if base_fn is None:
-        return Verdict(False, f"FAIL  {row.describe()}: {row.name} not found at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: {name} not found at base (rule 47)")
     base_calls = call_lines(base_fn.body, row.callee)
     if not base_calls:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: no call to {row.callee} inside {row.name} at base (rule 47)",
+            f"FAIL  {describe(row)}: no call to {row.callee} inside {name} at base (rule 47)",
         )
     head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
-        enclosing = gone(row, base_fn, head, f"{row.name} deleted")
+        enclosing = gone(row, base_fn, head, f"{name} deleted")
         if not enclosing.ok:
             return enclosing
-        return callee_gone(row, head, f"{row.name} and its calls deleted")
+        return callee_gone(row, head, f"{name} and its calls deleted")
     head_calls = call_lines(head_fn.body, row.callee)
     if head_calls == base_calls:
-        return Verdict(True, f"PASS  {row.describe()}: unchanged")
-    if row.subject in unfrozen:
-        return Verdict(True, f"PASS  {row.describe()}: changed under an UNFREEZE line naming it")
+        return Verdict(True, f"PASS  {describe(row)}: unchanged")
+    if subject_of(row) in unfrozen:
+        return Verdict(True, f"PASS  {describe(row)}: changed under an UNFREEZE line naming it")
     if not head_calls:
         return callee_gone(row, head, "calls deleted")
     return Verdict(
         False,
-        f"FAIL  {row.describe()}: the frozen call lines changed\n"
+        f"FAIL  {describe(row)}: the frozen call lines changed\n"
         + "\n".join(f"  base: {line}" for line in base_calls)
         + "\n"
         + "\n".join(f"  head: {line}" for line in head_calls),
     )
 
 
-def callee_gone(row: Row, head: Head, what: str) -> Verdict:
-    assert row.callee is not None
+def callee_gone(row: Calls, head: Head, what: str) -> Verdict:
     survivors = head.names(row.callee)
     if survivors:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: the calls are gone but `{row.callee}` is still named at "
-            f"head outside comments ({', '.join(survivors)}): not deleted",
+            f"FAIL  {describe(row)}: the calls are gone but `{row.callee}` is still named at "
+            f"head outside comments and literals ({', '.join(survivors)}): not deleted",
         )
-    return Verdict(True, f"PASS  {row.describe()}: {what}")
+    return Verdict(True, f"PASS  {describe(row)}: {what}")
 
 
 SURVIVAL_SHARE = 0.5
 
 
-def file_gone(repo: Path, head: Head, row: Row, base_text: str, what: str) -> Verdict:
+def file_gone(repo: Path, head: Head, row: Shrink, base_text: str, what: str) -> Verdict:
     """The shrink row's file is absent at head. Was it deleted, or moved?"""
     moved = head.renames_from(row.path)
     if moved:
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: renamed, not deleted ({', '.join(moved)}); "
+            f"FAIL  {describe(row)}: renamed, not deleted ({', '.join(moved)}); "
             f"the file is gone only when no path carries it",
         )
     base_lines = content_lines(base_text)
@@ -592,17 +630,17 @@ def file_gone(repo: Path, head: Head, row: Row, base_text: str, what: str) -> Ve
         if carriers:
             return Verdict(
                 False,
-                f"FAIL  {row.describe()}: the file is gone but its code survives under src/: "
+                f"FAIL  {describe(row)}: the file is gone but its code survives under src/: "
                 f"{'; '.join(carriers)}: renamed or split, not deleted",
             )
-    return Verdict(True, f"PASS  {row.describe()}: {what}")
+    return Verdict(True, f"PASS  {describe(row)}: {what}")
 
 
 def judge_shrink(
-    repo: Path, row: Row, base_text: str | None, head_text: str | None, head: Head, unfrozen: set[str]
+    repo: Path, row: Shrink, base_text: str | None, head_text: str | None, head: Head, unfrozen: set[str]
 ) -> Verdict:
     if base_text is None:
-        return Verdict(False, f"FAIL  {row.describe()}: absent at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: absent at base (rule 47)")
     if head_text is None:
         return file_gone(repo, head, row, base_text, "file deleted")
     before = code_line_count(base_text)
@@ -611,18 +649,18 @@ def judge_shrink(
     if not added:
         return Verdict(
             True,
-            f"PASS  {row.describe()}: {before} -> {after} code lines, none added",
+            f"PASS  {describe(row)}: {before} -> {after} code lines, none added",
         )
-    if row.subject in unfrozen:
+    if subject_of(row) in unfrozen:
         return Verdict(
             True,
-            f"PASS  {row.describe()}: {len(added)} code line(s) added under an UNFREEZE line naming the file",
+            f"PASS  {describe(row)}: {len(added)} code line(s) added under an UNFREEZE line naming the file",
         )
     shown = "\n".join(f"  + {line}" for line in added[:8])
     more = f"\n  ... and {len(added) - 8} more" if len(added) > 8 else ""
     return Verdict(
         False,
-        f"FAIL  {row.describe()}: {len(added)} code line(s) added ({before} -> {after} code lines). "
+        f"FAIL  {describe(row)}: {len(added)} code line(s) added ({before} -> {after} code lines). "
         f"{row.path} takes deletions only (Rick, 2026-10-09); an added or edited code line needs "
         f"**UNFREEZE (Rick, YYYY-MM-DD):** {row.path} — <reason> in {DEFAULT_BRIEF}\n{shown}{more}",
     )
@@ -630,38 +668,38 @@ def judge_shrink(
 
 def judge_removed(row: Row, base_text: str | None, head: Head, unfrozen: set[str]) -> Verdict:
     """A row present at base and absent at head."""
-    if row.kind == "shrink":
+    if isinstance(row, Shrink):
         if head.text(row.path) is None:
             if base_text is None:
-                return Verdict(False, f"FAIL  {row.describe()}: absent at base (rule 47)")
+                return Verdict(False, f"FAIL  {describe(row)}: absent at base (rule 47)")
             return file_gone(head.repo, head, row, base_text, "row retired, file deleted")
-        if row.subject in unfrozen:
-            return Verdict(True, f"PASS  {row.describe()}: row retired under an UNFREEZE line naming the file")
+        if subject_of(row) in unfrozen:
+            return Verdict(True, f"PASS  {describe(row)}: row retired under an UNFREEZE line naming the file")
         return Verdict(
             False,
-            f"FAIL  {row.describe()}: row removed while the file is still present. "
+            f"FAIL  {describe(row)}: row removed while the file is still present. "
             f"Lifting it needs a new line in {DEFAULT_BRIEF}: "
             f"**UNFREEZE (Rick, YYYY-MM-DD):** {row.path} — <reason>",
         )
     if base_text is None:
-        return Verdict(False, f"FAIL  {row.describe()}: {row.path} is absent at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: {row.path} is absent at base (rule 47)")
     base_fn = extract_function(base_text, row.anchor)
     if base_fn is None:
-        return Verdict(False, f"FAIL  {row.describe()}: not found at base (rule 47)")
+        return Verdict(False, f"FAIL  {describe(row)}: not found at base (rule 47)")
     head_text = head.text(row.path)
     head_fn = None if head_text is None else extract_function(head_text, row.anchor)
     if head_fn is None:
         verdict = gone(row, base_fn, head, "row retired, function deleted")
-        if not verdict.ok or row.kind == "body":
+        if not verdict.ok or isinstance(row, Body):
             return verdict
         return callee_gone(row, head, "row retired, function and calls deleted")
-    if row.kind == "calls" and not call_lines(head_fn.body, row.callee or ""):
+    if isinstance(row, Calls) and not call_lines(head_fn.body, row.callee):
         return callee_gone(row, head, "row retired, calls deleted")
-    if row.subject in unfrozen:
-        return Verdict(True, f"PASS  {row.describe()}: row retired under an UNFREEZE line naming it")
+    if subject_of(row) in unfrozen:
+        return Verdict(True, f"PASS  {describe(row)}: row retired under an UNFREEZE line naming it")
     return Verdict(
         False,
-        f"FAIL  {row.describe()}: row removed while the function is still present. "
+        f"FAIL  {describe(row)}: row removed while the function is still present. "
         f"Lifting it needs a new line in {DEFAULT_BRIEF}: "
         f"**UNFREEZE (Rick, YYYY-MM-DD):** {row.anchor} — <reason>",
     )
@@ -712,7 +750,7 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
     head_rows = parse_list(head_list, f"head:{list_path}") if head_list is not None else []
 
     judged = base_rows if base_list is not None else head_rows
-    if base_list is not None and not any(row.kind in ("body", "calls") for row in base_rows):
+    if base_list is not None and not any(isinstance(row, (Body, Calls)) for row in base_rows):
         print(
             "no body or calls rows remain at base: every frozen function is gone and the "
             "function freeze is discharged. The shrink rows stay as long as their files do."
@@ -730,14 +768,14 @@ def run(repo: Path, base: str, head: str, list_path: str, brief_path: str) -> in
     for note in notes:
         print(note)
 
-    head_tree = Head(repo, base_sha, head_sha, tree_texts(repo, head_sha, FROZEN_TREE))
+    head_tree = Head(repo, base_sha, head_sha)
     base_texts = {row.path: git_show(repo, base_sha, row.path) for row in judged + added + removed}
 
     verdicts: list[Verdict] = []
     for row in judged + added:
-        if row.kind == "body":
+        if isinstance(row, Body):
             verdicts.append(judge_body(row, base_texts[row.path], head_tree, unfrozen))
-        elif row.kind == "calls":
+        elif isinstance(row, Calls):
             verdicts.append(judge_calls(row, base_texts[row.path], head_tree, unfrozen))
         else:
             verdicts.append(

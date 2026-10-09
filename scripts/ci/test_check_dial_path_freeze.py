@@ -242,6 +242,28 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "the definition moved to src/p2p/dial_helpers.inl, not deleted",
     ),
     (
+        "moving a frozen function out of src/p2p fails: the definition moved, not deleted",
+        {
+            INL: IDLE + BETA,
+            "src/cryptonote_protocol/dial.cpp": ALPHA,
+            HDR: HDR_TEXT.replace("  bool alpha(int n);\n", ""),
+        },
+        1,
+        "the definition moved to src/cryptonote_protocol/dial.cpp, not deleted",
+    ),
+    (
+        "a comment or a string that quotes a deleted function does not keep it alive",
+        {
+            **WITHOUT_ALPHA,
+            "src/cryptonote_protocol/note.cpp": (
+                "// node_server<t>::alpha( was the dial path\n"
+                'void log_it() { MINFO("called alpha"); }\n'
+            ),
+        },
+        0,
+        "alpha: deleted",
+    ),
+    (
         "re-signing a frozen function fails: the anchor is gone, the name is not",
         {INL: INL_TEXT.replace("node_server<t>::alpha(int n)", "node_server<t>::alpha (int n)")},
         1,

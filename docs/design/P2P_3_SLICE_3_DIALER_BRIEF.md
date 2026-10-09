@@ -553,9 +553,9 @@ compares each body with the base revision on every PR to `dev`: a
 change fails, a deletion passes, a row it cannot find at base fails.
 Deleted means gone: the row's witness identifier (its bare name, or
 `open_outcome` for `zone_server::open`, whose bare name is an ordinary
-word) matches nothing under `src/p2p` at head outside comments and
+word) matches nothing under `src/` at head outside comments and
 string literals, and the body does not survive under another
-signature. **`net_node.inl`, `net_node.h` and
+signature. A definition moved out of `src/p2p` is still the dial path. **`net_node.inl`, `net_node.h` and
 `src/cryptonote_protocol/levin_notify.cpp` take deletions only (Rick,
 2026-10-09):** a change may add no code lines to them. A comment-only
 addition is free; an edited line, or logic swapped for a call into

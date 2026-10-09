@@ -7,8 +7,9 @@
 # is a function the P2P-3 slice 3 cutover deletes. Until that PR, a change to
 # a row's body fails `check_dial_path_freeze.py`; deleting the function
 # passes, where deleted means the witness identifier (the bare name unless
-# the row names one) is gone from src/p2p outside comments and literals. The
-# shrink rows are the C++ files the Rust lanes are replacing (Rick,
+# the row names one) is gone from src/ outside comments and literals. A
+# definition moved out of src/p2p is still the dial path. The shrink
+# rows are the C++ files the Rust lanes are replacing (Rick,
 # 2026-10-09): a change may add no code lines to them. Deletions are free;
 # comment-only additions are free; an edited line, or logic swapped for a
 # call into Rust, is an added code line. This file is the list the dialer
