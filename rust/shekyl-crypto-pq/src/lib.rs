@@ -56,6 +56,7 @@ pub mod derivation;
 mod encrypted_output_field;
 pub mod error;
 pub mod handle;
+mod hybrid_combiner;
 pub mod kem;
 pub mod key_image;
 pub mod keys;
