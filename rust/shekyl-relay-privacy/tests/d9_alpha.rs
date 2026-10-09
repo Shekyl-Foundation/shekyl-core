@@ -26,6 +26,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_relay_privacy::basis::{DerivationMs, Model, Timing};
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, FloodParams, FloodReach, FLOOD_TICK_MS,
 };
@@ -66,9 +67,7 @@ fn shipped_mean_ticks() -> u32 {
 
 fn alpha_at(fluff_return_ms: u32) -> f64 {
     let params = DandelionParams {
-        fluff_return_ms: DandelionParams::adopted()
-            .fluff_return_ms
-            .derived(fluff_return_ms),
+        fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(fluff_return_ms))),
         ..DandelionParams::adopted()
     };
     full_travel_probability(&params, shipped_mean_ticks(), DEFAULT_EMBARGO_TICK_MILLIS)

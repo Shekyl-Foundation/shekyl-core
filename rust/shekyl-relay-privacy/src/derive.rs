@@ -324,6 +324,11 @@ pub fn derive_embargo(
 /// the input value and its provenance in a commit that moves **no** derived
 /// constant, then moves the pins in a second commit whose diff is entirely
 /// mechanical. `DAEMON_RELAY_PRIVACY.md` §94.10.
+///
+/// A sensitivity probe, so it is built only with the `conformance` feature
+/// (the crate's own tests enable it): stepping a derived hop by a bare
+/// number is not something a shipped build does.
+#[cfg(any(test, feature = "conformance"))]
 #[must_use]
 pub fn next_embargo_step(
     params: &DandelionParams,

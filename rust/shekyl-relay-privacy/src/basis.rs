@@ -78,6 +78,30 @@ impl TimingBasis {
     pub const fn admissible(self) -> bool {
         !matches!(self, Self::CppPath)
     }
+
+    /// How much a value with this basis can bear, for derivation. From the
+    /// weakest: an assumption, then a model result, then a Rust-path
+    /// measurement. A derived value takes the weakest of its inputs, so
+    /// adding one assumption to a measurement yields an assumption.
+    /// `CppPath` has no rank: it is not admitted, and asking is a defect.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Assumption => 0,
+            Self::Model => 1,
+            Self::RustPath => 2,
+            Self::CppPath => panic!("a CppPath value has no place in a derivation"),
+        }
+    }
+
+    /// The weaker of two admissible bases.
+    #[must_use]
+    pub const fn weaker(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
 }
 
 /// A basis at the type level, so a function's bound can name it.
@@ -159,9 +183,20 @@ impl<B: Basis> Timing<B> {
 
 /// Whole milliseconds a privacy-constant derivation may consume.
 ///
-/// Built only by [`DerivationMs::admit`], whose bound excludes
-/// [`CppPath`]. The basis travels with the value so the derivation's output
-/// can say what it rests on.
+/// Built outside this crate only by [`DerivationMs::admit`], whose bound
+/// excludes [`CppPath`]. Inside the crate a derivation builds one with
+/// [`DerivationMs::derive`], which takes the weakest basis of its inputs.
+/// The basis travels with the value so the derivation's output can say
+/// what it rests on.
+///
+/// There is no public way to attach a basis to a bare number. `derived` is
+/// crate-private, so this does not compile outside the crate:
+///
+/// ```compile_fail
+/// use shekyl_relay_privacy::basis::{Assumption, DerivationMs, Timing};
+/// let transit = DerivationMs::admit(Timing::<Assumption>::new(50.0));
+/// let _ = transit.derived(715);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DerivationMs {
     ms: u32,
@@ -212,20 +247,42 @@ impl DerivationMs {
         self.basis
     }
 
-    /// A value derived from this one, carrying the basis this one was
-    /// admitted with. The derivation that produced `ms` consumed an admitted
-    /// input, so the result rests on nothing a derivation may not consume;
-    /// this is how `time_between_hop_ms` keeps the transit's basis.
+    /// A value a derivation inside this crate produced from inputs with the
+    /// given bases. It takes the weakest of them ([`TimingBasis::weaker`]):
+    /// the hop is a Rust-path verification floor plus an assumed transit,
+    /// and it reads as an assumption.
+    ///
+    /// Crate-private on purpose. A public version would attach any admitted
+    /// value's basis to any number, and `model.derived(cpp_measured)` would
+    /// turn a C++-path reading into a model result.
+    ///
+    /// # Panics
+    ///
+    /// With no inputs, or with a `CppPath` among them: neither is a
+    /// derivation this crate performs.
     #[must_use]
-    pub const fn derived(self, ms: u32) -> Self {
-        Self {
-            ms,
-            basis: self.basis,
+    pub(crate) const fn derive(ms: u32, inputs: &[TimingBasis]) -> Self {
+        assert!(!inputs.is_empty(), "a derived value names its inputs");
+        let mut basis = inputs[0];
+        let mut i = 1;
+        while i < inputs.len() {
+            basis = basis.weaker(inputs[i]);
+            i += 1;
         }
+        Self { ms, basis }
+    }
+
+    /// A value derived from this one alone, keeping its basis.
+    #[must_use]
+    pub(crate) const fn derived(self, ms: u32) -> Self {
+        Self::derive(ms, &[self.basis])
     }
 
     /// `self` plus `extra` milliseconds, with the same basis, or `None` on
-    /// overflow. For sensitivity probes that step a derived value.
+    /// overflow. For the sensitivity probes only: the conformance instrument
+    /// steps a derived value to find the next embargo step. Not in a shipped
+    /// build.
+    #[cfg(any(test, feature = "conformance"))]
     #[must_use]
     pub const fn checked_add_ms(self, extra: u32) -> Option<Self> {
         match self.ms.checked_add(extra) {
@@ -274,6 +331,27 @@ mod tests {
         assert_eq!((hop.ms(), hop.basis()), (165, TimingBasis::RustPath));
         assert_eq!(hop.checked_add_ms(10), Some(transit.derived(175)));
         assert_eq!(hop.checked_add_ms(u32::MAX), None);
+    }
+
+    #[test]
+    fn a_derived_value_takes_the_weakest_basis_of_its_inputs() {
+        use TimingBasis::{Assumption, Model, RustPath};
+        assert_eq!(
+            DerivationMs::derive(1, &[RustPath, Assumption]).basis(),
+            Assumption
+        );
+        assert_eq!(
+            DerivationMs::derive(1, &[Assumption, RustPath]).basis(),
+            Assumption
+        );
+        assert_eq!(DerivationMs::derive(1, &[RustPath, Model]).basis(), Model);
+        assert_eq!(
+            DerivationMs::derive(1, &[Model, Assumption]).basis(),
+            Assumption
+        );
+        assert_eq!(DerivationMs::derive(1, &[RustPath]).basis(), RustPath);
+        assert_eq!(RustPath.weaker(Model), Model);
+        assert_eq!(Model.weaker(Assumption), Assumption);
     }
 
     #[test]

@@ -92,6 +92,7 @@
 // an integer millisecond reading. Same disposition as `d9_alpha.rs`.
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_relay_privacy::basis::{DerivationMs, Model, Timing};
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, FloodParams, FloodReach, FLOOD_TICK_MS,
 };
@@ -358,7 +359,6 @@ fn tail_shape_at_the_boundary_mass() {
 /// of the derivation, so it has to be re-read at every candidate.
 #[test]
 fn dependents_at_each_candidate_boundary() {
-    use shekyl_relay_privacy::basis::DerivationMs;
     use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
     use shekyl_relay_privacy::schedule::{
         EmbargoTimer, ADOPTED_PROPAGATION_TIMEOUT_SECS, PROPAGATION_FALSE_FAIL_ONE_IN,
@@ -389,7 +389,7 @@ fn dependents_at_each_candidate_boundary() {
     ] {
         let embargo_secs = |transit: DerivationMs| {
             EmbargoTimer::adopted(&DandelionParams {
-                fluff_return_ms: DandelionParams::adopted().fluff_return_ms.derived(f_prime),
+                fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(f_prime))),
                 ..DandelionParams::adopted_for_transit_ms(transit)
             })
             .mean_secs()
@@ -405,7 +405,7 @@ fn dependents_at_each_candidate_boundary() {
             DerivationMs::admit(ADOPTED_TRANSIT)
         };
         let wait = EmbargoTimer::adopted(&DandelionParams {
-            fluff_return_ms: DandelionParams::adopted().fluff_return_ms.derived(f_prime),
+            fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(f_prime))),
             ..DandelionParams::adopted_for_transit_ms(worst_transit)
         })
         .judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
@@ -694,7 +694,7 @@ fn leak_at_each_candidate_region() {
     let mut rows = Vec::new();
     for f_prime in [3_250_u32, 3_500, 4_500, 4_750, 5_000] {
         let params = DandelionParams {
-            fluff_return_ms: DandelionParams::adopted().fluff_return_ms.derived(f_prime),
+            fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(f_prime))),
             ..DandelionParams::adopted()
         };
         let e = EmbargoTimer::adopted(&params);
@@ -818,7 +818,7 @@ fn leak_at_each_candidate_region() {
     // column a reading against the wrong embargo.
     for (f_prime, _) in &rows {
         let p = DandelionParams {
-            fluff_return_ms: DandelionParams::adopted().fluff_return_ms.derived(*f_prime),
+            fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(*f_prime))),
             ..DandelionParams::adopted()
         };
         let d = derive_embargo(
@@ -866,9 +866,7 @@ fn alpha_degradation_when_the_network_leaves_the_region() {
 
     #[allow(clippy::cast_possible_truncation)]
     let params_at = |f_prime: u64| DandelionParams {
-        fluff_return_ms: DandelionParams::adopted()
-            .fluff_return_ms
-            .derived(f_prime as u32),
+        fluff_return_ms: DerivationMs::admit(Timing::<Model>::new(f64::from(f_prime as u32))),
         ..DandelionParams::adopted()
     };
 

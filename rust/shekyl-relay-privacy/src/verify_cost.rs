@@ -49,7 +49,7 @@
 //! Pi verification surface"). Until a cell is populated it refuses — which
 //! is the same §83.3 posture the table will keep at its depth edge forever.
 
-use crate::basis::{Assumption, DerivationMs, Timing};
+use crate::basis::{Assumption, DerivationMs, Timing, TimingBasis};
 
 /// Where a cell's number comes from — a **field**, not a comment (§87.2).
 ///
@@ -620,9 +620,10 @@ pub fn adopted_hop_ms(n_in: usize, depth: u32) -> Result<DerivationMs, VerifyCos
 /// Callers admit [`ADOPTED_TRANSIT`] for clearnet or [`ANON_ZONE_TRANSIT`]
 /// for Tor; prefer [`crate::params::DandelionParams::adopted_for_transit_ms`]
 /// over calling this directly, so the connector chooses the constant rather
-/// than the call site. The hop returned carries the transit's basis: the
-/// verification floor is a Rust-path measurement, so the transit is the
-/// term that decides what the hop rests on.
+/// than the call site. The hop returned carries the weakest basis of its
+/// inputs: the verification floor is a Rust-path measurement
+/// ([`VERIFICATION_FLOOR_BASIS`]), so the transit is the term that decides
+/// what the hop rests on, and the shipped hop reads as an assumption.
 ///
 /// # Errors
 ///
@@ -641,8 +642,18 @@ pub fn adopted_hop_ms_with_transit(
     // guard).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let hop = (f + f64::from(transit.ms())).round() as u32;
-    Ok(transit.derived(hop))
+    Ok(DerivationMs::derive(
+        hop,
+        &[transit.basis(), VERIFICATION_FLOOR_BASIS],
+    ))
 }
+
+/// The basis of every populated verification cell: measured by the Rust
+/// verifier on the floor device (`Provenance::MeasuredPi4`, §85.3). The
+/// depth-7 cells are projections against a synthesized tree
+/// (`TreeBasis::SynthesizedProjection`), which is a statement about the
+/// tree, not about the path the number was taken on.
+pub const VERIFICATION_FLOOR_BASIS: TimingBasis = TimingBasis::RustPath;
 
 #[cfg(test)]
 mod tests {

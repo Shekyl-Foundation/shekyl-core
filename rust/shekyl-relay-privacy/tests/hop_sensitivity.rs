@@ -28,7 +28,7 @@
 //! clearnet-parity hop and more above it — so a global would under-provision
 //! it, the privacy-losing direction. That is why the second test below is now
 //! about *separateness* rather than headroom.
-use shekyl_relay_privacy::basis::DerivationMs;
+use shekyl_relay_privacy::basis::{DerivationMs, Model, Timing};
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
@@ -59,7 +59,7 @@ fn hop_sensitivity() {
     let base_s = embargo_secs(&DandelionParams::inherited());
     for hop in [175_u32, 300, 500, 875, 1050, 1750] {
         let mut p = DandelionParams::inherited();
-        p.time_between_hop_ms = p.time_between_hop_ms.derived(hop);
+        p.time_between_hop_ms = DerivationMs::admit(Timing::<Model>::new(f64::from(hop)));
         let s = embargo_secs(&p);
         println!(
             "  {hop:>6}   {s:>8}   {:>+7.0}%{}",

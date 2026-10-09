@@ -47,6 +47,7 @@
 //! table claims to cover. A test whose whole product is `println!` passes
 //! identically whether the derivation is right or nonsense.
 
+use shekyl_relay_privacy::basis::{DerivationMs, Model, Timing};
 use shekyl_relay_privacy::derive::derive_embargo;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
@@ -176,7 +177,7 @@ const DECIDED_SPEC_PRICE_LIST: [(f64, u64, u64); 3] =
 
 fn embargo_secs(hop_ms: u32) -> u64 {
     let mut p = DandelionParams::inherited();
-    p.time_between_hop_ms = p.time_between_hop_ms.derived(hop_ms);
+    p.time_between_hop_ms = DerivationMs::admit(Timing::<Model>::new(f64::from(hop_ms)));
     let d = derive_embargo(
         &p,
         DEFAULT_EMBARGO_TICK_MILLIS,
