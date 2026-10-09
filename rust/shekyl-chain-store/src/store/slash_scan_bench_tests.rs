@@ -929,23 +929,20 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     chain.finish();
 }
 
-/// The window reads no epoch below the retention horizon. A walk that
-/// passes over unobserved epochs could otherwise reach rows a store may
-/// have deleted, and the verdict would depend on what a node had pruned
-/// (`slash.rs` module docs, *The window*).
+/// The window reads no epoch below the retention horizon (ruled
+/// 2026-10-09; `failure_window.rs`, `SETTLEMENT_RETENTION_EPOCHS`). A walk
+/// that passes over unobserved epochs could otherwise reach rows a store
+/// may delete, and the verdict would depend on what a node had pruned.
 ///
 /// Two pairs with the same shape — ten misses, a long unobserved gap, one
 /// more miss at epoch 28 — placed two epochs apart. At epoch 28's pass the
-/// tip is in epoch 29 and the horizon is `29 − MAX_CLAIM_AGE_W_EPOCHS = 3`.
-/// Persona 1's ten misses are epochs 3–12, all at or above it: eleven
-/// misses, slashed. Persona 0's are epochs 1–10, two of them below it:
-/// nine, not slashed. Without the bound both would be.
-///
-/// Ignored on two counts. The bound is as built and not yet ruled
-/// (`ARCHIVAL_SETTLEMENT_WRITER.md` §14.4 step 3), so this is its witness
-/// and not a pin of a ratified rule. And the chain is thirty epochs.
+/// tip is in epoch 29 and the floor is `29 − 26 = 3`. Persona 1's ten
+/// misses are epochs 3–12, all at or above it: eleven misses, slashed.
+/// Persona 0's are epochs 1–10, two of them below it: nine, not slashed.
+/// Both pairs are far under the observation rate the bound is pinned
+/// against, which is the only state it binds in.
 #[test]
-#[ignore = "pins the unruled retention-horizon bound (SO-D10b, awaiting ratification) over 3 000 connects, minutes in debug. Run: cargo test -p shekyl-chain-store --lib -- --ignored the_window_stops_at_the_retention_horizon"]
+#[ignore = "thirty epochs, 3 000 connects; minutes in debug. Runs in the nightly store lane, or: cargo test -p shekyl-chain-store --lib -- --ignored the_window_stops_at_the_retention_horizon"]
 fn the_window_stops_at_the_retention_horizon() {
     fn plan(epoch: u64, persona: u64) -> Option<&'static [bool]> {
         let first = if persona == 0 { 1 } else { 3 };
@@ -954,10 +951,12 @@ fn the_window_stops_at_the_retention_horizon() {
     let schedule = RULES.settlement_schedule();
     let through = schedule.slash_deadline_height(28);
     assert_eq!(
-        schedule
-            .prune_below_epoch_at_height(through, shekyl_types::archival::MAX_CLAIM_AGE_W_EPOCHS),
-        Some(3),
-        "the horizon at epoch 28's pass"
+        shekyl_archival_retention::settlement_retention_floor(
+            schedule,
+            BlockHeight::from_raw(through)
+        ),
+        SettlementEpoch::from_raw(3),
+        "the floor at epoch 28's pass"
     );
     let chain = SlashedChain::build_with("slash-window-horizon", 2, through, plan);
     let id = |i: u64| Persona::at(slot(i)).id();

@@ -152,8 +152,9 @@ production pinner (`serve_set_source.rs`) is what the criterion asks for.
 **Dependency named:** the ruling stands on `J9` landing with SO-D8 Slice C;
 until then `set_archival_settlement` has no production caller, so nothing is
 exposed in the interval. **UPDATE 2026-10-08 (`SO-D10e`):**
-`set_archival_settlement` is deleted; the C++ store has no settlement writer
-and the Rust writer is not wired yet, so the interval claim holds. The reopen criterion in §9.7 is unchanged. The
+`set_archival_settlement` is deleted; the C++ store has no settlement writer.
+The Rust slash pass writes settlement rows, but no block path issues a draw
+yet, so it has nothing to settle and the interval claim holds. The reopen criterion in §9.7 is unchanged. The
 ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
 (RULED 2026-10-07).
 

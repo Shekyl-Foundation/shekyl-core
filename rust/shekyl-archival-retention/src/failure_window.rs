@@ -97,12 +97,22 @@
 //! - before the shard's `E_add + 1`: the pair has no counted draw there, so
 //!   there is nothing to count. Not a stop, and nothing accumulates.
 //!
-//! A walk that passes over epochs is no longer bounded by `n − 1` epochs
-//! of look-back, so the Rust walk also stops at the retention horizon
-//! (`SettlementSchedule::prune_below_epoch_at_height`): it reads no epoch a
-//! store may have deleted. The assert below still has to hold — `n`
-//! observations must fit inside what is retained — and the explicit stop
-//! is what keeps the reads there.
+//! A walk that passes over epochs is not bounded by `n − 1` epochs of
+//! look-back, so the Rust walk stops at the retention horizon as well
+//! ([`settlement_retention_floor`]; ruled 2026-10-09): it reads no epoch a
+//! store may delete, so a pruned row can never be read as an absent one.
+//! The bound is the horizon the settlement rows' own prune uses — one
+//! constant, [`SETTLEMENT_RETENTION_EPOCHS`] — and it is in the rule from
+//! the first commit so that the prune, when the Rust store gains one, is
+//! not a consensus change.
+//!
+//! It binds only in a degraded state. The window needs `n` observations
+//! and the horizon leaves twice `n` epochs to find them in, so the walk is
+//! cut short only when fewer than half a pair's epochs are observed
+//! ([`WINDOW_MIN_OBSERVATION_PER_MILLE`]; the assert beside it is that
+//! sentence in arithmetic). The simulated observation rate is 0.96 or
+//! better, at which `n` observations span about fourteen epochs. Below
+//! one half the network has larger problems than one unslashed pair.
 //!
 //! ## Persistence: recomputed, never stored
 //!
@@ -235,6 +245,55 @@ const _: () = assert!(
      archivers escape a slash they earned. Both directions are this assert \
      (ARCHIVAL_SETTLEMENT_WRITER.md SO-D5)"
 );
+
+/// Epochs of settlement rows a store keeps below the tip's, and how far
+/// the failure window's walk may read: **one constant for both**, so the
+/// walk can never read a row a prune may have deleted (ruled 2026-10-09).
+/// It is the claim window, because a settlement row is retained for as
+/// long as its epoch can be cited.
+pub const SETTLEMENT_RETENTION_EPOCHS: u64 = MAX_CLAIM_AGE_W;
+
+/// The least share of a pair's epochs, in thousandths, that must be
+/// observed for the retention horizon to leave the window its full `n`
+/// observations. At or above it the horizon never shortens a walk. Below
+/// it a slash can be missed, which is accepted: a network observing fewer
+/// than half its pair-epochs is degraded past the point where one
+/// unslashed pair matters.
+pub const WINDOW_MIN_OBSERVATION_PER_MILLE: u64 = 500;
+
+/// The epochs the walk can read at an on-time slash pass: the decision
+/// epoch `E` and back to the floor. The pass for `E` connects in epoch
+/// `E + LAG − 1`, so the floor is `E + LAG − 1 − RETENTION` and the span
+/// from it through `E` is `RETENTION + 2 − LAG`.
+const WINDOW_READABLE_EPOCHS: u64 =
+    SETTLEMENT_RETENTION_EPOCHS + 2 - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
+
+const _: () = assert!(
+    WINDOW_MIN_OBSERVATION_PER_MILLE * WINDOW_READABLE_EPOCHS
+        >= 1000 * (ARCHIVAL_FAILURE_WINDOW_N as u64),
+    "at the stated minimum observation rate the retention horizon leaves the failure \
+     window fewer than n observations: the walk would be cut short on a healthy network. \
+     Re-pinning n upward, the retention downward or the slash grace upward crosses this, \
+     and each is a decision about the others"
+);
+
+/// The lowest settlement epoch the failure window may read when the block
+/// at `connecting` runs the slash pass: the horizon below which a store
+/// may have deleted settlement rows. Zero while the chain is younger than
+/// the retention.
+#[must_use]
+pub const fn settlement_retention_floor(
+    schedule: crate::SettlementSchedule,
+    connecting: shekyl_types::BlockHeight,
+) -> shekyl_types::SettlementEpoch {
+    let floor = match schedule
+        .prune_below_epoch_at_height(connecting.to_raw(), SETTLEMENT_RETENTION_EPOCHS)
+    {
+        Some(floor) => floor,
+        None => 0,
+    };
+    shekyl_types::SettlementEpoch::from_raw(floor)
+}
 
 /// **Connect-order coupling — the slash pass must read what the close wrote.**
 /// At every connect the hooks run slash **then** close

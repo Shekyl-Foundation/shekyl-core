@@ -560,7 +560,8 @@ impl fmt::Display for Corrupt {
                 ),
                 SettlementCheck::PassesExceedCounted { persona, shard } => write!(
                     f,
-                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than                      draws selected (SI-25)"
+                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
+                     draws selected (SI-25)"
                 ),
             },
         }

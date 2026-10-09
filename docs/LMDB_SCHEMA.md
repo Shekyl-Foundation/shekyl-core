@@ -455,7 +455,7 @@ and `SettlementRow::from_bytes` refuses it on the read.
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
 | Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
 | Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
-| Writers | **None in this store.** `set_archival_settlement` was deleted (`SO-D10e`); settlement is the Rust validator's (`SO-D10`, `ARCHIVAL_SETTLEMENT_WRITER.md` §14), whose writer runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event, and is not wired yet |
+| Writers | **None in this store.** `set_archival_settlement` was deleted (`SO-D10e`); settlement is the Rust validator's (`SO-D10`, `ARCHIVAL_SETTLEMENT_WRITER.md` §14), whose writer runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event. It is wired: the Rust store's connect writes the pass's rows. No block path issues a draw yet, so off Fakechain there is nothing for it to settle |
 | Readers | **None in this store.** `get_archival_settlement` was deleted (`SO-D10e`); the Rust store's read is `ChainView::settlement_row` |
 | Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
 | Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
