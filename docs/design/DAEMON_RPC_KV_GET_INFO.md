@@ -402,10 +402,20 @@ count does not fit (`seam_board_ffi.rs:69-85`);
 whose hub is not up would report `has_peers = false` — the false
 `DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
 an answer). So `PeerFacts` distinguishes them: a missing hub is a
-`FactsFault` (`rust/shekyl-daemon-rpc/src/chain_facts.rs:196`) and the
-method refuses; zero sessions is `Ok(0)`; an index that is not a connector
-or direction is a programming error at the call site and is not
-representable as a count.
+`FactsFault` (`rust/shekyl-daemon-rpc/src/chain_facts.rs:196`); zero
+sessions is `Ok(0)`; an index that is not a connector or direction is a
+programming error at the call site and is not representable as a count.
+
+**The type lands at parity; the refusal does not.** The C++ handler
+answers a missing hub with zero counts and status OK, so a native handler
+that refused in commit 4 would differ from the oracle on a state no
+vector can express — a behaviour change inside the parity commit, which
+RK-D13 and the parent's RK-D8 forbid. In commit 4 `PeerFacts` already
+returns `Result`, and the handler maps the missing-hub fault to today's
+zeros in one named arm, as the serializer writes today's stand-ins. Commit
+7 deletes that arm: it is the commit that introduces `has_peers`, the
+first field for which the zero is a false answer, and it carries the
+version bump. From there a missing hub makes `get_info` refuse.
 
 ### 4.3 Economics — RK-D19
 
@@ -459,12 +469,13 @@ no vector carries `emission_era`. Fixtures:
 | burn refusal (`total_burned > already_generated`) | the logged-zero path — kept so parity matches; RK-Q9's commit replaces the behaviour |
 
 One case is not an oracle vector, because the C++ handler cannot express
-it — it reads the same zero-on-missing exports. It is a Rust handler test
-in commit 4:
+it — it reads the same zero-on-missing exports. It is a pair of Rust
+handler tests, one on each side of the behaviour change (§4.2):
 
-| Rust-only case | Asserts |
-| --- | --- |
-| hub absent | `PeerFacts` returns a `FactsFault` and `get_info` refuses; it does not answer `has_peers = false` or zero counts |
+| Rust-only case | Commit | Asserts |
+| --- | --- | --- |
+| hub absent, parity | 4 | `PeerFacts` returns a `FactsFault`; the handler's parity arm answers the zero counts the C++ handler answers |
+| hub absent, refusal | 7 | the parity arm is gone: `get_info` refuses, and does not answer `has_peers = false` or zero counts |
 
 ---
 
@@ -476,10 +487,10 @@ in commit 4:
 | 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row). **This commit builds the two-node rig; it does not reuse one** — none exists on `dev`, and the parent's 2026-08-27 entry records the single-node form passing one run in three. The rig's verdict must be deterministic, and the commit states how: what holds the transaction in the stem or embargo window for the whole of the assertion | the two-node regtest, green on repeated runs |
 | 2 | **RK-D21:** `emission_era` deleted — the struct field and its `KV_SERIALIZE` (`core_rpc_server_commands_defs.h:270`, `:320`), the computation (`core_rpc_server.cpp:294-302`), and the "Emission Era" row of `docs/DESIGN_CONCEPTS.md:673` | `CORE_RPC_VERSION` bump; `git grep emission_era` (the identifier, not the era names) → this document and CHANGELOG only. The era names also label the phases of the burn-rate table at `docs/DESIGN_CONCEPTS.md:299-303`; that table is not the field and is out of this commit's scope |
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
-| 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1 |
+| 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1; the hub-absent parity test of §4.4 |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
 | 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
-| 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
+| 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1; the handler's missing-hub parity arm is deleted, so a missing hub refuses (§4.2) | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers`; the hub-absent refusal test of §4.4 |
 | 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
 
 Commit 2 changes the wire before parity and commits 6–8 change it after,
