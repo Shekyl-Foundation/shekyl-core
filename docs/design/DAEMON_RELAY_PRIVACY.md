@@ -17191,9 +17191,10 @@ wanted: the operational replacement for 3250 ms, on the Rust path.
 
 ## 98. PR-1 pre-flight — `HiddenStemSlot` in `shekyl-relay` (Round 0, 2026-10-09)
 
-**Status: OPEN — pre-flight recorded; D-PR1-1, D-PR1-2 and the
-structure ruled 2026-10-09 (98.4); implementation landing on
-`feat/hidden-stem-slot` (#1018), one commit at a time.** Rule 26 is cited: this is the substrate
+**Status: OPEN — pre-flight recorded; D-PR1-2 and the structure ruled
+2026-10-09, D-PR1-1 ruled (c) and revised to (c′) the same day on
+98.10's table (98.4); implementation landing on `feat/hidden-stem-slot`
+(#1018), one commit at a time.** Rule 26 is cited: this is the substrate
 re-check between the §95 ruling and PR-1's first production commit.
 The governing design is §95.3's `HiddenStemSlot` paragraph, §96 item 1,
 and `TOR_COVER_POSTURE.md`'s 2026-10-08 UPDATE. Lines were read on `dev`
@@ -17206,8 +17207,8 @@ family.
 
 | | the instrument (`conformance/composition/mod.rs`) | production after PR-1 (`shekyl-relay/src/graph/`) |
 | --- | --- | --- |
-| mixed pool, hidden connector configured | `mixed_hidden_slot` (`:534` to `:561`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)` | `rebuild_stems`: one id drawn uniformly from the hidden-address outbound sessions, one from the remaining outbound sessions, `StemMap::new(slots, stems, rng)`; the local source resolves with `stem_for_among(None, &hidden_live)` where `hidden_live` is every outbound session whose declaration hides the address; its first pin freezes that set, slot 0's peer first (D-PR1-1 (c)). The instrument passes the slot peer alone and measures one origination per epoch, so the two agree on the primary, which is what §95.3 counts; the churn behaviour is 98.10's measurement |
-| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over the pool, local source `stem_for(None)` | the same call: every session is in the allowed set, so the primary is the load-balanced slot the paper's `stem_for(None)` would pick and the frozen set is the whole pool. One code path, two cases |
+| mixed pool, hidden connector configured | `mixed_hidden_slot` (`:534` to `:561`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)` | `rebuild_stems`: one id drawn uniformly from the hidden-address outbound sessions, one from the remaining outbound sessions, `StemMap::new(slots, stems, rng)`; the local source resolves with `stem_for_among(None, &hidden_live)` where `hidden_live` is every outbound session whose declaration hides the address; its first pin freezes `stems` of them: slot 0's peer and `stems − 1` alternates drawn uniformly from the rest (D-PR1-1 (c′)). The instrument passes the slot peer alone and measures one origination per epoch, so the two agree on the primary, which is what §95.3 counts; the churn behaviour is 98.10's measurement |
+| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over the pool, local source `stem_for(None)` | the same call: every session is in the allowed set, so the primary is the load-balanced slot the paper's `stem_for(None)` would pick and the alternate is drawn from the rest of the hidden outbound sessions. One code path, two cases |
 | no hidden connector | `paper_map` | unchanged: `plan_relay`'s existing `stem_for` arm (`mod.rs:946` to `:952`), plan `Stem` |
 | hidden connector, hidden pool empty | `hidden.is_empty()` takes the paper branch; the instrument has no "hidden connector with no hidden session" node | production holds: `NoOwnEdge`. The instrument never models this state, so nothing is transferred for it (coverage statement, 98.5) |
 
@@ -17238,21 +17239,23 @@ not available and the distributional test in 98.6 is the pin.
 
 **Added in `shekyl-relay-privacy::stem_map`, each with a production
 caller in `shekyl-relay` (B3):** a *reserved slot*. Slot 0 may be
-reserved for a candidate class the caller names at construction and at
+reserved for a class of sessions the caller names at construction and at
 every merge; the map never learns what the class is (structure ruling,
 98.4). Three operations. A constructor that draws slot 0 uniformly from
 the reserved class (empty when the class is empty) and the other slots
-uniformly from everything not yet slotted. A merge that refills an
-empty slot 0 from the reserved class only — the local source's next live
-frozen candidate first, else a uniform draw, else nothing — and the
-other slots as today. A first pin for a source given an allowed set
-whose frozen set is every allowed session live at that moment, the
-slotted one first and the rest in a shuffled order fixed at pin time
-(D-PR1-1 (c)); `resolve_pin` then walks it exactly as for a relayed
-source, and the merge is what moves the next frozen candidate into
-slot 0 so the walk finds it. The frozen set is **superset-of-slots**:
-a frozen candidate that is live but not slotted is a candidate the
-merge has not yet needed, not one the walk has passed.
+uniformly from everything not yet slotted. A merge whose hidden-slot
+fill refills an empty slot 0 from the reserved class only — the local
+pin's next live candidate first, else a uniform draw, else nothing — and
+the other slots as today. A first pin over a **supplied candidate list
+of length `stems`**, frozen as given, of which only the first must
+occupy a slot (D-PR1-1 (c′)); the caller builds the list — slot 0's
+peer, then `stems − 1` alternates drawn uniformly from the address-hiding
+sessions live at that moment — and `resolve_pin` then walks it exactly
+as it walks a relayed source's pin. The merge is what moves the live
+alternate into slot 0 so the walk finds it. Every source's pin has
+`stems` candidates; a relayed source's are the slot peers, the local
+source's are the slot-0 peer and its drawn alternates, and the walk is
+one function.
 
 **Changed in `shekyl-relay::graph`:** `rebuild_stems` partitions
 `outbound_ids()` by `address_hidden_from_peer` and, when a hidden
@@ -17261,8 +17264,10 @@ hidden class; `update_stems` merges the same partition; `plan_relay`'s
 hidden-origin arm merges first when slot 0's peer is no longer a live
 session (a close does not merge, `graph/mod.rs:613` to `:614`, and the
 refill is what the origin needs before it resolves), then returns
-`OwnEdge(stem_for_among(None, &hidden_live))` or `NoOwnEdge`. No field
-names the hidden slot: it is slot 0 by construction. The pool-of-one
+`OwnEdge` over the pin — made at first origination over the supplied
+list, walked afterwards with `hidden_live` as the allowed set — or
+`NoOwnEdge`. No field names the hidden slot: it is slot 0 by
+construction. The pool-of-one
 rotation report stays, at rebuild, when the hidden class has exactly one
 session. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
@@ -17275,21 +17280,22 @@ refresh, the no-hidden-connector path, every C++ arm. No edit to
 `levin_notify.cpp`, `shekyl_ffi.h`, or `relay_zone_ffi` — a diff there
 is the sign the plan kind was not kept.
 
-**Churn rules (each a test in 98.6; rules 1 to 3 are D-PR1-1 (c) and
+**Churn rules (each a test in 98.6; rules 1 to 3 are D-PR1-1 (c′) and
 D-PR1-2 (i) as ruled):**
 
 1. The local source is an ordinary `StemMap` source under W3c whose
    allowed set is the outbound sessions whose declaration hides the
-   address. Its first pin, made at first origination, freezes every such
-   session live at that moment: slot 0's peer first, the rest in a
-   shuffled order fixed at pin time. An origination that finds no hidden
-   session makes no pin; the next one may. It never resolves with plain
+   address. Its first pin, made at first origination, freezes `stems`
+   candidates: slot 0's peer, then `stems − 1` alternates (one at
+   production width) drawn uniformly from the address-hiding sessions
+   live at that moment. An origination that finds no hidden session
+   makes no pin; the next one may. It never resolves with plain
    `stem_for(None)`, which after a merge can land on the clearnet slot.
-2. When its peer drops, slot 0 is refilled with its next live frozen
-   candidate. A session opened after the pin never serves it this epoch.
-   When no frozen candidate is live, slot 0 refills uniformly from the
-   hidden class for the relayed sources, and the local source holds
-   (`NoOwnEdge`) until the epoch ends; it never takes a clearnet slot.
+2. When the slot's peer drops, slot 0 is refilled with the live
+   alternate. A session opened after the pin never serves it this epoch.
+   Once the frozen set is exhausted, slot 0 refills uniformly from the
+   hidden class for the relayed sources, and the local plan is
+   `NoOwnEdge` until the epoch ends; it never takes a clearnet slot.
 3. A hidden session that arrives while slot 0 is empty fills it at the
    next merge (`update_stems`), not at the next epoch. Nothing in the
    substrate forces the epoch: `update` already runs on every outbound
@@ -17300,19 +17306,26 @@ D-PR1-2 (i) as ruled):**
 
 ### 98.4 Decisions — RULED (Rick, 2026-10-09)
 
-**D-PR1-1 — RULED (c).** The local source is an ordinary `StemMap`
-source under W3c. The only difference is its allowed set: the outbound
-sessions whose declaration hides the address. Its first pin this epoch
-freezes every such session live at that moment: the hidden slot's peer
-first, the rest in a shuffled order fixed at pin time. Pins are made at
-first origination. When its peer drops, the hidden slot is refilled with
-its next live frozen candidate. A session opened after the pin never
-serves it this epoch. It holds (`NoOwnEdge`) only when the frozen set is
-exhausted. Relayed sources are unchanged. Neither option put below was
-taken: (a) held on the first drop; (b) re-rolled on every drop over a
-pool the adversary can enrich between drops; (c) walks a set fixed
-before the adversary acts. (b) and (c) are measured against each other
-in 98.10.
+**D-PR1-1 — RULED (c′), revising (c) the same day.** Every source's
+frozen set has `stems` candidates. For the local source those are the
+hidden slot's peer plus `stems − 1` alternates (one at production
+width), drawn uniformly from the address-hiding sessions live at its
+first pin. When the slot's peer drops, the hidden slot is refilled with
+the live alternate. Once the frozen set is exhausted, the local plan is
+`NoOwnEdge` until the epoch ends. Relayed sources are unchanged. The
+rule is the same for every source; only the local source's allowed set
+differs, keyed on `address_hidden_from_peer`. Measured in 98.10: exposure
+at most `stems / H` at every `k` and every flood, under targeted and
+random churn.
+
+*(c) as first ruled — WITHDRAWN 2026-10-09 (records-was).* The local
+source's first pin froze every address-hiding session live at that
+moment, the hidden slot's peer first and the rest shuffled; a drop
+walked to the next live frozen candidate; a session opened after the pin
+never served it. Withdrawn on 98.10's table: targeted drops walk the
+origin onto the adversary, 1.00 at `k = 11`. Neither posed option was
+taken either: (a) held on the first drop; (b) re-rolled on every drop
+over sessions the adversary can enrich between drops.
 
 **D-PR1-2 — RULED (i).** The hidden slot stays empty until a hidden
 session fills it at the next merge.
@@ -17372,11 +17385,12 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
 - *The all-hidden node.* The paper's draw by the same code path; §95.3's
   `(h, 0)` row is its measurement.
 - *A node originating at boot with one hidden session up.* Its frozen
-  set is one: that session. If it drops, the local source holds
-  (`NoOwnEdge`) until the epoch ends, however many hidden sessions the
-  dialer opens afterwards (rule 2: a session opened after the pin never
-  serves it this epoch). Slot 0 refills from those sessions for relayed
-  traffic. The pool-of-one rotation report names the state at rebuild.
+  set is one: that session, with no alternate to draw. If it drops, the
+  local source holds (`NoOwnEdge`) until the epoch ends, however many
+  hidden sessions the dialer opens afterwards (rule 2: a session opened
+  after the pin never serves it this epoch). Slot 0 refills from those
+  sessions for relayed traffic. The pool-of-one rotation report names
+  the state at rebuild.
 
 ### 98.6 Tests, named by property
 
@@ -17392,13 +17406,15 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   paper's draw;
 - a hidden session arriving mid-epoch fills the empty hidden slot at the
   next merge and no pinned relayed source moves (D-PR1-2 (i));
-- the local source's frozen set (D-PR1-1 (c)): after its peer drops,
-  slot 0 holds its next live frozen candidate and the origin rides it; a
-  session opened after the pin never serves the origin this epoch; when
-  the frozen set is exhausted the origin holds while relayed sources
-  route over the refilled slot; a boot pin over one session holds after
-  that session drops (98.5); an origination that finds no hidden
-  session makes no pin;
+- the local source's frozen set (D-PR1-1 (c′)): its pin is slot 0's
+  peer and one alternate drawn uniformly from the other address-hiding
+  sessions; after the slot's peer drops, slot 0 holds the live alternate
+  and the origin rides it; a session opened after the pin never serves
+  the origin this epoch; after the alternate drops too the origin holds
+  (`NoOwnEdge`) while relayed sources route over the refilled slot; an
+  alternate that dropped first leaves the pin exhausted at the primary's
+  drop; a boot pin over one session holds after that session drops
+  (98.5); an origination that finds no hidden session makes no pin;
 - the connector gate's selftest fails a `ConnectorId::` variant in
   production code of either crate;
 - `Relay::new` refuses width 1 with a hidden connector;
@@ -17418,10 +17434,11 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
    adversary floods onion candidates into gray so that each refill the
    dialer makes is its own with rising probability, then drops the
    origin's hidden peer to force a new draw. Under (b) each drop is one
-   roll over a pool the flood enriches; under (c) a session opened after
-   the pin never serves the origin, so the flood buys nothing against a
-   pinned source and what it can reach is bounded by the pool at pin
-   time. Resolved by D-PR1-1 (c); measured in 98.10.
+   roll over sessions the flood enriches; under (c′) a session opened
+   after the pin never serves the origin, so the flood buys nothing
+   against a pinned source, and what drops can reach is the `stems`
+   frozen candidates: exposure at most `stems / H`. Resolved by D-PR1-1
+   (c′); measured in 98.10.
 2. *A spy as the only hidden peer.* With a pool of one, every origination
    rides the spy, every epoch; the rotation report names it and the
    dialer keeps the pool at 12. Absorbed: the report stays, at rebuild.
@@ -17435,30 +17452,55 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
    a Rust assertion.
 5. *A relayed source re-pointed by the hidden arrival.* D-PR1-2 (ii)
    would do it; (i) does not. Resolved by D-PR1-2 (i).
+6. *A forced hold every epoch — residual.* An adversary who knows the
+   origin's current honest hidden hop can drop it and then the
+   alternate, `stems` drops, and the origin holds (`NoOwnEdge`) until
+   the epoch ends; repeated each epoch, that is a liveness cost (the
+   origin's own transactions wait, up to an epoch at a time), not a
+   privacy one. Bounded by the same assumption as 98.10's targeted rows:
+   the adversary must know which Tor session is the origin's current
+   hop, which Tor is built to hide; under random churn the hold needs
+   both frozen candidates to be hit by chance. Carried as a residual;
+   its measurement is 98.10's `held` column.
 
 ### 98.8 Commit plan (B5: every commit builds)
 
-Each commit is pushed to #1018 as it is made.
+Each commit is pushed to #1018 as it is made. Commits 4 and 5 were
+inserted when (c) was withdrawn; commits 6 to 8 are 4 to 6 of the plan
+as first written.
 
-1. `relay: record the PR-1 rulings in §98` — this section as it stands.
+1. `relay: record the PR-1 rulings in §98` — landed `f99890dd99`.
 2. `relay-privacy: measure the local source under induced churn` — the
    instrument of 98.10 beside `simulate_induced_churn_exposure`, its
-   pinned test, and the table recorded here. Stops the PR if (c) is not
-   clearly better than (b).
+   pinned test, and the table recorded here. Stopped the PR: (c) was
+   not clearly better than (b). Landed `8ac87fc22a`.
 3. `ci: the relay connector gate covers every variant and both crates`
-   — the structure ruling's gate, with its selftest.
-4. `relay-privacy: stem_map gains a reserved slot` — the API of 98.3
+   — the structure ruling's gate, with its selftest. Landed
+   `e715d56431`.
+4. `relay: revise D-PR1-1 to (c′) in §98` — this section as it stands.
+5. `relay-privacy: (c′) and random-churn arms in the hidden-slot
+   instrument` — the (c′) arm with exposure and held share, pinned at
+   `stems / H`; a random-churn mode; the worst-case statement; the
+   table of 98.10 re-recorded under both.
+6. `relay-privacy: stem_map gains a reserved slot` — the API of 98.3
    with its unit tests; no caller yet in this commit, so it is inert and
    named here as the next commit's consumer (rule 22: the caller is
-   commit 5 of the same PR).
-5. `relay: a local origin rides the hidden stem slot` — `rebuild_stems`,
+   commit 7 of the same PR).
+7. `relay: a local origin rides the hidden stem slot` — `rebuild_stems`,
    `update_stems`, `plan_relay`, the refusal; `own_edge.rs`,
    `hop0_edge`, `hop0_peer_live` deleted in this commit, not later; the
    tests of 98.6.
-6. `docs: HiddenStemSlot is the routing the relay ships` — §95.3's
+8. `docs: HiddenStemSlot is the routing the relay ships` — §95.3's
    sentence, §96 item 1 closed with the commit, `TOR_COVER_POSTURE.md`
    and `TOR_RELAY.md` corrected, the dialer brief's "stay on `dev`"
-   sentence to records-was, the RP index row, this section's status.
+   sentence to records-was, `params.rs:211` "own-edge pool", the RP
+   index row, this section's status; and the vocabulary fixed once
+   (Rick, 2026-10-09): **dial candidates** for the gray and white lists
+   (addresses considered for dialling), **pin** for a source's frozen
+   set (the code's word), and **hidden outbound sessions** in place of
+   "hidden pool" (the Tor subset of the live outbound sessions). The
+   five layers — gray, white, outbound sessions, stem slots, pins — each
+   get one name in this document and the dialer brief.
 
 Gates per commit: `cargo fmt --check`; `cargo clippy -p
 shekyl-relay-privacy -- -D warnings` (the lib as a dependant sees it),
