@@ -15,13 +15,16 @@ RK-5c, §2.1.1, §5. Family `RK-` (registered); this document mints
 it, added to the family's index row in the commit that lands this file
 (rule 94).
 **Sibling round:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md), round R1. Its §6.1
-is cited here **at #1006's head `f331b31e0`**, which is not merged: `dev`
+is cited here **at #1006's head `ded54540d`**, which is not merged: `dev`
 carries an earlier R1 text. Three things this document relies on exist
 only at that head — the phrase "absent, never zero", the paragraph "What
 the incident's consumer gets", and the ruling that RK-5c lands before
 RT-W10. If #1006 changes them before it merges, this document follows.
-The grant assigned to each part in §2.1 is that head's table, direction
-given 2026-10-08 and still to be confirmed there (RT-O9).
+The grant assigned to each part in §2.1 is that head's table. Four
+rulings are recorded there as RULED 2026-10-08 (its R1–R4); one of them,
+R3, reaches this document: unrelayed pool entries are **host-only data**,
+served to the host's administrator and to no grant, `admin` included
+(§4.1, RK-Q10).
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 — this slice moves the FFI boundary for the widest reply on the surface.
 **Decision authority:** Rick.
@@ -86,6 +89,10 @@ and unmaintainable. Every decision below is that principle applied.
 | **RK-D17** | **RK-5c lands before RT-W10.** Recorded in `RPC_CHANNEL.md` §6.1 at #1006's head. |
 | **RK-D21** | **`emission_era` is removed, not ported.** There never was an emission era: the chain is pre-genesis and the idea was retired. The field, its four labels and its thresholds are deleted from the C++ reply **before** the oracle capture, so nothing in Rust — no type, no enum, no function, no fixture — ever carries it. |
 | **RK-D23** | **`0` is a value; "no result" is `None` / `null`.** Zero is a valid answer for most quantities, so using it to mean "there is no answer" is ambiguous. In Rust the absence is `Option`; on the JSON wire it is `null`. This is RK-D15's principle stated generally, and it decides how every absence in this slice is written (§4.1, RK-Q7, RK-Q9). A standing rule for it is being drafted separately; this document cites RK-D23 either way. |
+
+RK-D15's "or absent" was written before RK-D23. It means the core has no
+target, which RK-D23 and RK-Q7 write as `null`; it does not mean the field
+is left off the reply.
 
 ---
 
@@ -281,14 +288,24 @@ GetInfoResponse {
   value is not allowed — that is the drift RK-D1 exists to prevent. Whether
   the extra names survive on the wire was RK-Q1: they do not.
 - The caller's authority reaches the builder as a value, `Disclosure`, not
-  as a boolean: today it has two inhabitants, `Full` and `View`, mapped
-  from the listener flag, and RT-W10 supplies a richer one. Under parity,
+  as a boolean, and it has **two axes**: which parts the caller's grants
+  select, and whether the caller is the **host's administrator**. The
+  second is not a grant and no grant implies it (`RPC_CHANNEL.md` §6.1,
+  "Two classes that are not grants", R3): it is what admits host-only
+  data, which on this reply is the unrelayed pool count. Naming the axis
+  now is what stops RT-W10 from reading "`admin`" as "may see unrelayed
+  entries". Today both axes are mapped from the one listener flag — the
+  unrestricted listener is every part plus host, the restricted listener
+  is the `view` parts and not host — written below as `Full` and `View`;
+  RT-W10 maps a grant set and a host flag onto the same value. Under
+  parity,
   `View` withholds Status and Peers, written as the four restricted
   stand-ins of §0's second bullet, `alt_blocks_count` among the zeroed
   counts. `tx_pool_size` is not withheld under `View`, but under parity it
   is not one quantity either: `View` counts relayed entries and `Full`
   adds the unrelayed ones. That is one key whose meaning depends on who
-  asks, which the governing principle forbids; RK-Q10 splits it.
+  asks, which the governing principle forbids; RK-Q10 splits it. The
+  difference between the two counts is the host axis, not a part.
   them: it does not depend on the caller, and RK-D15 retires it in this
   slice. RT-W10 replaces the input with the connection's grant. Replacing
   the stand-ins with absence (`RPC_CHANNEL.md` §6.1: "absent, never zero")
@@ -502,8 +519,8 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 
 ## 7. What this slice does not do
 
-- **Grants.** RT-W10 replaces `Disclosure`'s two inhabitants with the
-  connection's grant. RK-5c makes that a selection of parts and threads no
+- **Grants.** RT-W10 maps the connection's grant set and its host flag
+  onto `Disclosure`, in place of today's listener flag. RK-5c makes that a selection of parts and threads no
   grant through C++.
 - **`status` as an error channel**, positional params, aliases (`/getinfo`):
   RK-W.
@@ -531,4 +548,4 @@ beside each ruling is the recommendation's, kept as the record of why.
 | **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **RULED 2026-10-08 (Rick).** **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it, and the GUI pair opened against that commit — never piecemeal. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; whether the version fields must stay decodable on their own is a failure-mode point (rule 82) the ruling did not address; it is settled in commit 6's design, before that commit is written. |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **RULED 2026-10-08 (Rick).** **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
 | **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **RULED 2026-10-08 (Rick).** **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
-| **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **OPEN.** **Split, in commit 8+.** `tx_pool_size` becomes relayed entries only, a value for every caller, in `pool`. The unrelayed count becomes its own field in its own one-field `Hidden` part, absent for every caller without the grant that sees unrelayed entries. Three things are open inside this and are not this document's to settle alone: **(1)** which grant — #1006's pushed head (`f331b31e0`) puts unrelayed entries in `node`; the review that raised this calls the class host-only and says admin does not see it. **(2)** Until RT-W10 there are two listeners and no host identity, so either the unrestricted listener stands in for that class or the field is absent for everyone until the channel exists. **(3)** The readers whose number changes: `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` (four call sites) and `tests/stressnet/monitor.py:142` read `tx_pool_size` on an unrestricted listener and today see unrelayed entries in it; each is read at the split to decide which of the two fields it meant. |
+| **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **OPEN.** **Split, in commit 8+.** `tx_pool_size` becomes relayed entries only, a value for every caller, in `pool`. The unrelayed count becomes its own field in its own one-field `Hidden` part, present only for the host's administrator and absent for every other caller, `admin` included: the sibling round's R3 (RULED 2026-10-08, `RPC_CHANNEL.md` §6.1 at `ded54540d`) makes unrelayed pool entries host-only data, in no grant. Before RT-W10 there is no host identity; the unrestricted listener stands in for it, as that round states for parity, so nothing a caller sees today is withdrawn by the split. What is still open is the split itself, and with it the readers whose number changes: `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` (four call sites) and `tests/stressnet/monitor.py:142` read `tx_pool_size` on an unrestricted listener and today see unrelayed entries in it; each is read at the split to decide which of the two fields it meant. |
