@@ -37,10 +37,18 @@
 # stdin, so there is no early-exit consumer to trip the SIGPIPE trap.
 set -uo pipefail
 log=$1; label=$2; state=$3; stop=$4; out=$5
-first_h=""; first_t=""; last_h=""; last_t=""; last_target=""; prev=""; points=0; stalls=0; seen=""
+first_h=""; first_t=""; last_h=""; last_t=""; last_target=""; prev=""; points=0; stalls=0
+newest() { tail -n 40 "$log" 2>/dev/null | grep -oE '^\S*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z\S*.*Synced [0-9]+/[0-9]+' | tail -1 || true; }
+# The newest line at start is the previous window's last point, not this
+# window's first: a poll that began with `seen` empty recorded it, and every
+# window then opened on an observation taken before it began (BA-T5 session
+# 2, found in review; the reading of that capture drops the point by its
+# timestamp). Seeding `seen` with it means the first point recorded is the
+# first line the daemon writes after this window opens.
+seen=$(newest)
 to_epoch() { date -u -d "$1" +%s.%N 2>/dev/null || echo ""; }
 while [ ! -e "$stop" ]; do
-  line=$(tail -n 40 "$log" 2>/dev/null | grep -oE '^\S*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z\S*.*Synced [0-9]+/[0-9]+' | tail -1 || true)
+  line=$(newest)
   if [ -n "$line" ] && [ "$line" != "$seen" ]; then
     seen=$line
     ts=$(echo "$line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z' | head -1)

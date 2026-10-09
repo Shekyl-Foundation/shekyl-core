@@ -11,12 +11,14 @@ run. A later change of reading gets its own section that says so.
 **In one paragraph.** Beside a daemon syncing the chain at 3.3 cores, the
 floor device serves full segments at 37 to 41 per second, 70 % of its
 idle rate, with p99 executor wake lateness under 61 ms at every N up to
-64 — and the daemon keeps 37 to 46 % of the sync rate it has with the
-probe idle. The serving process at `nice 19` gives the daemon 93 to 98 %
-of that rate back and serves at 5 to 8 per second, a seventh to a fifth
-of normal priority, with p99 lateness up to 641 ms. Throughput is flat
-from N = 16 in every state; p99 lateness doubles with each doubling of N;
-CPU per response is 66 to 72 ms whatever the state or N. Time to first
+64 — and the daemon keeps about a third, 31 to 37 %, of the sync rate it
+has with the probe idle. The serving process at `nice 19` gives the
+daemon 90 to 97 % of that rate back and serves at 5 to 8 per second, a
+seventh to a fifth of normal priority, with p99 lateness up to 641 ms.
+Throughput is flat from N = 16 in every state; p99 lateness rises
+steeply with N, more than doubling across each of the first two doublings
+and by a third to a half across the last; CPU per response is 66 to 72 ms
+whatever the state or N. Time to first
 byte at one in flight is 0.19 ms p50 with the daemon idle, 1.85 ms under
 sync; the open pre-head estimate is settled. At N = 64, the cap, the
 endpoint refused one connection in 2,048 under sync. Five of the seven
@@ -245,24 +247,39 @@ script's output and the blocks in `_obs.tsv`.
 | idle | 16 | 55.5 | 69 ms | 11.7 ms | — | 0 |
 | idle | 32 | 56.7 | 69 ms | 35.8 ms | — | 0 |
 | idle | 64 | 55.2 | 71 ms | 51.6 ms | — | 0 |
-| sync | 8 | 36.9 | 66 ms | 7.2 ms | 46 % (40, 46, 47) | 0 |
-| sync | 16 | 40.5 | 66 ms | 14.3 ms | 41 % (38, 41, 46) | 0 |
-| sync | 32 | 40.9 | 66 ms | 45.0 ms | 37 % (26, 37, 44) | 0 |
-| sync | 64 | 40.4 | 67 ms | 60.0 ms | 38 % (37, 38, 45) | 1 of 6,144 |
-| nice | 8 | 6.2 (5.5 to 17.1) | 68 ms | 74.8 ms | 97 % | 0 |
-| nice | 16 | 5.8 (4.8 to 10.3) | 67 ms | 199.0 ms | 98 % | 0 |
-| nice | 32 | 6.8 (5.4 to 7.4) | 66 ms | 564.6 ms | 93 % | 0 |
-| nice | 64 | 8.2 (7.2 to 13.0) | 67 ms | 641.4 ms | 94 % | 0 |
+| sync | 8 | 36.9 | 66 ms | 7.2 ms | 37 % (2 valid windows: 36, 38; the third, one interval: 27) | 0 |
+| sync | 16 | 40.5 | 66 ms | 14.3 ms | 31 % (1 valid: 31; one interval: 30, 28) | 0 |
+| sync | 32 | 40.9 | 66 ms | 45.0 ms | 32 % (1 valid: 32; one interval: 26, 30) | 0 |
+| sync | 64 | 40.4 | 67 ms | 60.0 ms | 31 % (2 valid: 30, 32; one interval: 27) | 1 of 6,144 |
+| nice | 8 | 6.2 (5.5 to 17.1) | 68 ms | 74.8 ms | 96 % (95, 96, 97) | 0 |
+| nice | 16 | 5.8 (4.8 to 10.3) | 67 ms | 199.0 ms | 97 % (93, 97, 99) | 0 |
+| nice | 32 | 6.8 (5.4 to 7.4) | 66 ms | 564.6 ms | 94 % (92, 94, 98) | 0 |
+| nice | 64 | 8.2 (7.2 to 13.0) | 67 ms | 641.4 ms | 90 % (90, 90, 93) | 0 |
 
 The no-serve sync rate, median over the fifteen quiet windows of each
-state: **2.52 blocks/s** in the sync passes, **2.77 blocks/s** in the nice
-passes. Its spread is wide — 0.92 to 2.99 blocks/s with the probe idle —
+state: **2.92 blocks/s** in the sync passes, **2.81 blocks/s** in the nice
+passes. Its spread is wide — 0.93 to 3.00 blocks/s with the probe idle —
 and the slow windows sit at the same heights in every pass (about 560 to
 720, and the windows after 1,100), so the daemon's own rate depends on
 where in the chain it is, as much as on anything beside it. The shares in
 the table are each block's rate over its state's median no-serve rate, as
 registered; the per-pass spread in brackets is largely that chain
 position, which the interleaved orders put at a different N each pass.
+
+*How the sync windows are read, and why six serving windows are void.*
+A window's rate is derived from the daemon's `Synced H/T` log lines
+stamped at or after the window opened (see "What this reading corrects"
+below). Under sync, a 2,048-fetch block lasts about 50 s and the daemon,
+slowed by the serving beside it, writes a line every 15 to 20 s, so a
+serving window holds two to four in-window points; the registered rule
+needs three, and six of the twelve sync-state serving windows hold two.
+Those are void under the rule and excluded from the cell medians, which
+rest on one or two windows each. Their single interval is a measurement
+all the same — 15 to 20 s of the daemon's own height — and is printed
+beside, labelled, never in the medians: every one of the six reads
+between 26 and 30 %, where the valid windows read 30 to 38 %. The
+nice-state serving windows are 30 to 110 s long and hold four to fifteen
+points; none is void.
 
 ### The curves, and where each bends
 
@@ -276,25 +293,30 @@ doubling; lateness and CPU: a rise over 50 %; sync rate: a fall over
   prints the 9.8 % as "+10 %"). At nice 19 the curve has no shape the
   medians can show: 6.2, 5.8, 6.8, 8.2, inside a spread of 4.8 to 17.1
   that is the daemon's phase, not N.
-- **p99 wake lateness doubles with each doubling of N**, in every state,
-  from the first doubling: idle 5.5 → 11.7 → 35.8 → 51.6 ms; sync 7.2 →
-  14.3 → 45.0 → 60.0 ms; nice 74.8 → 199 → 565 → 641 ms. The knee is at
-  N = 8 in all three. Under sync, lateness is 1.2 to 1.3 × idle at the
-  same N; at nice 19 it is 12 to 17 × idle.
+- **p99 wake lateness rises steeply with N, and the rise slows at the
+  last doubling.** Idle 5.5 → 11.7 → 35.8 → 51.6 ms (× 2.1, × 3.1,
+  × 1.44); sync 7.2 → 14.3 → 45.0 → 60.0 ms (× 2.0, × 3.1, × 1.33); nice
+  74.8 → 199 → 565 → 641 ms (× 2.7, × 2.8, × 1.14). More than doubling
+  across each of the first two doublings, a third to a half across the
+  last, a seventh at nice 19. The knee, by the registered step of a rise
+  over 50 %, is at N = 8 in all three. Under sync, lateness is 1.2 to
+  1.3 × idle at the same N; at nice 19 it is 12 to 17 × idle.
 - **CPU per response has no knee and no state.** 66 to 72 ms at every
   cell, the same figure as session 1's 67.2 ms at one in flight. The
   idle cells of pass 3, at 72 to 76 °C, read 69 to 72 ms against 66 to
   70 ms in pass 1 at 60 to 73 °C: about 4 % more CPU time per response at
   the hotter board (see "Environment").
-- **The daemon's sync rate under serving does not depend on N.** 46, 41,
-  37, 38 % of no-serve at N = 8, 16, 32, 64: no doubling moves it by
-  25 %. What the serving process takes is a share of the four cores, and
-  it takes about the same share at every N, because the board is
-  saturated from N = 8: 37 to 41 responses/s × 66 ms ≈ 2.5 to 2.7 cores
-  for the probe, and the daemon, which took 3.3 cores alone, is left 1.3,
-  about 40 %. At nice 19 the serving process yields almost all of it: the
-  daemon keeps 93 to 98 % and the probe serves at 5 to 8/s, 0.4 to 0.6
-  of a core.
+- **The daemon's sync rate under serving does not depend on N.** 37, 31,
+  32, 31 % of no-serve at N = 8, 16, 32, 64 (the one-interval windows
+  read 26 to 30 %): no doubling moves it by 25 %. What the serving
+  process takes is a share of the four cores, and it takes about the same
+  share at every N, because the board is saturated from N = 8: 37 to 41
+  responses/s × 66 ms ≈ 2.5 to 2.7 cores for the probe, and the daemon,
+  which took 3.3 cores alone, is left 1.3 to 1.4, about 40 % of what it
+  had — it keeps a little less than that, which is the scheduler's share
+  for one busy process against a probe with many runnable threads. At
+  nice 19 the serving process yields almost all of it: the daemon keeps
+  90 to 97 % and the probe serves at 5 to 8/s, 0.4 to 0.6 of a core.
 
 ### The predictions, against the measurements
 
@@ -302,9 +324,9 @@ doubling; lateness and CPU: a rise over 50 %; sync rate: a fall over
 | --- | --- | --- | --- |
 | P1 | p99 wake lateness under sync above 100 ms by N = 16 | 14.3 ms at N = 16; 60.0 ms at N = 64; never above 100 ms inside the sweep | **missed** |
 | P2 | Board under 80 °C; `MemAvailable` never below 512 MB; swap never falls | 58.4 to 78.4 °C; lowest `MemAvailable` 5,840 MB; no swap configured | **held** |
-| P3 | Sync rate below 75 % of no-serve by N = 16, possibly at N = 8 | 46 % at N = 8 | **held** |
+| P3 | Sync rate below 75 % of no-serve by N = 16, possibly at N = 8 | 37 % at N = 8 | **held** |
 | P4 | Throughput under sync has its knee at N = 16 | Flat from N = 8: +9.8 % to N = 16, then ±1 % | **missed** |
-| P5 | At nice 19: sync rate ≥ 90 % at every N; serving throughput ≤ half of normal priority | 97, 98, 93, 94 %; throughput 17, 14, 17, 20 % of the sync state's | **held**, both halves |
+| P5 | At nice 19: sync rate ≥ 90 % at every N; serving throughput ≤ half of normal priority | 96, 97, 94, 90 % (N = 64 holds by half a point: 90.5); throughput 17, 14, 17, 20 % of the sync state's | **held**, both halves |
 | P6 | TTFB at one in flight, daemon idle: p50 under 1 ms, p99 under 5 ms | p50 0.19 ms, p90 0.22, p99 0.31, max 0.33 ms, n = 300 | **held** |
 | P7 | Idle p99 lateness within 2 × session 1 at N = 8 (5.6 ms), rising with N | 5.5 ms at N = 8; 11.7, 35.8, 51.6 ms | **held** |
 
@@ -334,6 +356,18 @@ step alone is a tenth of it. Under sync the same step is 1.85 ms p50 —
 ten times idle — which is scheduling delay, not work: the pre-head
 instruction count is flat (`BA-T3`), and the request waits behind the
 sync for a core.
+
+*Where the clock started.* In this capture the requester's clock
+started after its `write_all` of the request returned, not before the
+write. On a fresh loopback socket that write completes inside one
+`send` syscall with no await between the syscall's return and the
+reading of the clock, so the interval the endpoint could already have
+been working in — from the kernel taking the last request byte to the
+syscall returning — is the syscall's own return path, microseconds
+against a 190 µs reading, and the settlement does not turn on it. The
+probe now starts the clock before the write, so a later capture's figure
+includes the request write and is a bound from above with nothing
+outside it.
 
 ### The refusal at N = 64
 
@@ -381,10 +415,16 @@ decided there, not here. The serve path was not changed by this run.
 
 ### Limits of this run
 
-- **Three blocks per cell.** The sync-share spread in brackets shows what
-  that buys: the chain position the interleaving moves around dominates
-  the per-pass numbers, and three passes are enough to place the medians,
-  not to put error bars on them.
+- **Three blocks per cell, and fewer valid sync windows than that.** The
+  sync-share spread in brackets shows what three buys: the chain position
+  the interleaving moves around dominates the per-pass numbers, and three
+  passes are enough to place the medians, not to put error bars on them.
+  Under the registered three-point rule the sync-state cells rest on one
+  or two windows each; the one-interval reading of the rest sits 2 to 8
+  points below them. A later run that wants three valid windows per cell
+  under sync should make its serving blocks about twice as long (4,096
+  fetches, about 100 s), which still fits four of them and their quiet
+  windows inside one sync.
 - **The daemon's own rate varies threefold with chain position**, with
   the probe idle. The share figures use the state-wide median no-serve
   rate, as registered. A rate read against the no-serve window at the
@@ -402,6 +442,57 @@ decided there, not here. The serve path was not changed by this run.
   figures the discarded starts showed were in line with these.
 - **Not measured:** Tor, a cold cache, shard sizes other than the full
   segment, the clock during a block, N = 128.
+
+### What this reading corrects (second commit, 2026-10-09, found in review)
+
+The reading above replaces the one first committed with this capture.
+Nothing in the capture files changed; the reading script changed, and
+four summaries did. In the order that matters:
+
+1. **The sync poll's first point belonged to the previous window.** The
+   poll started with its "seen" line empty, so the newest `Synced H/T`
+   line at the moment a window opened — written by the daemon during the
+   previous window — was recorded as the window's first point, and 44 of
+   the 55 windows' summaries spanned time from before they opened. For a
+   serving window that meant one interval of the preceding no-serve rate
+   folded in, and for a no-serve window one interval of the preceding
+   serving rate: serving rates read high, no-serve rates read low, and
+   every share read toward 100 %. The point is identifiable by its
+   timestamp against the environment row written when the window opened,
+   and the reading now derives every window from its in-window points
+   alone. The no-serve medians moved from 2.52 and 2.77 to 2.92 and 2.81
+   blocks/s; the sync-state shares from 46, 41, 37, 38 % to 37, 31, 32,
+   31 %; the nice-state shares from 97, 98, 93, 94 % to 96, 97, 94, 90 %.
+   Six sync-state serving windows fell below the registered three points
+   once their borrowed point was dropped and are void, which is why the
+   sync cells rest on one or two windows and the one-interval reading is
+   printed beside them. **No prediction's verdict changed**: P3 held at
+   N = 8 before and after, and P5's sync-rate half holds at every N, N = 64
+   by half a point. The poll script now seeds its "seen" line with the
+   newest line at start, so a later capture carries no such point and
+   reads the same under either reading. The `SH-3` confirming run, which
+   re-measures the sync share with the shipped priority mechanism, runs
+   on the fixed poll.
+2. **"p99 lateness doubles with each doubling of N" overstated the last
+   step**, which is × 1.44 idle, × 1.33 under sync and × 1.14 at nice 19.
+   The curves section now carries the per-step ratios, and the same
+   sentence was corrected in the changelog, the alignment document and
+   the `p_serve_max_inflight` carrier.
+3. **The TTFB clock started after the request write returned.** Bounded
+   above in "Time to first byte"; the probe now starts it before the
+   write.
+4. **The completeness check was weaker than the registration.** It
+   accepted a capture with no `EXIT` row for a block, with three no-serve
+   windows per state where fifteen were registered, and with one
+   environment row. It now requires one zero exit for every registered
+   block, fifteen no-serve windows per syncing state, and the environment
+   row before and after every block and pass. This capture meets all
+   three; the selftest holds a failing case for each.
+
+Also corrected in the run script, for the next run and not this capture:
+a syncing daemon that fails to reach height 50 in time is stopped before
+the pass moves on, and every path is made absolute before the script
+changes directory.
 
 ## Files
 

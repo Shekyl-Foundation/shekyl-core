@@ -16,7 +16,8 @@ measurement it is read against and marks it held or missed, prints each
 curve against N with the knee as registered, and says whether the
 time-to-first-byte figure settles or replaces the open pre-head estimate.
 It exits 0 whatever it finds. It exits 2, before printing any figure, if
-the files do not hold the complete registered session.
+the files do not hold the complete registered session: every registered
+block with its zero exit, every no-serve window, every environment row.
 
 Row formats (tab-separated; the first column is the kind):
 
@@ -35,6 +36,20 @@ Row formats (tab-separated; the first column is the kind):
 Labels are `<state>.<pass>.<cell>`: state `idle`, `sync` or `nice`; cell
 `N<k>` for a serving block at k in flight, `quiet` or `quiet<k>` for a
 no-serve window, `ttfb` for the time-to-first-byte block.
+
+A sync window is read from its SYNCH points, not from the poll's own SYNC
+summary. The poll of the 2026-10-09 capture recorded, as each window's
+first point, the newest log line at the moment it started — a line the
+daemon had written during the previous window — so every SYNC summary
+spans time from before its window opened. The point is identifiable: its
+timestamp precedes the window's start, which the environment file
+records (`start.<label>` for a serving block, `pass.<state>.<pass>.start`
+for the first no-serve window, `end.<state>.<pass>.N<k>` for the no-serve
+window after block k). This reading drops every point stamped before its
+window's start and derives the rate from what remains, under the
+registered validity rule. The poll script has since been fixed to seed its
+"seen" line at start, so a later capture carries no such point and reads
+the same either way.
 """
 
 from __future__ import annotations
@@ -42,6 +57,8 @@ from __future__ import annotations
 import statistics
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,12 +67,20 @@ from ba_t5_reading import fmt_ms, med, rows  # noqa: E402
 # The registered session.
 STATES = ("idle", "sync", "nice")
 SYNCING = ("sync", "nice")
+PASSES = (1, 2, 3)
 IN_FLIGHT = (8, 16, 32, 64)
-BLOCKS_PER_CELL = 3
+BLOCKS_PER_CELL = len(PASSES)
 TTFB_STATES = ("idle", "sync")
 TTFB_SAMPLES = 300
 SYNC_STALL_POINTS_MAX = 1
+# The registered validity rule: at least three points in the window.
 SYNC_POINTS_MIN = 3
+# One interval. Not the registered rule; printed beside it, labelled, for
+# a cell the registered rule leaves with fewer valid windows than blocks.
+SYNC_POINTS_ONE_INTERVAL = 2
+# One no-serve window before the sweep and one after each cell, per pass.
+QUIET_PER_STATE = BLOCKS_PER_CELL * (len(IN_FLIGHT) + 1)
+STORE_BLOCK = "prep.store"
 
 # The registered predictions, as numbers.
 P1_P99_US = 100_000
@@ -89,18 +114,105 @@ def cell_of(label: str) -> str:
     return label.rsplit(".", 1)[-1]
 
 
+def block_labels() -> list[str]:
+    """Every registered serving block, by label."""
+    return [f"{state}.{pas}.N{n}" for state in STATES for pas in PASSES for n in IN_FLIGHT]
+
+
+def ttfb_labels() -> list[str]:
+    return [f"{state}.1.ttfb" for state in TTFB_STATES]
+
+
+def registered_env_tags() -> list[str]:
+    """The environment rows the run script writes: one before and after
+    every block, and one at each pass's start and end."""
+    tags = [f"start.{STORE_BLOCK}", f"end.{STORE_BLOCK}"]
+    for label in block_labels() + ttfb_labels():
+        tags += [f"start.{label}", f"end.{label}"]
+    for state in STATES:
+        for pas in PASSES:
+            tags += [f"pass.{state}.{pas}.start", f"pass.{state}.{pas}.end"]
+    return tags
+
+
+def utc_seconds(stamp: str) -> float:
+    """`2026-10-09T02:13:32Z` or with a fraction, as seconds since the epoch."""
+    base, _, frac = stamp.rstrip("Z").partition(".")
+    seconds = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    return seconds + (float(f"0.{frac}") if frac else 0.0)
+
+
+def window_start_tag(label: str) -> str:
+    """The environment tag written at the moment this window's poll began."""
+    state, pas, cell = label.split(".")
+    if cell.startswith("N") or cell == "ttfb":
+        return f"start.{label}"
+    if cell == "quiet":
+        return f"pass.{state}.{pas}.start"
+    return f"end.{state}.{pas}.N{cell[len('quiet'):]}"
+
+
+@dataclass
+class Window:
+    label: str
+    # (seconds since the epoch, height, target), in log order, inside the window.
+    points: list[tuple[float, int, int]]
+    # Points the poll recorded that were logged before the window opened.
+    dropped: int
+
+
+def windows(sync_path: Path, env_path: Path) -> dict[str, Window]:
+    """Every sync window, from its SYNCH points stamped at or after its start."""
+    opened_at = {e[1]: utc_seconds(e[0]) for e in rows(env_path, "ENV")}
+    points: dict[str, list[tuple[float, int, int]]] = defaultdict(list)
+    for utc, label, _state, height, target in rows(sync_path, "SYNCH"):
+        points[label].append((utc_seconds(utc), int(height), int(target)))
+    out: dict[str, Window] = {}
+    for label, ps in points.items():
+        start = opened_at.get(window_start_tag(label))
+        kept = ps if start is None else [p for p in ps if p[0] >= start]
+        out[label] = Window(label, kept, len(ps) - len(kept))
+    return out
+
+
+def window_rate(window: Window, points_min: int) -> float | None:
+    """Blocks per second across the window, or None if it is void under a
+    rule of `points_min` points: fewer points than that, a height that did
+    not advance over the window, more than one point at which it did not
+    advance from the previous one, or the target reached at the last
+    point. The span is between the first and the last point's own log
+    timestamps, so the rate is the daemon's, not the window's."""
+    ps = window.points
+    if len(ps) < points_min:
+        return None
+    stalls = sum(1 for a, b in zip(ps, ps[1:]) if b[1] == a[1])
+    if ps[-1][1] <= ps[0][1] or stalls > SYNC_STALL_POINTS_MAX:
+        return None
+    if ps[-1][1] >= ps[-1][2]:
+        return None
+    span = ps[-1][0] - ps[0][0]
+    if span <= 0:
+        return None
+    return (ps[-1][1] - ps[0][1]) / span
+
+
 def incomplete(obs_path: Path, env_path: Path, sync_path: Path) -> list[str]:
     """Why these files are not the complete registered session, if they are not."""
     found: list[str] = []
-    exits = rows(obs_path, "EXIT")
-    for label, mode, code in exits:
-        if code != "0":
-            found.append(f"block {label} ({mode}) exited {code}")
+    exits: dict[str, list[str]] = defaultdict(list)
+    for label, _mode, code in rows(obs_path, "EXIT"):
+        exits[label].append(code)
+    for label in [STORE_BLOCK] + block_labels() + ttfb_labels():
+        codes = exits.get(label, [])
+        if not codes:
+            found.append(f"{label}: no exit row; the probe's final status is unknown")
+        elif codes != ["0"]:
+            found.append(f"{label}: exit code(s) {', '.join(codes)}, registered one exit of 0")
     blocks = rows(obs_path, "BLOCK")
     late = rows(obs_path, "LATE")
     ttfb = rows(obs_path, "TTFB")
     env = rows(env_path, "ENV")
-    sync = rows(sync_path, "SYNC")
+    synch_labels = {r[1] for r in rows(sync_path, "SYNCH")}
     for state in STATES:
         for n in IN_FLIGHT:
             cell = f"N{n}"
@@ -111,21 +223,24 @@ def incomplete(obs_path: Path, env_path: Path, sync_path: Path) -> list[str]:
             if have_l < BLOCKS_PER_CELL:
                 found.append(f"{state} N{n}: {have_l} LATE row(s), registered at least {BLOCKS_PER_CELL}")
             if state in SYNCING:
-                have_s = sum(1 for s in sync if state_of(s[0]) == state and cell_of(s[0]) == cell)
+                have_s = sum(1 for s in synch_labels if state_of(s) == state and cell_of(s) == cell)
                 if have_s < BLOCKS_PER_CELL:
-                    found.append(f"{state} N{n}: {have_s} SYNC window(s), registered at least {BLOCKS_PER_CELL}")
+                    found.append(f"{state} N{n}: {have_s} sync window(s), registered at least {BLOCKS_PER_CELL}")
         if state in SYNCING:
-            quiet = sum(1 for s in sync if state_of(s[0]) == state and cell_of(s[0]).startswith("quiet"))
-            if quiet < BLOCKS_PER_CELL:
-                found.append(f"{state}: {quiet} no-serve window(s), registered at least {BLOCKS_PER_CELL}")
+            quiet = sum(1 for s in synch_labels if state_of(s) == state and cell_of(s).startswith("quiet"))
+            if quiet != QUIET_PER_STATE:
+                found.append(f"{state}: {quiet} no-serve window(s), registered {QUIET_PER_STATE}")
     for state in TTFB_STATES:
         t = [r for r in ttfb if state_of(r[0]) == state]
         if len(t) != 1:
             found.append(f"{state}: {len(t)} TTFB row(s), registered 1")
         elif int(t[0][2]) < TTFB_SAMPLES:
             found.append(f"{state}: TTFB over {t[0][2]} samples, registered at least {TTFB_SAMPLES}")
-    if not env:
-        found.append("no environment rows")
+    tags = {e[1] for e in env}
+    missing = [tag for tag in registered_env_tags() if tag not in tags]
+    if missing:
+        shown = ", ".join(missing[:4]) + (", …" if len(missing) > 4 else "")
+        found.append(f"environment: {len(missing)} registered row(s) missing ({shown})")
     for e in env:
         if len(e) < 16 or not e[2].isdigit() or not e[11].isdigit() or not e[14].isdigit() or not e[15].isdigit():
             found.append(f"environment row {e[:2]} lacks a temperature, memory or swap reading")
@@ -138,25 +253,6 @@ def rate_per_s(block: list[str]) -> float:
     attempted. A refused connection costs the endpoint nothing and must not
     count as a response."""
     return int(block[7]) / (int(block[5]) / 1000)
-
-
-def sync_rate(window: list[str]) -> float | None:
-    """Blocks per second across one SYNC window, or None if it is void.
-
-    The points are the daemon's own "Synced H/T" log lines, about eight
-    seconds apart; `seconds` is the span between the first and the last
-    point's timestamps. Void: fewer than three points, a point at which the
-    height did not advance beyond one, no advance over the window, or the
-    target reached at the last point."""
-    first, last, seconds, points, stalls = window[2], window[3], float(window[4]), int(window[5]), int(window[6])
-    target = window[7] if len(window) > 7 else "na"
-    if first == "na" or last == "na" or seconds <= 0 or points < SYNC_POINTS_MIN:
-        return None
-    if int(last) <= int(first) or stalls > SYNC_STALL_POINTS_MAX:
-        return None
-    if target != "na" and int(last) >= int(target):
-        return None
-    return (int(last) - int(first)) / seconds
 
 
 def mark(held: bool) -> str:
@@ -195,30 +291,47 @@ def main() -> int:
             print("  " + problem)
         return 2
     exits = rows(obs_path, "EXIT")
-    print(f"blocks: {len(exits)}, all exited 0; every registered cell is present")
+    print(f"blocks: {len(exits)}, all exited 0; every registered cell, window and environment row is present")
 
     blocks = rows(obs_path, "BLOCK")
     late = rows(obs_path, "LATE")
-    sync = rows(sync_path, "SYNC")
     env = rows(env_path, "ENV")
     obs = rows(obs_path, "OBS")
 
-    windows: dict[str, float | None] = {s[0]: sync_rate(s) for s in sync}
+    wins = windows(sync_path, env_path)
+    with_stale = sum(1 for w in wins.values() if w.dropped)
+    print(
+        f"\n== sync windows: {len(wins)}, read from their points stamped after each window opened; "
+        f"pre-window points dropped from {with_stale} of {len(wins)} windows =="
+    )
+    rate: dict[str, float | None] = {label: window_rate(w, SYNC_POINTS_MIN) for label, w in wins.items()}
+    one_interval: dict[str, float | None] = {
+        label: window_rate(w, SYNC_POINTS_ONE_INTERVAL) for label, w in wins.items()
+    }
     quiet: dict[str, list[float]] = defaultdict(list)
-    for label, r in windows.items():
+    for label, r in rate.items():
         if cell_of(label).startswith("quiet") and r is not None:
             quiet[state_of(label)].append(r)
     print("\n== no-serve sync rate, per state (median over valid windows) ==")
     for state in SYNCING:
-        print(f"  {state:5s} {med(quiet[state]):.2f} blocks/s over {len(quiet[state])} window(s)")
-    void = sorted(label for label, r in windows.items() if r is None)
+        print(
+            f"  {state:5s} {med(quiet[state]):.2f} blocks/s over {len(quiet[state])} window(s), "
+            f"range {min(quiet[state]):.2f} to {max(quiet[state]):.2f}"
+        )
+    void = sorted(label for label, r in rate.items() if r is None)
     if void:
-        print(f"  void windows (excluded): {', '.join(void)}")
+        print(f"  void under the registered rule (excluded): {', '.join(void)}")
+        thin = [label for label in void if one_interval.get(label) is not None]
+        if thin:
+            print(
+                "  of which hold one interval (two points), read outside the registered rule below: "
+                + ", ".join(thin)
+            )
 
     late_by_label = {r[0]: r for r in late if r[1] == "load"}
     per: dict[str, dict[str, dict[int, list[float]]]] = {
         q: {state: defaultdict(list) for state in STATES}
-        for q in ("rate", "cpu_ms", "p99_us", "refused", "sync_share")
+        for q in ("rate", "cpu_ms", "p99_us", "refused", "sync_share", "sync_share_one_interval")
     }
     # A refusal seen from outside: a load fetch that got 0 bytes. The
     # endpoint's own count is on the BLOCK row; the two must agree, and
@@ -250,10 +363,16 @@ def main() -> int:
         per["refused"][state][n].append(float(refused))
         share = ""
         if state in SYNCING:
-            r = windows.get(b[0])
-            if r is not None and quiet[state]:
-                per["sync_share"][state][n].append(r / med(quiet[state]))
-                share = f"  sync {r:.2f} blocks/s = {r / med(quiet[state]) * 100:.0f} % of no-serve"
+            base = med(quiet[state]) if quiet[state] else None
+            r = rate.get(b[0])
+            r1 = one_interval.get(b[0])
+            if r1 is not None and base:
+                per["sync_share_one_interval"][state][n].append(r1 / base)
+            if r is not None and base:
+                per["sync_share"][state][n].append(r / base)
+                share = f"  sync {r:.2f} blocks/s = {r / base * 100:.0f} % of no-serve"
+            elif r1 is not None and base:
+                share = f"  sync window VOID under the registered rule (one interval: {r1:.2f} blocks/s = {r1 / base * 100:.0f} %)"
             else:
                 share = "  sync window VOID"
         print(
@@ -285,7 +404,18 @@ def main() -> int:
         print_curve("CPU per response", "ms", curve["cpu_ms"][state], "rise")
         print_curve("p99 wake lateness", "ms", curve["p99_us"][state], "rise", scale=1000)
         if state in SYNCING:
-            print_curve("sync rate, share of no-serve", "x", curve["sync_share"][state], "fall")
+            print_curve("sync rate, share of no-serve", "%", curve["sync_share"][state], "fall", scale=0.01)
+            thin_cells = [n for n in IN_FLIGHT if len(per["sync_share"][state][n]) < BLOCKS_PER_CELL]
+            if thin_cells:
+                print(
+                    "  " + f"{'':28s} "
+                    + "valid windows per cell under the registered rule: "
+                    + ", ".join(f"N={n}: {len(per['sync_share'][state][n])}" for n in IN_FLIGHT)
+                    + " — the one-interval reading of every window, outside the registered rule:"
+                )
+                print_curve(
+                    "  sync share, one interval", "%", curve["sync_share_one_interval"][state], "fall", scale=0.01
+                )
 
     print("\n== the predictions, against the measurements ==")
     p99_sync = curve["p99_us"]["sync"]
@@ -378,9 +508,18 @@ def main() -> int:
 # --- selftest ---------------------------------------------------------------
 
 
+def _stamp(seconds: float) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     """A complete registered session in which every prediction holds, with
-    optional tweaks that make one thing come out otherwise."""
+    optional tweaks that make one thing come out otherwise.
+
+    The session has a clock: every window's points are stamped against the
+    environment row written when it opened, and, as in the 2026-10-09
+    capture, every sync window's first recorded point is the last line of
+    the previous window unless `no_stale` says otherwise."""
     obs: list[str] = []
     env: list[str] = []
     syn: list[str] = []
@@ -389,19 +528,21 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     share_at = dict(tweak.get("share", {}))  # type: ignore[arg-type]
     stalls_at = dict(tweak.get("stalls", {}))  # type: ignore[arg-type]
     drop = set(tweak.get("drop", ()))  # type: ignore[arg-type]
+    drop_exit = set(tweak.get("drop_exit", ()))  # type: ignore[arg-type]
+    drop_window = set(tweak.get("drop_window", ()))  # type: ignore[arg-type]
+    drop_env = set(tweak.get("drop_env", ()))  # type: ignore[arg-type]
+    no_stale = bool(tweak.get("no_stale", False))
     temp = int(tweak.get("temp_mC", 55_000))  # type: ignore[arg-type]
     swap = list(tweak.get("swap_free", [0, 0]))  # type: ignore[arg-type]
     ttfb = dict(tweak.get("ttfb", {}))  # type: ignore[arg-type]
     refused_at = dict(tweak.get("refused", {}))  # type: ignore[arg-type]
     # The probe sees one empty close fewer than the endpoint counted.
     probe_short = bool(tweak.get("probe_short", False))
-    quiet_rate = 2.9
-    # The store-writing block that precedes the first pass: a load block
-    # outside every state, which the reading must step over.
-    obs.append("OBS\tprep.store\tload\tfull-store\t8\t171518\t3330449")
-    obs.append("BLOCK\tprep.store\tload\tfull-store\t8\t8\t176\t625\t8\t0")
-    obs.append("LATE\tprep.store\tload\tfull-store\t8\t3\t3\t4\t50\t50\t50")
-    obs.append("EXIT\tprep.store\tload\t0")
+    # Ten blocks per point when the daemon is alone, so a share that is a
+    # multiple of a tenth gives whole heights and an exact rate.
+    quiet_rate = 2.5
+    quiet_seconds = 45.0
+    point_every = 4.0
     # Defaults chosen so every prediction holds: lateness over 100 ms from
     # N=16 under sync, sync share under 75 % from N=16, throughput flat
     # past 16, nice keeps 95 % of the rate at a third of the throughput.
@@ -411,12 +552,62 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     default_rate = {"idle": {8: 52, 16: 60, 32: 62, 64: 62},
                     "sync": {8: 20, 16: 30, 32: 31, 64: 31},
                     "nice": {8: 6, 16: 9, 32: 10, 64: 10}}
-    default_share = {"sync": {8: 0.80, 16: 0.60, 32: 0.50, 64: 0.45},
+    default_share = {"sync": {8: 0.80, 16: 0.60, 32: 0.50, 64: 0.40},
                      "nice": {8: 0.97, 16: 0.95, 32: 0.94, 64: 0.93}}
+
+    clock = utc_seconds("2026-10-09T02:00:00Z")
+    height = 100
+    last_point: tuple[float, int] | None = None
+    target = 2240
+
+    def env_row(tag: str) -> None:
+        if tag in drop_env:
+            return
+        free = swap[min(len(env), len(swap) - 1)]
+        env.append(
+            f"ENV\t{_stamp(clock)}\t{tag}\t{temp}\tondemand\t1800000\t1.0\t1000\t500\t366000"
+            f"\t{height}\tfalse\t6000000\t1\t380000\t0\t{free}"
+        )
+
+    def window(label: str, state: str, seconds: float, blocks_per_s: float, stalls: int = 0) -> None:
+        """Points for one window opening now and lasting `seconds`."""
+        nonlocal height, last_point
+        if label in drop_window:
+            return
+        if last_point is not None and not no_stale:
+            syn.append(f"SYNCH\t{_stamp(last_point[0])}\t{label}\t{state}\t{last_point[1]}\t{target}")
+        k = 0
+        first = height
+        while k * point_every <= seconds:
+            at = clock + k * point_every
+            if 0 < k <= stalls:
+                h = first
+            else:
+                h = first + int(round(blocks_per_s * k * point_every))
+            syn.append(f"SYNCH\t{_stamp(at)}\t{label}\t{state}\t{h}\t{target}")
+            last_point = (at, h)
+            height = h
+            k += 1
+
+    env_row(f"start.{STORE_BLOCK}")
+    obs.append(f"OBS\t{STORE_BLOCK}\tload\tfull-store\t8\t171518\t3330449")
+    obs.append(f"BLOCK\t{STORE_BLOCK}\tload\tfull-store\t8\t8\t176\t625\t8\t0")
+    obs.append(f"LATE\t{STORE_BLOCK}\tload\tfull-store\t8\t3\t3\t4\t50\t50\t50")
+    if STORE_BLOCK not in drop_exit:
+        obs.append(f"EXIT\t{STORE_BLOCK}\tload\t0")
+    clock += 1
+    env_row(f"end.{STORE_BLOCK}")
     for state in STATES:
-        for pas in ("1", "2", "3"):
+        for pas in PASSES:
             if state in SYNCING:
-                syn.append(f"SYNC\t{state}.{pas}.quiet\t{state}\t100\t{100 + int(quiet_rate * 40)}\t40.0\t5\t0\t2240")
+                # A fresh daemon has already logged a line before the pass's
+                # first window opens, as on the device.
+                height = 61
+                last_point = (clock - 5.0, 60)
+            env_row(f"pass.{state}.{pas}.start")
+            if state in SYNCING:
+                window(f"{state}.{pas}.quiet", state, quiet_seconds, quiet_rate)
+                clock += quiet_seconds
             for n in IN_FLIGHT:
                 label = f"{state}.{pas}.N{n}"
                 if label in drop:
@@ -426,27 +617,37 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
                 refused = refused_at.get((state, n), 0)
                 served = 256 - refused
                 wall_ms = int(served / rate * 1000)
+                env_row(f"start.{label}")
                 obs.append(f"OBS\t{label}\tload\tfull-store\t{n}\t60000\t3330449")
                 for _ in range(refused - (1 if probe_short and refused else 0)):
                     obs.append(f"OBS\t{label}\tload\tfull-store\t{n}\t900\t0")
                 obs.append(f"BLOCK\t{label}\tload\tfull-store\t{n}\t256\t{wall_ms}\t15000\t{served}\t{refused}")
                 obs.append(f"LATE\t{label}\tload\tfull-store\t{n}\t9000\t1000\t2000\t{p99}\t{p99}\t{p99}")
-                obs.append(f"EXIT\t{label}\tload\t0")
+                if label not in drop_exit:
+                    obs.append(f"EXIT\t{label}\tload\t0")
                 if state in SYNCING:
                     share = share_at.get((state, n), default_share[state][n])
-                    stalls = stalls_at.get((state, n), 0)
-                    syn.append(f"SYNC\t{label}\t{state}\t200\t{200 + int(quiet_rate * share * 56)}\t56.0\t7\t{stalls}\t2240")
-        if state in TTFB_STATES:
-            p50, p99 = ttfb.get(state, (600, 3_000))
-            obs.append(f"TTFB\t{state}.1.ttfb\tfull-store\t300\t{p50}\t900\t{p99}\t4000")
-            obs.append(f"EXIT\t{state}.1.ttfb\tttfb\t0")
-            for _ in range(300):
-                obs.append(f"OBS\t{state}.1.ttfb\tttfb\tfull-store\t1\t{p50}\t3326976")
-    for i, free in enumerate(swap):
-        env.append(
-            f"ENV\t2026-10-09T01:0{i}:00Z\ttick\t{temp}\tondemand\t1800000\t1.0\t1000\t500\t366000"
-            f"\t500\tfalse\t6000000\t1\t380000\t0\t{free}"
-        )
+                    window(label, state, wall_ms / 1000, quiet_rate * share, stalls_at.get((state, n), 0))
+                clock += wall_ms / 1000
+                env_row(f"end.{label}")
+                if state in SYNCING:
+                    window(f"{state}.{pas}.quiet{n}", state, quiet_seconds, quiet_rate)
+                    clock += quiet_seconds
+            if pas == 1 and state in TTFB_STATES:
+                label = f"{state}.1.ttfb"
+                p50, p99 = ttfb.get(state, (600, 3_000))
+                env_row(f"start.{label}")
+                obs.append(f"TTFB\t{label}\tfull-store\t300\t{p50}\t900\t{p99}\t4000")
+                if label not in drop_exit:
+                    obs.append(f"EXIT\t{label}\tttfb\t0")
+                for _ in range(300):
+                    obs.append(f"OBS\t{label}\tttfb\tfull-store\t1\t{p50}\t3326976")
+                if state in SYNCING:
+                    window(label, state, 12.0, quiet_rate)
+                clock += 12.0
+                env_row(f"end.{label}")
+            env_row(f"pass.{state}.{pas}.end")
+            clock += 1
     paths = (root / "obs.tsv", root / "env.tsv", root / "sync.tsv")
     for path, lines in zip(paths, (obs, env, syn)):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -480,6 +681,7 @@ def selftest() -> int:
         "P6 TTFB at idle p50 under 1 ms and p99 under 5 ms: p50 0.6 ms",
         "P7 idle p99 at N=8 within 2x", "rising: held",
         "SETTLED: TTFB p50 at idle is 0.6 ms",
+        "sync  2.50 blocks/s over 15 window(s)",
     ))
     run("P1 missed: lateness stays low under sync", 0, ("never above inside the sweep: missed",),
         p99_us={("sync", 8): 20_000, ("sync", 16): 30_000, ("sync", 32): 40_000, ("sync", 64): 50_000})
@@ -487,7 +689,7 @@ def selftest() -> int:
     run("P2 missed on swap growth", 0, ("swap grew (SwapTotal 0 MB): missed",), swap_free=[1000, 500])
     run("P3 missed: the daemon keeps its rate", 0, ("never below inside the sweep: missed",),
         share={("sync", 8): 0.9, ("sync", 16): 0.85, ("sync", 32): 0.8, ("sync", 64): 0.78})
-    run("void windows are excluded and named", 0, ("void windows (excluded): sync.1.N16",),
+    run("void windows are excluded and named", 0, ("void under the registered rule (excluded): sync.1.N16",),
         stalls={("sync", 16): 2})
     run("P4 missed: throughput keeps growing", 0, ("no knee inside the sweep: missed",),
         rate={("sync", 8): 20, ("sync", 16): 30, ("sync", 32): 40, ("sync", 64): 50})
@@ -502,6 +704,14 @@ def selftest() -> int:
         drop={"nice.2.N32"})
     run("incomplete: a whole cell missing", 2, ("idle N8: 0 BLOCK row(s)",),
         drop={"idle.1.N8", "idle.2.N8", "idle.3.N8"})
+    run("incomplete: a block without its exit row", 2, ("idle.1.N16: no exit row; the probe's final status is unknown",),
+        drop_exit={"idle.1.N16"})
+    run("incomplete: the store block without its exit row", 2, ("prep.store: no exit row",),
+        drop_exit={STORE_BLOCK})
+    run("incomplete: a no-serve window missing", 2, ("sync: 14 no-serve window(s), registered 15",),
+        drop_window={"sync.2.quiet8"})
+    run("incomplete: an environment row missing", 2, ("environment: 1 registered row(s) missing (end.nice.2.N32)",),
+        drop_env={"end.nice.2.N32"})
     # 253 served over the wall of 253 at 31/s: the rate is over served, so
     # it reads 31.0 and not 30.6.
     run("refusals are recorded, the rate is over served, and the counts agree", 0, (
@@ -512,12 +722,23 @@ def selftest() -> int:
         "DISAGREE", "sync.2.N64: 256 attempted, 253 served, 3 refused by the endpoint, 2 empty close(s) seen by the probe",
     ), refused={("sync", 64): 3}, probe_short=True)
     run("no refusals is said", 0, ("none in any block",))
+    # The 2026-10-09 capture's shape: every window's first recorded point
+    # was logged before it opened. It is dropped, and the window reads at
+    # its own rate: N=8 under sync at 80 % of no-serve exactly.
+    run("a point logged before the window opened is dropped, and the rate is the window's", 0, (
+        "pre-window points dropped from 55 of 55 windows",
+        "sync.1.N8          20.0/s  cpu/resp    59 ms  refused   0  p99   40.0 ms  sync 2.00 blocks/s = 80 % of no-serve",
+    ))
+    run("a capture with no pre-window points reads the same", 0, (
+        "pre-window points dropped from 0 of 55 windows",
+        "sync 2.00 blocks/s = 80 % of no-serve",
+    ), no_stale=True)
     if failures:
         print("SELFTEST FAIL:")
         for failure in failures:
             print("  " + failure)
         return 1
-    print("selftest: 16 cases pass")
+    print("selftest: 22 cases pass")
     return 0
 
 

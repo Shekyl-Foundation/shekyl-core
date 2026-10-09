@@ -21,9 +21,16 @@
 #
 # Needs no root. The resident daemon is never touched.
 set -uo pipefail
-WORK=$1; PROBE=$2; SHEKYLD=$3; PEER=$4; PASSES=$5
-cd "$WORK" || exit 3
+# Every path is made absolute before the chdir below, against the directory
+# this script was launched from: `$0`, the work directory, the probe and the
+# daemon may all be given relative, and a relative path re-resolved after
+# `cd "$WORK"` would point under the work directory instead.
 HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=$(cd "$1" && pwd) || exit 3
+PROBE=$(realpath "$2") || exit 3
+SHEKYLD=$(realpath "$3") || exit 3
+PEER=$4; PASSES=$5
+cd "$WORK" || exit 3
 STAMP=$(date -u +%Y%m%dT%H%MZ)
 OBS=obs-$STAMP.tsv; ENVF=env-$STAMP.tsv; SYNCF=sync-$STAMP.tsv; ERR=err-$STAMP.log
 export PATH=$HOME/.cargo/bin:$PATH
@@ -145,7 +152,10 @@ for pass in $(seq 1 "$PASSES"); do
   for state in idle sync nice; do
     syncing=0; [ "$state" != idle ] && syncing=1
     NICE=""; fetches=$FETCHES; [ "$state" = nice ] && { NICE="nice -n 19"; fetches=$FETCHES_NICE; }
-    if [ $syncing = 1 ]; then sync_start || continue; fi
+    # A daemon that did not reach height 50 in time is still running: stop
+    # it before moving on, or the next syncing state would wipe its live
+    # data directory and start a second daemon on the same ports.
+    if [ $syncing = 1 ]; then sync_start || { sync_stop; continue; }; fi
     envrow "pass.$state.$pass.start"
     if [ $syncing = 1 ]; then poll_start "$state.$pass.quiet" "$state"; sleep $QUIET_S; poll_stop; fi
     for n in $order; do

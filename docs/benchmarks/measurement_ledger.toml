@@ -401,7 +401,7 @@ defined_in = "rust/shekyl-p-serve/src/serve.rs"
 needle = "pub const MAX_INFLIGHT: usize = 64;"
 measured_by = ["BA-T5"]
 status = "unmeasured"
-carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment. Session 2 of BA-T5 (docs/benchmarks/ba_t5_serve_floor_device_20261009.md, 2026-10-09, a discovery run by ruling) swept N in {8, 16, 32, 64} on the floor device with the daemon idle and syncing: throughput is flat from N = 16 in every state, p99 wake lateness doubles with each doubling of N, and at N = 64 = MAX_INFLIGHT a requester that reconnects as its last stream closes was refused once in 6,144, because the permit is dropped after the stream. The run sets nothing; the constant stays unmeasured until BA-Q4 is ruled on that evidence."
+carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment. Session 2 of BA-T5 (docs/benchmarks/ba_t5_serve_floor_device_20261009.md, 2026-10-09, a discovery run by ruling) swept N in {8, 16, 32, 64} on the floor device with the daemon idle and syncing: throughput is flat from N = 16 in every state, p99 wake lateness rises steeply with N (more than doubling across each of the first two doublings, by a third to a half across the last), and at N = 64 = MAX_INFLIGHT a requester that reconnects as its last stream closes was refused once in 6,144, because the permit is dropped after the stream. The run sets nothing; the constant stays unmeasured until BA-Q4 is ruled on that evidence."
 path_set = "p-serve"
 
 [[path_set]]
