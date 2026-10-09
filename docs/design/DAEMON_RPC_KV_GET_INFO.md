@@ -1,8 +1,9 @@
 # RK-5c — `get_info`, the hub: rule-26 pre-flight
 
 **Status:** OPEN — R0, **DRAFT for ratification** (2026-10-08). §1's rulings
-are recorded as ruled. §4–§5 are proposed and authorize no implementation
-until the open questions in §8 are ruled.
+are recorded as ruled, and **RK-Q1…RK-Q9 were ruled 2026-10-08** (§8).
+**RK-Q10 is open** and gates only its own commit. §4–§5 are proposed until
+the document is ratified.
 **Ground:** `shekyl-core` `dev` **`98fbd20ac`** (#1005 merge, 2026-10-08);
 `shekyl-gui-wallet` `dev` **`447908f`**. Every `file:line` below was read at
 those commits. Open work on the hard-fork mechanism's deletion also edits
@@ -221,8 +222,8 @@ document owns tracks it until then.
 
 The failure is also RK-Q2's evidence, in one
 direction only: the GUI expects a string for `already_generated_coins` and
-a number for `total_burned` (gui `daemon_rpc.rs:116-117`), so RK-Q2 as
-recommended repairs the first and moves the second (§5.1).
+a number for `total_burned` (gui `daemon_rpc.rs:116-117`), so RK-Q2
+repairs the first and moves the second (§5.1).
 
 The GUI also reads `stake_ratio` and `staker_pool_balance` under
 `#[serde(default)]` (gui `daemon_rpc.rs:114-119`). The daemon sends neither;
@@ -235,8 +236,8 @@ sentinel, a synchronized daemon reports `0`. RK-D15 makes a synchronized
 node with a target report that target, which this line then shows.
 
 It does not finish the job without a GUI change. A node whose core reports
-no target — peerless at startup — has no value to send. Under RK-Q7 as
-recommended the field is `null`, and the GUI's `target_height: u64` is
+no target — peerless at startup — has no value to send. Under RK-Q7 the
+field is `null`, and the GUI's `target_height: u64` is
 required, so that reply would fail to decode and read as "disconnected" —
 as it would on an omitted field. The GUI pair for the RK-D15 commit makes
 the field `Option<u64>` and renders `null` as no target (§5.1).
@@ -271,14 +272,14 @@ GetInfoResponse {
 - **The type says which parts a caller may be refused.** `Hidden<T>` is
   either the part or its absence; the two parts outside the `view` preset
   carry it and the rest cannot be withheld. What an absent part *writes* is
-  the serializer's: today's stand-ins under parity, nothing once RK-Q8 is
-  ruled. No handler code changes between the two.
+  the serializer's: today's stand-ins under parity, nothing from RK-Q8's commit
+  on. No handler code changes between the two.
 - **One field, one value, even where the wire has two names.** Where today's
   wire repeats a value (`block_size_limit` / `block_weight_limit`, the
   difficulty triplets), the part holds the value **once** and the extra wire
   names are produced by its serializer. A second struct field for the same
   value is not allowed — that is the drift RK-D1 exists to prevent. Whether
-  the extra names survive on the wire is RK-Q1.
+  the extra names survive on the wire was RK-Q1: they do not.
 - The caller's authority reaches the builder as a value, `Disclosure`, not
   as a boolean: today it has two inhabitants, `Full` and `View`, mapped
   from the listener flag, and RT-W10 supplies a richer one. Under parity,
@@ -450,7 +451,7 @@ in commit 4:
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
 | 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1 |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
-| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7 as recommended, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
+| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
 | 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
 
@@ -514,17 +515,20 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 
 ---
 
-## 8. Open questions for ratification — OPEN
+## 8. Questions — RK-Q1…RK-Q9 RULED 2026-10-08 (Rick); RK-Q10 OPEN
 
-| ID | Question (OPEN) | Recommendation |
+Each of RK-Q1…RK-Q9 was ruled as recommended, in one pass. The reasoning
+beside each ruling is the recommendation's, kept as the record of why.
+
+| ID | Question | Ruling, or recommendation where open |
 | --- | --- | --- |
-| **RK-Q1** | **Duplicate wire names** — `block_size_limit`/`block_weight_limit`, `block_size_median`/`block_weight_median`, `difficulty` + `wide_difficulty` + `difficulty_top64` (and the cumulative triplet). Retire the extras in RK-5c (commit 8+) or leave them to RK-W? | **RK-5c.** One value already has one source internally (RK-D18); keeping several wire names for it is the same mess one layer up, and RK-W's reason to wait — redesign once — doesn't apply to a pure deletion. Keep `wide_*` (the u128 decimal string) and the `weight` names. Costs the GUI its `difficulty: u64` (§5.1). |
-| **RK-Q2** | **Atomic-unit encoding.** `already_generated_coins` and `total_burned` exceed 2^53 once about 9.0M coins have been emitted (asymptote 4.29·10¹⁸, `config/economics_params.json:3`); a JSON number loses precision in every JS reader. The wallet RPC already encodes amounts as decimal strings (`docs/api/wallet_rpc.yaml:1419-1425`). | **Decimal string, one `AtomicUnits` wire encoding for both RPCs.** This changes how two economics fields are written, not what they mean, so it sits inside RK-D16 as worded; if RK-D16 is meant to cover encoding too, this question is the EUP lane's. The GUI already expects a string for `already_generated_coins` and a number for `total_burned` (§3.3, §5.1). |
-| **RK-Q3** | **Peer counts** — the per-direction counts become sums over every connector from the board, or stay clearnet-only? | **Every connector.** Today's clearnet-only value is not a decision anyone made; it is `get_public_*` surviving the zone deletion. Per-connector detail stays in the socket counts. |
-| **RK-Q4** | **`has_peers` = a handshaken session, or any board row?** | **Handshaken.** A row before handshake cannot relay, which is what every reader asks. |
-| **RK-Q5** | `restricted` stays until RT-W10? | **Yes.** It is RT-W10's to retire; P's poller stops depending on it in commit 7. |
-| **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
-| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it, and the GUI pair opened against that commit — never piecemeal. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; whether the version fields must stay decodable on their own is the failure-mode question (rule 82) this recommendation leaves with the ruling. |
-| **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
-| **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
-| **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **Split, in commit 8+.** `tx_pool_size` becomes relayed entries only, a value for every caller, in `pool`. The unrelayed count becomes its own field in its own one-field `Hidden` part, absent for every caller without the grant that sees unrelayed entries. Three things are open inside this and are not this document's to settle alone: **(1)** which grant — #1006's pushed head (`f331b31e0`) puts unrelayed entries in `node`; the review that raised this calls the class host-only and says admin does not see it. **(2)** Until RT-W10 there are two listeners and no host identity, so either the unrestricted listener stands in for that class or the field is absent for everyone until the channel exists. **(3)** The readers whose number changes: `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` (four call sites) and `tests/stressnet/monitor.py:142` read `tx_pool_size` on an unrestricted listener and today see unrelayed entries in it; each is read at the split to decide which of the two fields it meant. |
+| **RK-Q1** | **Duplicate wire names** — `block_size_limit`/`block_weight_limit`, `block_size_median`/`block_weight_median`, `difficulty` + `wide_difficulty` + `difficulty_top64` (and the cumulative triplet). Retire the extras in RK-5c (commit 8+) or leave them to RK-W? | **RULED 2026-10-08 (Rick).** **RK-5c.** One value already has one source internally (RK-D18); keeping several wire names for it is the same mess one layer up, and RK-W's reason to wait — redesign once — doesn't apply to a pure deletion. Keep `wide_*` (the u128 decimal string) and the `weight` names. Costs the GUI its `difficulty: u64` (§5.1). |
+| **RK-Q2** | **Atomic-unit encoding.** `already_generated_coins` and `total_burned` exceed 2^53 once about 9.0M coins have been emitted (asymptote 4.29·10¹⁸, `config/economics_params.json:3`); a JSON number loses precision in every JS reader. The wallet RPC already encodes amounts as decimal strings (`docs/api/wallet_rpc.yaml:1419-1425`). | **RULED 2026-10-08 (Rick).** **Decimal string, one `AtomicUnits` wire encoding for both RPCs.** This changes how two economics fields are written, not what they mean, so it sits inside RK-D16; the ruling places it in this slice. There is no interim fix for the GUI before this commit (§3.3). The GUI already expects a string for `already_generated_coins` and a number for `total_burned` (§3.3, §5.1). |
+| **RK-Q3** | **Peer counts** — the per-direction counts become sums over every connector from the board, or stay clearnet-only? | **RULED 2026-10-08 (Rick).** **Every connector.** Today's clearnet-only value is not a decision anyone made; it is `get_public_*` surviving the zone deletion. Per-connector detail stays in the socket counts. |
+| **RK-Q4** | **`has_peers` = a handshaken session, or any board row?** | **RULED 2026-10-08 (Rick).** **Handshaken.** A row before handshake cannot relay, which is what every reader asks. |
+| **RK-Q5** | `restricted` stays until RT-W10? | **RULED 2026-10-08 (Rick).** **Yes.** It is RT-W10's to retire; P's poller stops depending on it in commit 7. |
+| **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **RULED 2026-10-08 (Rick).** **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
+| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **RULED 2026-10-08 (Rick).** **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it, and the GUI pair opened against that commit — never piecemeal. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; whether the version fields must stay decodable on their own is a failure-mode point (rule 82) the ruling did not address; it is settled in commit 6's design, before that commit is written. |
+| **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **RULED 2026-10-08 (Rick).** **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
+| **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **RULED 2026-10-08 (Rick).** **`null`, and the refusal stays logged** (RK-D23), in commit 8+. This is how a failure is written, not what the field means, so it sits inside RK-D16 the same way RK-Q2 does. Costs the GUI its `burn_pct: u64` (§5.1). |
+| **RK-Q10** | **`tx_pool_size` carries two quantities.** Raised from the RPC-channel round's review of this document. Split it? | **OPEN.** **Split, in commit 8+.** `tx_pool_size` becomes relayed entries only, a value for every caller, in `pool`. The unrelayed count becomes its own field in its own one-field `Hidden` part, absent for every caller without the grant that sees unrelayed entries. Three things are open inside this and are not this document's to settle alone: **(1)** which grant — #1006's pushed head (`f331b31e0`) puts unrelayed entries in `node`; the review that raised this calls the class host-only and says admin does not see it. **(2)** Until RT-W10 there are two listeners and no host identity, so either the unrestricted listener stands in for that class or the field is absent for everyone until the channel exists. **(3)** The readers whose number changes: `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:439-444` (four call sites) and `tests/stressnet/monitor.py:142` read `tx_pool_size` on an unrestricted listener and today see unrelayed entries in it; each is read at the split to decide which of the two fields it meant. |
