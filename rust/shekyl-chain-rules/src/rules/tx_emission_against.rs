@@ -75,12 +75,11 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
-use crate::rules::tx_against::{ReferenceContext, I15};
+use crate::rules::tx_against::{to_key_slots, ReferenceContext, I15};
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
 use crate::view::{ChainView, Tip};
-use shekyl_wire::Input;
 
 /// CEN-J23: every claimed epoch has a **frozen budget row** — it closed
 /// and was not pruned (`has_budget_row`, `blockchain.cpp:3935`) — and its
@@ -281,7 +280,9 @@ impl J25 {
 /// fee inputs; present, it verifies over the `txin_to_key` subset
 /// **exactly as CEN-I15** (`blockchain.cpp:4046–4105`, "§7.1 step 7 …
 /// identical to bond-post funding inputs"). The body is [`I15::verify`]
-/// over the `ToKey` slots, against J21's context; the absent⇔ clause is
+/// over [`to_key_slots`] — the one derivation of which inputs are `ToKey`,
+/// shared with the spend's and the bond post's attributions — against
+/// J21's context; the absent⇔ clause is
 /// H22's shape, required in `tx_form` and refused again by I15's body
 /// rather than assumed. Refuses at the transaction, as the C++ does
 /// (`reject_form`).
@@ -300,15 +301,7 @@ impl Rule for J26 {
 impl J26 {
     /// The fee-input proof against `reference`.
     fn check(cx: &TxContext<'_>, reference: &ReferenceContext) -> Verdict<()> {
-        let fee_slots: Vec<usize> = cx
-            .tx
-            .prefix
-            .inputs
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, input)| matches!(input, Input::ToKey { .. }).then_some(slot))
-            .collect();
-        I15::verify(cx.tx, &fee_slots, reference)
+        I15::verify(cx.tx, &to_key_slots(cx.tx), reference)
             .map_err(|()| InvalidBlock::new(Self::ROW, cx.locus()))
     }
 }

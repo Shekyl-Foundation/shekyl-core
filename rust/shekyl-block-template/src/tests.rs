@@ -287,9 +287,14 @@ fn a_template_listing_bodies_hashes_them_in_order() {
         listed.iter().map(Transaction::hash).collect::<Vec<_>>(),
         "CEN-A3/A4: the header names the listed bodies, in order"
     );
-    // A3 is pending and A4 held by the C++ (census); the validator admits
-    // the block with its bodies, and the naming is asserted above.
-    let _judged_by = admitted(&chain, template);
+    // A3 is pending and A4 held by the C++ (census); the naming is asserted
+    // above. The validator's admission of a template *listing* bodies is
+    // the ingest scenario's witness (`scenario_spend_tests`, over spends
+    // the harness spender proves against the chain's real tree): since
+    // CEN-I13/I15 flipped (slice 6 row 6, 2026-10-08) a filler-fixture spend
+    // is refused at its declared depth, so this test asserts nothing the
+    // validator says about these bodies. *Records-was:* until the flip it
+    // called `admitted` here and the fixtures passed.
 }
 
 // ---------------------------------------------------------------------------

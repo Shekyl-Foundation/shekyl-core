@@ -35,9 +35,12 @@ been written, as `shekyl-timing-engine`. The C++ bridge still waits.
 Not reopened here. Until this engine lands, one socketless `io_context`
 remains. Then this engine owns every deadline in Rust. C++ is called,
 not driven, on a budgeted blocking pool, one delivery at a time per
-connection. The `io_context` is deleted. Relay dispatch is the next
-round (P2P-3 **RD**). This round arms the relay sleep. It does not send
-relay messages.
+connection. The `io_context` is deleted. **UPDATE 2026-10-07:** relay dispatch
+(P2P-3 **RD**) follows slice 1 and the rescoped slice 3. It is not the
+next round. *Records-was: relay dispatch is the next round.* This
+round arms the relay sleep. It does not send relay messages. The
+outbound handshake invoke is a timing-engine owner inside slice 3's
+dialer, not a job of the C++ bridge.
 
 ---
 
@@ -60,19 +63,19 @@ engine runs today's behaviour so a differential harness can match it.
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
 | Per-connection timed sync | today it is the same 60 s maker as the three jobs above. PWD-B2 already ruled a per-connection draw, so sessions are not correlated by phase | the connection. One of the first owners to leave `idle_worker` |
-| Outbound fill | `connections_maker`, gated at 1 s (`net_node.h:721`). The fill loop `sleep_for`s 1 s when it makes no connection (`net_node.inl:2063`) and dials serially | slice 3. A call can run for many seconds. The blocking pool has to allow that |
-| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`net_node.h:723`). That timer both triggered promotion and capped it at about one probe a minute | **replaced by an event (2026-09-25).** The diversity floor is the eclipse minimum. The refill line sits above it. If white is already below the refill line, including empty, the count is the event. Otherwise one deadline, the earliest white expiry, and a re-count when it fires. No timer per entry |
-| Promotion pace | the same 60 s gate, secretly | slice 3. A bounded derived rate, jittered. This is the timer that remains |
-| Peerlist store | `store_config`, gated at 30 min (`net_node.h:722`) | slice 1 |
-| Incoming-connection check | `check_incoming_connections`, gated at 1 h (`net_node.h:724`) | slice 3 |
-| Tor process death | `check_ephemeral_tor_liveness`, gated at 60 s (`net_node.h:725`, body at `net_node.inl:2229`) | not a timer. The Tor-control actor owns the child and can report its exit |
+| Outbound fill | `connections_maker`, gated at 1 s (`m_connections_maker_interval`, `net_node.h:754` at `dev` `f317d979c4`). The fill loop dials serially from `idle_worker` (`net_node.inl:2303`, the call at `:2306`) | **slice 3's dialer (2026-10-07).** A timing-engine owner. One wake, one dial, the jittered spacing in the dialer brief. It does not block a p2p io worker. *Records-was: the gate was cited at `net_node.h:706` on `9eb5f473cd`, and before that `:721`. A call can run for many seconds and the blocking pool has to allow that.* |
+| Gray refill | `gray_peerlist_housekeeping`, gated at 60 s (`m_gray_peerlist_housekeeping_interval`, `net_node.h:756` at `f317d979c4`). That timer both triggered promotion and capped it at about one probe a minute. The dialer deletes the function and the interval | **replaced by an event (2026-09-25).** The diversity floor is the eclipse minimum. The refill line sits above it. If white is already below the refill line, including empty, the count is the event, and the fill's gray arms become eligible. Otherwise one deadline, the earliest white expiry, and a re-count when it fires. No timer per entry, and the deleted interval is not re-armed. *Records-was: the gate was cited at `net_node.h:723` on `9eb5f473cd`.* |
+| Promotion pace | the same 60 s gate. The probe closes the session and the caller writes white (`net_node.inl:3363`) | slice 3, on the fill's jittered wake. A free slot is `draw_gray` (`SessionAccepted`, session kept). A full target with white still under the refill line is `confirm_gray` (`Confirmed`, session closed, relay not flipped). *Records-was: this cell called that gate the timer that remains.* |
+| Peerlist store | `store_config`, gated at 30 min (`m_peerlist_store_interval`, `net_node.h:755` at `f317d979c4`) | slice 1. *Records-was: `net_node.h:722` on `9eb5f473cd`.* |
+| Incoming-connection check | `check_incoming_connections`, gated at 1 h (`m_incoming_connections_interval`, `net_node.h:757`) | slice 3. *Records-was: `net_node.h:724` on `9eb5f473cd`.* |
+| Tor process death | `check_ephemeral_tor_liveness`, gated at 60 s (`m_ephemeral_tor_liveness_interval`, `net_node.h:758`, body at `net_node.inl:2315`) | not a timer. The Tor-control actor owns the child and can report its exit. *Records-was: `net_node.h:725`, body `net_node.inl:2229`, on `9eb5f473cd`.* |
 | Idle-peer kick | `m_idle_peer_kicker`, 8 s (`cryptonote_protocol_handler.h:205`), run from `on_idle` (`cryptonote_protocol_handler.inl:1665`) | the cryptonote handler's open register row |
 | Standby check | `m_standby_checker`, 100 ms (`:206`). The tick that polls it is 1 s, so today it runs about once a second | the same open row |
 | Sync search | `m_sync_search_checker`, 101 s (`:207`) | the same open row |
 | Peers-monitor thread | deleted. *Records-was: its own thread, `sleep_for(1s)` (`net_node.inl:1113-1140`).* | LV-3 step c deleted it. The dial cap recounts and does not store a peer count. *Records-was: the out-count cache was not refreshed by the thread.* |
 | Rate-limit sleep | `handler_response_blocks_now` (`cryptonote_protocol_handler-base.cpp:102`). Its calls are commented out (`cryptonote_protocol_handler.inl:966-967` and `cryptonote_protocol_handler.h:238`) | not a deadline. Delete the function (rule 15) |
 
-`idle_worker` (`net_node.inl:2217-2226`) is the 1-second poll over the
+`idle_worker` (`net_node.inl:2303`, the six gates at `:2305-2310`) is the 1-second poll over the
 six `node_server` gates. `on_idle` is the poll over the three
 cryptonote gates. They are not two schedules. Dial, handshake, gap,
 and idle deadlines are owners of this engine too. They are specified

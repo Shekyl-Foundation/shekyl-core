@@ -109,6 +109,10 @@ path = "bins/extract_shard.rs"
 # The live apparatus test drives the harness on a tokio runtime; the loopback
 # client-leg test runs a SOCKS5h shim on it.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+# The loopback shim accepts the same username/password greeting the
+# production client sends. Dev-only: the rig's shipped binaries do not
+# speak SOCKS themselves.
+shekyl-socks = { path = "../shekyl-socks" }
 
 [lints]
 workspace = true

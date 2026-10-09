@@ -4,8 +4,9 @@
 `feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
 questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
 `ChainValid<'id, V>`). §4 reflects what landed — **§4.6's `validate` order,
-`judge_reference` and the emission judge last verified against slice 8
-row 11 (`CHAIN_RULES_SLICE_8.md`), 2026-10-06; §4.3, §4.4 and the rest of
+`judge_reference`, the emission judge and the bond-post judge last
+verified against the I13/I15 carrier PR #1003 (`CHAIN_RULES_SLICE_6.md`
+§5 rows 6 and 8, CEN-J27), 2026-10-08; §4.3, §4.4 and the rest of
 §4.6 against slice 7 commit 10 (`CHAIN_RULES_SLICE_7.md`), 2026-09-29:
 the E3 and slice-7 reads (`total_burned` included), `RecordedBlock`'s five
 fields, `ValidatedBlock`'s ten — eleven since DRS-E4 commit 4 added
@@ -820,18 +821,34 @@ coverages, and mints the `ChainValid`. The view-bound per-tx rules are
 `TxAgainstRule`s (`check(cx, view) -> Result<Verdict<()>, V::Fault>`, run by
 `run_tx_against`, out-of-scope rows recorded vacuous like `TxRule`'s), plus
 two D4-arranged sequences that yield an operand and consume it —
-`judge_reference` (I10 yields the height, I11 measures it, I12 reads the
-anchor; on the Emission class the same sequence is **J21** — the context
-is required with zero fee inputs because the vin's backing proof verifies
-against it — and the declared depth is judged through `I13::admits`
-against `depth_at(ref_height)`; it runs for `TxClass::Spend` and
-`Emission` and yields a `ReferenceContext` the later judges consume —
-slice 8 row 9, 2026-10-06; **the bond post's funding spends do not pass
-through it**, CEN-H21's open finding) and `judge_signatures` (I17 yields
-every input's signing hash, I18 verifies over it), with
-`judge_serve_credit_bond` between them (one
-`bond_record` read per serve-credit vin feeding J4, J5, J6 — the C++
-`check_tx_inputs` arm's order; `rules/tx_bond.rs`, slice 8) and then
+`judge_reference` (an explicit `match cx.class`, one arm per class, over
+**one** sequence `reference_context` — I10's lookup yields the height,
+I11's window measures it, I12's read is the anchor, I13's read and
+predicate admit the declared depth — with the row each step records and
+refuses under chosen by the arm's `ReferenceRows`: four rows on a spend
+(`SPEND_REFERENCE`), every step **J21** on an emission
+(`EMISSION_REFERENCE` — the context is required with zero fee inputs
+because the vin's backing proof verifies against it), every step
+**J27** on a bond post (`BOND_POST_REFERENCE`); it yields a
+`ReferenceContext`, and the arm then runs `I15::verify` over the
+transaction's `ToKey` slots against it — recorded **I15** on a spend,
+**J27** on a bond post (the steps run into a scratch coverage and fold
+in only when the proof has passed), and left to `judge_emission_claim`'s
+J26 on an emission — one body, three attributions, the other classes'
+rows recorded vacuous so the mint's `covers_landed` holds at every slot.
+The emission arm is slice 8 row 9, 2026-10-06; the dispatch and the
+collapse of J21's own copy of the sequence are PR #1003's first commit,
+the Spend flip (I13 depth, I15 verify) its twelfth and J27 its last,
+2026-10-08 — *records-was:* until then the depth step was staged off on
+a spend and **the bond post's funding spends did not pass through it**,
+CEN-H21's finding) and `judge_signatures` (I17 yields every input's
+signing hash, I18 verifies over it), with `judge_serve_credit_bond`
+and `judge_bond_post` **before** `judge_reference` (the C++'s order
+within the bond arm: `check_archival_bond_post_input` :3616, the funding
+half :3654, so a post refused against its record is those rows'
+refusal whatever its proof says) — `judge_serve_credit_bond` makes one
+`bond_record` read per serve-credit vin feeding J4, J5, J6 (the C++
+`check_tx_inputs` arm's order; `rules/tx_bond.rs`, slice 8) and
 `judge_bond_post` (one `bond_record` read per bond-post vin feeding the
 kind's verify and J13 in the C++ arm's order — JoinMarket J14 → J13,
 Release J13 over the record → J16, Reinstate J18 → J13; J13: which key
@@ -842,7 +859,7 @@ signature, slice 8 Q8; J16 reads the rule set for the connecting height's
 settlement epoch — the first transaction rule to read a parameter off it;
 `tx_against` itself only compares it to the formed one; *was* `judge_bond_post_key`,
 J13 alone, at slice 8 row 4), then **`judge_emission_claim`**
-(`rules/tx_emission_against.rs`, slice 8 row 9: after `judge_bond_post`,
+(`rules/tx_emission_against.rs`, slice 8 row 9: after `judge_reference`,
 before the signatures, Emission class only — J23 gathers each claimed
 epoch's frozen close through `archival::gather_epoch_snapshot`, the epoch
 close's own gather; J25 runs the three retention legs under
@@ -920,14 +937,21 @@ slice 8 row 5, 2026-10-04; and J15 in `judge_bond_post` over
 the emission claim's statics in `rules/tx_emission.rs`, slice 8 row 8;
 and J21, J23, J25, J26 — the emission claim's context and verify,
 `judge_reference`'s emission arm and `rules/tx_emission_against.rs`,
-slice 8 row 9, with I13's predicate and I15's body live but their
-Spend-class rows `pending` until the flip PR after #983 (ruled
-2026-10-07; the FOLLOWUPS I13/I15 rows); and from 4.B, B4 in
-`rules/attestation.rs`, slice 8 row 10 — all 2026-10-06);
+slice 8 row 9; and from 4.B, B4 in `rules/attestation.rs`, slice 8 row
+10 — all 2026-10-06); and **I13, I15 on the Spend class and J27** (the
+bond post's funding half) in `judge_reference`, PR #1003, 2026-10-08 —
+*records-was:* I13's predicate and I15's body were live under J21/J26
+from 2026-10-06 with their Spend-class rows `pending` until the flip;
 H2, H8, H12, H13, H23 (`by_construction`); H19 is a
 `TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
-applies, a pass is not coverage) until slice 6 lands the BP+ verification
-and switches the call to `run_tx`; H24 is bucket 3 — no registry row. Its
+applies, a pass is not coverage) until **H19-verify** lands the BP+
+verification as a `validate` fold over a driven block listing two spends
+(slice 6 Q9, the one-bad-proof-among-good fixture) and switches the call to
+`run_tx` — **owned, since slice 6 closed as record 2026-10-08 with the row
+still deferred, by this section and the FOLLOWUPS row *CEN-H19's
+verification half…*, which carries the falsifier** (the deferral's record
+is `CHAIN_RULES_SLICE_6.md` §5 row 8, `docs/completed/`); H24 is bucket 3
+— no registry row. Its
 falsifier asserts the residue predicate and that `tx_form` still accepts
 the offsets fixture, indexed from the census cell. The crypto rows call
 the bodies the C++ already marshals to (`shekyl-ct-balance`,
@@ -1263,9 +1287,18 @@ something that is not a call is counted, since the gate cannot see its
 type), and a bare outer `Err(` that is neither the inner half of `Ok(Err(`
 nor wraps `InvalidBlock` nor is a match-arm pattern. `map_err(ViewRead::View)`
 is not a site. The set of rules with at least one site must equal
-`CORRUPT_CAPABLE = {B4}`: a second rule with a site is a finding naming the
-site, and a listed rule with no site (or no `impl`) is a stale entry and
-refuses too. Subject refusals exit 2: no rule sources, no `impl BlockRule`,
+`CORRUPT_CAPABLE = {B4}`, whose entry names the read the halt comes from
+(`anchor_window` through `recorded`; `committed_hybrid_key`): a second rule
+with a site is a finding naming the site, and a listed rule with no site (or
+no `impl`) is a stale entry and refuses too. The finding leads with the rule
+the gate enforces — *a block rule may propagate `Corrupt`, never consume it*
+— because the gate sees capability, not intent: a rule that swallows a
+`Corrupt` into a refusal trips it exactly as one that lifts one does, and a
+message opening with "if the halt is intended, add it" invited whitelisting
+the defect. The same sentence is what a reader needs at a match guard on the
+variant (`ViewRead::Corrupt(c) if … =>`), which the walk counts as a site: a
+guard that stops the halt is consumption, not a false positive (reworded
+2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `impl BlockRule`,
 fewer than ten of them, no lifting function, `recorded` not a lifter.
 `--describe` prints every rule's sites; `--selftest` bites each refusal on
 synthetic sources, including `map_err(ViewRead::Corrupt)?` and
@@ -1423,8 +1456,16 @@ second lines behind the belt and the type shapes, not gates.
   `Lone` is judged non-coinbase), the limits pinned to `cryptonote_config.h`
   and to the wire's constants (`rules/tx_tests.rs`); and the **fixture-sanity
   gate** (`fixture_sanity_tests.rs`) walking the closed `TxShape` enum: every
-  fixture labelled valid passes under current coverage, and a red on an
-  untouched fixture is a finding, not a fixture error.
+  fixture labelled valid passes the **stateless** rules under current
+  coverage through `tx_form`, and a red on an untouched fixture is a
+  finding, not a fixture error. The view-bound half is not judged there
+  and cannot be (since PR #1003, 2026-10-08): a fixture spend carries a
+  named image and no membership proof, so I13/I15 refuse it on any view,
+  a fixture join's funding spend likewise under J27, and a serve credit
+  needs a record the mock holds none of (J4); the one well-formed block a
+  `MockChain` holds is coinbase-only. Each listed shape's `validate`
+  witness is a driven chain in `shekyl-chain-ingest` (`scenario_spend_tests`,
+  `scenario_join_tests`, `scenario_archival_tests`).
 - **the wire twin's conformance** (`rules/tx_conformance_tests.rs`, slice 5
   Q1): every refusal site of `shekyl-wire/src/transaction.rs` — every
   `io::Error::other` construction however spelled, plus `Err(PrunedError)`
@@ -1441,6 +1482,15 @@ second lines behind the belt and the type shapes, not gates.
 - `tx_against` — *records-was:* returned `Ok(Ok(EMPTY))` until 4.I landed
   (slice 6, #864, 2026-09-26); its rules' tests are `rules/tx_against_tests.rs`
   and the captured-chain witness `shekyl-chain-ingest`'s `vectors_tests`.
+  **Partitioned by verdict** (PR #1003, 2026-10-08): a rules-crate test
+  over a `MockChain` asserts a **refusal** — a row that fires before I13
+  reaches the body, or I13/I15/J27 themselves over a planted tree — and
+  never that `validate` or `tx_against` **accepts** a block with a listed
+  transaction; the acceptance witnesses are the ingest's scenarios over
+  the spender's tree. Falsified by a rules-crate test that runs `validate`
+  over a candidate listing a non-coinbase body and asserts `Ok(Ok(_))`
+  (none at PR #1003; `fixture_sanity_tests`' module doc carries the
+  partition and names each shape's ingest witness).
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
   refusal). Increment 1 has no rule that reads the view, so this is exercised

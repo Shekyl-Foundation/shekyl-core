@@ -55,6 +55,18 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # 2 F11): every landed rule, identical verdicts and coverage over both. The
 # feature is test-only by contract; see the rules crate's `[features]`.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The spender over the fixture chains (`connect_fixtures::Grown`): the
+# wallet-side curve tree mirrors the store's over the same blocks, held to
+# one root at every connect, and builds the real spends the chains list —
+# since slice 6 row 6 the Spend class is judged by CEN-I13 and CEN-I15, so a
+# listed spend is a proof over a coinbase the chain mined, not a filler. Its
+# wallet is the harness miner every fixture coinbase pays, and the wallet
+# crate's `repay` is how an endowed genesis stays spendable (the amount,
+# commitment and ciphertext re-derived together — a raw amount write would
+# leave a coinbase no scan recovers). Test-only: the store derives nothing
+# consensus-visible from either.
+shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # The release-admission tests open under `ReleaseAnchors::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
@@ -72,6 +84,12 @@ shekyl-economics = { path = "../shekyl-economics" }
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The leaf-chunk width the leaf-read tests derive their tree shape from
+# (how many leaves fit the first chunk, so where the frontier's depth
+# moves): read from the crate that owns it, not restated. Already a normal
+# dependency of shekyl-chain-rules (rule 17); test-only here, for the same
+# reason as `shekyl-economics`.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 # The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
 # C++ unit test that still owns the decoder; read with the workspace's
 # serde_json (rule 17: already a workspace dependency, no new crate).

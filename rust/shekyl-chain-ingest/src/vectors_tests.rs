@@ -589,12 +589,14 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // it carries passed it (for CEN-I18: a signature made with a real
     // HKDF-derived key over I17's derivation verified, which no harness
     // fixture can show, its keys being derived from the image rather than
-    // the image from the key). This assertion is the weaker half: the row
-    // was *run* here. It cannot say the row judged rather than recorded
+    // the image from the key; for CEN-I13/I15: a declared depth and a
+    // proof built over the tree at the reference, admitted and verified
+    // there — slice 6 row 6's flip). This assertion is the weaker half: the
+    // row was *run* here. It cannot say the row judged rather than recorded
     // vacuous (slice 5 Q2 — one bit per row, by design), which is why it is
     // paired with the refusal check rather than standing for it.
     for row in [
-        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I17", "CEN-I18",
+        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I13", "CEN-I15", "CEN-I17", "CEN-I18",
     ] {
         assert!(
             report.exercised.contains(row),

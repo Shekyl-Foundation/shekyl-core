@@ -7,315 +7,50 @@
 //! `DRS_E4_ARCHIVAL_WRITER.md` §6 row 4): a persona whose bond posts ride
 //! the driver's real spend, and the serve credit it responds with.
 //!
-//! What is real: the persona's keys (`derive_archival_p_keys`, the wallet's
-//! derivation from a master seed and a slot); the post (`build_join_market_vin`
-//! / `build_release_vin`, the constructors `shekyl-engine-core`'s
-//! `AssembleBond` / `AssembleRelease` call, so the vin carries the identity
-//! key, the derived `P_canonical_id`, the floor-priced total and the
-//! genesis-frozen term side); the transaction around it
-//! ([`Spender::spend_coinbase_posting`](crate::scenario_spend::Spender::spend_coinbase_posting):
-//! funding spend, two confidential outputs, `sign_transaction_with_terms`
-//! with the post's term on its side, the bond slot last in `pqc_auths` and
-//! signed by the named key — the identity key for a credit, `bond_spend_sk`
-//! for a debit, GF-1's one visible fact). CEN-H21 judges the balance with
-//! the terms, CEN-I18 verifies every slot's signature, and CEN-L7 judges the
-//! post over the store's view — the same path a wallet's post takes.
+//! The persona and its posts are [`shekyl_harness_spender::Persona`]'s
+//! (that module's docs say what is real about them). They lived here until
+//! CEN-J27 (`CHAIN_RULES_SLICE_6.md` §5 row 6) judged a bond post's funding
+//! spend as CEN-I13/I15 judge a regular one: the store's tests then needed
+//! a real join as much as the driver did, and the store cannot dev-depend
+//! on the ingest. This module keeps the driver's [`Persona`] as a
+//! [`Deref`] over the spender's — every call site reads as before — and
+//! adds the one body that is not a spend: the serve credit.
 //!
-//! What is not the subject: a serve credit's Ed25519 countersignature. The
-//! kept half is the production wire type ([`ArchivalServeCreditResponse`])
-//! and the transaction is CEN-H20's shape, but no Rust countersigner exists
-//! (the challenger side is not built) and no rule verifies the
-//! countersignature (CEN-J1/J4/J10 pending in the census), so the bytes here
-//! are a marker, not a signature. When J10 lands, [`Persona::serve_credit`]
-//! is where the signer goes.
-//!
-//! The vin-to-wire mapping is
-//! [`shekyl_archival_bond_builder::bond_post_input`]: every
-//! [`shekyl_archival_retention::BondKind`] has one image there, and this
-//! driver calls it. The wallet's `wire_bond_post_input` is the producer
-//! policy over that same function.
+//! What is not the subject: a serve credit's Ed25519 countersignature —
+//! the vin's docs ([`shekyl_harness_spender::Persona::serve_credit_vin`])
+//! say why its bytes are a marker, and the body around it is the rules
+//! harness's H20 shape (`fixture::serve_credit_only_with`), whose pruned
+//! record is likewise a marker until CEN-J10 lands.
 
-use shekyl_archival_bond_builder::{bond_post_input, build_join_market_vin, build_release_vin};
-use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    HoldingsDescriptor, HoldingsKind,
-};
-use shekyl_chain_rules::harness::fixture::PRUNED_PASS_RECORD;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
-use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridSecretKey, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
-};
-use shekyl_tx_builder::{InputTerm, OutputTerm};
-use shekyl_types::archival::{BondRecord, Holdings};
-use shekyl_types::{PCanonicalId, SigningPayloadHash};
-use shekyl_wire::transaction::{BondPost, TxPrefix};
-use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction};
+use core::ops::Deref;
 
-/// The driver's persona master seed. Any 64 bytes; fixed so the personas
-/// (and their canonical ids) are the same in every run.
-const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
+use shekyl_chain_rules::harness::fixture;
+use shekyl_wire::Transaction;
 
-/// A bond post riding a spend: the prefix input, the cleartext term on the
-/// side the kind fixes, and the key that signs the bond `pqc_auths` slot.
-///
-/// The term is two `Option`s, not one signed amount, for the reason the
-/// production assembler gives: swapping the sides balances a different
-/// transaction than the one being built.
-pub struct PostedBond<'a> {
-    /// The `Input::BondPost` as it goes on the wire.
-    pub input: Input,
-    /// A debit — released collateral entering as a **source** (Release).
-    pub debit: Option<InputTerm>,
-    /// A credit — the bond leaving as a **sink** (JoinMarket).
-    pub credit: Option<OutputTerm>,
-    /// The public key occupying the bond slot (the last `pqc_auths` entry).
-    pub slot_pk: Vec<u8>,
-    /// The key that signs the slot: the identity key for a credit,
-    /// `bond_spend_sk` for a debit.
-    slot_sk: &'a HybridSecretKey,
-}
+pub use shekyl_harness_spender::{complete_tree, shard_set};
 
-impl PostedBond<'_> {
-    /// The bond slot's signature over its phase-1 payload hash — the
-    /// production assembler's `sign_bond_slot`, verbatim.
-    pub fn sign_slot(&self, payload: &SigningPayloadHash) -> Vec<u8> {
-        HybridEd25519MlDsa
-            .sign(self.slot_sk, SCHEME_DOMAIN_PQC_AUTH_TX, payload.as_bytes())
-            .expect("the persona's key signs")
-            .to_canonical_bytes()
-            .expect("a hybrid signature encodes")
+/// An archival persona: the keys a wallet derives for a slot, and the
+/// posts and the credit it makes with them.
+pub struct Persona(shekyl_harness_spender::Persona);
+
+impl Deref for Persona {
+    type Target = shekyl_harness_spender::Persona;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
-}
-
-/// An archival persona: the keys a wallet derives for slot `p_slot`.
-pub struct Persona {
-    keys: ArchivalPKeys,
 }
 
 impl Persona {
-    /// Derive the persona at `p_slot` from the driver's master seed.
+    /// Derive the persona at `p_slot` from the harness's master seed.
     pub fn at(p_slot: u32) -> Self {
-        let keys = derive_archival_p_keys(
-            &MASTER,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            p_slot,
-        )
-        .expect("the driver's seed derives a persona");
-        Self { keys }
-    }
-
-    /// The whole bundle — what the emission claim's assembly signs and
-    /// scans with (E6 slice 8 row 7, `emission_assembly`), and what
-    /// `scenario_spend::Owner::persona` reads to source the outputs a
-    /// coinbase spend paid it.
-    pub fn keys(&self) -> &ArchivalPKeys {
-        &self.keys
-    }
-
-    /// The identity key, canonical bytes — `hybrid_public_key` on every
-    /// post, and the bond slot's key on a credit.
-    pub fn identity(&self) -> Vec<u8> {
-        self.keys
-            .bond_post_keys()
-            .identity_pk()
-            .to_canonical_bytes()
-            .expect("the identity key encodes")
-    }
-
-    /// The GF-1 debit authorizer, canonical bytes — `bond_spend_pk` on a
-    /// JoinMarket, and the bond slot's key on a Release.
-    pub fn bond_spend(&self) -> Vec<u8> {
-        self.keys
-            .bond_post_keys()
-            .bond_spend_pk()
-            .to_canonical_bytes()
-            .expect("the bond-spend key encodes")
-    }
-
-    /// `P_canonical_id`, derived from the identity key as the verifier
-    /// derives it.
-    pub fn id(&self) -> PCanonicalId {
-        p_canonical_id_from_hybrid_pubkey(&self.identity())
-    }
-
-    /// A JoinMarket over `holdings` at `endpoint`, through the production
-    /// constructor: the total is the floor of the holdings, the credit is
-    /// the total, the slot is the identity key's.
-    pub fn join(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> PostedBond<'_> {
-        let built = build_join_market_vin(self.keys.bond_post_keys(), holdings, endpoint)
-            .expect("the production constructor builds the join");
-        PostedBond {
-            input: bond_post_input(built.vin()),
-            debit: None,
-            credit: Some(built.credit_term()),
-            slot_pk: built.vin().hybrid_public_key.clone(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
-    }
-
-    /// A Release of `record_bonded_total`, through the production
-    /// constructor: the debit is the whole balance, the slot is
-    /// `bond_spend_pk`'s and `bond_spend_sk` signs it.
-    pub fn release(&self, record_bonded_total: u64) -> PostedBond<'_> {
-        let built = build_release_vin(self.keys.bond_post_keys(), record_bonded_total)
-            .expect("the production constructor builds the release");
-        PostedBond {
-            input: bond_post_input(built.vin()),
-            debit: Some(built.debit_term()),
-            credit: None,
-            slot_pk: self.bond_spend(),
-            slot_sk: &self.keys.bond_spend_sk,
-        }
-    }
-
-    /// The Reinstate vin for `record` — the shape
-    /// [`verify_reinstate_bond_post`](shekyl_archival_retention::verify_reinstate_bond_post)
-    /// reads: zero money (no credit, no debit, the record's total
-    /// unchanged) over exactly the holdings the record holds, under the
-    /// 2026-09-20 immutable-bond ruling. No wallet constructor exists for
-    /// a Reinstate (`build_reinstate_vin` is not in the builder crate;
-    /// `PRINCIPAL_STAKE_LIFECYCLE.md` §5 item 2), so the driver assembles
-    /// the vin through the retention crate's own constructor; when the
-    /// producer lands this is the site that calls it instead. Split from
-    /// [`Self::reinstate`] so a test can hand the same vin to the
-    /// wallet-side verify and the fold.
-    pub fn reinstate_vin(&self, record: &BondRecord) -> ArchivalBondPostVin {
-        let holdings = match &record.holdings {
-            Holdings::CompleteTree => complete_tree(),
-            Holdings::ShardSet(held) => {
-                shard_set(held.as_slice().iter().map(|h| h.shard.to_raw()).collect())
-            }
-        };
-        ArchivalBondPostVin::reinstate(
-            self.identity(),
-            self.id().to_bytes(),
-            holdings,
-            record.bonded_total.to_raw(),
-            0,
-            0,
-        )
-    }
-
-    /// A Reinstate of `record` ([`Self::reinstate_vin`]) riding a spend:
-    /// no term on either side, the identity key in the slot — a credit
-    /// arm's key (gate-4 §9.11), as the C++ `apply_archival_reinstate`'s
-    /// authorizer.
-    pub fn reinstate(&self, record: &BondRecord) -> PostedBond<'_> {
-        PostedBond {
-            input: bond_post_input(&self.reinstate_vin(record)),
-            debit: None,
-            credit: None,
-            slot_pk: self.identity(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
-    }
-
-    /// A Release `BondPost` with the production constructor's fields, for
-    /// [`Self::post_by_hand`] to mutate — what [`Self::release`] carries,
-    /// before the caller changes one thing. Through `post_by_hand` the
-    /// **identity** key signs the slot where `release` signs with
-    /// `bond_spend_sk`: a Release under the wrong key, which is the J13
-    /// fixture (`CHAIN_RULES_SLICE_8.md` §5 row 4).
-    pub fn release_post(&self, record_bonded_total: u64) -> BondPost {
-        let built = build_release_vin(self.keys.bond_post_keys(), record_bonded_total)
-            .expect("the production constructor builds the release");
-        let Input::BondPost(post) = bond_post_input(built.vin()) else {
-            unreachable!("a vin maps to a bond post");
-        };
-        *post
-    }
-
-    /// A post shaped by hand — for the posts no constructor emits (an
-    /// unknown kind; a compact join holding nothing or a shard twice; a
-    /// post whose `p_canonical_id` hint names another persona; a Release
-    /// under the identity key). The identity key signs the slot; the
-    /// terms are the post's own `bond_credit` / `bond_debit`, so CEN-H21
-    /// balances and the refusal that fires — or the connect that should
-    /// not — is the arm under test, not the balance.
-    pub fn post_by_hand(&self, post: BondPost) -> PostedBond<'_> {
-        let credit = (post.bond_credit != 0)
-            .then(|| OutputTerm::new(shekyl_units::AtomicUnits::from_raw(post.bond_credit)));
-        let debit = (post.bond_debit != 0)
-            .then(|| InputTerm::new(shekyl_units::AtomicUnits::from_raw(post.bond_debit)));
-        PostedBond {
-            input: Input::BondPost(Box::new(post)),
-            debit,
-            credit,
-            slot_pk: self.identity(),
-            slot_sk: &self.keys.hybrid_sign_sk,
-        }
-    }
-
-    /// A JoinMarket `BondPost` with the production constructor's fields,
-    /// for [`Self::post_by_hand`] to mutate: what a join *would* carry for
-    /// `holdings`, before the caller changes one thing.
-    pub fn join_post(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> BondPost {
-        let built = build_join_market_vin(self.keys.bond_post_keys(), holdings, endpoint)
-            .expect("the production constructor builds the join");
-        let Input::BondPost(post) = bond_post_input(built.vin()) else {
-            unreachable!("a vin maps to a bond post");
-        };
-        *post
+        Self(shekyl_harness_spender::Persona::at(p_slot))
     }
 
     /// The serve-credit-only transaction (CEN-H20's shape, with its `RF-D1`
-    /// prunable region) for `shard` in `settlement_epoch` — the kept half on
-    /// the production wire type. The countersignature and the pruned record
-    /// are markers (module docs).
+    /// prunable region) crediting this persona for `shard` in
+    /// `settlement_epoch`: the spender's vin in the rules harness's body.
     pub fn serve_credit(&self, shard: u64, settlement_epoch: u64) -> Transaction {
-        let kept = ArchivalServeCreditResponse {
-            p_canonical_id: *self.id().as_bytes(),
-            shard_id: shard,
-            settlement_epoch,
-            ed25519_countersignature: [0x5c; 64],
-        };
-        Transaction {
-            prefix: TxPrefix {
-                unlock_time: 0,
-                inputs: vec![Input::ServeCredit {
-                    canonical_bytes: kept.serialize().expect("a kept half serializes"),
-                }],
-                outputs: Vec::new(),
-                extra: Vec::new(),
-            },
-            ct: Ct::Fcmp {
-                fee: 0,
-                reference_block: shekyl_types::BlockHash::NULL,
-                base: CtBase {
-                    enc_amounts: Vec::new(),
-                    enc_labels: Vec::new(),
-                    commitments: Vec::new(),
-                },
-                pqc_auths: Vec::new(),
-                // `RF-D1`: one pruned pass record per serve-credit vin. A
-                // marker, like the countersignature: CEN-H20 counts the
-                // records and CEN-J10, when it lands, judges them.
-                prunable: Some(Prunable {
-                    bulletproofs: Vec::new(),
-                    tree_depth: 0,
-                    fcmp_proof: Vec::new(),
-                    pseudo_outs: Vec::new(),
-                    serve_credit_pruned: vec![PRUNED_PASS_RECORD.to_vec()],
-                }),
-            },
-        }
-    }
-}
-
-/// A compact shard-set holding.
-pub fn shard_set(ids: Vec<u64>) -> HoldingsDescriptor {
-    HoldingsDescriptor {
-        kind: HoldingsKind::ShardSetCompact,
-        shard_ids: shekyl_archival_retention::ShardSet::new(ids).expect("distinct, under the cap"),
-    }
-}
-
-/// A complete-tree holding.
-pub fn complete_tree() -> HoldingsDescriptor {
-    HoldingsDescriptor {
-        kind: HoldingsKind::CompleteTree,
-        shard_ids: shekyl_archival_retention::ShardSet::new(Vec::new()).expect("empty"),
+        fixture::serve_credit_only_with(self.serve_credit_vin(shard, settlement_epoch))
     }
 }

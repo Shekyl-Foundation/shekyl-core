@@ -51,20 +51,13 @@ rust/shekyl-chain-ingest/src/grader.rs	1	pub height: u64,
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	fn seed_for(height: u64, hash_at: impl Fn(u64) -> BlockHash) -> BlockHash {
 rust/shekyl-chain-ingest/src/mutation_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	height: u64,
-rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	let fork_spend = |hashes: &[BlockHash], height: u64| {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn over(self, tree: &GrownTree, height: u64) -> Facts {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn synthetic_economics(height: u64) -> TraceEconomics {
 rust/shekyl-chain-ingest/src/test_support.rs	4	height: u64,
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn archival_snapshot_after(&self, height: u64) -> ArchivalSnapshot {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn at(height: u64) -> usize {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn coinbase(height: u64) -> Transaction {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn coins_generated_at(&self, height: u64) -> AtomicUnits {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn key_image(family: Family, height: u64) -> [u8; 32] {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn median_for(&self, height: u64) -> LongTermWeight {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn root_after(&self, height: u64) -> CurveTreeRoot {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn root_going_into(&self, height: u64) -> CurveTreeRoot {
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn weights_of(&self, height: u64) -> RecordedWeights {
 rust/shekyl-chain-ingest/src/trace.rs	6	height: u64,
 rust/shekyl-chain-ingest/src/trace.rs	1	let mut last_height: Option<u64> = None;
 rust/shekyl-chain-ingest/src/vectors_tests.rs	1	tip_height: u64,
@@ -87,9 +80,7 @@ rust/shekyl-chain-store/src/store/archival_write.rs	4	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	1	pub(super) fn class_of(tip: Option<&(u64, BlockInfo)>, height: u64) -> HeightClass<'_> {
 rust/shekyl-chain-store/src/store/connect.rs	1	height: u64,
-rust/shekyl-chain-store/src/store/connect_fixtures.rs	4	height: u64,
-rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn at(height: u64) -> usize {
+rust/shekyl-chain-store/src/store/connect_fixtures.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn coinbase(height: u64) -> Transaction {
 rust/shekyl-chain-store/src/store/connect_fixtures.rs	1	pub(super) fn root_going_into(store: &ChainStore, height: u64) -> CurveTreeRoot {

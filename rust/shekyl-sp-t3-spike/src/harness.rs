@@ -39,9 +39,10 @@
 //! # Cold vs warm on a no-isolation client
 //!
 //! §6.2 asks for circuit setup to be inside the timed path unless a warm circuit
-//! is defensible, and for both to be reported. With the production client there
-//! is no per-fetch SOCKS username to vary, so the arms come from what a real
-//! daemon's tor does over time rather than from an isolation key:
+//! is defensible, and for both to be reported. The production client mints a
+//! header per fetch and presents that nonce as the SOCKS username, so Tor's
+//! `IsolateSOCKSAuth` puts every fetch on its own rendezvous circuit. The arms
+//! are what the client tor does around that circuit:
 //!
 //! - **Cold** — [`Apparatus::rotate_client_circuits`] sends `SIGNAL NEWNYM` to
 //!   the **client** tor before the fetch. Tor marks every client circuit dirty
@@ -57,9 +58,15 @@
 //!   harness spaces its signals itself; that wait is *outside* the timed path.
 //!   A signal the control port does not answer is retried, not timed through
 //!   and not fatal ([`Apparatus::rotate_client_circuits_retrying`]).
-//! - **Warm** — no signal between fetches to the same persona, so the client
-//!   tor reuses its rendezvous circuit and only the stream cost is paid. This
-//!   is the organic fill scheduler's steady state against one `P`.
+//! - **Warm** — no signal between fetches to the same persona. The rendezvous
+//!   circuit is still a new one: the username is, and `IsolateSOCKSAuth` will
+//!   not attach this fetch to a circuit another username built. What the
+//!   missing signal leaves standing is the client tor's cached onion state.
+//!   Whether that cache answers the next username is `BA-T31`'s observation,
+//!   reported by the isolation run and not assumed here. This is the organic
+//!   fill scheduler's steady state against one `P`: a circuit per read. The
+//!   2026-09-16 warm column measured the earlier client, which presented no
+//!   per-fetch credentials and reused the circuit.
 //! - **Concurrent** — `n` cold fetches to `n` personas at once through the one
 //!   client tor: the client-side circuit-churn question `SF-D7` names as the
 //!   upper bound on `N`. One [`PFetchClient`] **per persona** here, so the
@@ -99,8 +106,8 @@ use shekyl_tor_control_client::control::onion::{
 };
 use shekyl_tor_control_client::control::{
     ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    EventSink, ManagedTor, Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
-    WaitReadyError,
+    ControlReply, EventSink, ManagedTor, Signal, SocksPort, TorControlClient,
+    TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -238,7 +245,11 @@ impl ManagedInstance {
     /// scheme has a window in which any of the others (or anything else on
     /// the box) can take the port first, failing an otherwise valid W₂ run
     /// nondeterministically.
-    async fn launch(tor_binary: &Path, data_dir: PathBuf) -> Result<Self, ApparatusError> {
+    async fn launch(
+        tor_binary: &Path,
+        data_dir: PathBuf,
+        events: EventSink,
+    ) -> Result<Self, ApparatusError> {
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let verified = shekyl_tor_control_client::binary::discover_and_verify_at(tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
@@ -250,7 +261,7 @@ impl ManagedInstance {
                 disable_network: false,
                 exit_observer: None,
             }),
-            events: EventSink::unsubscribed(),
+            events,
             readiness,
         });
 
@@ -471,6 +482,9 @@ pub struct Apparatus {
     /// `NEWNYM`s the client tor's control port did not answer and that were
     /// retried — an apparatus count, reported apart from every arm.
     newnym_unanswered: AtomicU64,
+    /// The client tor's async control events, until a caller takes them
+    /// ([`Self::observe_client`]).
+    client_events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ControlReply>>>,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
     /// The served objects, framed once and handed to every persona — and
@@ -630,15 +644,24 @@ impl Apparatus {
         // Launch every tor at once: the client's and one per persona.
         let tor_binary = Arc::<Path>::from(tor_binary);
         let mut launches = tokio::task::JoinSet::new();
+        // The client tor's async control events. Nothing arrives until a
+        // caller subscribes with [`Apparatus::observe_client`].
+        let (client_events_tx, client_events_rx) = tokio::sync::mpsc::unbounded_channel();
         {
             let bin = Arc::clone(&tor_binary);
             let dir = data_dir.join("client-tor");
-            launches.spawn(async move { (None, ManagedInstance::launch(&bin, dir).await) });
+            launches.spawn(async move {
+                let sink = EventSink::new(client_events_tx);
+                (None, ManagedInstance::launch(&bin, dir, sink).await)
+            });
         }
         for slot in 0..persona_count {
             let bin = Arc::clone(&tor_binary);
             let dir = data_dir.join(format!("persona-{slot}-tor"));
-            launches.spawn(async move { (Some(slot), ManagedInstance::launch(&bin, dir).await) });
+            launches.spawn(async move {
+                let sink = EventSink::unsubscribed();
+                (Some(slot), ManagedInstance::launch(&bin, dir, sink).await)
+            });
         }
         let mut client_tor = None;
         let mut serving_tors: Vec<Option<ManagedInstance>> =
@@ -731,6 +754,7 @@ impl Apparatus {
             client,
             last_newnym: Mutex::new(None),
             newnym_unanswered: AtomicU64::new(0),
+            client_events: Mutex::new(Some(client_events_rx)),
             personas,
             objects,
         })
@@ -764,6 +788,100 @@ impl Apparatus {
     #[must_use]
     pub fn expectation_of(&self, shard_id: u64) -> Option<ExpectedShard> {
         self.object(shard_id).map(|o| o.expectation(shard_id))
+    }
+
+    /// Subscribe the client tor's control port to `events` (`SETEVENTS`) and
+    /// take the stream of its async replies.
+    ///
+    /// For the checks that have to see what tor did with a fetch, not what
+    /// the client asked for: which circuit a stream was attached to, and
+    /// whether a descriptor was fetched. One caller per apparatus.
+    ///
+    /// # Errors
+    ///
+    /// [`ApparatusError::Control`] if the events were already taken, or the
+    /// control port fails or answers anything but `250`. On a failed
+    /// subscription the events are not taken, so the call can be made
+    /// again.
+    pub async fn observe_client(
+        &self,
+        events: &[&str],
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<ControlReply>, ApparatusError> {
+        let rx = self
+            .client_events
+            .lock()
+            .expect("the events slot is never held across a panic")
+            .take()
+            .ok_or_else(|| ApparatusError::Control("client events already taken".to_owned()))?;
+        // The control actor answers `Ok` for a refusal too: a `552` for an
+        // event this tor does not know is a reply, not an error. Anything
+        // but `250` means nothing is subscribed, and the caller would wait
+        // on events that never come.
+        let subscribed = match self
+            .client_tor
+            .control
+            .ask(Command::SetEvents(
+                events.iter().map(|e| (*e).to_owned()).collect(),
+            ))
+            .await
+        {
+            Ok(reply) if reply.status() == 250 => Ok(()),
+            Ok(reply) => Err(ApparatusError::Control(format!(
+                "SETEVENTS answered {}",
+                reply.status()
+            ))),
+            Err(e) => Err(ApparatusError::Control(e.to_string())),
+        };
+        match subscribed {
+            Ok(()) => Ok(rx),
+            Err(e) => {
+                // Not subscribed, so the stream is still nobody's: put it
+                // back for a caller that asks again.
+                *self
+                    .client_events
+                    .lock()
+                    .expect("the events slot is never held across a panic") = Some(rx);
+                Err(e)
+            }
+        }
+    }
+
+    /// One fetch of `shard_id` from persona `persona_index` under a header
+    /// and timeouts the caller chose, through a client of its own on the
+    /// client tor.
+    ///
+    /// The timed arms mint a header per fetch ([`fetch_via`]). This is for a
+    /// caller that has to hold the header, to send the same one twice the
+    /// way a stall retry does, or to bound a fetch so that it stalls.
+    ///
+    /// # Errors
+    ///
+    /// The client's own verdict.
+    ///
+    /// # Panics
+    ///
+    /// If `shard_id` names no served object: that is a rig misuse, not a
+    /// fetch outcome, and the apparatus stops rather than filing it under
+    /// a class Tor would be blamed for.
+    pub async fn fetch_with(
+        &self,
+        persona_index: usize,
+        shard_id: u64,
+        header: &RequestHeader,
+        timeouts: Timeouts,
+    ) -> Result<usize, FetchError> {
+        let client = PFetchClient::with_timeouts(self.client_tor.socks, timeouts);
+        let target = self.personas[persona_index].target();
+        let expected = self
+            .expectation_of(shard_id)
+            .expect("fetch_with names a shard the apparatus serves");
+        client
+            .fetch(&target, header, &expected, Arc::new(DiscardTxs))
+            .await
+            .map(|shard| {
+                usize::try_from(shard.archival_len().to_raw())
+                    .expect("a verified archival length fits usize")
+            })
     }
 
     /// The client tor's SOCKS endpoint — the "daemon's tor zone" every fetch
@@ -928,10 +1046,12 @@ impl Apparatus {
     /// Time one fetch of shard `0` from `persona_index` through the client tor.
     ///
     /// The clock starts before the header is minted and stops after the
-    /// countersignature verifies, so on a cold client (after
+    /// countersignature verifies. On a cold client (after
     /// [`Self::rotate_client_circuits`]) descriptor fetch, intro, and
-    /// rendezvous are inside the timed path (§6.2), and on a warm one only
-    /// the stream is. Success means the verified body was exactly
+    /// rendezvous are inside the timed path (§6.2). On a warm one the client
+    /// tor is not signalled, and the fetch still builds its own rendezvous
+    /// circuit, because the minted nonce is a SOCKS username no other fetch
+    /// presents. Success means the verified body was exactly
     /// [`Self::expected_body_len`] bytes. A complete exchange of the wrong
     /// length is [`FailureKind::Refused`] (the apparatus served the wrong
     /// shard); a stream that broke mid-body is [`FailureKind::Truncated`].

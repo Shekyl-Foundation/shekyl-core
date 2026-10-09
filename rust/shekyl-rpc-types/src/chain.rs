@@ -43,11 +43,14 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.42: `request_archival_shard` is served
+/// `CORE_RPC_VERSION_MINOR`. 3.43: `request_archival_shard` is served
 /// natively over the W-shard view (`archival.rs`; `SHARD_VIEW_FETCH.md`
 /// `SV-D3`): the response gains `archival_len` and `close_height`, and an
 /// open shard and an absent skeleton answer with their own codes (-24, -25)
-/// rather than sharing the miss's -22. 3.41: `inject_archival_serve_credit` (regtest
+/// rather than sharing the miss's -22. `get_version` gains nothing. 3.42:
+/// `get_info` reports `already_generated_coins`, the gross coins emitted
+/// through the tip. `get_version` gains nothing. 3.41:
+/// `inject_archival_serve_credit` (regtest
 /// only) returns its receipt — `height`, the tip's block **index** the row
 /// was keyed at, read under the lock with the write; the chain-vector
 /// capture replays the injection as a corpus event at exactly that height
@@ -109,11 +112,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
 /// `get_version` and `sync_info` stop encoding synchronization as
 /// `target_height = 0`; 3.41 the injector's `height` receipt; 3.42
-/// `request_archival_shard` served natively over the W-shard view
-/// (`archival.rs`): the response gains `archival_len` and `close_height`,
-/// and the open-shard and skeleton-absent refusals get their own codes
-/// (`SHARD_VIEW_FETCH.md` `SV-D3`, `SV-D5`, `SV-D9`).
-pub const CORE_RPC_VERSION_MINOR: u32 = 42;
+/// `get_info.already_generated_coins`; 3.43 `request_archival_shard`
+/// served natively over the W-shard view (`archival.rs`): the response
+/// gains `archival_len` and `close_height`, and the open-shard and
+/// skeleton-absent refusals get their own codes (`SHARD_VIEW_FETCH.md`
+/// `SV-D3`, `SV-D5`, `SV-D9`).
+pub const CORE_RPC_VERSION_MINOR: u32 = 43;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -519,10 +523,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_650);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 42);
+        assert_eq!(CORE_RPC_VERSION, 196_651);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 43);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 42);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 43);
     }
 
     #[test]

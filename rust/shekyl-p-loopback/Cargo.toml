@@ -25,6 +25,8 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # The server half. No `test-signer`: the caller brings the `PassSigner`.
 shekyl-p-serve = { path = "../shekyl-p-serve" }
+# The greeting `Isolation::Persona` sends. The shim is its other half.
+shekyl-socks = { path = "../shekyl-socks" }
 # `request_header` takes an ordinal `BlockHeight`; the fixture expectation
 # is placed in `ShardId` / `ArchivalLength` terms.
 shekyl-types = { path = "../shekyl-types" }

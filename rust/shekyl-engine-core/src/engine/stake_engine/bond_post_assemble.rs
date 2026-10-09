@@ -3,18 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared prove / sign / encode tail for a bond-post transaction.
+//! Bond-post assembly: funding spends, one bond-post extra input, two
+//! confidential vouts to `P`'s base, and the bond slot signed by the
+//! caller's key.
 //!
 //! [`AssembleBond`] and [`AssembleRelease`] are debit/credit twins of one
-//! wire shape: funding spends + one bond-post extra input + two confidential
-//! vouts to `P`'s base + `pqc_auths` with the bond slot last. The policy
-//! that differs — funding equation, extra-term side, which key signs the
-//! bond slot — stays at the call site. This module is the mechanical tail
-//! both handlers already shared by copy.
-//!
-//! The drain path established the composition: a thin actor handler, and a
-//! single constructor so two callers cannot drift (`drain_assembly` /
-//! `assemble_transfer_wire`). This is that constructor for bond posts.
+//! wire shape. The prove / phase-1 / spend-slot / encode sequence is
+//! [`shekyl_tx_builder::open_spend`]. What stays here is the bond-post
+//! policy: the funding floor, which term is a debit and which a credit,
+//! and which key signs the bond slot.
 //!
 //! **GF-1 is not a parameter of this function.** The caller builds
 //! [`BondPostAssembleArgs::bond_auth_pk`] and the `sign_bond_slot` closure
@@ -27,13 +24,11 @@ use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
 use shekyl_archival_retention::bond_wire::ArchivalBondPostVin;
-use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
-    phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
-    tx_prefix_hash_from_parts_with_extra, InputTerm, OutputTerm, PqcAuth, TreeContext,
-    WireEncodeInput,
+    open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
+    InputTerm, OutputTerm, SpendLayout, TreeContext,
 };
 use shekyl_types::{GlobalOutputIndex, PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
@@ -173,62 +168,34 @@ pub(crate) async fn assemble_signed_bond_post(
     .map_err(|e| BondAssemblyError::build("proving offload join", e))?
     .map_err(|e| BondAssemblyError::build("proving", e))?;
 
-    let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
-        .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
-
-    let mut wire = WireEncodeInput {
-        key_images,
-        extra_inputs,
-        output_amounts: vec![0; output_keys.len()],
-        output_keys,
-        view_tags,
-        tx_extra,
-        fee,
-        enc_amounts: signed.enc_amounts,
-        enc_labels: signed.enc_labels,
-        out_commitments: signed.commitments,
-        pseudo_outs: signed.pseudo_outs,
-        bulletproof,
-        reference_block: signed.reference_block,
-        fcmp_proof: signed.fcmp_proof,
-        pqc_auths: pqc_pubkeys
-            .into_iter()
-            .map(|pk| PqcAuth {
-                auth_version: 1,
-                signature: Vec::new(),
-                public_key: pk,
-            })
-            .chain(std::iter::once(PqcAuth {
-                auth_version: 1,
-                signature: Vec::new(),
-                public_key: args.bond_auth_pk.clone(),
-            }))
-            .collect(),
-        fcmp_layers: signed.tree_depth,
+    let output_amounts = vec![0; output_keys.len()];
+    let open = open_spend(
+        signed,
+        &spend_inputs,
+        SpendLayout {
+            key_images,
+            extra_inputs,
+            output_keys,
+            output_amounts,
+            view_tags,
+            tx_extra,
+            fee,
+            slots: AuthSlots {
+                spend: pqc_pubkeys,
+                extra: vec![args.bond_auth_pk],
+            },
+        },
+    )
+    .map_err(|e| BondAssemblyError::build("open spend", e))?;
+    let bond_sig = {
+        let bond_payload = open
+            .sole_extra_payload()
+            .map_err(|e| BondAssemblyError::build("bond slot payload", e))?;
+        sign_bond_slot(bond_payload)?
     };
-
-    let payload_hashes = phase1_payload_hashes(&wire)
-        .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
-    if payload_hashes.len() != spend_inputs.len() + 1 {
-        return Err(BondAssemblyError::build(
-            "phase1 payload hash",
-            format!(
-                "expected {} payload hashes, got {}",
-                spend_inputs.len() + 1,
-                payload_hashes.len()
-            ),
-        ));
-    }
-    let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
-        .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
-    let bond_payload_hash = payload_hashes[spend_inputs.len()];
-    let bond_sig = sign_bond_slot(&bond_payload_hash)?;
-    pqc_auths.push(PqcAuth {
-        auth_version: 1,
-        signature: bond_sig,
-        public_key: args.bond_auth_pk,
-    });
-    wire.pqc_auths = pqc_auths;
+    let wire = open
+        .seal(vec![bond_sig])
+        .map_err(|e| BondAssemblyError::build("seal spend", e))?;
     drop(spend_inputs);
 
     let bound_tx = finalize_bond_tx(args.persona, &wire)?;

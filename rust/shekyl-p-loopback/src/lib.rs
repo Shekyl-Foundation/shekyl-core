@@ -11,9 +11,11 @@
 //! crate is the one copy. It is a dev-dependency of both ends and of the
 //! wallet's proving test. Nothing in `cmake/BuildRust.cmake` builds it.
 //!
-//! The shim accepts no-auth CONNECT and tunnels it to the endpoint. The
-//! name the client sends is not resolved: that is the daemon's tor-zone
-//! proxy's job, and this stands in for the proxy.
+//! The shim accepts the username/password greeting
+//! `shekyl_socks::Isolation::Persona` sends and tunnels the CONNECT to the
+//! endpoint. It does not read the credentials: isolation is the tor proxy's
+//! job, and this stands in for that proxy. The name the client sends is not
+//! resolved.
 //!
 //! The types a caller has to name are re-exported. A proving test then
 //! dev-depends on this crate and not on either end.
@@ -26,6 +28,7 @@ use std::sync::Arc;
 use shekyl_archival_retention::{PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_serve::{PassSigner, ProviderError, ShardBody, ShardProvider};
+use shekyl_socks::accept_userpass;
 use shekyl_types::{ArchivalLength, BlockHeight, ShardId, TxHash, SHARD_LENGTH};
 use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx};
 use shekyl_wire::TxidParts;
@@ -39,7 +42,6 @@ pub use shekyl_p_fetch::{
 pub use shekyl_p_serve::PServeEndpoint;
 
 const SOCKS_VERSION: u8 = 0x05;
-const NO_AUTH: u8 = 0x00;
 const CMD_CONNECT: u8 = 0x01;
 const RSV: u8 = 0x00;
 const SUCCEEDED: u8 = 0x00;
@@ -187,7 +189,8 @@ pub async fn endpoint_and_client(
     (endpoint, client)
 }
 
-/// SOCKS5 no-auth proxy. Every CONNECT is tunneled to `target`.
+/// SOCKS5 proxy. It accepts the persona greeting, then tunnels every
+/// CONNECT to `target`.
 ///
 /// Returns the proxy's loopback address. The accept loop runs until the
 /// listener closes, which is process end in a test.
@@ -222,17 +225,15 @@ async fn tunnel(mut client: TcpStream, target: SocketAddr) {
     }
 }
 
-/// Read a no-auth greeting and a CONNECT, and answer success with a
+/// Accept the persona greeting and a CONNECT, and answer success with a
 /// zero IPv4 bind address. The client discards that address.
+///
+/// The credentials drop here. The shim has to speak the greeting so the
+/// client will send CONNECT; what the username isolates is Tor's decision.
 async fn handshake(client: &mut TcpStream) -> std::io::Result<()> {
-    let mut greeting = [0u8; 2];
-    client.read_exact(&mut greeting).await?;
-    if greeting[0] != SOCKS_VERSION {
-        return Err(protocol_error("socks version"));
-    }
-    let mut methods = vec![0u8; usize::from(greeting[1])];
-    client.read_exact(&mut methods).await?;
-    client.write_all(&[SOCKS_VERSION, NO_AUTH]).await?;
+    accept_userpass(client)
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
 
     let mut request = [0u8; 4];
     client.read_exact(&mut request).await?;

@@ -139,7 +139,7 @@ code consumes).
 
 *Landed 2026-10-08 (step 3).* `shekyl_daemon_rpc::shard_view` holds the
 trait (`ShardViewFacts`), the method and its refusal mapping; the wire types
-are `shekyl_rpc_types::archival` (`CORE_RPC_VERSION` 3.42); every C++ site
+are `shekyl_rpc_types::archival` (`CORE_RPC_VERSION` 3.43; 3.42 was taken by `get_info.already_generated_coins` on merge); every C++ site
 named above, `src/shekyl/shekyl_daemon_fetch.h`, the C ABI struct and the
 `core_rpc_ffi.cpp` dispatch row are deleted. The C++ error-code header keeps
 the three slots (-22, -24, -25) as a note so they are not re-minted there.
