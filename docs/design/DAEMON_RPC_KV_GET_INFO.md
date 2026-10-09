@@ -222,10 +222,10 @@ node with a target report that target, which this line then shows.
 
 It does not finish the job without a GUI change. A node whose core reports
 no target — peerless at startup — has no value to send. Under RK-Q7 as
-recommended the field is omitted, and the GUI's `target_height: u64` is
-required, so that reply would fail to decode and read as "disconnected".
-The GUI pair for the RK-D15 commit makes the field optional and renders the
-absence (§5.1).
+recommended the field is `null`, and the GUI's `target_height: u64` is
+required, so that reply would fail to decode and read as "disconnected" —
+as it would on an omitted field. The GUI pair for the RK-D15 commit makes
+the field `Option<u64>` and renders `null` as no target (§5.1).
 
 ---
 
@@ -384,7 +384,7 @@ no vector carries `emission_era`. Fixtures:
 | 3 | **Capture:** `build_get_info` extraction + oracle vectors for §4.4's fixtures | C++ unit + vectors committed |
 | 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
-| 6 | **RK-D15:** sentinel retired; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | `CORE_RPC_VERSION` bump; `_v2` derived from `_v1` (README rule); GUI pair (§5.1) |
+| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7 as recommended, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); GUI pair (§5.1) |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1 | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` |
 | 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8 as ruled, one commit each | bump each; GUI pair where §5.1 names one |
 
@@ -404,7 +404,7 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | Core commit | Wire change | GUI today | GUI change needed |
 | --- | --- | --- | --- |
 | 2 (RK-D21) | `emission_era` gone | `#[serde(default)] String`; the panel renders it only when non-empty | none to keep decoding; the dead field, its type and the two panel blocks are deleted |
-| 6 (RK-D15) | `target_height` is the core's target, omitted when there is none (RK-Q7) | required `u64`, shown as "daemon height" | optional; absence rendered as no target, not `0` |
+| 6 (RK-D15) | `target_height` is the core's target, `null` when there is none (RK-Q7) | required `u64`, shown as "daemon height" | `Option<u64>`; `null` rendered as no target, not `0` |
 | 8+ (RK-Q1) | `difficulty` and `difficulty_top64` retired, `wide_difficulty` kept | required `difficulty: u64` | reads `wide_difficulty` (decimal string) |
 | 8+ (RK-Q2) | `already_generated_coins`, `total_burned` become decimal strings | `Option<String>` and `u64` | `total_burned` becomes a string; the first already is |
 | 8+ (RK-Q6) | `nettype` and the three booleans retired | not read | none |
@@ -426,6 +426,7 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 | Four bridged `get_info` console legs | parent §5 | 4 |
 | `target` re-pinned as a value (RK-D9) | parent §1 | 4 |
 | Wallet sync predicate simplification | #792 / WSS-Q14 | 6 |
+| `get_version` and `sync_info` still encode "no target" as an omitted or zero `target_height` (`rust/shekyl-rpc-types/src/chain.rs:386-393`, `p2p.rs:280-283`) | RK-D23 | 6 |
 | "`get_info` still writes `0` when synchronized" — the `HEIGHT_SEMANTICS.md` index row and the comment at `rust/shekyl-daemon-rpc/src/chain_facts.rs:112-116` | height-semantics Phase 2f | 6 |
 | CLI `DaemonInfo` and engine `GetInfoResp` duplicates retired | RK-D1 | 4 |
 
@@ -456,5 +457,5 @@ round's (`RPC_CHANNEL.md` §6.1 at #1006's head).
 | **RK-Q4** | **`has_peers` = a handshaken session, or any board row?** | **Handshaken.** A row before handshake cannot relay, which is what every reader asks. |
 | **RK-Q5** | `restricted` stays until RT-W10? | **Yes.** It is RT-W10's to retire; P's poller stops depending on it in commit 7. |
 | **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
-| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. | **Omitted, exactly as `get_version` writes it** (`rust/shekyl-rpc-types/src/chain.rs:390-393`: `0` and omitted only when the core reported none). One fact, one encoding on every method that carries it. The cost is the GUI's required `target_height` (§3.4, §5.1). |
+| **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
