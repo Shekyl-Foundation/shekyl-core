@@ -231,7 +231,9 @@ def main() -> int:
     disagree: list[str] = []
     print("\n== serving blocks (rate over the responses served) ==")
     for b in blocks:
-        if b[1] != "load":
+        # The store-writing block (`prep.store`) is a load block too, but
+        # it belongs to no state and is not a cell.
+        if b[1] != "load" or state_of(b[0]) not in STATES:
             continue
         state, n = state_of(b[0]), int(b[3])
         lat = late_by_label.get(b[0])
@@ -352,7 +354,16 @@ def main() -> int:
     print("\n== environment ==")
     print(f"  board temperature: {min(temps) / 1000:.1f} to {max(temps) / 1000:.1f} C over {len(env)} samples")
     print(f"  governor: {sorted({e[3] for e in env})}")
-    srss = [int(e[9]) for e in env if e[9].isdigit()]
+    freqs = [int(e[4]) for e in env]
+    top = max(freqs)
+    below = [(e[0], e[1], int(e[4]) // 1000, int(e[2]) / 1000) for e in env if int(e[4]) < top]
+    print(
+        f"  CPU clock at the sample: {min(freqs) // 1000} to {top // 1000} MHz; "
+        f"{len(below)} of {len(freqs)} samples below {top // 1000} MHz"
+    )
+    for utc, tag, mhz, deg in below:
+        print(f"    {utc} {tag:22s} {mhz} MHz at {deg:.1f} C")
+    srss = [int(e[8]) for e in env if e[8].isdigit()]
     if srss:
         print(f"  syncing daemon RSS kB: {min(srss)} to {max(srss)}")
     sysrss = [int(e[13]) for e in env if len(e) > 13 and e[13].isdigit()]
@@ -385,6 +396,12 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     # The probe sees one empty close fewer than the endpoint counted.
     probe_short = bool(tweak.get("probe_short", False))
     quiet_rate = 2.9
+    # The store-writing block that precedes the first pass: a load block
+    # outside every state, which the reading must step over.
+    obs.append("OBS\tprep.store\tload\tfull-store\t8\t171518\t3330449")
+    obs.append("BLOCK\tprep.store\tload\tfull-store\t8\t8\t176\t625\t8\t0")
+    obs.append("LATE\tprep.store\tload\tfull-store\t8\t3\t3\t4\t50\t50\t50")
+    obs.append("EXIT\tprep.store\tload\t0")
     # Defaults chosen so every prediction holds: lateness over 100 ms from
     # N=16 under sync, sync share under 75 % from N=16, throughput flat
     # past 16, nice keeps 95 % of the rate at a third of the throughput.

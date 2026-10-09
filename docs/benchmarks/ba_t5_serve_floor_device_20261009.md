@@ -1,10 +1,27 @@
 # `BA-T5` session 2: serving beside a syncing daemon, the in-flight sweep, and time to first byte. Floor run of 2026-10-09 (a discovery run)
 
-**State of this record: PRE-REGISTERED. No observation has been taken.**
-Everything below the heading "Registered before the run" was committed and
-pushed before the device was claimed for the run. The results are added
-under "Reading" by a later commit; the registered text is not edited after
-the run. A later change of reading gets its own section that says so.
+**State of this record: RUN COMPLETE, 2026-10-09 02:22Z to 03:24Z (the
+fourth start; the three before it are discarded, as the registration
+history says).** Everything below the heading "Registered before the run"
+was committed and pushed before the device was claimed for the run, and
+was last amended at `301ed05b73`, before the start that counts. The
+results are under "Reading"; the registered text is not edited after the
+run. A later change of reading gets its own section that says so.
+
+**In one paragraph.** Beside a daemon syncing the chain at 3.3 cores, the
+floor device serves full segments at 37 to 41 per second, 70 % of its
+idle rate, with p99 executor wake lateness under 61 ms at every N up to
+64 — and the daemon keeps 37 to 46 % of the sync rate it has with the
+probe idle. The serving process at `nice 19` gives the daemon 93 to 98 %
+of that rate back and serves at 5 to 8 per second, a seventh to a fifth
+of normal priority, with p99 lateness up to 641 ms. Throughput is flat
+from N = 16 in every state; p99 lateness doubles with each doubling of N;
+CPU per response is 66 to 72 ms whatever the state or N. Time to first
+byte at one in flight is 0.19 ms p50 with the daemon idle, 1.85 ms under
+sync; the open pre-head estimate is settled. At N = 64, the cap, the
+endpoint refused one connection in 2,048 under sync. Five of the seven
+predictions held; P1 and P4 missed, both in the direction of the device
+doing better than predicted.
 
 This session extends the run of 2026-10-07
 ([`ba_t5_serve_floor_device_20261007.md`](ba_t5_serve_floor_device_20261007.md)):
@@ -209,12 +226,200 @@ built from the commit named in the reading.
 
 ## Reading
 
-*Not yet taken.*
+Taken 2026-10-09 from the fourth start's capture, tree `301ed05b73`,
+probe sha256 `74d70aaad8f7…`, rustc 1.94.0, release profile. 39 blocks
+(the store-writing block, 36 cells, two TTFB blocks), every one exited 0;
+55 sync windows, none void; every registered cell present. The resident
+daemon was not mining and did not restart (its RSS 641.8 to 642.0 MB
+throughout). The numbers below are what `ba_t5_session2_reading.py`
+prints over the three capture files.
+
+### The serving blocks, by state and N
+
+Cell medians over three blocks; the per-block table is in the reading
+script's output and the blocks in `_obs.tsv`.
+
+| State | N | Responses/s | CPU per response | p99 wake lateness | Sync rate, share of no-serve | Refused |
+| --- | --- | --- | --- | --- | --- | --- |
+| idle | 8 | 51.1 | 72 ms | 5.5 ms | — | 0 |
+| idle | 16 | 55.5 | 69 ms | 11.7 ms | — | 0 |
+| idle | 32 | 56.7 | 69 ms | 35.8 ms | — | 0 |
+| idle | 64 | 55.2 | 71 ms | 51.6 ms | — | 0 |
+| sync | 8 | 36.9 | 66 ms | 7.2 ms | 46 % (40, 46, 47) | 0 |
+| sync | 16 | 40.5 | 66 ms | 14.3 ms | 41 % (38, 41, 46) | 0 |
+| sync | 32 | 40.9 | 66 ms | 45.0 ms | 37 % (26, 37, 44) | 0 |
+| sync | 64 | 40.4 | 67 ms | 60.0 ms | 38 % (37, 38, 45) | 1 of 6,144 |
+| nice | 8 | 6.2 (5.5 to 17.1) | 68 ms | 74.8 ms | 97 % | 0 |
+| nice | 16 | 5.8 (4.8 to 10.3) | 67 ms | 199.0 ms | 98 % | 0 |
+| nice | 32 | 6.8 (5.4 to 7.4) | 66 ms | 564.6 ms | 93 % | 0 |
+| nice | 64 | 8.2 (7.2 to 13.0) | 67 ms | 641.4 ms | 94 % | 0 |
+
+The no-serve sync rate, median over the fifteen quiet windows of each
+state: **2.52 blocks/s** in the sync passes, **2.77 blocks/s** in the nice
+passes. Its spread is wide — 0.92 to 2.99 blocks/s with the probe idle —
+and the slow windows sit at the same heights in every pass (about 560 to
+720, and the windows after 1,100), so the daemon's own rate depends on
+where in the chain it is, as much as on anything beside it. The shares in
+the table are each block's rate over its state's median no-serve rate, as
+registered; the per-pass spread in brackets is largely that chain
+position, which the interleaved orders put at a different N each pass.
+
+### The curves, and where each bends
+
+Read by the registered steps (throughput: a gain under 10 % at a
+doubling; lateness and CPU: a rise over 50 %; sync rate: a fall over
+25 %).
+
+- **Throughput is flat from N = 16 in every state.** Idle: +9 % from 8 to
+  16, then +2 % and −3 %. Sync: +9.8 % from 8 to 16, then +1 % and −1 %.
+  The knee is at N = 8 in both, by a hair in the sync state (the reading
+  prints the 9.8 % as "+10 %"). At nice 19 the curve has no shape the
+  medians can show: 6.2, 5.8, 6.8, 8.2, inside a spread of 4.8 to 17.1
+  that is the daemon's phase, not N.
+- **p99 wake lateness doubles with each doubling of N**, in every state,
+  from the first doubling: idle 5.5 → 11.7 → 35.8 → 51.6 ms; sync 7.2 →
+  14.3 → 45.0 → 60.0 ms; nice 74.8 → 199 → 565 → 641 ms. The knee is at
+  N = 8 in all three. Under sync, lateness is 1.2 to 1.3 × idle at the
+  same N; at nice 19 it is 12 to 17 × idle.
+- **CPU per response has no knee and no state.** 66 to 72 ms at every
+  cell, the same figure as session 1's 67.2 ms at one in flight. The
+  idle cells of pass 3, at 72 to 76 °C, read 69 to 72 ms against 66 to
+  70 ms in pass 1 at 60 to 73 °C: about 4 % more CPU time per response at
+  the hotter board (see "Environment").
+- **The daemon's sync rate under serving does not depend on N.** 46, 41,
+  37, 38 % of no-serve at N = 8, 16, 32, 64: no doubling moves it by
+  25 %. What the serving process takes is a share of the four cores, and
+  it takes about the same share at every N, because the board is
+  saturated from N = 8: 37 to 41 responses/s × 66 ms ≈ 2.5 to 2.7 cores
+  for the probe, and the daemon, which took 3.3 cores alone, is left 1.3,
+  about 40 %. At nice 19 the serving process yields almost all of it: the
+  daemon keeps 93 to 98 % and the probe serves at 5 to 8/s, 0.4 to 0.6
+  of a core.
+
+### The predictions, against the measurements
+
+| # | Prediction | Measured | |
+| --- | --- | --- | --- |
+| P1 | p99 wake lateness under sync above 100 ms by N = 16 | 14.3 ms at N = 16; 60.0 ms at N = 64; never above 100 ms inside the sweep | **missed** |
+| P2 | Board under 80 °C; `MemAvailable` never below 512 MB; swap never falls | 58.4 to 78.4 °C; lowest `MemAvailable` 5,840 MB; no swap configured | **held** |
+| P3 | Sync rate below 75 % of no-serve by N = 16, possibly at N = 8 | 46 % at N = 8 | **held** |
+| P4 | Throughput under sync has its knee at N = 16 | Flat from N = 8: +9.8 % to N = 16, then ±1 % | **missed** |
+| P5 | At nice 19: sync rate ≥ 90 % at every N; serving throughput ≤ half of normal priority | 97, 98, 93, 94 %; throughput 17, 14, 17, 20 % of the sync state's | **held**, both halves |
+| P6 | TTFB at one in flight, daemon idle: p50 under 1 ms, p99 under 5 ms | p50 0.19 ms, p90 0.22, p99 0.31, max 0.33 ms, n = 300 | **held** |
+| P7 | Idle p99 lateness within 2 × session 1 at N = 8 (5.6 ms), rising with N | 5.5 ms at N = 8; 11.7, 35.8, 51.6 ms | **held** |
+
+Where the predictions missed, the device did better than I expected: I
+had pictured lateness under sync blowing past 100 ms as the daemon
+fought the probe for the cores, and it did not — the executor's workers
+are woken within 60 ms at 64 in flight with three cores' worth of sync
+running beside them. And I had the throughput knee one doubling too
+late: the board is saturated at eight in flight, idle or not.
+
+### Time to first byte, and the pre-head estimate
+
+At one in flight, full segment from the store, n = 300 each:
+
+| Daemon | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- |
+| idle | 0.19 ms | 0.22 ms | 0.31 ms | 0.33 ms |
+| syncing | 1.85 ms | 3.53 ms | 3.95 ms | 6.47 ms |
+
+The idle p50 is a bound from above on every serial step `P` takes before
+its first byte — parse, anchor gate, shard open, pre-flight, head — and
+it sits inside the 0 to 1 ms band, so by the registered rule the open
+`serve_prehead_work_floor` estimate is **settled**: it moves to a
+measured constant on this capture in the ledger. Session 1's 2.2 ms was
+a whole abandoned request with one chunk read and hashed; the pre-head
+step alone is a tenth of it. Under sync the same step is 1.85 ms p50 —
+ten times idle — which is scheduling delay, not work: the pre-head
+instruction count is flat (`BA-T3`), and the request waits behind the
+sync for a core.
+
+### The refusal at N = 64
+
+One connection in 6,144 was refused in the sync cells at N = 64
+(`sync.3.N64`: 2,047 served, 1 refused, and the probe's count of empty
+closes agrees with the endpoint's), none at any other N or in the idle
+cells. It is the mechanism the third start exposed, now recorded instead
+of fatal: the requester opens its next 64 connections the instant it has
+seen the last stream of the previous 64 close, and a connection task's
+in-flight permit is dropped after its stream, so on a loaded board the
+reconnect can arrive at a full table. For a requester that behaves this
+way, the cap is N − ε rather than N. That is an input to `BA-Q4`: the
+constant's value, and whether the permit should outlive the stream, are
+decided there, not here. The serve path was not changed by this run.
+
+### Environment
+
+- **Temperature:** 58.4 °C at the first sample; 78.4 °C at the hottest,
+  first reached at the end of the second nice pass and again twice in the
+  third sync pass; 77.9 °C at the last sample. From the second pass on
+  the board sat between 68 and 78 °C, with no cooling window long enough
+  to bring it down: the quiet windows are 45 s and the daemon is syncing
+  through them.
+- **Clock:** 26 of the 96 environment samples read a CPU clock below
+  1.8 GHz, between 1.2 and 1.7 GHz, at 58 to 78 °C — including the very
+  first sample, at 58 °C, before any load. The governor is `ondemand`
+  with thirteen steps from 600 MHz to 1.8 GHz, and every sample is taken
+  between blocks, while the load is changing, so an intermediate value
+  there is the governor on its way up or down and says little about the
+  clock *during* a block. The firmware's throttle flags cannot be read
+  without root on this device. The oracle for the clock during a block is
+  CPU time per response, which is flat at 66 to 72 ms across the session
+  and 5 % higher in the hottest idle pass than the coolest: if the clock
+  had been held at 1.2 GHz through a block, that figure would be half
+  again as large. So the board ran at or near full clock through the
+  serving blocks, with at most a few per cent lost to heat late in the
+  session. A later run that wants the clock during a block should read
+  `cpufreq/stats/time_in_state` before and after it.
+- **Memory:** two daemons resident. The syncing daemon 357 to 368 MB RSS
+  across its nine lives; the resident daemon 642 MB; `MemAvailable` never
+  below 5,840 MB of the board's 8 GB; no swap.
+- **The sync poll's cost:** one `tail` and one `grep` a second, charged
+  to the environment's remainder; it ran through every sync and nice
+  pass and through no idle block.
+
+### Limits of this run
+
+- **Three blocks per cell.** The sync-share spread in brackets shows what
+  that buys: the chain position the interleaving moves around dominates
+  the per-pass numbers, and three passes are enough to place the medians,
+  not to put error bars on them.
+- **The daemon's own rate varies threefold with chain position**, with
+  the probe idle. The share figures use the state-wide median no-serve
+  rate, as registered. A rate read against the no-serve window at the
+  same heights would be tighter, and would need the quiet windows to
+  cover the same heights as the blocks, which the interleaving prevents.
+- **The second daemon is the departure from the brief.** The resident
+  daemon idled at 642 MB; the board carried two daemons' memory and one
+  daemon's sync load. A run with the resident daemon itself syncing would
+  differ in memory by one daemon and in nothing this run measures.
+- **The nice-19 blocks are 512 fetches**, a quarter of the others, and
+  at 5 to 17 responses per second each still ran 30 to 110 s; their
+  throughput medians sit inside a spread set by the daemon's phase.
+- **Three starts were discarded before this one**, for the reasons the
+  registration history gives; no number from them is quoted here. The
+  figures the discarded starts showed were in line with these.
+- **Not measured:** Tor, a cold cache, shard sizes other than the full
+  segment, the clock during a block, N = 128.
 
 ## Files
 
-*Added with the reading.* The probe is
-`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs` with the `ttfb` mode
-added; the run script is `scripts/bench/ba_t5_session2_run.sh` and the
-sync poll `scripts/bench/ba_t5_sync_poll.sh`; the reading is
-`scripts/bench/ba_t5_session2_reading.py`, with a selftest.
+- `ba_t5_serve_floor_device_20261009_obs.tsv` — the capture: per-fetch
+  `OBS` rows, `BLOCK`, `LATE`, `TTFB` and `EXIT` rows, `NOTE` rows for each
+  sync daemon start and pass order; header names the tree, the probe's
+  hash and the conditions.
+- `ba_t5_serve_floor_device_20261009_env.tsv` — one `ENV` row before and
+  after every block and pass: temperature, governor, clock, load,
+  jiffies, both daemons' RSS, the syncing daemon's height, memory, swap.
+- `ba_t5_serve_floor_device_20261009_sync.tsv` — the sync poll: `SYNCH`
+  points and one `SYNC` summary per window.
+- The probe is `rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs` with the
+  `ttfb` mode and the refusal recording added; the run script is
+  `scripts/bench/ba_t5_session2_run.sh` and the sync poll
+  `scripts/bench/ba_t5_sync_poll.sh`; the reading is
+  `scripts/bench/ba_t5_session2_reading.py`, with a selftest. Two fixes
+  to the reading landed with the reading itself and are not a change of
+  rule: it steps over the store-writing block, which is a load block in
+  no state, and it reads the syncing daemon's RSS from the right column.
+  The environment section's clock line was added at the same time.
