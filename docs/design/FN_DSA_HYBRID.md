@@ -121,7 +121,7 @@ pinned signature. It also carries the cross-surface negative.
 | Path | Result at this commit |
 | --- | --- |
 | x86_64, AVX2 (the default build on the development host) | all pass |
-| x86_64, the crate's AVX2 paths compiled out (`no_avx2` on the four sub-crates) | all pass, same bytes |
+| x86_64, the crate's AVX2 paths compiled out (`no_avx2` on the four sub-crates) | all pass, same bytes. Run on every pull request by a step of `rust-audit-test.yml` |
 | aarch64 under `qemu-aarch64` (user mode) | all pass, same bytes |
 
 The aarch64 run is wired into `depends-aarch64-kats.yml`, beside the other
@@ -192,7 +192,7 @@ open a second road to a release.
 | `FND-3` | `SigningKey1024::decode` returns a ~114 kB context **by value**. Any move of it is another copy on the stack, unwiped, and in an unoptimized build each move costs its size in stack. The first draft moved it once and signing needed 1.25 MiB of stack; borrowing it in place halved that | Fixed in this increment; the measurements are on `the_scheme_runs_on_a_small_stack` |
 | `FND-4` | Signing needs up to 256 KiB of stack optimized and 640 KiB unoptimized; key generation 128 KiB and 512 KiB; verification 64 KiB and 128 KiB | Held by test at half a default thread stack (unoptimized) and a quarter (optimized). **Carried to increment 4:** the serve path's signing capability should hold a decoded key across signatures rather than decode per receipt — it removes the per-signature stack cost and the ~13% the crate's own figures give for decoding |
 | `FND-5` | The registry gate passed with two unregistered scheme-domain constants in the tree: it pins cSHAKE call sites, and a domain constant with no call site of its own is invisible to it | Rows added by hand, census pin moved. The gate's header already says completeness for constants is a review duty; this is an instance |
-| `FND-6` | The x86_64 vectors run AVX2 code the floor device never runs | Recorded at the pin; the same vectors are run with AVX2 compiled out and under aarch64 |
+| `FND-6` | The x86_64 vectors run AVX2 code the floor device never runs | Recorded at the pin; the same vectors are run with AVX2 compiled out and under aarch64, each by its own CI step |
 | `FND-7` | No licence policy is enforced anywhere in the repository | Recorded. Not this lane's to add |
 | `FND-8` | The lock file moved an unrelated edge (`bindgen` → `itertools`) when the dependency was added without `--locked` | Restored by hand; the lock differs from `dev` by the five packages only |
 | `FND-9` | Sign and verify figures on the floor device are owed, and so is a run of the vectors on aarch64 hardware: their agreement there was shown under emulation, which computes IEEE arithmetic in software and so cannot show what the device's own floating point does | The benches exist (§3.1). Registered as `BA-T33`'s floor arm with a FOLLOWUPS row; the capture is a floor-device session |

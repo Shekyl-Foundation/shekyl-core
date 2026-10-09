@@ -539,6 +539,23 @@ jobs:
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+      - name: "FN-DSA vectors with the AVX2 paths compiled out"
+        working-directory: rust
+        # The pinned `fn-dsa` crate dispatches to AVX2 at run time on x86_64,
+        # and this runner has AVX2, so the workspace test above pins the
+        # scheme-3 vectors on the AVX2 code only. `no_avx2` on the four
+        # sub-crates compiles that dispatch out and leaves the baseline x86_64
+        # (SSE2) path, which is what an x86_64 machine without AVX2 runs. The
+        # vectors must give the same bytes on it: signing is floating point,
+        # and a signer that disagreed with itself across paths over one
+        # message would be giving two signatures over one hashed point. Cargo
+        # refuses the build if a sub-crate stops offering the feature, so the
+        # step cannot pass by ceasing to select the path
+        # (`docs/design/FN_DSA_HYBRID.md` §3, `FND-6`).
+        run: >-
+          cargo test --locked -p shekyl-crypto-pq
+          --features fn-dsa-comm/no_avx2,fn-dsa-kgen/no_avx2,fn-dsa-sign/no_avx2,fn-dsa-vrfy/no_avx2
+          --test kat_fn_dsa_hybrid_v1
       - name: "Gate 2: shekyl-pow-randomx debug-vs-release equivalence"
         # Per `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.11.3 R4:
         # Rust integer-overflow semantics differ between debug (panic)
