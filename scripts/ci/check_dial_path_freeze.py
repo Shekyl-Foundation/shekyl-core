@@ -714,21 +714,24 @@ def unfreeze_subjects(base_brief: str | None, head_brief: str | None) -> tuple[s
     Returns the subjects and a log of what was read, including lines that
     are not new and therefore do not count.
     """
+    # The form is exact, so the line is matched as written: no leading or
+    # trailing whitespace, and "new" is judged on the same exact line. A
+    # padded copy of a line already at base is the old line, not a new one.
     base_lines = set(base_brief.splitlines()) if base_brief else set()
     subjects: set[str] = set()
     log: list[str] = []
     if head_brief is None:
         return subjects, log
     for line in head_brief.splitlines():
-        match = UNFREEZE.match(line.strip())
+        match = UNFREEZE.match(line)
         if not match:
             continue
-        subject = match.group("subject").strip().strip("`")
+        subject = match.group("subject").strip("`")
         if line in base_lines:
-            log.append(f"note  UNFREEZE line already present at base, not counted: {line.strip()}")
+            log.append(f"note  UNFREEZE line already present at base, not counted: {line}")
             continue
         subjects.add(subject)
-        log.append(f"note  UNFREEZE accepted for {subject}: {match.group('reason').strip()}")
+        log.append(f"note  UNFREEZE accepted for {subject}: {match.group('reason')}")
     return subjects, log
 
 

@@ -495,6 +495,21 @@ CASES: list[tuple[str, dict[str, str | None], int, str]] = [
         "already present at base, not counted",
     ),
     (
+        "a padded copy of an UNFREEZE line already at base is not a new line",
+        {
+            INL: INL_TEXT + "  int extra_code_line;\n",
+            BRIEF: BRIEF_TEXT + "\n" + UNFREEZE_INL + "  " + UNFREEZE_INL.rstrip("\n") + "  \n",
+        },
+        1,
+        "net_node.inl takes deletions only",
+    ),
+    (
+        "an indented UNFREEZE line is not the exact form and is not read",
+        {INL: INL_TEXT + "  int extra_code_line;\n", BRIEF: BRIEF_TEXT + "\n  " + UNFREEZE_INL},
+        1,
+        "net_node.inl takes deletions only",
+    ),
+    (
         "an empty list at base is nothing frozen",
         {},
         0,
@@ -512,7 +527,9 @@ def main() -> int:
         if name.startswith("after the cutover"):
             base[LIST] = "# frozen\n" + SHRINK_ROWS
             base[INL] = IDLE + BETA
-        if name.startswith("an UNFREEZE line that was already at base"):
+        if name.startswith("an UNFREEZE line that was already at base") or name.startswith(
+            "a padded copy of an UNFREEZE line"
+        ):
             base[BRIEF] = BRIEF_TEXT + "\n" + UNFREEZE_INL
         repo = repo_with(base, head)
         rc, out = gate(repo)
