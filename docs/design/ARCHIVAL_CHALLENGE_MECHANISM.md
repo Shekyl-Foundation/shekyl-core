@@ -2172,6 +2172,138 @@ value is still the same call. It is retained rather than deleted because
 This lands with a rig if one is ever scoped, not before — a provenance type
 with no measurement to stamp is scaffolding.
 
+## 9.8 Serving runs below the daemon's CPU priority (SH-3, RULED 2026-10-09)
+
+**Ruling (maintainer, 2026-10-09).** The serving host runs below the
+daemon's CPU priority by default, with no operator setting. The evidence
+is `BA-T5` session 2
+([`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md)):
+on the floor device, with the serving process at `nice 19` beside a
+daemon syncing the chain, the daemon kept 93 to 98 % of the sync rate it
+has with nothing serving, and serving still delivered 5 to 8 responses
+per second — about a hundred times honest demand. At normal priority the
+same serving took the daemon down to 37 to 46 % of its rate.
+
+**Why the scope is the serving threads and nothing wider.** Serving is
+not its own process. `shekyl-p-host` binds the loopback endpoint on
+whatever runtime the engine is running on (`host.rs`,
+`PServeEndpoint::bind`), and the endpoint's read-and-fold and sign hops
+go to that runtime's shared blocking pool. A `Nice=` line in a service
+unit would lower the whole wallet — the GUI, the user's own spend
+proving, the P-scan — to pay for a priority that only serving needs. The
+right unit is the thread, and lowering a thread's own priority needs no
+privilege on any platform, so it works for an ordinary user and ships on
+by default.
+
+**Design.**
+
+1. **A dedicated serving runtime.** The host builds one runtime and
+   blocking pool for serving through the single constructor
+   (`shekyl_runtime::runtime`, D5/D14 item 1), named `sk-serving`, with
+   its own thread-ledger row, and owns it for the host's life. The
+   endpoint is bound *on* that runtime, so the accept loop, every
+   per-connection task, the read-and-fold hops and the sign hop run
+   there; it shares nothing with the engine's runtime. Its budget —
+   `workers = 2`, `blocking = MAX_INFLIGHT` — is a structural floor,
+   labelled unmeasured in the ledger: two workers because the serving
+   loop's executor work per response is small (the frame head, the
+   digest start and finish, the socket writes) and `BA-T5` showed the
+   path CPU-bound on the blocking side, and one blocking thread per
+   permitted connection because each connection has at most one hop in
+   flight at a time. The confirming run below is the first measurement of
+   this budget: `BA-T5`'s endpoint ran on the probe binary's default
+   runtime.
+
+   *What the runtime does not cover.* The `SF-D13` countersignature is
+   made inside the stake actor, which holds the persona's key and runs at
+   engine priority; the serving runtime carries the round trip, not the
+   ML-DSA work. That work is bounded — one signature per response, about
+   forty a second at the measured serving rate — and moving it would move
+   the key, which `SF-D13` forbids. The tor supervisor stays on the
+   engine's runtime and the wallet's tor *process* stays at normal
+   priority: an onion that cannot keep its circuits up serves nothing at
+   any priority.
+
+2. **Threads lower their own priority at start**, through the runtime
+   constructor's thread-start hook (Tokio's `on_thread_start`, which runs
+   on every worker and every blocking thread before it takes work). The
+   platform mapping, with the scheduling class kept normal everywhere:
+   - **Linux:** `setpriority(PRIO_PROCESS, 0, 19)` — on Linux the nice
+     value is a per-thread attribute and `who = 0` is the calling thread.
+     Ordinary `SCHED_OTHER`, never `SCHED_IDLE`: an idle-class thread can
+     be starved outright while the daemon syncs, and a persona whose
+     serving threads never run fails challenge reads it should pass. At
+     nice 19 the run above shows serving still delivering 5 to 8
+     responses a second under a full sync.
+   - **macOS:** `pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0)`.
+     Utility, not Background: the background class also lowers the
+     thread's I/O priority and is what the system throttles under
+     App Nap and low-power modes, and a serving thread that cannot read
+     the store is the SCHED_IDLE failure by another route.
+   - **Windows:** `SetThreadPriority(GetCurrentThread(),
+     THREAD_PRIORITY_LOWEST)`. Not `THREAD_MODE_BACKGROUND_BEGIN`, which
+     also lowers the thread's I/O and memory priority.
+   - Everything else (the BSDs, Android) takes the unix `setpriority`
+     path; a platform with no mapping is a compile-time hole, not a
+     silent no-op.
+
+   *Rule 17.* No new dependency: `libc 0.2` (unix) and `windows-sys 0.61`
+   with `Win32_System_Threading` (windows) are already workspace
+   dependencies through `shekyl-logging` and `shekyl-win-sec`, and every
+   symbol above was read in the pinned sources
+   (`libc-0.2.184`: `unix/linux_like/linux/{gnu,musl}/mod.rs` for
+   `setpriority`/`PRIO_PROCESS`, `new/apple/libpthread/pthread_/qos.rs`
+   for the QoS call and `qos_class_t`; `windows-sys-0.61.2`
+   `Win32/System/Threading/mod.rs` for the two functions and the
+   constants). `shekyl-runtime` denies unsafe code and keeps doing so;
+   the three calls live in a new `shekyl-thread-priority` crate, the
+   same siting `shekyl-win-sec` uses for the wallet's other platform
+   calls, with one entry point: lower the current thread.
+
+3. **Failure mode (rule 82).** If lowering fails — an unexpected errno,
+   a platform call refused — the thread goes on serving at normal
+   priority. The host counts each failure (`priority_not_lowered`, read
+   through the engine's serving status beside the posture) and logs one
+   warning per host start naming what was not lowered and that serving
+   continues. Serving is never refused for this: a persona that stops
+   answering accrues misses toward a slash, and a priority it could not
+   set is not a reason to be slashed.
+
+4. **Uniform, with no knob (rule 75).** Priority shows only under
+   contention, and timing already reveals load, so if every `P` runs the
+   same default the setting tells an observer nothing. An opt-out would
+   create a population that behaves differently under load, which is a
+   fingerprint. The lowering is unconditional in the shipped binary.
+
+5. **Out of scope.** The daemon, the wallet's other work, and the
+   wallet's tor process all stay at normal priority.
+
+**Tests.** A Linux test builds the serving runtime, runs a task and a
+blocking task on it, and reads each thread's nice value back
+(`getpriority(PRIO_PROCESS, 0)` on the thread itself, cross-checked
+against `/proc/self/task/<tid>/stat`), asserting 19; the same test
+asserts the test's own runtime threads are unchanged. The failure path
+runs through an injected failing setter and asserts the counter, the
+single warning, and that the endpoint still answers. The serve
+invariant tests and the `BA-T3` instruction-count gate pass unchanged:
+priority does not change instruction counts.
+
+**Confirming run (after merge; discovery, not a gate, by the 2026-10-08
+ruling).** A short `BA-T5` floor block with the syncing daemon, N = 8
+and N = 64, with the shipped thread-level mechanism in place of the
+external `nice 19`. Its record says whether the thread-level mechanism
+reproduces the 93 to 98 % sync figure, and it is the first measurement
+of the serving runtime's budget.
+
+**Ledger.** A constant row `serving_priority_nice` (the Linux nice
+value, 19) on a new path set `serving-runtime` covering the serving
+runtime's construction and the priority crate. The row is *estimated*
+until the confirming run lands — a band of 0.90 to 1.00 for the share of
+its no-serve sync rate the daemon keeps, from the external-nice arm —
+and only a *current* row listens to its path set, so a later change to
+the priority setup trips the ledger once that run has promoted the row,
+not before. The row's carrier says so.
+
 ## 10. Standing rules for any agent working this
 
 Verify every claim at file:line against `dev` **before** planning — including

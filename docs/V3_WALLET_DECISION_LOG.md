@@ -6290,3 +6290,50 @@ and replaced by pointers; what each still owns is the specification's
    owned by the RPC lane (data) and the GUI lane (presentation).
 
 ---
+
+## 2026-10-09 — The serving host runs below the daemon's CPU priority, on by default, with no setting
+
+**Decision (maintainer, 2026-10-09; brief relayed to the serving lane).**
+The persona serving host runs its threads below the daemon's CPU
+priority by default, and there is no operator setting for it. Recorded
+in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.8 as `SH-3`.
+
+1. **The evidence.** `BA-T5` session 2 on the floor device
+   ([`ba_t5_serve_floor_device_20261009.md`](benchmarks/ba_t5_serve_floor_device_20261009.md)):
+   with the serving process at `nice 19` beside a daemon syncing the
+   chain, the daemon kept 93 to 98 % of its no-serve sync rate and
+   serving still delivered 5 to 8 responses per second, about a hundred
+   times honest demand; at normal priority the daemon kept 37 to 46 %.
+2. **The unit is the serving threads, not the process.** Serving runs
+   inside the wallet process on the engine's runtime, so a service-unit
+   `Nice=` would also slow the GUI and the user's own spend proving.
+   Serving gets a dedicated runtime and blocking pool through the single
+   constructor (D5), with its own thread-ledger row, and every thread of
+   it lowers its own priority as it starts. That needs no privilege on
+   any platform.
+3. **`nice 19`, not `SCHED_IDLE`.** An idle-class thread can be starved
+   completely under a syncing daemon; a persona whose serving threads
+   never run fails challenge reads it should pass. Normal scheduling at
+   the lowest nice keeps serving alive, as the run shows. macOS maps to
+   the Utility QoS class and Windows to the lowest thread priority;
+   neither platform's "background" mode is used, because both also
+   throttle I/O.
+4. **Uniform, with no knob.** Priority shows only under contention, and
+   timing already reveals load; if every `P` runs the same default the
+   setting tells an observer nothing, and an opt-out would create a
+   population that behaves differently. Unconditional, under rule 75.
+5. **Failure is a warning and a counter, never a refusal to serve.** A
+   thread whose priority could not be lowered serves at normal priority;
+   the host counts it and the operator sees one warning.
+6. **Out of scope.** The daemon, the wallet's other work and the wallet's
+   tor process stay at normal priority. The `SF-D13` countersignature is
+   made inside the stake actor at engine priority: the serving runtime
+   carries the round trip, not the key.
+7. **Confirming run.** After the mechanism merges, a short `BA-T5` floor
+   block with the syncing daemon at N = 8 and N = 64 records whether the
+   thread-level mechanism reproduces the external-nice figure. Discovery,
+   not a gate, by the 2026-10-08 ruling. The ledger row for the nice
+   value is estimated until that run promotes it.
+
+---
