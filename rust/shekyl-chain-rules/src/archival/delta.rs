@@ -7,7 +7,7 @@
 //! its siblings build the delta — and private past that module. The doctests on
 //! [`ArchivalDelta`] are the pin. The store writes what it is given.
 
-use shekyl_types::archival::{BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
+use shekyl_types::archival::{BondRecord, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -28,6 +28,7 @@ use shekyl_units::AtomicUnits;
 /// let delta = shekyl_chain_rules::ArchivalDelta {
 ///     records: Vec::new(),
 ///     serve_credits: Vec::new(),
+///     settlements: Vec::new(),
 ///     slashes: Vec::new(),
 ///     slash_watermark: None,
 ///     accrual: todo!(),
@@ -42,6 +43,7 @@ use shekyl_units::AtomicUnits;
 ///     Vec::new(),
 ///     Vec::new(),
 ///     Vec::new(),
+///     Vec::new(),
 ///     None,
 ///     todo!(),
 ///     None,
@@ -51,6 +53,7 @@ use shekyl_units::AtomicUnits;
 pub struct ArchivalDelta {
     pub(super) records: Vec<RecordWrite>,
     pub(super) serve_credits: Vec<ServeCreditKey>,
+    pub(super) settlements: Vec<Settlement>,
     pub(super) slashes: Vec<Slash>,
     pub(super) slash_watermark: Option<SettlementEpoch>,
     pub(super) accrual: Accrual,
@@ -61,6 +64,7 @@ impl ArchivalDelta {
     pub(super) const fn new(
         records: Vec<RecordWrite>,
         serve_credits: Vec<ServeCreditKey>,
+        settlements: Vec<Settlement>,
         slashes: Vec<Slash>,
         slash_watermark: Option<SettlementEpoch>,
         accrual: Accrual,
@@ -69,6 +73,7 @@ impl ArchivalDelta {
         Self {
             records,
             serve_credits,
+            settlements,
             slashes,
             slash_watermark,
             accrual,
@@ -89,6 +94,17 @@ impl ArchivalDelta {
     #[must_use]
     pub fn serve_credits(&self) -> &[ServeCreditKey] {
         &self.serve_credits
+    }
+
+    /// The settlement rows this block's slash pass derives, by epoch, then
+    /// persona, then shard: one per pair with a counted draw in each epoch
+    /// whose deadline this block passes
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §14). The slashes below were
+    /// decided on these rows and on rows already recorded; the store
+    /// writes them first (`SO-D7`).
+    #[must_use]
+    pub fn settlements(&self) -> &[Settlement] {
+        &self.settlements
     }
 
     /// The slashes this block applies, in application order — the order
@@ -174,6 +190,20 @@ pub struct ServeCreditKey {
     pub shard: ShardId,
     /// The settlement epoch credited.
     pub epoch: SettlementEpoch,
+}
+
+/// One pair's settlement for one epoch: the `archival_settlement` key and
+/// its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settlement {
+    /// The persona settled.
+    pub persona: PCanonicalId,
+    /// The shard settled.
+    pub shard: ShardId,
+    /// The epoch settled.
+    pub epoch: SettlementEpoch,
+    /// What it settled.
+    pub row: SettlementRow,
 }
 
 /// One slash: the log entry and what it burned.

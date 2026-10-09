@@ -20,10 +20,12 @@
 //!
 //! ## What this module is, and what it is not
 //!
-//! It is the **arithmetic and the window contract**. The C++ block-connect slash
-//! scan (`db_lmdb.cpp`, `process_archival_slash_for_epoch`) owns the LMDB reads
-//! that *gather* the observation sequence and calls this through
-//! `shekyl-ffi`; it decides nothing (`20-rust-vs-cpp-policy`). The
+//! It is the **arithmetic**, the **window contract**, and the Rust slash
+//! pass's gather ([`settlement_window_slashable`]). The C++ block-connect
+//! slash scan (`db_lmdb.cpp`, `process_archival_slash_for_epoch`) still
+//! gathers its own observation sequence from the serve-credit ledger and
+//! calls [`failure_window_slashable`] through `shekyl-ffi`, until
+//! `DEL-008`. It decides nothing (`20-rust-vs-cpp-policy`). The
 //! interval-append the slash performs is unchanged — [`slash_open_interval_to_append`]
 //! still produces exactly what the writer appends; only **whether** it fires
 //! moves here.
@@ -48,23 +50,15 @@
 //! stated on the enforcement side: no alternate code path may count
 //! bonded-but-uncredited epochs against a `P`.)
 //!
-//! ## The window is scoped to the record's *current* standing run
+//! ## Standing bounds both gathers
 //!
-//! Look-back stops at the boundary of the current continuous challengeable run
-//! for the pair: the caller walks back from the decision epoch and halts at the
-//! first epoch that is not an observation. Three consensus boundaries fall out
-//! of that one rule, none of them special-cased:
+//! Both gathers stop where the record's current continuous challengeable
+//! run ends. [`good_through`] is false before `E_join + 1`, so a record
+//! cannot be charged for epochs predating its own join, and it is false
+//! across a closed bad interval (slash → `Reinstate`), so the walk stops
+//! at the reinstatement boundary.
 //!
-//! - **Before `E_join + 1`** — `good_through` is false, so the walk stops; a
-//!   record cannot be charged for epochs predating its own join.
-//! - **Before the shard's `E_add + 1`** — the as-of-`H_fire` holdings read is
-//!   false, so the walk stops. The partial add epoch is forfeited in both
-//!   directions (P2B-7 Pin 5: no credit earned in it, and no challenge fired in
-//!   it can slash).
-//! - **Across a closed bad interval (slash → `Reinstate`)** — `good_through` is
-//!   false inside the interval, so the walk stops at the reinstatement boundary.
-//!
-//! That third boundary is a **ruling, not an accident**, so it is stated
+//! That second boundary is a **ruling, not an accident**, so it is stated
 //! plainly: *a reinstated record starts the window clean*. The alternative —
 //! carrying pre-slash misses across the `Reinstate` — punishes one absence twice
 //! and, worse, defeats the pin at exactly the point it matters: an archiver that
@@ -78,49 +72,99 @@
 //! at `E_reinstate`); the interval boundary is what extends the same treatment to a
 //! **carried** shard the same sweep did not slash.
 //!
+//! The shard's add-epoch is not that same stop for both gathers. The partial
+//! add epoch is forfeited in both directions (P2B-7 Pin 5: no credit earned
+//! in it, and no challenge fired in it can slash), but each gather reaches
+//! that fact its own way, below.
+//!
+//! ## The C++ gather (until `DEL-008`)
+//!
+//! `process_archival_slash_for_epoch` reads the serve-credit ledger and
+//! halts at the first epoch that is not an observation. Before the shard's
+//! `E_add + 1` the as-of-`H_fire` holdings read is false, so that halt is
+//! also where the add-epoch stops this walk. Because it stops at the first
+//! gap, the deepest epoch it can read is `n − 1` below the decision epoch.
+//! The const-assert beside `SLASH_SETTLEMENT_TIP_LAG_EPOCHS` is **this**
+//! walk's horizon: those `n − 1` epochs are still inside
+//! `prune_archival_epochs_before`.
+//!
+//! ## The Rust gather ([`settlement_window_slashable`])
+//!
+//! The Rust slash pass reads settlement rows. By
+//! `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10b` it **passes over** an epoch
+//! that is not an observation — a NonObservation row, or no row — and does
+//! not stop there. Stopping would let a producer withhold one reveal, push
+//! a non-server's pair below three issued draws in one epoch, and clear
+//! its window. The walk stops where standing ends (`good_through` false),
+//! at `FAILURE_WINDOW_N` observations, once passes exceed
+//! [`FAILURE_WINDOW_SERVE_BUDGET`], and at [`settlement_retention_floor`].
+//! Before the shard's `E_add + 1` the pair has no counted draw, so the
+//! epoch is passed over and nothing accumulates: the add-epoch is not a
+//! stop.
+//!
+//! A walk that passes over epochs is not bounded by `n − 1` epochs of
+//! look-back, so the floor is the horizon the settlement rows' own prune
+//! uses — one constant, [`SETTLEMENT_RETENTION_EPOCHS`] — ruled 2026-10-09
+//! and in the rule from the first commit, so the prune is not a consensus
+//! change when the Rust store gains one. The walk reads the floor and
+//! nothing below it. It binds only in a degraded state. The window needs
+//! `n` observations and the horizon leaves twice `n` epochs to find them
+//! in, so the walk is cut short only when fewer than half a pair's epochs
+//! are observed ([`WINDOW_MIN_OBSERVATION_PER_MILLE`]; the assert beside
+//! it is that sentence in arithmetic). The simulated observation rate is
+//! 0.96 or better, at which `n` observations span about fourteen epochs.
+//! Below one half the network has larger problems than one unslashed pair.
+//!
 //! ## Persistence: recomputed, never stored
 //!
 //! There is no miss-tally in persisted consensus state, and therefore no
-//! `42-serialization-policy` version bump. The window is a pure function of the
-//! serve-credit ledger and the bond record — both already
-//! persisted, and both already reverted by `pop_block` (gate-2 §8, gate-4 §5).
-//! Recomputing is what makes the mechanism reorg-safe for free: a rewound bit is
-//! a rewound observation, with no second copy of the history to keep in sync.
+//! `42-serialization-policy` version bump. Each gather is a pure function of
+//! the table it reads and the bond record. The C++ gather reads the
+//! serve-credit ledger. The Rust gather reads settlement rows. Both tables
+//! are already persisted, and both are reverted by `pop_block` (gate-2 §8,
+//! gate-4 §5). Recomputing is what makes the mechanism reorg-safe for free:
+//! a rewound row is a rewound observation, with no second copy of the
+//! history to keep in sync.
 //!
-//! **The price of recomputing: `n` is now a retention constraint.** Before the
-//! window, the slash decision read a *single* epoch's served state; it now
-//! reads up to `n − 1` epochs further back. Those rows are not permanent —
-//! `prune_archival_epochs_before` deletes every epoch-scoped archival table
-//! below `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
-//! `ARCHIVAL_CONSENSUS_STATE.md` §5), and a pruned row is indistinguishable
-//! from one that was never written. What a horizon breach *does* to the
-//! verdict depends on which table the window reads, and the two candidates
-//! fail in **opposite directions** (`ARCHIVAL_SETTLEMENT_WRITER.md` §8,
-//! `SO-D5`):
+//! **The price of recomputing: each gather's depth is a retention
+//! constraint.** `prune_archival_epochs_before` deletes every epoch-scoped
+//! archival table below `tip_epoch − MAX_CLAIM_AGE_W`
+//! (`prune_below_epoch_at_height`, `ARCHIVAL_CONSENSUS_STATE.md` §5), and a
+//! pruned row is indistinguishable from one that was never written. What a
+//! horizon breach *does* to the verdict depends on which table the gather
+//! reads, and the two reads fail in **opposite directions**
+//! (`ARCHIVAL_SETTLEMENT_WRITER.md` §8, `SO-D5`):
 //!
-//! - **`archival_serve_credit` — the read the window makes today** (an
-//!   [`BaselineObservation`] is `archival_serve_credit_pass_count(...) > 0`).
-//!   Absent means *no pass bit*, i.e. a **miss**. A breach reads *served*
-//!   epochs as missed and **slashes an honest archiver** for history the node
-//!   deleted. Loud-wrong: somebody's bond burns and they will say so.
-//! - **`archival_settlement` — the ruled future read**, once the `SO-D8` writer
-//!   is wired and the window consumes verdict rows. Absent means
-//!   **non-observation** (`SO-D1`: never issued ⇒ not a miss). A breach reads
-//!   fully-evidenced *failures* as unobserved epochs and silently **shrinks the
-//!   window's denominator**, so an archiver that should have been slashed is
-//!   not. Quiet-wrong: nothing burns, nobody complains, the pin's deterrence
-//!   erodes without a signal.
+//! - **`archival_serve_credit` — the C++ gather's read, until `DEL-008`**
+//!   (an [`BaselineObservation`] is
+//!   `archival_serve_credit_pass_count(...) > 0`). Absent means *no pass
+//!   bit*, i.e. a **miss**. A breach reads *served* epochs as missed and
+//!   **slashes an honest archiver** for history the node deleted.
+//!   Loud-wrong: somebody's bond burns and they will say so. This walk
+//!   stops at the first gap, so its deepest read is `n − 1` epochs back,
+//!   and the const-assert on `SLASH_SETTLEMENT_TIP_LAG_EPOCHS` is the bound
+//!   that keeps that read on disk.
+//! - **`archival_settlement` — the Rust gather's read.** Absent means
+//!   **non-observation** (`SO-D1`: never issued ⇒ not a miss), and the
+//!   gather passes over it. A breach that treated a pruned row as absent
+//!   would read fully-evidenced *failures* as unobserved epochs and
+//!   silently **shrink the window's denominator**, so an archiver that
+//!   should have been slashed is not. Quiet-wrong: nothing burns, nobody
+//!   complains, the pin's deterrence erodes without a signal. The walk can
+//!   pass over more than `n − 1` epochs, so the `n − 1` assert does not
+//!   cover it. [`settlement_retention_floor`] does: the walk reads no epoch
+//!   a store may delete, and [`WINDOW_MIN_OBSERVATION_PER_MILLE`] pins that
+//!   the floor still leaves `n` observations while at least half a pair's
+//!   epochs are observed.
 //!
-//! Both are wrong, both are consensus-deterministic (pruning is a function of
-//! tip height, so every node deletes the same rows and reaches the same wrong
-//! verdict — a false verdict, not a fork), and **the same assert catches both**,
-//! because both tables are pruned by the same call at the same horizon. It is
-//! stated twice here so that a maintainer debugging a *missed* slash does not
-//! read "slashes honest archivers" and conclude the assert is about somebody
-//! else's problem. The horizon is comfortable at the shipped values and the
-//! assert below pins it, because **raising `n` at Round-2 is exactly the edit
-//! that would cross it** and nothing else would catch that. Reorgs cannot reach
-//! a prune boundary either (`ARCHIVAL_REORG_DEPTH_BLOCKS` ≪
+//! Both failures are consensus-deterministic (pruning is a function of tip
+//! height, so every node deletes the same rows and reaches the same wrong
+//! verdict — a false verdict, not a fork). They are stated together so that
+//! a maintainer debugging a *missed* slash does not read "slashes honest
+//! archivers" and conclude the retention bound is about somebody else's
+//! problem. Raising `n` at Round-2 is the edit that would cross either
+//! bound, and each bound is the assert for its own gather. Reorgs cannot
+//! reach a prune boundary either (`ARCHIVAL_REORG_DEPTH_BLOCKS` ≪
 //! `SETTLEMENT_EPOCH_BLOCKS`).
 //!
 //! ## Numerics are provisional; the shape is frozen
@@ -134,6 +178,9 @@
 //! robust, deterrence-credible at the L17 ×0.25 crisis multiplier). The
 //! *m-of-n shape* is genesis-frozen; the two integers are not — the
 //! `bond_duration` precedent.
+
+use shekyl_types::archival::SettlementOutcome;
+use shekyl_types::SettlementEpoch;
 
 use crate::bond_floor::MAX_CLAIM_AGE_W;
 use crate::constants::SLASH_GRACE_EPOCHS;
@@ -175,23 +222,26 @@ const _: () = assert!(
 /// grace is denominated in epochs.
 const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 
-/// **Prune-horizon coupling — the window may not out-reach the serve-credit
-/// ledger's retention.** At the moment epoch `E` is settled the tip is
-/// `E + LAG`, so rows below `E + LAG − MAX_CLAIM_AGE_W` are already deleted,
-/// while the look-back reaches `E − (n − 1)`. Requiring
-/// `n − 1 ≤ MAX_CLAIM_AGE_W − LAG` keeps every epoch the window can read on
-/// disk. At the shipped values: `13 ≤ 26 − 2 + 1 = 25`, a 12-epoch margin.
+/// **Prune-horizon coupling — the C++ gather may not out-reach the
+/// serve-credit ledger's retention.** At the moment epoch `E` is settled
+/// the tip is `E + LAG`, so rows below `E + LAG − MAX_CLAIM_AGE_W` are
+/// already deleted, while that gather's look-back reaches `E − (n − 1)`
+/// because it stops at the first gap. Requiring
+/// `n − 1 ≤ MAX_CLAIM_AGE_W − LAG` keeps every epoch **that** walk can read
+/// on disk. At the shipped values: `13 ≤ 26 − 2 + 1 = 25`, a 12-epoch margin.
 ///
-/// This is the assert that must fire if Round-2 re-pins `n` upward past the
-/// retention window, or if `MAX_CLAIM_AGE_W` is ever lowered. Crossing it does
-/// not fork the network (pruning is deterministic in tip height, so every node
-/// deletes the same rows) — it produces a wrong verdict whose *direction*
-/// depends on the table read (module docs, `SO-D5`): against the serve-credit
-/// ledger a pruned row is a **miss** and an honest archiver is slashed; against
-/// the settlement table a pruned row is **non-observation** and a failed
+/// This assert fires if Round-2 re-pins `n` upward past the retention
+/// window, or if `MAX_CLAIM_AGE_W` is ever lowered. It is the C++ gather's
+/// bound. The Rust gather passes over gaps and can read further;
+/// [`settlement_retention_floor`] and the
+/// [`WINDOW_MIN_OBSERVATION_PER_MILLE`] assert are its bound. Crossing
+/// either does not fork the network (pruning is deterministic in tip
+/// height) — it produces a wrong verdict whose *direction* depends on the
+/// table read (module docs, `SO-D5`): against the serve-credit ledger a
+/// pruned row is a **miss** and an honest archiver is slashed; against the
+/// settlement table a pruned row is **non-observation** and a failed
 /// archiver is not. Whichever constant moves, the fix is a decision about
-/// both, not a bump — and whichever failure you are chasing, this is the
-/// assert for it.
+/// both gathers, not a bump.
 ///
 /// Holds on every schedule: `n`, `W` and the lag are all epoch-denominated, so
 /// the FAKECHAIN-only `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever moves none of the
@@ -201,14 +251,63 @@ const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 /// caveat is gone with the constant.)
 const _: () = assert!(
     (ARCHIVAL_FAILURE_WINDOW_N as u64) + SLASH_SETTLEMENT_TIP_LAG_EPOCHS <= MAX_CLAIM_AGE_W + 1,
-    "the failure window reaches further back than the epoch-scoped archival \
-     tables are retained (prune_archival_epochs_before deletes below \
+    "the C++ failure-window gather reaches further back than the epoch-scoped \
+     archival tables are retained (prune_archival_epochs_before deletes below \
      tip - MAX_CLAIM_AGE_W). Against archival_serve_credit a pruned bit reads as \
-     a MISS and honest archivers are slashed for epochs they served; against \
-     archival_settlement a pruned row reads as NON-OBSERVATION and failed \
-     archivers escape a slash they earned. Both directions are this assert \
+     a MISS and honest archivers are slashed for epochs they served. The Rust \
+     gather's bound is settlement_retention_floor: against archival_settlement \
+     a pruned row reads as NON-OBSERVATION and a failed archiver escapes \
      (ARCHIVAL_SETTLEMENT_WRITER.md SO-D5)"
 );
+
+/// Epochs of settlement rows a store keeps below the tip's, and how far
+/// the failure window's walk may read: **one constant for both**, so the
+/// walk can never read a row a prune may have deleted (ruled 2026-10-09).
+/// It is the claim window, because a settlement row is retained for as
+/// long as its epoch can be cited.
+pub const SETTLEMENT_RETENTION_EPOCHS: u64 = MAX_CLAIM_AGE_W;
+
+/// The least share of a pair's epochs, in thousandths, that must be
+/// observed for the retention horizon to leave the window its full `n`
+/// observations. At or above it the horizon never shortens a walk. Below
+/// it a slash can be missed, which is accepted: a network observing fewer
+/// than half its pair-epochs is degraded past the point where one
+/// unslashed pair matters.
+pub const WINDOW_MIN_OBSERVATION_PER_MILLE: u64 = 500;
+
+/// The epochs the walk can read at an on-time slash pass: the decision
+/// epoch `E` and back to the floor. The pass for `E` connects in epoch
+/// `E + LAG − 1`, so the floor is `E + LAG − 1 − RETENTION` and the span
+/// from it through `E` is `RETENTION + 2 − LAG`.
+const WINDOW_READABLE_EPOCHS: u64 =
+    SETTLEMENT_RETENTION_EPOCHS + 2 - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
+
+const _: () = assert!(
+    WINDOW_MIN_OBSERVATION_PER_MILLE * WINDOW_READABLE_EPOCHS
+        >= 1000 * (ARCHIVAL_FAILURE_WINDOW_N as u64),
+    "at the stated minimum observation rate the retention horizon leaves the failure \
+     window fewer than n observations: the walk would be cut short on a healthy network. \
+     Re-pinning n upward, the retention downward or the slash grace upward crosses this, \
+     and each is a decision about the others"
+);
+
+/// The lowest settlement epoch the failure window may read when the block
+/// at `connecting` runs the slash pass: the horizon below which a store
+/// may have deleted settlement rows. Zero while the chain is younger than
+/// the retention.
+#[must_use]
+pub const fn settlement_retention_floor(
+    schedule: crate::SettlementSchedule,
+    connecting: shekyl_types::BlockHeight,
+) -> shekyl_types::SettlementEpoch {
+    let floor = match schedule
+        .prune_below_epoch_at_height(connecting.to_raw(), SETTLEMENT_RETENTION_EPOCHS)
+    {
+        Some(floor) => floor,
+        None => 0,
+    };
+    shekyl_types::SettlementEpoch::from_raw(floor)
+}
 
 /// **Connect-order coupling — the slash pass must read what the close wrote.**
 /// At every connect the hooks run slash **then** close
@@ -385,6 +484,71 @@ pub fn failure_window_slashable(
     Ok(misses >= ARCHIVAL_FAILURE_WINDOW_M as usize)
 }
 
+/// The Rust slash pass's failure window, gathered from settlement rows.
+///
+/// `decision` is a Missed epoch: the caller enters only then, and this
+/// function does not read it again. `in_standing` is the record's
+/// challengeable run ([`crate::good_through`]). `row` is that epoch's
+/// settlement outcome, or `None` when the pair has no row.
+///
+/// Served and Missed are observations. NonObservation and an absent row
+/// are passed over. The walk stops where `in_standing` is false, at
+/// [`FAILURE_WINDOW_N`] observations, once passes exceed
+/// [`FAILURE_WINDOW_SERVE_BUDGET`], and at `floor`. `floor` is read; nothing
+/// below it is. The decision epoch is the first observation, so a walk that
+/// never steps back is the decision alone.
+///
+/// # Errors
+///
+/// A `row` error is returned as it stands. The fold's own refusals are not
+/// reachable from a walk this function built: the sequence holds the
+/// decision epoch and at most [`FAILURE_WINDOW_N`] observations, strictly
+/// descending, headed by a miss.
+pub fn settlement_window_slashable<E>(
+    decision: SettlementEpoch,
+    floor: SettlementEpoch,
+    mut in_standing: impl FnMut(SettlementEpoch) -> bool,
+    mut row: impl FnMut(SettlementEpoch) -> Result<Option<SettlementOutcome>, E>,
+) -> Result<bool, E> {
+    let window = usize::try_from(FAILURE_WINDOW_N).expect("the window width fits a usize");
+    let mut observations = Vec::with_capacity(window);
+    observations.push(BaselineObservation::missed(decision.to_raw()));
+    let mut passes_seen = 0u32;
+    let mut earlier = decision;
+    while observations.len() < window {
+        let Some(candidate) = earlier
+            .to_raw()
+            .checked_sub(1)
+            .map(SettlementEpoch::from_raw)
+        else {
+            break;
+        };
+        if candidate < floor {
+            break;
+        }
+        earlier = candidate;
+        if !in_standing(earlier) {
+            break;
+        }
+        match row(earlier)? {
+            Some(SettlementOutcome::Served) => {
+                observations.push(BaselineObservation::served(earlier.to_raw()));
+                passes_seen += 1;
+                if passes_seen > FAILURE_WINDOW_SERVE_BUDGET {
+                    break;
+                }
+            }
+            Some(SettlementOutcome::Missed) => {
+                observations.push(BaselineObservation::missed(earlier.to_raw()));
+            }
+            Some(SettlementOutcome::NonObservation) | None => {}
+        }
+    }
+    Ok(failure_window_slashable(&observations).expect(
+        "the gathered window holds the decision epoch and at most FAILURE_WINDOW_N observations",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,11 +576,13 @@ mod tests {
 
     #[test]
     fn the_window_fits_inside_the_archival_retention_horizon() {
-        // The const-assert above is the gate; this states the margin in numbers
-        // so a Round-2 re-pin can see how much room it has before the window
-        // starts reading pruned epochs — as misses against the serve-credit
-        // ledger, as non-observations against the settlement table (SO-D5).
-        // Both tables prune at this one horizon (prune_archival_epochs_before).
+        // The C++ gather's bound (module docs, *The C++ gather*): it stops
+        // at the first gap, so its deepest read is `n − 1` below the
+        // decision epoch. The Rust gather passes over gaps; its bound is
+        // [`settlement_retention_floor`], tested on
+        // [`settlement_window_slashable`]. Both tables prune at one horizon
+        // (`prune_archival_epochs_before`), and a breach fails in the
+        // direction of the table read (SO-D5).
         let deepest_epoch_read = u64::from(FAILURE_WINDOW_N) - 1; // n - 1 below the decision epoch
         let oldest_epoch_retained = MAX_CLAIM_AGE_W - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
         assert!(
@@ -584,5 +750,149 @@ mod tests {
             failure_window_slashable(&too_long),
             Err(FailureWindowError::TooLong { len: 14, n: 13 })
         );
+    }
+
+    fn epoch(raw: u64) -> SettlementEpoch {
+        SettlementEpoch::from_raw(raw)
+    }
+
+    /// The epochs `row` was asked for, and whether the window slashes.
+    fn walk<R>(
+        decision: u64,
+        floor: u64,
+        in_standing: impl FnMut(SettlementEpoch) -> bool,
+        row: R,
+    ) -> (bool, Vec<u64>)
+    where
+        R: FnMut(SettlementEpoch) -> Result<Option<SettlementOutcome>, &'static str>,
+    {
+        let mut asked = Vec::new();
+        let mut row = row;
+        let slash = settlement_window_slashable(epoch(decision), epoch(floor), in_standing, |e| {
+            asked.push(e.to_raw());
+            row(e)
+        })
+        .expect("the row read succeeds");
+        (slash, asked)
+    }
+
+    #[test]
+    fn the_decision_epoch_is_the_first_observation_and_is_not_reread() {
+        let (slash, asked) = walk(8, 0, |_| true, |_| Ok(Some(SettlementOutcome::Missed)));
+        assert!(
+            !asked.contains(&8),
+            "the caller already knows the decision is a miss"
+        );
+        assert_eq!(asked.first().copied(), Some(7));
+        // The decision plus the eight epochs below it is nine misses, under m.
+        assert!(!slash);
+        assert_eq!(asked.last().copied(), Some(0));
+    }
+
+    #[test]
+    fn an_unobserved_epoch_is_passed_over() {
+        let (slash, asked) = walk(
+            12,
+            0,
+            |_| true,
+            |epoch| {
+                let outcome = match epoch.to_raw() {
+                    11 => Some(SettlementOutcome::NonObservation),
+                    9 => None,
+                    _ => Some(SettlementOutcome::Missed),
+                };
+                Ok(outcome)
+            },
+        );
+        // A stop at the NonObservation would leave the decision alone.
+        // Passing over 11 and 9 gathers the decision plus the ten misses
+        // at 10, 8, 7, …, 0: m, so the pair is slashed.
+        assert!(slash);
+        assert!(asked.contains(&11) && asked.contains(&9) && asked.contains(&0));
+    }
+
+    #[test]
+    fn the_walk_stops_where_standing_ends_and_does_not_read_past_it() {
+        let (slash, asked) = walk(
+            20,
+            0,
+            |epoch| epoch.to_raw() >= 15,
+            |_| Ok(Some(SettlementOutcome::Missed)),
+        );
+        assert!(!slash, "five misses inside the run are under m");
+        assert_eq!(asked, (15..=19).rev().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn three_served_epochs_end_the_walk_short_of_a_slash() {
+        let (slash, asked) = walk(
+            20,
+            0,
+            |_| true,
+            |epoch| {
+                let outcome = if epoch.to_raw() >= 17 {
+                    SettlementOutcome::Served
+                } else {
+                    SettlementOutcome::Missed
+                };
+                Ok(Some(outcome))
+            },
+        );
+        assert!(!slash);
+        // The third serve is the one past the budget. The misses below it
+        // would have reached m had the walk continued.
+        assert_eq!(asked, vec![19, 18, 17]);
+    }
+
+    #[test]
+    fn the_retention_floor_is_read_and_nothing_below_it_is() {
+        // The chain case in miniature (ruled 2026-10-09): decision 28, floor
+        // 3. Misses at 1..=10 leave epochs 1 and 2 below the floor, so the
+        // eight inside it plus the decision are nine, under m.
+        let (slash, asked) = walk(
+            28,
+            3,
+            |_| true,
+            |epoch| {
+                let raw = epoch.to_raw();
+                Ok((1..=10).contains(&raw).then_some(SettlementOutcome::Missed))
+            },
+        );
+        assert!(!slash, "two of the ten misses sit below the floor");
+        assert!(!asked.contains(&28));
+        assert!(asked.contains(&3) && asked.contains(&10));
+        assert!(!asked.contains(&2) && !asked.contains(&1));
+
+        // The same gap, with the ten misses moved up onto the floor: 3..=12
+        // plus the decision is m, and the pair is slashed.
+        let (slash, asked) = walk(
+            28,
+            3,
+            |_| true,
+            |epoch| {
+                let raw = epoch.to_raw();
+                Ok((3..=12).contains(&raw).then_some(SettlementOutcome::Missed))
+            },
+        );
+        assert!(slash, "eleven misses at or above the floor");
+        assert!(asked.contains(&3));
+        assert!(!asked.contains(&2));
+    }
+
+    #[test]
+    fn a_row_read_that_fails_is_the_walks_error() {
+        let err = settlement_window_slashable(
+            epoch(4),
+            epoch(0),
+            |_| true,
+            |epoch| {
+                if epoch.to_raw() == 2 {
+                    Err("hole")
+                } else {
+                    Ok(Some(SettlementOutcome::Missed))
+                }
+            },
+        );
+        assert_eq!(err, Err("hole"));
     }
 }
