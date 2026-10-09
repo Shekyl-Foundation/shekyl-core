@@ -405,6 +405,10 @@ jobs:
         # rustdoc warnings; widening to the whole workspace is a separate
         # hygiene task, tracked in FOLLOWUPS.
         #
+        # `shekyl-crypto-pq` is here though it is not on the serving path: its
+        # module docs state the hybrid schemes' contracts, and it joined when
+        # hybrid scheme 3 landed and its eight older warnings were cleared.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -413,7 +417,7 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
-          -p shekyl-capped-stream
+          -p shekyl-capped-stream -p shekyl-crypto-pq
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
