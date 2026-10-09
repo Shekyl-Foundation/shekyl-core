@@ -423,6 +423,7 @@ stale_through = [
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
 ]
 
 [[constant]]
@@ -481,6 +482,7 @@ stale_through = [
   { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. The dial and the gap wait are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
 ]
 
 [[constant]]
