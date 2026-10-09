@@ -42,16 +42,17 @@
 //! successor it lacked. Citing `/shard/` in a design doc is not a bug;
 //! citing it as a format-round candidate still is.
 //!
-//! **The body is a different matter as of `RF-D4` (2026-08-20), and the two
-//! must not be confused.** The response *payload* now carries the ruled
-//! served frame — [`shekyl_curve_tree::served_frame::ServedFrameHeader`],
-//! `leaf_count ‖ padding_len ‖ segment_bytes ‖ padding_bytes` — which **is**
-//! genesis-frozen. The request half is the status line, the header set and
-//! the route; the framed half is everything after `\r\n\r\n`. This crate
-//! *emits* that frame, it does not define it: the definition lives in
-//! `shekyl-curve-tree` because any fetcher already depends on that crate to
-//! recompute `R_k`, and a format owned by the server would make every reader
-//! depend on the writer.
+//! **The body is a different matter, and the two must not be confused.**
+//! The request half is the status line, the header set and the route; the
+//! body is everything after `\r\n\r\n` up to the countersignature
+//! envelope, and this crate neither defines nor frames it. What a
+//! [`ShardProvider`] opens is what the loop streams and signs for: the
+//! `shekyl_wire::shard_frame` body over the shard's archival good
+//! (`SF-D8` amendment 2026-10-08, `ARCHIVAL_SHARD_FETCH.md`), whose
+//! definition lives in `shekyl-wire` because the requester checks it
+//! against the same crate's `txid_parts` rows. The `RF-D4` served frame
+//! this loop wrote ahead of the body (2026-08-20 — 2026-10-08) described
+//! the retired leaf-segment unit and is deleted, not adapted.
 //!
 //! # What this crate is, and is not
 //!
@@ -66,8 +67,8 @@
 //! either.
 //!
 //! **Is not:** a pass-record builder, a key holder, the *definition* of a
-//! wire format (it emits `RF-D4`'s frame; `shekyl-curve-tree` owns it), a
-//! consensus surface, onion registration, or the W₂ rig. The rig extends
+//! wire format (the body is the provider's; `shekyl-wire` owns its frame),
+//! a consensus surface, onion registration, or the W₂ rig. The rig extends
 //! this loop with the concurrent-batch measurement shape (§9); the
 //! placeholder [`serve::MAX_INFLIGHT`] (SPIKE-PIN-2) is derived there on
 //! the provisioning-floor hardware (rule 76).

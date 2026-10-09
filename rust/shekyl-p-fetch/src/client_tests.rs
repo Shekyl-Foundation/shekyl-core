@@ -512,7 +512,7 @@ async fn a_503_is_a_failed_read_with_no_retry() {
 
 #[tokio::test]
 async fn a_body_closed_with_the_refusal_trailer_is_a_failed_read() {
-    // `P` sent the whole frame and wrote the refusal trailer where the
+    // `P` sent the whole body and wrote the refusal trailer where the
     // signature goes. That is `P` saying it did not sign: a failed read,
     // no retry. The unsigned bytes never reach the hole.
     let keys = keys();

@@ -30,7 +30,7 @@
 //! * **`crypto_bench_serve_read_and_fold`** — the read-and-hash loop on its
 //!   own, at the serve loop's chunk size.
 //! * **`crypto_bench_serve_digest_alone`** — the one-shot delivery digest
-//!   over the same framed bytes.
+//!   over the same body bytes.
 //!
 //! The last two exist for their difference. The floor run of 2026-10-06
 //! (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`, run 3) put
@@ -171,7 +171,7 @@ impl ShardProvider for OneShard {
         if shard_id != SHARD_ID {
             return Ok(None);
         }
-        Ok(ShardBody::flat(Arc::clone(&self.bytes)))
+        Ok(Some(ShardBody::flat(Arc::clone(&self.bytes))))
     }
 }
 
@@ -184,10 +184,10 @@ struct Fixture {
     head: Vec<u8>,
     out: Vec<u8>,
     expected_len: usize,
-    /// The response body ahead of the envelope: frame header, then shard.
+    /// The response body ahead of the envelope: the shard's bytes, exactly.
     /// What the delivery digest is over.
-    framed: Vec<u8>,
-    /// The delivery digest of [`Self::framed`] under [`NONCE`].
+    body: Vec<u8>,
+    /// The delivery digest of [`Self::body`] under [`NONCE`].
     digest: [u8; 32],
 }
 
@@ -222,13 +222,13 @@ fn fixture(leaf_count: usize) -> Fixture {
         + 4;
     assert!(
         witness.starts_with(b"HTTP/1.1 200 OK\r\n")
-            && witness.len() > body_at + leaf_count * LEAF_BYTES + SIGNATURE_ENVELOPE_LEN,
-        "a served response is a 200 carrying the frame, the body and the envelope"
+            && witness.len() == body_at + leaf_count * LEAF_BYTES + SIGNATURE_ENVELOPE_LEN,
+        "a served response is a 200 carrying the body and the envelope, nothing else"
     );
-    let framed = witness[body_at..witness.len() - SIGNATURE_ENVELOPE_LEN].to_vec();
+    let body = witness[body_at..witness.len() - SIGNATURE_ENVELOPE_LEN].to_vec();
     // The three digest paths agree before any of them is measured, so the
     // cells compare the cost of one result and not of three.
-    let digest = pass_delivery_digest(&NONCE, &framed);
+    let digest = pass_delivery_digest(&NONCE, &body);
     assert_eq!(
         read_and_fold_in_memory(&*provider, SHARD_ID, &NONCE),
         Some(digest),
@@ -242,7 +242,7 @@ fn fixture(leaf_count: usize) -> Fixture {
         // Pre-sized so the buffer's growth is not what the gate measures.
         out: Vec::with_capacity(expected_len),
         expected_len,
-        framed,
+        body,
         digest,
     }
 }
@@ -294,8 +294,8 @@ fn crypto_bench_serve_prehead(mut fx: Fixture) -> Fixture {
     );
     assert!(black_box(ready), "the request must be admitted");
     assert!(
-        fx.out.len() < fx.expected_len - fx.framed.len(),
-        "only the head and the frame header are rendered"
+        fx.out.len() == fx.expected_len - fx.body.len() - SIGNATURE_ENVELOPE_LEN,
+        "only the head is rendered"
     );
     fx
 }
@@ -315,7 +315,7 @@ fn crypto_bench_serve_read_and_fold(fx: Fixture) -> Fixture {
 #[bench::eighth_segment(setup = eighth_segment)]
 #[bench::full_segment(setup = full_segment)]
 fn crypto_bench_serve_digest_alone(fx: Fixture) -> Fixture {
-    let digest = pass_delivery_digest(black_box(&NONCE), black_box(&fx.framed));
+    let digest = pass_delivery_digest(black_box(&NONCE), black_box(&fx.body));
     assert_eq!(black_box(digest), fx.digest);
     fx
 }

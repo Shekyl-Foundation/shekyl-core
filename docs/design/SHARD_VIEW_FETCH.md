@@ -42,8 +42,9 @@ live document still carried on 2026-10-08.
    were also skeleton-derivable would make the fetch pointless — exactly the
    wrong shape, since the fetch *is* the point (`SV-D2`).
 4. **Nothing in the view path was buildable.** `shekyl-p-fetch` ships the
-   leaf unit (`ServedFrameHeader`, `R_k` recompute); the tx-range body is
-   fetch Sub-PR 2, unbuilt; `shekyl_daemon_operator_shard_fetch` is a typed
+   leaf unit (`ServedFrameHeader`, `R_k` recompute — the frame deleted
+   2026-10-08, `R_k` leaves with the client commit); the tx-range body is
+   fetch Sub-PR 2, unbuilt at round open; `shekyl_daemon_operator_shard_fetch` is a typed
    miss; the serve side for `W`-shard bodies is the wallet lane's store
    rebuild (`WSS-`, behind `WSS-Q1`). The ordering in §4 follows from this.
 5. **The method is admin-only and must stay so while it fetches** (`SV-D6`).
@@ -213,9 +214,12 @@ branch.
 | 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route | this round | 3 |
 
-Until 2c lands every fetch is a typed miss and every viewer shows *"this
-archive could not be retrieved"* — a visible state, never an empty picture
-(rule 82).
+Until 2c lands every fetch against the still-wired leaf-segment provider
+ends `ContentRefused` — the body `P` signs is not the tx-range body the
+client expects — and every viewer shows *"this archive could not be
+retrieved"*, a visible state, never an empty picture (rule 82). That
+interim refusal is a property of the provider, not of `P`: no consumer may
+read it as evidence against the holder (`SF-D8` amendment, 2026-10-08).
 
 ---
 

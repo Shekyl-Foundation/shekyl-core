@@ -65,9 +65,10 @@ const UNRESOLVED_ENDPOINT: [u8; 32] = [0x42; 32];
 /// the same endpoint. The value itself is not a protocol constant.
 pub const FIXTURE_SHARD_ID: u64 = 3;
 
-/// Bytes that fill one leaf and no more, so a served frame of this body
-/// declares `leaf_count == 1`. The modulus keeps the bytes from being a
-/// run of zeroes; a swapped envelope and frame fails a comparison with it.
+/// A small fixture body: one leaf's worth of bytes (the serve loop is
+/// body-agnostic, so any length serves; this one is short). The modulus
+/// keeps the bytes from being a run of zeroes, so a body swapped with
+/// the envelope fails a comparison with it.
 #[must_use]
 pub fn one_leaf() -> Arc<[u8]> {
     const DISTINCT: usize = 251;
@@ -121,9 +122,7 @@ impl ShardProvider for OneShard {
         if shard_id != self.shard_id {
             return Ok(None);
         }
-        // A body that is not a whole number of leaves is a miss. Callers
-        // that want a served frame pass `one_leaf` or a multiple of it.
-        Ok(ShardBody::flat(Arc::clone(&self.body)))
+        Ok(Some(ShardBody::flat(Arc::clone(&self.body))))
     }
 }
 

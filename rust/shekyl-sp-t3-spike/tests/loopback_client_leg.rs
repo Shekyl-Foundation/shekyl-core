@@ -115,10 +115,7 @@ async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
 
     // The length the apparatus would derive at bring-up, through the same
     // contract the endpoint writes with.
-    let expected = ShardBody::flat(payload())
-        .expect("four whole leaves")
-        .header()
-        .framed_len();
+    let expected = ShardBody::flat(payload()).len();
     assert_eq!(u64::try_from(len).expect("fits"), expected);
     assert_eq!(ep.served_count(), 1);
 }

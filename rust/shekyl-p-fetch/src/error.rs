@@ -58,7 +58,7 @@ pub enum FetchError {
     ///
     /// **A failed read: name another `P`.** No retry of this one.
     Unavailable,
-    /// **`P` sent the whole frame and then said it would not sign.** A 200
+    /// **`P` sent the whole body and then said it would not sign.** A 200
     /// of its full declared length whose envelope is the refusal trailer
     /// (`serving_route::is_refusal_trailer`) in place of a signature. `P`
     /// holds the shard and served it; its signer then failed. The body is
@@ -68,7 +68,7 @@ pub enum FetchError {
     /// **A failed read: name another `P`.** No retry. This is `P`'s own
     /// statement, in bytes only `P` can put on the stream, and that is why
     /// it is not inferred from a response that stopped: a relay can cut a
-    /// stream at any byte, the frame's end included, and the same guard
+    /// stream at any byte, the body's end included, and the same guard
     /// sits on every retry. A cut is [`Stall::Truncated`] wherever it
     /// falls.
     Unsigned,
@@ -147,7 +147,7 @@ impl fmt::Display for FetchError {
             Self::Rejected => f.write_str("rejected: P answered 400"),
             Self::Unavailable => f.write_str("unavailable: P answered 503"),
             Self::Unsigned => {
-                f.write_str("P sent the whole frame and a refusal in place of the countersignature")
+                f.write_str("P sent the whole body and a refusal in place of the countersignature")
             }
             Self::Malformed(m) => write!(f, "malformed response: {m}"),
             Self::BadCountersignature => {

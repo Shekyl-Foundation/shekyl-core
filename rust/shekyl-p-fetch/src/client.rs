@@ -64,7 +64,7 @@ pub const MAX_INFLIGHT: usize = 8;
 /// canonical `HybridSignature` encoding and nothing else (`SF-D8`). Both
 /// ends read `HybridSignature::CANONICAL_LEN`; this name is the
 /// fetch-side statement that the body's **last** bytes are a signature —
-/// `P` releases it only after the frame, so a countersignature in hand
+/// `P` releases it only after the body, so a countersignature in hand
 /// means the whole read was delivered.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
@@ -73,20 +73,20 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 ///
 /// `content-length` comes from a potentially adversarial `P`; an
 /// unbounded one is a pre-allocation and resource-exhaustion path. The
-/// figure is `envelope + frame-header-max + 2 × segment`: the `RF-D4`
-/// frame bounds padding at one segment's worth (its
-/// `ServedFrameHeader::padding_len` contract), so a well-formed body is
-/// never more than twice a segment behind two varint lengths.
+/// figure is `envelope + 20 + 2 × leaf-segment`, the bound the retired
+/// `RF-D4` frame admitted (two varint lengths, padding capped at one
+/// segment).
 ///
 /// **This is the one leaf-shaped number in the crate, and it is
 /// provisional by name.** It is a *resource* bound, not a parse: the crate
-/// still hands the bytes to the content-verify hole unparsed. When
-/// `PDM-Q6` retires the leaf shard for a tx-range body, this function is
-/// re-derived from that unit's maximum (sub-PR 2), and nothing else here
-/// moves.
+/// still hands the bytes to the content-verify hole unparsed. The serve
+/// side no longer writes the frame (`SF-D8` amendment 2026-10-08), and
+/// the body's exact length is derivable from the requester's own skeleton
+/// rows; the Sub-PR 2 client replaces this figure with that derivation
+/// (`ExpectedShard::max_response_len`) and nothing else here moves.
 #[must_use]
 pub fn max_body_bytes() -> u64 {
-    // Two LEB128 `u64` lengths lead the frame; each is at most 10 bytes.
+    // The retired frame's two LEB128 `u64` lengths, at most 10 bytes each.
     const FRAME_HEADER_MAX: u64 = 2 * 10;
     let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).expect("segment fits u64");
     u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64")
@@ -661,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn the_body_ceiling_is_two_segments_behind_the_envelope_and_frame_header() {
+    fn the_body_ceiling_is_two_leaf_segments_behind_the_envelope_and_twenty() {
         let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).unwrap();
         assert_eq!(max_body_bytes(), 3385 + 20 + 2 * segment);
         // The figure the round quoted: ~3.33 MB a segment, so ~6.7 MB ceiling.

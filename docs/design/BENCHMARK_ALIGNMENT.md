@@ -485,9 +485,11 @@ the documents that record it state what the second read and the digest cost.
    carries the nonce and `D`, so anyone who later holds the shard can
    recompute `D` and check a historical pass. A pass signed for bytes that
    were not the shard is permanent evidence against its signer. This holds
-   while the frame is a function of the shard, which the write-zero padding
-   rule makes it today (`rust/shekyl-curve-tree/src/served_frame.rs:162`);
-   a padding scheme keeps it only if the padded frame stays recomputable.
+   while the body is a function of the shard, which it is by construction
+   since 2026-10-08: the serve loop writes the provider's bytes with no
+   frame or padding of its own (~~the write-zero padding rule of
+   `served_frame.rs:162`~~, deleted); a padding scheme, if one is ever
+   ruled, keeps it only if the padded body stays recomputable.
 
 `D` does not show that the persona stores the shard; that is unchanged in
 every option below.

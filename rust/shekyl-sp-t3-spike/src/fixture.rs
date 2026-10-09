@@ -219,7 +219,7 @@ impl ShardProvider for FixtureShardProvider {
         else {
             return Ok(None);
         };
-        Ok(ShardBody::flat(Arc::clone(payload)))
+        Ok(Some(ShardBody::flat(Arc::clone(payload))))
     }
 }
 
@@ -237,11 +237,11 @@ impl std::fmt::Debug for FixtureShardProvider {
 /// `0` (the shard, 1×), `1` (its first half, ½×) and `2` (its first quarter, ¼×) —
 /// a 4× byte span, every size a whole number of leaves.
 ///
-/// The shard is the top of the ladder because it is the largest object the
-/// production frame can carry: `ServedFrameHeader::for_segment` refuses a leaf
-/// count past one segment, so a larger object is unservable, not merely unusual
-/// (the client's `max_body_bytes` bound of two segments is headroom for padding,
-/// not a second segment).
+/// The shard is the top of the ladder because it is the size the W₂
+/// question asks about (`SHARD_BYTES`); the serve loop itself is
+/// body-agnostic and would stream a larger object, and the client's
+/// provisional `max_body_bytes` ceiling (two leaf segments) is the one
+/// bound a larger object would meet.
 ///
 /// Nothing here is synthetic in the sense the honesty gate forbids: every byte
 /// served is a byte of the extracted shard. What varies is only how many of them
@@ -270,19 +270,19 @@ mod tests {
         assert!((3_320_000..3_340_000).contains(&SHARD_BYTES));
     }
 
-    /// The body a reader actually receives is the frame header plus the
-    /// shard, and the apparatus derives that number through the production
-    /// contract rather than taking it from a caller. Pinned here because the
-    /// first version of the harness compared against `SHARD_BYTES` directly,
-    /// and when RF-D4's frame landed every probe went stale at once.
-    ///
-    /// `4` is the hand-derived header for a full unpadded segment
-    /// (`88 CB 01 00`, `ARCHIVAL_RESPONSE_FORMAT.md` §3.5).
+    /// The body a reader actually receives is the shard's bytes exactly —
+    /// the serve loop writes nothing of its own ahead of them — and the
+    /// apparatus derives that number through the production contract
+    /// rather than taking it from a caller. Pinned here because the first
+    /// version of the harness compared against `SHARD_BYTES` directly, and
+    /// when the since-retired `RF-D4` frame landed every probe went stale
+    /// at once; the derivation is what keeps the next wire move from doing
+    /// the same.
     #[test]
-    fn served_body_is_the_frame_plus_the_shard() {
+    fn served_body_is_the_shard_through_the_production_contract() {
         let payload: std::sync::Arc<[u8]> = vec![0u8; SHARD_BYTES].into();
-        let body = shekyl_p_serve::ShardBody::flat(payload).expect("a full shard is framable");
-        assert_eq!(body.header().framed_len(), (SHARD_BYTES + 4) as u64);
+        let body = shekyl_p_serve::ShardBody::flat(payload);
+        assert_eq!(body.len(), SHARD_BYTES as u64);
     }
 
     #[test]
@@ -349,7 +349,10 @@ mod tests {
                 "{} is not whole leaves",
                 object.len()
             );
-            assert!(shekyl_p_serve::ShardBody::flat(Arc::clone(object)).is_some());
+            assert_eq!(
+                shekyl_p_serve::ShardBody::flat(Arc::clone(object)).len(),
+                object.len() as u64
+            );
         }
         let one = fixture.bytes();
         assert!(
@@ -358,9 +361,6 @@ mod tests {
         );
         assert_eq!(&ladder[1][..], &one[..SHARD_BYTES / 2]);
         assert_eq!(&ladder[2][..], &one[..SHARD_BYTES / 4]);
-        // One leaf past a segment is unservable — why the shard tops the ladder.
-        let past: Arc<[u8]> = vec![0u8; SHARD_BYTES + LEAF_BYTES].into();
-        assert!(shekyl_p_serve::ShardBody::flat(past).is_none());
     }
 
     /// Shard `i` is object `i`; past the end is the ordinary miss.
@@ -374,7 +374,7 @@ mod tests {
         for (id, leaves) in [(0u64, 1u64), (1, 2)] {
             let body = provider.shard_bytes(id).expect("ok").expect("served");
             let payload = leaves * u64::try_from(LEAF_BYTES).expect("fits");
-            assert!(body.header().framed_len() > payload);
+            assert_eq!(body.len(), payload);
         }
         assert!(provider.shard_bytes(2).expect("ok").is_none());
     }

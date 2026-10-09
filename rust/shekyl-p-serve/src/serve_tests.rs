@@ -19,7 +19,6 @@ use shekyl_archival_retention::pass_anchor::{
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
-use shekyl_curve_tree::{ServedFrameHeader, LEAF_BYTES};
 use shekyl_types::BlockHeight;
 
 /// The test persona's own height, and the anchor a requester at the same
@@ -60,69 +59,30 @@ struct FixtureProvider {
 }
 
 impl FixtureProvider {
-    /// Every fixture payload is asserted servable **here**, at
-    /// construction. `ShardBody::flat` returns `None` for anything it
-    /// cannot frame, so without this a bad fixture would arrive as a 404
-    /// and read as a routing bug — the failure would be real but would
-    /// name the wrong thing.
-    ///
-    /// Two constraints, one authority each. The leaf-multiple check is
-    /// spelled out because its message can name the leaf width; the
-    /// bound check goes through [`ServedFrameHeader::for_segment`] — the
-    /// same call the production path makes — so this guard cannot drift
-    /// from `flat`'s actual acceptance rule. (Its first version did
-    /// exactly that: it asserted the multiple and silently let an
-    /// oversized fixture fall through to the 404 it claimed to prevent.)
+    /// The loop is body-agnostic (`SF-D8` amendment 2026-10-08): whatever
+    /// the provider holds is what it streams and signs for, so a fixture
+    /// is any byte string. The one thing the loop still refuses is a body
+    /// that is not the length it was opened at, and that is the store's
+    /// to get wrong, not the fixture's.
     fn new(shards: impl IntoIterator<Item = (u64, Vec<u8>)>) -> Arc<Self> {
         Arc::new(Self {
             shards: shards
                 .into_iter()
-                .map(|(id, bytes)| {
-                    assert!(
-                        bytes.len().is_multiple_of(LEAF_BYTES),
-                        "fixture for shard {id} is {} bytes, not a whole number of \
-                         {LEAF_BYTES}-byte leaves — a served body is a leaf array",
-                        bytes.len()
-                    );
-                    if let Err(e) = ServedFrameHeader::for_segment(bytes.len() / LEAF_BYTES) {
-                        panic!("fixture for shard {id} is not servable: {e}");
-                    }
-                    (id, Arc::from(bytes.into_boxed_slice()))
-                })
+                .map(|(id, bytes)| (id, Arc::from(bytes.into_boxed_slice())))
                 .collect(),
         })
     }
 }
 
-/// The guards above demonstrated firing — a guard that has never fired is
-/// indistinguishable from one that cannot (the defect its first version
-/// had, caught in review: the oversized case fell through silently).
-#[test]
-#[should_panic(expected = "not servable")]
-fn an_oversized_fixture_fails_at_construction_not_as_a_404() {
-    let leaves = shekyl_curve_tree::leaves_per_segment() + 1;
-    FixtureProvider::new([(0, vec![0u8; leaves * LEAF_BYTES])]);
-}
-
-#[test]
-#[should_panic(expected = "not a whole number")]
-fn a_ragged_fixture_fails_at_construction_not_as_a_404() {
-    FixtureProvider::new([(0, vec![0u8; LEAF_BYTES - 1])]);
-}
-
 impl ShardProvider for FixtureProvider {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        Ok(self
-            .shards
-            .get(&shard_id)
-            .cloned()
-            .and_then(ShardBody::flat))
+        Ok(self.shards.get(&shard_id).cloned().map(ShardBody::flat))
     }
 }
 
-/// `n` leaves of distinguishable filler.
-fn leaves(n: usize, seed: u8) -> Vec<u8> {
-    (0..n * LEAF_BYTES)
+/// `n` bytes of distinguishable filler.
+fn filler(n: usize, seed: u8) -> Vec<u8> {
+    (0..n)
         .map(|i| (u8::try_from(i % 251).expect("modulus is under 256")).wrapping_add(seed))
         .collect()
 }
@@ -131,15 +91,13 @@ fn leaves(n: usize, seed: u8) -> Vec<u8> {
 struct Served {
     head: String,
     signature: HybridSignature,
-    /// The body ahead of the envelope, byte for byte: frame header, then
-    /// payload. What the countersignature's delivery digest is over.
-    framed: Vec<u8>,
-    frame: ServedFrameHeader,
+    /// The body ahead of the envelope, byte for byte. What the
+    /// countersignature's delivery digest is over.
     body: Vec<u8>,
 }
 
-/// Split a 200 response into head, frame header, payload, and the
-/// countersignature envelope that closes it.
+/// Split a 200 response into head, body, and the countersignature
+/// envelope that closes it.
 fn parse_served(response: &[u8]) -> Served {
     let end = response
         .windows(4)
@@ -147,16 +105,12 @@ fn parse_served(response: &[u8]) -> Served {
         .expect("response has a head");
     let head = String::from_utf8_lossy(&response[..end]).to_string();
     let after_head = &response[end + 4..];
-    let (mut body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
+    let (body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
     let signature =
         HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
-    let framed = body.to_vec();
-    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
     Served {
         head,
         signature,
-        framed,
-        frame,
         body: body.to_vec(),
     }
 }
@@ -327,7 +281,7 @@ async fn every_invalid_request_is_the_one_bare_400_held_or_not() {
     // refused. A 405, a 500 or a second 400 shape would be an
     // implementation fingerprint. It does NOT cover incomplete heads
     // (oversized / EOF / timeout): those close, like over-capacity.
-    let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(3, filler(128, 7))])).await;
     let mut seen: Vec<Vec<u8>> = Vec::new();
     for (method, path) in [
         ("GET", "/"),
@@ -427,7 +381,7 @@ async fn only_a_valid_request_for_an_unheld_shard_is_the_404() {
     // held. A store that could not answer is this persona's fault and is
     // the bare 503 — never the 404, which would say "not held" of a shard
     // the chain says is.
-    let (ep, _) = bind(FixtureProvider::new([(3, leaves(1, 7))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(3, filler(128, 7))])).await;
     assert_eq!(
         fetch(ep.addr(), "/shard/4").await,
         render_not_found().as_bytes()
@@ -452,7 +406,7 @@ async fn a_request_body_does_not_reset_the_response() {
     // deliver the whole bare 400 — the invariant says every invalid
     // request renders *the same bytes*, and "reset instead" is not the
     // same bytes.
-    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(0, filler(128, 1))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
     let body = vec![b'z'; 64 * 1024];
     s.write_all(
@@ -558,47 +512,36 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     // The body is streamed in WRITE_CHUNK_BYTES pieces; a chunking or
     // cursor bug shows up as reordering, duplication, or a short body,
     // none of which a same-length assertion alone would catch.
-    // Three full chunks plus one leaf: still a short final chunk (the
-    // cursor bug this test exists for), now a whole number of leaves.
-    assert!(WRITE_CHUNK_BYTES.is_multiple_of(LEAF_BYTES));
-    let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + LEAF_BYTES)
+    // Three full chunks plus a tail: a short final chunk is the cursor
+    // bug this test exists for.
+    let payload: Vec<u8> = (0..WRITE_CHUNK_BYTES * 3 + 128)
         .map(|i| u8::try_from(i % 253).expect("modulus is under 256"))
         .collect();
     let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
-    let Served {
-        head, frame, body, ..
-    } = parse_served(&r);
-    let expected_len = SIGNATURE_ENVELOPE_LEN as u64 + frame.framed_len();
+    let Served { head, body, .. } = parse_served(&r);
+    let expected_len = SIGNATURE_ENVELOPE_LEN + payload.len();
     assert!(head.contains(&format!("content-length: {expected_len}")));
-    assert_eq!(
-        frame.framed_len(),
-        (frame.encoded_len() + payload.len()) as u64,
-        "the frame covers its header as well as the segment"
-    );
     assert_eq!(body, payload);
 }
 
 #[tokio::test]
-async fn the_served_body_is_the_frame_then_the_countersignature() {
-    // RF-D4 then SF-D8 on the wire. The frame tells the witness where the
-    // segment bytes stop, so a padded response is not mistaken for a
-    // longer segment. The signature binds the response to the request the
-    // witness made (nonce, anchor, shard id) and comes last, so it is in
-    // hand only once the frame has been delivered. One `content-length`
-    // covers both.
-    let payload = leaves(9, 0x40);
+async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
+    // The body then SF-D8 on the wire. The loop writes the provider's
+    // bytes exactly — no frame of its own ahead of them — and the
+    // signature binds the response to the request the witness made
+    // (nonce, anchor, shard id) and comes last, so it is in hand only
+    // once the body has been delivered. One `content-length` covers both.
+    let payload = filler(9 * 128, 0x40);
     let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
 
     let Served {
         head,
         signature,
-        framed,
-        frame,
         body,
     } = parse_served(&r);
-    let digest = pass_delivery_digest(&NONCE, &framed);
+    let digest = pass_delivery_digest(&NONCE, &body);
     assert!(head.starts_with("HTTP/1.1 200 OK"));
     // The countersignature verifies through the consensus verifier the
     // daemon runs, against exactly the header the request carried.
@@ -635,11 +578,11 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
     .is_err());
     // ...and to *these* bytes: the digest of a body one byte different, or
     // of this body under another request's nonce, does not verify.
-    let mut tampered = framed.clone();
+    let mut tampered = body.clone();
     *tampered.last_mut().expect("a served shard is not empty") ^= 1;
     for other in [
         pass_delivery_digest(&NONCE, &tampered),
-        pass_delivery_digest(&[0u8; 32], &framed),
+        pass_delivery_digest(&[0u8; 32], &body),
     ] {
         assert!(verify_pass_transcript(
             signer.public_key(),
@@ -653,19 +596,13 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
         .is_err());
     }
 
-    assert_eq!(frame.leaf_count(), 9);
-    assert_eq!(frame.segment_bytes(), payload.len() as u64);
-    assert_eq!(
-        frame.padding_len(),
-        0,
-        "writers emit zero padding until a scheme is specified"
-    );
-    // The frame *delimits*: everything the header accounts for is
-    // present, and nothing beyond it arrived.
+    // The body is the provider's bytes, exactly, and the declared length
+    // accounts for every byte that arrived: nothing of the loop's own
+    // ahead of the body, nothing beyond the envelope.
     assert_eq!(body, payload);
     assert_eq!(
-        r.len() as u64 - (head.len() + 4) as u64,
-        SIGNATURE_ENVELOPE_LEN as u64 + frame.framed_len()
+        r.len() - (head.len() + 4),
+        SIGNATURE_ENVELOPE_LEN + payload.len()
     );
 }
 
@@ -673,7 +610,7 @@ async fn the_served_body_is_the_frame_then_the_countersignature() {
 async fn the_gate_is_two_sided_with_the_admission_lag() {
     // `anchor_height ∈ [p − 720 − L, p − 720 + L]`: both edges serve, one
     // past either edge is the bare 400 with no store read and no sign.
-    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 1))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(0, filler(128, 1))])).await;
     let l = PASS_ANCHOR_LAG_BLOCKS.to_raw();
     for (anchor, servable) in [
         (IN_GATE_ANCHOR, true),
@@ -732,7 +669,7 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     }
     let key = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, filler(128, 1))]), signer)
         .await
         .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
@@ -743,29 +680,22 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
 }
 
 #[tokio::test]
-async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
-    // The constructor-level half of the same rule, at the wire: the
-    // frame declares a leaf count, so bytes that are not a leaf array
-    // have no representable header. Rendering the bare 404 — rather
-    // than a body some witness would then fail to verify — is what
-    // keeps an unframeable payload from looking like a serve.
-    struct RaggedProvider;
-    impl ShardProvider for RaggedProvider {
-        fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-            // One byte short of a leaf.
-            Ok(ShardBody::flat(Arc::from(
-                vec![0u8; LEAF_BYTES - 1].into_boxed_slice(),
-            )))
-        }
+async fn the_loop_serves_a_body_of_any_length_it_was_opened_at() {
+    // The loop is unit-agnostic (`SF-D8` amendment 2026-10-08): it has no
+    // notion of leaf, segment or frame to refuse a body against, so a
+    // body of any length is streamed and signed for, and the requester's
+    // skeleton rows are what judge its content. Before the amendment a
+    // body that was not a whole number of 128-byte leaves was the bare
+    // 404 here; that rule described the retired unit and left with it.
+    for len in [1usize, 127, 129, 1_000] {
+        let payload = filler(len, 0x11);
+        let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
+        let r = fetch(ep.addr(), "/shard/0").await;
+        let Served { head, body, .. } = parse_served(&r);
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{len} bytes");
+        assert_eq!(body, payload, "{len} bytes");
+        assert_eq!(ep.served_count(), 1, "{len} bytes");
     }
-    let (ep, _) = bind(Arc::new(RaggedProvider)).await;
-    let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(
-        r,
-        render_not_found().as_bytes(),
-        "an unframeable body is not served"
-    );
-    assert_eq!(ep.served_count(), 0);
 }
 
 #[tokio::test]
@@ -774,7 +704,7 @@ async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
     // until READ_TIMEOUT). Poll until the accept loop has actually
     // filled the cap and starts shedding by CLOSE — never a fixed
     // sleep that flakes under load.
-    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 3))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(0, filler(128, 3))])).await;
 
     let mut held: Vec<TcpStream> = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -836,7 +766,7 @@ async fn concurrency_past_the_cap_is_refused_by_close_not_by_a_status_code() {
 async fn the_cap_does_not_refuse_below_it() {
     // Negative control: without it, a cap of zero would pass
     // "refusals happen" while breaking the endpoint entirely.
-    let payload = leaves(4, 9);
+    let payload = filler(512, 9);
     let (ep, _) = bind(FixtureProvider::new([(0, payload)])).await;
     for _ in 0..8 {
         let r = fetch(ep.addr(), "/shard/0").await;
@@ -851,7 +781,7 @@ async fn oversized_request_head_is_closed_not_answered() {
     // Incomplete / hostile head: close with no HTTP bytes — same wire
     // class as over-capacity, not a complete-head status. The
     // pre-allocation bound is enforced while reading.
-    let (ep, _) = bind(FixtureProvider::new([(0, leaves(1, 0))])).await;
+    let (ep, _) = bind(FixtureProvider::new([(0, filler(128, 0))])).await;
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
     s.write_all(b"GET /shard/0 HTTP/1.1\r\n")
         .await

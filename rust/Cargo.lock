@@ -4069,7 +4069,6 @@ dependencies = [
  "serde_json",
  "shekyl-consensus",
  "shekyl-crypto-pq",
- "shekyl-curve-io",
  "shekyl-fcmp",
  "shekyl-types",
  "tempfile",

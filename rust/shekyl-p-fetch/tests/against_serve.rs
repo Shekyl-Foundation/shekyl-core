@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
-use shekyl_curve_tree::ServedFrameHeader;
 use shekyl_p_fetch::{FetchError, NextMove, PFetchClient, Timeouts};
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, one_leaf, request_header, AcceptAny, PServeEndpoint,
@@ -61,13 +60,9 @@ async fn fetch_client_accepts_a_real_served_body() {
         .await
         .expect("the two stacks speak the same contract");
     assert_eq!(shard.shard_id(), FIXTURE_SHARD_ID);
-    // Envelope already stripped; remaining bytes are RF-D4 then the
-    // segment. The transport crate does not parse the frame — this test
-    // does, so a swapped envelope/frame order fails here.
-    let mut rest = shard.body();
-    let frame = ServedFrameHeader::read(&mut rest).expect("RF-D4 frame ahead of the envelope");
-    assert_eq!(frame.leaf_count(), 1);
-    assert_eq!(rest, one_leaf().as_ref());
+    // Envelope already stripped; what remains is the provider's body,
+    // exactly — the loop writes nothing of its own ahead of it.
+    assert_eq!(shard.body(), one_leaf().as_ref());
 }
 
 #[tokio::test]

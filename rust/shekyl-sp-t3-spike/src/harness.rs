@@ -482,12 +482,12 @@ pub struct Apparatus {
     /// passed in.**
     ///
     /// Computed once at bring-up from the payload, through the production
-    /// serving contract ([`shekyl_p_serve::ShardBody::header`]), so it is
-    /// the length the endpoint will actually write: `RF-D4`'s frame header
-    /// plus the leaf bytes. (The client strips the countersignature envelope
-    /// before handing the body over, so the envelope is not in this figure.)
-    /// Before this field existed every caller passed the raw fixture length,
-    /// and when the frame landed that number went stale at four call sites at
+    /// serving contract ([`shekyl_p_serve::ShardBody::len`]), so it is the
+    /// length the endpoint will actually write. (The client strips the
+    /// countersignature envelope before handing the body over, so the
+    /// envelope is not in this figure.) Before this field existed every
+    /// caller passed the raw fixture length, and when the since-retired
+    /// `RF-D4` frame landed that number went stale at four call sites at
     /// once. A number a caller supplies is a number that drifts when the wire
     /// moves; a number the apparatus derives from the same code that writes
     /// the wire cannot. One length per served object, indexed by shard id;
@@ -530,13 +530,9 @@ pub enum ApparatusError {
         /// countersignature) — the one thing a reader needs to fix the rig.
         reason: String,
     },
-    /// The payload cannot be served at all: not a whole number of leaves, or
-    /// more than one segment. Refused at bring-up, because an apparatus that
+    /// No object to serve. Refused at bring-up, because an apparatus that
     /// serves a 404 for every shard measures nothing.
-    Unframeable {
-        /// The offending payload length.
-        bytes: usize,
-    },
+    NoObjects,
 }
 
 impl std::fmt::Display for ApparatusError {
@@ -563,11 +559,7 @@ impl std::fmt::Display for ApparatusError {
                 "persona {persona} answered but the client refused the exchange: {reason} \
                  (anchor gate, key, or fixture disagree)"
             ),
-            Self::Unframeable { bytes } => write!(
-                f,
-                "payload of {bytes} bytes is not servable (not a whole number of leaves, or \
-                 more than one segment)"
-            ),
+            Self::NoObjects => f.write_str("no object to serve: the object list is empty"),
         }
     }
 }
@@ -635,21 +627,16 @@ impl Apparatus {
         // Each object's expected body length, derived through the production
         // contract BEFORE any tor is launched: the same `ShardBody::flat` the
         // fixture provider will call per request, so what the probes compare
-        // against is what the endpoint will write — frame header included.
-        let expected_lens = objects
+        // against is what the endpoint will write.
+        let expected_lens: Vec<usize> = objects
             .iter()
             .map(|payload| {
-                let framed = ShardBody::flat(Arc::clone(payload))
-                    .ok_or(ApparatusError::Unframeable {
-                        bytes: payload.len(),
-                    })?
-                    .header()
-                    .framed_len();
-                Ok(usize::try_from(framed).expect("framed length fits usize"))
+                let len = ShardBody::flat(Arc::clone(payload)).len();
+                usize::try_from(len).expect("body length fits usize")
             })
-            .collect::<Result<Vec<usize>, ApparatusError>>()?;
+            .collect();
         if expected_lens.is_empty() {
-            return Err(ApparatusError::Unframeable { bytes: 0 });
+            return Err(ApparatusError::NoObjects);
         }
 
         // Launch every tor at once: the client's and one per persona.

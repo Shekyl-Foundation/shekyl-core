@@ -308,9 +308,9 @@ Measured at `8494f2a27` by the items each crate names through
 | Crate | Imports from `shekyl-curve-tree` | Obligation |
 | --- | --- | --- |
 | `shekyl-engine-core` | `CurveTreeClient`, `assemble_path`, `AssembleInput`, `TreeContext`, `ReferenceBlock`, `select_reference_height`, `REF_ANCHOR_AGE`, `should_reanchor`, `BlockLeaves`, `TxLeafInputs`, `LeafStore`, `serving_route` | **Both** — A dominant; `serving_route` and the serve-set source are B |
-| `shekyl-p-host` | `ServingReader`, `SegmentId`, `served_frame`, `serving_route`, `StoreError` | **B only** |
-| `shekyl-p-serve` | `served_frame`, `ServedFrameHeader`, `serving_route`, `leaves_per_segment` | **B only** |
-| `shekyl-p-fetch` | `serving_route`, `ServedFrameHeader`, `leaves_per_segment` | **B only** (client side of the route) |
+| `shekyl-p-host` | `ServingReader`, `SegmentPin`, `PostureDeclaration`, `BlockHeight`, `serving_route`, `StoreError` (~~`served_frame`~~ deleted 2026-10-08) | **B only** |
+| `shekyl-p-serve` | `FrozenSegmentBody`, `SegmentId`, `ServingReader`, `StoreError`, `serving_route`, `leaves_per_segment` (~~`served_frame`, `ServedFrameHeader`~~ deleted 2026-10-08) | **B only** |
+| `shekyl-p-fetch` | `serving_route`, `leaves_per_segment`, `LEAF_BYTES` (~~`ServedFrameHeader`~~ deleted 2026-10-08; the leaf ceiling leaves with fetch Sub-PR 2's client) | **B only** (client side of the route) |
 | `shekyl-ffi` | `CurveTreeClient`, `client`, `types` | **A only** |
 | `shekyl-wire` | `CurveTreeClient` (e2e spend tests) | **A only** |
 | `shekyl-archival-retention` | `LEAF_BYTES`, `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` — **constants, no store handle** | Neither (consensus constants) |
@@ -1128,7 +1128,7 @@ Framing from `P` would therefore be **redundant and untrusted**. The same rows
 give the requester the shard's **total length before the first byte arrives**,
 so a response whose length disagrees is refusable at the header.
 
-#### 6.6.3 The frame re-key — owed to the RF/SF lane, not to this round
+#### 6.6.3 The frame re-key — owed to the RF/SF lane, not to this round — DISCHARGED 2026-10-08 (`SF-D8` amendment: `served_frame` deleted; the body is `shekyl_wire::shard_frame`, no padding field)
 
 `RF-D4`'s inner frame is **leaf-typed**: `leaf_count` varint ≤
 `leaves_per_segment`, then exactly `leaf_count × LEAF_BYTES`
@@ -1205,8 +1205,8 @@ nonce reuse, which is the failure this rule exists to prevent.
 **Deleted with the leaf unit:**
 
 - `ProviderError::FrozenSegmentPruned`;
-- `ServedFrameHeader::for_segment`;
-- `flat_header`'s whole-number-of-leaves rule (`provider.rs:111-116`) —
+- `ServedFrameHeader::for_segment` — DELETED 2026-10-08 with the module;
+- `flat_header`'s whole-number-of-leaves rule (`provider.rs:111-116`) — DELETED 2026-10-08 (`ShardBody::flat` takes any length) —
   `ShardBody::flat`'s validity check becomes **"length within the closed-shard
   range"**, `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`.
 

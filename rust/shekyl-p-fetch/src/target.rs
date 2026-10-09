@@ -83,9 +83,10 @@ pub struct FetchTarget {
 /// the caller expected for `shard_id`?
 ///
 /// Sub-PR 1 knows the body is bytes and that `P` signed for them. Whether
-/// they are the *right* bytes — today an `RF-D4` frame whose leaves
-/// recompute to the committed `R_k`, tomorrow whatever `PDM-Q6` rules — is
-/// this trait's, plugged by the caller. The countersignature check is
+/// they are the *right* bytes — the `shekyl_wire::shard_frame` body over
+/// the shard's archival good, checked per transaction against the
+/// requester's skeleton rows (`SF-D8` amendment 2026-10-08) — is this
+/// trait's, plugged by the caller. The countersignature check is
 /// **not** inside the hole; it ran before this is called, and a refusal
 /// here is typed separately ([`FetchError::ContentRefused`](crate::FetchError::ContentRefused))
 /// from a bad signature so the scheduler can tell "`P` served the wrong

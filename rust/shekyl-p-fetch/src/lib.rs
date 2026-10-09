@@ -33,7 +33,7 @@
 //! 5. Bound the body from `content-length` **before** reading it, read
 //!    exactly that many bytes, and split the fixed-width countersignature
 //!    envelope off the end. `P` sends it last, so holding it means the
-//!    whole frame arrived. An envelope that is the refusal trailer is
+//!    whole body arrived. An envelope that is the refusal trailer is
 //!    [`FetchError::Unsigned`]: `P` served and says it did not sign. A body
 //!    that stops short of its declared length is a stall, wherever it
 //!    stops.
@@ -50,9 +50,9 @@
 //!
 //! **It is not unit-aware.** The body is bytes. Sub-PR 1 lands the
 //! transport and the transport-authenticity check (the countersignature);
-//! what those bytes *are* — today an `RF-D4` frame over a leaf shard,
-//! tomorrow whatever `PDM-Q6` rules — is sub-PR 2's, behind
-//! [`ContentVerify`]. A leaf type, a frame parse, or a tx/leaf polymorphism
+//! what those bytes *are* — the `shekyl_wire::shard_frame` body over the
+//! shard's archival good (`SF-D8` amendment 2026-10-08) — is sub-PR 2's,
+//! behind [`ContentVerify`]. A leaf type or a tx/leaf polymorphism
 //! appearing in this crate means the split leaked
 //! (`docs/FOLLOWUPS.md`, "Implement the daemon shard-fetch client"). The
 //! one place the leaf figure appears is [`max_body_bytes`], the provisional

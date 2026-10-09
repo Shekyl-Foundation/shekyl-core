@@ -388,11 +388,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The expected body length is the apparatus's to know, not this binary's
     // to pass: it is derived from the payload through the production serving
-    // contract (RF-D4's frame included), so no caller here can hand in a
-    // number that the wire has since moved away from.
+    // contract, so no caller here can hand in a number that the wire has
+    // since moved away from.
     for shard in 0..shard_count {
         println!(
-            "served body, shard {shard}: {} bytes (frame + object)",
+            "served body, shard {shard}: {} bytes",
             app.expected_body_len_of(shard).expect("a served shard")
         );
     }
