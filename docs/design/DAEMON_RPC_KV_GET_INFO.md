@@ -340,7 +340,7 @@ with the FFI shim as today's only implementation:
 | --- | --- | --- |
 | `InfoChainFacts` | above | DRS-E's store implementation reads the same set; `database_size` and `free_space` are the chain store's on-disk size and the volume's free space, whatever the store |
 | `PoolFacts` | pool count, full and broadcast-only | |
-| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board** (`shekyl_seam_board_count`), the one store; no subtraction. Whether `daemon-rpc` reads the hub directly or through the FFI is an implementation detail for rule 25 |
+| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25 |
 | `NodeFacts` | offline, busy syncing, following degraded, start time, free space, database size | |
 
 `rpc_connections_count` is the Rust connection tracker read natively; the
@@ -351,6 +351,20 @@ deleted.
 board export does not read the handshake flag today
 (`rust/shekyl-ffi/src/seam_board_ffi.rs:69-74`); the facts read needs the
 handshaken count (RK-Q4).
+
+**A missing hub is a fault, not zero peers.** Today's exports cannot say
+so. `shekyl_seam_board_count` returns `0` for a missing hub, `0` for an
+index that is not a connector or a direction, and `u64::MAX` when the
+count does not fit (`seam_board_ffi.rs:69-85`);
+`shekyl_seam_socket_count` returns `0` for the same three cases
+(`rust/shekyl-ffi/src/seam_ffi.rs:526-539`). Read through them, a daemon
+whose hub is not up would report `has_peers = false` — the false
+`DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
+an answer). So `PeerFacts` distinguishes them: a missing hub is a
+`FactsFault` (`rust/shekyl-daemon-rpc/src/chain_facts.rs:196`) and the
+method refuses; zero sessions is `Ok(0)`; an index that is not a connector
+or direction is a programming error at the call site and is not
+representable as a count.
 
 ### 4.3 Economics — RK-D19
 
@@ -398,6 +412,14 @@ no vector carries `emission_era`. Fixtures:
 | peerless startup (target 0, not synchronized) | the case the sentinel collides with |
 | synced, restricted | each of the four restricted stand-ins in §0, `alt_blocks_count` included |
 | burn refusal (`total_burned > already_generated`) | the logged-zero path |
+
+One case is not an oracle vector, because the C++ handler cannot express
+it — it reads the same zero-on-missing exports. It is a Rust handler test
+in commit 4:
+
+| Rust-only case | Asserts |
+| --- | --- |
+| hub absent | `PeerFacts` returns a `FactsFault` and `get_info` refuses; it does not answer `has_peers = false` or zero counts |
 
 ---
 
