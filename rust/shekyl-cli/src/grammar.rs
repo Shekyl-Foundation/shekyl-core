@@ -266,10 +266,17 @@ fn parse_shard_fetch(args: &[&str]) -> ResolvedCommand {
         _ => return diag(usage(id)),
     };
     let png = split.value("--png").map(str::to_owned);
+    // The edge length is judged here, before the command runs: a size the
+    // renderer would refuse must not cost the daemon a fetch first.
     let size = match split.value("--size") {
         None => None,
         Some(raw) => match raw.parse::<u32>() {
-            Ok(size) => Some(size),
+            Ok(size) => {
+                if let Err(e) = shekyl_shard_visual::check_render_size(size) {
+                    return diag(format!("shard fetch: --size {e}"));
+                }
+                Some(size)
+            }
             Err(_) => {
                 return diag(format!(
                     "shard fetch: --size expects a pixel edge length, got {raw:?}"
@@ -773,6 +780,16 @@ mod tests {
                 assert!(message.contains("--png"), "{message}");
             }
             other => panic!("{other:?}"),
+        }
+        // A size the renderer would refuse is refused here, before the
+        // daemon is asked to fetch anything.
+        for raw in ["0", "4097"] {
+            match parse(&format!("shard fetch 7 --png out.png --size {raw}")) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("invalid render size"), "{message}");
+                }
+                other => panic!("{other:?}"),
+            }
         }
         match parse("shard fetch seven") {
             ResolvedCommand::Diagnostic { message } => {
