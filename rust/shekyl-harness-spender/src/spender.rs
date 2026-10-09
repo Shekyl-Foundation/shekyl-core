@@ -203,6 +203,22 @@ impl Spender {
         self.coinbases.push(miner_transaction.clone());
     }
 
+    /// [`Self::push`], then hold the ingested root equal to `expected`.
+    ///
+    /// `expected` is the root the other tree recorded going into this
+    /// height: the store header's `curve_tree_root`, or the validator
+    /// tree's root going into the height. A disagreement is the block
+    /// that opened it.
+    pub fn push_agreeing<B: MinedBlock>(&mut self, mined: &B, expected: CurveTreeRoot) {
+        let height = mined.height();
+        self.push(mined);
+        assert_eq!(
+            self.root_at(height),
+            expected,
+            "height {height:?}: the wallet-side tree agrees on the root going in"
+        );
+    }
+
     /// The wallet-side tree's root going into `height` — the state the
     /// header at `height` commits to, keyed as the store's `root_at` is.
     #[must_use]

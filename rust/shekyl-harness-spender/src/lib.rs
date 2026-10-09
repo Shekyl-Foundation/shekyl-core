@@ -69,7 +69,7 @@ mod spender;
 
 use shekyl_chain_rules::{RuleSet, REFERENCE_BLOCK_MIN_AGE};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Block, Input, Transaction};
 
 pub use bond::PostedBond;
 pub use persona::{complete_tree, shard_set, Persona};
@@ -88,6 +88,45 @@ pub trait MinedBlock {
     fn miner_transaction(&self) -> &Transaction;
     /// The listed bodies, in the order the block names them.
     fn listed(&self) -> &[Transaction];
+}
+
+/// A connected block and the bodies it listed, as [`MinedBlock`].
+///
+/// The store's `Grown` and the ingest's `Growing` both feed the wallet-side
+/// tree through this adapter, so the two chains read height off the coinbase
+/// the same way.
+pub struct Linked<'a> {
+    block: &'a Block,
+    listed: &'a [Transaction],
+}
+
+impl<'a> Linked<'a> {
+    /// `block` connected listing `listed`.
+    #[must_use]
+    pub fn new(block: &'a Block, listed: &'a [Transaction]) -> Self {
+        Self { block, listed }
+    }
+}
+
+impl MinedBlock for Linked<'_> {
+    fn height(&self) -> BlockHeight {
+        match self.block.miner_transaction.prefix.inputs.first() {
+            Some(Input::Gen(height)) => BlockHeight::from_raw(*height),
+            _ => panic!("a fixture block's coinbase opens with Input::Gen"),
+        }
+    }
+
+    fn hash(&self) -> BlockHash {
+        self.block.hash()
+    }
+
+    fn miner_transaction(&self) -> &Transaction {
+        &self.block.miner_transaction
+    }
+
+    fn listed(&self) -> &[Transaction] {
+        self.listed
+    }
 }
 
 /// Blocks after a coinbase's height before a spend of it can connect —
