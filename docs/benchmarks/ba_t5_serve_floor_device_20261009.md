@@ -47,8 +47,29 @@ cannot sit inside a 13-minute sync: the later cells of every nice pass
 would have been void and the session incomplete. Nice blocks are 512
 fetches, about 85 s, which a window of about ten points covers. The
 second start's 12 blocks are discarded and are not in the capture; the
-numbers it showed are not quoted in the reading. This text is pushed
-before the third start. Every earlier text is in the branch history.
+numbers it showed are not quoted in the reading. That text was pushed at
+`c9158e71a5` before the third start. **The third start (02:07Z) stopped
+itself at 02:14Z**, seven blocks in, when the probe exited 101 on the
+first `sync` block at N = 64: with 64 in flight against a cap of 64, the
+endpoint refused one connection — past `MAX_INFLIGHT` the accept loop
+drops the stream without writing a byte, by design — and the probe, which
+had never run at N equal to the cap, read the empty close as a response
+cut short and failed the block. The refusal is one of the quantities this
+registration says each cell records, so the probe was wrong to die on it.
+The sequence is in the capture it left: the refused connection was opened
+at a batch boundary, after the requester had seen every stream of the
+previous batch close, while one connection task on the loaded board had
+not yet dropped its permit. The idle pass's N = 64 block, 2,048 fetches
+with no refusal, is the control. This amendment: the probe records a
+connection closed without a byte as a refusal (a 0 on its `OBS` row, the
+endpoint's own count on the `BLOCK` row) and goes on, retrying nothing,
+since a retry changes the offered load; the reading divides by the
+responses served, not the fetches attempted, and reports a block whose
+probe-side and endpoint-side refusal counts disagree. At one in flight,
+where no refusal can occur, an empty close is still a fault. The serve
+path is not changed. The third start's seven blocks are discarded and are
+not in the capture. This text is pushed before the fourth start. Every
+earlier text is in the branch history.
 
 ## The questions
 
@@ -75,8 +96,10 @@ before the third start. Every earlier text is in the branch history.
 A cell is one daemon state and one in-flight count N, at full segment
 from the on-disk store, 2,048 whole fetches per block (512 in the nice
 state, where the serve is slow by design), at least three blocks per
-cell. For each block: responses per second; CPU per response;
-the endpoint's refusals; p50, p90, p99 and maximum wake lateness on the
+cell. For each block: responses per second and CPU per response, both
+over the responses served; the endpoint's refusals (a fetch the endpoint
+closed without a byte is counted, not served, and not retried); p50, p90,
+p99 and maximum wake lateness on the
 endpoint's executor; and, when the daemon is syncing, its sync rate in
 blocks per second over the block's window, read from its own height.
 Between serving blocks in a syncing pass, no-serve windows of 45 s give

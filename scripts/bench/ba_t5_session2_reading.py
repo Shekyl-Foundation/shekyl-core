@@ -134,7 +134,10 @@ def incomplete(obs_path: Path, env_path: Path, sync_path: Path) -> list[str]:
 
 
 def rate_per_s(block: list[str]) -> float:
-    return int(block[4]) / (int(block[5]) / 1000)
+    """Responses served per second: over `served`, not over the fetches
+    attempted. A refused connection costs the endpoint nothing and must not
+    count as a response."""
+    return int(block[7]) / (int(block[5]) / 1000)
 
 
 def sync_rate(window: list[str]) -> float | None:
@@ -217,17 +220,32 @@ def main() -> int:
         q: {state: defaultdict(list) for state in STATES}
         for q in ("rate", "cpu_ms", "p99_us", "refused", "sync_share")
     }
-    print("\n== serving blocks ==")
+    # A refusal seen from outside: a load fetch that got 0 bytes. The
+    # endpoint's own count is on the BLOCK row; the two must agree, and
+    # served plus refused must be the fetches attempted. A disagreement is
+    # reported, not fatal: the capture is still read.
+    zero_seen: dict[str, int] = defaultdict(int)
+    for r in obs:
+        if r[1] == "load" and r[5] == "0":
+            zero_seen[r[0]] += 1
+    disagree: list[str] = []
+    print("\n== serving blocks (rate over the responses served) ==")
     for b in blocks:
         if b[1] != "load":
             continue
         state, n = state_of(b[0]), int(b[3])
         lat = late_by_label.get(b[0])
         p99 = float(lat[7]) if lat else float("nan")
+        attempted, served, refused = int(b[4]), int(b[7]), int(b[8])
+        if served + refused != attempted or zero_seen[b[0]] != refused:
+            disagree.append(
+                f"{b[0]}: {attempted} attempted, {served} served, {refused} refused by the endpoint, "
+                f"{zero_seen[b[0]]} empty close(s) seen by the probe"
+            )
         per["rate"][state][n].append(rate_per_s(b))
-        per["cpu_ms"][state][n].append(int(b[6]) / int(b[4]))
+        per["cpu_ms"][state][n].append(int(b[6]) / served)
         per["p99_us"][state][n].append(p99)
-        per["refused"][state][n].append(float(b[8]) if len(b) > 8 else 0.0)
+        per["refused"][state][n].append(float(refused))
         share = ""
         if state in SYNCING:
             r = windows.get(b[0])
@@ -237,9 +255,23 @@ def main() -> int:
             else:
                 share = "  sync window VOID"
         print(
-            f"  {b[0]:16s} {rate_per_s(b):6.1f}/s  cpu/resp {int(b[6]) / int(b[4]):5.0f} ms  "
-            f"refused {b[8] if len(b) > 8 else '-':>3s}  p99 {p99 / 1000:6.1f} ms{share}"
+            f"  {b[0]:16s} {rate_per_s(b):6.1f}/s  cpu/resp {int(b[6]) / served:5.0f} ms  "
+            f"refused {refused:3d}  p99 {p99 / 1000:6.1f} ms{share}"
         )
+    print("\n== refusals (the endpoint drops a connection past MAX_INFLIGHT without a byte) ==")
+    for state in STATES:
+        for n in IN_FLIGHT:
+            counts = per["refused"][state][n]
+            if any(counts):
+                print(f"  {state} N{n}: " + ", ".join(f"{int(c)}" for c in counts) + " over its blocks")
+    if not any(any(per["refused"][state][n]) for state in STATES for n in IN_FLIGHT):
+        print("  none in any block")
+    if disagree:
+        print("  the probe's count and the endpoint's DISAGREE:")
+        for line in disagree:
+            print(f"    {line}")
+    else:
+        print("  the probe's count of empty closes agrees with the endpoint's count in every block")
     curve: dict[str, dict[str, dict[int, float]]] = {
         q: {state: {n: med(v) for n, v in per[q][state].items() if v} for state in STATES} for q in per
     }
@@ -349,6 +381,9 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
     temp = int(tweak.get("temp_mC", 55_000))  # type: ignore[arg-type]
     swap = list(tweak.get("swap_free", [0, 0]))  # type: ignore[arg-type]
     ttfb = dict(tweak.get("ttfb", {}))  # type: ignore[arg-type]
+    refused_at = dict(tweak.get("refused", {}))  # type: ignore[arg-type]
+    # The probe sees one empty close fewer than the endpoint counted.
+    probe_short = bool(tweak.get("probe_short", False))
     quiet_rate = 2.9
     # Defaults chosen so every prediction holds: lateness over 100 ms from
     # N=16 under sync, sync share under 75 % from N=16, throughput flat
@@ -371,9 +406,13 @@ def _synthetic(root: Path, **tweak: object) -> tuple[Path, Path, Path]:
                     continue
                 p99 = p99_at.get((state, n), default_p99[state][n])
                 rate = rate_at.get((state, n), default_rate[state][n])
-                wall_ms = int(256 / rate * 1000)
+                refused = refused_at.get((state, n), 0)
+                served = 256 - refused
+                wall_ms = int(served / rate * 1000)
                 obs.append(f"OBS\t{label}\tload\tfull-store\t{n}\t60000\t3330449")
-                obs.append(f"BLOCK\t{label}\tload\tfull-store\t{n}\t256\t{wall_ms}\t15000\t256\t0")
+                for _ in range(refused - (1 if probe_short and refused else 0)):
+                    obs.append(f"OBS\t{label}\tload\tfull-store\t{n}\t900\t0")
+                obs.append(f"BLOCK\t{label}\tload\tfull-store\t{n}\t256\t{wall_ms}\t15000\t{served}\t{refused}")
                 obs.append(f"LATE\t{label}\tload\tfull-store\t{n}\t9000\t1000\t2000\t{p99}\t{p99}\t{p99}")
                 obs.append(f"EXIT\t{label}\tload\t0")
                 if state in SYNCING:
@@ -446,12 +485,22 @@ def selftest() -> int:
         drop={"nice.2.N32"})
     run("incomplete: a whole cell missing", 2, ("idle N8: 0 BLOCK row(s)",),
         drop={"idle.1.N8", "idle.2.N8", "idle.3.N8"})
+    # 253 served over the wall of 253 at 31/s: the rate is over served, so
+    # it reads 31.0 and not 30.6.
+    run("refusals are recorded, the rate is over served, and the counts agree", 0, (
+        "refused   3", "sync N64: 3, 3, 3 over its blocks", "sync.1.N64         31.0/s",
+        "agrees with the endpoint's count in every block",
+    ), refused={("sync", 64): 3})
+    run("the probe's and the endpoint's refusal counts disagree, and it is reported", 0, (
+        "DISAGREE", "sync.2.N64: 256 attempted, 253 served, 3 refused by the endpoint, 2 empty close(s) seen by the probe",
+    ), refused={("sync", 64): 3}, probe_short=True)
+    run("no refusals is said", 0, ("none in any block",))
     if failures:
         print("SELFTEST FAIL:")
         for failure in failures:
             print("  " + failure)
         return 1
-    print("selftest: 13 cases pass")
+    print("selftest: 16 cases pass")
     return 0
 
 

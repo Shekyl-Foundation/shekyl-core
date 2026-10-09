@@ -183,6 +183,16 @@ fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
 /// `content-length` bytes, no fewer and no more. A response cut short
 /// anywhere, the head and frame included, is a failed block and is not
 /// timed as a served one.
+///
+/// Returns 0 for a connection the endpoint closed without writing a byte.
+/// That is what a refusal looks like from outside: past `MAX_INFLIGHT` the
+/// accept loop drops the stream and says nothing, by design. At N equal to
+/// the cap it happens at a batch boundary — the requester has seen every
+/// stream of the last batch close, but a connection task's permit is
+/// dropped after its stream is, and on a loaded board the reconnect can
+/// land first. A block records those (the endpoint's `refused` count is on
+/// its `BLOCK` row; the `OBS` row carries the 0) and goes on; it does not
+/// retry, because a retry would change the offered load.
 async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(&request_head(shard_id, nonce))
@@ -190,6 +200,9 @@ async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
         .expect("write request");
     let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
     s.read_to_end(&mut out).await.expect("read response");
+    if out.is_empty() {
+        return 0;
+    }
     check_whole(shard_id, &out);
     out.len()
 }
@@ -463,7 +476,11 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
     let (size, _) = size_of(shard_id);
     clients.block_on(async {
         for i in 0..warm_up {
-            fetch(addr, shard_id, nonce(0x11, i)).await;
+            // One in flight: a refusal here is a serve fault, not the cap.
+            assert!(
+                fetch(addr, shard_id, nonce(0x11, i)).await > 0,
+                "a warm-up fetch was refused"
+            );
         }
     });
     let served_before = served.endpoint.served_count();
@@ -593,6 +610,7 @@ fn ba_t5_floor_probe() {
         "cold" => {
             let t = Instant::now();
             let got = clients.block_on(fetch(addr, 0, nonce(0x44, 0)));
+            assert!(got > 0, "the cold fetch was refused at one in flight");
             println!(
                 "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
                 t.elapsed().as_micros()
@@ -649,6 +667,7 @@ fn ba_t5_floor_probe() {
                 }
                 let t = Instant::now();
                 let got = clients.block_on(fetch(addr, 0, nonce(0x77, i)));
+                assert!(got > 0, "a sustain fetch was refused at one in flight");
                 println!(
                     "OBS\t{label}\tsustain\tfull-store\t1\t{}\t{got}",
                     t.elapsed().as_micros()
@@ -681,7 +700,10 @@ fn ba_t5_floor_probe() {
         "ttfb" => {
             let n = env_usize("BAT5_N", 300);
             for i in 0..5 {
-                clients.block_on(fetch(addr, 0, nonce(0x11, i)));
+                assert!(
+                    clients.block_on(fetch(addr, 0, nonce(0x11, i))) > 0,
+                    "a warm-up fetch was refused"
+                );
             }
             let mut samples = Vec::with_capacity(n);
             for i in 0..n {
