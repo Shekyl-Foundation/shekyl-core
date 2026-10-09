@@ -159,7 +159,19 @@ where it was: `crypto_bench_hybrid_sign_1_input` 7,163,792 instructions at
 `shekyl-crypto-pq` manifest. On every pull request it asserts its subject —
 all five packages locked, at one version, each pinned exact in the manifest
 at that version — and reports whether the lock is pre-1.0. Given a release
-tag with no pre-release suffix it **fails** on a pre-1.0 lock.
+tag that is not a recognised pre-release it **fails** on a pre-1.0 lock.
+
+The tag test fails closed. A pre-release is `MAJOR.MINOR.PATCH` followed by
+`-alpha`, `-beta` or `-RC` with an optional number, in any case, with or
+without the leading `v`; every other shape is treated as genesis and
+refused, `v3.0`, `V3.0.0` and `v3.0.0+mainnet` included. An oddly named
+rehearsal tag has to be re-cut with a suffix.
+
+**What "1.0" stands for (ruled 2026-10-09).** The property wanted is that
+the crate implements final FIPS 206; the gate tests the crate's major
+version. The two are assumed to coincide: 1.0 is taken to be the FIPS 206
+release. Which version that turns out to be is known when it ships, and the
+gate's threshold is adjusted then.
 
 The tag rule is the repository's own:
 [`RELEASE_PROMOTION.md`](../RELEASE_PROMOTION.md) reserves the first

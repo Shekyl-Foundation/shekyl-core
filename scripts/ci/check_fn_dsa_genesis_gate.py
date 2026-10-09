@@ -27,8 +27,10 @@
 #      the locked version.
 #
 # WHAT IT REFUSES, for a genesis release only: a locked version below 1.0.0.
-# A genesis release is a tag with no pre-release suffix — RELEASE_PROMOTION.md
-# reserves the first such tag for the genesis mainnet release. The tag comes
+# A genesis release is any tag that is not a recognised pre-release —
+# RELEASE_PROMOTION.md reserves the first such tag for the genesis mainnet
+# release. The test is on the pre-release shape, so a tag this script does
+# not recognise is refused and not waved through. The tag comes
 # from `--release-tag`, or from GITHUB_REF_NAME when GITHUB_REF_TYPE is `tag`.
 # With no tag the script reports what a genesis build would be told and
 # passes, so a pull request sees the standing state without being blocked by
@@ -46,10 +48,15 @@ PACKAGES = ("fn-dsa", "fn-dsa-comm", "fn-dsa-kgen", "fn-dsa-sign", "fn-dsa-vrfy"
 LOCK = "rust/Cargo.lock"
 MANIFEST = "rust/shekyl-crypto-pq/Cargo.toml"
 
-# MAJOR.MINOR.PATCH and nothing after it, with or without the leading `v`: a
-# final tag cut without the prefix is still a final tag. `v3.1.0-alpha.9` and
-# `v3.0.0-RC1` carry a pre-release suffix and are not genesis releases.
-FINAL_TAG = re.compile(r"^v?\d+\.\d+\.\d+$")
+# The pre-release shapes this repository cuts (RELEASE_PROMOTION.md §3):
+# `v3.1.0-alpha.9`, `v3.0.0-RC1`, `v3.0.0-beta`. Every other tag is a genesis
+# release as far as this gate is concerned — `v3.0.0`, and equally `V3.0.0`,
+# `v3.0`, `v3.0.0+mainnet` or `mainnet-3.0.0`. An oddly named rehearsal tag
+# is refused until it is re-cut with a suffix; that is the direction a gate
+# whose job is to keep mainnet off a pre-standard crate has to fail in.
+# `gitian.yml` carries the same expression for a tree that predates this
+# script; the two change together.
+PRERELEASE_TAG = re.compile(r"^v?\d+\.\d+\.\d+-(alpha|beta|rc)(\.?\d+)*$", re.IGNORECASE)
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 
 
@@ -83,7 +90,7 @@ def manifest_pins(manifest_text):
 
 
 def is_genesis_tag(tag):
-    return bool(tag) and bool(FINAL_TAG.match(tag))
+    return bool(tag) and not PRERELEASE_TAG.match(tag)
 
 
 def judge(lock_text, manifest_text, tag):
@@ -135,7 +142,8 @@ def judge(lock_text, manifest_text, tag):
     if is_genesis_tag(tag):
         if pre_standard:
             problems.append(
-                "tag %s is a genesis release (no pre-release suffix) and "
+                "tag %s is not a recognised pre-release (-alpha.N, -beta, "
+                "-RCn), so it is a genesis release, and "
                 "fn-dsa is locked at %s. A pre-1.0 fn-dsa is pre-standard: "
                 "its keys and signatures are not stable. Genesis waits for "
                 "1.0 (ARCHIVAL_SERVE_CREDIT_SPEC.md §11)" % (tag, version)
@@ -145,7 +153,7 @@ def judge(lock_text, manifest_text, tag):
     elif pre_standard:
         notes.append(
             "fn-dsa is locked at %s, pre-standard. This passes for %s; a "
-            "genesis release (a tag with no pre-release suffix) would be "
+            "genesis release (any tag that is not a recognised pre-release) would be "
             "refused" % (version, "tag %s" % tag if tag else "an untagged build")
         )
     else:
@@ -209,8 +217,18 @@ def selftest():
     if problems:
         print("selftest FAILED: table-form pin — %s" % problems, file=sys.stderr)
         ok = False
-    for tag, genesis in (("v3.0.0", True), ("v10.2.33", True), ("v3.0.0-rc.1", False),
-                         ("v3.0", False), ("3.0.0", True), ("", False), (None, False)):
+    for tag, genesis in (
+        ("v3.0.0", True), ("v10.2.33", True), ("3.0.0", True),
+        # The pre-release shapes the repository cuts.
+        ("v3.1.0-alpha.9", False), ("v3.0.0-RC1", False), ("v3.0.0-RC14", False),
+        ("v3.0.0-rc.1", False), ("v3.0.0-beta", False), ("3.1.0-alpha.10", False),
+        # Unrecognised shapes are genesis: the gate fails closed.
+        ("V3.0.0", True), ("v3.0", True), ("v3.0.0+mainnet", True),
+        ("mainnet-3.0.0", True), ("core-v3.1.0", True), ("v3.0.0-final", True),
+        ("v3.0.0-rc.1+build", True), ("v3.0.0-alphabet", True), ("genesis", True),
+        # No tag at all is an untagged build, not a release.
+        ("", False), (None, False),
+    ):
         if is_genesis_tag(tag) != genesis:
             print("selftest FAILED: is_genesis_tag(%r)" % (tag,), file=sys.stderr)
             ok = False
