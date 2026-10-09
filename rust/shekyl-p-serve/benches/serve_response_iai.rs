@@ -9,15 +9,22 @@
 //! (PR #954), which is how a response that cost 78 ms more on the floor
 //! device passed the gate.
 //!
-//! Four functions, each at more than one shard size:
+//! Five functions, most at more than one shard size:
 //!
 //! * **`crypto_bench_serve_response`** — the whole response to one
 //!   `GET /shard/{id}`: parse, the anchor gate, the open, the key's
 //!   pre-flight, the head, every chunk read and folded into the delivery
-//!   digest, the countersignature, and the bytes written. One leaf, an
-//!   eighth of a segment, and a full segment (3,326,976 bytes, the size a
-//!   bonded shard is served at): the cost has a fixed part and a part
-//!   linear in the body, and three sizes let a change to either show.
+//!   digest, the call for the countersignature, and the bytes written.
+//!   One leaf, an eighth of a segment, and a full segment (3,326,976
+//!   bytes, the size a bonded shard is served at): the cost has a fixed
+//!   part and a part linear in the body, and three sizes let a change to
+//!   either show. The signer on this path answers with a pinned envelope
+//!   (see *Seeded, end to end*); the signature's own cost is the next
+//!   function's.
+//! * **`crypto_bench_serve_sign`** — the countersignature alone: the
+//!   seeded persona key signing one pinned transcript. This is where a
+//!   change to the hybrid sign shows, on a trajectory nothing on the wire
+//!   can move.
 //! * **`crypto_bench_serve_prehead`** — the same request up to the point
 //!   where the 200 head is ready to write. This is the abuse number: work
 //!   `P` does before the requester has received anything. It must not
@@ -57,16 +64,34 @@
 //!
 //! Named into the `crypto_bench_*` class, so `scripts/bench/compare.py`
 //! routes them to a bidirectional threshold: a serve that stops hashing
-//! or stops signing presents as a large instruction-count drop, which a
-//! slowdown-only class would wave through.
+//! presents as a large instruction-count drop in `serve_response` and
+//! `read_and_fold`, and a sign that got cheaper presents as one in
+//! `serve_sign`; a slowdown-only class would wave both through. A serve
+//! that stops *calling* the signer is `serve_bench_seam_tests.rs`'s to
+//! catch (it counts signatures per served response), not this gate's.
 //!
 //! **Seeded, end to end.** The shard bytes, the persona key and the ML-DSA
-//! signing nonce all come from one fixed seed. A fresh key or a hedged
-//! signature moves ML-DSA's rejection-sampling trajectory, and with it the
-//! count by tens of millions of instructions between runs of one input
-//! (measured: 14 M against 45 M for one leaf). The production signer is
-//! hedged, as it should be; the gate pins one trajectory so that what
-//! moves the count is the serve. Synthetic shards and a bench key only.
+//! signing nonce all come from one fixed seed. ML-DSA signs by rejection
+//! sampling: it loops until a candidate passes its norm checks, each round
+//! about two million instructions, and the number of rounds is a function
+//! of the key, the nonce and the message. A fresh key or a hedged
+//! signature moves the count by tens of millions between runs of one input
+//! (measured: 14 M against 45 M for one leaf). Pinning the key and the
+//! nonce is not enough: the message the serve signs is the pass transcript,
+//! which carries the delivery digest of the body, so any change to the
+//! bytes on the wire re-rolls the trajectory. The `SF-D8` amendment that
+//! removed the frame header did exactly that — 10.75 M → 7.31 M for one
+//! leaf and 31.4 M → 9.0 M for a full segment, with the serve's own work
+//! within 0.7 % — and the gate read it as a −27.9 % serve regression.
+//!
+//! So the serve cells sign with a **pinned envelope**: the seeded key signs
+//! one fixed transcript in `setup`, and the signer the serve is handed
+//! answers every `sign_pass` with that envelope. The serve still makes the
+//! call, the response is still a 200 closed by a well-formed envelope, and
+//! what moves the count is the serve. The signature's cost is gated on its
+//! own in `crypto_bench_serve_sign`, over the same fixed transcript. The
+//! production signer is hedged, as it should be. Synthetic shards and a
+//! bench key only.
 //!
 //! Requires `cargo install gungraun-runner` and a working Valgrind. x86
 //! only; the floor device is wall clock (`BA-T5`).
@@ -161,6 +186,51 @@ impl PassSigner for SeededSigner {
     }
 }
 
+/// The transcript the seeded key signs once, in `setup`: fixed bytes, so
+/// the ML-DSA trajectory it selects is a property of this file and not of
+/// what the serve put on the wire.
+const PINNED_TRANSCRIPT: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] =
+    [0x3c; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
+
+/// The signer the serve cells are handed: [`SeededSigner`]'s signature
+/// over [`PINNED_TRANSCRIPT`], answered to every `sign_pass`. Constant
+/// cost by construction, so the serve is what the cell counts. The
+/// envelope is real — the right length, from the right key — and the
+/// seam tests, not this bench, are what hold the serve to signing the
+/// transcript it actually produced.
+struct PinnedEnvelopeSigner {
+    envelope: HybridSignature,
+}
+
+impl PinnedEnvelopeSigner {
+    fn new(key: &SeededSigner) -> Self {
+        Self {
+            envelope: key
+                .sign_pass(&PINNED_TRANSCRIPT)
+                .expect("the seeded key signs the pinned transcript"),
+        }
+    }
+}
+
+impl PassKey for PinnedEnvelopeSigner {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
+    fn sign_pass(
+        &self,
+        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Ok(self.envelope.clone())
+    }
+}
+
+impl PassSigner for PinnedEnvelopeSigner {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
+}
+
 /// One shard, in memory, at the leaf count the fixture asked for.
 struct OneShard {
     bytes: Arc<[u8]>,
@@ -175,12 +245,15 @@ impl ShardProvider for OneShard {
     }
 }
 
-/// The provider, the signer, one request head, and buffers sized for what
-/// each measured function writes, built in `setup` outside the measured
-/// region.
+/// The provider, the signers, one request head, and buffers sized for
+/// what each measured function writes, built in `setup` outside the
+/// measured region.
 struct Fixture {
     provider: Arc<dyn ShardProvider>,
+    /// The pinned-envelope signer the serve cells are handed.
     signer: Arc<dyn PassSigner>,
+    /// The seeded key itself, for `crypto_bench_serve_sign`.
+    key: SeededSigner,
     head: Vec<u8>,
     out: Vec<u8>,
     expected_len: usize,
@@ -197,7 +270,8 @@ fn fixture(leaf_count: usize) -> Fixture {
     let provider: Arc<dyn ShardProvider> = Arc::new(OneShard {
         bytes: Arc::from(body.into_boxed_slice()),
     });
-    let signer: Arc<dyn PassSigner> = Arc::new(SeededSigner::new());
+    let key = SeededSigner::new();
+    let signer: Arc<dyn PassSigner> = Arc::new(PinnedEnvelopeSigner::new(&key));
     let anchor = BlockHeight::from_raw(OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw());
     let header = pass_request_header_bytes(&NONCE, anchor, &ANCHOR_HASH);
     let head = format!(
@@ -207,13 +281,29 @@ fn fixture(leaf_count: usize) -> Fixture {
     .into_bytes();
     // Self-witness, asserted here because setup is outside the measured
     // region: the fixture must SERVE, or the gate counts a refusal and a
-    // serve that stopped working reads as a large speed-up.
+    // serve that stopped working reads as a large speed-up. Witnessed
+    // under the seeded key, so the composition is proven to serve with a
+    // real signature over the transcript it produced; then under the
+    // pinned signer the cells are handed, which must put the same head and
+    // body on the wire and differ only in the envelope.
     let mut witness = Vec::new();
-    let outcome = serve_one_in_memory(&*provider, &*signer, &head, &mut witness);
+    let outcome = serve_one_in_memory(&*provider, &key, &head, &mut witness);
     assert_eq!(
         outcome,
         InMemoryServe::Served,
         "gate fixture must serve, or the drift gate counts a refusal"
+    );
+    let mut pinned = Vec::new();
+    assert_eq!(
+        serve_one_in_memory(&*provider, &*signer, &head, &mut pinned),
+        InMemoryServe::Served,
+        "the pinned-envelope signer must serve as the seeded key does"
+    );
+    assert_eq!(pinned.len(), witness.len(), "one envelope length");
+    assert_eq!(
+        pinned[..pinned.len() - SIGNATURE_ENVELOPE_LEN],
+        witness[..witness.len() - SIGNATURE_ENVELOPE_LEN],
+        "the pinned signer changes the envelope and nothing before it"
     );
     let body_at = witness
         .windows(4)
@@ -238,6 +328,7 @@ fn fixture(leaf_count: usize) -> Fixture {
     Fixture {
         provider,
         signer,
+        key,
         head,
         // Pre-sized so the buffer's growth is not what the gate measures.
         out: Vec::with_capacity(expected_len),
@@ -283,6 +374,23 @@ fn crypto_bench_serve_response(mut fx: Fixture) -> Fixture {
 }
 
 #[library_benchmark]
+#[bench::pinned_transcript(setup = one_leaf)]
+fn crypto_bench_serve_sign(fx: Fixture) -> Fixture {
+    let envelope = fx
+        .key
+        .sign_pass(black_box(&PINNED_TRANSCRIPT))
+        .expect("the seeded key signs the pinned transcript");
+    assert_eq!(
+        black_box(envelope)
+            .to_canonical_bytes()
+            .expect("canonical envelope")
+            .len(),
+        SIGNATURE_ENVELOPE_LEN
+    );
+    fx
+}
+
+#[library_benchmark]
 #[bench::one_leaf(setup = one_leaf)]
 #[bench::full_segment(setup = full_segment)]
 fn crypto_bench_serve_prehead(mut fx: Fixture) -> Fixture {
@@ -323,6 +431,7 @@ fn crypto_bench_serve_digest_alone(fx: Fixture) -> Fixture {
 library_benchmark_group!(
     name = serve_response_group;
     benchmarks = crypto_bench_serve_response,
+        crypto_bench_serve_sign,
         crypto_bench_serve_prehead,
         crypto_bench_serve_read_and_fold,
         crypto_bench_serve_digest_alone
