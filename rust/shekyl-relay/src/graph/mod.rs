@@ -36,7 +36,7 @@ use shekyl_types::relay::RelayMethod;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
 mod cover;
-mod own_edge;
+mod hidden_slot;
 
 pub use cover::{any_open_link, cover_class, transit_ms};
 
@@ -226,12 +226,14 @@ pub enum NodeSync {
 ///   the pool retries after sync. A refresh cannot make it routable, and
 ///   falling through to fluff would publish it early.
 /// - [`RelayPlan::OwnEdge`] is the first hop of a local origin whose address
-///   a peer must not learn. One ordinary send. A failed write is terminal:
-///   no stem-map refresh, no second plan, no fluff. Success records
-///   `relay_method::local`.
-/// - [`RelayPlan::NoOwnEdge`] is that draw with an empty pool. Send nothing
-///   and record nothing. Refreshing the stem map cannot manufacture an
-///   edge that hides this node's address.
+///   a peer must not learn: the hidden stem slot's peer, or the live
+///   alternate of the origin's pin (§95.3, §98). One ordinary send. A failed
+///   write is terminal: no stem-map refresh, no second plan, no fluff.
+///   Success records `relay_method::local`.
+/// - [`RelayPlan::NoOwnEdge`] is that plan with no address-hiding session
+///   slotted, or with the origin's pin exhausted for the epoch. Send nothing
+///   and record nothing. Refreshing the stem map cannot manufacture a
+///   session that hides this node's address.
 ///
 /// The daemon also reports the routable outcomes differently: the inherited
 /// `dandelionpp_notify` emits `relay_method::stem` on *entering* the
@@ -307,6 +309,14 @@ pub enum RelayNewError {
         /// Windows the epoch affords.
         affords: u32,
     },
+    /// A configured connector hides this node's address and `stems < 2`.
+    /// Slot 0 is reserved for the sessions that hide it (§95.3), so the
+    /// origin's pin needs one alternate and relayed traffic needs a slot of
+    /// its own; a narrower map has neither.
+    HiddenSlotWidth {
+        /// The stem count that was requested.
+        got: usize,
+    },
 }
 
 impl fmt::Display for RelayNewError {
@@ -324,6 +334,11 @@ impl fmt::Display for RelayNewError {
                 "noise epoch carries {affords} windows but a full message needs \
                  {needs}; a roll that rebinds the slot restarts it from the first \
                  fragment, so it may never finish"
+            ),
+            Self::HiddenSlotWidth { got } => write!(
+                f,
+                "a connector that hides this node's address reserves stem slot 0 and \
+                 needs a stem width of at least 2 (got {got})"
             ),
         }
     }
@@ -438,13 +453,10 @@ pub struct Relay {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// A configured connector hides this node's address, so a local origin
-    /// draws [`RelayPlan::OwnEdge`] rather than a stem slot.
+    /// A configured connector hides this node's address, so slot 0 of the
+    /// stem map is reserved for the sessions that do and a local origin
+    /// plans [`RelayPlan::OwnEdge`] over a pin on them (`hidden_slot`).
     origin_address_hidden: bool,
-    /// This epoch's own-edge, once a non-empty hidden-address pool has been
-    /// drawn. Not a stem-map slot. Kept while that peer is live; a dead peer
-    /// is replaced on the next origination. Cleared by [`Relay::rebuild_stems`].
-    hop0_edge: Option<ConnectionId>,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -491,11 +503,17 @@ impl Relay {
     /// [`carrier::noise_windows_in_epoch`] against
     /// [`carrier::MAX_FRAGMENTS`].
     ///
-    /// The three refusals are distinct [`RelayNewError`] variants. The FFI
+    /// **A hidden connector needs a stem width of at least two.** Slot 0 is
+    /// then reserved for the sessions that hide this node's address, and the
+    /// origin's pin needs `stems − 1 ≥ 1` alternates; at width one relayed
+    /// traffic would have no slot of its own. Production width is
+    /// [`inherited::NOISE_CHANNELS`]; width one is reachable only from tests.
+    ///
+    /// The four refusals are distinct [`RelayNewError`] variants. The FFI
     /// maps every one to null. C++ passes the noise flag only behind the
     /// development opt-in and does not pre-decide which connector can carry
     /// it. The flag defaults off, so a shipped construction does not hit
-    /// these.
+    /// the noise refusals.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
@@ -519,27 +537,36 @@ impl Relay {
                 });
             }
         }
+        let origin_address_hidden = any_hides_address_from_peer(configured);
+        if origin_address_hidden && stems < 2 {
+            return Err(RelayNewError::HiddenSlotWidth { got: stems });
+        }
         let epoch = EpochScheduler::new(params).start(now, rng);
         let noise = if noise_requested {
             NoiseSchedule::on(stems, now, rng)
         } else {
             NoiseSchedule::Off
         };
+        // Built at full width with no peers rather than `StemMap::empty()`,
+        // so `update_stems` can grow into it. An empty map has no slots to
+        // fill, which is what forced the first-population special case that
+        // then swallowed the epoch rebuild. Under a hidden connector slot 0
+        // is reserved from the start; neither constructor draws on no peers.
+        let map = if origin_address_hidden {
+            StemMap::new_with_reserved_slot(Vec::new(), Vec::new(), stems, rng)
+        } else {
+            StemMap::new(Vec::new(), stems, rng)
+        };
         Ok(Self {
             stem_watch: StemWatch::default(),
             contexts: BTreeMap::new(),
-            // Built at full width with no peers rather than `StemMap::empty()`,
-            // so `update_stems` can grow into it. An empty map has no slots to
-            // fill, which is what forced the first-population special case that
-            // then swallowed the epoch rebuild.
-            map: StemMap::new(Vec::new(), stems, rng),
+            map,
             fluff: FluffScheduler::memoryless(),
             fluffing: epoch.fluffing,
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            origin_address_hidden: any_hides_address_from_peer(configured),
-            hop0_edge: None,
+            origin_address_hidden,
             noise,
         })
     }
@@ -832,6 +859,10 @@ impl Relay {
     /// nothing about the merged result looks wrong when it happens. A close
     /// does not call this. The dead slot stays until the next merge.
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
+        if self.origin_address_hidden {
+            self.merge_reserved(rng);
+            return;
+        }
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
         // Named bind: the value is `Copy + must_use`, so neither `drop` nor
@@ -852,11 +883,15 @@ impl Relay {
     /// channel picks up its new peer at the next send, and a channel the redraw
     /// leaves unbound clears at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
-        // Class-blind. A hidden-address peer is one outbound candidate among
-        // the rest, not a reserved slot. The own-edge is drawn separately,
-        // on the next local origin, from the hidden-address pool.
-        self.map = StemMap::new(self.outbound_ids(), self.stems, rng);
-        self.hop0_edge = None;
+        // Every pin goes with the map, the local origin's included: the next
+        // origination pins afresh (§98.3). Under a hidden connector slot 0 is
+        // reserved for the address-hiding sessions; otherwise the draw is
+        // class-blind, as the paper's.
+        self.map = if self.origin_address_hidden {
+            self.reserved_stem_map(rng)
+        } else {
+            StemMap::new(self.outbound_ids(), self.stems, rng)
+        };
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -937,11 +972,11 @@ impl Relay {
             return RelayPlan::AwaitSync;
         }
         if local_origin && self.origin_address_hidden {
-            return self.own_edge(rng);
+            return self.hidden_slot_plan(rng);
         }
-        // No hidden-address connector: the own-edge is this stem slot. On a
-        // cover-bearing link that is the channel's cadence. Tor does not
-        // take this path.
+        // No hidden-address connector: the origin's first hop is an
+        // ordinary stem slot. On a cover-bearing link that is the channel's
+        // cadence. A node with a hidden connector does not take this path.
         // The inherited predicate, transcribed rather than restated:
         // `if (!zone_->fluffing || tx_relay == relay_method::local)`.
         if !self.fluffing || local_origin {
@@ -963,9 +998,10 @@ impl Relay {
     ///
     /// A settled [`RelayPlan::FluffEpoch`] does not refresh: retrying cannot
     /// change an epoch decision. [`RelayPlan::AwaitSync`] does not either.
-    /// [`RelayPlan::NoOwnEdge`] and [`RelayPlan::OwnEdge`] do not: the stem
-    /// map is not the pool those plans draw from, and a second plan would
-    /// let an empty own-edge fall through to fluff.
+    /// [`RelayPlan::OwnEdge`] does not: the hidden-origin arm has already
+    /// merged when its slot was dead. [`RelayPlan::NoOwnEdge`] does not: a
+    /// refresh cannot manufacture a session that hides this node's address,
+    /// and a second plan would let it fall through to fluff on a clear link.
     pub fn plan_relay_with_refresh<R: RelayRng + ?Sized>(
         &mut self,
         source: Option<ConnectionId>,

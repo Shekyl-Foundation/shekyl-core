@@ -130,11 +130,39 @@ fn a_hidden_connector_origin_does_not_draw_a_clear_edge() {
 }
 
 #[test]
+fn a_hidden_connector_refuses_a_stem_width_below_two() {
+    let mut rng = SplitMix64::new(3);
+    for stems in [0, 1] {
+        let built = Relay::new(
+            DandelionParams::inherited(),
+            stems,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        );
+        assert!(
+            matches!(built, Err(RelayNewError::HiddenSlotWidth { got }) if got == stems),
+            "slot 0 is reserved and the origin's pin needs an alternate: width {stems} refused"
+        );
+    }
+    assert!(Relay::new(
+        DandelionParams::inherited(),
+        1,
+        false,
+        &[ConnectorId::Clearnet],
+        0,
+        &mut rng,
+    )
+    .is_ok());
+}
+
+#[test]
 fn a_restricted_hop_0_is_constant_within_the_epoch() {
     let mut rng = SplitMix64::new(3);
     let mut z = Relay::new(
         DandelionParams::inherited(),
-        1,
+        2,
         false,
         &[ConnectorId::Clearnet, ConnectorId::Tor],
         0,
@@ -163,7 +191,12 @@ fn a_restricted_hop_0_is_constant_within_the_epoch() {
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::OwnEdge(dest),
-        "the own-edge is one peer for the epoch"
+        "the origin's pin is one peer for the epoch"
+    );
+    assert_eq!(
+        z.stem_slots()[0],
+        Some(dest),
+        "and that peer is the hidden stem slot"
     );
 }
 
@@ -189,25 +222,26 @@ fn eight_clearnet_and_one_tor_originates_every_epoch() {
         );
     }
     z.on_session_established(tor, PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    let mut tor_unslotted = 0;
     for _ in 0..200 {
         z.rebuild_stems(&mut rng);
-        if !z.stem_slots().contains(&Some(tor)) {
-            tor_unslotted += 1;
-        }
+        assert_eq!(
+            z.stem_slots()[0],
+            Some(tor),
+            "the one address-hiding session holds the hidden slot every epoch (§95.3)"
+        );
+        assert!(
+            (1..=8).contains(&z.stem_slots()[1].expect("filled").as_bytes()[0]),
+            "the other slot is drawn from the rest"
+        );
         let first = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
         let second = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
         assert_eq!(first, RelayPlan::OwnEdge(tor));
         assert_eq!(second, first);
     }
-    assert!(
-        tor_unslotted > 100,
-        "the Tor peer was absent from the stem map in only {tor_unslotted} of 200 epochs"
-    );
 }
 
 #[test]
-fn four_hidden_peers_share_the_own_edge() {
+fn four_hidden_peers_share_the_hidden_slot() {
     let mut rng = SplitMix64::new(4);
     let mut z = Relay::new(
         DandelionParams::inherited(),
@@ -248,8 +282,9 @@ fn four_hidden_peers_share_the_own_edge() {
         let index = dest.as_bytes()[0];
         assert!(
             (1..=4).contains(&index),
-            "own-edge {index} is not in the hidden pool"
+            "hidden slot {index} is not an address-hiding session"
         );
+        assert_eq!(z.stem_slots()[0], Some(dest), "the origin rides slot 0");
         counts[usize::from(index - 1)] += 1;
     }
     // Equal quarters. 1.5σ on the largest of four counts rejects a uniform
@@ -261,24 +296,203 @@ fn four_hidden_peers_share_the_own_edge() {
     for count in counts {
         assert!(
             count > 0,
-            "a hidden peer was never the own-edge: {counts:?}"
+            "a hidden peer never held the hidden slot: {counts:?}"
         );
         assert!(
             count <= 80,
-            "own-edge count {count} is far from a quarter ({counts:?})"
+            "hidden-slot count {count} is far from a quarter ({counts:?})"
         );
         let delta = f64::from(count) - expected;
         chi += delta * delta / expected;
     }
     assert!(
         chi < 11.34,
-        "own-edge counts are not a uniform draw over the pool: {counts:?} (chi {chi})"
+        "hidden-slot counts are not a uniform draw over the class: {counts:?} (chi {chi})"
     );
 }
 
+/// D-PR1-1 (c′) at the relay: the origin's pin is slot 0's peer plus one
+/// alternate drawn from the other address-hiding sessions at its first
+/// origination. A later hidden session does not re-point a live pin. When
+/// the slot's peer drops, the next origination rides the alternate (merged
+/// into slot 0, or found where the class-blind draw already slotted it).
+/// When the alternate drops too, the pin is exhausted: `NoOwnEdge` until the
+/// epoch ends, however many address-hiding sessions are up — a session
+/// opened after the pin never serves the origin. The next epoch pins afresh.
 #[test]
-fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
-    let mut rng = SplitMix64::new(11);
+fn the_origin_pin_walks_to_its_alternate_and_then_holds_until_the_epoch() {
+    for seed in 0..16 {
+        let mut rng = SplitMix64::new(11 + seed);
+        let mut z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        for byte in 1..=3 {
+            z.on_session_established(
+                id(byte),
+                PeerDirection::Outbound,
+                ConnectorId::Tor,
+                &mut rng,
+            );
+        }
+        z.on_session_established(
+            id(11),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+        z.rebuild_stems(&mut rng);
+        let RelayPlan::OwnEdge(primary) =
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("three address-hiding sessions and no pin");
+        };
+        assert_eq!(
+            z.stem_slots()[0],
+            Some(primary),
+            "the pin's head is the hidden slot"
+        );
+
+        // A fourth hidden session opens after the pin.
+        z.on_session_established(id(4), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::OwnEdge(primary),
+            "a live pin is not re-pointed when another hidden session connects"
+        );
+
+        // The slot's peer drops. The next origination rides the alternate.
+        z.on_connection_close(&primary);
+        let RelayPlan::OwnEdge(alternate) =
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("the alternate was live and the origin held");
+        };
+        assert_ne!(alternate, primary);
+        assert!(
+            (1..=3).contains(&alternate.as_bytes()[0]),
+            "the alternate was drawn at the pin, before session 4 existed: got {alternate:?}"
+        );
+        assert!(
+            z.stem_slots().contains(&Some(alternate)),
+            "the alternate occupies a slot: moved into slot 0 by the fill, or already in slot 1"
+        );
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::OwnEdge(alternate),
+            "the alternate stays while it is live"
+        );
+
+        // The alternate drops too: the pin is exhausted. Two address-hiding
+        // sessions are still up (the third initial one and session 4) and
+        // neither serves the origin this epoch.
+        z.on_connection_close(&alternate);
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::NoOwnEdge,
+            "an exhausted pin holds until the epoch ends"
+        );
+        assert!(
+            z.stem_slots()[0].is_some(),
+            "slot 0 refilled from the class for relayed traffic while the origin holds"
+        );
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::NoOwnEdge,
+            "and keeps holding"
+        );
+        let forwarded = z.plan_relay(Some(id(11)), false, NodeSync::Synchronised, &mut rng);
+        assert!(
+            matches!(forwarded, RelayPlan::Stem(_)) || z.is_fluffing(),
+            "relayed traffic still routes"
+        );
+
+        // The next epoch pins afresh over what is live.
+        z.rebuild_stems(&mut rng);
+        let RelayPlan::OwnEdge(fresh) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("a new epoch with hidden sessions up pins again");
+        };
+        assert!(fresh == id(4) || (1..=3).contains(&fresh.as_bytes()[0]));
+    }
+}
+
+/// One of the two other address-hiding sessions is the pin's alternate and
+/// the other is not. Dropping one of them and then the primary shows which:
+/// if it was the alternate, the pin is exhausted at the primary's drop
+/// although the third session is up; if it was the third, the pin walks to
+/// the live alternate untouched. Over the seeds both happen.
+#[test]
+fn an_alternate_that_dropped_first_leaves_the_origin_holding_at_the_primary_drop() {
+    let mut exhausted = 0;
+    let mut walked = 0;
+    for seed in 0..24 {
+        let mut rng = SplitMix64::new(31 + seed);
+        let mut z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        for byte in 1..=3 {
+            z.on_session_established(
+                id(byte),
+                PeerDirection::Outbound,
+                ConnectorId::Tor,
+                &mut rng,
+            );
+        }
+        z.rebuild_stems(&mut rng);
+        let RelayPlan::OwnEdge(primary) =
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("no pin");
+        };
+        let others: Vec<ConnectionId> = (1..=3).map(id).filter(|p| *p != primary).collect();
+        let (dropped, kept) = (others[0], others[1]);
+
+        z.on_connection_close(&dropped);
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::OwnEdge(primary),
+            "the primary is live; nothing moves"
+        );
+        z.on_connection_close(&primary);
+        match z.plan_relay(None, true, NodeSync::Synchronised, &mut rng) {
+            RelayPlan::NoOwnEdge => {
+                // `dropped` was the alternate: exhausted although `kept` is up.
+                assert!(z.peer(&kept).is_some());
+                exhausted += 1;
+            }
+            RelayPlan::OwnEdge(dest) => {
+                // `dropped` was the third session: the pin walks to its live
+                // alternate, which is `kept`.
+                assert_eq!(dest, kept);
+                walked += 1;
+            }
+            other => panic!("unexpected plan {other:?}"),
+        }
+    }
+    assert!(
+        exhausted > 0 && walked > 0,
+        "exhausted {exhausted}, walked {walked}"
+    );
+}
+
+/// A node that originates at boot with one address-hiding session up has a
+/// pin of one. If that session drops, the origin holds until the epoch ends
+/// however many such sessions the dialer opens afterwards (§98.5).
+#[test]
+fn a_boot_pin_over_one_hidden_session_holds_after_it_drops() {
+    let mut rng = SplitMix64::new(41);
     let mut z = Relay::new(
         DandelionParams::inherited(),
         2,
@@ -289,48 +503,114 @@ fn a_dead_own_edge_is_replaced_and_a_live_one_is_not() {
     )
     .unwrap();
     z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
-    let RelayPlan::OwnEdge(dest) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
-    else {
-        panic!("hop 0 had two hidden peers");
-    };
-    z.on_session_established(id(3), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::OwnEdge(dest),
-        "a live own-edge is not re-pointed when another hidden peer connects"
+        RelayPlan::OwnEdge(id(1))
     );
-    z.on_connection_close(&dest);
-    let RelayPlan::OwnEdge(replaced) = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng)
-    else {
-        panic!("a dead own-edge with peers still up returned no route");
-    };
-    assert_ne!(replaced, dest);
-    assert!(
-        replaced == id(1) || replaced == id(2) || replaced == id(3),
-        "replacement {replaced:?} is not in the remaining pool"
-    );
-    assert_eq!(
-        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
-        RelayPlan::OwnEdge(replaced),
-        "the replacement stays while it is live"
-    );
-    z.on_connection_close(&replaced);
-    for byte in 1..=3 {
-        let peer = id(byte);
-        if peer != dest && peer != replaced {
-            z.on_connection_close(&peer);
-        }
+    z.on_connection_close(&id(1));
+    for byte in 2..=5 {
+        z.on_session_established(
+            id(byte),
+            PeerDirection::Outbound,
+            ConnectorId::Tor,
+            &mut rng,
+        );
     }
+    assert!(
+        z.stem_slots()[0].is_some(),
+        "slot 0 refilled for relayed traffic"
+    );
     assert_eq!(
         z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
         RelayPlan::NoOwnEdge,
-        "an empty hidden-address pool has nothing to draw"
+        "a session opened after the pin never serves the origin this epoch"
+    );
+    z.rebuild_stems(&mut rng);
+    assert!(matches!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::OwnEdge(_)
+    ));
+}
+
+/// An origination that finds no address-hiding session makes no pin, so the
+/// first hidden session to arrive serves the next origination.
+#[test]
+fn an_origination_with_no_hidden_session_makes_no_pin() {
+    let mut rng = SplitMix64::new(43);
+    let mut z = Relay::new(
+        DandelionParams::inherited(),
+        2,
+        false,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    z.on_session_established(
+        id(11),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::NoOwnEdge
+    );
+    z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    assert_eq!(
+        z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+        RelayPlan::OwnEdge(id(1)),
+        "no pin was made on the empty slot; the arrival fills it at the merge and serves"
+    );
+}
+
+/// Relayed sources are unchanged by the reserved slot: they pin over both
+/// slots, hidden or not.
+#[test]
+fn relayed_sources_reach_both_slots_under_a_hidden_connector() {
+    let mut rng = SplitMix64::new(47);
+    let mut z = None;
+    for _ in 0..10_000 {
+        let built = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        if !built.is_fluffing() {
+            z = Some(built);
+            break;
+        }
+    }
+    let mut z = z.expect("a stem epoch");
+    z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    z.on_session_established(
+        id(11),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    for byte in 100..140 {
+        let RelayPlan::Stem(dest) =
+            z.plan_relay(Some(id(byte)), false, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("a stem epoch routes relayed traffic");
+        };
+        seen.insert(dest);
+    }
+    assert_eq!(
+        seen.len(),
+        2,
+        "relayed sources reach the hidden slot and the clear slot"
     );
 }
 
 #[test]
-fn an_unslotted_own_edge_uses_the_ordinary_carrier() {
+fn the_hidden_slot_origin_uses_the_ordinary_carrier_beside_a_clearnet_slot() {
     let mut rng = SplitMix64::new(5);
     let mut z = Relay::new(
         DandelionParams::inherited(),
@@ -356,11 +636,17 @@ fn an_unslotted_own_edge_uses_the_ordinary_carrier() {
     z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
     let dispatch = z.plan_dispatch(None, true, NodeSync::Synchronised, &mut rng);
     assert_eq!(dispatch.plan, RelayPlan::OwnEdge(id(2)));
-    assert!(
-        !z.stem_slots().contains(&Some(id(2))),
-        "the two clearnet peers already fill the stem map"
+    assert_eq!(
+        z.stem_slots()[0],
+        Some(id(2)),
+        "the one address-hiding session holds slot 0; a clearnet peer the other"
     );
-    assert_eq!(dispatch.carrier, RelayCarrier::Ordinary);
+    assert!(z.stem_slots()[1] == Some(id(1)) || z.stem_slots()[1] == Some(id(3)));
+    assert_eq!(
+        dispatch.carrier,
+        RelayCarrier::Ordinary,
+        "no cover on Tor: the hidden slot's channel carries nothing"
+    );
 }
 
 #[test]
@@ -449,13 +735,17 @@ fn an_empty_hidden_pool_does_not_refresh_the_stem_map() {
             &mut rng,
         );
     }
-    let slotted: Vec<_> = z.stem_slots().iter().copied().flatten().collect();
-    assert_eq!(slotted.len(), 2, "width 2 with three outbound peers");
+    assert_eq!(
+        z.stem_slots()[0],
+        None,
+        "slot 0 is reserved and no session hides the address"
+    );
+    let slotted = z.stem_slots()[1].expect("one clearnet peer holds the other slot");
     let spare = [id(1), id(2), id(3)]
         .into_iter()
-        .find(|peer| !slotted.contains(peer))
-        .expect("one peer is unslotted");
-    z.on_connection_close(&slotted[0]);
+        .find(|peer| *peer != slotted)
+        .expect("two peers are unslotted");
+    z.on_connection_close(&slotted);
     let before = z.stem_slots().to_vec();
     assert!(
         !before.contains(&Some(spare)),
