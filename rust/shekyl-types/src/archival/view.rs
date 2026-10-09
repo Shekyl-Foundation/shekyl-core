@@ -36,8 +36,11 @@ pub struct ShardView {
     pub coinbase_output_count: u64,
     /// `last`'s timestamp minus `first`'s, saturating.
     pub time_range_seconds: u64,
-    /// The block whose connection closed the shard: the cache key the
-    /// response carries so a viewer can tell two views of one id apart
-    /// across a reorg (`SV-D5`).
+    /// The block whose connection closed the shard. Placement, and the
+    /// height the spec version is pinned at. A viewer tells two views of
+    /// one id apart by `(shard_id, shard_hash)`: a same-height reorg leaves
+    /// this height and moves [`Self::shard_hash`] (`SV-D5`, amended
+    /// 2026-10-09). The daemon's own cache keys on the close-block hash,
+    /// which this view does not carry.
     pub close_height: BlockHeight,
 }

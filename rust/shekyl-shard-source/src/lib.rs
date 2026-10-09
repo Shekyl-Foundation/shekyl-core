@@ -12,9 +12,12 @@
 //! (`shekyl-wallet-contract::shard_view`, `SHARD_VIEW_FETCH.md` SV-D): the
 //! wallet's daemon fetches the body from a holder, folds the view hash
 //! (SV-D1) and returns the counts. Enumerating live shards is not a list of
-//! aggregates either — each one costs a fetch — but a count,
-//! `shekyl_types::closed_shards(height)`: shard `k` is viewable iff
-//! `k < closed_shards(tip)`. The `ArchivalShardSource` stub this crate once
+//! aggregates either — each one costs a fetch — but a count from the chain
+//! view. `shekyl_chain_rules::closed_shards_through` at a height is the
+//! closed set `0..n`: shard `k` holds the transactions whose fold-before
+//! lies in `[k·W, (k+1)·W)` and is closed once the fold has reached
+//! `(k+1)·W`. `closed_shards_before` is that count at the parent of a
+//! connecting block. The `ArchivalShardSource` stub this crate once
 //! carried for that role is deleted (rule 23: a refusing stub behind a
 //! feature flag is a deferral wearing code), and its premise — that a
 //! source reconstructs aggregates from a local archival registry — is
@@ -201,10 +204,11 @@ impl ShardSource for FixtureShardSource {
         // `shard_hash` is authoritative: a handle whose hash disagrees with the
         // resolved aggregate is stale and rejected, never rendered under the
         // wrong hash (2026-07-10 decision-log entry). Always passes on fixtures
-        // (their hashes are static). For a live shard the same question is
-        // answered by `get_shard_view`'s `close_height`: a view whose
-        // close_height moved is a view across a reorg, and a viewer caching
-        // by id re-keys on it.
+        // (their hashes are static). A live view is the same key. Viewers tell
+        // two views of one id apart by `(shard_id, shard_hash)`
+        // (`SHARD_VIEW_FETCH.md` SV-D5, amended 2026-10-09). `close_height`
+        // places the shard and pins the spec version; a same-height reorg
+        // leaves it and moves the hash.
         if summary.aggregate.shard_hash != handle.shard_hash {
             return Err(ShardSourceError::StaleHandle {
                 shard_id: handle.shard_id,
