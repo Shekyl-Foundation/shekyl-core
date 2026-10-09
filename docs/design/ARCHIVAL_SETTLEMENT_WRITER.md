@@ -5,7 +5,8 @@
 mechanism is named, not just leaned toward); **`SO-D7` CORRECTED 2026-08-24 —
 it re-derived a constraint the tree already enforced**; **`SO-D8` OPENED** and
 assigned out of this round. **`SO-D10` RULED 2026-10-08** — the writer's
-wiring ahead of the secret draw, §14.
+wiring ahead of the secret draw, §14. **`SO-D11` POSED 2026-10-09** —
+accrual reads the row and the gather moves to the slash pass, §15.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -705,6 +706,7 @@ added (Q15).
 | `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`). **Direction ratified 2026-09-13 — shape R-B:** the record names and validates its issuing block `h`, `E = epoch(h)`, deadline `h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`; `PC-D2` reversed; dedup widens to `(P,s,E,h)`; the emission gather joins the writer in the slash pass (this doc's `SO-D7` applied to its second consumer). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B / PC-D4 / SO-D7); `SO-D8d` RULED 2026-09-16 (three local layers, halt not clamp, on-chain digest REJECTED; proposal §6); `SO-D8e` RULED 2026-09-16 (proposal §7.2); Q9 carrier semantics RULED (B) same day; Q9's set-commitment bytes (PROPOSED) remain to be ruled in [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §9. *SUPERSEDED: "and the witness-key / batching questions remain to be ruled" — Q8 and Q9 RULED 2026-09-16.* **Reconciled 2026-09-14 against `PL-D3` (PR #745):** the witness key must not be a spendable output's own key, because `PL-D3` holds only while the per-output key is published once, at spend (proposal §2.2); `SO-D8` builds on `dev` after #745 and touches none of its surfaces. The §12 hold on the writer call site stands until then. **UPDATE 2026-09-16 (Q15 RULED):** wait until SO can be written directly in Rust; no C++ mirroring. **S-CHAIN-W increment 3 landed 2026-09-15** (PR #757); DRS is one increment from a validator. Deadline and SO-D9 are surface-free E6 rows; witness verification is bound to the block/tx surface; membership and dedup wait on S-ARCH with the writer — not the whole port. Wait's load-bearing reason is re-derivation plus a second bite at a genesis-frozen wire (`h`, 117 → ~125, rule 42), not only the shim prohibition. Beacon-era §5.1 interim-writer stays closed. *SUPERSEDED: Q12 sequenced behind F5.* Q3 RULED 2026-09-16 (`DrawableSet::at_epoch_open`; drop stays in `D`; filter at settlement). **UPDATE 2026-09-16 (Q8 RULED):** dedicated non-output hybrid key from coinbase output 0's `combined_ss`; 32-B commitment under `0x0C` (not `0x0B` — no version prefix, `k × 49` B). Combined_ss does not cross the FFI. **UPDATE 2026-09-16 (Q8 pins):** `0x0C` mandatory-present (commitment 2); `combined_ss` uniqueness is a derivation requirement with a fixture; Q10 RULED: memory-only ZeroizeOnDrop; persist-encrypted REJECTED. Q12 RULED independently (proposal §7.9); Q13 writes the CEN row and does not re-open optionality. **UPDATE 2026-09-16 (Q9 RULED):** *records-was, amended below:* Merkle-root batching; fail-whole refused (authorship ≠ incidence); serve-credit is fee-less by construction; 300,000 is `get_min_block_weight` (a floor); prunable bytes count toward weight. Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈365 KB/block; 39:1). Unpaid inclusion and any prunable-weight discount belong to a fee-and-weight round. **UPDATE 2026-09-16 (Q10 RULED):** accept-loss; memory-only ZeroizeOnDrop ring; persist-encrypted REJECTED. File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key`, not persist. **UPDATE 2026-09-16 (Q13 RULED):** 0x0C content is one CEN row, five fixtures, genesis-unconditional; dedicated parser must not copy 0x0B empty-set; length is WITNESS_COMMITMENT_BYTES. **UPDATE 2026-09-16 (Q12 RULED):** 0x0C is a bare 32-B cSHAKE256 of witness_pk under shekyl/archival-witness-key-v1, independent of F5; hiding is theater (reveal publishes pk); reopen if h is removed in order to conceal the issuing block. **UPDATE 2026-09-16 (SO-D8a/b/c RULED):** transcriptions — fire gate dies, `h_close` replaced by per-challenge W₂ (`CHALLENGE_RESPONSE_BLOCKS` FOLLOWUPS discharged); dedup `(P,s,E,h)` exact-get because `h` is in the past and in the DB (what PC-D4 could not do); emission gather to slash pass (SO-D7's second consumer). **UPDATE 2026-09-16 (`SO-D8d` RULED, amended same day vs `dev@5fde3b1ce`):** three local layers — assignment equality (streamed); **persisted** local 32-B `D` digest written in the connect batch at `h_open(E)`, compared against a re-walk at every slash pass; `passes ≤ issued` backstop (strictly dominated). The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone. Desync is a **store-invariant Fault** with a new `SI-` row (Slice C) — `poison().arm(row)` → `ConnectState::Halted`; never `CenRow`/`InvalidBlock`; the block at the slash height is unwritten *because the writer halted*, not because it is invalid. Q7 collapsed: cache drops at `h_close + W₂`; the writer is a pure function of chain data (`SO-D1` §4.2, `SO-D6`). §7.4 pin 4 reconciled by call site. On-chain `D`-digest REJECTED on four grounds (ground 3 withdrawn); issued-from-records REJECTED. Q4 is a coverage precondition (λ divergence passes layer 2). **UPDATE 2026-09-16 (Q15 residue):** #761/#762/#764 landed; falsifier unchanged and unfired (LMDB serves production; `held_by_cxx` rows). **UPDATE 2026-09-16 (review):** Q9's byte construction (proposal §7.6.1, PROPOSED) and carrier semantics (§7.6.2, OPEN — the inherited contract refuses a whole carrier on one bad vin; per-vin admission vs fail-whole + resubmission, recommendation (B)) are ruled before Slice C; Q3's drop-safety argument corrected (a dropped pair writes no row — zero bad observations, not one); fee-and-weight round now a FOLLOWUPS row. **UPDATE 2026-09-16 (`SO-D8e` RULED):** forward urn + `W₂` ring of self-contained pairs (~1.9 MB); no checkpoints — rewind replays from the hash-independent wave boundary; one `DrawableSet` live; lifetime `[h_open, h_close + W₂]`, settlement never reads it; one persisted carve-out (32-B `D` digest at `h_open`, undo-logged); ~16 MB at maturity; stateless draws-with-replacement FORECLOSED; owed `SI-10` (SI-5 exists, reuse refused) and 720-not-`D_max`. **UPDATE 2026-09-16 (Q9 amended):** Merkle-root batching SUPERSEDED same day — its isolation-at-admission premise was false under the carrier contract; ruled form is one signature per carrier over a set commitment (`cSHAKE256_32` of the length-framed records, bytes PROPOSED), **carrier fail-whole + resubmission within `W₂`** ((B) RULED; (A) per-vin admission REJECTED — free-weight channel); no inclusion paths (−22 KB/block); split 42 / 42 / 13, ≈ 347 KB/block, 42:1. **UPDATE 2026-09-17 (Q4 RESOLVED, `fix/so-q4-pin-lambda`):** `ChallengeUrn::new` reads `CHALLENGES_PER_PAIR_PER_EPOCH`; `assign_epoch` feeds that constructor; explicit λ is `#[cfg(test)]`; FOLLOWUPS `lambda_target` row removed. Open: Q9 set-commitment vectors. Q12–Q13 RULED; Q14 resolved by Q15 plus the tautology-repair prohibition. **UPDATE 2026-10-04:** Slice C AUTHORIZED, owned by this round with the writer's call site; the §12 hold lifted (proposal §8.0; `SERVE_CREDIT_VERIFIER.md` `SCV-Q3`). | **DIRECTION RATIFIED 2026-09-13 — a–e RULED 2026-09-16; placement RULED 2026-09-16 (Q15)**, consensus-visible |
 | `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it at that single site from `shekyl_archival_settlement_epoch_at_height(·)` of the block whose epoch the record claims — `current_height` on the **pre-cutover R-A path** (the connecting block), the **validated issuing block `h`** under **R-B** (proposal §1 "what is ruled is the site", §2.1 item 3) — making "the record's epoch is the block's epoch" an explicit enforced rule rather than a bound on *when* implicit in `h_close`. The *site* is independent of `SO-D8`'s shape; the *operand* is not, and the two pre-FFI C++ bounds (`h_close`, `challenge_seal_on_chain`) mean (i) on the R-A operand flips exactly one block per epoch (proposal §1 "Ordering", Q14). **Implementation not yet built** and **not to be built on the C++ path** (Q15, 2026-09-16): the row lands in `shekyl-chain-rules` with the R-B cutover, operand `h`. **Prohibition:** do not repair the tautology in `blockchain.cpp` — that would be a consensus tightening on the live LMDB daemon for a path being replaced. FOLLOWUPS row. Proposal: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 / Q15 | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D10` | Wiring the writer ahead of the secret draw: it reads the issued-draw index, empty until the draw lands; the walk-back skips an unobserved epoch inside a standing run; the pass fact lives on the draw's index entry; accrual follows as its own change and gates the draw (§14) | **RULED 2026-10-08** |
+| `SO-D11` | Accrual reads the settlement row (`SO-D10d`), so the emission gather moves to the slash pass (`SO-D8c`): what is credited, CEN-J15's price row, when an epoch is claimable, `SI-21`, and the cutover gate. §15 | **POSED 2026-10-09** |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual
@@ -919,3 +921,117 @@ unless noted.
   `slash_scan_bench_tests.rs`, which now issues the draws it settles. The
   other, `archival_write_tests.rs`, drives accrual, which stays on any
   pass until `SO-D10d`.
+
+---
+
+## 15. `SO-D11` — accrual reads the row, and the gather moves — POSED 2026-10-09
+
+Step 4 of §14.4. Grounded at `feat/settlement-writer@1ed03431ea`. Nothing
+here is built. Two rulings meet in this step, and the second rests on a
+premise the code does not bear out, so the step is posed before it is
+written.
+
+### 15.1 What is ruled
+
+- **`SO-D10d`** (§14.5): accrual reads the settlement row. Its own change,
+  after the slash fold reads the row and before the draw; the draw cannot
+  go live until it lands.
+- **Specification §9.4:** the slash fold and reward accrual read the
+  settlement row; neither reads "any pass".
+- **`SO-D8c`** (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §5, 2026-09-16):
+  the emission gather moves from the epoch close to the slash pass. The
+  close hook stays for the budget freeze. The invariant-2 joint pin of
+  `ARCHIVAL_CONSENSUS_STATE.md` §4 is re-pinned in the same change.
+
+The second follows from the first: epoch `E`'s rows are written by the
+slash pass at `(E+2)·SEB − 1`, an epoch after `E`'s close at
+`(E+1)·SEB − 1`. A gather that reads rows cannot run at the close.
+
+### 15.2 What the code does today
+
+| Subject | State | Where |
+| --- | --- | --- |
+| Who is credited | A pair with any pass row for `(P, shard, E)`, plus the closing block's own credits | `rust/shekyl-chain-rules/src/archival/close.rs` (`recorded_credits`, `Transition::credited_shards`) |
+| The gather | At the close of `E`: `epoch_close_compute` over the credited pairs gives `r_market(shard, E)` for every closed shard and `Σwork(E)` | `close.rs` (`gather_epoch_snapshot`, `Transition::close`); `rust/shekyl-archival-retention/src/consensus_state.rs` (`epoch_close_compute`) |
+| What the close writes | `archival_r_market[*, E]`, `archival_sigma_work[E]`, `archival_budget[E]`, each insert-once, as one write set | `rust/shekyl-chain-store/src/store/archival_write.rs` (`record_archival_epoch`); `SI-21` |
+| A claim's gate | CEN-J23 refuses a claimed epoch with no `budget` or no `Σwork` row, then re-gathers the epoch **by the same any-pass read** and CEN-J25 compares the recomputed `Σwork` with the stored one | `rules/tx_emission_against.rs` (`J23::gather`, `J25::verify`) |
+| When `E` is claimable | From connecting height `(E+1)·SEB + 1`: the second block of `E+1`. The window is `[C − 26, C − 1]` for a block in epoch `C` | `rust/shekyl-archival-retention/src/emission_verify.rs`; `archival/inputs.rs` |
+| A compact join's price | CEN-J15 reads `r_market(shard, P − 1)` for a parent in epoch `P`, and refuses when the row is absent | `rules/tx_bond.rs` (`holding_admissible`); `SettlementSchedule::last_settled_epoch_as_of_parent` |
+| The C++ daemon | Gathers at the close on any pass. No C++ code gathers at the slash pass | `src/blockchain_db/lmdb/db_lmdb.cpp` (`process_archival_epoch_close_at_height`) |
+| The wallet and the claim-source RPC | Read the C++ daemon's rows. The wallet skips an epoch on `has_budget_row = false`; `Σwork`'s presence is not on the wire | `rust/shekyl-engine-core/src/engine/emission_claim.rs`; `src/rpc/archival_claim_source.cpp` |
+
+### 15.3 The defect: `SO-D8c` says the consumers tolerate the move
+
+`SO-D8c` reads `REWARD_EMISSION_LEG.md` §4.5 ("typically in settlement
+epoch `E+1` or later") as tolerance. Three consumers do not tolerate it
+as written.
+
+1. **CEN-J15.** With `r_market(·, P − 1)` written by the slash pass at
+   the **last** block of `P`, the row is absent for every parent in `P`
+   but that one. A compact join would be admissible at one connecting
+   height per epoch.
+2. **Claims.** §4.5's own joint pin makes `E` citable from
+   `h_close(E) + 1`, inside `E+1`. With `Σwork(E)` written at
+   `(E+2)·SEB − 1`, CEN-J23 refuses `E` for the whole of `E+1`. The
+   window's top moves from `C − 1` to `C − 2`.
+3. **`SI-21`.** "An epoch closes whole": budget, `Σwork` and every
+   `r_market` row exist together or none does. Budget at the close and
+   the other two an epoch later is the state it excludes.
+
+And one that is not a tolerance question: **CEN-J23 and J25 re-gather at
+claim time.** If the stored `Σwork(E)` is computed from rows and the
+claim's recomputation still reads any pass, every claim fails J25's
+comparison. The verify moves with the gather, and the settlement rows
+become an operand of every claim for as long as the epoch is claimable.
+
+### 15.4 The shape proposed
+
+- **A pair is credited for `E` iff its settlement row for `E` is Served.**
+- **The slash pass of `E` gathers.** After it settles `E` and before it
+  slashes on it, it computes `r_market(·, E)` and `Σwork(E)` over the
+  Served pairs and the snapshot of records it already holds. They ride
+  the delta beside the rows and are written with them.
+- **The close of `E` freezes `budget(E)` and nothing else.**
+- **"Settled" means the slash pass has run.** CEN-J15 and the claim gate
+  key on the slash watermark (`last_settled_slash_epoch`, A9), not on
+  `epoch(parent) − 1`. One definition, read off recorded state, in place
+  of two arithmetic ones.
+- **The claim verify reads rows.** J23's re-gather takes the Served pairs
+  of the claimed epoch.
+
+### 15.5 Posed
+
+| # | Question | Recommended |
+| --- | --- | --- |
+| `SO-D11a` | What "credited" is | **The pair's row for `E` is Served.** A transcription of specification §9.4. Two consequences to accept with it: a pair issued fewer than three draws in `E` earns nothing for `E` even if it served (the specification's "unpaid service"); and a pass that is not among the three selected earns nothing. `PC-D6` recorded "emission credits on presence while settlement slashes on absolute-2" as noted and not opened. §9.4 opens and closes it |
+| `SO-D11b` | Before the draw lands the index is empty, so no pair is Served and `Σwork` is zero for every epoch | **Accept it, and make it a gate on the cutover.** With `SO-D10a` the Rust validator slashes nothing until the draw; with this step it also pays nothing: a budget with no credited work has no claimant. That is harmless while the C++ daemon is consensus and is not harmless one block after it stops being. **Gate:** the Rust validator does not become the live validator (`DEL-008`) before the draw is live. Recorded on the `DEL-008` row beside the `SO-D10d` gate |
+| `SO-D11c` | CEN-J15's price row | **Read `r_market(shard, w)` at the slash watermark `w` as of the parent**, the last epoch whose gather has run. Under the pinned schedule that is `P − 2` for a parent in `P`, except in `P`'s last block. The price a join meets is one epoch older than today. The alternative, leaving the key at `P − 1`, admits joins at one height per epoch |
+| `SO-D11d` | When `E` becomes claimable, and the window | **`E` is claimable once its `Σwork` row exists**: from connecting height `(E+2)·SEB`, one epoch later than today. Row existence is the citing gate (`ARCHIVAL_CONSENSUS_STATE.md` §4 says so already), so CEN-J23 is the gate and CEN-J25's finalisation bound stays true and stops binding. **Keep `MAX_CLAIM_AGE_W_EPOCHS = 26`**: the floor does not move, so the claimable span is 25 epochs where it was 26. Raising it to 27 to keep 26 is the alternative; it also moves the retention horizon and everything pinned to it, including the walk-back bound of §14.4 |
+| `SO-D11e` | `SI-21` | **Restate it as two write sets.** *The close freezes the budget:* `archival_budget[E]`, insert-once. *The slash pass settles whole:* `archival_sigma_work[E]` and every `r_market(shard, E)` row its snapshot named, zeros written, exist together with the epoch's settlement rows or none does; insert-once on `E`. Whether that is `SI-21` reworded or `SI-21` narrowed plus a new row is the register's call; one row reworded is the smaller change |
+| `SO-D11f` | The universe the gather reads. The close read the closed shards and the records as of the close. The slash pass runs an epoch later | **As of the slash pass.** The gather takes the records snapshot the pass already judges on and the closed universe before its connecting height. A shard that closed during `E+1` is then in `E`'s `r_market` with a count of zero unless a pair was Served on it. A pair slashed out by an earlier pass is already absent. The alternative, reconstructing the state as of `h_close(E)`, needs the as-of-height holdings fold for every pair and buys a snapshot nothing else in the pass uses |
+| `SO-D11g` | The wallet and the claim-source RPC | **No change in this step.** They read the C++ daemon, which gathers at the close. At the cutover the claim source must gate an epoch on `Σwork`'s row, not only on the budget's: budget-present and `Σwork`-absent would otherwise reach the wallet as a work total of zero. Recorded for the RPC lane on the `DEL-008` row; not built here |
+| `SO-D11h` | The design text that pins materialisation at the close: `ARCHIVAL_CONSENSUS_STATE.md` §3.3, §3.5 and §4's invariant 2 and joint pin; `REWARD_EMISSION_LEG.md` §4.4 and §4.5; `EMISSION_CLAIM_BUILDER.md` §2 and §7.3; `ARCHIVAL_BUDGET_SCHEDULE.md` §3.3 | **Re-pinned in the implementing change**, as `SO-D8c` requires: the text describing the Rust validator states the slash pass, and text describing the C++ daemon stays and is marked as going with `DEL-008` |
+
+### 15.6 What moves with it
+
+- **Tests.** `a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back`
+  (store), `the_drivers_emission_claim_connects_and_pays_the_persona`
+  and the levered chain's `join_two_shards` (ingest), the J15, J23 and
+  J25 rule tests and the harness's `with_close`, which plants `Σwork`
+  and budget as one unit.
+- **The pinned snapshot** `SLASHED_SNAPSHOT_BODY_KECCAK`: its body holds
+  the close families, and the `Σwork` row count at the tip drops by one.
+- **The comparison with the C++ capture** (`vectors_tests`): the Rust
+  rows for `RMarket` and `SigmaWork` will differ from the daemon's by
+  ruling, in timing and in content. Which families stay compared is
+  settled in the implementing change against what the capture holds.
+- **Retention.** Settlement rows join the operands of a claim, so they
+  live at least as long as the claim window. Both prune at one horizon
+  in the design; the Rust store prunes neither today.
+- **`ESR-12`** (settlement timing) gains its first concrete figure: one
+  epoch between serving and a claimable reward becomes two.
+
+### 15.7 Not in this step
+
+Admission, the draw, the drawable-set check (`SO-D10g`), and any C++
+change.
