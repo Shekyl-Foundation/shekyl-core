@@ -31,8 +31,8 @@ use shekyl_curve_tree::{
 };
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
-    PinnedServeSet, RefusingKey, ReportedSet, ServeCounters, ServeObligation, ServeSetPinner,
-    Staleness, StalenessBound,
+    PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
+    ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
 use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
@@ -543,6 +543,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("host starts without a working tor — the endpoint does not need one");
@@ -672,6 +673,7 @@ async fn shutdown_stops_the_listener() {
             bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -747,6 +749,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -804,6 +807,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             bodies: bodies.reader(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1147,6 +1151,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1214,6 +1219,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1259,6 +1265,7 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             bodies: empty_bodies(),
         },
         DeadPinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect_err("a dead pinner cannot start a host");
@@ -1327,6 +1334,7 @@ async fn host_staleness_uses_the_live_witness() {
             bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1760,6 +1768,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");

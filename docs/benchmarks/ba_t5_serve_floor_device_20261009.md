@@ -499,11 +499,13 @@ changes directory.
 - `ba_t5_serve_floor_device_20261009_obs.tsv` — the capture: per-fetch
   `OBS` rows, `BLOCK`, `LATE`, `TTFB` and `EXIT` rows, `NOTE` rows for each
   sync daemon start and pass order; header names the tree, the probe's
-  hash and the conditions. One header line differs from the file the
-  device wrote: the run script had put the LAN staker's address in the
-  "syncing daemon" line, and this repository names roles, not hosts, so
-  that line now says "a testnet staker on the LAN, port 12021" and the
-  script writes it that way from now on. No data row is changed.
+  hash and the conditions. Two header lines differ from the file the
+  device wrote, because this repository names roles, not hosts: the
+  "syncing daemon" line carried the LAN staker's address and the daemon's
+  binary path, and the "resident daemon" line carried its command line
+  with binary and configuration paths. Both now name the daemon's role
+  only, and the run script writes them that way from now on. No data row
+  is changed.
 - `ba_t5_serve_floor_device_20261009_env.tsv` — one `ENV` row before and
   after every block and pass: temperature, governor, clock, load,
   jiffies, both daemons' RSS, the syncing daemon's height, memory, swap.

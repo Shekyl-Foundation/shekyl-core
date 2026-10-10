@@ -29,6 +29,11 @@ shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
 # Same runtime the two halves already use; `sync` for the posture watch this
 # crate re-exports, `time` for the bounded startup wait.
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+# The serving runtime (SH-3): built through the single constructor, with
+# its own thread-ledger row, and owned by the host.
+shekyl-runtime = { path = "../shekyl-runtime" }
+# Every thread of that runtime lowers its own CPU priority as it starts.
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 
 [features]
 # Arms `shekyl-p-serve`'s ephemeral `TestKeySigner` as a `PassKey`, so a host

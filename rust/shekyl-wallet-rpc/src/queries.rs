@@ -231,11 +231,12 @@ pub(crate) async fn get_wallet_info(
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "get_wallet_info")?;
 
-    // The serving posture rides out of this same tenant-lock block: it is
+    // The serving snapshot rides out of this same tenant-lock block: it is
     // the embedder's fact (the handle is parked here, not on the engine),
     // and taking it now means the tenant lock is never re-entered under the
-    // engine guard below.
-    let (name, shared, serving_posture) = {
+    // engine guard below. One read: posture and the unlowered count are
+    // the same lifecycle.
+    let (name, shared, serving) = {
         let state = tenants.lock().await;
         let name = state
             .tenant
@@ -243,7 +244,7 @@ pub(crate) async fn get_wallet_info(
             .ok_or(WalletRpcError::WalletNotOpen)?
             .to_owned();
         let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, engine, state.tenant.serving_posture())
+        (name, engine, state.tenant.serving_status())
     };
 
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
@@ -284,6 +285,7 @@ pub(crate) async fn get_wallet_info(
         // staking fields and the `staking` block absent while the wallet's
         // identity/height/liquid facts stay served.
         let balance = get_balance_result(&snapshot.view);
+        let (posture, serving_priority_not_lowered) = crate::staking::serving_wire(serving);
         let staking = staking_view.map(|staking_view| StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
@@ -296,7 +298,8 @@ pub(crate) async fn get_wallet_info(
                 .pscan_synced_height
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
             recovery_pending_reopen: staking_view.recovery_pending_reopen,
-            posture: crate::staking::posture_str(serving_posture),
+            posture,
+            serving_priority_not_lowered,
         });
 
         let daemon = engine.daemon().clone();

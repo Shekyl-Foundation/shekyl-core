@@ -305,6 +305,11 @@ count_pattern() {
 # (`derive_store_key` / `slot_key`; shekyl/p-store-aead-v1,
 # shekyl/p-store-slot-v1) that this pin records with the labels.
 # The tests call those through the public functions; none adds a site.
+# FN-DSA hybrid (2026-10-09, PR #1016): 69 stays 69. The two scheme domains
+# (shekyl/archival-receipt-scheme-v1, shekyl/archival-witness-carrier-scheme-v1)
+# are byte strings fed to the existing nested combiner's one cSHAKE site
+# (hybrid_combiner.rs `preimage`). Neither has a signer yet, and neither
+# adds a call site.
 MECH1_EXPECTED=69
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then

@@ -55,6 +55,7 @@ members = [
     # one of them (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to
     # nothing off Windows. See docs/design/WINDOWS_WALLET_SUPPORT.md.
     "shekyl-win-sec",
+    "shekyl-thread-priority",
 
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
