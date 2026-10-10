@@ -1,0 +1,68 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# RT-W8 part 1: the ProVerif model of the P2P transport's handshake,
+# Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s (docs/formal/proverif/).
+#
+# The model, its named edits and its expected verdicts live in
+# docs/formal/proverif/nnhfs/run.py, over the shared library
+# docs/formal/proverif/lib/noise.pvl. This job installs the one ProVerif
+# version those verdicts are pinned to, by the same script a developer runs
+# (install_proverif.sh beside them; byte-identical to the RPC channel
+# model's copy so the two jobs share one cache), and runs every variant. It
+# fails if any query's result changes: a property that stops holding, and
+# equally a named edit under which the property no longer fails.
+#
+# It runs when the model, the library, this file, or noise.rs changes. The
+# model is symbolic and does not read the Rust, so a change to noise.rs
+# cannot move a verdict by itself; it is on the list because that is the
+# moment to ask whether the model still describes the code, and the run's
+# log beside the diff is where a reviewer asks it. Like the sibling job it
+# carries no merge_group trigger: an uncached ProVerif build is a quarter
+# of an hour, and this is not a required check (06-branching.mdc).
+
+name: ci/p2p-nnhfs-model
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "docs/formal/proverif/**"
+      - "rust/shekyl-p2p-transport/src/noise.rs"
+      - ".github/workflows/p2p-nnhfs-model.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: p2p-nnhfs-model-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    name: "RT-W8 part 1: NNhfs ProVerif model"
+    runs-on: ubuntu-latest
+    # The variants take about a second each; the budget is the uncached
+    # ProVerif build. run.py bounds each variant itself and reports a
+    # timeout as a failure.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore the pinned ProVerif
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/shekyl-proverif
+          # Keyed on the recipe: a changed pin is a changed script.
+          key: proverif-${{ runner.os }}-${{ hashFiles('docs/formal/proverif/install_proverif.sh') }}
+
+      - name: Install the pinned ProVerif
+        run: docs/formal/proverif/install_proverif.sh "$HOME/.cache/shekyl-proverif"
+
+      - name: Run the model
+        run: |
+          export PATH="$HOME/.cache/shekyl-proverif/proverif2.05:$PATH"
+          python3 docs/formal/proverif/nnhfs/run.py --jobs 4
