@@ -92,8 +92,10 @@ section says exactly what was and was not done.
   every comparison and both null comparisons are under 4.5 on the floor
   device, and the aarch64 code has no branch or division that depends on
   the ciphertext. A diagnosis is not a registered result; RT-P4 is judged
-  by a fresh registration of the corrected method on both machines. The
-  record is `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`.
+  by a fresh registration of the corrected method on both machines,
+  `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`, registered and
+  not yet run. The first record is
+  `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`.
 
 ---
 

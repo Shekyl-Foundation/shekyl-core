@@ -5,8 +5,10 @@ registered lines.** RT-P4 is therefore **not met by this registration**.
 The diagnosis that followed (below) attributes the failure to how this
 harness prepared its inputs and finds no dependence in the decapsulation;
 a diagnosis is not a registered result, and RT-P4 is judged by a fresh
-registration of the corrected method, run on both machines, which follows
-this record.
+registration of the corrected method, run on both machines:
+[`rt_p4_mlkem_decaps_timing_20261011.md`](rt_p4_mlkem_decaps_timing_20261011.md).
+The harness this record describes no longer exists in the tree; it is the
+example file as of `67faff8290`.
 Everything under "Registered before the run" was committed and pushed
 (`cd65ab8af1`) before the first timed run that counts. Results are added
 below it and that section is not edited afterwards.
