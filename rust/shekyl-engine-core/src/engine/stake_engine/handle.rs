@@ -25,7 +25,8 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, SignPassTranscript,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
+    SignPassTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -93,6 +94,7 @@ impl StakeEngineHandle {
         bundles: BTreeMap<PSlot, ArchivalPKeys>,
         bonded: BTreeSet<PSlot>,
         active: Option<PSlot>,
+        bodies: shekyl_p_store::BodyStore,
     ) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),
@@ -106,6 +108,7 @@ impl StakeEngineHandle {
             bundles,
             bonded,
             active,
+            bodies,
             // A non-test `conformance` build always grades the real OsRng adapter
             // (no field); in `test + conformance` the default is `Skip` so
             // unrelated stake tests are not flaked by the grade. The dedicated S6
@@ -189,6 +192,20 @@ impl StakeEngineHandle {
     ) -> Result<PersonaIdentity, StakeEngineError> {
         self.actor
             .ask(ActivatePersona { handle })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// The read-only handle on this actor's body store (`WSS-Q1`(a)).
+    ///
+    /// The writer stays on the actor. This reader still decrypts, so
+    /// `WSS-Q13` is not met; the ask exists so the serve task never holds
+    /// the writer, and so the engine orchestrator does not hold the store.
+    pub(crate) async fn serving_bodies(
+        &self,
+    ) -> Result<shekyl_p_store::BodyStoreReader, StakeEngineError> {
+        self.actor
+            .ask(ServingBodies)
             .await
             .map_err(collapse_send_error)
     }

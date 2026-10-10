@@ -399,7 +399,7 @@ impl Declaration {
 
     /// A column that is not a built connector.
     ///
-    /// The relay guard drives this through stem draw, own-edge draw, and
+    /// The relay guard drives this through stem draw, the hidden slot's pin, and
     /// the embargo. Production columns are [`declaration`]. Every cell
     /// this function does not take is not assessed.
     #[must_use]

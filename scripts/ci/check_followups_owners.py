@@ -77,7 +77,7 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # 2026-10-01 when five grandfathered rows closed (the stub, the
 # target_height sentinel, the Ledger sources, the fcmp fuzz build, and
 # the false test-only-builder claim).
-GRANDFATHER_CEILING = 317
+GRANDFATHER_CEILING = 316
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

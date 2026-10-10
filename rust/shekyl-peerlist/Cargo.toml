@@ -1,0 +1,34 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-peerlist"
+description = "The peer lists: gray, white, the one door between them, the cached disclosure sample, ban demotion and the per-session intake cap. Data only — no socket, no dial, no FFI (P2P_3_SLICE_1_PEERLIST_BRIEF.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# The D3 exception instrument (slice 1 brief §16.5): a model of a node's
+# white list, its outbound sessions and an observer polling the cached
+# sample. Float-bearing, test and diagnostic only, like
+# shekyl-relay-privacy's `conformance`.
+conformance = []
+
+[dependencies]
+shekyl-net-address = { path = "../shekyl-net-address" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+
+[dev-dependencies]
+shekyl-peerlist = { path = ".", features = ["conformance"] }
+
+[lints]
+workspace = true

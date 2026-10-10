@@ -364,3 +364,125 @@ fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
         fresh_curve[5]
     );
 }
+
+/// **§98.10 (PR-1, D-PR1-1):** the local source under induced churn on the
+/// hidden stem slot. Four shapes on one trial — (a) the slot peer alone,
+/// (b) follow the refilled slot, (c) the full freeze (withdrawn), (c′) the
+/// slot peer plus `stems − 1` drawn alternates (ruled) — under two churns: the
+/// targeted adversary who drops the origin's current honest hidden hop (a
+/// worst-case bound: Tor is built to hide which session that is) and random
+/// churn that drops a uniformly random live hidden session. `H` is
+/// `MIN_PROVISIONED_OUT_PEERS`, consumed from its owner; `stems` is 2.
+///
+/// Pinned: **(c′)'s exposure is at most `stems / H` within tolerance at every
+/// `k`, every flood level, and both churns** — the ruling's property. Also
+/// pinned, as the shapes that chose it: under targeted churn (c) walks to
+/// certainty at `k = H − 1` and (b) exceeds (c) at `k` 1..8 once gray is a
+/// quarter adversarial; with no churn all arms are the same pin.
+#[test]
+fn hidden_slot_churn_frozen_stems_exposure_is_bounded_by_stems_over_h() {
+    use shekyl_relay_privacy::conformance::{simulate_hidden_slot_churn_exposure, HiddenSlotChurn};
+    use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
+
+    const H: usize = MIN_PROVISIONED_OUT_PEERS as usize;
+    const STEMS: usize = 2; // CRYPTONOTE_DANDELIONPP_STEMS
+    const G: f64 = 1.0 / 12.0; // one adversarial hidden session at pin time
+    let bound = STEMS as f64 / H as f64;
+    let trials = 200_000;
+    let drops = [0_usize, 1, 2, 4, 8, 11];
+
+    for (churn_seed, churn, churn_label) in [
+        (
+            0_u64,
+            HiddenSlotChurn::Targeted,
+            "targeted: the origin's current honest hop drops",
+        ),
+        (
+            1,
+            HiddenSlotChurn::Random,
+            "random: a uniformly random live hidden session drops",
+        ),
+    ] {
+        println!("\n§98.10 local source, H={H}, stems={STEMS}, g={G:.4} (a=1) — {churn_label}");
+        for (seed, label, flood) in [
+            (0_u64, "ambient (no flood)", G),
+            (1, "gray 1/4 adversarial", 0.25),
+            (2, "gray 1/2 adversarial", 0.5),
+            (3, "gray 9/10 adversarial", 0.9),
+        ] {
+            println!("  flood: {label}");
+            println!("   k   (a) slot  held    (b) follow   (c) all   held    (c') stems  held");
+            let mut follow = Vec::new();
+            let mut all = Vec::new();
+            for (i, k) in drops.iter().copied().enumerate() {
+                let mut rng = SplitMix64::new(0x9810 + churn_seed * 4096 + seed * 64 + i as u64);
+                let r = simulate_hidden_slot_churn_exposure(
+                    H, STEMS, G, flood, k, churn, trials, &mut rng,
+                );
+                println!(
+                    "  {:>2}   {:.4}   {:.4}   {:.4}      {:.4}   {:.4}   {:.4}     {:.4}",
+                    k,
+                    r.slot_only_exposure,
+                    r.slot_only_held_share,
+                    r.follow_slot_exposure,
+                    r.frozen_all_exposure,
+                    r.frozen_all_held_share,
+                    r.frozen_stems_exposure,
+                    r.frozen_stems_held_share,
+                );
+                assert!((r.effective_share - G).abs() < 1e-12);
+
+                // The ruling's property, at every cell.
+                assert!(
+                    r.frozen_stems_exposure <= bound + 0.01,
+                    "(c') must stay within stems / H = {bound:.4}: {churn_label}, flood {flood}, k={k}, got {}",
+                    r.frozen_stems_exposure
+                );
+                // (a) never moves off its first draw.
+                assert!((r.slot_only_exposure - r.effective_share).abs() < 0.01);
+
+                if k == 0 {
+                    for e in [
+                        r.follow_slot_exposure,
+                        r.frozen_all_exposure,
+                        r.frozen_stems_exposure,
+                    ] {
+                        assert!(
+                            (e - r.slot_only_exposure).abs() < 1e-9,
+                            "with k = 0 every arm is the same pin"
+                        );
+                    }
+                }
+                follow.push(r.follow_slot_exposure);
+                all.push(r.frozen_all_exposure);
+            }
+
+            if churn == HiddenSlotChurn::Targeted {
+                // (c) is a without-replacement walk over H with one adversary:
+                // (k + 1) / H, certain at k = H - 1. The row that withdrew it.
+                for (i, k) in drops.iter().copied().enumerate() {
+                    let expect = (k + 1) as f64 / H as f64;
+                    assert!(
+                        (all[i] - expect).abs() < 0.01,
+                        "(c) walks the full freeze without replacement: k={k} got {} want {expect}",
+                        all[i]
+                    );
+                }
+                if (flood - G).abs() >= 1e-12 {
+                    for i in 1..drops.len() {
+                        if drops[i] >= H - 1 {
+                            continue;
+                        }
+                        assert!(
+                            follow[i] > all[i],
+                            "under a flood of {flood} (b) exceeds (c) for k < H - 1: k={} (b)={} (c)={}",
+                            drops[i],
+                            follow[i],
+                            all[i]
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

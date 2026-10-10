@@ -1870,6 +1870,39 @@ and Tor cut over together.
 
 ---
 
+## Clearnet reconnect throttle — REGISTERED 2026-10-09, not built
+
+A question for this layer, registered by the P2P-3 slice 1 ruling
+D-S1 (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §5c; Rick, 2026-10-09). PR-2
+does not build it.
+
+**The question.** After `N` completed handshakes from one host within a
+period `T`, refuse that host's new inbound handshakes for a cooldown.
+It belongs to the "who can reach us" job of the rate-limit table above:
+connections, before a session exists. D-S1 caps what one *session* may
+put into gray; a host that reconnects buys a fresh session and a fresh
+cap, and this throttle is what would price the reconnect.
+
+**It throttles only.** No score, no ban, no demotion. The reason: a TCP
+reset is forgeable by a path attacker on unencrypted clearnet, and it
+stays forgeable after clearnet encryption is on — the reset is below
+the encrypted channel — so a reconnect count is evidence of a
+reconnect, not of the host's intent. A throttle a path attacker can
+trigger costs the honest host a cooldown; a ban or a demotion it could
+trigger would cost it its white entry (D4 demotes on a ban), which is
+the attacker's gain.
+
+**`N` and `T` are measured**, on the Rust transport after the cutover,
+against the honest reconnect rate per host; neither is set here.
+
+**Residual.** Tor has no host to throttle: an inbound rendezvous
+carries no address (D7, "this zone, no address"). The per-session cap
+of D-S1 and Tor's proof-of-work on the rendezvous are what bound a
+reconnecting onion peer; the reconnect itself is unpriced there, and
+that is recorded as the residual of this question.
+
+---
+
 ## D14 — rulings (RULED 2026-09-25)
 
 1. **Runtime ownership** (D5). One daemon-level place constructs every
