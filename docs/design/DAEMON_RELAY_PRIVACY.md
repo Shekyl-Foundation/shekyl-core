@@ -16689,8 +16689,9 @@ named when a run is ruled. No constant is added. The instruments are
 `conformance::composition` (the two-class graph, `walk_originated`, and
 the spy and capture folds) and `conformance::epoch_traffic`, behind the
 `conformance` feature. The default build does not contain them. No
-production constant moves, and `own_edge()` stays until the relay lane
-takes the stem-slot ruling.
+production constant moves. *Records-was (2026-10-08): "`own_edge()`
+stays until the relay lane takes the stem-slot ruling" — PR-1 (#1018,
+§98) took it and deleted the function.*
 
 **RULED 2026-10-08 (Rick).** An own transaction rides a stem slot.
 The origin's own send is always a stem, and each relay forwards with
@@ -17115,22 +17116,28 @@ Each item is open. Its carrier is the only thing that closes it.
    a sender who also has a hidden session, so the origin is sought
    among onion candidates (§95.3). This item carries that cost.
    **Carrier:** P2P-3 slice 1, and the ProxyMark reproduction (§99).
-   **Closes when (Rick, 2026-10-09)** the ProxyMark step 2a
-   reproduction (§99, PM-2a: connection occupation, the paper's
-   parameters and metric) has run against the Rust peerlist and relay
-   and its result is recorded there — not on slice 1 landing. D-S1's
-   per-session intake cap (slice 1 brief §5c) is measured as part of
-   this item's instrument: time for an attacker to fill gray and the
-   resulting `p_h`, per connector. **Re-evaluation:** the PM-2a row's
-   dated status. *Records-was: closed when slice 1 had landed, the C++
-   peer lists gone (`m_peers_white` / `peerlist_manager` absent from
-   `src/p2p`) and the uniform draw within a connector the dial source.*
+   **Stays open and tracked (Rick, 2026-10-09)** against PM-2a (§99:
+   connection occupation, the paper's attacker and metric — 7–11 of 12
+   hidden outbound after restarts, 8–10 of 10 within about 20 minutes
+   under periodic replacement), per profile, recording our result
+   against the paper's and against blind chance at the §97 knobs in
+   effect. D-S1's per-session intake cap (slice 1 brief §5c) is read
+   off the same run: time for an attacker to fill gray and the
+   resulting `p_h`, per connector. **Closes when** Rick decides it
+   from the results; no threshold is fixed in advance. **Re-evaluation:**
+   the PM-2a row's dated status. *Records-was, both 2026-10-09: "closes
+   on the PM-2a reproduction" with a threshold to be set; and before
+   that, closed when slice 1 had landed, the C++ peer lists gone
+   (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and the
+   uniform draw within a connector the dial source.*
 4. **TRC-1.** On Tor, wire-observer resistance is operator relay
    volume, and that measurement is not finished. **Carrier:**
    TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Test
    (Rick, 2026-10-09):** the ProxyMark step 3 reproduction (§99,
-   PM-3: the message-rate watermark recovered at a malicious guard)
-   is this item's test. **Closes when** that row's falsifier is met:
+   PM-3, Level 3: the message-rate watermark recovered at a malicious
+   guard; the paper's bar is 100 % precision with 93.8 % recall for
+   onion-service nodes and 91.4 % for Tor-client nodes) is this item's
+   test. **Closes when** that row's falsifier is met:
    carried traffic at ordinary operator scale is measured, PM-3 has
    run against it, and the row is removed, or the ruling reopens
    because originated cells stayed distinguishable. **Re-evaluation:**
@@ -17396,8 +17403,8 @@ slot. (a) Hold: the adversary who can drop the origin's hidden peer buys
 no re-roll inside the epoch; the cost is originations held up to an
 epoch after one Tor circuit fails. (b) Follow the slot: the refill drops
 the local source's pin and the next origination first-pins onto the new
-hidden peer; `own_edge()` replaced a dead edge the same way today
-(`own_edge.rs:35` to `:52`), §95's capture reading is per-epoch and
+hidden peer; `own_edge()` replaced a dead edge the same way at the time
+(`own_edge.rs:35` to `:52`, since deleted), §95's capture reading is per-epoch and
 already counts one draw per epoch per node, and the extra rolls an
 adversary can buy are bounded by how many of the origin's hidden peers
 it can make drop, which the dialer refills to 12.
@@ -17445,9 +17452,10 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   slot, loss of every hidden session (`NoOwnEdge`), and their return;
 - relayed sources reach both slots over epochs;
 - the slot draw is uniform over the hidden outbound sessions and the other slot
-  uniform over the rest (chi-square over 200 rebuilds, the shape
-  `four_hidden_peers_share_the_own_edge` already uses, `edge.rs:210`),
-  the distributional pin of `mixed_hidden_slot`;
+  uniform over the rest (chi-square over 200 rebuilds,
+  `four_hidden_peers_share_the_hidden_slot`, `edge.rs`; *records-was:*
+  the shape `four_hidden_peers_share_the_own_edge` used before PR-1
+  rewrote it), the distributional pin of `mixed_hidden_slot`;
 - an all-hidden node and a no-hidden-connector node reduce to the
   paper's draw;
 - a hidden session arriving mid-epoch fills the empty hidden slot at the
@@ -17701,38 +17709,147 @@ volume cover on the hidden link is unchanged. Not
 examined: `shekyl-tor` and the connector crates, which PR-1 does not
 touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
 
-## 99. ProxyMark reproduction — REGISTERED 2026-10-09 (PM-1…PM-3)
+## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
 
-**Status: OPEN — registered; pass thresholds are Rick's to set and are
-open until ruled.** The paper is `2607.07062v1_TOR_Deanonymizing.pdf`
-(Shi et al., Monero over Tor; referenced from
-`P2P_2_REQUIREMENTS_REGISTER.md` PW-15 and `TOR_COVER_POSTURE.md`),
-which deanonymised hidden-service Monero nodes in three stages: TC-I
-occupying the target's two outgoing Tor connections, TC-II advertising
-falsified fresh block heights so the occupied peers are picked as the
-proxies, TC-III injecting a timing watermark as a peer that a malicious
-guard recovers on the circuit and binds to the source. Reported against
-hidden-service nodes with Monero's white noise on: **precision 100 %,
-recall 93.8 %**. Shekyl's design closes TC-I and TC-II structurally
-(§95.3: own transactions ride a stem slot; stem candidacy is not a
-peer-asserted height; a hidden stem slot is drawn from the hidden
-outbound sessions) and treats TC-III as a Tor-layer threat (TRC-1).
-This section is the reproduction that tests those claims rather than
-asserts them (rule 47), one row per stage, with the identity step the
-peerlist adds in front. **This section mints `PM-1…PM-3`** (rule 94;
-registered in `IMPLEMENTATION_INDEX.md` §2); PM-2 splits into 2a and
-2b, the paper's TC-I and TC-II.
+**Status: OPEN — registered; PM-2b has one model run (#1022); PM-1,
+PM-2a and PM-3 have not run. Not a gate (Rick, 2026-10-09).** The
+paper is `2607.07062v1_TOR_Deanonymizing.pdf` (arXiv 2607.07062,
+"ProxyMark"; referenced from `P2P_2_REQUIREMENTS_REGISTER.md` PW-15 and
+`TOR_COVER_POSTURE.md`; the PDF is not in this repository and the
+author list is not transcribed here). It deanonymised Monero nodes
+behind Tor in three stages (its §III-D, §IV-C): **TC-I** occupying the
+target's outgoing Tor connections; **TC-II** advertising falsified
+fresh block heights so the occupied peers are picked as the proxies;
+**TC-III** injecting a timing watermark as a peer that a malicious
+guard recovers on the circuit and binds to the source. A fourth step
+precedes them in this reproduction, because Shekyl's peerlist redesign
+changes its answer: **identity** — the node's own onion was the last
+entry of its timed-sync replies, recovered at 100 % precision and
+100 % recall.
 
-| Step | What it reproduces | Where it runs | When | Closing condition | Paper baseline | Pass threshold |
-| --- | --- | --- | --- | --- | --- | --- |
-| **PM-1** identity in the cached sample | Whether a requester polling a node's cached disclosure sample learns the node's own address or onion — the join the handshake-address ruling removes the field for (dialer brief; slice 1 brief §5a) | The `shekyl-peerlist` sample instrument (PR-2), then the Foundation estate after PR-3, with per-boot and persistent onions, shortly after restart and in steady state | PR-2 for the model; after PR-3 live | Both onion modes measured and recorded here; the result decides whether the onion stays per-boot (PWD-E7) | The paper does not run this step; Monero's handshake carried the node's own entry (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`), so identity was given, not inferred. Baseline: identity recovered with certainty | Rick sets |
-| **PM-2a** connection occupation (TC-I) | An attacker's share of the target's stem slots over time, as a function of its share of the dial candidates and the hidden outbound sessions, with the paper's parameters (two outgoing connections to occupy) and the paper's metric (occupation of both) | `shekyl-relay-privacy` conformance (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure`) extended with the PR-2 peerlist model: gray intake under D-S1, the uniform white draw, the hidden slot | PR-2 for the model; after PR-3 against the live dialer | Recorded here with the attacker's time-to-fill and the resulting `p_h` per connector; **closes §96 item 3** | Both outgoing Tor connections occupied for the targeted nodes (the paper's precondition for TC-II; its count is in the paper's table, not transcribed here) | Rick sets |
-| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | The merged Rust relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). `pm_2b_falsified_heights_buy_no_stem_or_hidden_slot_share` (`graph/proxymark.rs`) measures attacker sessions' stem-slot and hidden-slot share against their uniform share | **Run 2026-10-09** against the relay as merged (#1018) | Recorded against §96 item 1: attacker hop share 0.319 (uniform 0.333), other slot 0.244 (0.244), both 0.064 (0.067) over 3000 epochs | Falsified heights made the occupied peers the chosen proxies: selection probability 1 for the attacker's peers under Monero's height-ordered selection | Rick sets |
-| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | After RD, on the Rust path, against operator relay volume (TRC-1, `TOR_COVER_POSTURE.md` §8): the stem leaves inside a stream the relay's own traffic fills | After RD and the TRC-1 measurement | **The test of §96 item 4**: the watermark is not recoverable at the guard under carried traffic at ordinary operator scale, or TRC-1 reopens | Recovered with the paper's overall precision 100 % and recall 93.8 % | Rick sets |
+Shekyl's design closes TC-I and TC-II structurally (§95.3: own
+transactions ride a stem slot; stem candidacy is not a peer-asserted
+height; a hidden stem slot is drawn from the hidden outbound sessions;
+slice 1: `DISCLOSE_COUNT` 12 against the paper's 250 per reply, random
+rather than first-in-first-out gray eviction, the per-session intake
+cap; the handshake-address ruling: no self-entry) and treats TC-III as
+a Tor-layer threat (TRC-1). This section is how those claims are
+measured rather than asserted (rule 47). **This section mints
+`PM-1…PM-3`** (rule 94; registered in `IMPLEMENTATION_INDEX.md` §2);
+PM-2 splits into 2a and 2b, the paper's TC-I and TC-II.
 
-The baseline cells name what the paper's stage achieved; where this
-repository holds only the paper's aggregate figures, the cell says so
-rather than guessing a per-stage number. The lane brief's table of
-2026-10-09 is the source for the per-stage figures when they are
-transcribed, and transcription is a docs change to this table, not a
-measurement.
+### 99.1 The benchmark's job
+
+The reproduction tells us whether we are beating the paper, whether a
+change has made things worse, and which knob to turn next. It is not a
+pass/fail gate, and no threshold is fixed in advance. Three reference
+points per step and profile:
+
+| Reference | What it is | What it is for |
+| --- | --- | --- |
+| **The paper's result** | What ProxyMark achieved against Monero | The bar to beat. Below it we are making progress; at or above it we are not |
+| **Our last recorded result** | The value measured at the previous run | The regression check. A change that makes this worse beyond noise is a design decision undoing an earlier gain |
+| **Blind chance** | What a guessing attacker gets | The ideal. The gap between it and our result is the remaining room for tuning |
+
+**Profiles.** Every step runs against **Profile A**, the desktop
+wallet — a node that restarts: the paper's "after restarts" case,
+measured shortly after start — and **Profile B**, the always-on node —
+steady state: the paper's "periodic replacement" case. Each has a
+**persistent-onion sensitivity row** beside the per-boot default
+(PWD-E7), because step 1's answer and TC-I's refill rate both move
+with the onion mode.
+
+**Tuning.** The knobs are the values §97 labels `Assumption`:
+`DISCLOSE_COUNT`, the per-session intake cap (`2 × DISCLOSE_COUNT`),
+the white floor and the refill line, the clearnet reconnect throttle
+(`P2P_TRANSPORT_LAYER.md`, registered, not built), and whether the
+onion is per-boot or persistent. Each run records those values in
+effect beside its results, so the numbers say which knob moves
+exposure. Profile A and Profile B will likely point at different knobs.
+**The reproduction is thereby the derivation §97 has been waiting
+for:** its rows for those values are re-derived from these results on
+the Rust path, not from a model run against the C++.
+
+**Regression.** The conformance version (Level 1, 99.4) runs in CI,
+records its numbers per profile and step in the measurement ledger
+(`docs/benchmarks/measurement_ledger.toml`, as tracked captures in the
+`BENCHMARK_ALIGNMENT.md` set the comparator already reads), and fails
+the run when a recorded result gets worse beyond noise — the mechanism
+the ledger already uses for timing. Testnet runs (Level 2) are recorded
+at milestones beside the conformance numbers, so the model and the
+network can be seen to agree or not.
+
+**§96 item 3 stays open**, tracked against PM-2a per profile. Rick
+decides closure from the results; a number fixed now would be a guess.
+
+### 99.2 The paper's attacker, and ours
+
+The paper's TC-I attacker, against Monero's peerlist as it then stood:
+**5,000 onion addresses** (the paper scaled to 500, with gray 500 and
+white 100 — Monero's caps are 5,000 and 1,000); **250 addresses per
+reply** (`P2P_DEFAULT_PEERS_IN_HANDSHAKE`); **first-in-first-out gray
+eviction**, so a flood pushes the honest entries out in order;
+**delayed replies**, so the victim's dials to the attacker's onions
+hold its outbound slots; and, under periodic replacement, **one peer
+dropped every 101 s** to force a refill from the flooded list.
+
+The same attacker against Shekyl meets, at the knobs above: 12
+addresses per reply and at most 24 distinct per session per day (so a
+flood of 5,000 needs hundreds of sessions, each a Tor rendezvous
+priced by proof-of-work); random eviction over a gray list of 5,000,
+so the flood's share of gray is its share of the admitted addresses,
+not its recency; and a white list the flood reaches only through this
+node's own confirmed dials (slice 1 §2). PM-2a measures what that buys.
+
+### 99.3 The steps
+
+Cells: *paper* is the bar; *ours* is our last recorded result, with
+the §97 values in effect and the commit it was taken at; *blind* is
+the ideal. "—" is not yet run. Profiles are A (restart), B (steady
+state); P (persistent onion) is the sensitivity row.
+
+| Step | What it reproduces | Where it runs (level, 99.4) | Paper | Ours | Blind chance |
+| --- | --- | --- | --- | --- | --- |
+| **PM-1** identity | A requester polling the node's cached disclosure sample tries to name the node's own address or onion. The paper's step: the node's own onion was the last entry of each timed-sync reply (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`); under the handshake-address ruling the own address is one uniform member of the sample with no position, and nothing is disclosed below the floor | Level 1 on the `shekyl-peerlist` sample instrument; Level 2 after PR-3 with per-boot and persistent onions, shortly after restart (A) and in steady state (B). Decides PWD-E7 | **100 % precision, 100 % recall** | A: — · B: — · P: — | One uniform guess among the disclosure population: `1 / (|W| + 1)` per guess; a sample of 12 contains the own address with probability `12 / (|W| + 1)` |
+| **PM-2a** connection occupation (TC-I) | Adversarial occupation of the 12 hidden outbound sessions over time, plus time to fill, under the attacker of 99.2 at the §97 knobs; D-S1's intake cap and the resulting `p_h` per connector are read off the same run | Level 1 on the `shekyl-peerlist` model plus the relay's hidden-slot draw (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure` extended with gray intake under D-S1 and the uniform white draw); Level 2 after PR-3 against the live dialer. **§96 item 3 is tracked here** | **A: 7–11 of 12** hidden outbound occupied after restarts · **B: 8–10 of 10** within about 20 minutes under periodic replacement | A: — · B: — · P: — | The attacker's uniform share of white times 12, and a fill time set by the dialer's honest refill rate, not by its flood |
+| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). `graph/proxymark.rs` (#1022) measures attacker sessions' hidden-slot and stem-slot share against their uniform share | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | model (#1022): — pending that PR's recording against §96 item 1 | The attacker's uniform share of the hidden outbound sessions (one occupied connection of 12: 8.3 %) |
+| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **§96 item 4's test** | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
+
+### 99.4 The harness — three levels (stretch goal, Rick, 2026-10-09)
+
+The reproduction is built to run repeatedly. Each level is registered
+here with its blocker and its falsifier (rule 22); none is built in
+#1018.
+
+**Level 1 — conformance.** Grows out of PR-2's instruments
+(`shekyl-peerlist::conformance`, #1021; `shekyl-relay-privacy::conformance`;
+`shekyl-relay` `graph/proxymark.rs`, #1022). Runs in CI on changes to
+the peerlist and relay crates (`rust/shekyl-peerlist`,
+`rust/shekyl-relay`, `rust/shekyl-relay-privacy`) or to a §97
+`Assumption` value, plus a weekly scheduled run. Results go to the
+measurement ledger per step and profile with the §97 values in effect;
+a regression beyond noise fails the run. *Blocked on* #1021 landing
+(its instruments are the model) — *falsify by* a workflow under
+`.github/workflows/` whose `paths:` name those three crates and whose
+`schedule:` is weekly, and PM rows in `measurement_ledger.toml` keyed
+by step and profile. Owner: this section and the PM family.
+
+**Level 2 — scripted testnet.** An ancillary PR after PR-3 (the Rust
+dialer is what the attacker's flood is run against): one script for
+setup, run, collection and teardown; **roles, not hosts**, in
+`shekyl-core` (rule 37: the target, the attacker fleet, the observer),
+with host claims in `shekyl-dev` (rule 38, `infrastructure/USAGE.md`);
+an **isolated network id only** — the attacker fleet refuses to start on
+any other network; results recorded beside Level 1's. *Blocked on*
+PR-3 — *falsify by* the script in `scripts/` and a results file beside
+the Level 1 captures, and a refusal test that the fleet does not start
+on mainnet's, testnet's or stagenet's network id. Owner: this section
+and the PM family.
+
+**Level 3 — the PM-3 protocol.** A documented procedure under TRC-1,
+run at milestones: the watermark injected by a peer we control, the
+guard we control, recovery attempted against the relay's carried
+volume, precision and recall recorded. *Blocked on* RD and TRC-1's
+measurement (`TOR_COVER_POSTURE.md` §8) — *falsify by* the procedure
+written into that section and its first recorded run. Owner: TRC-1's
+row and this section.
