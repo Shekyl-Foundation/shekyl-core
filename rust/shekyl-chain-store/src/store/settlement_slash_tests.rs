@@ -32,9 +32,10 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
         "the pass ran: the watermark moved"
     );
     assert_eq!(snap.total_burned().expect("read"), AtomicUnits::ZERO);
+    let floor = slash_floor_at(&snap);
     for p in ids_in_table_order(chain.personas) {
         assert!(snap
-            .slash_log_after(&p, BlockHeight::from_raw(0))
+            .slash_log_after(&p, whole_log_from(floor), floor)
             .expect("read")
             .is_empty());
         assert!(snap

@@ -327,6 +327,9 @@ impl super::Transition {
     /// The slashes logged against `persona` strictly above `height`: the
     /// recorded ones (A2) and this block's own, which sit at the connecting
     /// height and so are above every height the pass asks about.
+    ///
+    /// The read is handed `self.slash_floor`. A scan whose start key lies
+    /// in the retired range is SI-26 (`SlashLogReadBelowFloor`).
     fn slashed_after<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -334,7 +337,7 @@ impl super::Transition {
         height: BlockHeight,
     ) -> Result<Vec<SlashLogEntry>, ViewRead<V::Fault>> {
         let mut log = view
-            .slash_log_after(&persona, height)
+            .slash_log_after(&persona, height, self.slash_floor)
             .map_err(ViewRead::View)?;
         log.extend(
             self.slashes

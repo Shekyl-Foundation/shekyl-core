@@ -370,10 +370,12 @@ impl<'id> WriteBatch<'_, 'id> {
         // After the seal, so the boundary block's undo row carries the
         // block's writes and none of the prune's (a discard is not
         // pop-reversible, `prune.rs`); inside this transaction, so a chain
-        // connected past `E·SEB` with `D(E)` un-run is unrepresentable.
-        let pruned = self.prune_at_boundary(height)?;
+        // connected past `E·SEB` with `D(E)` un-run is unrepresentable. The
+        // slash log's floor is `in_force`'s expression (`SLK-2`).
+        let height = BlockHeight::from_raw(height);
+        let pruned = self.prune_at_boundary(height, &in_force)?;
         Ok(Connected {
-            height: BlockHeight::from_raw(height),
+            height,
             journaled,
             pruned,
         })
