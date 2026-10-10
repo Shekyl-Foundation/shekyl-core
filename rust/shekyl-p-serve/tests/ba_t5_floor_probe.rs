@@ -128,9 +128,9 @@ impl ShardProvider for Shards {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
         match shard_id {
             0 => self.store.shard_bytes(0),
-            1 => Ok(ShardBody::flat(Arc::clone(&self.one_leaf))),
-            2 => Ok(ShardBody::flat(Arc::clone(&self.eighth))),
-            3 => Ok(ShardBody::flat(Arc::clone(&self.full))),
+            1 => Ok(Some(ShardBody::flat(Arc::clone(&self.one_leaf)))),
+            2 => Ok(Some(ShardBody::flat(Arc::clone(&self.eighth)))),
+            3 => Ok(Some(ShardBody::flat(Arc::clone(&self.full)))),
             _ => Ok(None),
         }
     }

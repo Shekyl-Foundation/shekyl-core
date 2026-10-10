@@ -9,9 +9,9 @@
 //! `shekyl-p-serve` answers `GET /shard/{id}` on a persona's onion and
 //! `shekyl-p-fetch` dials it. Neither may depend on the other (`SF-D4`:
 //! the two ends of `PWD-E9` do not share a dependency graph), so the
-//! route grammar they must agree on lives here, in the codec crate both
-//! already depend on for the `RF-D4` frame. Two constants that happen to
-//! agree are not the ratification; one constant read twice is
+//! route grammar they must agree on lives here, in a crate both already
+//! depend on. Two constants that happen to agree are not the
+//! ratification; one constant read twice is
 //! ([`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
 //! `SF-D4`, `SF-D5`). The living contract is
 //! [`ARCHIVAL_SERVING_ROUTE.md`](../../../docs/design/ARCHIVAL_SERVING_ROUTE.md).

@@ -14,6 +14,10 @@ path = "src/main.rs"
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
+# `shard fetch --png`: the candidate.v1 renderer over the aggregate
+# `get_shard_view` returns. Rendering is the viewer's; no picture crosses
+# the wallet RPC (SV-D).
+shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # The outbound-endpoint disclosure (`network_posture`) and the host extractor
 # `--rpc-url` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.

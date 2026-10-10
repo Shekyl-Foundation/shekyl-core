@@ -148,18 +148,6 @@ pub struct ShardCoverageRow {
     pub expected_profit_atomic: u64,
 }
 
-/// `request_archival_shard` result. An aggregate, never shard bytes.
-#[derive(Debug, Deserialize)]
-pub struct ArchivalShardFetch {
-    pub shard_id: u64,
-    pub shard_hash: String,
-    pub block_count: u64,
-    pub tx_count: u64,
-    pub output_count: u64,
-    pub coinbase_output_count: u64,
-    pub time_range_seconds: u64,
-}
-
 /// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an
 /// independent connection from the wallet-RPC session's daemon path.
 pub struct DaemonClient {
@@ -313,16 +301,6 @@ impl DaemonClient {
         serde_json::from_value(value).map_err(|e| {
             DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))
         })
-    }
-
-    /// Ask the daemon to retrieve one shard. The response is an aggregate.
-    pub fn request_archival_shard(&self, shard_id: u64) -> Result<ArchivalShardFetch, DaemonError> {
-        let value = self.json_rpc(
-            "request_archival_shard",
-            &serde_json::json!({ "shard_id": shard_id }),
-        )?;
-        serde_json::from_value(value)
-            .map_err(|e| DaemonError::MalformedResponse(format!("request_archival_shard: {e}")))
     }
 
     /// The configured daemon URL, for copy that names the endpoint

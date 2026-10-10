@@ -98,7 +98,7 @@ use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
-    ContentRefused, ContentVerify, FetchError, FetchTarget, PFetchClient, RequestHeader,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
     ServingEndpoint, Stall, Timeouts,
 };
 use shekyl_tor_control_client::control::onion::{
@@ -112,9 +112,9 @@ use shekyl_tor_control_client::control::{
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
 
-use shekyl_p_serve::{PServeEndpoint, ShardBody, TestKeySigner};
+use shekyl_p_serve::{PServeEndpoint, TestKeySigner};
 
-use crate::fixture::FixtureShardProvider;
+use crate::fixture::{FixtureShardProvider, FramedObject};
 use crate::measure::{FailureKind, Observation};
 use crate::onion_key::derive_onion_identity;
 
@@ -347,14 +347,13 @@ impl Persona {
         &self.serving
     }
 
-    /// The typed fetch target for shard `shard_id`, as a scheduler would
-    /// build it from local chain state.
+    /// The typed fetch target, as a scheduler would build it from a bond
+    /// record. The shard is named by the expectation, not the target.
     #[must_use]
-    pub fn target(&self, shard_id: u64) -> FetchTarget {
+    pub fn target(&self) -> FetchTarget {
         FetchTarget {
             endpoint: self.serving,
             verifying_key: self.verifying_key.clone(),
-            shard_id,
         }
     }
 }
@@ -387,13 +386,14 @@ impl ClientLeg {
     }
 
     /// One fetch on lane `lane` (modulo the lane count), returning the
-    /// verified body length on success. See [`fetch_via`].
+    /// verified archival length on success. See [`fetch_via`].
     pub async fn fetch_once(
         &self,
         lane: usize,
         target: &FetchTarget,
+        expected: &ExpectedShard,
     ) -> Result<usize, FailureKind> {
-        fetch_via(&self.lanes[lane % self.lanes.len()], target)
+        fetch_via(&self.lanes[lane % self.lanes.len()], target, expected)
             .await
             .map_err(|fault| fault.kind())
     }
@@ -431,13 +431,16 @@ impl std::fmt::Display for FetchFault {
     }
 }
 
-/// One fetch through `client`, returning the verified body length on
+/// One fetch through `client`, returning the verified archival length on
 /// success.
 ///
 /// The header is minted fresh per call ([`RequestHeader::fresh`]) with the
-/// apparatus anchor, exactly as a daemon mints one per need; the content
-/// hole accepts every body, because what the rig checks is the transport
-/// and the countersignature, not `R_k`.
+/// apparatus anchor, exactly as a daemon mints one per need. `expected` is
+/// the served object's own row ([`FramedObject::expectation`]), so the
+/// client's content check runs in the timed path as it does for a daemon;
+/// the verified transactions are discarded ([`DiscardTxs`]), as a
+/// challenge caller's are. A content mismatch is the apparatus's fault,
+/// not Tor's, and classifies as `Refused`.
 ///
 /// # Panics
 ///
@@ -445,7 +448,11 @@ impl std::fmt::Display for FetchFault {
 /// happened, so no [`FailureKind`] describes it — and a rig that cannot mint
 /// nonces has nothing left to measure. It stops loudly rather than filing
 /// the failure under a class Tor would be blamed for.
-pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<usize, FetchFault> {
+pub async fn fetch_via(
+    client: &PFetchClient,
+    target: &FetchTarget,
+    expected: &ExpectedShard,
+) -> Result<usize, FetchFault> {
     let header = RequestHeader::fresh(
         shekyl_types::BlockHeight::from_raw(APPARATUS_ANCHOR_HEIGHT),
         APPARATUS_ANCHOR_HASH,
@@ -453,26 +460,14 @@ pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<us
     .expect("OS entropy source failed; the apparatus cannot mint request nonces");
     let fetched = tokio::time::timeout(
         FETCH_CEILING,
-        client.fetch(target, &header, Arc::new(AcceptAnyContent)),
+        client.fetch(target, &header, expected, Arc::new(DiscardTxs)),
     )
     .await;
     match fetched {
         Err(_) => Err(FetchFault::Ceiling),
-        Ok(Ok(shard)) => Ok(shard.body().len()),
+        Ok(Ok(shard)) => Ok(usize::try_from(shard.archival_len().to_raw())
+            .expect("a verified archival length fits usize")),
         Ok(Err(e)) => Err(FetchFault::Client(e)),
-    }
-}
-
-/// The content-verify hole, plugged open: the rig measures transport and
-/// the countersignature. A complete body of the wrong length is classified
-/// after the fetch (`Refused`), not inside the hole — injecting the length
-/// check here would turn a mid-body stall into a content refusal and VOID
-/// a Tor measurement.
-struct AcceptAnyContent;
-
-impl ContentVerify for AcceptAnyContent {
-    fn verify(&self, _shard_id: u64, _body: &[u8]) -> Result<(), ContentRefused> {
-        Ok(())
     }
 }
 
@@ -492,21 +487,20 @@ pub struct Apparatus {
     client_events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ControlReply>>>,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
-    /// The body length every fetch is checked against — **derived, never
-    /// passed in.**
+    /// The served objects, framed once and handed to every persona — and
+    /// the source of every fetch's expectation, **derived, never passed
+    /// in.**
     ///
-    /// Computed once at bring-up from the payload, through the production
-    /// serving contract ([`shekyl_p_serve::ShardBody::header`]), so it is
-    /// the length the endpoint will actually write: `RF-D4`'s frame header
-    /// plus the leaf bytes. (The client strips the countersignature envelope
-    /// before handing the body over, so the envelope is not in this figure.)
-    /// Before this field existed every caller passed the raw fixture length,
-    /// and when the frame landed that number went stale at four call sites at
-    /// once. A number a caller supplies is a number that drifts when the wire
-    /// moves; a number the apparatus derives from the same code that writes
-    /// the wire cannot. One length per served object, indexed by shard id;
-    /// never empty (bring-up refuses an empty object list).
-    expected_lens: Vec<usize>,
+    /// The expectation ([`FramedObject::expectation`]) and the archival
+    /// length a fetch is checked against come from the same object the
+    /// endpoint serves, so they are what the endpoint will actually write.
+    /// Before this field existed every caller passed the raw fixture
+    /// length, and when the since-retired `RF-D4` frame landed that number
+    /// went stale at four call sites at once. A number a caller supplies is
+    /// a number that drifts when the wire moves; a number the apparatus
+    /// derives from the same object that is written cannot. One object per
+    /// shard id; never empty (bring-up refuses an empty object list).
+    objects: Vec<FramedObject>,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -544,13 +538,9 @@ pub enum ApparatusError {
         /// countersignature) — the one thing a reader needs to fix the rig.
         reason: String,
     },
-    /// The payload cannot be served at all: not a whole number of leaves, or
-    /// more than one segment. Refused at bring-up, because an apparatus that
+    /// No object to serve. Refused at bring-up, because an apparatus that
     /// serves a 404 for every shard measures nothing.
-    Unframeable {
-        /// The offending payload length.
-        bytes: usize,
-    },
+    NoObjects,
 }
 
 impl std::fmt::Display for ApparatusError {
@@ -577,11 +567,7 @@ impl std::fmt::Display for ApparatusError {
                 "persona {persona} answered but the client refused the exchange: {reason} \
                  (anchor gate, key, or fixture disagree)"
             ),
-            Self::Unframeable { bytes } => write!(
-                f,
-                "payload of {bytes} bytes is not servable (not a whole number of leaves, or \
-                 more than one segment)"
-            ),
+            Self::NoObjects => f.write_str("no object to serve: the object list is empty"),
         }
     }
 }
@@ -646,24 +632,13 @@ impl Apparatus {
         postures: &[OnionPow],
     ) -> Result<Self, ApparatusError> {
         let persona_count = u32::try_from(postures.len()).map_err(|_| ApparatusError::Bootstrap)?;
-        // Each object's expected body length, derived through the production
-        // contract BEFORE any tor is launched: the same `ShardBody::flat` the
-        // fixture provider will call per request, so what the probes compare
-        // against is what the endpoint will write — frame header included.
-        let expected_lens = objects
-            .iter()
-            .map(|payload| {
-                let framed = ShardBody::flat(Arc::clone(payload))
-                    .ok_or(ApparatusError::Unframeable {
-                        bytes: payload.len(),
-                    })?
-                    .header()
-                    .framed_len();
-                Ok(usize::try_from(framed).expect("framed length fits usize"))
-            })
-            .collect::<Result<Vec<usize>, ApparatusError>>()?;
-        if expected_lens.is_empty() {
-            return Err(ApparatusError::Unframeable { bytes: 0 });
+        // Each object framed once, BEFORE any tor is launched: the frame
+        // the fixture provider will serve per request and the row the
+        // probes expect are the same object, so what the client verifies
+        // is what the endpoint will write.
+        let objects: Vec<FramedObject> = objects.iter().map(|o| FramedObject::new(o)).collect();
+        if objects.is_empty() {
+            return Err(ApparatusError::NoObjects);
         }
 
         // Launch every tor at once: the client's and one per persona.
@@ -731,7 +706,7 @@ impl Apparatus {
             ));
             let verifying_key = signer.public_key().clone();
             let endpoint = PServeEndpoint::bind(
-                Arc::new(FixtureShardProvider::with_objects(objects.clone())),
+                Arc::new(FixtureShardProvider::with_framed(objects.clone())),
                 signer,
             )
             .await
@@ -781,27 +756,38 @@ impl Apparatus {
             newnym_unanswered: AtomicU64::new(0),
             client_events: Mutex::new(Some(client_events_rx)),
             personas,
-            expected_lens,
+            objects,
         })
     }
 
-    /// The body length every fetch is checked against: frame header plus
-    /// shard, as the endpoint writes it and the client hands it over.
+    /// The archival length every fetch of shard 0 is checked against: the
+    /// payload the client verifies out of the frame and hands back.
     /// Exposed so operators and logs can print the number a remote reader
     /// should expect.
     #[must_use]
     pub fn expected_body_len(&self) -> usize {
-        self.expected_lens[0]
+        self.objects[0].payload_len()
     }
 
     /// [`Self::expected_body_len`] for shard `shard_id`, or `None` past the
     /// served objects.
     #[must_use]
     pub fn expected_body_len_of(&self, shard_id: u64) -> Option<usize> {
+        self.object(shard_id).map(FramedObject::payload_len)
+    }
+
+    /// The served object at `shard_id`, or `None` past the served objects.
+    fn object(&self, shard_id: u64) -> Option<&FramedObject> {
         usize::try_from(shard_id)
             .ok()
-            .and_then(|i| self.expected_lens.get(i))
-            .copied()
+            .and_then(|i| self.objects.get(i))
+    }
+
+    /// What a requester expects of shard `shard_id` — the served object's
+    /// own row — or `None` past the served objects.
+    #[must_use]
+    pub fn expectation_of(&self, shard_id: u64) -> Option<ExpectedShard> {
+        self.object(shard_id).map(|o| o.expectation(shard_id))
     }
 
     /// Subscribe the client tor's control port to `events` (`SETEVENTS`) and
@@ -871,6 +857,12 @@ impl Apparatus {
     /// # Errors
     ///
     /// The client's own verdict.
+    ///
+    /// # Panics
+    ///
+    /// If `shard_id` names no served object: that is a rig misuse, not a
+    /// fetch outcome, and the apparatus stops rather than filing it under
+    /// a class Tor would be blamed for.
     pub async fn fetch_with(
         &self,
         persona_index: usize,
@@ -879,11 +871,17 @@ impl Apparatus {
         timeouts: Timeouts,
     ) -> Result<usize, FetchError> {
         let client = PFetchClient::with_timeouts(self.client_tor.socks, timeouts);
-        let target = self.personas[persona_index].target(shard_id);
+        let target = self.personas[persona_index].target();
+        let expected = self
+            .expectation_of(shard_id)
+            .expect("fetch_with names a shard the apparatus serves");
         client
-            .fetch(&target, header, Arc::new(AcceptAnyContent))
+            .fetch(&target, header, &expected, Arc::new(DiscardTxs))
             .await
-            .map(|shard| shard.body().len())
+            .map(|shard| {
+                usize::try_from(shard.archival_len().to_raw())
+                    .expect("a verified archival length fits usize")
+            })
     }
 
     /// The client tor's SOCKS endpoint — the "daemon's tor zone" every fetch
@@ -954,8 +952,8 @@ impl Apparatus {
                 probes.spawn(probe_once(
                     self.client.lane(index),
                     index,
-                    persona.target(0),
-                    self.expected_body_len(),
+                    persona.target(),
+                    self.objects[0].expectation(0),
                     deadline,
                 ));
             }
@@ -1063,15 +1061,19 @@ impl Apparatus {
 
     /// [`Self::timed_fetch`] of shard `shard_id` — one of the served objects.
     pub async fn timed_fetch_shard(&self, persona_index: usize, shard_id: u64) -> Observation {
-        let (Some(persona), Some(expected_len)) = (
-            self.personas.get(persona_index),
-            self.expected_body_len_of(shard_id),
-        ) else {
+        let (Some(persona), Some(object)) =
+            (self.personas.get(persona_index), self.object(shard_id))
+        else {
             return Observation::failure(Duration::ZERO, FailureKind::Refused);
         };
-        let target = persona.target(shard_id);
+        let target = persona.target();
+        let expected = object.expectation(shard_id);
+        let expected_len = object.payload_len();
         let start = Instant::now();
-        let outcome = self.client.fetch_once(persona_index, &target).await;
+        let outcome = self
+            .client
+            .fetch_once(persona_index, &target, &expected)
+            .await;
         let elapsed = start.elapsed();
         match outcome {
             Ok(len) if len == expected_len => Observation::success(elapsed),
@@ -1162,14 +1164,16 @@ async fn probe_once(
     client: Arc<PFetchClient>,
     index: usize,
     target: FetchTarget,
-    expected_len: usize,
+    expected: ExpectedShard,
     deadline: Instant,
 ) -> Result<bool, ApparatusError> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(ApparatusError::NotReachable);
     }
-    match tokio::time::timeout(remaining, fetch_via(&client, &target)).await {
+    let expected_len =
+        usize::try_from(expected.archival_len().to_raw()).expect("archival length fits usize");
+    match tokio::time::timeout(remaining, fetch_via(&client, &target, &expected)).await {
         Ok(Ok(bytes)) if bytes == expected_len => Ok(true),
         Ok(Ok(bytes)) => Err(ApparatusError::Refused {
             persona: index,
@@ -1430,8 +1434,8 @@ mod tests {
         // Body-phase I/O (the only remaining `Stall::Io` site) is a mid-body
         // break, not a missing head.
         assert_eq!(
-            classify(&FetchError::Stall(Stall::Io(std::io::Error::from(
-                std::io::ErrorKind::ConnectionReset
+            classify(&FetchError::Stall(Stall::Io(Arc::new(
+                std::io::Error::from(std::io::ErrorKind::ConnectionReset)
             )))),
             FailureKind::Truncated
         );

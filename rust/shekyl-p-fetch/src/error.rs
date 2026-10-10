@@ -14,11 +14,18 @@
 
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 
-use crate::target::ContentRefused;
+use shekyl_wire::shard_frame::{ContentMismatch, FrameError};
 
 /// Why a [`fetch`](crate::PFetchClient::fetch) did not return a shard.
-#[derive(Debug)]
+///
+/// `Clone` so one outcome can be handed to every viewer waiting on the
+/// same flight. The only non-`Clone` payload the taxonomy ever held was
+/// [`Stall::Io`]'s [`std::io::Error`], and that is shared through an
+/// [`Arc`] rather than stringified: [`Error::source`](std::error::Error::source)
+/// still returns it.
+#[derive(Clone, Debug)]
 pub enum FetchError {
     /// **No complete exchange.** The dial failed or timed out, the
     /// connection closed before a complete head, a read stalled, or the
@@ -58,7 +65,7 @@ pub enum FetchError {
     ///
     /// **A failed read: name another `P`.** No retry of this one.
     Unavailable,
-    /// **`P` sent the whole frame and then said it would not sign.** A 200
+    /// **`P` sent the whole body and then said it would not sign.** A 200
     /// of its full declared length whose envelope is the refusal trailer
     /// (`serving_route::is_refusal_trailer`) in place of a signature. `P`
     /// holds the shard and served it; its signer then failed. The body is
@@ -68,15 +75,17 @@ pub enum FetchError {
     /// **A failed read: name another `P`.** No retry. This is `P`'s own
     /// statement, in bytes only `P` can put on the stream, and that is why
     /// it is not inferred from a response that stopped: a relay can cut a
-    /// stream at any byte, the frame's end included, and the same guard
+    /// stream at any byte, the body's end included, and the same guard
     /// sits on every retry. A cut is [`Stall::Truncated`] wherever it
     /// falls.
     Unsigned,
     /// **A completed exchange that is not the contract.** A status other
     /// than 200, 400, 404 or 503, a header set other than the ruled two, a
     /// `content-length` that is missing, unparseable, below the envelope
-    /// width, or above the ceiling, or an envelope that is not a canonical
-    /// `HybridSignature`. Refused before, or without, reading the body.
+    /// width, or above the expectation's ceiling, a body that is not the
+    /// `shard_frame` grammar or does not end where the envelope begins, or
+    /// an envelope that is not a canonical `HybridSignature`. Refused as
+    /// soon as it is seen — from the head where the head decides it.
     /// **Name another `P`**; this one is not speaking the protocol.
     Malformed(Malformed),
     /// **`P` served, but the countersignature does not verify** under the
@@ -85,11 +94,19 @@ pub enum FetchError {
     /// one outcome that is evidence *about* `P` rather than about the
     /// path, which is why it is typed apart from [`Self::Malformed`].
     BadCountersignature,
-    /// **`P` served and signed, but the content is not what the caller
-    /// expected** — the [`ContentVerify`](crate::ContentVerify) hole
-    /// refused. `P` demonstrably answered *this* request with *these*
-    /// bytes. **Name another `P`.**
-    ContentRefused(ContentRefused),
+    /// **`P` served and signed a well-formed frame whose content is not the
+    /// shard the caller expected** — a transaction count, a declared length
+    /// or a segment hash off the requester's retained rows
+    /// ([`ExpectedShard`](crate::ExpectedShard)). Typed only once the
+    /// countersignature has verified: `P` demonstrably answered *this*
+    /// request with *these* bytes. **Name another `P`.**
+    ///
+    /// Against the interim leaf-segment provider every fetch ends in
+    /// [`Self::Malformed`] (raw leaf bytes are not the frame's version
+    /// byte) or, where they happen to be, here — that `P` serves a body
+    /// this grammar does not describe — which is a statement about the
+    /// serve side, not evidence against `P` (`SHARD_VIEW_FETCH.md` §4).
+    ContentRefused(ContentMismatch),
 }
 
 /// What a scheduler does after a failed fetch of one `P` (`SF-D6`).
@@ -147,13 +164,13 @@ impl fmt::Display for FetchError {
             Self::Rejected => f.write_str("rejected: P answered 400"),
             Self::Unavailable => f.write_str("unavailable: P answered 503"),
             Self::Unsigned => {
-                f.write_str("P sent the whole frame and a refusal in place of the countersignature")
+                f.write_str("P sent the whole body and a refusal in place of the countersignature")
             }
             Self::Malformed(m) => write!(f, "malformed response: {m}"),
             Self::BadCountersignature => {
                 f.write_str("countersignature does not verify under the target key")
             }
-            Self::ContentRefused(r) => write!(f, "content refused: {r}"),
+            Self::ContentRefused(m) => write!(f, "content refused: {m}"),
         }
     }
 }
@@ -161,8 +178,9 @@ impl fmt::Display for FetchError {
 impl std::error::Error for FetchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Stall(Stall::Io(e)) => Some(e),
-            Self::ContentRefused(r) => Some(r),
+            Self::Stall(Stall::Io(error)) => Some(error.as_ref()),
+            Self::ContentRefused(m) => Some(m),
+            Self::Malformed(Malformed::Frame(e)) => Some(e),
             _ => None,
         }
     }
@@ -170,7 +188,7 @@ impl std::error::Error for FetchError {
 
 /// Where a [`FetchError::Stall`] stopped. Diagnostic detail only: every
 /// arm has the same disposition.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Stall {
     /// The SOCKS dial did not complete within the connect bound — the
     /// proxy was slow to answer, or the rendezvous with `P`'s onion did
@@ -209,7 +227,17 @@ pub enum Stall {
     /// An I/O error on the stream **after** a complete head (body drain or
     /// the close probe). Pre-head I/O is [`Self::ClosedBeforeHead`]: no
     /// exchange happened, so it is not a short body.
-    Io(io::Error),
+    ///
+    /// Shared, not copied: an `io::Error` is not `Clone`, and a view flight
+    /// hands one refusal to every waiter. The [`Arc`] keeps
+    /// [`Error::source`](std::error::Error::source) pointed at this error.
+    Io(Arc<io::Error>),
+}
+
+impl From<io::Error> for Stall {
+    fn from(error: io::Error) -> Self {
+        Self::Io(Arc::new(error))
+    }
 }
 
 impl fmt::Display for Stall {
@@ -224,14 +252,14 @@ impl fmt::Display for Stall {
                 write!(f, "body truncated: {received} of {declared} bytes")
             }
             Self::NoClose => f.write_str("body complete but P did not close"),
-            Self::Io(e) => write!(f, "i/o: {e}"),
+            Self::Io(error) => write!(f, "i/o: {}", error.as_ref()),
         }
     }
 }
 
 /// How a complete head, or the envelope behind it, departed from the
 /// contract. Diagnostic detail only: every arm has the same disposition.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Malformed {
     /// Bytes kept arriving past the head bound with no `\r\n\r\n`. Not a
     /// stall — the stream is flowing — and not the contract.
@@ -254,9 +282,11 @@ pub enum Malformed {
         /// Bytes `content-length` declared.
         declared: u64,
     },
-    /// `content-length` exceeds [`max_body_bytes`](crate::max_body_bytes).
+    /// `content-length` exceeds the expectation's
+    /// [`max_response_len`](crate::ExpectedShard::max_response_len).
     /// Refused from the head, before a body byte is read: the declaration
-    /// comes from a potentially adversarial `P`.
+    /// comes from a potentially adversarial `P`, and the ceiling from the
+    /// requester's own rows.
     Oversize {
         /// Bytes `content-length` declared.
         declared: u64,
@@ -271,7 +301,19 @@ pub enum Malformed {
         /// Bytes `content-length` declared.
         declared: u64,
     },
-    /// The leading envelope bytes are not a canonical `HybridSignature`.
+    /// The body is not the `shard_frame` grammar: a version byte that is
+    /// not the frame's, or a varint that does not decode. Refused where it
+    /// is read; the rest of the body is not drained.
+    Frame(FrameError),
+    /// The frame ran into the envelope: a varint or a segment still wanted
+    /// bytes when the content ahead of the signature was spent. The frame
+    /// `P` declared is longer than the body `P` sent.
+    FrameShort,
+    /// The frame ended with content bytes still ahead of the envelope. A
+    /// frame ends exactly where the declared length says (`SF-D6`: body
+    /// long of agreed `N`), not at a parse that happened to finish.
+    FrameLong,
+    /// The trailing envelope bytes are not a canonical `HybridSignature`.
     Envelope,
 }
 
@@ -301,6 +343,11 @@ impl fmt::Display for Malformed {
                     f,
                     "more body bytes than the declared content-length {declared}"
                 )
+            }
+            Self::Frame(e) => write!(f, "body is not the shard frame: {e}"),
+            Self::FrameShort => f.write_str("frame ran into the signature envelope"),
+            Self::FrameLong => {
+                f.write_str("frame ended with content bytes still ahead of the envelope")
             }
             Self::Envelope => f.write_str("envelope is not a canonical hybrid signature"),
         }
