@@ -54,10 +54,12 @@ structural close is a deliberate **two-policy split**, owned by
   never become nonce reuse; dead RNG must never become a crash loop). The
   DLEQ nonce (F-1, the one bare `Scalar::random` the audit found protecting a
   full spend scalar) now binds every challenge input through this seam.
-- **Key material — fail-loud:** master seeds, transaction keys, and keygen
-  draw `OsRng` directly at their call sites and panic/error on entropy
-  failure — a key silently minted from a degraded source is the worse
-  outcome, so this path deliberately does **not** route through the hedge.
+- **Key material — fail-loud:** a key minted from a degraded source is the
+  worse outcome, so this path does not use the hedge. Inside
+  `shekyl-crypto-pq` the draw is the crate-private `key_material32`:
+  32 fresh bytes, or an error, never zeros. Callers outside this crate
+  still draw `OsRng` and handle the error at the site (`stake_engine`'s
+  `try_fill_bytes` preflight).
 
 Hybrid scheme 3 (2026-10-09) sits on both sides of that split and adds no
 third policy. FN-DSA's signer takes a generic RNG and draws through

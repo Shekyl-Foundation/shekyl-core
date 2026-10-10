@@ -20,20 +20,24 @@
 //! secret's hash inputs — it is never the sole defense. On RNG failure
 //! the construction degrades to its deterministic RFC-6979-style form:
 //! never a repeated nonce across distinct statements, never a panic that
-//! aborts the supervisor owning the caller. [`hedged_fresh32`] encodes
-//! that policy: fresh bytes, or all-zeros on failure, never a panic.
-//! It is **only** sound inside such a construction — a caller that uses
-//! the output as a nonce directly reintroduces the bare-RNG defect this
-//! module retires.
+//! aborts the supervisor owning the caller. [`hedged_fresh32`] is that
+//! policy for a caller that wants 32 bytes: fresh bytes, or all-zeros on
+//! failure, never a panic. `HedgedOsRng` is the same policy as an
+//! `RngCore`, for a signer that hedges internally and draws with
+//! infallible `fill_bytes`. Both are sound only inside such a
+//! construction — a caller that uses the output as a nonce or a key
+//! directly reintroduces the bare-RNG defect this module retires.
 //!
 //! **Key material — fail-loud.** Master seeds, transaction keys, and
 //! session seeds have no deterministic fallback that is safe to emit: a
-//! predictable key is a compromised key. Those call sites draw from
-//! `OsRng` directly (panicking or erroring on entropy failure) and are
-//! deliberately *not* routed through this module — a fail-safe helper
-//! there would convert an outage into silent key reuse. See
-//! `stake_engine`'s `try_fill_bytes` preflight for the fail-loud-without-
-//! panic variant where a supervisor needs to survive.
+//! predictable key is a compromised key. `key_material32` is that draw
+//! inside this crate: 32 fresh bytes, or an error, never zeros and never
+//! a panic. It is crate-private, so the public surface of this module
+//! stays the one function whose failure mode is the opposite of a key
+//! draw. Callers outside this crate still draw `OsRng` and handle the
+//! error at the site; `stake_engine`'s `try_fill_bytes` preflight is
+//! that shape for a supervisor that must survive the outage. Do not feed
+//! key material through [`hedged_fresh32`].
 
 use rand::rngs::OsRng;
 use rand::RngCore as _;
@@ -108,10 +112,11 @@ impl rand::CryptoRng for HedgedOsRng {}
 
 /// 32 bytes of key material from the OS CSPRNG, or an error.
 ///
-/// The fail-loud half of the policy, without the panic: a caller that must
-/// survive an entropy outage gets an `Err` to propagate, and never a
-/// predictable key.
-pub fn key_material32() -> Result<zeroize::Zeroizing<[u8; 32]>, rand::Error> {
+/// The fail-loud half of this module's policy. A caller that must survive
+/// an entropy outage gets an `Err` to propagate, and never a predictable
+/// key. Crate-private: the public entropy function is [`hedged_fresh32`],
+/// and its zero-on-failure policy is unsafe for a key.
+pub(crate) fn key_material32() -> Result<zeroize::Zeroizing<[u8; 32]>, rand::Error> {
     let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
     OsRng.try_fill_bytes(bytes.as_mut())?;
     Ok(bytes)

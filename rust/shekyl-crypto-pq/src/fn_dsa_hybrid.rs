@@ -390,8 +390,15 @@ impl SignatureScheme for HybridEd25519FnDsa {
     }
 }
 
-/// FN-DSA-1024 key generation from a seed. The generator's ~48 kB of
-/// scratch is a local here and is wiped by the crate when it drops.
+/// FN-DSA-1024 key generation from `seed`.
+///
+/// Returns the encoded public key and the encoded secret. The secret is
+/// wrapped so it wipes on drop. The generator's scratch is a local of this
+/// function and is wiped by the crate when it drops.
+///
+/// `#[inline(never)]` keeps that scratch in this frame. Inlining it stacks
+/// the scratch on the caller, and `the_scheme_runs_on_a_small_stack` fails
+/// when that happens.
 #[inline(never)]
 fn fn_dsa_keygen(
     seed: &[u8; 32],
@@ -410,8 +417,17 @@ fn fn_dsa_keygen(
     (public, secret)
 }
 
-/// One FN-DSA-1024 signature over the inner preimage. The decoded signing
-/// key (~114 kB) is a local here and is wiped by the crate when it drops.
+/// One FN-DSA-1024 signature over `inner`, drawn from `rng`.
+///
+/// Returns the fixed-length signature. `InvalidKeyMaterial` means `secret`
+/// did not decode: the crate reports a failed sign the same way, after it
+/// has treated a long run of rejected samples as a bad key. The decoded
+/// signing key is a local of this function and is wiped by the crate when
+/// it drops.
+///
+/// `#[inline(never)]` keeps that key in this frame. Inlining it stacks the
+/// key on the caller, and `the_scheme_runs_on_a_small_stack` fails when
+/// that happens.
 #[inline(never)]
 fn fn_dsa_sign(
     secret: &[u8; FN_DSA_1024_SECRET_KEY_LENGTH],
@@ -435,9 +451,7 @@ fn fn_dsa_sign(
 mod tests {
     use super::*;
     use crate::error::PqcVerifyError;
-    use crate::signature::{
-        verify_pqc_auth, HybridEd25519MlDsa, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER,
-    };
+    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 
@@ -662,9 +676,6 @@ mod tests {
         )
         .expect("preimage");
         assert_ne!(fn_dsa, ml_dsa);
-        // The other scheme exists and is a different type; this line is the
-        // compile-time half of the same statement.
-        let _: fn(&HybridEd25519MlDsa) = |_| {};
     }
 
     /// Key generation and signing each hold a large local — ~48 kB of
