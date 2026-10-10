@@ -262,7 +262,7 @@ producers cited at source.
 | POD | Field | Quantity |
 | --- | --- | --- |
 | `shekyl_rpc_chain_tip_facts` (`src/rpc/rpc_facts_ffi.h:35-37`) | `chain_height` | COUNT (`top_height + 1`, `src/rpc/rpc_facts_ffi.cpp:73-75`) |
-| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp:1327`); `0` is the core reporting none (C5), at this FFI boundary only: no wire method writes it since 3.46 |
+| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp:1293`); `0` is the core reporting none (C5), at this FFI boundary only: no wire method writes it since 3.46 |
 | `shekyl_rpc_block_hash_facts` (`src/rpc/rpc_facts_ffi.h:81`) | `chain_height` | COUNT |
 | `shekyl_rpc_block_header_facts` (`src/rpc/rpc_facts_ffi.h:104-106`) | `height` ORDINAL; `depth` DIFFERENCE; `chain_height` COUNT | as named in the header |
 | `ChainTipFactsFfi` (`rust/shekyl-daemon-rpc/src/ffi.rs:337-342`) | twins of the C POD | stay raw |

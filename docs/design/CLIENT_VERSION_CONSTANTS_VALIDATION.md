@@ -1205,7 +1205,7 @@ and `mining_parity.genesis_identity_is_pow_independent` (mainnet/fakechain
 `e623214c…`, testnet `7cbb8529…`, stagenet `82ccf335…`). Handshake compares
 those ids — `get_block_id_by_height(0)` / `geblock block-id` — not
 `GENESIS_TX`. `GENESIS_PINS_ARE_PLACEHOLDERS` is deleted; [`genesis_hash_for`](../../rust/shekyl-rpc-types/src/identity.rs)
-and [`IdentityExpectation::check`](../../rust/shekyl-rpc-types/src/identity.rs)
+and [`IdentityExpectation::read`](../../rust/shekyl-rpc-types/src/identity.rs) (named `check` until RK-5c commit 6, when it took over the decode so the version is read first)
 refuse a foreign block 0. Wallet and console do not each hold a copy.
 Reminting genesis updates `GENESIS_TX` / nonce, the frozen-id surfaces, and
 these pins in the same change.

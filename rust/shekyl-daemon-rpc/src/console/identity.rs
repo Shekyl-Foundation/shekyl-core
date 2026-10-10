@@ -5,7 +5,7 @@
 
 //! Remote-arm identity handshake (`VC-3`).
 //!
-//! Comparison is [`shekyl_rpc_types::IdentityExpectation::check`]. This
+//! Decode and comparison are [`shekyl_rpc_types::IdentityExpectation::read`]. This
 //! module fetches `get_version` over the blocking control transport and
 //! formats the refusal.
 
