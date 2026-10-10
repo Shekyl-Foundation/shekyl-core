@@ -143,7 +143,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 59, &mut rng);
     let own = v4(9_999);
-    list.set_own_address(connector, Some(own.clone()));
+    assert_eq!(list.set_own_address(connector, Some(own.clone())), Ok(()));
     let mut own_seen = 0_u32;
     let mut each: Vec<u32> = vec![0; 59];
     let windows = 3_000_u32;
@@ -181,6 +181,26 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
             "white {i}: {share} vs {expect}"
         );
     }
+}
+
+#[test]
+fn own_address_must_belong_to_the_connector() {
+    let mut list = Peerlist::new(Vec::new());
+    let clear = Peerlist::connector_of(&v4(1)).expect("served");
+    let hidden = Peerlist::connector_of(&onion(1)).expect("served");
+    // Refused before the partition stores it.
+    assert_eq!(
+        list.set_own_address(clear, Some(onion(1))),
+        Err(Refusal::ForeignConnector)
+    );
+    assert!(!list.is_gray(&onion(1)) && !list.is_white(&onion(1)));
+    assert_eq!(list.set_own_address(clear, Some(v4(9))), Ok(()));
+    assert_eq!(list.set_own_address(clear, None), Ok(()));
+    assert_eq!(list.set_own_address(hidden, Some(onion(2))), Ok(()));
+    assert_eq!(
+        list.set_own_address(hidden, Some(v4(9))),
+        Err(Refusal::ForeignConnector)
+    );
 }
 
 #[test]

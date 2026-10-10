@@ -208,11 +208,29 @@ impl Peerlist {
         !address.ip().is_some_and(|ip| bans.is_banned(ip, now))
     }
 
-    /// This node's own dialable address on `connector`, or none: one
-    /// uniform member of the disclosure population when set (the
-    /// handshake-address ruling). Never a white entry.
-    pub fn set_own_address(&mut self, connector: ConnectorId, address: Option<NetworkAddress>) {
+    /// This node's own dialable address on `connector`, or none.
+    ///
+    /// `None` clears it. An address whose connector is not `connector` is
+    /// [`Refusal::ForeignConnector`] and is not stored; an address no
+    /// connector serves is [`Refusal::NoConnector`]. When set, the address
+    /// is one uniform member of the disclosure population (the
+    /// handshake-address ruling) and is never a white entry. An address
+    /// that is also listed stays listed: disclosure already dedups it.
+    pub fn set_own_address(
+        &mut self,
+        connector: ConnectorId,
+        address: Option<NetworkAddress>,
+    ) -> Result<(), Refusal> {
+        if let Some(address) = &address {
+            let Some(home) = Self::connector_of(address) else {
+                return Err(Refusal::NoConnector);
+            };
+            if home != connector {
+                return Err(Refusal::ForeignConnector);
+            }
+        }
         self.partition_mut(connector).set_own_address(address);
+        Ok(())
     }
 
     /// The connector's disclosure sample (D3): the window's sample, once

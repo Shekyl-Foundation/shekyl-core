@@ -80,8 +80,11 @@ impl DialOutcome {
 pub enum Refusal {
     /// No local connector serves this address's type (brief §2).
     NoConnector,
-    /// The address's connector is not the session's. One such entry rejects
-    /// the peer's whole list (`net_node.inl:2460` to `:2466`).
+    /// The address belongs to a different connector than this call is for.
+    /// On a session admit, that is not the session's connector; on
+    /// [`crate::Peerlist::set_own_address`], not the connector named.
+    /// One such entry in a received list rejects the whole list
+    /// (`net_node.inl:2460` to `:2466`).
     ForeignConnector,
     /// The address is under an active ban (D4): refused at admit while the
     /// ban lasts.
