@@ -103,8 +103,8 @@ pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {
 
 /// The slash log's retirement floor at a tip, under a schedule and a reorg
 /// cap: rows **at or above** it are retained, rows below it may be retired
-/// (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`). `None` inside while
-/// the chain is shorter than the window — no row has aged out yet.
+/// (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`). `None` while the
+/// chain is shorter than the window — no row has aged out yet.
 ///
 /// The value of [`journal_horizon_under`], typed so the two sites that hold
 /// it cannot take a bare height for it (`05-system-thinking`: a quantity
