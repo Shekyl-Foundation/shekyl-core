@@ -16689,8 +16689,9 @@ named when a run is ruled. No constant is added. The instruments are
 `conformance::composition` (the two-class graph, `walk_originated`, and
 the spy and capture folds) and `conformance::epoch_traffic`, behind the
 `conformance` feature. The default build does not contain them. No
-production constant moves, and `own_edge()` stays until the relay lane
-takes the stem-slot ruling.
+production constant moves. *Records-was (2026-10-08): "`own_edge()`
+stays until the relay lane takes the stem-slot ruling" — PR-1 (#1018,
+§98) took it and deleted the function.*
 
 **RULED 2026-10-08 (Rick).** An own transaction rides a stem slot.
 The origin's own send is always a stem, and each relay forwards with
@@ -17381,8 +17382,8 @@ slot. (a) Hold: the adversary who can drop the origin's hidden peer buys
 no re-roll inside the epoch; the cost is originations held up to an
 epoch after one Tor circuit fails. (b) Follow the slot: the refill drops
 the local source's pin and the next origination first-pins onto the new
-hidden peer; `own_edge()` replaced a dead edge the same way today
-(`own_edge.rs:35` to `:52`), §95's capture reading is per-epoch and
+hidden peer; `own_edge()` replaced a dead edge the same way at the time
+(`own_edge.rs:35` to `:52`, since deleted), §95's capture reading is per-epoch and
 already counts one draw per epoch per node, and the extra rolls an
 adversary can buy are bounded by how many of the origin's hidden peers
 it can make drop, which the dialer refills to 12.
@@ -17430,9 +17431,10 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   slot, loss of every hidden session (`NoOwnEdge`), and their return;
 - relayed sources reach both slots over epochs;
 - the slot draw is uniform over the hidden outbound sessions and the other slot
-  uniform over the rest (chi-square over 200 rebuilds, the shape
-  `four_hidden_peers_share_the_own_edge` already uses, `edge.rs:210`),
-  the distributional pin of `mixed_hidden_slot`;
+  uniform over the rest (chi-square over 200 rebuilds,
+  `four_hidden_peers_share_the_hidden_slot`, `edge.rs`; *records-was:*
+  the shape `four_hidden_peers_share_the_own_edge` used before PR-1
+  rewrote it), the distributional pin of `mixed_hidden_slot`;
 - an all-hidden node and a no-hidden-connector node reduce to the
   paper's draw;
 - a hidden session arriving mid-epoch fills the empty hidden slot at the
