@@ -40,7 +40,8 @@
 //! F2 (the wire admits one transaction version) and F8 (one output tag)
 //! are falsified in `miner_tests`. F19 (parent state is the view's brand)
 //! is falsified by the `compile_fail` doctests on `validate`. F21 is
-//! [`EMISSION_SPLIT_EPOCH`].
+//! [`shekyl_economics::EMISSION_SPLIT_EPOCH`], compile-pinned from the
+//! census and falsified by `the_staker_share_starts_at_block_one`.
 //!
 //! # What is not here
 //!
@@ -110,23 +111,6 @@ pub(crate) fn economics() -> &'static EconomicParams {
         params
     })
 }
-
-/// CEN-F21: the height the staker share's decay is measured from
-/// (`genesis_ng_height`). One on every issued chain — the C++ returns the
-/// one-row hardfork table's height, and
-/// `the_emission_split_epoch_is_the_hardfork_tables_first_row` pins this
-/// constant to those three tables.
-///
-/// CEN-F16 passes it to `shekyl_economics::compute_emission_split`
-/// (`rules::reward::judge_emission`, slice 7 commit 5). It
-/// becomes a [`crate::RuleSet`] field when a schedule step names a different
-/// epoch. Until then a field would be copied into every rule-set mismatch
-/// and no row would read it.
-///
-/// Public since E6 slice 6 for the same one reason as [`tx_volume_window`]:
-/// the producer's split (`shekyl-block-template`) is priced at the epoch
-/// the validator will judge, read here, not restated.
-pub const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)

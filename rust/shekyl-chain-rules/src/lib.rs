@@ -64,8 +64,7 @@
 //! (the first of that status), every public network's genesis pinned in
 //! [`ReleaseAnchors`] — verified by equality, in no trust band — and
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
-//! `rules::miner::EMISSION_SPLIT_EPOCH` until a schedule step names
-//! another); F14/F14b/F16/F18 wait on CEN-G6's
+//! `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
 //! (`CHAIN_RULES_SLICE_5.md`) landed 4.H — the transaction on its own —
 //! as the third rule class, `TxRule` over a `TxContext` (crate-private,
@@ -177,7 +176,6 @@ pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
-    EMISSION_SPLIT_EPOCH,
 };
 pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};

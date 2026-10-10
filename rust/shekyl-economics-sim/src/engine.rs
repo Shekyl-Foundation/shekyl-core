@@ -205,13 +205,6 @@ impl SimParams {
 
 const COIN: f64 = crate::burden::COIN as f64;
 
-/// The height the staker emission share decays from. The validator's own
-/// (`shekyl_chain_rules::EMISSION_SPLIT_EPOCH`), read here so that every
-/// fold in this crate splits a block at the epoch the validator judges it
-/// at.
-pub(crate) const EMISSION_SPLIT_EPOCH_HEIGHT: u64 =
-    shekyl_chain_rules::EMISSION_SPLIT_EPOCH.to_raw();
-
 /// The circulating supply the burn reads at a block: `coins_generated −
 /// total_burned` at parent state (FL-R16c, CEN-F17), derived by its one
 /// owner. The folds keep both accumulators in `u128`, and the chain records

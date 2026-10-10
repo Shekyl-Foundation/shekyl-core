@@ -86,7 +86,11 @@
 # breakages (CEN-D2's longhash anchors, the RandomX phase-3 swap table, and
 # four census rows citing the deleted C++ codec/builder/tests) were
 # re-anchored or travelled with that move; none was absorbed into the figure.
-dead-citations: 45
+# Lowered 45 -> 44 on 2026-10-09 (hard-fork deletion, PR #1009):
+# SHEKYLD_PREREQUISITES.md no longer cites
+# src/rpc/core_rpc_server.cpp:2987-3008. That range is past the file.
+# The fee estimate is src/rpc/rpc_facts_ffi.cpp:125.
+dead-citations: 44
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a

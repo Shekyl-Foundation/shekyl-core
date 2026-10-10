@@ -76,8 +76,6 @@ typedef struct mdb_txn_cursors
 
   MDB_cursor *m_txc_alt_blocks;
 
-  MDB_cursor *m_txc_hf_versions;
-
   MDB_cursor *m_txc_properties;
 
   MDB_cursor *m_txc_curve_tree_leaves;
@@ -101,7 +99,6 @@ typedef struct mdb_txn_cursors
 #define m_cur_txpool_meta	m_cursors->m_txc_txpool_meta
 #define m_cur_txpool_blob	m_cursors->m_txc_txpool_blob
 #define m_cur_alt_blocks	m_cursors->m_txc_alt_blocks
-#define m_cur_hf_versions	m_cursors->m_txc_hf_versions
 #define m_cur_properties	m_cursors->m_txc_properties
 #define m_cur_curve_tree_leaves	m_cursors->m_txc_curve_tree_leaves
 #define m_cur_curve_tree_layers	m_cursors->m_txc_curve_tree_layers
@@ -126,7 +123,6 @@ typedef struct mdb_rflags
   bool m_rf_txpool_meta;
   bool m_rf_txpool_blob;
   bool m_rf_alt_blocks;
-  bool m_rf_hf_versions;
   bool m_rf_properties;
   bool m_rf_curve_tree_leaves;
   bool m_rf_curve_tree_layers;
@@ -432,10 +428,6 @@ private:
   uint64_t num_outputs() const;
 
   // Hard fork
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version);
-  virtual uint8_t get_hard_fork_version(uint64_t height) const;
-  virtual void check_hard_fork_info();
-  virtual void drop_hard_fork_info();
 
   inline void check_open() const;
 

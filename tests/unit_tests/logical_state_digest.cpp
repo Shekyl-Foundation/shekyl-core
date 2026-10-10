@@ -21,7 +21,6 @@
 #include "blockchain_db/shekyl_types.h"
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/hardfork.h"
 #include "net/enums.h"
 
 #include <vector>
@@ -78,9 +77,6 @@ TEST(LogicalStateDigestV0, SpentKeySetIsOrderIndependent)
 TEST(LogicalStateDigestV0, MinerOnlyBlockMovesTheChainComponent)
 {
   archival_test::TempLMDB fixture;
-  cryptonote::HardFork hf(fixture.db);
-  hf.init();
-  fixture.db.set_hard_fork(&hf);
   const auto before = fixture.db.logical_state_digest_v0();
   archival_test::append_minimal_blocks(fixture.db, 1);
   const auto after = fixture.db.logical_state_digest_v0();
