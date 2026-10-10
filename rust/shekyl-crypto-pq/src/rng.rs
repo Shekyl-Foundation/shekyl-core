@@ -20,13 +20,15 @@
 //! secret's hash inputs — it is never the sole defense. On RNG failure
 //! the construction degrades to its deterministic RFC-6979-style form:
 //! never a repeated nonce across distinct statements, never a panic that
-//! aborts the supervisor owning the caller. [`hedged_fresh32`] is that
-//! policy for a caller that wants 32 bytes: fresh bytes, or all-zeros on
-//! failure, never a panic. `HedgedOsRng` is the same policy as an
-//! `RngCore`, for a signer that hedges internally and draws with
-//! infallible `fill_bytes`. Both are sound only inside such a
-//! construction — a caller that uses the output as a nonce or a key
-//! directly reintroduces the bare-RNG defect this module retires.
+//! aborts the supervisor owning the caller. `hedged_fill` is that
+//! policy: the draw's bytes, or zeros across the whole buffer when the
+//! draw fails, never a panic. [`hedged_fresh32`] asks it for 32 bytes.
+//! `HedgedOsRng` asks it for whatever the signer draws and then reports
+//! success, because the signer calls infallible `fill_bytes` and a zero
+//! buffer is the fallback rather than an error. Both are sound only
+//! inside a hedged construction — a caller that uses the output as a
+//! nonce or a key directly reintroduces the bare-RNG defect this module
+//! retires.
 //!
 //! **Key material — fail-loud.** Master seeds, transaction keys, and
 //! session seeds have no deterministic fallback that is safe to emit: a
@@ -42,6 +44,17 @@
 use rand::rngs::OsRng;
 use rand::RngCore as _;
 
+/// Apply the hedged-draw policy to `dest`.
+///
+/// `draw` fills `dest` from its source. On `Ok` those bytes stay. On `Err`
+/// every byte of `dest` becomes zero, including a prefix `draw` wrote
+/// before failing. The caller decides what a zero draw means.
+fn hedged_fill(dest: &mut [u8], draw: impl FnOnce(&mut [u8]) -> Result<(), rand::Error>) {
+    if draw(dest).is_err() {
+        dest.fill(0);
+    }
+}
+
 /// 32 fresh bytes from the OS CSPRNG, or all-zeros if the OS RNG fails.
 ///
 /// For hedged nonce constructions **only** — see the module docs for why
@@ -49,13 +62,11 @@ use rand::RngCore as _;
 #[must_use]
 pub fn hedged_fresh32() -> [u8; 32] {
     let mut fresh = [0u8; 32];
-    if OsRng.try_fill_bytes(&mut fresh).is_err() {
-        fresh = [0u8; 32];
-    }
+    hedged_fill(&mut fresh, |dest| OsRng.try_fill_bytes(dest));
     fresh
 }
 
-/// The OS CSPRNG as a [`rand::RngCore`], with [`hedged_fresh32`]'s policy:
+/// The OS CSPRNG as a [`rand::RngCore`], with `hedged_fill`'s policy:
 /// fresh bytes, or zeros if the OS RNG fails, never a panic.
 ///
 /// For a signer that **hedges internally** and takes its randomness as an
@@ -95,9 +106,7 @@ impl rand::RngCore for HedgedOsRng {
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        if OsRng.try_fill_bytes(dest).is_err() {
-            dest.fill(0);
-        }
+        hedged_fill(dest, |buf| OsRng.try_fill_bytes(buf));
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
@@ -156,5 +165,35 @@ mod tests {
         let a = key_material32().expect("a working OS RNG");
         let b = key_material32().expect("a working OS RNG");
         assert_ne!(*a, *b);
+    }
+
+    /// The OS RNG cannot be made to fail on demand (rule 50, case 2). The
+    /// policy is the function both callers share, so a draw that writes a
+    /// prefix and then fails is the fault, and zeros in every byte are the
+    /// classification.
+    #[test]
+    fn a_failed_draw_zeros_the_whole_buffer() {
+        let unavailable = || rand::Error::new(std::io::Error::other("entropy source unavailable"));
+
+        let mut partial = [0xABu8; 40];
+        hedged_fill(&mut partial, |dest| {
+            dest[..7].fill(0x11);
+            Err(unavailable())
+        });
+        assert_eq!(
+            partial, [0u8; 40],
+            "a prefix written before failure is wiped"
+        );
+
+        let mut untouched = [0xABu8; 4];
+        hedged_fill(&mut untouched, |_| Err(unavailable()));
+        assert_eq!(untouched, [0u8; 4]);
+
+        let mut kept = [0u8; 8];
+        hedged_fill(&mut kept, |dest| {
+            dest.fill(0x5A);
+            Ok(())
+        });
+        assert_eq!(kept, [0x5Au8; 8], "a successful draw is kept");
     }
 }
