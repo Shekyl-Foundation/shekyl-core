@@ -13,8 +13,12 @@
 //! `SessionAccepted` or `Confirmed` (brief §2), or a Foundation-fleet
 //! harvest (§3). Nothing else writes white — not an inbound session, not a
 //! transcript, not an operator assertion — and that is a type fact here:
-//! [`White`] has no public constructor and is built in one place, inside
-//! [`Peerlist::apply`].
+//! there is no exported white type, and the only function that writes a
+//! white seat is [`Peerlist::apply`].
+//!
+//! An address has one seat. An outstanding draw is still gray: it counts
+//! toward gray, the snapshot names it gray, and the file keeps it. It is
+//! not also white, and eviction does not take it.
 //!
 //! Lists are partitioned by connector, derived from the address type
 //! through the transport layer's declaration ([`connector_for`]) at every
@@ -46,9 +50,11 @@
 
 #![deny(unsafe_code)]
 
+mod index;
 mod outcome;
 mod partition;
 mod peerlist;
+mod sample;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;

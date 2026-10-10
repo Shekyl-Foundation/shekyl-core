@@ -166,6 +166,140 @@ fn a_foundation_harvest_writes_white_and_anyone_elses_does_not() {
 }
 
 #[test]
+fn a_non_fleet_harvest_returns_an_outstanding_draw_to_drawable_gray() {
+    let mut rng = SplitMix64::new(13);
+    let mut list = Peerlist::new(fleet());
+    let peer = v4(30);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &peer, &mut rng);
+    list.apply(
+        &DialOutcome::HarvestDone(peer.clone()),
+        at_hours(1),
+        &mut rng,
+    );
+    assert!(
+        list.is_gray(&peer) && !list.is_white(&peer),
+        "anyone else's harvest leaves white unchanged"
+    );
+    draw_until(&mut list, &peer, &mut rng);
+
+    // The fleet's harvest of an outstanding draw still writes white.
+    let seed = v4(250);
+    assert_eq!(
+        list.admit_gray(&seed, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &seed, &mut rng);
+    list.apply(
+        &DialOutcome::HarvestDone(seed.clone()),
+        at_hours(1),
+        &mut rng,
+    );
+    assert!(list.is_white(&seed) && !list.is_gray(&seed));
+}
+
+#[test]
+fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
+    let mut rng = SplitMix64::new(14);
+    let mut list = Peerlist::new(fleet());
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    for n in 0..GRAY_CAP {
+        let n = u16::try_from(n).expect("fits");
+        assert_eq!(
+            list.admit_gray(
+                &v4_wide(n),
+                Source::Reload,
+                at_hours(0),
+                &mut NoBans,
+                &mut rng
+            ),
+            Ok(true)
+        );
+    }
+    let pinned = v4_wide(0);
+    // The door helper tries 10_000 draws. At 5_000 gray that misses often;
+    // a full gray list needs a longer search, and each miss settles back.
+    let mut drawn_pinned = false;
+    for _ in 0..100_000 {
+        match list.draw_gray(connector, &mut rng) {
+            Some(drawn) if drawn == pinned => {
+                drawn_pinned = true;
+                break;
+            }
+            Some(other) => list.apply(&DialOutcome::PayloadRefused(other), at_hours(0), &mut rng),
+            None => panic!("gray ran out before the pinned address was drawn"),
+        }
+    }
+    assert!(drawn_pinned, "the pinned address was drawn");
+    assert!(
+        list.is_gray(&pinned) && !list.is_white(&pinned),
+        "the draw is outstanding, which is still gray"
+    );
+    let extra_admits = 100;
+    for n in 0..extra_admits {
+        let n = u16::try_from(GRAY_CAP + n).expect("fits");
+        assert_eq!(
+            list.admit_gray(
+                &v4_wide(n),
+                Source::Reload,
+                at_hours(0),
+                &mut NoBans,
+                &mut rng
+            ),
+            Ok(true)
+        );
+    }
+    assert!(
+        list.is_gray(&pinned),
+        "eviction drops a drawable gray seat, not the outstanding draw"
+    );
+    list.apply(
+        &DialOutcome::SessionAccepted(pinned.clone()),
+        at_hours(1),
+        &mut rng,
+    );
+    assert!(list.is_white(&pinned) && !list.is_gray(&pinned));
+
+    // Every gray seat outstanding: the next admit has nobody else to drop,
+    // so gray sits one over the cap and the draws stay.
+    let mut list = Peerlist::new(fleet());
+    for n in 0..GRAY_CAP {
+        let n = u16::try_from(n).expect("fits");
+        assert_eq!(
+            list.admit_gray(
+                &v4_wide(n),
+                Source::Reload,
+                at_hours(0),
+                &mut NoBans,
+                &mut rng
+            ),
+            Ok(true)
+        );
+    }
+    let first = list.draw_gray(connector, &mut rng).expect("drawable");
+    for _ in 1..GRAY_CAP {
+        list.draw_gray(connector, &mut rng).expect("drawable");
+    }
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    let extra = v4(9);
+    assert_eq!(
+        list.admit_gray(&extra, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        Ok(true)
+    );
+    assert_eq!(list.gray_count(connector), GRAY_CAP + 1);
+    assert!(list.is_gray(&first) && list.is_gray(&extra));
+    list.apply(
+        &DialOutcome::SessionAccepted(first.clone()),
+        at_hours(1),
+        &mut rng,
+    );
+    assert!(list.is_white(&first) && !list.is_gray(&first));
+}
+
+#[test]
 fn incoming_and_add_peer_stay_gray() {
     let mut rng = SplitMix64::new(4);
     let mut list = Peerlist::new(fleet());
@@ -231,15 +365,30 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         1,
         "the clock moved"
     );
-    // Inbound contact does not: an admit of a white address leaves it white
-    // and does not move the clock.
+    // Inbound contact does not: an admit of a white address leaves it
+    // white, does not seat it on gray, and does not move the clock.
     assert_eq!(
         list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
-        Ok(true)
+        Ok(false)
     );
     assert!(
-        list.is_white(&peer),
-        "a white entry is untouched by an admit"
+        list.is_white(&peer) && !list.is_gray(&peer),
+        "a white entry is one seat, untouched by an admit"
+    );
+    assert_eq!(
+        list.persistable().iter().filter(|a| *a == &peer).count(),
+        1,
+        "the file names the address once"
+    );
+    assert_eq!(
+        list.snapshot().iter().filter(|(a, _)| a == &peer).count(),
+        1
+    );
+    assert!(list.snapshot().contains(&(peer.clone(), ListName::White)));
+    assert_eq!(
+        list.white_count(connector, at_hours(43), &mut NoBans, &mut rng),
+        1,
+        "the admit did not move the clock"
     );
     assert_eq!(
         list.white_count(connector, at_hours(44), &mut NoBans, &mut rng),

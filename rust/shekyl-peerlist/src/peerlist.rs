@@ -88,11 +88,12 @@ impl Peerlist {
     /// Admit one address to gray (brief §6). The connector comes from the
     /// address type; an address learned over a session is admitted only
     /// when that connector is the session's. An address under an active
-    /// ban is refused (D4). A session that has offered
-    /// [`crate::SESSION_INTAKE_CAP`] other distinct addresses within the
-    /// intake span is refused (D-S1); the caller applies that to the
-    /// session. A white entry at the address is untouched. Returns whether
-    /// the address was new to gray.
+    /// ban is refused (D4), before any intake charge. A session that has
+    /// offered [`crate::SESSION_INTAKE_CAP`] other distinct addresses
+    /// within the intake span is refused (D-S1); the caller applies that
+    /// to the session. An address that already sits — gray, outstanding,
+    /// or white — is left where it is and is not a new intake charge.
+    /// Returns whether it newly entered gray.
     pub fn admit_gray<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
@@ -115,6 +116,10 @@ impl Peerlist {
         }
         let partition = self.partition_mut(connector);
         if let Source::Session { id, .. } = source {
+            if partition.is_seated(address) {
+                partition.refresh_intake(id, address, now);
+                return Ok(false);
+            }
             if !partition.record_intake(id, address, now) {
                 return Err(Refusal::PeerlistRefused);
             }
@@ -270,13 +275,17 @@ impl Peerlist {
             DialOutcome::HarvestDone(address) => {
                 if fleet {
                     partition.promote(address, now, rng);
+                } else {
+                    // The dial is over. White is unchanged; an outstanding
+                    // draw returns to drawable gray.
+                    partition.settle_outstanding(address);
                 }
             }
             DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
-                partition.drop_draw(address);
+                partition.drop_outstanding(address);
             }
             DialOutcome::PayloadRefused(address) => {
-                partition.settle_draw(address);
+                partition.settle_outstanding(address);
             }
         }
     }
@@ -297,7 +306,8 @@ impl Peerlist {
         partition.white_len()
     }
 
-    /// Gray entries of `connector`.
+    /// Gray entries of `connector`, outstanding draws included. Drawing
+    /// an address does not free its gray seat.
     #[must_use]
     pub fn gray_count(&self, connector: ConnectorId) -> usize {
         self.partition(connector).gray_len()

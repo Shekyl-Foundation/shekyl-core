@@ -34,8 +34,9 @@
 // Counts become ratios here; the counts are list sizes, far below 2^52.
 #![allow(clippy::cast_precision_loss)]
 
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_relay_privacy::rng::RelayRng;
 
+use crate::sample::sample_prefix;
 use crate::DISCLOSE_COUNT;
 
 /// One observer's score after `windows` polls.
@@ -221,15 +222,11 @@ fn run_trial<R: RelayRng + ?Sized>(
     let mut seen = vec![false; white + known_beyond_white];
     for _ in 0..windows {
         // One cached sample per window: `DISCLOSE_COUNT` distinct members,
-        // uniform — the draw `Partition::disclose` makes.
+        // uniform — the same prefix draw `Partition::disclose` makes.
         let mut pool = population.clone();
-        let take = DISCLOSE_COUNT.min(pool.len());
-        for i in 0..take {
-            let remaining = pool.len() - i;
-            let pick = i + usize::try_from(bounded_uniform(rng, (remaining - 1) as u64))
-                .expect("bounded by the pool");
-            pool.swap(i, pick);
-            seen[pool[i]] = true;
+        let taken = sample_prefix(&mut pool, DISCLOSE_COUNT, rng);
+        for address in pool.iter().take(taken) {
+            seen[*address] = true;
         }
     }
 

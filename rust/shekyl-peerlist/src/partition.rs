@@ -5,6 +5,13 @@
 
 //! One connector's lists.
 //!
+//! An address has one seat in [`Partition::seats`]. Drawable gray,
+//! an outstanding draw, and white are three values of that seat, so an
+//! address cannot be on two lists. Outstanding is still gray to every
+//! reader outside this module — [`Partition::is_gray`], the gray count,
+//! the snapshot and the file — and it is the one gray seat eviction
+//! will not take. Only [`crate::Peerlist::apply`] moves it.
+//!
 //! Everything here is inside one partition; the connector is the caller's
 //! key ([`crate::Peerlist`] derives it from the address type). No method
 //! of this module sees another connector's entries.
@@ -13,10 +20,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_timing_engine::Tick;
 
+use crate::index::Index;
 use crate::outcome::SessionId;
+use crate::sample::sample_prefix;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
     SESSION_INTAKE_CAP, WHITE_CAP,
@@ -30,90 +39,37 @@ struct Sample {
     addresses: Vec<NetworkAddress>,
 }
 
-/// A confirmed address's one clock: when this process last confirmed it on
-/// a connection this node opened (brief §4). Not a sort key, not a rank.
+/// Where one address sits. One seat, so gray and white cannot both hold it.
 ///
-/// Built in exactly one place, [`Partition::promote`], which only
-/// [`crate::Peerlist::apply`] reaches (brief §11.1). No `Deserialize`: the
+/// `Outstanding` is a gray address the dialer has drawn and not yet
+/// reported. Readers outside this module still call it gray. The clock on
+/// `White` is `last_observed` (brief §4): not a sort key, not a rank.
+/// White is reached only from [`Partition::promote`], which only
+/// [`crate::Peerlist::apply`] calls (brief §11.1). No `Deserialize`: the
 /// file cannot carry a white entry (§7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct White {
-    pub(crate) last_observed: Tick,
+enum Seat {
+    /// Arrived, not drawn, not confirmed. No clock.
+    Gray,
+    /// Drawn, not yet reported. Still gray to every outside reader.
+    Outstanding,
+    /// Confirmed by this node's own dial. The value is `last_observed`.
+    White(Tick),
 }
 
-/// A set with uniform random access: a vector for the index draw and a map
-/// from the address to its position, kept in step by swap-remove. Gray
-/// draws and capacity evictions are a uniform index into the vector, so a
-/// full list (5000) costs no walk.
-#[derive(Debug, Default)]
-struct IndexedSet {
-    members: Vec<NetworkAddress>,
-    position: BTreeMap<NetworkAddress, usize>,
-}
-
-impl IndexedSet {
-    fn len(&self) -> usize {
-        self.members.len()
-    }
-
-    fn contains(&self, address: &NetworkAddress) -> bool {
-        self.position.contains_key(address)
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &NetworkAddress> {
-        self.members.iter()
-    }
-
-    /// Insert; `false` when already present.
-    fn insert(&mut self, address: NetworkAddress) -> bool {
-        if self.position.contains_key(&address) {
-            return false;
-        }
-        self.position.insert(address.clone(), self.members.len());
-        self.members.push(address);
-        true
-    }
-
-    /// Remove; `false` when absent.
-    fn remove(&mut self, address: &NetworkAddress) -> bool {
-        let Some(at) = self.position.remove(address) else {
-            return false;
-        };
-        let last = self.members.len() - 1;
-        self.members.swap(at, last);
-        self.members.pop();
-        if at < self.members.len() {
-            self.position.insert(self.members[at].clone(), at);
-        }
-        true
-    }
-
-    /// One uniform member, or `None` when empty.
-    fn pick<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<&NetworkAddress> {
-        match self.members.len() {
-            0 => None,
-            1 => Some(&self.members[0]),
-            n => {
-                let index = usize::try_from(bounded_uniform(rng, (n - 1) as u64))
-                    .expect("the draw is bounded by the member count");
-                Some(&self.members[index])
-            }
-        }
-    }
-}
-
-/// One connector's gray and white lists and the gray draws the dialer has
-/// outstanding.
+/// One connector's seats, its cached sample, and its intake ledger.
 #[derive(Debug, Default)]
 pub(crate) struct Partition {
-    /// Arrived, not confirmed. No clock.
-    gray: IndexedSet,
-    /// Confirmed by this node's own dial. Keyed by address; the map's order
-    /// carries no meaning.
-    white: BTreeMap<NetworkAddress, White>,
-    /// Gray addresses the dialer drew and has not yet reported on. A draw
-    /// that was not outstanding cannot promote (§5).
-    outstanding: BTreeSet<NetworkAddress>,
+    /// Every address this partition holds, each exactly once.
+    seats: Index<Seat>,
+    /// Seats that are [`Seat::Gray`]: the drawable population. Moved only
+    /// by [`Self::seat_new`], [`Self::move_seat`] and [`Self::leave`].
+    drawable_gray: usize,
+    /// Seats that are [`Seat::Outstanding`]. Counted as gray, never drawn
+    /// by eviction or by [`Self::draw_gray`]. Same three writers.
+    outstanding_draws: usize,
+    /// Seats that are [`Seat::White`]. Same three writers.
+    white_seats: usize,
     /// The cached disclosure sample and when it was drawn (D3).
     sample: Option<Sample>,
     /// This node's own dialable address on this connector, when known: one
@@ -126,172 +82,166 @@ pub(crate) struct Partition {
 }
 
 impl Partition {
+    /// Gray seats, outstanding draws included. An outstanding draw still
+    /// occupies gray: drawing it does not free a cap slot.
     pub(crate) fn gray_len(&self) -> usize {
-        self.gray.len()
+        self.occupied_gray()
     }
 
     pub(crate) fn white_len(&self) -> usize {
-        self.white.len()
+        self.white_seats
     }
 
     pub(crate) fn is_gray(&self, address: &NetworkAddress) -> bool {
-        self.gray.contains(address)
+        matches!(self.seat_of(address), Some(Seat::Gray | Seat::Outstanding))
     }
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
-        self.white.contains_key(address)
+        matches!(self.seat_of(address), Some(Seat::White(_)))
     }
 
     pub(crate) fn is_outstanding(&self, address: &NetworkAddress) -> bool {
-        self.outstanding.contains(address)
+        matches!(self.seat_of(address), Some(Seat::Outstanding))
+    }
+
+    /// Whether the address already has a seat. A seated address is not a
+    /// new gray entry and not a new intake charge.
+    pub(crate) fn is_seated(&self, address: &NetworkAddress) -> bool {
+        self.seats.contains(address)
     }
 
     pub(crate) fn gray_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
-        self.gray.iter()
+        self.seats.iter().filter_map(|(address, seat)| match seat {
+            Seat::Gray | Seat::Outstanding => Some(address),
+            Seat::White(_) => None,
+        })
     }
 
     pub(crate) fn white_iter(&self) -> impl Iterator<Item = &NetworkAddress> {
-        self.white.keys()
+        self.seats.iter().filter_map(|(address, seat)| match seat {
+            Seat::White(_) => Some(address),
+            Seat::Gray | Seat::Outstanding => None,
+        })
     }
 
-    /// Insert into gray. A white entry at the address is untouched. Over
-    /// capacity, a uniformly random *other* gray entry is dropped, so the
-    /// address just admitted is the one that stays (§2). Returns whether
-    /// the address was new to gray.
+    /// Seat `address` on gray when it sits nowhere.
+    ///
+    /// Already gray, outstanding, or white: left where it is, and `false`.
+    /// Over [`GRAY_CAP`], a uniformly random *other drawable* gray seat is
+    /// dropped, so the address just admitted stays (brief §2) and an
+    /// outstanding draw is not a candidate (brief §5). When the only
+    /// drawable seat is the one just admitted, gray sits over the cap by
+    /// the outstanding draws rather than cancelling one.
     pub(crate) fn insert_gray<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         rng: &mut R,
     ) -> bool {
-        if !self.gray.insert(address.clone()) {
+        if self.seats.contains(address) {
             return false;
         }
-        while self.gray.len() > GRAY_CAP {
-            // Rejection draw: a uniform member that is not the one just
-            // admitted. With thousands of members the retry is rare.
-            let victim = loop {
-                let Some(candidate) = self.gray.pick(rng) else {
-                    break None;
-                };
-                if candidate != address {
-                    break Some(candidate.clone());
-                }
-            };
-            match victim {
-                Some(victim) => {
-                    self.gray.remove(&victim);
-                    self.outstanding.remove(&victim);
-                }
-                None => break,
-            }
-        }
+        self.seat_new(address.clone(), Seat::Gray);
+        self.evict_gray_over_cap(address, rng);
         true
     }
 
-    /// One uniform gray address, remembered as outstanding. `None` when
-    /// every gray entry is already outstanding or gray is empty.
+    /// One uniform drawable gray address, moved to outstanding. `None`
+    /// when every gray seat is already outstanding, or gray is empty.
     pub(crate) fn draw_gray<R: RelayRng + ?Sized>(
         &mut self,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        if self.outstanding.len() >= self.gray.len() {
+        if self.drawable_gray == 0 {
             return None;
         }
-        // Rejection draw over the members not already outstanding. The
-        // outstanding set is a handful of in-flight dials, so this is a
-        // uniform draw over the rest at one or two picks.
-        let chosen = loop {
-            let candidate = self.gray.pick(rng)?;
-            if !self.outstanding.contains(candidate) {
-                break candidate.clone();
-            }
-        };
-        self.outstanding.insert(chosen.clone());
+        let chosen = self.pick_accepted(rng, |_, seat| matches!(seat, Seat::Gray));
+        self.move_seat(&chosen, Seat::Outstanding);
         Some(chosen)
     }
 
     /// One uniform white address. A re-contact draw, not a promotion.
     pub(crate) fn draw_white<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<NetworkAddress> {
-        let candidates: Vec<&NetworkAddress> = self.white.keys().collect();
-        pick(&candidates, rng).map(|a| (*a).clone())
+        if self.white_seats == 0 {
+            return None;
+        }
+        Some(self.pick_accepted(rng, |_, seat| matches!(seat, Seat::White(_))))
     }
 
-    /// The one white write. Removes the address from gray and from the
-    /// outstanding draws, stamps `now`, and over capacity demotes a
-    /// uniformly random *other* white entry to gray.
+    /// The one white write. From any seat, or from none (a fleet harvest
+    /// of an address that was not listed). Stamps `now`. Over [`WHITE_CAP`],
+    /// a uniformly random *other* white seat is demoted to gray.
     pub(crate) fn promote<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
         rng: &mut R,
     ) {
-        self.gray.remove(address);
-        self.outstanding.remove(address);
-        self.white
-            .insert(address.clone(), White { last_observed: now });
-        while self.white.len() > WHITE_CAP {
-            let candidates: Vec<&NetworkAddress> =
-                self.white.keys().filter(|a| *a != address).collect();
-            let Some(victim) = pick(&candidates, rng).map(|a| (*a).clone()) else {
-                break;
-            };
-            self.demote(&victim, rng);
+        if self.seats.contains(address) {
+            self.move_seat(address, Seat::White(now));
+        } else {
+            self.seat_new(address.clone(), Seat::White(now));
         }
+        self.evict_white_over_cap(address, rng);
     }
 
     /// Move the clock of an address that is already white.
     pub(crate) fn touch(&mut self, address: &NetworkAddress, now: Tick) -> bool {
-        match self.white.get_mut(address) {
-            Some(white) => {
-                white.last_observed = now;
+        match self.seats.get_mut(address) {
+            Some(Seat::White(observed)) => {
+                *observed = now;
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
-    /// White to gray, the clock not copied across. The entry enters gray
-    /// through the capped insert (F3, Rick 2026-10-09): over capacity a
-    /// uniformly random other gray entry is dropped, so a mass demotion —
-    /// an expiry sweep, a subnet ban — cannot push gray over its cap.
+    /// White to gray. The clock is not copied. The entry then takes the
+    /// capped gray path (F3, Rick 2026-10-09): over capacity a uniformly
+    /// random other drawable gray seat is dropped, so a mass demotion
+    /// cannot push gray over its cap except by outstanding draws.
     pub(crate) fn demote<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         rng: &mut R,
     ) -> bool {
-        if self.white.remove(address).is_some() {
-            self.insert_gray(address, rng);
-            true
-        } else {
-            false
+        if !matches!(self.seat_of(address), Some(Seat::White(_))) {
+            return false;
         }
+        self.move_seat(address, Seat::Gray);
+        self.evict_gray_over_cap(address, rng);
+        true
     }
 
-    /// Drop an outstanding gray draw: the address leaves gray.
-    pub(crate) fn drop_draw(&mut self, address: &NetworkAddress) -> bool {
-        if self.outstanding.remove(address) {
-            self.gray.remove(address);
-            true
-        } else {
-            false
+    /// Drop an outstanding draw: the address leaves the partition. A white
+    /// address is not outstanding, so a failed redial leaves it white.
+    pub(crate) fn drop_outstanding(&mut self, address: &NetworkAddress) -> bool {
+        if !matches!(self.seat_of(address), Some(Seat::Outstanding)) {
+            return false;
         }
+        self.leave(address);
+        true
     }
 
-    /// The draw is resolved and the address stays gray.
-    pub(crate) fn settle_draw(&mut self, address: &NetworkAddress) {
-        self.outstanding.remove(address);
+    /// The draw is over and the address returns to drawable gray.
+    ///
+    /// The gray count is unchanged, so this does not evict. Going through
+    /// [`Self::insert_gray`] would: an outstanding draw can be what holds
+    /// gray over the cap, and settling it must not drop someone else.
+    pub(crate) fn settle_outstanding(&mut self, address: &NetworkAddress) {
+        if matches!(self.seat_of(address), Some(Seat::Outstanding)) {
+            self.move_seat(address, Seat::Gray);
+        }
     }
 
     /// Demote every white entry that has gone `EXPIRATION_PERIOD` without
     /// contact. Returns how many moved.
     pub(crate) fn expire<R: RelayRng + ?Sized>(&mut self, now: Tick, rng: &mut R) -> usize {
         let expired: Vec<NetworkAddress> = self
-            .white
-            .iter()
-            .filter(|(_, w)| {
-                now.get().saturating_sub(w.last_observed.get()) >= EXPIRATION_PERIOD_NANOS
+            .white_clocks()
+            .filter(|(_, observed)| {
+                now.get().saturating_sub(observed.get()) >= EXPIRATION_PERIOD_NANOS
             })
-            .map(|(a, _)| a.clone())
+            .map(|(address, _)| address.clone())
             .collect();
         for address in &expired {
             self.demote(address, rng);
@@ -299,24 +249,17 @@ impl Partition {
         expired.len()
     }
 
-    /// The earliest white expiry, if any white entry exists.
+    /// The earliest white expiry, if any white seat exists.
     pub(crate) fn next_expiry(&self) -> Option<Tick> {
-        self.white
-            .values()
-            .map(|w| {
-                Tick::new(
-                    w.last_observed
-                        .get()
-                        .saturating_add(EXPIRATION_PERIOD_NANOS),
-                )
-            })
+        self.white_clocks()
+            .map(|(_, observed)| Tick::new(observed.get().saturating_add(EXPIRATION_PERIOD_NANOS)))
             .min()
     }
 
-    /// Every address this partition holds, unordered: gray and white
-    /// together, for the file (§7).
+    /// Every address this partition holds, each once, unordered: gray
+    /// (outstanding included) and white together, for the file (§7).
     pub(crate) fn persistable(&self) -> impl Iterator<Item = &NetworkAddress> {
-        self.gray.iter().chain(self.white.keys())
+        self.seats.iter().map(|(address, _)| address)
     }
 
     /// D4: move every white entry under an active ban to gray. The clock is
@@ -329,10 +272,9 @@ impl Partition {
         rng: &mut R,
     ) -> usize {
         let banned: Vec<NetworkAddress> = self
-            .white
-            .keys()
-            .filter(|a| a.ip().is_some_and(|ip| is_banned(ip, now)))
-            .cloned()
+            .white_clocks()
+            .filter(|(address, _)| address.ip().is_some_and(|ip| is_banned(ip, now)))
+            .map(|(address, _)| address.clone())
             .collect();
         for address in &banned {
             self.demote(address, rng);
@@ -340,10 +282,11 @@ impl Partition {
         banned.len()
     }
 
-    /// D-S1: record that `session` offered `address` at `now`. `false` when
-    /// the session has already offered `SESSION_INTAKE_CAP` other distinct
-    /// addresses within the intake span — the refusal. A re-offer of an
-    /// address the session already sent counts once.
+    /// D-S1: record that `session` offered `address` at `now`, for an
+    /// address that is about to enter gray. `false` when the session has
+    /// already offered [`SESSION_INTAKE_CAP`] other distinct addresses
+    /// within the intake span — the refusal. A row already in the ledger
+    /// (the address left and is entering again inside the span) counts once.
     pub(crate) fn record_intake(
         &mut self,
         session: SessionId,
@@ -351,7 +294,7 @@ impl Partition {
         now: Tick,
     ) -> bool {
         let ledger = self.intake.entry(session).or_default();
-        ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
+        prune_intake(ledger, now);
         if let Some(at) = ledger.get_mut(address) {
             *at = now;
             return true;
@@ -363,25 +306,50 @@ impl Partition {
         true
     }
 
-    /// D-S1 for a whole list (F2, Rick 2026-10-09): would admitting every
-    /// address in `candidates` take `session` past `SESSION_INTAKE_CAP`
-    /// distinct addresses within the intake span? Counted before any entry
-    /// is admitted, so a list that would cross the cap admits nothing. An
-    /// address the session already offered counts once.
+    /// A seated address offered again: refresh the ledger row when this
+    /// session still has one. Does not create a row. A seated address did
+    /// not newly become gray, so it is not a new charge.
+    pub(crate) fn refresh_intake(
+        &mut self,
+        session: SessionId,
+        address: &NetworkAddress,
+        now: Tick,
+    ) {
+        let Some(ledger) = self.intake.get_mut(&session) else {
+            return;
+        };
+        prune_intake(ledger, now);
+        if let Some(at) = ledger.get_mut(address) {
+            *at = now;
+        }
+    }
+
+    /// D-S1 for a whole list (F2, Rick 2026-10-09): would seating every
+    /// address in `candidates` that is not already seated take `session`
+    /// past [`SESSION_INTAKE_CAP`] distinct addresses within the intake
+    /// span? Counted before any entry is admitted, so a list that would
+    /// cross the cap admits nothing. An address the session already
+    /// offered, and an address that already sits, each count as not fresh.
     pub(crate) fn would_exceed_intake(
         &mut self,
         session: SessionId,
         candidates: &[&NetworkAddress],
         now: Tick,
     ) -> bool {
-        let ledger = self.intake.entry(session).or_default();
-        ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
-        let fresh: BTreeSet<&NetworkAddress> = candidates
+        // The unseated set borrows `candidates`, not `self`, so the ledger
+        // prune below can take `&mut self`.
+        let entering: BTreeSet<&NetworkAddress> = candidates
             .iter()
             .copied()
-            .filter(|candidate| !ledger.contains_key(*candidate))
+            .filter(|candidate| self.seat_of(candidate).is_none())
             .collect();
-        ledger.len() + fresh.len() > SESSION_INTAKE_CAP
+        let ledger = self.intake.entry(session).or_default();
+        prune_intake(ledger, now);
+        let fresh = entering
+            .iter()
+            .filter(|candidate| !ledger.contains_key(**candidate))
+            .count();
+        ledger.len() + fresh > SESSION_INTAKE_CAP
     }
 
     /// The session ended: its intake ledger goes with it.
@@ -393,7 +361,7 @@ impl Partition {
     pub(crate) fn intake_count(&mut self, session: SessionId, now: Tick) -> usize {
         match self.intake.get_mut(&session) {
             Some(ledger) => {
-                ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
+                prune_intake(ledger, now);
                 ledger.len()
             }
             None => 0,
@@ -424,24 +392,16 @@ impl Partition {
                 return sample.addresses.clone();
             }
         }
-        if self.white.len() < floor {
+        if self.white_seats < floor {
             return Vec::new();
         }
-        let mut population: Vec<NetworkAddress> = self.white.keys().cloned().collect();
+        let mut population: Vec<NetworkAddress> = self.white_iter().cloned().collect();
         if let Some(own) = &self.own_address {
             if !population.contains(own) {
                 population.push(own.clone());
             }
         }
-        // Partial Fisher-Yates: `DISCLOSE_COUNT` distinct members, uniform,
-        // in a random order.
-        let take = DISCLOSE_COUNT.min(population.len());
-        for i in 0..take {
-            let remaining = population.len() - i;
-            let pick = i + usize::try_from(bounded_uniform(rng, (remaining - 1) as u64))
-                .expect("the draw is bounded by the population");
-            population.swap(i, pick);
-        }
+        let take = sample_prefix(&mut population, DISCLOSE_COUNT, rng);
         population.truncate(take);
         self.sample = Some(Sample {
             drawn_at: now,
@@ -449,17 +409,126 @@ impl Partition {
         });
         population
     }
-}
 
-/// One uniform element of `candidates`.
-fn pick<'a, T, R: RelayRng + ?Sized>(candidates: &[&'a T], rng: &mut R) -> Option<&'a T> {
-    match candidates.len() {
-        0 => None,
-        1 => Some(candidates[0]),
-        n => {
-            let index = usize::try_from(bounded_uniform(rng, (n - 1) as u64))
-                .expect("the draw is bounded by the candidate count");
-            Some(candidates[index])
+    fn occupied_gray(&self) -> usize {
+        self.drawable_gray + self.outstanding_draws
+    }
+
+    fn seat_of(&self, address: &NetworkAddress) -> Option<Seat> {
+        self.seats.get(address).copied()
+    }
+
+    fn white_clocks(&self) -> impl Iterator<Item = (&NetworkAddress, Tick)> {
+        self.seats.iter().filter_map(|(address, seat)| match seat {
+            Seat::White(observed) => Some((address, *observed)),
+            Seat::Gray | Seat::Outstanding => None,
+        })
+    }
+
+    /// First seat for `address`. The caller has already seen it sit nowhere.
+    fn seat_new(&mut self, address: NetworkAddress, seat: Seat) {
+        let inserted = self.seats.insert(address, seat);
+        debug_assert!(inserted, "seat_new is the first seat");
+        if inserted {
+            self.note_added(&seat);
         }
     }
+
+    /// Move an address that already sits. The counts follow the value.
+    fn move_seat(&mut self, address: &NetworkAddress, seat: Seat) {
+        let previous = self.seat_of(address).expect("the address sits");
+        self.note_removed(&previous);
+        self.note_added(&seat);
+        *self.seats.get_mut(address).expect("the address sits") = seat;
+    }
+
+    fn leave(&mut self, address: &NetworkAddress) -> Option<Seat> {
+        let previous = self.seats.remove(address)?;
+        self.note_removed(&previous);
+        Some(previous)
+    }
+
+    fn note_added(&mut self, seat: &Seat) {
+        *self.tally(seat) += 1;
+    }
+
+    fn note_removed(&mut self, seat: &Seat) {
+        let tally = self.tally(seat);
+        debug_assert!(*tally > 0, "a seat count tracks the table");
+        *tally -= 1;
+    }
+
+    fn tally(&mut self, seat: &Seat) -> &mut usize {
+        match seat {
+            Seat::Gray => &mut self.drawable_gray,
+            Seat::Outstanding => &mut self.outstanding_draws,
+            Seat::White(_) => &mut self.white_seats,
+        }
+    }
+
+    /// Drop drawable gray until the gray population is within [`GRAY_CAP`],
+    /// never `keep` and never an outstanding draw. Stops when the only
+    /// drawable seat left is `keep`: gray may then sit over the cap.
+    fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
+        while self.occupied_gray() > GRAY_CAP {
+            let keep_is_drawable = matches!(self.seat_of(keep), Some(Seat::Gray));
+            if !another(self.drawable_gray, keep_is_drawable) {
+                break;
+            }
+            let victim = self.pick_accepted(rng, |address, seat| {
+                matches!(seat, Seat::Gray) && address != keep
+            });
+            self.leave(&victim);
+        }
+    }
+
+    /// Demote white until it is within [`WHITE_CAP`], never `keep`.
+    fn evict_white_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
+        while self.white_seats > WHITE_CAP {
+            let keep_is_white = matches!(self.seat_of(keep), Some(Seat::White(_)));
+            if !another(self.white_seats, keep_is_white) {
+                break;
+            }
+            let victim = self.pick_accepted(rng, |address, seat| {
+                matches!(seat, Seat::White(_)) && address != keep
+            });
+            self.demote(&victim, rng);
+        }
+    }
+
+    /// A uniform member for which `accept` holds.
+    ///
+    /// Precondition: at least one member is acceptable, so the rejection
+    /// ends. The draw is uniform over those members. A one-member table
+    /// does not consume the generator ([`Index::pick`]).
+    fn pick_accepted<R: RelayRng + ?Sized>(
+        &self,
+        rng: &mut R,
+        mut accept: impl FnMut(&NetworkAddress, &Seat) -> bool,
+    ) -> NetworkAddress {
+        loop {
+            let (address, seat) = self
+                .seats
+                .pick(rng)
+                .expect("a seat was known to be acceptable");
+            if accept(address, seat) {
+                return address.clone();
+            }
+        }
+    }
+}
+
+/// Whether a kind with `kind_count` members has one that is not `keep`.
+/// `keep_is_this_kind` is false when `keep` sits somewhere else, or nowhere.
+fn another(kind_count: usize, keep_is_this_kind: bool) -> bool {
+    match kind_count {
+        0 => false,
+        1 => !keep_is_this_kind,
+        _ => true,
+    }
+}
+
+/// Drop ledger rows whose arrival has left the intake span.
+fn prune_intake(ledger: &mut BTreeMap<NetworkAddress, Tick>, now: Tick) {
+    ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
 }

@@ -453,6 +453,13 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
         Ok(true)
     );
     // The span is sliding: once the first twelve are a day old, room returns.
+    // They are still gray, so offering them again is not a new charge.
+    assert_eq!(list.intake_count(connector, s, at_hours(25)), 12);
+    assert_eq!(
+        list.admit_received_list(&first, s, connector, at_hours(25), &mut NoBans, &mut rng),
+        Ok(0),
+        "still seated: a re-offer after the span is not a new gray entry"
+    );
     assert_eq!(list.intake_count(connector, s, at_hours(25)), 12);
     assert_eq!(
         list.admit_gray(
@@ -480,6 +487,77 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     // A forgotten session starts over.
     list.forget_session(connector, s);
     assert_eq!(list.intake_count(connector, s, at_hours(25)), 0);
+}
+
+#[test]
+fn a_seated_address_is_not_a_new_intake_charge() {
+    let mut rng = SplitMix64::new(31);
+    let mut list = Peerlist::new(Vec::new());
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    let session_id = session(4);
+    let white = with_white(&mut list, 1, 12, &mut rng);
+    assert_eq!(
+        list.admit_gray(
+            &white[0],
+            Source::Session {
+                id: session_id,
+                connector
+            },
+            at_hours(1),
+            &mut NoBans,
+            &mut rng
+        ),
+        Ok(false),
+        "white already sits"
+    );
+    assert_eq!(
+        list.intake_count(connector, session_id, at_hours(1)),
+        0,
+        "a seat the session did not open is not a charge"
+    );
+    // Two legal lists: a received list longer than DISCLOSE_COUNT is
+    // refused whole, which is a different refusal from the intake cap.
+    let first: Vec<NetworkAddress> = (100..112).map(v4).collect();
+    let second: Vec<NetworkAddress> = (112..124).map(v4).collect();
+    assert_eq!(
+        list.admit_received_list(
+            &first,
+            session_id,
+            connector,
+            at_hours(1),
+            &mut NoBans,
+            &mut rng
+        ),
+        Ok(DISCLOSE_COUNT)
+    );
+    assert_eq!(
+        list.admit_received_list(
+            &second,
+            session_id,
+            connector,
+            at_hours(1),
+            &mut NoBans,
+            &mut rng
+        ),
+        Ok(DISCLOSE_COUNT)
+    );
+    assert_eq!(
+        list.admit_received_list(
+            &white,
+            session_id,
+            connector,
+            at_hours(2),
+            &mut NoBans,
+            &mut rng
+        ),
+        Ok(0),
+        "a session at the cap, offering only seated addresses, is not refused"
+    );
+    assert_eq!(
+        list.intake_count(connector, session_id, at_hours(2)),
+        SESSION_INTAKE_CAP
+    );
+    assert!(list.is_white(&white[0]) && !list.is_gray(&white[0]));
 }
 
 #[test]

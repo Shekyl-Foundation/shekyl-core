@@ -48,16 +48,19 @@ pub enum DialOutcome {
     /// target. The same white write as `SessionAccepted`; no session
     /// remains.
     Confirmed(NetworkAddress),
-    /// A harvest closed. Writes white only for a Foundation-fleet address
-    /// (brief §3); anyone else's harvest leaves white unchanged.
+    /// A harvest closed. A Foundation-fleet address writes white from any
+    /// seat (brief §3). Anyone else's harvest leaves white unchanged, and
+    /// an outstanding draw of that address returns to drawable gray: the
+    /// dial is over, and only [`crate::Peerlist::apply`] moves an
+    /// outstanding draw.
     HarvestDone(NetworkAddress),
     /// The dial did not reach a handshake. An outstanding gray draw is
     /// dropped; a white address stays white.
     DialFailed(NetworkAddress),
     /// The peer's list was refused. As `DialFailed` for the lists.
     PeerlistRefused(NetworkAddress),
-    /// A payload was refused. No promotion, no demotion, no gray drop: an
-    /// outstanding draw stays gray.
+    /// A payload was refused. No promotion and no demotion. An outstanding
+    /// draw returns to drawable gray.
     PayloadRefused(NetworkAddress),
 }
 
