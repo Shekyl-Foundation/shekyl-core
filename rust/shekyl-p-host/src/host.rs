@@ -218,6 +218,37 @@ impl std::error::Error for HostError {
     }
 }
 
+/// The loopback endpoint and the runtime it is bound on.
+///
+/// The pool is the last field, so Drop closes the endpoint and then
+/// [`ServingPool`]'s drop stops the runtime without waiting. That stop
+/// is [`shekyl_runtime::Pool::shutdown_background`]: a zero timeout,
+/// safe on the engine's runtime, where this host is dropped on every
+/// path that is not [`BoundServe::stop`]. Ordered shutdown drops the
+/// endpoint and then awaits the runtime, so the listener is closed when
+/// shutdown resolves. The host holds this as one field, so the order
+/// does not depend on where that field sits among the host's others.
+struct BoundServe {
+    endpoint: PServeEndpoint,
+    pool: ServingPool,
+}
+
+impl BoundServe {
+    fn addr(&self) -> std::net::SocketAddr {
+        self.endpoint.addr()
+    }
+
+    fn counters(&self) -> &ServeCounterReader {
+        self.endpoint.counters()
+    }
+
+    async fn stop(self) {
+        let Self { endpoint, pool } = self;
+        drop(endpoint);
+        pool.stop().await;
+    }
+}
+
 /// A bonded persona's serving host: the loopback shard server, the onion
 /// that makes it reachable, and the pins that keep its shards alive.
 ///
@@ -268,8 +299,10 @@ impl std::error::Error for HostError {
 /// a stronger form of the same rule and is not foreclosed by anything
 /// here.
 pub struct PersonaServingHost<P: ServeSetPinner> {
-    /// Bound once in [`Self::start`]; never rebound. See the type doc.
-    endpoint: PServeEndpoint,
+    /// Bound once in [`Self::start`]; never rebound. The endpoint and the
+    /// runtime that runs it are one value, so the runtime cannot stop
+    /// while the endpoint is still the thing that owns the accept task.
+    bound: BoundServe,
     tor: WalletTorControl,
     service_id: ServiceId,
     /// The one pinner this host will ever use. Held rather than taken per
@@ -321,12 +354,6 @@ pub struct PersonaServingHost<P: ServeSetPinner> {
     /// the call site, and the caller most likely to hit it is the retry after
     /// a failure.
     refresh_gate: tokio::sync::Mutex<()>,
-    /// The serving runtime (`SH-3`): the accept loop, every connection and
-    /// every blocking hop run here, at lowered CPU priority. **Last field
-    /// on purpose**: fields drop in declaration order, so the endpoint and
-    /// its accept task are gone before the pool that ran them is told to
-    /// stop, and the pool's drop detaches that stop onto its own thread.
-    runtime: ServingPool,
 }
 
 impl<P: ServeSetPinner> PersonaServingHost<P> {
@@ -421,14 +448,13 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         let tor = WalletTorControl::spawn(tor);
 
         Ok(Self {
-            endpoint,
+            bound: BoundServe { endpoint, pool },
             tor,
             service_id,
             pinner,
             pinned: Mutex::new(pinned),
             refresh_failures: AtomicU32::new(0),
             refresh_gate: tokio::sync::Mutex::new(()),
-            runtime: pool,
         })
     }
 
@@ -575,7 +601,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// rig, can dial the serving loop directly without the onion leg.
     #[must_use]
     pub fn serve_addr(&self) -> std::net::SocketAddr {
-        self.endpoint.addr()
+        self.bound.addr()
     }
 
     /// The endpoint's aggregate counters.
@@ -585,7 +611,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// serving path.
     #[must_use]
     pub fn counters(&self) -> ServeCounters {
-        ServeCounters::read(self.endpoint.counters())
+        ServeCounters::read(self.bound.counters())
     }
 
     /// The counters' read side, detached from this host.
@@ -597,7 +623,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// readable after [`Self::shutdown`]; the totals just stop moving.
     #[must_use]
     pub fn counter_reader(&self) -> ServeCounterReader {
-        self.endpoint.counters().clone()
+        self.bound.counters().clone()
     }
 
     /// Stop serving: tear the onion down first, then the listener.
@@ -612,11 +638,9 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// rather than an unreachable service it can retry.
     pub async fn shutdown(self) {
         self.tor.shutdown().await;
-        drop(self.endpoint);
-        // Then the serving runtime, awaited: the accept task is dropped with
-        // it, so the listener is closed — not merely told to close — by
-        // the time this returns (`SH-3`).
-        self.runtime.stop().await;
+        // Then the endpoint, then its runtime. The listener is closed —
+        // not merely told to close — by the time this returns (`SH-3`).
+        self.bound.stop().await;
     }
 }
 

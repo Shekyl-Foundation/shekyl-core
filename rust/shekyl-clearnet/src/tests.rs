@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_runtime::{runtime, RuntimeBudget, ThreadName, ThreadStart};
+use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, NetworkColumn, Sockets};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
@@ -88,8 +88,7 @@ fn start(
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
     let engine = EngineService::start(MonotonicClock::new());
-    let pool =
-        runtime(harness_budget(), &name("sk-clearnet"), ThreadStart::none()).expect("runtime");
+    let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
     let recorded = causes();
     let seen = Arc::clone(&recorded.seen);
     let listener = listen(
@@ -136,7 +135,7 @@ fn the_option_reads_the_plan_and_not_a_connector_id() {
 #[test]
 fn one_descriptor_after_the_socket_is_split() {
     let engine = EngineService::start(MonotonicClock::new());
-    let pool = runtime(harness_budget(), &name("sk-inode"), ThreadStart::none()).expect("runtime");
+    let pool = runtime(harness_budget(), &name("sk-inode")).expect("runtime");
     pool.block_on(async move {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -563,8 +562,7 @@ fn a_socks_refusal_carries_the_reply_byte() {
         record.lock().expect("causes").push(cause);
     });
     let engine = EngineService::start(MonotonicClock::new());
-    let pool =
-        runtime(harness_budget(), &name("sk-clearnet"), ThreadStart::none()).expect("runtime");
+    let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
     let listener = listen(
         pool,
         &engine.handle(),
@@ -630,12 +628,7 @@ where
     F: FnOnce(std::net::TcpStream) + Send + 'static,
 {
     let engine = EngineService::start(MonotonicClock::new());
-    let pool = runtime(
-        harness_budget(),
-        &name("sk-clearnet-cause"),
-        ThreadStart::none(),
-    )
-    .expect("runtime");
+    let pool = runtime(harness_budget(), &name("sk-clearnet-cause")).expect("runtime");
     let recorded = causes();
     let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel();
     let port = pool.block_on(async {

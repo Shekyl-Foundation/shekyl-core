@@ -300,9 +300,11 @@ impl Tenant {
             .and_then(CadenceHandle::serving_posture)
     }
 
-    /// Serving-runtime threads the platform would not lower (`SH-3`), or
-    /// `None` when no serving lifecycle is parked. The same snapshot
-    /// discipline as [`Self::serving_posture`]: never waits on the task.
+    /// Serving-runtime threads currently at normal priority because the
+    /// platform would not lower them (`SH-3`), or `None` when no serving
+    /// lifecycle is parked. A thread that has exited leaves the count.
+    /// The same snapshot discipline as [`Self::serving_posture`]: never
+    /// waits on the task.
     pub(crate) fn serving_priority_not_lowered(&self) -> Option<u32> {
         self.tasks
             .cadence

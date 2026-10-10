@@ -2205,10 +2205,11 @@ same serving took the daemon down to about a third of its rate, 31 to
 inside the 30 s write-stall timeout and the witness's window.
 
 **Why the scope is the serving threads and nothing wider.** Serving is
-not its own process. `shekyl-p-host` binds the loopback endpoint on
-whatever runtime the engine is running on (`host.rs`,
-`PServeEndpoint::bind`), and the endpoint's read-and-fold and sign hops
-go to that runtime's shared blocking pool. A `Nice=` line in a service
+not its own process. Before this ruling, `shekyl-p-host` bound the
+loopback endpoint on whatever runtime the engine was running on
+(`host.rs`, `PServeEndpoint::bind`), and the endpoint's read-and-fold
+and sign hops went to that runtime's shared blocking pool. A `Nice=`
+line in a service
 unit would lower the whole wallet — the GUI, the user's own spend
 proving, the P-scan — to pay for a priority that only serving needs. The
 right unit is the thread, and lowering a thread's own priority needs no
@@ -2218,8 +2219,9 @@ by default.
 **Design.**
 
 1. **A dedicated serving runtime.** The host builds one runtime and
-   blocking pool for serving through the single constructor
-   (`shekyl_runtime::runtime`, D5/D14 item 1), named `sk-serving`, with
+   blocking pool for serving through `runtime_with_thread_hooks` (the
+   single constructor, with the thread pair from item 2; D5/D14 item 1),
+   named `sk-serving`, with
    its own thread-ledger row, and owns it for the host's life. The
    endpoint is bound *on* that runtime, so the accept loop, every
    per-connection task, the read-and-fold hops and the sign hop run
@@ -2244,10 +2246,17 @@ by default.
    priority: an onion that cannot keep its circuits up serves nothing at
    any priority.
 
-2. **Threads lower their own priority at start**, through the runtime
-   constructor's thread-start hook (Tokio's `on_thread_start`, which runs
-   on every worker and every blocking thread before it takes work). The
-   platform mapping, with the scheduling class kept normal everywhere:
+2. **Threads lower their own priority at start**, through thread hooks
+   the serving runtime passes to `runtime_with_thread_hooks`. The
+   ordinary constructor, `shekyl_runtime::runtime`, takes a budget and a
+   name and starts threads as Tokio starts them; no other runtime passes
+   hooks. The hooks are one value, a start and a stop. Tokio's
+   `on_thread_start` runs on every worker and every blocking thread
+   before it takes work, and `on_thread_stop` runs before that thread
+   exits, including when Tokio retires an idle blocking thread. The
+   start hook lowers the thread. The stop hook is what keeps the
+   failure count in item 3 a count of threads that are still running.
+   The platform mapping, with the scheduling class kept normal everywhere:
    - **Linux:** `setpriority(PRIO_PROCESS, 0, 19)` — on Linux the nice
      value is a per-thread attribute and `who = 0` is the calling thread.
      Ordinary `SCHED_OTHER`, never `SCHED_IDLE`: an idle-class thread can
@@ -2287,15 +2296,20 @@ by default.
 
 3. **Failure mode (rule 82).** If lowering fails — an unexpected errno,
    a platform call refused — the thread goes on serving at normal
-   priority. The host counts each failure (`priority_not_lowered`, read
-   through the engine's serving status beside the posture) and logs one
-   warning per host start naming what was not lowered and that serving
-   continues. Serving is never refused for this: a persona that stops
-   answering accrues misses toward a slash, and a priority it could not
-   set is not a reason to be slashed. The counter reports the OS call's
-   result, thread by thread, and nothing more; whether the lowered
-   priority yields CPU to the daemon is a question of scheduling
-   topology, answered by the confirming run below, not by the counter.
+   priority. The host's count (`priority_not_lowered`, read through the
+   engine's serving status beside the posture) is how many serving
+   threads are in that state right now. The start hook adds the thread;
+   the stop hook removes it when the thread exits, including when the
+   runtime retires an idle blocking thread and the next hop starts
+   another. The count therefore stays within the runtime's budget, and
+   the host logs one warning per host start naming what was not lowered
+   and that serving continues. Serving is never refused for this: a
+   persona that stops answering accrues misses toward a slash, and a
+   priority it could not set is not a reason to be slashed. The counter
+   reports the OS call's result for the threads that are still running,
+   and nothing more; whether the lowered priority yields CPU to the
+   daemon is a question of scheduling topology, answered by the
+   confirming run below, not by the counter.
 
 4. **Uniform, with no knob (rule 75).** Priority shows only under
    contention, and timing already reveals load, so if every `P` runs the
@@ -2312,9 +2326,12 @@ blocking task on it, and reads each thread's nice value back
 against `/proc/self/task/<tid>/stat`), asserting 19; the same test
 asserts the test's own runtime threads are unchanged. The failure path
 runs through an injected failing setter and asserts the counter, the
-single warning, and that the endpoint still answers. The serve
-invariant tests and the `BA-T3` instruction-count gate pass unchanged:
-priority does not change instruction counts.
+single warning, and that the endpoint still answers. A further failure
+test waits out Tokio's blocking-thread keep-alive, asserts the retired
+thread has left the count, asserts the thread that replaces it is
+counted on its own call, and asserts shutdown brings the count to zero.
+The serve invariant tests and the `BA-T3` instruction-count gate pass
+unchanged: priority does not change instruction counts.
 
 **Confirming run (after merge; discovery, not a gate, by the 2026-10-08
 ruling).** A short `BA-T5` floor block with the syncing daemon, N = 8

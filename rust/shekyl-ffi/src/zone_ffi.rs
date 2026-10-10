@@ -24,7 +24,7 @@ use shekyl_clearnet::{
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_runtime::{runtime, RuntimeBudget, ThreadName, ThreadStart};
+use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
     connector_from_index, drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial,
     Direction, Endpoint, Hub, SocketId,
@@ -281,12 +281,7 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     let workers = NonZeroUsize::new(params.workers).ok_or(())?;
     let blocking = NonZeroUsize::new(params.blocking).ok_or(())?;
     let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
-    let pool = runtime(
-        RuntimeBudget { workers, blocking },
-        &name,
-        ThreadStart::none(),
-    )
-    .map_err(|_| ())?;
+    let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
     let handle = pool.handle().clone();
     let clock = MonotonicClock::new();
     let budget_clock = clock.clone();

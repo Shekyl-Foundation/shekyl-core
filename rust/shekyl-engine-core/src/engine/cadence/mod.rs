@@ -253,14 +253,15 @@ impl CadenceHandle {
             .and_then(ServingHandle::posture)
     }
 
-    /// Serving-runtime threads whose priority-lowering call the OS refused
-    /// (`SH-3`), or `None` when no serving lifecycle is parked. The OS
-    /// call's result, thread by thread, and nothing more: zero is the
-    /// expected reading, a non-zero count is that many threads at normal
-    /// priority. Whether the lowering yields CPU to the daemon is a
-    /// question of scheduling topology, not of this count
-    /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). Same brief-lock snapshot
-    /// as [`Self::serving_posture`].
+    /// Serving-runtime threads currently at normal priority because the
+    /// OS refused to lower them (`SH-3`), or `None` when no serving
+    /// lifecycle is parked. The OS call's result for the threads that
+    /// are still running, and nothing more: a thread that has exited
+    /// leaves the count. Zero is the expected reading; a non-zero count
+    /// is that many threads at normal priority. Whether the lowering
+    /// yields CPU to the daemon is a question of scheduling topology,
+    /// not of this count (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). Same
+    /// brief-lock snapshot as [`Self::serving_posture`].
     #[must_use]
     pub fn serving_priority_not_lowered(&self) -> Option<u32> {
         self.serving

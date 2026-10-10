@@ -13,9 +13,14 @@
 //! The pool's row lives on [`shekyl_thread_ledger`]. A dedicated thread is
 //! spawned there, not here: that crate has no Tokio dependency, and the
 //! timing engine depends on it alone. The row this constructor records
-//! has no join. Daemon-RPC, Tor-control, and the transport each call this
-//! constructor. Their budgets are the caller's, labelled unmeasured until
+//! has no join. Daemon-RPC, Tor-control, and the transport each call
+//! [`runtime`]. Their budgets are the caller's, labelled unmeasured until
 //! the D5 pin names them. This crate holds neither number.
+//!
+//! A runtime whose threads must do something as they start and as they
+//! exit calls [`runtime_with_thread_hooks`] instead. The ordinary
+//! constructor does not take a hook. The one caller is the serving
+//! runtime (`SH-3`).
 
 #![deny(unsafe_code)]
 
@@ -98,36 +103,49 @@ impl Deref for Pool {
     }
 }
 
-/// What every thread of a runtime runs once, as it starts and before it
-/// takes work — worker and blocking threads alike.
+/// What every thread of a runtime runs as it starts and as it exits.
 ///
-/// The one use today is the serving runtime's threads lowering their own
-/// CPU priority (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). This
-/// crate does not know what the hook does; it only guarantees where it
-/// runs. [`ThreadStart::none`] is the ordinary runtime.
+/// Worker threads and blocking threads both. The start hook runs before
+/// the thread takes work. The stop hook runs before the thread exits,
+/// including when Tokio retires an idle blocking thread. The two are one
+/// value: a start that records a thread has the exit that releases it.
+/// [`Self::none`] is what [`runtime`] installs.
+///
+/// This crate does not know what the hooks do. The one caller is the
+/// serving runtime, whose threads lower their own CPU priority and whose
+/// failure count is the threads still in that state (`SH-3`).
 #[derive(Clone, Default)]
-pub struct ThreadStart(Option<Arc<dyn Fn() + Send + Sync>>);
+pub struct ThreadHooks {
+    on_start: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+}
 
-impl ThreadStart {
-    /// No hook: threads start as Tokio starts them.
+impl ThreadHooks {
+    /// No hooks: threads start and exit as Tokio starts and exits them.
     #[must_use]
     pub fn none() -> Self {
-        Self(None)
+        Self::default()
     }
 
-    /// Run `hook` on every thread of the runtime as it starts.
+    /// Run `on_start` as each thread starts and `on_stop` as it exits.
     #[must_use]
-    pub fn new(hook: impl Fn() + Send + Sync + 'static) -> Self {
-        Self(Some(Arc::new(hook)))
+    pub fn pair(
+        on_start: impl Fn() + Send + Sync + 'static,
+        on_stop: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            on_start: Some(Arc::new(on_start)),
+            on_stop: Some(Arc::new(on_stop)),
+        }
     }
 }
 
-impl fmt::Debug for ThreadStart {
+impl fmt::Debug for ThreadHooks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(if self.0.is_some() {
-            "ThreadStart(hook)"
+        f.write_str(if self.on_start.is_some() {
+            "ThreadHooks(pair)"
         } else {
-            "ThreadStart(none)"
+            "ThreadHooks(none)"
         })
     }
 }
@@ -137,12 +155,21 @@ impl fmt::Debug for ThreadStart {
 /// `name` is the OS thread name and the ledger label. The ledger row
 /// lives as long as the returned [`Pool`], including the workers'
 /// shutdown. A name that is empty or contains a NUL is a [`ThreadName`]
-/// error, so this function never builds a runtime for one. `on_thread_start`
-/// runs on each of the runtime's threads before it takes work.
-pub fn runtime(
+/// error, so this function never builds a runtime for one. Threads start
+/// as Tokio starts them. A runtime that needs [`ThreadHooks`] calls
+/// [`runtime_with_thread_hooks`].
+pub fn runtime(budget: RuntimeBudget, name: &ThreadName) -> io::Result<Pool> {
+    runtime_with_thread_hooks(budget, name, ThreadHooks::none())
+}
+
+/// [`runtime`] with hooks on every worker and blocking thread.
+///
+/// The start hook runs before the thread takes work. The stop hook runs
+/// before the thread exits. [`ThreadHooks::none`] is [`runtime`].
+pub fn runtime_with_thread_hooks(
     budget: RuntimeBudget,
     name: &ThreadName,
-    on_thread_start: ThreadStart,
+    hooks: ThreadHooks,
 ) -> io::Result<Pool> {
     let row = shekyl_thread_ledger::record_runtime(name, budget);
     let mut builder = Builder::new_multi_thread();
@@ -152,8 +179,11 @@ pub fn runtime(
         .thread_name(name.as_str())
         .enable_io()
         .enable_time();
-    if let Some(hook) = on_thread_start.0 {
+    if let Some(hook) = hooks.on_start {
         builder.on_thread_start(move || hook());
+    }
+    if let Some(hook) = hooks.on_stop {
+        builder.on_thread_stop(move || hook());
     }
     let runtime = builder.build()?;
     Ok(Pool { runtime, row })
@@ -167,29 +197,41 @@ mod tests {
 
     use shekyl_thread_ledger::{ledger, RowKind};
 
-    use super::{runtime, RuntimeBudget, ThreadName, ThreadStart};
+    use super::{runtime, runtime_with_thread_hooks, RuntimeBudget, ThreadHooks, ThreadName};
 
     #[test]
-    fn the_thread_start_hook_runs_on_every_worker_and_blocking_thread() {
-        use std::collections::HashSet;
+    fn thread_hooks_run_as_a_thread_starts_and_as_it_exits() {
         use std::sync::Mutex;
         use std::thread::ThreadId;
 
-        let seen: std::sync::Arc<Mutex<HashSet<ThreadId>>> = Default::default();
-        let hook_seen = std::sync::Arc::clone(&seen);
-        let pool = runtime(
+        let started: std::sync::Arc<Mutex<HashSet<ThreadId>>> = Default::default();
+        let stopped: std::sync::Arc<Mutex<HashSet<ThreadId>>> = Default::default();
+        let on_start = std::sync::Arc::clone(&started);
+        let on_stop = std::sync::Arc::clone(&stopped);
+        let pool = runtime_with_thread_hooks(
             budget(2, 2),
-            &thread_name("sk-rt-hook"),
-            ThreadStart::new(move || {
-                hook_seen
-                    .lock()
-                    .expect("set")
-                    .insert(std::thread::current().id());
-            }),
+            &thread_name("sk-rt-hooks"),
+            ThreadHooks::pair(
+                move || {
+                    on_start
+                        .lock()
+                        .expect("set")
+                        .insert(std::thread::current().id());
+                },
+                move || {
+                    on_stop
+                        .lock()
+                        .expect("set")
+                        .insert(std::thread::current().id());
+                },
+            ),
         )
         .expect("runtime");
         // Threads report their own ids from inside a task and a blocking
-        // task; every one of them must have run the hook first.
+        // task; every one of them must have run the start hook first.
+        // Shutdown runs the stop hook, including on a blocking thread that
+        // has already finished its task and is only waiting out its
+        // keep-alive.
         let (tx, rx) = std::sync::mpsc::channel();
         pool.block_on(async {
             let mut tasks = Vec::new();
@@ -212,13 +254,18 @@ mod tests {
         });
         drop(tx);
         let working: HashSet<ThreadId> = rx.iter().collect();
-        let hooked = seen.lock().expect("set").clone();
+        let started = started.lock().expect("set").clone();
         assert!(!working.is_empty());
         assert!(
-            working.is_subset(&hooked),
-            "a thread took work without running the start hook: {working:?} vs {hooked:?}"
+            working.is_subset(&started),
+            "a thread took work without running the start hook: {working:?} vs {started:?}"
         );
         drop(pool);
+        let stopped = stopped.lock().expect("set").clone();
+        assert!(
+            started.is_subset(&stopped),
+            "a thread that started did not run the stop hook: {started:?} vs {stopped:?}"
+        );
     }
 
     fn budget(workers: usize, blocking: usize) -> RuntimeBudget {
@@ -234,12 +281,7 @@ mod tests {
 
     #[test]
     fn the_budget_is_recorded_and_built() {
-        let pool = runtime(
-            budget(2, 3),
-            &thread_name("sk-rt-budget"),
-            ThreadStart::none(),
-        )
-        .expect("runtime");
+        let pool = runtime(budget(2, 3), &thread_name("sk-rt-budget")).expect("runtime");
         assert_eq!(pool.metrics().num_workers(), 2);
         let id = pool.ledger_id();
         let row = ledger().into_iter().find(|row| row.id == id).expect("row");
@@ -257,8 +299,7 @@ mod tests {
 
     #[test]
     fn one_worker_is_one_thread() {
-        let pool =
-            runtime(budget(1, 1), &thread_name("sk-rt-one"), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(1, 1), &thread_name("sk-rt-one")).expect("runtime");
         assert_eq!(pool.metrics().num_workers(), 1);
         let ids = pool.block_on(async {
             let mut tasks = Vec::new();
@@ -277,12 +318,7 @@ mod tests {
 
     #[test]
     fn shutdown_returns_while_a_blocking_task_is_still_running() {
-        let pool = runtime(
-            budget(1, 1),
-            &thread_name("sk-rt-stop"),
-            ThreadStart::none(),
-        )
-        .expect("runtime");
+        let pool = runtime(budget(1, 1), &thread_name("sk-rt-stop")).expect("runtime");
         let id = pool.ledger_id();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         pool.block_on(async move {
@@ -305,18 +341,8 @@ mod tests {
     /// its thread; this task returns without joining it.
     #[test]
     fn shutdown_background_from_inside_a_task_returns_without_waiting() {
-        let outer = runtime(
-            budget(1, 1),
-            &thread_name("sk-rt-outer"),
-            ThreadStart::none(),
-        )
-        .expect("outer runtime");
-        let inner = runtime(
-            budget(1, 1),
-            &thread_name("sk-rt-inner"),
-            ThreadStart::none(),
-        )
-        .expect("inner runtime");
+        let outer = runtime(budget(1, 1), &thread_name("sk-rt-outer")).expect("outer runtime");
+        let inner = runtime(budget(1, 1), &thread_name("sk-rt-inner")).expect("inner runtime");
         let id = inner.ledger_id();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         inner.block_on(async move {

@@ -511,9 +511,10 @@ fn print_serving_posture(val: &Value) {
 /// The operator line for a serving host that could not lower its priority.
 ///
 /// Absent and zero are the steady readings and print nothing: no lifecycle
-/// is parked, or every serving thread that has started was lowered. A
-/// positive count is the failure, and the line says serving is still up
-/// and where the cause is written.
+/// is parked, or every serving thread that is running was lowered. A
+/// thread that has exited is not in the count. A positive count is the
+/// failure, and the line says serving is still up and where the cause is
+/// written.
 fn serving_priority_line(field: Option<&Value>) -> Option<String> {
     let count = field.and_then(Value::as_u64)?;
     if count == 0 {

@@ -339,7 +339,7 @@ mod tests {
     use shekyl_net_address::NetworkAddress;
     use shekyl_onion_v3::v3_onion_hostname;
     use shekyl_peer_policy::InboundCeiling;
-    use shekyl_runtime::{runtime, RuntimeBudget, ThreadName, ThreadStart};
+    use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
     use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
     use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Direction, Sockets};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -407,7 +407,7 @@ mod tests {
         Arc<Mutex<Vec<CloseCause>>>,
     ) {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let recorded = causes();
         let listener = listen(
             pool,
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn a_failed_anonymous_bind_does_not_leave_a_listener() {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let held =
             std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("hold");
         let taken = held.local_addr().expect("addr");
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn bytes_pass_through_the_socks_dial() {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let recorded = causes();
         let runtime_handle = pool.handle().clone();
         let (proxy_port, got) = runtime_handle.block_on(async {
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn a_socks_refusal_keeps_the_reply_byte() {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let recorded = causes();
         let handle_pool = pool.handle().clone();
         let proxy_port = handle_pool.block_on(async {
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn dropping_an_unestablished_session_releases_the_slot() {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let recorded = causes();
         let sockets = Sockets::new();
         let mut listener = listen(
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn a_send_that_does_not_fit_closes_the_connection() {
         let engine = EngineService::start(MonotonicClock::new());
-        let pool = runtime(budget(), &name(), ThreadStart::none()).expect("runtime");
+        let pool = runtime(budget(), &name()).expect("runtime");
         let recorded = causes();
         let mut capped = config(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),

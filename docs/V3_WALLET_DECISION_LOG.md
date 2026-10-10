@@ -6415,8 +6415,9 @@ in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
    setting tells an observer nothing, and an opt-out would create a
    population that behaves differently. Unconditional, under rule 75.
 5. **Failure is a warning and a counter, never a refusal to serve.** A
-   thread whose priority could not be lowered serves at normal priority;
-   the host counts it and the operator sees one warning.
+   thread whose priority could not be lowered serves at normal priority.
+   The host counts the threads still in that state — a thread that has
+   exited leaves the count — and the operator sees one warning.
 6. **Out of scope.** The daemon, the wallet's other work and the wallet's
    tor process stay at normal priority. The `SF-D13` countersignature is
    made inside the stake actor at engine priority: the serving runtime

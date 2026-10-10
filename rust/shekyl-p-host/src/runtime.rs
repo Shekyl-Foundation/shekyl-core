@@ -21,10 +21,11 @@
 //! Lowering is unconditional (rule 75): priority shows only under
 //! contention, timing already reveals load, and a population of personas
 //! that could opt out would be a fingerprint. When the platform refuses,
-//! the thread serves at normal priority, the refusal is counted on
-//! [`PriorityFailures`] for the serving status, and one warning is logged
-//! per host (rule 82). Serving is never refused for it.
+//! the thread serves at normal priority for as long as it keeps running.
+//! It is counted on [`PriorityFailures`] until it exits, and one warning
+//! is logged per host (rule 82). Serving is never refused for it.
 
+use std::cell::Cell;
 use std::io;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -32,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_p_serve::MAX_INFLIGHT;
-use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName, ThreadStart};
+use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
 use shekyl_thread_priority::{lower_current_thread, NotLowered};
 
 /// The serving runtime's async workers.
@@ -53,6 +54,30 @@ pub const SERVING_BLOCKING: usize = MAX_INFLIGHT;
 /// The OS thread name and ledger label of the serving runtime.
 const SERVING_THREAD_NAME: &str = "sk-serving";
 
+/// Worker budget as the non-zero count the runtime constructor takes.
+///
+/// Zero is not a budget. The match is a const, so a zero
+/// [`SERVING_WORKERS`] fails compilation rather than the first start.
+const SERVING_WORKER_THREADS: NonZeroUsize = match NonZeroUsize::new(SERVING_WORKERS) {
+    Some(count) => count,
+    None => panic!("SERVING_WORKERS is zero"),
+};
+
+/// Blocking budget as the non-zero count the runtime constructor takes.
+const SERVING_BLOCKING_THREADS: NonZeroUsize = match NonZeroUsize::new(SERVING_BLOCKING) {
+    Some(count) => count,
+    None => panic!("SERVING_BLOCKING is zero"),
+};
+
+// Set by the start hook, cleared by the stop hook. A thread that exits
+// — shutdown, or Tokio retiring an idle blocking thread — leaves the
+// gauge only when this is set, so a thread that was lowered is not
+// subtracted and a stop without a start cannot wrap the count.
+// `thread_local!` does not take a doc comment.
+std::thread_local! {
+    static THIS_THREAD_NOT_LOWERED: Cell<bool> = const { Cell::new(false) };
+}
+
 /// The one warning a host logs when lowering fails.
 ///
 /// The failure-path test counts this text. One host logs it once; a
@@ -68,15 +93,18 @@ const SERVING_PRIORITY_REFUSAL: &str = "the OS refused to lower a serving thread
 /// [`Pool::shutdown`] documents.
 const SERVING_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
-/// Threads of the serving runtime whose priority-lowering call the OS
-/// refused.
+/// Serving threads currently at normal priority because lowering failed.
 ///
 /// Born by the caller that reports serving status and handed to the host,
 /// so the count outlives any one host and is readable without holding it.
-/// Each thread whose call failed adds one; a thread whose call succeeded
-/// adds nothing. Zero is the expected reading on every supported platform.
-/// It is the OS call's result and nothing more: it does not say whether
-/// the lowered priority yields CPU to the daemon, which depends on the two
+/// The start hook adds a thread whose call failed. The stop hook removes
+/// it when that thread exits, including when the runtime retires an idle
+/// blocking thread and starts another for the next hop. The count is
+/// therefore the live set, at most [`SERVING_WORKERS`] plus
+/// [`SERVING_BLOCKING`], and zero is the expected reading on every
+/// supported platform. It is the OS call's result for the threads that
+/// are still running, and nothing more: it does not say whether the
+/// lowered priority yields CPU to the daemon, which depends on the two
 /// processes being in one scheduling group (§9.8, the confirming run).
 #[derive(Clone, Debug, Default)]
 pub struct PriorityFailures(Arc<AtomicU32>);
@@ -88,14 +116,66 @@ impl PriorityFailures {
         Self::default()
     }
 
-    /// Threads that serve at normal priority because lowering failed.
+    /// Serving threads running at normal priority because lowering failed.
     #[must_use]
     pub fn count(&self) -> u32 {
         self.0.load(Ordering::Relaxed)
     }
 
-    fn record(&self) {
+    /// This thread is one of the live set.
+    fn retain(&self) {
         self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// This thread has exited. A release without a retain leaves the
+    /// gauge where it is: wrapping would publish a huge count for a set
+    /// that got smaller.
+    fn release(&self) {
+        // `Err` is a release that found zero. The gauge stays: wrapping
+        // would publish a huge count for a set that got smaller. The
+        // returned value is the reading the update observed.
+        match self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_sub(1)
+            }) {
+            Ok(previous) => debug_assert!(previous > 0),
+            Err(already_zero) => debug_assert_eq!(already_zero, 0),
+        }
+    }
+
+    /// The start and stop hooks that keep [`Self::count`] equal to the
+    /// threads still at normal priority.
+    ///
+    /// The pair is one value. The start hook cannot be installed without
+    /// the stop hook that removes the same thread, so a retired blocking
+    /// thread cannot stay in the count.
+    fn thread_hooks(
+        &self,
+        lower: impl Fn() -> Result<(), NotLowered> + Send + Sync + 'static,
+    ) -> ThreadHooks {
+        let retained = self.clone();
+        let released = self.clone();
+        // One warning per host: the first thread that fails says so, with
+        // the cause; the rest only count. A persona whose platform refuses
+        // on every thread would otherwise log once per thread per start.
+        let warned = Arc::new(AtomicBool::new(false));
+        ThreadHooks::pair(
+            move || {
+                if let Err(cause) = lower() {
+                    THIS_THREAD_NOT_LOWERED.with(|slot| slot.set(true));
+                    retained.retain();
+                    if !warned.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(%cause, "{SERVING_PRIORITY_REFUSAL}");
+                    }
+                }
+            },
+            move || {
+                if THIS_THREAD_NOT_LOWERED.with(|slot| slot.replace(false)) {
+                    released.release();
+                }
+            },
+        )
     }
 }
 
@@ -109,9 +189,9 @@ impl PriorityFailures {
 /// [`Pool::shutdown_background`]: a zero wait, which returns before Tokio's
 /// check that a blocking wait is not allowed, including while a panic is
 /// already unwinding. In-flight blocking hops keep their threads, detached,
-/// the same as an ordered shutdown whose wait expired. The host declares
-/// this as its last field, so the endpoint and its accept task are gone
-/// before the pool that ran them is told to stop.
+/// the same as an ordered shutdown whose wait expired. The value that
+/// owns this pool owns the endpoint ahead of it, so the endpoint and its
+/// accept task are gone before the pool that ran them is told to stop.
 pub(crate) struct ServingPool(Option<Pool>);
 
 impl ServingPool {
@@ -132,25 +212,11 @@ impl ServingPool {
     ) -> io::Result<Self> {
         let name = ThreadName::new(SERVING_THREAD_NAME).map_err(io::Error::other)?;
         let budget = RuntimeBudget {
-            workers: NonZeroUsize::new(SERVING_WORKERS)
-                .ok_or_else(|| io::Error::other("zero workers"))?,
-            blocking: NonZeroUsize::new(SERVING_BLOCKING)
-                .ok_or_else(|| io::Error::other("zero blocking"))?,
+            workers: SERVING_WORKER_THREADS,
+            blocking: SERVING_BLOCKING_THREADS,
         };
-        let failures = failures.clone();
-        // One warning per host: the first thread that fails says so, with
-        // the cause; the rest only count. A persona whose platform refuses
-        // on every thread would otherwise log once per thread per start.
-        let warned = Arc::new(AtomicBool::new(false));
-        let on_thread_start = ThreadStart::new(move || {
-            if let Err(cause) = lower() {
-                failures.record();
-                if !warned.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(%cause, "{SERVING_PRIORITY_REFUSAL}");
-                }
-            }
-        });
-        Ok(Self(Some(runtime(budget, &name, on_thread_start)?)))
+        let hooks = failures.thread_hooks(lower);
+        Ok(Self(Some(runtime_with_thread_hooks(budget, &name, hooks)?)))
     }
 
     /// The runtime, to spawn the bind onto.
@@ -252,6 +318,7 @@ mod tests {
     /// that runtime still answers.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_lowering_is_counted_once_per_thread_and_serving_goes_on() {
+        let _warning = refusal_warning_lock().await;
         let warnings = refusal_warning_log();
         // A sibling test can register this callsite with no subscriber
         // first. Interest is cached process-wide from that first hit, so
@@ -291,9 +358,9 @@ mod tests {
         }
         let seen = threads.lock().expect("seen").len();
         assert!(seen >= 2, "a worker and a blocking thread ran: {seen}");
-        // Every started thread failed once. Threads start lazily, so the
-        // count is at least the threads that took work, and never more than
-        // the budget.
+        // The count is the threads still up whose call failed, so it
+        // cannot pass the budget. Threads start as work arrives, so the
+        // count is at least the threads that took work.
         let counted = failures.count() as usize;
         assert!(counted >= seen, "counted {counted}, saw {seen} threads");
         assert!(counted <= SERVING_WORKERS + SERVING_BLOCKING);
@@ -328,6 +395,97 @@ mod tests {
             "one warning for the host, not one per thread"
         );
         drop(pool);
+    }
+
+    /// An idle blocking thread leaves the count when Tokio retires it,
+    /// and the thread that replaces it is counted on its own call.
+    ///
+    /// Tokio's blocking pool exits a thread that sits idle for
+    /// [`BLOCKING_THREAD_KEEP_ALIVE`] (the default; the serving runtime
+    /// does not set one) and runs the start hook again for the next hop.
+    /// The count is the threads still in that state, so after the idle
+    /// gap it is the workers alone, and after the next hop it is the
+    /// workers plus the new blocking thread. Shutdown then brings it to
+    /// zero.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_retired_blocking_thread_leaves_the_unlowered_count() {
+        let _warning = refusal_warning_lock().await;
+        let failures = PriorityFailures::new();
+        let workers = u32::try_from(SERVING_WORKERS).expect("worker count");
+        let pool = ServingPool::build_with(&failures, || {
+            Err(NotLowered::Refused(io::Error::from_raw_os_error(13)))
+        })
+        .expect("serving runtime");
+
+        assert!(
+            wait_until(|| failures.count() == workers, Duration::from_secs(2)).await,
+            "workers did not all start: {}",
+            failures.count()
+        );
+
+        let first = pool
+            .handle()
+            .spawn(async { tokio::task::spawn_blocking(|| std::thread::current().id()).await })
+            .await
+            .expect("task")
+            .expect("blocking");
+        assert_eq!(failures.count(), workers + 1);
+
+        let retired = wait_until(
+            || failures.count() == workers,
+            BLOCKING_THREAD_KEEP_ALIVE + Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            retired,
+            "the idle blocking thread is still counted: {}",
+            failures.count()
+        );
+
+        let second = pool
+            .handle()
+            .spawn(async { tokio::task::spawn_blocking(|| std::thread::current().id()).await })
+            .await
+            .expect("task")
+            .expect("blocking");
+        assert_ne!(first, second, "the replacement is a new thread");
+        assert_eq!(failures.count(), workers + 1);
+
+        pool.stop().await;
+        assert!(
+            wait_until(|| failures.count() == 0, Duration::from_secs(2)).await,
+            "every serving thread has stopped: {}",
+            failures.count()
+        );
+    }
+
+    /// Tokio 1.51's blocking-pool default (`KEEP_ALIVE` in
+    /// `runtime/blocking/pool.rs`). The serving runtime does not set
+    /// `thread_keep_alive`.
+    const BLOCKING_THREAD_KEEP_ALIVE: Duration = Duration::from_secs(10);
+
+    async fn wait_until(mut pred: impl FnMut() -> bool, limit: Duration) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            if pred() {
+                return true;
+            }
+            if start.elapsed() >= limit {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// The two tests that refuse lowering both log the one warning into
+    /// the process-wide subscriber. They hold this for the whole test so
+    /// one test's warning is not the other's extra line. A tokio mutex,
+    /// because the guard stays across the awaits that run the runtime.
+    async fn refusal_warning_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
     }
 
     /// Dropping the pool from inside an async context does not panic and
