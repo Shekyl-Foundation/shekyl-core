@@ -487,6 +487,116 @@ fn an_alternate_that_dropped_first_leaves_the_origin_holding_at_the_primary_drop
     );
 }
 
+/// The stranded state: an all-hidden node's slot 0 dies before the origin
+/// has pinned, the survivor holds slot 1 and is not moved, and the origin
+/// plans `OwnEdge(survivor)` from where it sits — not `NoOwnEdge`, and
+/// without a merge on every origination.
+#[test]
+fn an_all_hidden_node_whose_slot_zero_died_before_the_pin_rides_the_survivor() {
+    for seed in 0..16 {
+        let mut rng = SplitMix64::new(61 + seed);
+        let mut z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        z.rebuild_stems(&mut rng);
+        let dead = z.stem_slots()[0].expect("filled");
+        let survivor = z.stem_slots()[1].expect("filled");
+        // Slot 0's peer dies before any origination; the next outbound
+        // handshake merges (a repeat of the survivor is enough).
+        z.on_connection_close(&dead);
+        z.update_stems(&mut rng);
+        assert_eq!(
+            z.stem_slots()[0],
+            None,
+            "no unslotted hidden session to fill slot 0"
+        );
+        assert_eq!(
+            z.stem_slots()[1],
+            Some(survivor),
+            "the survivor is not moved"
+        );
+        let before = z.stem_slots().to_vec();
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::OwnEdge(survivor),
+            "the origin pins on the address-hiding peer where it sits"
+        );
+        assert_eq!(z.stem_slots(), before.as_slice(), "no merge, nothing moved");
+        assert_eq!(
+            z.plan_relay(None, true, NodeSync::Synchronised, &mut rng),
+            RelayPlan::OwnEdge(survivor)
+        );
+    }
+}
+
+/// The same stranded state on a mixed node: the only live address-hiding
+/// session sits in slot 1 beside a clearnet peer, and the origin plans
+/// `OwnEdge` on it.
+#[test]
+fn a_mixed_node_with_its_only_hidden_session_in_slot_one_still_plans_own_edge() {
+    let mut reached = 0;
+    for seed in 0..64 {
+        let mut rng = SplitMix64::new(71 + seed);
+        let mut z = Relay::new(
+            DandelionParams::inherited(),
+            2,
+            false,
+            &[ConnectorId::Clearnet, ConnectorId::Tor],
+            0,
+            &mut rng,
+        )
+        .unwrap();
+        z.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        z.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        z.on_session_established(
+            id(11),
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+        z.rebuild_stems(&mut rng);
+        let dead = z.stem_slots()[0].expect("filled");
+        let other = z.stem_slots()[1].expect("filled");
+        if other == id(11) {
+            // The class-blind draw took the clearnet peer: not the state
+            // under test (slot 0 would refill from the unslotted hidden one).
+            continue;
+        }
+        reached += 1;
+        z.on_connection_close(&dead);
+        z.update_stems(&mut rng);
+        assert_eq!(z.stem_slots()[0], None);
+        assert_eq!(
+            z.stem_slots()[1],
+            Some(other),
+            "the only hidden session stays in slot 1"
+        );
+        let plan = z.plan_relay(None, true, NodeSync::Synchronised, &mut rng);
+        assert_eq!(plan, RelayPlan::OwnEdge(other));
+        assert_eq!(
+            z.plan_relay(Some(id(11)), false, NodeSync::Synchronised, &mut rng),
+            if z.is_fluffing() {
+                RelayPlan::FluffEpoch
+            } else {
+                RelayPlan::Stem(other)
+            },
+            "relayed traffic routes over the one live slot"
+        );
+    }
+    assert!(
+        reached >= 8,
+        "the hidden-in-slot-1 draw was reached {reached} times in 64"
+    );
+}
+
 /// A node that originates at boot with one address-hiding session up has a
 /// pin of one. If that session drops, the origin holds until the epoch ends
 /// however many such sessions the dialer opens afterwards (§98.5).

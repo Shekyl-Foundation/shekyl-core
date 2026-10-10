@@ -363,9 +363,17 @@ impl StemMap {
     /// slot stays empty (D-PR1-2 (i)). The other slots are backfilled from
     /// every unslotted session, reserved or not, as `update` backfills them.
     ///
-    /// A local alternate that the class-blind backfill has already placed in
-    /// another slot is not moved: it is not an unslotted candidate, so the
-    /// fill passes over it, and the pin's walk resolves to it where it is.
+    /// Peers are never moved between slots. A local alternate that the
+    /// class-blind backfill has already placed in another slot is not an
+    /// unslotted candidate, so the fill passes over it and the pin's walk
+    /// resolves to it where it is. The same holds for the local **primary**:
+    /// when slot 0's peer dies before the local source has pinned and every
+    /// reserved session is already in another slot, slot 0 stays empty and
+    /// the caller pins the local source on a reserved peer where it sits
+    /// ([`Self::pin_over`] asks only that the head occupy *a* slot). A move
+    /// would re-point every source pinned on the moved peer's slot index in
+    /// the covert-channel binding and change the live set for no routing
+    /// reason.
     ///
     /// Returns [`StemSetChange::Changed`] on the same predicate as `update`.
     pub fn update_with_reserved<R: RelayRng + ?Sized>(

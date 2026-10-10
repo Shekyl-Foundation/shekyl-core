@@ -17271,7 +17271,20 @@ refill is what the origin needs before it resolves), then returns
 `OwnEdge` over the pin — made at first origination over the supplied
 list, walked afterwards with `hidden_live` as the allowed set — or
 `NoOwnEdge`. No field names the hidden slot: it is slot 0 by
-construction. The class-of-one
+construction. **The local primary may sit in a slot other than 0**
+(Rick, 2026-10-09): it is slot 0's peer when slot 0 holds one, otherwise
+an address-hiding peer occupying another slot, drawn uniformly when
+several do. The reason is that peers are never moved between slots — a
+move would re-point every relayed source pinned on the moved peer's
+slot index in the covert-channel binding (§20.3) and change the live
+set for no routing reason — so when the class-blind draw has put an
+address-hiding session in slot 1 and slot 0's peer dies before the
+origin has pinned, the hidden-slot fill finds no *unslotted*
+address-hiding session, slot 0 stays empty, and the origin pins on the
+survivor where it sits. For the same reason the origination-time merge
+runs only when slot 0's peer is dead, or slot 0 is empty and an
+unslotted address-hiding session exists; in the stranded state nothing
+would change, so nothing merges. The class-of-one
 rotation report (`hop-0 edge cannot rotate`) stays, at rebuild, when
 exactly one outbound session hides the address. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
@@ -17419,6 +17432,12 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   alternate that dropped first leaves the pin exhausted at the primary's
   drop; a boot pin over one session holds after that session drops
   (98.5); an origination that finds no hidden session makes no pin;
+- the stranded state: an all-hidden two-session map whose slot 0 dies
+  before the local pin leaves the survivor in slot 1 (`stem_map`); in
+  that state the origin plans `OwnEdge(survivor)`, not `NoOwnEdge`, and
+  no merge runs at origination (relay); a mixed node in the same state,
+  its only hidden session in slot 1 beside a clearnet peer, also plans
+  `OwnEdge` (relay);
 - the connector gate's selftest fails a `ConnectorId::` variant in
   production code of either crate;
 - `Relay::new` refuses width 1 with a hidden connector;
@@ -17500,7 +17519,12 @@ as first written.
    `TOR_RELAY.md` corrected, the dialer brief's "stay on `dev`" sentence
    to records-was, `params.rs:211` "own-edge pool", the RP index row,
    the CHANGELOG, this section's status; and the vocabulary fixed once
-   (98.11, Rick 2026-10-09).
+   (98.11, Rick 2026-10-09). Landed `4bc4ad7380`, with the ledger
+   hearing `4bbb8dd4b4`.
+9. `relay: the origin's primary may sit in a slot other than 0` — the
+   pre-merge-review fix (Rick, 2026-10-09): the stranded state above,
+   its three tests, and the merge condition narrowed so the stranded
+   state does not merge on every origination.
 
 Gates per commit: `cargo fmt --check`; `cargo clippy -p
 shekyl-relay-privacy -- -D warnings` (the lib as a dependant sees it),

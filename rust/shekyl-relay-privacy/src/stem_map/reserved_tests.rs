@@ -348,3 +348,32 @@ fn relayed_sources_pin_over_both_slots_and_are_unchanged_by_the_reserved_slot() 
     }
     assert_eq!(seen.len(), 2, "relayed sources reach both slots");
 }
+
+/// An all-hidden two-session map whose slot 0 dies before the local source
+/// has pinned: the survivor already holds slot 1 and is not moved, so slot 0
+/// stays empty and the local source pins on the survivor where it sits.
+#[test]
+fn a_slot_zero_death_before_the_local_pin_leaves_the_survivor_in_slot_one() {
+    for seed in 0..16 {
+        let mut rng = SplitMix64::new(seed + 300);
+        let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2]), Vec::new(), 2, &mut rng);
+        let dead = m.slots()[0].expect("filled");
+        let survivor = m.slots()[1].expect("filled");
+        assert_ne!(dead, survivor);
+        let change = merge(&mut m, &[survivor.0[0]], &[], &mut rng);
+        assert_eq!(change, StemSetChange::Changed);
+        assert_eq!(
+            m.slots()[0],
+            None,
+            "no unslotted reserved session to fill slot 0"
+        );
+        assert_eq!(m.slots()[1], Some(survivor), "the survivor is not moved");
+        // The caller pins the local source on the survivor where it sits.
+        assert_eq!(m.pin_over(None, vec![survivor]), Some(survivor));
+        assert_eq!(m.usage(), &[0, 1]);
+        assert_eq!(
+            m.stem_for_among(None, &[survivor], &mut rng),
+            Some(survivor)
+        );
+    }
+}

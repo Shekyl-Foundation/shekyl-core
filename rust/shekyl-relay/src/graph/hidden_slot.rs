@@ -14,6 +14,17 @@
 //! peer drops, the merge moves the live alternate into slot 0; once the pin
 //! is exhausted the plan is [`RelayPlan::NoOwnEdge`] until the epoch ends.
 //!
+//! The primary is slot 0's peer when slot 0 holds one. It may sit in another
+//! slot: the class-blind draw for the other slots can place an address-hiding
+//! session there, and when slot 0's peer then dies before the origin has
+//! pinned, the hidden-slot fill finds no *unslotted* address-hiding session
+//! and slot 0 stays empty while the survivor holds slot 1. Peers are never
+//! moved between slots — a move would re-point every relayed source pinned
+//! on the moved peer's slot index in the covert-channel binding (§20.3) and
+//! change the live set for no routing reason — so the origin's primary is
+//! then an address-hiding peer occupying another slot, drawn uniformly when
+//! several do.
+//!
 //! No connector is named here. The class is `address_hidden_from_peer`,
 //! read off each session's declaration; the stem map never learns what the
 //! class is (`StemMap::new_with_reserved_slot`, `update_with_reserved`).
@@ -76,8 +87,12 @@ impl Relay {
     /// A close does not merge ([`Relay::on_connection_close`]), so a slot 0
     /// whose peer is gone is merged here first: the hidden-slot fill is what
     /// moves the pin's live alternate into the slot before the pin is walked.
-    /// An empty slot 0 with an address-hiding session up is merged for the
-    /// same reason (rule 3: it fills at the next merge, not the next epoch).
+    /// An empty slot 0 is merged only when an **unslotted** address-hiding
+    /// session exists to fill it (rule 3: it fills at the next merge, not the
+    /// next epoch). When every address-hiding session is already in another
+    /// slot the merge would change nothing, and the origin pins on one of
+    /// them where it sits (see the module doc) rather than merging on every
+    /// origination.
     ///
     /// Then the pin. Unpinned this epoch: slot 0's peer and `stems − 1`
     /// alternates drawn uniformly from the other address-hiding sessions,
@@ -93,7 +108,9 @@ impl Relay {
         let slot0 = self.map.slots().first().copied().flatten();
         let needs_merge = match slot0 {
             Some(peer) => !self.contexts.contains_key(&peer),
-            None => !hidden_live.is_empty(),
+            None => hidden_live
+                .iter()
+                .any(|peer| self.map.slot_of(*peer).is_none()),
         };
         if needs_merge {
             self.merge_reserved(rng);
@@ -110,18 +127,42 @@ impl Relay {
         }
     }
 
-    /// The local source's pin (D-PR1-1 (c′)): slot 0's peer first, then
+    /// The local source's pin (D-PR1-1 (c′)): the primary first, then
     /// `stems − 1` alternates drawn uniformly — a partial Fisher-Yates, as
     /// `StemMap::new` draws — from the other address-hiding sessions live
-    /// now. Empty when slot 0 is empty, so [`StemMap::pin_over`] pins
-    /// nothing.
+    /// now.
+    ///
+    /// The primary is slot 0's peer when slot 0 holds one. Otherwise it is an
+    /// address-hiding peer occupying another slot, drawn uniformly when
+    /// several do (the stranded state the module doc describes; peers are not
+    /// moved between slots). Empty when no slot holds an address-hiding
+    /// session, so [`StemMap::pin_over`] pins nothing.
     fn local_pin_candidates<R: RelayRng + ?Sized>(
         &self,
         hidden_live: &[ConnectionId],
         rng: &mut R,
     ) -> Vec<ConnectionId> {
-        let Some(primary) = self.map.slots().first().copied().flatten() else {
-            return Vec::new();
+        let slots = self.map.slots();
+        let primary = match slots.first().copied().flatten() {
+            Some(peer) => peer,
+            None => {
+                let slotted: Vec<ConnectionId> = slots
+                    .iter()
+                    .skip(1)
+                    .flatten()
+                    .copied()
+                    .filter(|peer| hidden_live.contains(peer))
+                    .collect();
+                match slotted.len() {
+                    0 => return Vec::new(),
+                    1 => slotted[0],
+                    n => {
+                        let pick = usize::try_from(bounded_uniform(rng, (n - 1) as u64))
+                            .expect("the draw is bounded by the slot count");
+                        slotted[pick]
+                    }
+                }
+            }
         };
         let mut alternates: Vec<ConnectionId> = hidden_live
             .iter()
