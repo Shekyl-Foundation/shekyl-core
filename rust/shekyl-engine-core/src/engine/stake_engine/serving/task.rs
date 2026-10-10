@@ -142,6 +142,31 @@ pub enum ServingPosture {
     FoundationCompleteTree,
 }
 
+/// One read of a parked serving lifecycle (`SH-3`).
+///
+/// Posture and the unlowered-thread count belong to one lifecycle. A
+/// restart swaps the handle under the cadence slot lock, and reading the
+/// two through two locks can pair one lifecycle's posture with another's
+/// count. [`ServingHandle::status`] is that pair. The caller that parks
+/// the handle holds the slot lock across the read, so the swap cannot
+/// land between the fields.
+///
+/// `posture` is `None` while the lifecycle is parked but has not published
+/// an obligation: the launch standoff, a failed start, teardown. The count
+/// is a reading whenever the lifecycle exists, and zero means every live
+/// serving thread was lowered. Absence of this value is the only "no
+/// lifecycle" answer, and it is the same absence the wire uses for both
+/// fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServingStatus {
+    /// What this persona is obligated to serve, or `None` while nothing
+    /// has been published yet.
+    pub posture: Option<ServingPosture>,
+    /// Serving threads of this lifecycle at normal priority because
+    /// lowering failed. Zero is a reading.
+    pub priority_not_lowered: u32,
+}
+
 /// A running serving lifecycle: the cancel token plus the task's join handle.
 ///
 /// Deliberately the same shape as `PScanHandle`. The handle parks with the
@@ -211,6 +236,20 @@ impl ServingHandle {
     #[must_use]
     pub fn posture(&self) -> Option<ServingPosture> {
         *self.posture.borrow()
+    }
+
+    /// Posture and unlowered count together.
+    ///
+    /// The two reads are this handle's watch and its counter. They are one
+    /// lifecycle by construction: this value is the lifecycle. The slot
+    /// that parks the handle is what a caller holds when a restart must
+    /// not swap the lifecycle between the two reads.
+    #[must_use]
+    pub fn status(&self) -> ServingStatus {
+        ServingStatus {
+            posture: self.posture(),
+            priority_not_lowered: self.priority_not_lowered(),
+        }
     }
 
     /// Whether the serving task is still running.

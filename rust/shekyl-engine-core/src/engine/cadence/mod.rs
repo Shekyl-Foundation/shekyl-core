@@ -59,7 +59,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::pscan::cadence::{FixedRateSchedule, ScanSchedule};
 use super::signer::EngineSignerKind;
-use super::stake_engine::serving::{ServingHandle, ServingPosture};
+use super::stake_engine::serving::{ServingHandle, ServingPosture, ServingStatus};
 use super::submit_lifecycle::WatchdogHost;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
@@ -237,38 +237,34 @@ impl CadenceHandle {
         *self.serving.lock().expect("serving slot lock") = Some(handle);
     }
 
+    /// The parked lifecycle's posture and unlowered-thread count, under
+    /// one lock (`SH-3`).
+    ///
+    /// `None` when nothing is parked. A parked lifecycle that has not
+    /// published a posture still returns `Some`, with `posture: None` and
+    /// a real count — zero is a reading, not an absence. The lock is held
+    /// across both reads, so [`Self::adopt_serving`] cannot swap the
+    /// handle between them. A status query never waits on the task.
+    #[must_use]
+    pub fn serving_status(&self) -> Option<ServingStatus> {
+        self.serving
+            .lock()
+            .expect("serving slot lock")
+            .as_ref()
+            .map(ServingHandle::status)
+    }
+
     /// What the parked serving lifecycle is serving right now, or `None`
     /// when no host is parked — or the parked host has died, in which case
     /// the serving-liveness leg restarts it on the next chain advance and
     /// "not serving" is exactly the truth in the interim.
     ///
-    /// A cheap snapshot read (brief lock, watch-channel `borrow`): a status
-    /// query can never stall the thing that serves.
+    /// The posture half of [`Self::serving_status`]. A caller that also
+    /// needs the unlowered count takes that one snapshot; this answer is
+    /// complete on its own for the posture question.
     #[must_use]
     pub fn serving_posture(&self) -> Option<ServingPosture> {
-        self.serving
-            .lock()
-            .expect("serving slot lock")
-            .as_ref()
-            .and_then(ServingHandle::posture)
-    }
-
-    /// Serving-runtime threads currently at normal priority because the
-    /// OS refused to lower them (`SH-3`), or `None` when no serving
-    /// lifecycle is parked. The OS call's result for the threads that
-    /// are still running, and nothing more: a thread that has exited
-    /// leaves the count. Zero is the expected reading; a non-zero count
-    /// is that many threads at normal priority. Whether the lowering
-    /// yields CPU to the daemon is a question of scheduling topology,
-    /// not of this count (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). Same
-    /// brief-lock snapshot as [`Self::serving_posture`].
-    #[must_use]
-    pub fn serving_priority_not_lowered(&self) -> Option<u32> {
-        self.serving
-            .lock()
-            .expect("serving slot lock")
-            .as_ref()
-            .map(ServingHandle::priority_not_lowered)
+        self.serving_status().and_then(|status| status.posture)
     }
 
     /// Fire the cancel token. Idempotent. The task observes it at the next
