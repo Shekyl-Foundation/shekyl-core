@@ -287,9 +287,24 @@ GetInfoResponse {
   the grant never crosses the FFI (RT-O9's last bullet dissolves).
 - **The type says which parts a caller may be refused.** `Hidden<T>` is
   either the part or its absence; the two parts outside the `view` preset
-  carry it and the rest cannot be withheld. What an absent part *writes* is
-  the serializer's: today's stand-ins under parity, nothing from RK-Q8's commit
-  on. No handler code changes between the two.
+  carry it and the rest cannot be withheld. **At parity nothing is absent
+  yet.** A restricted reply today carries every key, and one of them —
+  `database_size`, rounded up — is derived from a real read, so no
+  constant written for an absent part could reproduce it. Until RK-Q8's
+  commit the handler therefore builds a restricted caller's Status and
+  Peers as *present parts holding the stand-ins* (zeros, `u64::MAX`, the
+  empty string, the rounded size), and the absent arm of `Hidden` is
+  reached only by a decoder. RK-Q8's commit is where the handler starts
+  returning it. (Amended 2026-10-10; this bullet first said an absent
+  part's serializer would write the stand-ins.)
+- **How the composition is written.** serde does not support
+  `deny_unknown_fields` together with `flatten`, on the outer struct or the
+  flattened one, and every reply type in `shekyl-rpc-types` refuses unknown
+  fields. `Hidden`'s whole-part rule needs a hand-written decoder in any
+  case. So `GetInfoResponse` derives its serializer over the flattened
+  parts and has a hand-written deserializer that takes each part's keys,
+  applies the whole-part rule to the hidden ones, and refuses any key left
+  over. The crate's property is kept without the attribute.
 - **One field, one value, even where the wire has two names.** Where today's
   wire repeats a value (`block_size_limit` / `block_weight_limit`, the
   difficulty triplets), the part holds the value **once** and the extra wire
@@ -345,9 +360,11 @@ places this reply needs them distinct.
   `None` only when **none** of `T`'s keys are present, `Some` when all
   are, and an error otherwise.
 
-Both are tested per field in commit 4: `{}` fails and `{"f": null}`
-decodes for each `Nullable` field; a full reply with one Status key
-removed, and one with one Peers key removed, is an error and not `None`.
+`Hidden` is tested in commit 4: a full reply with one Status key removed,
+and one with one Peers key removed, is an error and not an absent part.
+`Nullable` has no field to carry until commit 6 makes the target
+nullable, so the type and its test — `{}` fails and `{"f": null}` decodes,
+per field — land there, not as an unused type in commit 4.
 
 #### The three wire states — RK-D23
 
@@ -405,6 +422,11 @@ the node no filesystem or peer-registry read. `PeerFacts`'s session counts
 feed two parts: Status's two aggregate counts are read with Status, and
 Health's `has_peers`, from commit 7, is read for everyone.
 
+*Where the version string comes from.* The build's version string exists
+only in C++ (`SHEKYL_VERSION_FULL`); nothing in `rust/` has it. It is a
+Status field, so it rides the Status facts export as a string, one source,
+and is not read for a caller who will be shown the empty stand-in.
+
 *One exception, for as long as parity lasts.* A restricted reply carries
 `database_size` today — rounded up to 5 GiB, but derived from the real
 size. The caller receives it, so it is read for that caller, and a failure
@@ -412,6 +434,20 @@ of that one read refuses a `View` caller as it does a `Full` one. It joins
 the not-read set in RK-Q8's commit, when a restricted reply stops carrying
 Status at all. The other restricted stand-ins need no read: zero,
 `u64::MAX` and the empty string are constants.
+
+*The size read must be able to fail, and say so (ruled 2026-10-10,
+RK-D23).* `BlockchainLMDB::get_database_size`
+(`src/blockchain_db/lmdb/db_lmdb.cpp:4253-4260`) swallows the `file_size`
+error and returns `0` — a zero that means "could not read". Read through
+it, the "size read failing" case below would test a path production cannot
+reach. So the size is its own facts export and its own trait method, apart
+from the other Status facts, and it does not call that getter: it stats
+the store's data file itself and carries a failure out as a distinct
+return code, mapped to its own `FactsFault`, never as a size of `0`. No
+method is added to the store's C++ interface for this (the daemon-side
+LMDB code is frozen during the store cutover); the export asks the store
+for its file names, which the interface already answers. An FFI-level case
+pins it: an unreadable data file yields the fault, not `0`.
 
 *The test this decision requires* (commit 4): with `StatusFacts`' start
 time, free space and alt-block count set to fail, a `View` caller gets a
@@ -521,9 +557,9 @@ handler tests, one on each side of the behaviour change (§4.2):
 | 1 | **Origin-guard re-anchor** on `include_sensitive`, own diff, before the route leaves (parent §5 row). **LANDED 2026-10-09** as `restricted_listener_hides_a_transaction_this_node_has_not_broadcast` (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs`). **The rig is two daemons, an origin and a sink, and the holder is the origin** — not a second node holding what the first stemmed to it, which is what this row pictured. A relay node's hold rests on its epoch draw and on having somewhere to stem onward; the origin's does not, because a local origin takes the stem slot whatever the epoch. The sink runs `--no-sync` and drops what it is sent, so nothing fluffs the transaction back. **What is not fixed is the origin's embargo**, a draw with no lever: the restricted reads are bracketed by a read of the relay state on the unrestricted listener, held before and held after, and an attempt whose bracket does not close is discarded and retried with a new transaction. **No lever was added to the relay**; pinning the epoch and the embargo on regtest was the alternative, and it would have put a test switch in the code that decides when a transaction is published. Four reads are judged (the three bridged pool routes and native `/get_transactions`), then the transaction is mined and popped back into the broadcast set and the restricted listener must show it (parent §7, 2026-10-09) | armed in `scripts/ci/run_live_daemon_gates.sh`; green on twelve consecutive runs (62–72 s each); observed red twice by daemon sabotage, each naming exactly the routes it should; the discard-and-retry path and the exhausted-attempts failure each observed once |
 | 2 | **RK-D21:** `emission_era` deleted. **LANDED 2026-10-09** at `CORE_RPC_VERSION` 3.45 (written as 3.43, and moved twice as `dev` took 3.43 and then 3.44 first): the struct field and its `KV_SERIALIZE`, the `double`-threshold computation in `on_get_info`, and, in `docs/DESIGN_CONCEPTS.md`'s chain-health dashboard table, the "Emission Era" row, the "Emission forecast" row ("Maturity Era begins in ~X years"; nothing in core or the GUI implements it, and a forecast, if one is wanted, belongs to the economics sim lane) and the words "with era boundaries" on the Emission progress row. The handler lines cited elsewhere in this document as `:294-302` are the ones removed; the ground commit still shows them | **The sweep covers the four era names in live design text, not only the identifier.** `git grep emission_era` → this document, the CHANGELOG, and the version history that records the bump (`rust/shekyl-rpc-types/src/chain.rs`, `tests/rpc_parity.rs`). `git grep -i -E "(founding|growth|maturity|tail) era" -- docs/DESIGN_CONCEPTS.md` → two things, both left as they are: the burn-rate table under "Burn rate behavior across chain lifecycle", which records how burn was once projected by phase, and one sentence that says "tail era" for the period of tail emission. That second sense, which other documents under `docs/` also use, is a different thing from the retired label and is not swept. `get_version_synced_v22.json` derived from `_v21` |
 | 3 | **Capture.** **LANDED 2026-10-10.** `on_get_info` gathers `get_info_facts` and calls `build_get_info(facts, restricted, res)` (`src/rpc/get_info_build.h`; defined beside the handler). The builder is the handler's computation with each read replaced by a fact; rewriting the old handler's reads into facts mechanically and diffing against the builder leaves only the lines that moved to the gather. **One thing differs, and it is not in any reply:** the gather reads everything whoever is asking, where the handler skipped a restricted caller's hidden reads and counted the pool one way; the builder decides what a restricted caller is shown from the same facts, which is the shape §4.1 gives the native handler. `tests/unit_tests/rpc_oracle_vectors.cpp` runs the builder over fixed facts for §4.4's five fixtures and pins `get_info_{synced,syncing,peerless_startup,synced_restricted,burn_refusal}_v1.json`, stored LF | the emitter is in `unit_tests` and green; observed red by breaking the connection-count subtraction in the builder — the three vectors with peers and full disclosure drifted, the restricted and peerless ones did not |
-| 4 | **Native port at parity:** types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Nullable` missing-key and `Hidden` partial-part tests of §4.1; the hub-absent parity test of §4.4; RK-D24's gather-by-part test, both cases |
+| 4 | **Native port at parity**, landed as bisectable pieces (types, facts and handler with their parity tests; then the Rust readers; then the console): types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) | parent §4 gate; the `Hidden` partial-part tests of §4.1; the hub-absent parity test of §4.4; RK-D24's gather-by-part test, both cases; the FFI-level case that an unreadable data file is a fault and not a size of `0` |
 | 5 | **Delete C++:** `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, three dispatch rows (`src/rpc/core_rpc_ffi.cpp:174-175`, `:268`), `build_get_info`, the `get_info` cases in `rpc_target_wire_contract.cpp` (`check_core_ready` stays: `:636` and `:727` still call it) | `git grep COMMAND_RPC_GET_INFO` → this doc and CHANGELOG only |
-| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6); under RK-Q11 as recommended, the version is read before the full decode, and that lands first in this commit | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); **gated on RK-Q11's ruling** |
+| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6); under RK-Q11 as recommended, the version is read before the full decode, and that lands first in this commit | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); `Nullable` and its missing-key test (§4.1); **gated on RK-Q11's ruling** |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1; the handler's missing-hub parity arm is deleted, so a missing hub refuses (§4.2) | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers`; the hub-absent refusal test of §4.4 |
 | 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each | bump each |
 
