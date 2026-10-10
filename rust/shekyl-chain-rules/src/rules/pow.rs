@@ -76,10 +76,10 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale, ViewRead};
 #[cfg(test)]
 use crate::rules::difficulty::Target;
-use crate::rules::{recorded, BlockContext, BlockRule, Rule};
+use crate::rules::{recorded_header, BlockContext, HeaderRule, Rule};
 use crate::substrate::Substrate;
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::HeaderView;
 
 /// CEN-D2: the longhash is RandomX v2 over the PoW preimage under the
 /// seed, unconditionally; a verifier that cannot compute is the fail-closed
@@ -138,28 +138,30 @@ impl Rule for D3 {
 }
 
 impl D3 {
-    /// The seed the chain expects for a block connecting at `connecting`.
-    fn expected_seed<'id, V: ChainView<'id>>(
-        view: &V,
+    /// The seed the chain expects for a block connecting at `connecting`:
+    /// a header fact (the seed block's identity), so a header view answers.
+    fn expected_seed<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
-    ) -> Result<BlockHash, ViewRead<V::Fault>> {
+    ) -> Result<BlockHash, ViewRead<H::Fault>> {
         let Some(seed_height) = seed_height(connecting) else {
             return Ok(BlockHash::NULL);
         };
         // `seed_height ≤ connecting − 1 − SEEDHASH_EPOCH_LAG` (or 0) is
         // below the tip on a conforming view — the shared parent-side read,
-        // whose hole arm is the halting fault, not a panic (`recorded`).
-        Ok(recorded(view, seed_height)?.hash)
+        // whose hole arm is the halting fault, not a panic
+        // (`recorded_header`).
+        Ok(recorded_header(view, seed_height)?.hash)
     }
 
     /// Check the claimed seed against the view, recording this row.
     /// A mismatch is [`Stale::Seed`] with the retry the token allows.
-    pub(crate) fn verify_seed<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn verify_seed<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         formed: &StructurallyValid,
         coverage: &mut RuleCoverage,
-    ) -> Result<(), Fault<V::Fault>> {
+    ) -> Result<(), Fault<H::Fault>> {
         coverage.insert(Self::ROW);
         let expected = Self::expected_seed(view, connecting)?;
         let claimed = formed.seed();
@@ -206,17 +208,20 @@ impl D1b {
 }
 
 /// CEN-D1: the block's longhash must satisfy the difficulty target.
+///
+/// A header rule that reads no view at all: the target is the context's
+/// (D4's, derived from header facts) and the longhash is `form`'s.
 pub(crate) struct D1;
 
 impl Rule for D1 {
     const ROW: CenRow = CenRow::D1;
 }
 
-impl BlockRule for D1 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for D1 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         if cx.target.is_satisfied_by(cx.formed.pow()) {
             Ok(Ok(()))
         } else {

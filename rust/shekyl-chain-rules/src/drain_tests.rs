@@ -16,7 +16,8 @@ use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::tree_growth::TreeFrontier;
 use crate::view::{
-    AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights, Tip,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,
+    RecordedWeights, Tip,
 };
 
 fn h(height: u64) -> BlockHeight {
@@ -60,8 +61,17 @@ fn the_sources_are_the_two_maturity_windows_back() {
 /// A view that answers `outputs_at` from a closure and has an empty tree.
 struct OutputsOnly<F: Fn(BlockHeight) -> AtHeight<BlockOutputs>>(F);
 
-impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for OutputsOnly<F> {
+impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> HeaderView<'id> for OutputsOnly<F> {
     type Fault = Infallible;
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(None)
+    }
+    fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+}
+
+impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for OutputsOnly<F> {
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }
@@ -86,9 +96,6 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     }
     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
         Ok(AtHeight::Recorded(CurveTreeRoot::EMPTY))
-    }
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        Ok(None)
     }
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
         Ok(TreeFrontier::EMPTY)

@@ -28,7 +28,10 @@ use shekyl_units::AtomicUnits;
 
 use super::{Brand, MockView};
 use crate::tree_growth::TreeFrontier;
-use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip};
+use crate::view::{
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
+    Tip,
+};
 
 /// The fault a [`FaultingView`] raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,9 +41,19 @@ pub struct Faulted;
 #[derive(Default)]
 pub struct FaultingView<'id>(Brand<'id>);
 
-impl<'id> ChainView<'id> for FaultingView<'id> {
+impl<'id> HeaderView<'id> for FaultingView<'id> {
     type Fault = Faulted;
 
+    fn tip(&self) -> Result<Option<Tip>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, Faulted> {
+        Err(Faulted)
+    }
+}
+
+impl<'id> ChainView<'id> for FaultingView<'id> {
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Faulted> {
         Err(Faulted)
     }
@@ -85,10 +98,6 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
         Err(Faulted)
     }
 
-    fn tip(&self) -> Result<Option<Tip>, Faulted> {
-        Err(Faulted)
-    }
-
     crate::archival_reads!(fault Faulted);
 }
 
@@ -98,8 +107,13 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
 /// its tip, is a different instrument and is not this one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WithheldRead {
-    /// [`ChainView::block_at`] at this height — the block row.
+    /// [`ChainView::block_at`] at this height — the block row, as an
+    /// executed-fact reader asks for it. `header_at` at the same height
+    /// still answers: one read, one height.
     BlockAt(BlockHeight),
+    /// [`HeaderView::header_at`] at this height — the header record, as
+    /// a header rule asks for it (DRS-E5 PR-a). `block_at` still answers.
+    HeaderAt(BlockHeight),
     /// [`ChainView::root_at`] at this height — the curve-tree root.
     RootAt(BlockHeight),
     /// [`ChainView::weights_window`] ending at this height — the weights
@@ -135,9 +149,24 @@ impl<'a, 'id> MockView<'a, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
+impl<'id> HeaderView<'id> for WithholdingView<'_, 'id> {
     type Fault = Infallible;
 
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        self.inner.tip()
+    }
+
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        if let WithheldRead::HeaderAt(at) = self.withheld {
+            if height == at {
+                return Ok(AtHeight::AboveTip);
+            }
+        }
+        self.inner.header_at(height)
+    }
+}
+
+impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         self.inner.has_key_image(key_image)
     }
@@ -166,10 +195,6 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
             }
         }
         self.inner.root_at(height)
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        self.inner.tip()
     }
 
     fn weights_window(
@@ -272,9 +297,19 @@ impl<'a, 'id> MockView<'a, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
+impl<'id> HeaderView<'id> for NonCanonicalBondView<'_, 'id> {
     type Fault = Infallible;
 
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        self.inner.tip()
+    }
+
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        self.inner.header_at(height)
+    }
+}
+
+impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         self.inner.has_key_image(key_image)
     }
@@ -293,10 +328,6 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
         self.inner.root_at(height)
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        self.inner.tip()
     }
 
     fn weights_window(

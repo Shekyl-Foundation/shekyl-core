@@ -43,8 +43,9 @@
 
 use shekyl_chain_rules::harness::{fixture, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
-    form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
-    RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate, Trust, TxSlot, Verdict,
+    form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt,
+    HeaderRecord, HeaderView, Locus, RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate,
+    Trust, TxSlot, Verdict,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
@@ -238,9 +239,11 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
         mock = mock
             .push_tree_weighing(
                 RecordedBlock {
-                    hash: cand.block.hash(),
-                    header: cand.block.header.clone(),
-                    cumulative_difficulty: work,
+                    header: HeaderRecord {
+                        hash: cand.block.hash(),
+                        header: cand.block.header.clone(),
+                        cumulative_difficulty: work,
+                    },
                     // What the store records for this chain: the verdict's
                     // accumulator (G12; slice 7 commit 5), and a tx count
                     // that stays zero because no fixture block lists a
@@ -448,7 +451,7 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
         let h = h as u64;
         let (work, coins_generated) =
             mock.with_view(|view| match view.block_at(BlockHeight::from_raw(h)) {
-                Ok(AtHeight::Recorded(r)) => (r.cumulative_difficulty, r.coins_generated),
+                Ok(AtHeight::Recorded(r)) => (r.header.cumulative_difficulty, r.coins_generated),
                 Ok(AtHeight::AboveTip) => unreachable!("built above"),
                 Err(never) => match never {},
             });
@@ -456,9 +459,11 @@ fn a_drifted_mock_is_caught_by_the_comparison() {
         let late_root = CurveTreeRoot::from_bytes([0xd0 + u8::try_from(h).expect("small"); 32]);
         drifted = drifted.push(
             RecordedBlock {
-                hash: b.block.hash(),
-                header: b.block.header.clone(),
-                cumulative_difficulty: work,
+                header: HeaderRecord {
+                    hash: b.block.hash(),
+                    header: b.block.header.clone(),
+                    cumulative_difficulty: work,
+                },
                 coins_generated,
                 cumulative_tx_count: 0,
                 cumulative_archival_len: ArchivalLength::ZERO,
@@ -499,52 +504,97 @@ fn a_stale_seed_is_stale_over_both_views() {
     cleanup(&path);
 }
 
-/// What the rules read off a recorded block, as one comparable value.
+/// What the header rules read off a recorded block through
+/// `HeaderView::header_at`, as one comparable value (DRS-E5 `E5-13`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BlockRead {
+struct HeaderRead {
     hash: BlockHash,
     timestamp: u64,
     work: u128,
 }
 
-impl BlockRead {
-    fn of(at: AtHeight<RecordedBlock>) -> Option<Self> {
+impl HeaderRead {
+    fn of(at: AtHeight<HeaderRecord>) -> Option<Self> {
         match at {
-            AtHeight::Recorded(b) => Some(Self {
-                hash: b.hash,
-                timestamp: b.header.timestamp,
-                work: b.cumulative_difficulty.to_raw(),
+            AtHeight::Recorded(h) => Some(Self {
+                hash: h.hash,
+                timestamp: h.header.timestamp,
+                work: h.cumulative_difficulty.to_raw(),
             }),
             AtHeight::AboveTip => None,
         }
     }
 }
 
+/// What the executed-chain rules read off a recorded block through
+/// `ChainView::block_at` beyond its header: the facts only a connected
+/// block has. Carries the header too, so the partition can be checked as
+/// a projection (`block_at(h).header == header_at(h)`) on each view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockRead {
+    header: HeaderRead,
+    coins_generated: u64,
+    cumulative_tx_count: u64,
+    cumulative_archival_len: u64,
+}
+
+impl BlockRead {
+    fn of(at: AtHeight<RecordedBlock>) -> Option<Self> {
+        match at {
+            AtHeight::Recorded(b) => Some(Self {
+                header: HeaderRead::of(AtHeight::Recorded(b.header))?,
+                coins_generated: b.coins_generated.to_raw(),
+                cumulative_tx_count: b.cumulative_tx_count,
+                cumulative_archival_len: b.cumulative_archival_len.to_raw(),
+            }),
+            AtHeight::AboveTip => None,
+        }
+    }
+}
+
+/// The two per-height reads (`E5-13`): the header read beside the block read.
+type HeightReads = Vec<(Option<HeaderRead>, Option<BlockRead>)>;
+
+/// Both reads at every probed height, off one view.
+fn reads<'id, V: ChainView<'id>>(view: &V) -> Result<HeightReads, V::Fault> {
+    let mut out = Vec::new();
+    for h in 0..7u64 {
+        let h = BlockHeight::from_raw(h);
+        out.push((
+            HeaderRead::of(view.header_at(h)?),
+            BlockRead::of(view.block_at(h)?),
+        ));
+    }
+    Ok(out)
+}
+
 #[test]
 fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
     // The reads the rules make, compared directly, so a disagreement above
-    // has a named cause below.
+    // has a named cause below. Two reads per height since `E5-13`: the
+    // header read the cheap-tier rules make, and the block read the
+    // executed-chain rules make. Each view must agree with the other on
+    // both, and with itself that the header read is the block read's
+    // projection — a view whose `header_at` answered from a different
+    // record than its `block_at` would pass the first check and fail the
+    // second.
     let (store, path, mock, blocks) = twin_chains(5);
-    let real: Result<Vec<Option<BlockRead>>, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let mut out = Vec::new();
-        for h in 0..7u64 {
-            out.push(BlockRead::of(view.block_at(BlockHeight::from_raw(h))?));
-        }
-        Ok(out)
-    });
+    let real: Result<HeightReads, TestErr> = store.write(|batch| Ok(reads(&batch.chain_view())?));
     let real = real.expect("reads");
-    let mocked: Vec<Option<BlockRead>> = mock.with_view(|view| {
-        (0..7u64)
-            .map(|h| match view.block_at(BlockHeight::from_raw(h)) {
-                Ok(at) => BlockRead::of(at),
-                Err(never) => match never {},
-            })
-            .collect()
+    let mocked = mock.with_view(|view| match reads(&view) {
+        Ok(reads) => reads,
+        Err(never) => match never {},
     });
     assert_eq!(real, mocked);
-    assert_eq!(real.iter().filter(|r| r.is_some()).count(), 5);
-    assert_eq!(real[0].map(|r| r.hash), Some(blocks[0].block.hash()));
+    for (header, block) in &real {
+        assert_eq!(
+            *header,
+            block.map(|b| b.header),
+            "header_at is block_at's projection"
+        );
+    }
+    assert_eq!(real.iter().filter(|(h, _)| h.is_some()).count(), 5);
+    assert_eq!(real[0].0.map(|r| r.hash), Some(blocks[0].block.hash()));
 
     // By hash (CEN-I10): every recorded identity answers its height on both
     // views, and a hash no chain holds answers `None` on both — the mock's

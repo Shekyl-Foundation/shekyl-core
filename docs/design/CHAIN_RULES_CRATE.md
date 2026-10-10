@@ -375,7 +375,7 @@ has no `expect`. `RuleSet` gained its first parameter, `enforced`, so
 `enforced()` reads data rather than returning `CenRow::ALL` regardless of
 `self`. Same public API.
 
-### 4.3 `ChainView<'id>`, `AtHeight<T>`, `RecordedBlock` (`view.rs`)
+### 4.3 `HeaderView<'id>`, `ChainView<'id>`, `AtHeight<T>`, `HeaderRecord`, `RecordedBlock` (`view.rs`)
 
 ```rust
 /// A by-height lookup against the recorded chain. Matched exhaustively;
@@ -403,13 +403,24 @@ pub enum AtHeight<T> {
 /// sums make the volume window (slice 4). Fields grow with rows, never
 /// ahead of them. The block's *weights* are not here: G6 reads them in bulk
 /// through `weights_window`, below.
+///
+/// DRS-E5 a2 (2026-10-10, `E5-13`): the header facts are their own record,
+/// embedded — `block.header.hash`, never a `Deref` — so a `HeaderView`
+/// answers them without the block's accumulators. *Records-was:* `hash`,
+/// `header` and `cumulative_difficulty` were flat fields of `RecordedBlock`
+/// from slice 1 until a2.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock {
+pub struct HeaderRecord {
     pub hash: BlockHash,
     pub header: shekyl_wire::BlockHeader,
     pub cumulative_difficulty: CumulativeDifficulty,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedBlock {
+    pub header: HeaderRecord,
     pub coins_generated: AtomicUnits,
     pub cumulative_tx_count: u64,
+    pub cumulative_archival_len: ArchivalLength,   // DRS-E4
 }
 
 /// The two weights the store records for one block — what CEN-G6's two
@@ -419,21 +430,38 @@ pub struct RecordedBlock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedWeights { pub weight: BlockWeight, pub long_term_weight: LongTermWeight }
 
-/// The narrow, read-only view a rule consumes. Implemented by the store over
-/// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
-/// tests. `'id` is the transaction brand: a `ChainValid<'id, V>` is minted
-/// only against the `V: ChainView<'id>` it names, of the same `'id`.
-pub trait ChainView<'id> {
+/// The header facts alone — what the cheap tier of alt-block admission can
+/// answer stateless from a window of headers (DRS-E5 `E5-14`, a2). Two
+/// methods, measured, not four: `height_of` and `depth_at` are header facts
+/// by classification with no cheap-tier caller, so they stay on `ChainView`
+/// (rule 21). A rule that reads only these is a `HeaderRule` (§4.6).
+pub trait HeaderView<'id> {
     /// What the view's **substrate** can fail with: the store's engine error
     /// for the projection, `Infallible` for the mock. Opaque to every rule —
     /// no bound, so nothing in this crate can inspect, match, or convert it
     /// (G2 by genericity). A fault is not a verdict: `validate` returns it
     /// *outside* the `Result<ChainValid, InvalidBlock>` and the caller halts.
+    /// Declared once, here; `ChainView` inherits it (`V::Fault` resolves).
     type Fault;
+    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
+    /// B1 does not read the tip: the rule set is an input. `None` is the empty
+    /// chain — slice 1, Q1. (On `ChainView` until a2.)
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+    /// `block_at`'s header projection — the same read, the accumulators
+    /// dropped. CEN-A2, CEN-A4, CEN-C2, CEN-C3, CEN-D3, CEN-D4, CEN-E1.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault>;
+}
 
+/// The narrow, read-only view a rule consumes. Implemented by the store over
+/// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
+/// tests. `'id` is the transaction brand: a `ChainValid<'id, V>` is minted
+/// only against the `V: ChainView<'id>` it names, of the same `'id`.
+pub trait ChainView<'id>: HeaderView<'id> {
     /// CEN-I7 (chain-wide key-image uniqueness); CEN-L1's chain half.
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault>;
-    /// CEN-A2, CEN-A4, CEN-C2, CEN-C3.
+    /// The header record and the executed accumulators together — CEN-F13,
+    /// CEN-F20, CEN-F17's `n`. A reader that needs only the former asks
+    /// `HeaderView::header_at`.
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
@@ -444,10 +472,7 @@ pub trait ChainView<'id> {
     /// commit 5 (2026-09-25); the store shares one body between
     /// `ReadSnapshot` and `BatchView`.
     fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault>;
-    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
-    /// B1 does not read the tip: the rule set is an input. `None` is the empty
-    /// chain — slice 1, Q1.
-    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+    // `tip` is on `HeaderView` since DRS-E5 a2 (2026-10-10); it was here from slice 1.
     // DRS-E3 (2026-09-26): the three reads the growth derivation consumes —
     // not a rule's, `validate`'s (`drain.rs`), which runs after the last rule
     // and derives `ValidatedBlock::{root_after, drain}` (CTW-Q1: the root
@@ -509,6 +534,21 @@ each with its row named above. No
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in
 `validate`'s signature, and `V` names the implementor itself.
+
+**The header split (DRS-E5 a2, 2026-10-10; `DRS_E5_POOL_ALT_PRUNE.md`
+`E5-13`/`E5-14`).** `HeaderView<'id>` is the supertrait: `tip` and
+`header_at`, the latter `block_at`'s projection (the store's `BatchView`
+answers both from one `block_body` read, and its conformance suite asserts
+`header_at == block_at.map(|b| b.header)` at every height). The split was
+measured, not designed: of the ten rule files, five read only header facts
+(D1, C1, C2, E1 as `HeaderRule`s; the D3/D4/C3/E5 helpers and B4's
+`anchor_window` bound on `HeaderView`), and the two header-classified
+reads with no cheap-tier caller stayed on `ChainView`. A generic
+`V: ChainView<'id>` calls `tip`/`header_at` without naming the supertrait;
+a concrete call site (`BatchView` in the ingest connector and the store's
+tests) imports `HeaderView`. A hole below the tip on a header read is
+`Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`, through
+`recorded_header` (`rules/mod.rs`) as `recorded` does for the block.
 
 **Why a fault channel (Q12-1).** The store's projection reads a redb
 transaction; reads can fail. An infallible trait would leave the projection
@@ -740,7 +780,7 @@ impl ReleaseAnchors {
     pub const fn current(&self) -> Option<Anchor>;                           // `C`
     pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
     /// CEN-E5, run once by the writer at open; the remedy is the writer's.
-    pub fn conflict_with<'id, V: ChainView<'id>>(&self, view: &V) -> Result<Option<AnchorConflict>, V::Fault>;
+    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<AnchorConflict>, H::Fault>;   // `HeaderView` since DRS-E5 a2
 }
 pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
 impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }

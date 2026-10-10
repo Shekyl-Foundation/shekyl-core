@@ -11,7 +11,7 @@
 //! - **CEN-E5** — the binary's anchors agree with the file it opens. Not a
 //!   per-block predicate: it is run **once, at open**, over the recorded
 //!   chain ([`E5::conflict_over`]; [`E5::conflict_with`] is that walk over a
-//!   [`ChainView`]), and its finding is an [`AnchorConflict`] the writer
+//!   [`HeaderView`]), and its finding is an [`AnchorConflict`] the writer
 //!   remedies (pop to a chain count, or refuse to run) rather than a
 //!   consensus verdict. The check, the conflict, and the remedy live in
 //!   this module; the table ([`ReleaseAnchors`](crate::ReleaseAnchors))
@@ -20,8 +20,9 @@
 //!   Q4), excluded from per-block completeness because no per-block
 //!   coverage could ever contain it.
 //! - **CEN-E1** — a block connecting at an anchored height carries that
-//!   anchor's hash. Per block, view-bound ([`E1`]); reads the anchors from
-//!   the `Trust` input that carries them into `validate`.
+//!   anchor's hash. Per block, view-bound ([`E1`], a header rule: the
+//!   anchors are header facts and the view is not read); reads the anchors
+//!   from the `Trust` input that carries them into `validate`.
 //! - **CEN-E2** — an alternative block at or below the last anchor is
 //!   refused; `D_max`'s second band lands in the same function (`PDM-Q11`).
 //!   **No Rust site**: the store admits no alternative block, and on the
@@ -35,9 +36,9 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
 use crate::fault::ViewRead;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::rules::{BlockContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, Tip};
+use crate::view::{AtHeight, HeaderView, Tip};
 
 /// CEN-E1: a block connecting at an anchored height carries that anchor's
 /// hash — the anchor's own rule (`PDM-Q11`), the `assumevalid` argument
@@ -62,11 +63,11 @@ impl Rule for E1 {
     const ROW: CenRow = CenRow::E1;
 }
 
-impl BlockRule for E1 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for E1 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         match cx.trust.anchors().expected_at(cx.connecting) {
             Some(expected) if expected != cx.formed.hash() => refused(Self::ROW, Locus::Block),
             Some(_) | None => Ok(Ok(())),
@@ -135,14 +136,15 @@ impl E5 {
     }
 
     /// [`conflict_over`](Self::conflict_over) over `view`: the tip, then
-    /// each pinned block's identity.
-    pub(crate) fn conflict_with<'id, V: ChainView<'id>>(
+    /// each pinned block's identity — header facts, so a header view
+    /// suffices (an alt chain's anchors are checked the same way).
+    pub(crate) fn conflict_with<'id, H: HeaderView<'id>>(
         anchors: &ReleaseAnchors,
-        view: &V,
-    ) -> Result<Option<AnchorConflict>, V::Fault> {
+        view: &H,
+    ) -> Result<Option<AnchorConflict>, H::Fault> {
         Self::conflict_over(anchors, view.tip()?, |height| {
-            Ok(match view.block_at(height)? {
-                AtHeight::Recorded(block) => Some(block.hash),
+            Ok(match view.header_at(height)? {
+                AtHeight::Recorded(record) => Some(record.hash),
                 AtHeight::AboveTip => None,
             })
         })
@@ -212,10 +214,10 @@ impl ReleaseAnchors {
     /// before connecting anything.
     ///
     /// [`conflict_with`](Self::conflict_with) is this walk over a
-    /// [`ChainView`](crate::ChainView). A reader that is not a view — the
-    /// store's snapshot, whose `ChainView` impl is deferred — calls this
-    /// with the tip and the identity it recorded, so the two cannot grow
-    /// different policies.
+    /// [`HeaderView`](crate::HeaderView). A reader that is not a view — the
+    /// store's snapshot, whose view impl is deferred — calls this with the
+    /// tip and the identity it recorded, so the two cannot grow different
+    /// policies.
     ///
     /// # Errors
     ///
@@ -229,19 +231,20 @@ impl ReleaseAnchors {
         E5::conflict_over(self, tip, recorded_at)
     }
 
-    /// **CEN-E5** over a [`ChainView`](crate::ChainView).
+    /// **CEN-E5** over a [`HeaderView`](crate::HeaderView).
     ///
     /// [`conflict_over`](Self::conflict_over) is the walk. This is that walk
-    /// with the view's tip and `block_at`.
+    /// with the view's tip and `header_at` — header facts, which every
+    /// [`ChainView`](crate::ChainView) answers and an alt view answers too.
     ///
     /// # Errors
     ///
     /// The view's own fault, when it could not answer. A fault is not a
     /// conflict.
-    pub fn conflict_with<'id, V: ChainView<'id>>(
+    pub fn conflict_with<'id, H: HeaderView<'id>>(
         &self,
-        view: &V,
-    ) -> Result<Option<AnchorConflict>, V::Fault> {
+        view: &H,
+    ) -> Result<Option<AnchorConflict>, H::Fault> {
         E5::conflict_with(self, view)
     }
 }

@@ -23,8 +23,8 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     effective_median_at, quote_emission, tree_after, AtHeight, BlockOutputs, Candidate, ChainView,
-    LeafSource, RecordedBlock, RecordedWeights, RuleSet, SettlementSchedule, Tip, TreeFrontier,
-    ViewRead,
+    HeaderRecord, HeaderView, LeafSource, RecordedBlock, RecordedWeights, RuleSet,
+    SettlementSchedule, Tip, TreeFrontier, ViewRead,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_difficulty::CumulativeDifficulty;
@@ -256,10 +256,14 @@ impl GrownTree {
             .try_fold(archival_before, ArchivalLength::checked_add)
             .expect("a fixture chain's archival fold fits u64");
         self.blocks.push(RecordedBlock {
-            hash: block.hash(),
-            header: block.header.clone(),
-            // Regtest at difficulty one: the work through `h` is `h + 1`.
-            cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height.to_raw()) + 1),
+            header: HeaderRecord {
+                hash: block.hash(),
+                header: block.header.clone(),
+                // Regtest at difficulty one: the work through `h` is `h + 1`.
+                cumulative_difficulty: CumulativeDifficulty::from_raw(
+                    u128::from(height.to_raw()) + 1,
+                ),
+            },
             coins_generated,
             cumulative_tx_count: listed_before
                 + u64::try_from(txs.len()).expect("a fixture body count fits"),
@@ -324,11 +328,34 @@ impl GrownTree {
     }
 }
 
+impl<'id> HeaderView<'id> for GrownTree {
+    type Fault = Infallible;
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        let Some(block) = self.blocks.last() else {
+            return Ok(None);
+        };
+        let height = BlockHeight::from_raw(
+            u64::try_from(self.blocks.len() - 1).expect("a fixture chain fits u64"),
+        );
+        Ok(Some(Tip {
+            height,
+            hash: block.header.hash,
+        }))
+    }
+
+    /// The header half of the record `block_at` answers, the same vector.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        Ok(match Self::recorded(&self.blocks, height) {
+            AtHeight::Recorded(block) => AtHeight::Recorded(block.header),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+}
+
 /// The tree `tree_after` grows, and the block records, weight window and
 /// burned fold the reward chain reads when a block is pushed.
 impl<'id> ChainView<'id> for GrownTree {
-    type Fault = Infallible;
-
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }
@@ -370,19 +397,6 @@ impl<'id> ChainView<'id> for GrownTree {
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
         Ok(Self::recorded(&self.roots, height))
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        let Some(block) = self.blocks.last() else {
-            return Ok(None);
-        };
-        let height = BlockHeight::from_raw(
-            u64::try_from(self.blocks.len() - 1).expect("a fixture chain fits u64"),
-        );
-        Ok(Some(Tip {
-            height,
-            hash: block.hash,
-        }))
     }
 
     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
