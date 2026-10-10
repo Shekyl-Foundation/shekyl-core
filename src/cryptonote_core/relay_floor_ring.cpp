@@ -115,13 +115,7 @@ uint64_t Blockchain::fee_correction_at(uint64_t db_height, uint64_t already_gene
 uint64_t Blockchain::fee_correction_from(uint64_t height, uint64_t already_generated_coins,
     const shekyl::tx_volume_window& tx_volume) const
 {
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  const uint64_t sigma = shekyl_calc_emission_share(
-      height,
-      genesis_ng_height,
-      SHEKYL_STAKER_EMISSION_SHARE,
-      SHEKYL_STAKER_EMISSION_DECAY,
-      SHEKYL_BLOCKS_PER_YEAR);
+  const uint64_t sigma = shekyl_emission_share_at(height);
   const uint64_t burn_pct = shekyl_calc_burn_pct(
       tx_volume.tx_count_sum,
       tx_volume.blocks,
@@ -140,8 +134,7 @@ bool Blockchain::relay_floor_at(uint64_t height, uint64_t long_term_median,
   // M_r-neutral reward: M_r lives inside C. Weight-1 makes the penalty inert,
   // so R depends on already_generated_coins alone.
   uint64_t base_reward = 0;
-  if (!get_block_reward(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, 1, already_generated_coins, base_reward,
-      get_current_hard_fork_version()))
+  if (!get_block_reward(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, 1, already_generated_coins, base_reward))
     return false;
 
   const uint64_t c = fee_correction_from(height, already_generated_coins, tx_volume);

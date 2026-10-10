@@ -1476,8 +1476,6 @@ BlockchainLMDB::BlockchainLMDB(bool batch_transactions): BlockchainDB()
   m_cum_count = 0;
 
   // reset may also need changing when initialize things here
-
-  m_hardfork = nullptr;
 }
 
 #ifdef WIN32
@@ -1677,6 +1675,14 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   if (!(mdb_flags & MDB_RDONLY))
     lmdb_db_open(txn, LMDB_HF_STARTING_HEIGHTS, MDB_CREATE, m_hf_starting_heights, "Failed to open db handle for m_hf_starting_heights");
 
+  // The hard-fork mechanism that used these two tables is deleted. Nothing
+  // reads either. `hf_versions` is never written; `hf_starting_heights` is
+  // still dropped at every writable open, below, which is the runtime fact
+  // the store audit records as DRS-W5. The two declarations stay because
+  // the redb store's schema and digest domain are defined against this
+  // table list (scripts/ci/check_redb_schema_bijection.py), and its
+  // `hf_versions` (the rule set in force per height) is in that domain.
+  // They leave with the list (docs/FOLLOWUPS.md).
   lmdb_db_open(txn, LMDB_HF_VERSIONS, MDB_INTEGERKEY | MDB_CREATE, m_hf_versions, "Failed to open db handle for m_hf_versions");
 
   lmdb_db_open(txn, LMDB_PROPERTIES, MDB_CREATE, m_properties, "Failed to open db handle for m_properties");
@@ -4120,65 +4126,6 @@ void BlockchainLMDB::get_output_tx_and_index(const uint64_t& amount, const std::
   }
   TIME_MEASURE_FINISH(db3);
   LOG_PRINT_L3("db3: " << db3);
-}
-
-void BlockchainLMDB::check_hard_fork_info()
-{
-}
-
-void BlockchainLMDB::drop_hard_fork_info()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX(0);
-
-  auto result = mdb_drop(*txn_ptr, m_hf_starting_heights, 1);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error dropping hard fork starting heights db: ", result).c_str()));
-  result = mdb_drop(*txn_ptr, m_hf_versions, 1);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error dropping hard fork versions db: ", result).c_str()));
-
-  TXN_POSTFIX_SUCCESS();
-}
-
-void BlockchainLMDB::set_hard_fork_version(uint64_t height, uint8_t version)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_BLOCK_PREFIX(0);
-
-  MDB_val_copy<uint64_t> val_key(height);
-  MDB_val_copy<uint8_t> val_value(version);
-  int result;
-  result = mdb_put(*txn_ptr, m_hf_versions, &val_key, &val_value, MDB_APPEND);
-  if (result == MDB_KEYEXIST)
-    result = mdb_put(*txn_ptr, m_hf_versions, &val_key, &val_value, 0);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error adding hard fork version to db transaction: ", result).c_str()));
-
-  TXN_BLOCK_POSTFIX_SUCCESS();
-}
-
-uint8_t BlockchainLMDB::get_hard_fork_version(uint64_t height) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(hf_versions);
-
-  MDB_val_copy<uint64_t> val_key(height);
-  MDB_val val_ret;
-  auto result = mdb_cursor_get(m_cur_hf_versions, &val_key, &val_ret, MDB_SET);
-  if (result == MDB_NOTFOUND || result)
-    throw0(DB_ERROR(lmdb_error("Error attempting to retrieve a hard fork version at height " + boost::lexical_cast<std::string>(height) + " from the db: ", result).c_str()));
-
-  uint8_t ret = *(const uint8_t*)val_ret.mv_data;
-  TXN_POSTFIX_RDONLY();
-  return ret;
 }
 
 void BlockchainLMDB::add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob)

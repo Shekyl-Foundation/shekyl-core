@@ -286,9 +286,7 @@ namespace cryptonote
     }
 
     // Component 4: effective staker emission share at current height
-    const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-    res.staker_emission_share_effective = shekyl_calc_emission_share(
-        res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
+    res.staker_emission_share_effective = shekyl_emission_share_at(res.height);
 
     double emission_pct = (double)res.already_generated_coins / (double)SHEKYL_EMISSION_CURVE_ASYMPTOTE;
     if (emission_pct < 0.30)

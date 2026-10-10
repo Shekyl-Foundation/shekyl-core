@@ -485,7 +485,6 @@ mod tests {
             release: false,
             current_height: 1,
             target_height: 0,
-            hard_forks: vec![],
             consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
             nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
             genesis_hash: shekyl_rpc_types::HashHex::from_bytes(

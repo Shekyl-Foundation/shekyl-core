@@ -334,7 +334,6 @@ census_rows! {
         B4 implemented(crate::rules::attestation::B4),
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
-        B7 implemented(crate::rules::header::B7),
         // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition
         // recorded at `C3::window`.
         C1 implemented(crate::rules::timestamps::C1),
@@ -395,7 +394,7 @@ census_rows! {
         F18 implemented(crate::rules::reward::F18),
         F19 by_construction(crate::view::ChainView, "doctest:validate"),
         F20 implemented(crate::rules::miner::F20),
-        F21 by_construction(crate::rules::miner::EMISSION_SPLIT_EPOCH, "the_emission_split_epoch_is_the_hardfork_tables_first_row"),
+        F21 by_construction(shekyl_economics::EMISSION_SPLIT_EPOCH, "the_staker_share_starts_at_block_one"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
         G1 implemented(crate::rules::body::G1),
         G2 implemented(crate::rules::body::G2),

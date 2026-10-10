@@ -260,26 +260,36 @@ pub fn inside_one_epoch(from: BlockHeight, following: u64) -> BlockHeight {
     BlockHeight::from_raw(height)
 }
 
+/// The first settlement epoch whose emission gather prices `close`'s
+/// shard under `rules`: the first `w` whose slash pass — the block at
+/// `slash_deadline_height(w)` — finds the shard closed **and final**
+/// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D11f`). The pass's universe is the
+/// shards final as of its parent, so it needs
+/// `close_height + reorg_cap + 1 ≤ slash_deadline_height(w)`.
+pub fn first_pricing_epoch(rules: &ChainRules, close: ClosedShard) -> u64 {
+    let in_force = rules.in_force(close.close_height);
+    let schedule = in_force.settlement_schedule();
+    let final_for_a_pass_at = close.close_height.to_raw() + in_force.reorg_cap().to_raw() + 1;
+    (0u64..)
+        .find(|&w| schedule.slash_deadline_height(w) >= final_for_a_pass_at)
+        .expect("a test chain's epochs are small")
+}
+
 /// The first height a compact JoinMarket onto `shard` connects at under
 /// `rules` — CEN-J15's two post-close operands, read at the parent `P`:
 ///
 /// - **final:** `close_height + reorg_cap ≤ P`;
-/// - **priced:** `r_market(shard, E_s)` exists for `E_s`, the last settled
-///   epoch as of `P` (`epoch_at(P) − 1`). The close of epoch `E` runs in
-///   the block at `last_block(E)` and prices every shard closed at *its*
-///   parent, so the first epoch to price a shard closed at `h` is
-///   `E₀ = epoch_at(h + 1)`, and `E_s ≥ E₀` needs `P ≥ (E₀ + 1) · SEB`.
+/// - **priced:** `r_market(shard, w)` exists for `w`, the slash watermark
+///   as of `P` (`SO-D11c`). The rows of epoch `w` are written by its slash
+///   pass, over the shards final at that pass, so the first watermark that
+///   prices the shard is [`first_pricing_epoch`] and `P` is at least that
+///   pass's block. Every later pass prices it too.
 ///
-/// The join lands at `max` of the two parents, plus one. One block earlier
-/// the post is refused on J15, whichever operand lifts last.
+/// The priced operand lifts last — a pass that sees the shard final is a
+/// parent at which it is final — so the join lands on the block after
+/// that pass. One block earlier the post is refused on J15.
 pub fn first_admissible_compact_join(rules: &ChainRules, close: ClosedShard) -> BlockHeight {
-    let in_force = rules.in_force(close.close_height);
-    let schedule = in_force.settlement_schedule();
-    let h = close.close_height.to_raw();
-    let final_parent = h + in_force.reorg_cap().to_raw();
-    let priced_epoch = schedule.epoch_at_height(h + 1);
-    let priced_parent = schedule
-        .close_height(priced_epoch)
-        .expect("a test chain's epochs are small");
-    BlockHeight::from_raw(final_parent.max(priced_parent) + 1)
+    let schedule = rules.in_force(close.close_height).settlement_schedule();
+    let pass = schedule.slash_deadline_height(first_pricing_epoch(rules, close));
+    BlockHeight::from_raw(pass + 1)
 }

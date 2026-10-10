@@ -220,12 +220,6 @@ t_command_server::t_command_server(
     , "Set the <max_number> of in peers."
     );
     m_command_lookup.set_handler(
-      "hard_fork_info"
-    , std::bind(&t_command_parser_executor::hard_fork_info, &m_parser, p::_1)
-    , "hard_fork_info <version>"
-    , "Print the hard fork voting information. If given a version, prints whether is this version enabled."
-    );
-    m_command_lookup.set_handler(
       "bans"
     , std::bind(&t_command_parser_executor::show_bans, &m_parser, p::_1)
     , "Show the currently banned IPs."

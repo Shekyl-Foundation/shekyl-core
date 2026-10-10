@@ -635,8 +635,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   TIME_MEASURE_FINISH(time1);
   time_add_block1 += time1;
 
-  m_hardfork->add(blk, prev_height);
-
   // Redirected staker-inflow accrual row (ARCHIVAL_BUDGET_SCHEDULE.md §3.1),
   // keyed at the connecting block's index (prev_height). Written BEFORE the
   // epoch-close hook below: the close of epoch E fires while connecting E's
@@ -654,11 +652,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   ++num_calls;
 
   return prev_height;
-}
-
-void BlockchainDB::set_hard_fork(HardFork* hf)
-{
-  m_hardfork = hf;
 }
 
 bool BlockchainDB::pop_target_allowed(uint64_t target_tip_height) const

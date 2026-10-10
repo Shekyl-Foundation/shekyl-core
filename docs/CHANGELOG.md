@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - **Relay: a node's own transactions ride the hidden stem slot** (`DAEMON_RELAY_PRIVACY.md` §95.3, §98; #1018). When a configured connector hides this node's address, one of the two Dandelion++ stem slots is reserved for the outbound sessions that do, and a transaction this node originates leaves on that slot's peer, pinned for the epoch with one alternate drawn from the same sessions; when both are gone the node holds its own transactions until the next epoch rather than send on a connection that reveals its address. The separate per-epoch draw this replaces sent originated traffic on a link that carried no relayed traffic. Relayed traffic is unchanged. A stem width below two with such a connector is refused at construction.
+- **Archival accrual reads the settlement row (Rust validator; `SO-D11`).** A pair earns for an epoch only if its settlement row is Served: two passes among the three counted draws. A pair issued fewer than three draws earns nothing for that epoch. The epoch close freezes the budget and nothing else; the epoch's slash pass, one epoch later, computes each shard's co-holder count and the epoch's work total, over shards that are closed and final. Three consequences for the Rust validator: an epoch becomes claimable one epoch later than before, on the block after its slash pass, and the claimable span is 25 epochs where it was 26; a compact bond join is priced at the last epoch whose slash pass has run; and until the secret draw is live no pair is Served, so nothing is credited. The C++ daemon is unchanged and stays consensus; the wallet and the claim-source RPC read it and do not change. The Rust validator does not become consensus before the draw is live.
 
 ### Shard view — a picture of a shard is drawn from a real fetch
 
@@ -69,6 +70,62 @@
   - The gitian workflow takes a `package_dry_run` input that runs the package job on a dispatch without publishing.
 - **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
 
+### The hard-fork mechanism is deleted
+
+Ruled 2026-10-06 (Rick): "delete the fork table - when we need one, we will
+write a fresh one, not try to recycle Monero's." Block version is 1. A future
+consensus change is a design document first, and this change deliberately
+leaves no activation machinery behind.
+
+- **No behaviour changes for a valid chain.** A block's version must be
+  `1.0`, as before (CEN-B1, CEN-B2); the rule is now one comparison against
+  the two constants, with no height schedule behind it. The captured replay
+  chains are unchanged.
+- **The staker emission share starts at block 1** (ruled 2026-10-08): the
+  genesis block pays no staker share, and the share's decay is measured from
+  block 1. The epoch is one constant, `shekyl_economics::EMISSION_SPLIT_EPOCH`.
+  `emission_share` closes over it: zero below the epoch, then the decay.
+  `emission_share_at` is that function on the shipped constants. The old
+  function took a caller-supplied genesis height and returned the initial
+  share there, so a fold that passed epoch 1 and height 0 disagreed with
+  the daemon. The daemon path is unchanged.
+- **Removed from the daemon:** the `HardFork` class and its table; the
+  block-version parameter threaded through the pool, transaction checks,
+  reward and coinbase builder; the start-up loop that popped blocks made
+  under an older fork; the "you may be running an old daemon" warning on a
+  higher block version (CEN-B7, such a block is refused); the
+  `HF_VERSION_*` constants.
+- **Wire, `CORE_RPC_VERSION` 3.44:** the `hard_fork_info` method is deleted
+  and `get_version` no longer carries `hard_forks`. No wallet read either.
+  3.43 was already the native `request_archival_shard` on `dev`, so the
+  deletion took the next minor.
+- **Wire, p2p:** the handshake no longer carries `top_version`. A peer that
+  still sends it is read with the key ignored.
+- **Daemon console:** the `hard_fork_info` command is removed; `status` no
+  longer prints a fork version or a countdown; `print_blockchain_dynamic_stats`
+  no longer prints `Block versions` and `Voting for`.
+- **`shekyl-blockchain-import`:** `--drop-hard-fork` is removed.
+- **Template fill:** the inherited C++ copy of the reward-aware fill, which
+  sat behind a block version this chain never had, is deleted. The fill that
+  ships is `decide_listed_body`: list in fee order, one body may cross the
+  median, and that body may not cross 13/10 of the median less the coinbase
+  reserve. `get_block_template.expected_reward` is the coinbase that template
+  carries. The reward-aware fill (`shekyl_block_template::Fill`) is still the
+  design and still arrives with the fill's move to Rust (`FOLLOWUPS.md`).
+- **Version gate:** a hard-fork table call is refused under every landing.
+  Labelling one `tx-version` does not admit it.
+- **Python RPC client:** `hard_fork_info` is deleted with the method.
+- **`get_block_template.expected_reward` is the coinbase the template
+  carries.** It reported the pre-split emission for an empty template and
+  `0` for any template that listed a transaction, because the inherited
+  fill only priced the coinbase in an arm that never ran. It is now the sum
+  of the template's coinbase outputs: the miner's emission leg plus its fee
+  income. The fill itself is unchanged.
+- **Not removed:** LMDB still declares `hf_versions` and
+  `hf_starting_heights`, unused, until the redb cutover (`FOLLOWUPS.md`).
+  The redb store's `hf_versions` is the rule set in force per height and is
+  not this mechanism.
+
 ### Consensus — the header's minor version is reserved at 0
 
 - A block's `minor_version` must be `0` (CEN-B2). The byte was Monero's
@@ -78,19 +135,20 @@
   takes it from its caller. Ruled 2026-10-06 with the deletion of the
   hard-fork mechanism, superseding the 2026-09-23 ruling that kept the vote
   window (`CONSENSUS_RULE_CENSUS.md` §10 R4).
-- `HardFork::check`, `check_for_height` and `add` share one predicate: the
+- `HardFork::check`, `check_for_height` and `add` shared one predicate: the
   major version is the one the height schedule names, and the minor version
   is the reserved constant. The vote window, the threshold and the decoder
-  that read a minor of 0 as a vote for 1 are deleted. The class, its tables
-  and its RPC surface are deleted in the PR that follows.
-- Wire: `hard_fork_info` still answers, and reports `window`, `votes` and
-  `threshold` as `0`. The one reader is the daemon console's
-  `hard_fork_info` command, which prints them as `0/0 votes, threshold 0`.
-  No wallet crate and neither wallet repository calls the method.
-- Mainnet, testnet and stagenet install one table, `hard_fork_schedule`
-  (version 1 at height 1). The three per-network copies were identical and
-  are deleted; regtest and the trace exporter read the same row. Rule 71's
-  allowlist for the table selection is retired with it.
+  that read a minor of 0 as a vote for 1 were deleted here. The class, its
+  tables and its RPC surface are deleted with the mechanism above.
+- Wire, until that deletion: `hard_fork_info` answered and reported
+  `window`, `votes` and `threshold` as `0`. The one reader was the daemon
+  console's `hard_fork_info` command. No wallet crate and neither wallet
+  repository called the method.
+- Mainnet, testnet and stagenet then installed one table,
+  `hard_fork_schedule` (version 1 at height 1). The three per-network copies
+  were identical and were deleted; regtest and the trace exporter read the
+  same row. Rule 71's allowlist for the table selection was retired with it.
+  The table itself is deleted with the mechanism above.
 - Blocks mined by earlier builds carried `1` and are invalid under this rule:
   the six captured replay chains are re-captured. Genesis carries `0` and is
   unchanged. Atomic under `07-consensus-atomic-cutovers`: both validators,
@@ -100,7 +158,7 @@
 - Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
 - Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) records a round ruled 2026-10-06 and not yet implemented: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every file in tor's directory and the directory holds nothing else, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
 - **Benchmarks: the archival serve path is gated per PR.** `BA-T3` adds four `crypto_bench_serve_*` instruction-count functions to `shekyl-p-serve` (a whole response at three shard sizes, the work before the first byte at two, and the chunked read-and-fold beside the one-shot digest), on the single-pass serve. First readings: a full segment is 191 M instructions; work before the head is 13.5 K and does not grow with the shard; chunking adds 2.2 % to the digest. The measurement ledger gains an `estimated` status with a typed band and `[[retired_estimate]]`, which keeps a prediction beside the measurement that settled it with a verdict the check computes; the first entry is the 40–60 ms single-pass prediction against the floor's 67.2 ms, falsified. `BENCHMARK_ALIGNMENT.md` records `BA-Q3` as ruled.
-- **C++ version gates swept.** Every version comparison in `src/` is classified in `docs/ci/cxx-version-gates.tsv` and held there by a CI gate (`CXX_VERSION_GATES.md`). Deleted with it: the unreachable `get_output_distribution` surface (`RpcHandler`, its message struct, the function through core, blockchain and LMDB) behind `major_version >= 4`, the peer top-version check behind `version >= 6`, and two always-true `HF_VERSION_FCMP_PLUS_PLUS_PQC` gates. `HF_VERSION_DYNAMIC_FEE` and `HF_VERSION_FCMP_PLUS_PLUS_PQC` are gone. Widened 2026-10-06: the gate reads a comparison on any version name, including a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion` and the bootstrap file version, and it scans `.cc`. 99 sites in 89 rows, counted on code alone: a comparison quoted in a string literal is not a row. Disposition and landing are closed tokens. The hard-fork mechanism is ruled deleted (Rick, 2026-10-06): its rows are `delete`, and it goes in its own PR. No behaviour changes.
+- **C++ version gates swept.** Every version comparison in `src/` is classified in `docs/ci/cxx-version-gates.tsv` and held there by a CI gate (`CXX_VERSION_GATES.md`). Deleted with it: the unreachable `get_output_distribution` surface (`RpcHandler`, its message struct, the function through core, blockchain and LMDB) behind `major_version >= 4`, the peer top-version check behind `version >= 6`, and two always-true `HF_VERSION_FCMP_PLUS_PLUS_PQC` gates. `HF_VERSION_DYNAMIC_FEE` and `HF_VERSION_FCMP_PLUS_PLUS_PQC` are gone. Widened 2026-10-06: the gate reads a comparison on any version name, including a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion` and the bootstrap file version, and it scans `.cc`. 99 sites in 89 rows, counted on code alone: a comparison quoted in a string literal is not a row. Disposition and landing are closed tokens. The hard-fork mechanism is ruled deleted (Rick, 2026-10-06): its rows are `delete`, and that deletion is the section above. No behaviour changes.
 
 ### Archival serving — one store read, and five answers that each mean one thing
 

@@ -16,9 +16,8 @@
 //!
 //! Height [`GENESIS_HEIGHT`] on [`price_emission`] is the **producer's**
 //! arm (CEN-G13): [`paid_block_reward`] runs, and the whole paid reward
-//! goes to the miner. [`compute_emission_split`] at height 0 would apply
-//! the initial staker share, which neither the producer nor the validator
-//! accrues there.
+//! goes to the miner. That is [`compute_emission_split`]'s own answer
+//! below `EMISSION_SPLIT_EPOCH`, so this module adds no arm of its own.
 //!
 //! The **validator** at genesis does not call [`price_emission`]. The
 //! coinbase sum stands (CEN-F11, `validate_miner_transaction` returns
@@ -72,8 +71,6 @@ pub struct EmissionInputs<'a> {
     pub supply: CirculatingSupply,
     /// Closed transaction-shard count the burn share escalates on (CEN-F17).
     pub closed_shards: ClosedShardCount,
-    /// Height the staker share's decay is measured from (CEN-F21).
-    pub split_epoch: u64,
     /// The parameter set. A reference: the set is resolved once by the caller.
     pub params: &'a EconomicParams,
 }
@@ -151,8 +148,8 @@ impl RewardArithmetic {
 
 /// Price the block's emission from derived operands.
 ///
-/// At [`GENESIS_HEIGHT`] the paid reward goes whole to the miner. Above it
-/// the reward is split from `split_epoch`. The fee burn runs at every
+/// At [`GENESIS_HEIGHT`] the paid reward goes whole to the miner; from
+/// block 1 it is split ([`compute_emission_split`]). The fee burn runs at every
 /// height, including genesis: a producer listing nothing passes a zero fee
 /// sum and the three burn legs are zero.
 ///
@@ -172,14 +169,7 @@ pub fn price_emission(inputs: &EmissionInputs<'_>) -> Result<PaidEmission, Rewar
         EmissionError::BlockTooBig => RewardArithmetic::BlockTooBig,
         EmissionError::Overflow => RewardArithmetic::RewardOverflow,
     })?;
-    let split = if inputs.height == GENESIS_HEIGHT {
-        EmissionSplit {
-            miner_emission: paid,
-            staker_emission: 0,
-        }
-    } else {
-        compute_emission_split(paid, inputs.height, inputs.split_epoch)
-    };
+    let split = compute_emission_split(paid, inputs.height);
     let fee_burn = compute_fee_burn(
         inputs.total_fees,
         inputs.tx_volume,
@@ -238,11 +228,7 @@ pub fn configured_emission(configured: u64, already_generated: u64) -> PaidEmiss
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emission_share::compute_emission_split;
-
-    /// The shipped split epoch. Chain-rules names it `EMISSION_SPLIT_EPOCH`;
-    /// this crate takes the height as data.
-    const SHIPPED_SPLIT_EPOCH: u64 = 1;
+    use crate::emission_share::EMISSION_SPLIT_EPOCH;
 
     fn inputs(params: &EconomicParams, height: u64, total_fees: u64) -> EmissionInputs<'_> {
         let supply = CirculatingSupply::derive(AtomicUnits::ZERO, AtomicUnits::ZERO)
@@ -256,13 +242,12 @@ mod tests {
             total_fees,
             supply,
             closed_shards: ClosedShardCount::ZERO,
-            split_epoch: SHIPPED_SPLIT_EPOCH,
             params,
         }
     }
 
     #[test]
-    fn the_producer_pays_genesis_whole_and_the_split_function_does_not() {
+    fn the_producer_pays_genesis_whole_and_splits_from_block_one() {
         let params = EconomicParams::default();
         let whole = price_emission(&inputs(&params, GENESIS_HEIGHT, 0)).expect("under the median");
         assert_eq!(whole.split.miner_emission, whole.paid.to_raw());
@@ -271,15 +256,9 @@ mod tests {
         assert_eq!(whole.accrual, AtomicUnits::ZERO);
         assert_eq!(whole.coins_generated, whole.paid);
         assert_eq!(whole.burned(), AtomicUnits::ZERO);
-        // The defect the arm exists to close: `compute_emission_split` at
-        // height 0 applies the initial share. The producer must not.
-        let shared =
-            compute_emission_split(whole.paid.to_raw(), GENESIS_HEIGHT, SHIPPED_SPLIT_EPOCH);
-        assert_ne!(whole.split, shared);
-        assert!(shared.staker_emission > 0);
 
         let later =
-            price_emission(&inputs(&params, SHIPPED_SPLIT_EPOCH, 0)).expect("under the median");
+            price_emission(&inputs(&params, EMISSION_SPLIT_EPOCH, 0)).expect("under the median");
         assert_eq!(later.paid, whole.paid);
         assert!(later.split.staker_emission > 0);
         assert!(later.split.miner_emission < later.paid.to_raw());
@@ -299,7 +278,7 @@ mod tests {
     #[test]
     fn a_block_over_twice_the_median_is_the_weight_bound() {
         let params = EconomicParams::default();
-        let mut over = inputs(&params, SHIPPED_SPLIT_EPOCH, 0);
+        let mut over = inputs(&params, EMISSION_SPLIT_EPOCH, 0);
         over.block_weight = params
             .full_reward_zone
             .checked_mul(2)
