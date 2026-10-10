@@ -1037,6 +1037,17 @@ impl ReadSnapshot<'_> {
         archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **A17.** The shards `persona`'s settlement rows for `epoch` say were
+    /// Served, ascending.
+    pub fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<ShardId>, StoreError> {
+        archival_reads::served_at(&self.txn, persona, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// The archival state as of this snapshot, as the E2 trace carries it
     /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`): the nine table
     /// families walked whole and the slash watermark cell, re-encoded

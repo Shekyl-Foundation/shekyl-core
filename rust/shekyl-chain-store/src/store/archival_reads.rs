@@ -45,6 +45,8 @@
 //!   `(P, shard, h, j)` order.
 //! - **A16** [`issued_digest`] — the running digest that index is checked
 //!   against.
+//! - **A17** [`served_at`] — the shards a persona's rows say were Served in
+//!   an epoch: what the emission gather credits (`SO-D11`).
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
@@ -89,6 +91,7 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
 use shekyl_store_codec::{BlobKind, CodecError};
+use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
     IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
 };
@@ -467,6 +470,36 @@ pub(super) fn issued_digest<T: ReadTables>(
 ) -> Result<IssuedDigest, ReadFault> {
     chain_reads::cell(txn, ARCHIVAL_ISSUED_DIGEST, epoch.to_raw(), ISSUED_DIGEST)
         .map(Option::unwrap_or_default)
+}
+
+/// **A17.** The shards `persona`'s settlement rows for `epoch` say were
+/// Served, ascending. The table is keyed `(P, shard, E)` (`SO-D2`), so this
+/// walks the persona's rows and keeps the epoch's: one range, bounded by
+/// the persona's shards times the epochs the table retains. A row that
+/// does not decode is SI-7.
+pub(super) fn served_at<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    epoch: SettlementEpoch,
+) -> Result<Vec<ShardId>, ReadFault> {
+    let table = txn.table(ARCHIVAL_SETTLEMENT)?;
+    let p = persona.to_bytes();
+    let mut out = Vec::new();
+    for row in table.range((p, 0, 0)..=(p, u64::MAX, u64::MAX))? {
+        let (key, value) = row?;
+        let (_, shard, e) = key.value();
+        if e != epoch.to_raw() {
+            continue;
+        }
+        let settled: SettlementRow = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(SETTLEMENT, cause))?;
+        if settled.outcome() == SettlementOutcome::Served {
+            out.push(ShardId::from_raw(shard));
+        }
+    }
+    Ok(out)
 }
 
 /// The nine table-backed families of the archival snapshot

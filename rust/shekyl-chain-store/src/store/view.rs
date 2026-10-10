@@ -362,4 +362,12 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
         archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
+
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<ShardId>, StoreError> {
+        archival_reads::served_at(self.batch.txn(), persona, epoch).map_err(|f| self.arm(f))
+    }
 }

@@ -420,4 +420,12 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Infallible> {
         self.inner.issued_digest(epoch)
     }
+
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<ShardId>, Infallible> {
+        self.inner.served_at(persona, epoch)
+    }
 }

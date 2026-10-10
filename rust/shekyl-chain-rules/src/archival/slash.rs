@@ -204,7 +204,12 @@ impl super::Transition {
                 }
             }
         }
-        Ok(())
+        // The emission gather, over the records as the epoch's slashes
+        // left them: a record slashed for `epoch` carries the interval
+        // that opens at `epoch` and is out of its market, and that is the
+        // record a later claim's verify reads back (`close.rs`, `gather`).
+        let slashed = self.post_images();
+        self.gather(view, epoch, &slashed)
     }
 
     /// Settle `epoch`: check its issued-draw index against its digest and
