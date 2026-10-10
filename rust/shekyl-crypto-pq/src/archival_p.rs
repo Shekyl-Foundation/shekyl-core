@@ -141,6 +141,7 @@ use crate::account::{
 };
 use crate::derivation::keygen_from_seed;
 use crate::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa};
+use crate::heap_secret::HeapSecret;
 use crate::kem::ML_KEM_768_EK_LEN;
 use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
@@ -540,7 +541,7 @@ fn build_hybrid(
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
 /// `bond_spend_sk` ([`HybridSecretKey`]), `receipt_sign_sk`
 /// ([`FnDsaHybridSecretKey`], both halves wiped on the heap) and `hs_id_seed`
-/// ([`Zeroizing`]) — so each wipes on drop via its own destructor. This is the rule-35 per-field discipline applied to a struct that
+/// ([`HeapSecret`]) — so each wipes on drop via its own destructor. This is the rule-35 per-field discipline applied to a struct that
 /// also holds non-`Zeroize` public material.
 ///
 /// **Not persisted at rest.** Persist only `p_slot` (and the public
@@ -606,7 +607,11 @@ pub struct ArchivalPKeys {
     /// gone after derivation — see [`derive_p_hs_id_seed`] for the refuted
     /// "rederive on each serve" premise and the caller discipline that follows
     /// from it.
-    pub hs_id_seed: Zeroizing<[u8; 32]>,
+    ///
+    /// On the heap ([`HeapSecret`]): the bundle is moved into the actor's
+    /// map and an inline array would be copied at each move, with only the
+    /// last copy wiped.
+    pub hs_id_seed: HeapSecret<32>,
 }
 
 impl ArchivalPKeys {
@@ -754,7 +759,7 @@ pub fn derive_archival_p_keys(
         bond_spend_sk,
         receipt_sign_pk,
         receipt_sign_sk,
-        hs_id_seed,
+        hs_id_seed: HeapSecret::copied_from(&hs_id_seed),
     })
 }
 
