@@ -7,6 +7,8 @@
 
 - **Archival accrual reads the settlement row (Rust validator; `SO-D11`).** A pair earns for an epoch only if its settlement row is Served: two passes among the three counted draws. A pair issued fewer than three draws earns nothing for that epoch. The epoch close freezes the budget and nothing else; the epoch's slash pass, one epoch later, computes each shard's co-holder count and the epoch's work total, over shards that are closed and final. Three consequences for the Rust validator: an epoch becomes claimable one epoch later than before, on the block after its slash pass, and the claimable span is 25 epochs where it was 26; a compact bond join is priced at the last epoch whose slash pass has run; and until the secret draw is live no pair is Served, so nothing is credited. The C++ daemon is unchanged and stays consensus; the wallet and the claim-source RPC read it and do not change. The Rust validator does not become consensus before the draw is live.
 
+- CI: the nightly workflow gains `economics-sim-ignored`, which runs the four `#[ignore]`d tests of `shekyl-economics-sim` (the two `--stage2` narration fixtures, the challenge-coverage reproduction and the secret draw's evidence set) on `main` and `dev`. No lane ran them before; the narration fixtures drifted on PR #1009 and CI stayed green. The job fails if the crate's ignored set is anything but those four and the two regeneration helpers, which it never runs.
+
 ### Shard view — a picture of a shard is drawn from a real fetch
 
 - **Wallet RPC: `get_shard_view { shard_id }`** (contract 0.11.0,
