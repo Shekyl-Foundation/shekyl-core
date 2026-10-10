@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -277,7 +278,9 @@ def scan_all(
     return production, tests, missing
 
 
-def judge(production: list[str], tests: list[str], missing: list[str] = ()) -> int:
+def judge(
+    production: list[str], tests: list[str], missing: Sequence[str] = ()
+) -> int:
     failed = False
     if missing:
         print(
