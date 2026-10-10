@@ -17759,11 +17759,11 @@ changes its answer: **identity** — the node's own onion was the last
 entry of its timed-sync replies, recovered at 100 % precision and
 100 % recall.
 
-Each stage has its own answer, and this section measures that answer
-rather than asserting it (rule 47). **TC-II** has no height input:
-stem candidacy is an outbound session with an assessed transit, and a
-peer-asserted height never reaches the map (§95.3, `stem_candidate`).
-The partition test names who is in the candidate set. **TC-I** stays open with §96
+Each stage has its own answer. The open stages are measured, and this
+section does not assert them (rule 47). **TC-II** is closed by
+construction: stem candidacy is an outbound session with an assessed
+transit, and a peer-asserted height never reaches the map (§95.3,
+`stem_candidate`). The partition test names who is in the candidate set. **TC-I** stays open with §96
 item 3. Occupying the hidden outbound sessions is the attack PM-2a
 runs, against the §97 assumptions in effect: `DISCLOSE_COUNT` 12
 against the paper's 250 per reply, random rather than
