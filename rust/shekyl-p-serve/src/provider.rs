@@ -28,9 +28,7 @@
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{
-    FrozenSegmentBody, SegmentId, ServedFrameHeader, ServingReader, StoreError, LEAF_BYTES,
-};
+use shekyl_curve_tree::{FrozenSegmentBody, SegmentId, ServingReader, StoreError};
 
 /// A shard lookup failed for an infrastructure reason (store I/O, pruned
 /// bytes) or a serve-set construction bug. Counted locally by the endpoint
@@ -106,32 +104,31 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// The frame header for a flat body of `len` bytes, or `None` if `len` is
-/// not a whole number of leaves or spans more than one segment.
-fn flat_header(len: usize) -> Option<ServedFrameHeader> {
-    if !len.is_multiple_of(LEAF_BYTES) {
-        return None;
-    }
-    ServedFrameHeader::for_segment(len / LEAF_BYTES).ok()
-}
-
 /// The body of one served shard, read in bounded chunks.
 ///
 /// **Chunked, not materialised.** The serving loop holds one body per
 /// in-flight connection for as long as that connection takes, so a
 /// whole-shard buffer would silently convert the endpoint's concurrency cap
-/// into a resident-memory bound of `MAX_INFLIGHT × 3.33 MB` — a bill the
-/// rule-76 provisioning floor cannot pay, and one the cap does not claim to
-/// be charging. Peak cost here is one chunk.
+/// into a resident-memory bound of `MAX_INFLIGHT × W` — a bill the rule-76
+/// provisioning floor cannot pay, and one the cap does not claim to be
+/// charging. Peak cost here is one chunk.
 ///
-/// [`Self::header`] is fixed when the body is opened and
-/// [`Self::remaining_bytes`] is exact before the first chunk is read, which
-/// is what lets the response head — including `content-length` — go out
-/// before the store is touched at all.
+/// **Opaque to the loop.** The bytes are whatever the provider holds for
+/// the shard — the `shekyl_wire::shard_frame` body over the shard's
+/// archival good (`SF-D8` amendment 2026-10-08) — and the loop neither
+/// parses nor frames them: it declares their length, streams them, and
+/// signs for them. A body that is the wrong content is the requester's to
+/// refuse against its skeleton rows; nothing a serving loop could prepend
+/// would make it right.
+///
+/// [`Self::len`] is fixed when the body is opened and exact before the
+/// first chunk is read, which is what lets the response head — including
+/// `content-length` — go out before the store is touched at all.
 #[derive(Debug)]
 pub struct ShardBody {
     source: Source,
-    header: ServedFrameHeader,
+    /// Total payload length, fixed at open.
+    len: u64,
 }
 
 /// Where a body's bytes come from. Private: the production and fixture
@@ -168,76 +165,72 @@ fn slice_chunk(bytes: &[u8], read: &mut usize, max_bytes: usize) -> Option<Vec<u
     Some(chunk)
 }
 
+/// A body length as the wire declares it.
+fn wire_len(len: usize) -> u64 {
+    u64::try_from(len).expect("a body length on this host fits u64")
+}
+
 impl ShardBody {
-    /// An in-memory body — fixtures and measurement harnesses, which serve
-    /// opaque bytes rather than a real segment.
-    ///
-    /// `None` for a payload that is not a whole number of leaves, or that
-    /// exceeds one segment. **This is the served frame reaching back into
-    /// the constructor**: the response declares a `leaf_count`
-    /// ([`ServedFrameHeader`]), so a body that is not a leaf array has no
-    /// representable header and therefore is not a servable shard. Before
-    /// the frame existed a flat body could be any length, and that latitude
-    /// is what the frame spends to make "multiple of `LEAF_BYTES`"
-    /// structural instead of a validity rule written in prose.
+    /// An in-memory body — fixtures and measurement harnesses, which hold
+    /// the shard's bytes rather than read them from a store.
     #[must_use]
-    pub fn flat(bytes: Arc<[u8]>) -> Option<Self> {
-        let header = flat_header(bytes.len())?;
-        Some(Self {
+    pub fn flat(bytes: Arc<[u8]>) -> Self {
+        let len = wire_len(bytes.len());
+        Self {
             source: Source::Flat { bytes, read: 0 },
-            header,
-        })
+            len,
+        }
     }
 
     /// [`Self::flat`], counting every chunk it yields into `reads`.
     #[cfg(test)]
-    pub(crate) fn counted(
-        bytes: Arc<[u8]>,
-        reads: Arc<std::sync::atomic::AtomicUsize>,
-    ) -> Option<Self> {
-        let header = flat_header(bytes.len())?;
-        Some(Self {
+    pub(crate) fn counted(bytes: Arc<[u8]>, reads: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        let len = wire_len(bytes.len());
+        Self {
             source: Source::Counted {
                 bytes,
                 read: 0,
                 reads,
             },
-            header,
-        })
+            len,
+        }
     }
 
     /// A store-backed frozen-segment body.
     #[must_use]
     pub fn segment(body: FrozenSegmentBody) -> Self {
-        let header = body.frame_header();
+        let len = wire_len(body.remaining_bytes());
         Self {
             source: Source::Segment(body),
-            header,
+            len,
         }
     }
 
-    /// The served-frame header for this body — the two leading lengths, and
-    /// with them the exact `content-length`.
+    /// The body's total length — what `content-length` declares ahead of
+    /// the envelope.
     ///
-    /// **Computed once, when the body is opened**, and stored rather than
-    /// derived on demand. That is not a cache: the frame describes the
+    /// **Fixed once, when the body is opened**, and stored rather than
+    /// derived on demand. That is not a cache: the length describes the
     /// response that was *chosen*, and servability is settled before any
-    /// byte is written, so the header is fixed at exactly the moment the
-    /// response is. Deriving it from the body's remaining length would make
-    /// it shrink as chunks were read — a header that answers a different
-    /// question after the first chunk — and would put a panic path in the
-    /// serving task for the sake of a value that was already known.
+    /// byte is written, so it is fixed at exactly the moment the response
+    /// is. Deriving it from the remaining length would make it shrink as
+    /// chunks were read — a figure that answers a different question after
+    /// the first chunk.
     #[must_use]
-    pub fn header(&self) -> ServedFrameHeader {
-        self.header
+    pub fn len(&self) -> u64 {
+        self.len
     }
 
-    /// Bytes of *payload* not yet read.
-    ///
-    /// **Not the wire `content-length`** — that is
-    /// [`ServedFrameHeader::framed_len`], which also covers the frame header
-    /// and any padding. This is what remains to stream after the frame, and
-    /// it shrinks as chunks are taken.
+    /// Whether the body has no bytes at all. A provider that opens one is
+    /// serving an empty shard, which no range produces (`SHT-Q2`: every
+    /// shard is non-empty); the loop still streams it correctly.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Bytes not yet read. Shrinks as chunks are taken; [`Self::len`] does
+    /// not.
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         match &self.source {
@@ -280,8 +273,9 @@ impl ShardBody {
 /// serve). `Err` is infrastructure failure. The endpoint renders the first
 /// as the bare 404 and the second as the bare 503.
 pub trait ShardProvider: Send + Sync + 'static {
-    /// Open the body for `shard_id` — the frozen segment's leaf bytes in
-    /// tree order, exactly what the witness hashes against `R_k`.
+    /// Open the body for `shard_id` — the `shekyl_wire::shard_frame` body
+    /// over the shard's archival good, exactly what the requester checks
+    /// against its skeleton rows (`SF-D8` amendment 2026-10-08).
     ///
     /// Servability is settled by this call, before any byte of response is
     /// written; the returned [`ShardBody`] then only streams. That
@@ -297,11 +291,23 @@ pub trait ShardProvider: Send + Sync + 'static {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
-/// The production provider: shard reads out of the persona's store,
-/// through a read-only [`ServingReader`].
+/// The leaf-segment provider: shard reads out of the persona's curve-tree
+/// store, through a read-only [`ServingReader`], serving a frozen
+/// segment's raw leaf bytes.
 ///
-/// Shard ids are segment indices — "shard" and "frozen segment" are the
-/// same object; the challenge path's `shard_id` is the segment index.
+/// **Retired unit, still wired.** It reads the leaf-segment partition
+/// (`PDM-Q12`, retired by `PDM-Q6` / `PDM-Q-F25`); the shard a requester
+/// names is a `W`-byte `tx_id` range (`SHT-Q2`) whose body is the
+/// `shard_frame` over archival good, and nothing this provider serves
+/// satisfies that expectation — a fetch against it is a grammar refusal
+/// (`Malformed::Frame`, where the leaf bytes are not the frame's version
+/// byte) or `ContentRefused` (where they happen to be), never a verified
+/// shard and never `Miss`. It stays until the wallet lane's store rebuild
+/// (`WSS-`, behind `WSS-Q1`) lands the provider over `P`'s body store, so
+/// that `shekyl-p-host`'s serve-set pinning keeps a provider to pin for;
+/// it is deleted with that landing, not adapted
+/// (`ARCHIVAL_SHARD_FETCH.md` `SF-D8` amendment 2026-10-08,
+/// `SHARD_VIEW_FETCH.md` §4).
 pub struct StoreShardProvider {
     reader: ServingReader,
 }

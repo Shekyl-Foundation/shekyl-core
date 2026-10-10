@@ -10,6 +10,7 @@
 
 use super::*;
 
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::rng::SplitMix64;
 
@@ -533,31 +534,28 @@ fn a_forwarded_tor_stem_takes_no_envelope() {
     );
 }
 
-fn embargo_mean(transit_ms: f64) -> u32 {
+fn embargo_mean(transit: DerivationMs) -> u32 {
     shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
-        transit_ms,
+        transit,
     ))
     .mean_secs()
 }
 
-fn stem_records(connector: ConnectorId, transit_ms: f64) {
+fn stem_records(connector: ConnectorId, transit: DerivationMs) {
     let mut rng = SplitMix64::new(11);
     let mut z = zone(&mut rng);
     z.on_session_established(id(1), PeerDirection::Outbound, connector, &mut rng);
     let tx = TxId::from_bytes([9u8; 32]);
     z.record_stem(&[tx], id(1), None, 0, &mut rng);
     assert_eq!(z.stem_connector(tx), Some(connector));
-    assert_eq!(
-        z.embargo_mean_secs(connector),
-        Some(embargo_mean(transit_ms))
-    );
+    assert_eq!(z.embargo_mean_secs(connector), Some(embargo_mean(transit)));
 }
 
 #[test]
 fn a_clearnet_stem_records_the_clearnet_embargo() {
     stem_records(
         ConnectorId::Clearnet,
-        shekyl_relay_privacy::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
+        shekyl_relay_privacy::verify_cost::ADOPTED_TRANSIT,
     );
 }
 
@@ -565,26 +563,42 @@ fn a_clearnet_stem_records_the_clearnet_embargo() {
 fn a_tor_stem_records_the_tor_embargo() {
     stem_records(
         ConnectorId::Tor,
-        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT,
     );
 }
 
 #[test]
-fn the_longest_measured_transit_is_the_max_of_the_measured_entries() {
-    let longest = longest_measured_transit();
+fn the_longest_transit_is_the_max_of_the_assessed_entries() {
+    let longest = longest_transit();
     let mut saw = false;
     for connector in ConnectorId::ALL {
-        if let Some(ms) = measured_transit_ms(*connector) {
+        if let Some(transit) = transit_ms(*connector) {
             saw = true;
             assert!(
-                longest.total_cmp(&ms).is_ge(),
-                "{connector:?} at {ms} exceeds {longest}"
+                longest.ms() >= transit.ms(),
+                "{connector:?} at {} exceeds {}",
+                transit.ms(),
+                longest.ms()
             );
         }
     }
-    assert!(saw, "no connector has a measured transit");
+    assert!(saw, "no connector has an assessed transit");
     assert_eq!(
-        longest.to_bits(),
-        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS.to_bits()
+        longest,
+        shekyl_relay_privacy::verify_cost::ANON_ZONE_TRANSIT
     );
+}
+
+/// Neither built column's transit is a measurement (§97). A column that
+/// claimed one would have to say which path it was taken on.
+#[test]
+fn both_built_transits_are_labelled_assumptions() {
+    for connector in ConnectorId::ALL {
+        let transit = transit_ms(*connector).expect("both built columns stem");
+        assert_eq!(
+            transit.basis(),
+            shekyl_relay_privacy::basis::AdmissibleBasis::Assumption,
+            "{connector:?}"
+        );
+    }
 }

@@ -22,15 +22,16 @@
 //! over [`Grown`]'s tree) — then [`CREDIT_BLOCKS`] blocks each carrying
 //! [`CREDITS_PER_BLOCK`] padded serve credits close shard 0, so the scan's
 //! universe is one shard. The credits are personas 0 and 1's **on shard
-//! 1**, the open one, and are there for their bytes ([`padded_credit`]);
-//! nobody serves shard 0 — which is how every observation settles as a
-//! miss 2-of-3: every challenge is on shard 0, and with no pass recorded
-//! there every challenge of the epoch is missed. Each epoch's deadline
-//! connect (`199`, `299`, …) settles that epoch: epoch 0 is not
-//! challengeable (`good_through` starts the epoch after the join), epochs
-//! `1..M-1` are misses that do not yet fill the window, and the epoch-`M`
-//! deadline connect (`last_block(M + 1) = 1_299`) slashes every persona on
-//! shard 0. Both tests assert that — the watermark, the log,
+//! 1**, the open one, and are there for their bytes ([`padded_credit`]).
+//! Each pair on shard 0 is issued three draws in every epoch from 1
+//! through the regtest door ([`ChainStore::regtest_issue_draws`],
+//! `SO-D10f`: nothing admits a draw yet), none passed — which is how every
+//! observation settles Missed. Each epoch's deadline connect (`199`,
+//! `299`, …) settles that epoch: epoch 0 has no draw and is not in
+//! standing either (`good_through` starts the epoch after the join),
+//! epochs `1..M-1` are misses that do not yet fill the window, and the
+//! epoch-`M` deadline connect (`last_block(M + 1) = 1_299`) slashes every
+//! persona on shard 0. Both tests assert that — the watermark, the log,
 //! `slash_applied`, the emptied records, the burn (SI-8).
 //!
 //! One join per block is the rate the chain sustains, not a choice: a
@@ -89,6 +90,11 @@
 //! Run: `SHEKYL_SLASH_BENCH_PERSONAS=23 cargo test -p shekyl-chain-store
 //! --release slash_scan_bench -- --ignored --nocapture`.
 
+//! Settlement's own wiring — an empty index, the window on a real chain,
+//! a drifted digest, a popped deadline, a second write — lives in
+//! [`settlement_slash_tests`]. The retention floor is specified on
+//! `settlement_window_slashable`, not by a chain of thirty epochs.
+//!
 // A whole-file test module: the parent gates it with `#[cfg(test)]`, and
 // this self-declaration is what the debug-macro lint keys on — the bench
 // prints its figures, which is its job, not a debug leftover.
@@ -97,12 +103,15 @@
 use core::num::NonZeroU128;
 use std::time::{Duration, Instant};
 
+use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{FakechainSchedule, RuleSet};
+use shekyl_chain_rules::{Corrupt, FakechainSchedule, RuleSet, SettlementCheck, Trust};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
-use shekyl_types::archival::SlashedHolding;
+use shekyl_types::archival::{
+    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SlashedHolding,
+};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
@@ -111,7 +120,7 @@ use super::connect_fixtures::{Grown, Listed, FIRST_SPEND_HEIGHT};
 use super::store_tests::{cleanup, tmp, TestErr};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
-use crate::codec::{SettlementEpochBlocks, SlashLogEntry};
+use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -266,6 +275,89 @@ fn credit_heights(personas: u64) -> impl Iterator<Item = u64> {
     first..first + CREDIT_BLOCKS
 }
 
+/// What one pair is issued in one epoch: `None` is no draw at all, and
+/// `Some(passes)` is one draw per entry, passed or not.
+type Plan = fn(epoch: u64, persona: u64) -> Option<&'static [bool]>;
+
+/// Three draws, none passed: a Missed epoch.
+const MISSED: &[bool] = &[false, false, false];
+/// Three draws, two passed: a Served epoch, whichever three are selected.
+const SERVED: &[bool] = &[true, true, false];
+/// Two draws: below the floor of three, so not an observation.
+const SHORT: &[bool] = &[false, false];
+
+/// The witness's plan: every pair misses every epoch from 1.
+fn every_epoch_missed(epoch: u64, _persona: u64) -> Option<&'static [bool]> {
+    (epoch >= 1).then_some(MISSED)
+}
+
+/// The draws `plan` issues in `epoch`, each pair's on shard 0 at
+/// consecutive heights inside the epoch, in index order.
+fn planned_draws(epoch: u64, personas: u64, plan: Plan) -> Vec<IndexedDraw> {
+    let open = RULES.settlement_schedule().open_height(epoch);
+    let mut draws = Vec::new();
+    for id in ids_in_table_order(personas) {
+        let i = (0..personas)
+            .find(|i| Persona::at(slot(*i)).id() == id)
+            .expect("an id of the list");
+        let Some(passes) = plan(epoch, i) else {
+            continue;
+        };
+        for (k, &passed) in (0u64..).zip(passes) {
+            let issuing_height = BlockHeight::from_raw(open + 60 + k);
+            draws.push(IndexedDraw {
+                persona: id,
+                shard: ShardId::from_raw(0),
+                issuing_height,
+                draw: 0,
+                state: IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(open + 61 + k),
+                    passed,
+                },
+            });
+        }
+    }
+    draws
+}
+
+/// The digest of `draws` folded onto `digest`: what admission would have
+/// left in the epoch's cell.
+fn folded(mut digest: IssuedDigest, epoch: SettlementEpoch, draws: &[IndexedDraw]) -> IssuedDigest {
+    for draw in draws {
+        digest.fold(&issued_draw_term(
+            &draw.persona,
+            draw.shard,
+            epoch,
+            draw.issuing_height,
+            draw.draw,
+        ));
+    }
+    digest
+}
+
+/// Issue `epoch`'s planned draws through the regtest door, with the
+/// digest they fold to.
+fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
+    let draws = planned_draws(epoch, personas, plan);
+    if draws.is_empty() {
+        return;
+    }
+    let epoch = SettlementEpoch::from_raw(epoch);
+    let digest = store
+        .begin_read()
+        .expect("read")
+        .issued_digest(epoch)
+        .expect("read");
+    store
+        .regtest_issue_draws(
+            Trust::UNANCHORED,
+            epoch,
+            &draws,
+            folded(digest, epoch, &draws),
+        )
+        .expect("the draws are issued");
+}
+
 #[derive(Clone, Copy, Default)]
 struct Timing {
     judge: Duration,
@@ -296,12 +388,29 @@ struct SlashedChain {
     /// The height whose listed bodies carried the running archival total
     /// past `W` — where shard 0 closed, read off the chain as it was built.
     shard_closed: u64,
+    /// The chain as built, for a test that connects one more block by hand.
+    grown: Grown,
     timings: Vec<Timing>,
     built: Duration,
 }
 
 impl SlashedChain {
+    /// The witness's chain: every pair misses every epoch from 1, built to
+    /// the epoch-`M` slashing connect.
     fn build(label: &str, personas: u64) -> Self {
+        let m = u64::from(FAILURE_WINDOW_M);
+        let through = RULES.settlement_schedule().slash_deadline_height(m);
+        Self::build_with(label, personas, through, every_epoch_missed)
+    }
+
+    /// A chain through height `through`, each epoch's draws issued by
+    /// `plan` once the epoch's blocks are connected — an epoch ahead of the
+    /// deadline connect that settles it.
+    fn build_with(label: &str, personas: u64, through: u64, plan: Plan) -> Self {
+        assert!(
+            SEB.is_multiple_of(PER_BATCH),
+            "an epoch ends on a batch boundary"
+        );
         assert!(
             (CREDITS_PER_BLOCK..=MAX_PERSONAS).contains(&personas),
             "{personas} personas: a persona per credit slot, and the joins and the shard \
@@ -310,7 +419,7 @@ impl SlashedChain {
         let schedule = RULES.settlement_schedule();
         let m = u64::from(FAILURE_WINDOW_M);
         let slashing_height = schedule.slash_deadline_height(m);
-        let total = slashing_height + 1;
+        let total = through + 1;
 
         let path = tmp(label);
         let horizons = Horizons::new(
@@ -358,6 +467,9 @@ impl SlashedChain {
             });
             out.expect("the chain connects");
             h = end;
+            if h.is_multiple_of(SEB) {
+                issue(&store, h / SEB - 1, personas, plan);
+            }
         }
         let shard_closed = shard_closed.expect("the credits close shard 0");
         let credits_from = join_height(personas).to_raw();
@@ -374,6 +486,7 @@ impl SlashedChain {
             slashing_height,
             first_deadline: schedule.slash_deadline_height(0),
             shard_closed,
+            grown,
             timings,
             built: wall.elapsed(),
         }
@@ -430,6 +543,32 @@ impl SlashedChain {
             burned,
             "SI-8: the burns folded"
         );
+    }
+
+    /// The rows the pass settled (`SO-D7`: written ahead of the slash they
+    /// decide): Missed on no pass of three for every epoch from 1 through
+    /// `M`, and none for epoch 0, in which no draw was issued.
+    fn assert_settled_missed_from_epoch_one(&self) {
+        let snap = self.store.begin_read().expect("read");
+        let shard = ShardId::from_raw(0);
+        let missed = SettlementRow::settle(0, 3).expect("a row");
+        assert_eq!(missed.outcome(), SettlementOutcome::Missed);
+        for p in ids_in_table_order(self.personas) {
+            assert_eq!(
+                snap.settlement_row(&p, shard, SettlementEpoch::from_raw(0))
+                    .expect("read"),
+                None,
+                "no draw, no row"
+            );
+            for e in 1..=self.m {
+                assert_eq!(
+                    snap.settlement_row(&p, shard, SettlementEpoch::from_raw(e))
+                        .expect("read"),
+                    Some(missed),
+                    "epoch {e} of {p:?}"
+                );
+            }
+        }
     }
 
     /// Before the slashing epoch, no deadline wrote anything: the window
@@ -652,6 +791,7 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
         (chain.m + 2) * SEB - 1,
         "the slashing connect is last_block(M + 1) under a one-epoch grace"
     );
+    chain.assert_settled_missed_from_epoch_one();
     chain.assert_nothing_slashed_before_m();
     chain.assert_slashed();
     chain.assert_snapshot_pins_the_slash_families();
@@ -703,3 +843,6 @@ fn slash_scan_bench() {
     );
     chain.finish();
 }
+
+#[path = "settlement_slash_tests.rs"]
+mod settlement_slash_tests;

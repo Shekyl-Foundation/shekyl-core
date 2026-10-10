@@ -215,7 +215,6 @@ Fleet: arm readouts must record the per-sample series, not a pooled summary — 
 Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` fixed, and `F'` is the axis the region derivation moves.
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
 Relay: populate the 48-cell Pi verification surface, then consume it per shape.
-Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones
 Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.
 Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.
 The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.

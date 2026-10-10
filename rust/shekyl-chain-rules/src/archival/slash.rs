@@ -1,23 +1,64 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The slash scan and the one-record slash fold (CEN-L9).
+//! The slash pass: settle the epoch, then slash on what it settled
+//! (CEN-L9; `ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`).
+//!
+//! # Order inside one epoch
+//!
+//! 1. **Settle.** Read the epoch's issued-draw index whole, check it
+//!    against the epoch's running digest, and fold each pair's counted
+//!    draws into its row ([`settle_pair`]). The rows go into the delta; the
+//!    store writes them ahead of the slashes (`SO-D7`).
+//! 2. **Slash.** A pair whose row for the epoch is Missed is judged on its
+//!    failure window. Nothing else is a candidate: Served, NonObservation
+//!    and no row at all are each "no slash here".
+//!
+//! With no draw issued — the state until the secret draw lands
+//! (`SO-D10a`) — step 1 writes nothing and step 2 slashes nothing.
+//!
+//! # Which draws count for a pair
+//!
+//! A draw at `h` counts only if the pair held its shard in the state after
+//! `h` connected (specification §9.3 step 2), read as [`holds_shard_at`]
+//! reads it: slashes strictly above `h`. A pair that stopped holding the
+//! shard during the epoch is not charged for the draws that followed. The
+//! digest check covers every stored draw, counted or not, because that is
+//! what was folded when each was indexed.
+//!
+//! # The window (`SO-D10b`)
+//!
+//! From a Missed epoch, [`settlement_window_slashable`] gathers the pair's
+//! earlier observations. What counts as an observation, where the walk
+//! stops, and the retention horizon ruled 2026-10-09 live with the
+//! arithmetic in `shekyl-archival-retention::failure_window`. This pass
+//! supplies the standing predicate ([`good_through`]) and the settlement-row
+//! read, and the floor ([`settlement_retention_floor`]) the gather stops at.
+//!
+//! # The stale snapshot
 //!
 //! The scan judges a snapshot taken as the epoch's scan begins and slashes
 //! the live post-image (P2B-9 Pin 5). Record-shaped failures of that fold
 //! are [`Corrupt`](crate::Corrupt), not refusals of the block.
 
-use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, failure_window_slashable, good_through,
-    holds_shard_at, slash_open_interval_to_append, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET, MAX_BOND_BAD_INTERVALS,
+use core::num::NonZeroU64;
+use std::collections::BTreeMap;
+
+use shekyl_archival_retention::settlement_select::{
+    issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
-use shekyl_types::archival::{BondRecord, HeldShard, Holdings, SlashLogEntry, SlashedHolding};
+use shekyl_archival_retention::{
+    good_through, holds_shard_at, settlement_retention_floor, settlement_window_slashable,
+    slash_open_interval_to_append, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
+};
+use shekyl_types::archival::{
+    BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
+    SettlementRow, SlashLogEntry, SlashedHolding,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
-use crate::fault::{Corrupt, RecordInvariant, ViewRead};
-use crate::rules::miner::closed_shards_before;
+use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
 use crate::rules::recorded;
 use crate::view::ChainView;
 
@@ -88,6 +129,17 @@ pub(crate) fn apply_slash(
     })
 }
 
+/// Whether the record's persona was in good standing through `epoch`:
+/// joined by then and in no bad interval. Where this is false is where a
+/// pair's challengeable run began.
+fn in_standing(record: &BondRecord, epoch: SettlementEpoch) -> bool {
+    good_through(
+        record.join_settlement_epoch.to_raw(),
+        epoch.to_raw(),
+        &record.bad_intervals,
+    )
+}
+
 impl super::Transition {
     /// The slash scheduler (`process_archival_slash_at_height`): every
     /// epoch above the watermark whose deadline `count` passes, ascending.
@@ -114,23 +166,29 @@ impl super::Transition {
         Ok(())
     }
 
-    /// One epoch's scan (`process_archival_slash_for_epoch`): every record
-    /// in persona-key order, judged against a snapshot taken as the scan
-    /// begins (module docs, *The stale eligibility copy*). A complete-tree
-    /// record is challenged on every closed shard and slashed on the first
-    /// failure only; a compact record on each shard it holds.
+    /// One epoch's pass: settle it, then judge every record in persona-key
+    /// order against a snapshot taken as the pass begins (module docs, *The
+    /// stale snapshot*). A complete-tree record is slashed on its first
+    /// failing shard only; a compact record on each shard it holds.
     fn scan_epoch<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
         epoch: SettlementEpoch,
     ) -> Result<(), ViewRead<V::Fault>> {
-        let universe = closed_shards_before(view, self.connecting)?.get();
         let snapshot = self.merged(view)?;
+        self.settle(view, epoch, &snapshot)?;
         for (persona, record) in &snapshot {
             match &record.holdings {
                 Holdings::CompleteTree => {
-                    for k in 0..universe {
-                        let shard = ShardId::from_raw(k);
+                    // A complete tree holds every shard, so its candidates
+                    // are the shards it has a row for, in shard order.
+                    let settled: Vec<ShardId> = self
+                        .settled
+                        .range((epoch, *persona, ShardId::from_raw(0))..)
+                        .take_while(|((e, p, _), _)| *e == epoch && p == persona)
+                        .map(|((_, _, shard), _)| *shard)
+                        .collect();
+                    for shard in settled {
                         if self.challenge_failed(view, *persona, record, shard, epoch)? {
                             self.slash(*persona, shard, epoch)?;
                             break;
@@ -149,8 +207,201 @@ impl super::Transition {
         Ok(())
     }
 
-    /// `archival_challenge_failed_at_height`: no pass, not already
-    /// slashed, baseline observed, and the failure window says slash.
+    /// Settle `epoch`: check its issued-draw index against its digest and
+    /// fold each pair's counted draws into a row (module docs, *Order
+    /// inside one epoch*, step 1).
+    fn settle<'id, V: ChainView<'id>>(
+        &mut self,
+        view: &V,
+        epoch: SettlementEpoch,
+        snapshot: &[(PCanonicalId, BondRecord)],
+    ) -> Result<(), ViewRead<V::Fault>> {
+        let draws = view.issued_draws(epoch).map_err(ViewRead::View)?;
+        // Every stored draw, before any is dropped: the digest was folded
+        // over issuance, and a pair that later stopped holding its shard
+        // still had its draws issued. An epoch with no draw must have the
+        // digest of no draws.
+        let mut folded = IssuedDigest::ZERO;
+        for draw in &draws {
+            folded.fold(&issued_draw_term(
+                &draw.persona,
+                draw.shard,
+                epoch,
+                draw.issuing_height,
+                draw.draw,
+            ));
+        }
+        if folded != view.issued_digest(epoch).map_err(ViewRead::View)? {
+            return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                epoch,
+                check: SettlementCheck::IssuedIndexDigest,
+            }));
+        }
+        if draws.is_empty() {
+            return Ok(());
+        }
+        let beacon = self.settlement_beacon(view, epoch)?;
+        let records: BTreeMap<&PCanonicalId, &BondRecord> =
+            snapshot.iter().map(|(p, record)| (p, record)).collect();
+        // The persona's slash log above the epoch's first block, read once
+        // per persona: the index is persona-major, so one persona's pairs
+        // are adjacent.
+        let mut after_open: Option<(PCanonicalId, Vec<SlashLogEntry>)> = None;
+        for pair in draws.chunk_by(|a, b| a.persona == b.persona && a.shard == b.shard) {
+            let (persona, shard) = (pair[0].persona, pair[0].shard);
+            // A draw is issued to a pair of the drawable set, and the set
+            // is of bonded personas; admission is what holds an index row
+            // to that. A row naming no record here has no holding to count
+            // a draw against.
+            let Some(record) = records.get(&persona) else {
+                continue;
+            };
+            if after_open.as_ref().map(|(p, _)| *p) != Some(persona) {
+                let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+                let log = self.slashed_after(view, persona, h_open)?;
+                after_open = Some((persona, log));
+            }
+            let log = after_open
+                .as_ref()
+                .map_or(&[][..], |(_, log)| log.as_slice());
+            let counted = self.counted(view, persona, record, shard, epoch, pair, log)?;
+            match settle_pair(&beacon, &persona, shard, epoch, &counted) {
+                Ok(Some(row)) => {
+                    self.settled.insert((epoch, persona, shard), row);
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                        epoch,
+                        check: SettlementCheck::PassesExceedCounted { persona, shard },
+                    }));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The settlement beacon of `epoch`: the hash of the block `W₂` after
+    /// the epoch's last, by which every reveal for the epoch has landed or
+    /// can no longer land (specification §9.3 step 1). A schedule whose
+    /// epoch is too short to have a response window has none to wait out,
+    /// and the beacon is the epoch's last block.
+    ///
+    /// The block must sit strictly below the connecting height. The slash
+    /// grace is at least `W₂` on every schedule that has one
+    /// (`constants.rs`), so a passed deadline always puts it there. A
+    /// re-pin that makes the arm reachable is still
+    /// [`SettlementCheck::BeaconNotRecorded`]: the block at the slash
+    /// height is not invalid, and this node cannot settle the epoch. The
+    /// pass does not advance its watermark on that fault.
+    ///
+    /// # Errors
+    ///
+    /// [`ViewRead::Corrupt`] when the beacon block is not strictly below
+    /// the connecting height, or when the view has no block recorded there.
+    fn settlement_beacon<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<[u8; SETTLEMENT_BEACON_LEN], ViewRead<V::Fault>> {
+        let window = self
+            .schedule
+            .challenge_response_blocks()
+            .map_or(0, NonZeroU64::get);
+        let at = self
+            .schedule
+            .last_block(epoch.to_raw())
+            .saturating_add(window);
+        if at >= self.connecting.to_raw() {
+            return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                epoch,
+                check: SettlementCheck::BeaconNotRecorded,
+            }));
+        }
+        let beacon = recorded(view, BlockHeight::from_raw(at))?.hash;
+        Ok(*beacon.as_bytes())
+    }
+
+    /// The slashes logged against `persona` strictly above `height`: the
+    /// recorded ones (A2) and this block's own, which sit at the connecting
+    /// height and so are above every height the pass asks about.
+    fn slashed_after<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        persona: PCanonicalId,
+        height: BlockHeight,
+    ) -> Result<Vec<SlashLogEntry>, ViewRead<V::Fault>> {
+        let mut log = view
+            .slash_log_after(&persona, height)
+            .map_err(ViewRead::View)?;
+        log.extend(
+            self.slashes
+                .iter()
+                .map(|s| s.entry)
+                .filter(|entry| entry.persona == persona),
+        );
+        Ok(log)
+    }
+
+    /// The draws of `pair` that count: those issued while the pair held
+    /// the shard (module docs, *Which draws count for a pair*), in the
+    /// `(h, j)` order the index gives them in.
+    ///
+    /// `after_open` is the persona's slash log above the epoch's first
+    /// block. The log above any later height of the epoch is a subset of
+    /// it, so when it is empty no draw needs its own read. When it is not
+    /// — the persona was slashed during or after the epoch — each draw
+    /// reads the log above its own height.
+    #[allow(clippy::too_many_arguments)]
+    fn counted<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        persona: PCanonicalId,
+        record: &BondRecord,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+        pair: &[IndexedDraw],
+        after_open: &[SlashLogEntry],
+    ) -> Result<Vec<IssuedDraw>, ViewRead<V::Fault>> {
+        let h_open = self.schedule.open_height(epoch.to_raw());
+        let mut counted = Vec::with_capacity(pair.len());
+        for draw in pair {
+            let at = draw.issuing_height;
+            let held = if after_open.is_empty() && at.to_raw() >= h_open {
+                holds_shard_at(self.schedule, record, shard, at, &[])
+            } else {
+                let log = self.slashed_after(view, persona, at)?;
+                holds_shard_at(self.schedule, record, shard, at, &log)
+            };
+            if held {
+                counted.push(draw.state);
+            }
+        }
+        Ok(counted)
+    }
+
+    /// What an earlier `epoch` settled for the pair: this block's own rows
+    /// first (an epoch the same pass caught up on), then the recorded row
+    /// (A14). `None` is no row.
+    fn outcome<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        persona: PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementOutcome>, ViewRead<V::Fault>> {
+        if let Some(row) = self.settled.get(&(epoch, persona, shard)) {
+            return Ok(Some(row.outcome()));
+        }
+        Ok(view
+            .settlement_row(&persona, shard, epoch)
+            .map_err(ViewRead::View)?
+            .map(SettlementRow::outcome))
+    }
+
+    /// Whether the pair is slashed for `epoch`: its row is Missed, the
+    /// slash is not already applied, the persona was in good standing
+    /// through the epoch, and the failure window says slash.
     fn challenge_failed<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -159,7 +410,14 @@ impl super::Transition {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
-        if self.passed(view, persona, shard, epoch)? {
+        // The epoch in hand was settled by this pass a moment ago, so its
+        // rows are the pending ones and no recorded row can exist for it:
+        // the common case, a pair with no row, costs no read.
+        let missed = self
+            .settled
+            .get(&(epoch, persona, shard))
+            .is_some_and(|row| row.outcome() == SettlementOutcome::Missed);
+        if !missed {
             return Ok(false);
         }
         let applied = view
@@ -171,78 +429,15 @@ impl super::Transition {
         if applied {
             return Ok(false);
         }
-        if !self.baseline_observed(view, persona, record, shard, epoch)? {
+        if !in_standing(record, epoch) {
             return Ok(false);
         }
         self.window_slashable(view, persona, record, shard, epoch)
     }
 
-    /// `archival_baseline_observed_at_epoch`: the persona was good through
-    /// `epoch`, the deadline has passed, the seal block is recorded, and
-    /// the persona held the shard as of the fire height.
-    fn baseline_observed<'id, V: ChainView<'id>>(
-        &self,
-        view: &V,
-        persona: PCanonicalId,
-        record: &BondRecord,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<bool, ViewRead<V::Fault>> {
-        let e = epoch.to_raw();
-        if !good_through(
-            record.join_settlement_epoch.to_raw(),
-            e,
-            &record.bad_intervals,
-        ) {
-            return Ok(false);
-        }
-        if self.count().to_raw() <= self.schedule.slash_deadline_height(e) {
-            return Ok(false);
-        }
-        let h_open = self.schedule.open_height(e);
-        let h_close = self.schedule.last_block(e);
-        let h_seal = challenge_seal_height(h_open);
-        // The seal is a recorded block's hash, so it must sit below the
-        // connecting height. Under the pinned constants a passed deadline
-        // puts it there always; the guard is the observability boundary
-        // stated, not a reachable arm.
-        if h_seal >= self.connecting.to_raw() {
-            return Ok(false);
-        }
-        let seal = recorded(view, BlockHeight::from_raw(h_seal))?.hash;
-        let h_fire = challenge_fire_height(
-            h_open,
-            h_close,
-            seal.as_bytes(),
-            persona.as_bytes(),
-            shard.to_raw(),
-            e,
-        );
-        let fire = BlockHeight::from_raw(h_fire);
-        // A2 plus this block's own entries for the persona — the fire
-        // height is below `connecting`, so they qualify as "after".
-        let mut slashed_after = view
-            .slash_log_after(&persona, fire)
-            .map_err(ViewRead::View)?;
-        slashed_after.extend(
-            self.slashes
-                .iter()
-                .map(|s| s.entry)
-                .filter(|entry| entry.persona == persona),
-        );
-        Ok(holds_shard_at(
-            self.schedule,
-            record,
-            shard,
-            fire,
-            &slashed_after,
-        ))
-    }
-
-    /// `archival_failure_window_slashable`: the decision epoch is a miss;
-    /// walk back through the pair's continuous challengeable run, at most
-    /// `FAILURE_WINDOW_N` observations, stopping once passes exceed the
-    /// serve budget.
+    /// The failure window from a Missed `epoch`. The gather, and where it
+    /// stops, is [`settlement_window_slashable`]; this pass names the
+    /// record's standing and the row each earlier epoch settled.
     fn window_slashable<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -251,33 +446,13 @@ impl super::Transition {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
-        let window = usize::try_from(FAILURE_WINDOW_N).expect("a u32 fits a usize");
-        let mut observations = vec![BaselineObservation::missed(epoch.to_raw())];
-        let mut passes_seen = 0u32;
-        let mut e = epoch.to_raw();
-        while observations.len() < window && e > 0 {
-            e -= 1;
-            let earlier = SettlementEpoch::from_raw(e);
-            if !self.baseline_observed(view, persona, record, shard, earlier)? {
-                break;
-            }
-            let passed = self.passed(view, persona, shard, earlier)?;
-            observations.push(if passed {
-                BaselineObservation::served(e)
-            } else {
-                BaselineObservation::missed(e)
-            });
-            if passed {
-                passes_seen += 1;
-                if passes_seen > FAILURE_WINDOW_SERVE_BUDGET {
-                    break;
-                }
-            }
-        }
-        // The sequence always holds the decision epoch and never more than
-        // the window: the fold's two refusals are unreachable from here.
-        Ok(failure_window_slashable(&observations)
-            .expect("the gathered window holds the decision epoch and at most FAILURE_WINDOW_N observations"))
+        let floor = settlement_retention_floor(self.schedule, self.connecting);
+        settlement_window_slashable(
+            epoch,
+            floor,
+            |earlier| in_standing(record, earlier),
+            |earlier| self.outcome(view, persona, shard, earlier),
+        )
     }
 
     /// Apply one slash to the persona's post-image and record it.

@@ -40,7 +40,8 @@
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+    BondRecord, IndexedDraw, IssuedDigest, PassCount, RMarket, ServedShard, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -381,7 +382,8 @@ pub trait ChainView<'id> {
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 
     // -----------------------------------------------------------------------
-    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13)
+    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13;
+    // `SO-D10` A14–A16)
     //
     // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
     // E4 fold that derives a bond post's transition: a record is state, the
@@ -505,9 +507,38 @@ pub trait ChainView<'id> {
     /// closed epoch whose row the close deleted. The accrual adds this
     /// block's inflow to it; the close freezes it as `budget(E)` (A8).
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // Settlement's reads (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`;
+    // `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.3, §10). Parent-state reads like
+    // the rest.
+    // -----------------------------------------------------------------------
+
+    /// **A14.** What `epoch` settled for `(persona, shard)`
+    /// (`archival_settlement`). `None` is a pair no draw was issued to in
+    /// that epoch, or an epoch the slash pass has not settled: **never a
+    /// miss**. A caller that counts misses reads the row's outcome.
+    fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, Self::Fault>;
+
+    /// **A15.** Every draw issued in `epoch`, in `(persona, shard, issuing
+    /// height, draw)` order; empty when none was. The settlement walk's
+    /// operand: one pair's rows are adjacent and already in the `(h, j)`
+    /// order the selection is defined over, and the whole answer is what
+    /// the epoch's digest (A16) covers.
+    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, Self::Fault>;
+
+    /// **A16.** The running digest of the draws issued in `epoch`, as
+    /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
+    /// with none: the digest of no draws.
+    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A13) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A16) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -621,6 +652,25 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_units::AtomicUnits>);
             (epoch);
             (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; settlement_row;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (::core::option::Option<shekyl_types::archival::SettlementRow>);
+            (persona, shard, epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; issued_draws;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::std::vec::Vec<shekyl_types::archival::IndexedDraw>);
+            (epoch);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; issued_digest;
+            (epoch: shekyl_types::SettlementEpoch);
+            (shekyl_types::archival::IssuedDigest);
+            (epoch);
+            (shekyl_types::archival::IssuedDigest::ZERO));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {

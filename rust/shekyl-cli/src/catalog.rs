@@ -191,6 +191,7 @@ const TX_LIST_FLAGS: &[Flag] = &[
     Flag::switch("--unmatched"),
 ];
 const REQUEST_NEW_FLAGS: &[Flag] = &[Flag::value("--expiry")];
+const SHARD_FETCH_FLAGS: &[Flag] = &[Flag::value("--png"), Flag::value("--size")];
 const REQUEST_LIST_FLAGS: &[Flag] = &[Flag::switch("--matched"), Flag::switch("--all")];
 const URI_MAKE_FLAGS: &[Flag] = &[
     Flag::value("--amount"),
@@ -335,7 +336,12 @@ fn meta(id: CommandId) -> Meta {
         ShardListAll => child("all", "shard list all", ShardList),
         ShardListMine => child("mine", "shard list mine", ShardList),
         ShardShow => child("show", "shard show <id>", Shard),
-        ShardFetch => child("fetch", "shard fetch <id>", Shard),
+        ShardFetch => flagged(
+            "fetch",
+            "shard fetch <id> [--png <path>] [--size <n>]",
+            Shard,
+            SHARD_FETCH_FLAGS,
+        ),
         Mine => interior("mine", "mine", None),
         MineStart => child("start", "mine start [threads|auto]", Mine),
         MineStop => child("stop", "mine stop", Mine),

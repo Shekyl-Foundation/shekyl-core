@@ -56,7 +56,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use shekyl_p_fetch::ExpectedShard;
 use shekyl_p_serve::{ProviderError, ShardBody, ShardProvider};
+use shekyl_types::{ArchivalLength, ShardId, TxHash, SHARD_LENGTH};
+use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx};
+use shekyl_wire::TxidParts;
 
 /// Leaves in one frozen level-2 segment (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
 /// §5.2: `SELENE_CHUNK_WIDTH · HELIOS_CHUNK_WIDTH · SELENE_CHUNK_WIDTH`
@@ -70,6 +74,89 @@ pub const LEAF_BYTES: usize = 128;
 
 /// Exact size of a shard payload — the number the §8.3 gate is about.
 pub const SHARD_BYTES: usize = SEGMENT_LEAF_COUNT * LEAF_BYTES;
+
+/// The txid every framed object's one row carries. Not on the wire and
+/// not checked against anything but itself: the client's content check is
+/// the row's hashes, and the txid is what the view hash binds them to.
+const OBJECT_TXID: TxHash = TxHash::from_bytes([0x5a; 32]);
+
+/// One served object as the wire now carries it (`SF-D8` amendment
+/// 2026-10-08): the payload framed as a **single transaction's prunable
+/// region** in `shekyl_wire::shard_frame`, with the one row a requester
+/// holds for it.
+///
+/// The rig measures a transport, and the transport since the amendment is
+/// a tx-range frame the client takes apart against rows it already holds.
+/// Framing the payload as one transaction keeps every served byte a byte
+/// of the extracted shard (plus a handful of frame bytes) and gives the
+/// client a real expectation to verify, so the production content check
+/// is in the timed path exactly as it is for a daemon.
+#[derive(Clone, Debug)]
+pub struct FramedObject {
+    frame: Arc<[u8]>,
+    payload_len: usize,
+    row: TxidParts,
+}
+
+impl FramedObject {
+    /// Frame `payload` as one transaction with no `pqc_auths`.
+    #[must_use]
+    pub fn new(payload: &[u8]) -> Self {
+        let tx = FrameTx {
+            pqc_auth_count: 0,
+            pqc_auths: &[],
+            prunable: payload,
+        };
+        let (pqc_auth_hash, prunable_hash, archival_len) = rows_of(&tx);
+        Self {
+            frame: Arc::from(encode_frame(&[tx])),
+            payload_len: payload.len(),
+            row: TxidParts {
+                hash: OBJECT_TXID,
+                pqc_auth_hash,
+                prunable_hash,
+                archival_len,
+            },
+        }
+    }
+
+    /// The bytes the endpoint writes ahead of the envelope.
+    #[must_use]
+    pub fn frame(&self) -> Arc<[u8]> {
+        Arc::clone(&self.frame)
+    }
+
+    /// The payload's length: the archival length the client verifies and
+    /// returns, and the figure the apparatus compares a fetch against.
+    #[must_use]
+    pub fn payload_len(&self) -> usize {
+        self.payload_len
+    }
+
+    /// What a requester expects of this object served as shard `shard_id`:
+    /// the one row, placed so the range closes the shard — at the shard's
+    /// start when the payload is `W` or longer, else `W` short of its end.
+    ///
+    /// # Panics
+    ///
+    /// If `shard_id` is past the last representable shard. The rig serves
+    /// shards `0..3`.
+    #[must_use]
+    pub fn expectation(&self, shard_id: u64) -> ExpectedShard {
+        let w = SHARD_LENGTH.to_raw();
+        let start = shard_id.checked_mul(w).expect("shard start fits");
+        let end = start.checked_add(w).expect("shard end fits");
+        let cum_before = end
+            .saturating_sub(self.row.archival_len.to_raw())
+            .max(start);
+        ExpectedShard::new(
+            ShardId::from_raw(shard_id),
+            ArchivalLength::from_raw(cum_before),
+            vec![self.row],
+        )
+        .expect("one row closing its shard")
+    }
+}
 
 /// Why a fixture could not be loaded. Every arm is loud and actionable (rule 82);
 /// none of them degrade to a synthetic payload.
@@ -143,9 +230,8 @@ impl ShardFixture {
         })
     }
 
-    /// The payload, shareable across connections without copying — the
-    /// exact shape `shekyl_p_serve::ShardBody::flat` takes, so serving it
-    /// costs an `Arc` clone and nothing else.
+    /// The payload, shareable without copying. [`FramedObject::new`] frames
+    /// it once; serving it then costs an `Arc` clone and nothing else.
     #[must_use]
     pub fn bytes(&self) -> Arc<[u8]> {
         Arc::clone(&self.bytes)
@@ -185,49 +271,53 @@ impl std::fmt::Debug for ShardFixture {
 /// carrying a second copy of it that drifts (as it did, until the copy was
 /// deleted).
 pub struct FixtureShardProvider {
-    /// The served objects, indexed by shard id.
-    objects: Vec<Arc<[u8]>>,
+    /// The served objects, framed, indexed by shard id.
+    objects: Vec<FramedObject>,
 }
 
 impl FixtureShardProvider {
     /// Wrap one pre-loaded payload, served as shard 0.
     #[must_use]
     pub fn new(payload: Arc<[u8]>) -> Self {
-        Self::with_objects(vec![payload])
+        Self::with_objects(&[payload])
     }
 
     /// Serve several payloads, shard `i` being `objects[i]`. An id past the
     /// end is the ordinary miss.
     #[must_use]
-    pub fn with_objects(objects: Vec<Arc<[u8]>>) -> Self {
+    pub fn with_objects(objects: &[Arc<[u8]>]) -> Self {
+        Self::with_framed(objects.iter().map(|o| FramedObject::new(o)).collect())
+    }
+
+    /// Serve objects already framed — the apparatus frames once and hands
+    /// the same objects to every persona.
+    #[must_use]
+    pub fn with_framed(objects: Vec<FramedObject>) -> Self {
         Self { objects }
+    }
+
+    /// The object served as `shard_id`, or `None` past the end.
+    #[must_use]
+    pub fn object(&self, shard_id: u64) -> Option<&FramedObject> {
+        usize::try_from(shard_id)
+            .ok()
+            .and_then(|i| self.objects.get(i))
     }
 }
 
 impl ShardProvider for FixtureShardProvider {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        // `flat` refuses a payload that is not a whole number of leaves —
-        // the served frame declares a leaf count, so such bytes have no
-        // representable header. [`ShardFixture::load`] already enforces
-        // exactly [`SHARD_BYTES`], so the `None` arm is the guard for a
-        // payload handed to [`FixtureShardProvider::new`] directly, and it
-        // renders the ordinary miss rather than a body no witness could
-        // verify.
-        let Some(payload) = usize::try_from(shard_id)
-            .ok()
-            .and_then(|i| self.objects.get(i))
-        else {
-            return Ok(None);
-        };
-        Ok(ShardBody::flat(Arc::clone(payload)))
+        // The serve loop is body-agnostic: it writes the frame as held. An
+        // id past the served objects renders the ordinary miss.
+        Ok(self.object(shard_id).map(|o| ShardBody::flat(o.frame())))
     }
 }
 
 impl std::fmt::Debug for FixtureShardProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let lens: Vec<usize> = self.objects.iter().map(|o| o.len()).collect();
+        let lens: Vec<usize> = self.objects.iter().map(FramedObject::payload_len).collect();
         f.debug_struct("FixtureShardProvider")
-            .field("lens", &lens)
+            .field("payload_lens", &lens)
             .finish()
     }
 }
@@ -237,11 +327,12 @@ impl std::fmt::Debug for FixtureShardProvider {
 /// `0` (the shard, 1×), `1` (its first half, ½×) and `2` (its first quarter, ¼×) —
 /// a 4× byte span, every size a whole number of leaves.
 ///
-/// The shard is the top of the ladder because it is the largest object the
-/// production frame can carry: `ServedFrameHeader::for_segment` refuses a leaf
-/// count past one segment, so a larger object is unservable, not merely unusual
-/// (the client's `max_body_bytes` bound of two segments is headroom for padding,
-/// not a second segment).
+/// The shard is the top of the ladder because it is the size the W₂
+/// question asks about (`SHARD_BYTES`); the serve loop itself is
+/// body-agnostic and would stream a larger object, and the client's
+/// response ceiling — derived from the expectation's rows
+/// (`ExpectedShard::max_response_len`) — is the one bound a larger object
+/// would meet.
 ///
 /// Nothing here is synthetic in the sense the honesty gate forbids: every byte
 /// served is a byte of the extracted shard. What varies is only how many of them
@@ -270,19 +361,50 @@ mod tests {
         assert!((3_320_000..3_340_000).contains(&SHARD_BYTES));
     }
 
-    /// The body a reader actually receives is the frame header plus the
-    /// shard, and the apparatus derives that number through the production
-    /// contract rather than taking it from a caller. Pinned here because the
-    /// first version of the harness compared against `SHARD_BYTES` directly,
-    /// and when RF-D4's frame landed every probe went stale at once.
-    ///
-    /// `4` is the hand-derived header for a full unpadded segment
-    /// (`88 CB 01 00`, `ARCHIVAL_RESPONSE_FORMAT.md` §3.5).
+    /// The body a reader actually receives is the shard's bytes framed as
+    /// one transaction — the serve loop writes nothing of its own ahead of
+    /// them — and the apparatus derives what to expect from the same
+    /// object the endpoint serves rather than taking a number from a
+    /// caller. Pinned here because the first version of the harness
+    /// compared against `SHARD_BYTES` directly, and when the since-retired
+    /// `RF-D4` frame landed every probe went stale at once; the derivation
+    /// is what keeps the next wire move from doing the same.
     #[test]
-    fn served_body_is_the_frame_plus_the_shard() {
-        let payload: std::sync::Arc<[u8]> = vec![0u8; SHARD_BYTES].into();
-        let body = shekyl_p_serve::ShardBody::flat(payload).expect("a full shard is framable");
-        assert_eq!(body.header().framed_len(), (SHARD_BYTES + 4) as u64);
+    fn served_body_is_the_shard_through_the_production_contract() {
+        let object = FramedObject::new(&vec![0u8; SHARD_BYTES]);
+        let body = shekyl_p_serve::ShardBody::flat(object.frame());
+        // Frame overhead: version, count 1, auth count 0, pqc len 0, and the
+        // prunable length as LEB128 (four bytes for 3.3 MB).
+        assert_eq!(body.len(), SHARD_BYTES as u64 + 1 + 1 + 1 + 1 + 4);
+        assert_eq!(object.payload_len(), SHARD_BYTES);
+        // The expectation is the one row, and the client's ceiling covers
+        // the frame.
+        let expected = object.expectation(0);
+        assert_eq!(expected.tx_count(), 1);
+        assert_eq!(expected.archival_len().to_raw(), SHARD_BYTES as u64);
+        assert!(
+            body.len() + shekyl_p_fetch::SIGNATURE_ENVELOPE_LEN as u64
+                <= expected.max_response_len()
+        );
+    }
+
+    /// A payload longer than `W` is placed at its shard's start; a shorter
+    /// one is placed `W` short of the shard's end. Both close the shard.
+    #[test]
+    fn a_framed_object_closes_whichever_shard_it_is_served_as() {
+        let w = SHARD_LENGTH.to_raw();
+        let long = FramedObject::new(&vec![0u8; SHARD_BYTES]);
+        assert!(
+            SHARD_BYTES as u64 > w,
+            "the extracted shard is longer than W"
+        );
+        for shard in 0..3u64 {
+            assert_eq!(long.expectation(shard).shard_id().to_raw(), shard);
+        }
+        let short = FramedObject::new(&[0u8; LEAF_BYTES]);
+        for shard in 0..3u64 {
+            assert_eq!(short.expectation(shard).shard_id().to_raw(), shard);
+        }
     }
 
     #[test]
@@ -349,7 +471,7 @@ mod tests {
                 "{} is not whole leaves",
                 object.len()
             );
-            assert!(shekyl_p_serve::ShardBody::flat(Arc::clone(object)).is_some());
+            assert_eq!(FramedObject::new(object).payload_len(), object.len());
         }
         let one = fixture.bytes();
         assert!(
@@ -358,9 +480,6 @@ mod tests {
         );
         assert_eq!(&ladder[1][..], &one[..SHARD_BYTES / 2]);
         assert_eq!(&ladder[2][..], &one[..SHARD_BYTES / 4]);
-        // One leaf past a segment is unservable — why the shard tops the ladder.
-        let past: Arc<[u8]> = vec![0u8; SHARD_BYTES + LEAF_BYTES].into();
-        assert!(shekyl_p_serve::ShardBody::flat(past).is_none());
     }
 
     /// Shard `i` is object `i`; past the end is the ordinary miss.
@@ -370,12 +489,20 @@ mod tests {
             vec![1u8; LEAF_BYTES].into(),
             vec![2u8; 2 * LEAF_BYTES].into(),
         ];
-        let provider = FixtureShardProvider::with_objects(objects);
+        let provider = FixtureShardProvider::with_objects(&objects);
         for (id, leaves) in [(0u64, 1u64), (1, 2)] {
             let body = provider.shard_bytes(id).expect("ok").expect("served");
             let payload = leaves * u64::try_from(LEAF_BYTES).expect("fits");
-            assert!(body.header().framed_len() > payload);
+            assert_eq!(
+                body.len(),
+                u64::try_from(provider.object(id).unwrap().frame().len()).unwrap()
+            );
+            assert_eq!(
+                provider.object(id).unwrap().payload_len(),
+                usize::try_from(payload).unwrap()
+            );
         }
         assert!(provider.shard_bytes(2).expect("ok").is_none());
+        assert!(provider.object(2).is_none());
     }
 }

@@ -45,6 +45,21 @@
 // ^ Small integer parameters (`k`, hop milliseconds) widen to `f64` for the
 //   closed-form derivation below. Every value involved is far below 2^53.
 
+use crate::basis::DerivationMs;
+
+/// The inherited `hop`, 175 ms: an assumption. It is the number inside a
+/// `tx_pool.cpp` comment (§21), never measured on any path.
+/// [`DandelionParams::inherited`] carries it; the adopted set derives its
+/// hop instead (§97).
+pub const INHERITED_HOP: DerivationMs = DerivationMs::assumption(175);
+
+/// `fluff_return_ms`, 3250 ms: a model result. F-7's transit-free p90 first
+/// passage at degree 12 under `FloodReach::OutboundOnly`, provisional under
+/// `DAEMON_RELAY_PRIVACY.md` §96 item 2. The C++ transports every flush
+/// today; this number is the instrument's, not a reading of that transport
+/// (§97).
+pub const FLUFF_RETURN: DerivationMs = DerivationMs::model(3_250);
+
 /// Probability that a stem transaction travels its full expected length before
 /// *any* node on the path fires its embargo timer.
 ///
@@ -308,7 +323,12 @@ pub struct DandelionParams {
     /// into this scalar without the spread, and the spread is the dominant
     /// term. **`175` is not yet such a value** — it is a provenance (§21), and
     /// the clearnet measurement is owed first (§65.3).
-    pub time_between_hop_ms: u32,
+    ///
+    /// A [`DerivationMs`]: the value carries the basis it was built or
+    /// derived with (§97). [`Self::inherited`] carries [`INHERITED_HOP`], an
+    /// assumption; [`Self::adopted_for_transit_ms`] derives it, and the
+    /// result carries the weakest basis of its inputs.
+    pub time_between_hop_ms: DerivationMs,
     /// Minimum epoch duration in seconds, before jitter.
     pub min_epoch_secs: u32,
     /// Width of the uniform jitter added to each epoch, in seconds.
@@ -332,7 +352,12 @@ pub struct DandelionParams {
     /// testnet reopening trigger, and it is set from a high quantile rather
     /// than a mean because over-estimating lengthens the embargo (safe) while
     /// under-estimating shortens it (a privacy loss).
-    pub fluff_return_ms: u32,
+    ///
+    /// A [`DerivationMs`] taken from [`FLUFF_RETURN`], a model result
+    /// (§97): the instrument's number, not a reading of the C++ that
+    /// transports the flush today. §96 item 2 is its operational
+    /// replacement, on the Rust path after RD.
+    pub fluff_return_ms: DerivationMs,
     /// Stem-graph shape.
     pub graph: StemGraph,
 }
@@ -352,7 +377,7 @@ impl DandelionParams {
             // The `hop = 175 ms` fudge factor named in the `tx_pool.cpp`
             // comment. Not a config constant in C++ — it exists only inside
             // that comment's arithmetic, which is part of the problem.
-            time_between_hop_ms: 175,
+            time_between_hop_ms: INHERITED_HOP,
             // CRYPTONOTE_DANDELIONPP_MIN_EPOCH = 10 minutes.
             min_epoch_secs: 600,
             // CRYPTONOTE_DANDELIONPP_EPOCH_RANGE = 30 seconds.
@@ -396,7 +421,7 @@ impl DandelionParams {
             // leak and pays only in black-hole recovery latency. Privacy-safe
             // on both axes. Under the *inherited* Poisson delay the same
             // instrument gives ~13.75 s — see F-5.
-            fluff_return_ms: 3_250,
+            fluff_return_ms: FLUFF_RETURN,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
         }
@@ -455,19 +480,21 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS)
+        Self::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT)
     }
 
-    /// The adopted parameter set for one measured transit term.
+    /// The adopted parameter set for one transit term.
     ///
-    /// The embargo draw uses this with the forwarded connector's measured
-    /// transit. Only `time_between_hop_ms` changes.
+    /// The embargo draw uses this with the forwarded connector's declared
+    /// transit. Only `time_between_hop_ms` changes. The transit is a
+    /// [`crate::basis::DerivationMs`]: it carries its basis, and a C++-path
+    /// reading is not a basis this type can carry (§97).
     #[must_use]
-    pub fn adopted_for_transit_ms(transit_ms: f64) -> Self {
+    pub fn adopted_for_transit_ms(transit: crate::basis::DerivationMs) -> Self {
         let hop = crate::verify_cost::adopted_hop_ms_with_transit(
             1,
             crate::verify_cost::GENESIS_TREE_DEPTH,
-            transit_ms,
+            transit,
         )
         .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {
@@ -525,7 +552,7 @@ impl DandelionParams {
     #[must_use]
     pub fn closed_form_embargo_secs(&self) -> u32 {
         let k = self.expected_stem_length();
-        let hop = f64::from(self.time_between_hop_ms) / 1000.0;
+        let hop = f64::from(self.time_between_hop_ms.ms()) / 1000.0;
         let secs = (-k * (k - 1.0) * hop) / (2.0 * EMBARGO_FULL_TRAVEL_PROBABILITY.ln());
         // `ceil` before narrowing; the value is a few tens of seconds for any
         // sane input, so the cast cannot truncate meaningfully. Clamp anyway
@@ -580,7 +607,7 @@ impl DandelionParams {
 #[must_use]
 pub fn reconciles_under_log10(params: &DandelionParams) -> f64 {
     let k = params.expected_stem_length();
-    let hop = f64::from(params.time_between_hop_ms) / 1000.0;
+    let hop = f64::from(params.time_between_hop_ms.ms()) / 1000.0;
     (-k * (k - 1.0) * hop) / (2.0 * EMBARGO_FULL_TRAVEL_PROBABILITY.log10())
 }
 
@@ -769,7 +796,9 @@ mod tests {
         for pct in 1..=100_u32 {
             for hop_ms in [1_u32, 25, 175, 1_000, 10_000] {
                 let p = DandelionParams {
-                    time_between_hop_ms: hop_ms,
+                    time_between_hop_ms: DandelionParams::inherited()
+                        .time_between_hop_ms
+                        .derived(hop_ms),
                     fluff_probability_pct: pct,
                     ..DandelionParams::inherited()
                 };
@@ -805,28 +834,33 @@ mod tests {
     fn the_clearnet_transit_is_the_adopted_set() {
         assert_eq!(
             DandelionParams::adopted(),
-            DandelionParams::adopted_for_transit_ms(
-                crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS
-            ),
+            DandelionParams::adopted_for_transit_ms(crate::verify_cost::ADOPTED_TRANSIT),
             "adopted() is the clearnet transit assumption"
         );
         assert_eq!(
-            DandelionParams::adopted().time_between_hop_ms,
+            DandelionParams::adopted().time_between_hop_ms.ms(),
             175,
             "the clearnet hop moved off its §88 value"
+        );
+        // The adopted hop carries the clearnet transit's basis: an assumption.
+        assert_eq!(
+            DandelionParams::adopted().time_between_hop_ms.basis(),
+            crate::basis::AdmissibleBasis::Assumption
+        );
+        assert_eq!(
+            DandelionParams::adopted().fluff_return_ms.basis(),
+            crate::basis::AdmissibleBasis::Model
         );
     }
 
     #[test]
     fn the_longer_transit_takes_the_longer_hop() {
-        let anon = DandelionParams::adopted_for_transit_ms(
-            crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
-        );
+        let anon = DandelionParams::adopted_for_transit_ms(crate::verify_cost::ANON_ZONE_TRANSIT);
         // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
         // input is that connector's measured transit.
-        assert_eq!(anon.time_between_hop_ms, 1_750);
+        assert_eq!(anon.time_between_hop_ms.ms(), 1_750);
         assert!(
-            anon.time_between_hop_ms > DandelionParams::adopted().time_between_hop_ms,
+            anon.time_between_hop_ms.ms() > DandelionParams::adopted().time_between_hop_ms.ms(),
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \
              relays where clearnet is one direct connection. If this ever \
              inverts, the interim has been edited to the privacy-losing side"

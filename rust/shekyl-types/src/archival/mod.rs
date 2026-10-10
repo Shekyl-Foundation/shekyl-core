@@ -629,14 +629,21 @@ impl core::fmt::Display for SettlementEpochBlocks {
 
 mod bond;
 mod serve;
+mod settlement;
 mod slash;
+mod view;
 
 pub use bond::{
     BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, RMarket,
     SigmaWorkMilli, MAX_BOND_KEY_BYTES,
 };
 pub use serve::{PassCount, ServedShard};
+pub use settlement::{
+    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SettlementRowError,
+    COUNTED_DRAWS, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES, SETTLEMENT_ROW_LEN,
+};
 pub use slash::{SlashLogEntry, SlashedHolding};
+pub use view::ShardView;
 
 #[cfg(test)]
 mod tests {

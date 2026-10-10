@@ -30,7 +30,7 @@ use shekyl_chain_rules::{
     validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault, Locus,
     RecordWriteKind, ReleaseAnchors, RuleSet, Trust, TxSlot, Verdict,
 };
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_wire::Input;
 
@@ -738,5 +738,111 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
         },
     );
     drop(store);
+    cleanup(&path);
+}
+
+/// The draw-issue door (`SO-D10f`) beside the credit injector: Fakechain
+/// only, bonded personas only, a draw issued once, and the digest the
+/// caller folded stored as given. Not journaled, like the credit.
+#[test]
+fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_once() {
+    let path = tmp("aw-issue-draws");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let p = persona(P_SLOT);
+    let draw = |j: u32, passed: bool| IndexedDraw {
+        persona: p,
+        shard: shard(3),
+        issuing_height: BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
+        draw: j,
+        state: IssuedDraw {
+            revealed_at: BlockHeight::from_raw(FIRST_SPEND_HEIGHT + 1),
+            passed,
+        },
+    };
+    let digest = IssuedDigest::from_bytes([0x5a; 32]);
+
+    let mut grown = Grown::new();
+    for _ in 0..FIRST_SPEND_HEIGHT {
+        connect_empty(&store, &mut grown, RuleSet::GENESIS);
+    }
+    let stranger = store
+        .regtest_issue_draws(Trust::UNANCHORED, epoch(0), &[draw(0, false)], digest)
+        .unwrap_err();
+    assert!(
+        matches!(
+            stranger,
+            StoreError::Cannot(StoreCannot::InjectionForUnbondedPersona { persona }) if persona == p
+        ),
+        "{stranger:?}"
+    );
+    connect_one(
+        &store,
+        &mut grown,
+        &[Listed::Join { slot: P_SLOT }],
+        RuleSet::GENESIS,
+    );
+    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0]), &[]));
+    let off = store
+        .regtest_issue_draws(anchored, epoch(0), &[draw(0, false)], digest)
+        .unwrap_err();
+    assert!(
+        matches!(off, StoreError::Cannot(StoreCannot::InjectionOffFakechain)),
+        "{off:?}"
+    );
+    let read = |e: u64| {
+        let snap = store.begin_read().expect("read");
+        (
+            snap.issued_draws(epoch(e)).expect("read"),
+            snap.issued_digest(epoch(e)).expect("read"),
+        )
+    };
+    assert_eq!(
+        read(0),
+        (vec![], IssuedDigest::ZERO),
+        "a refused issue writes nothing"
+    );
+
+    store
+        .regtest_issue_draws(
+            Trust::UNANCHORED,
+            epoch(0),
+            &[draw(1, true), draw(0, false)],
+            digest,
+        )
+        .expect("Fakechain, a record held, draws not yet issued");
+    assert_eq!(
+        read(0),
+        (vec![draw(0, false), draw(1, true)], digest),
+        "both draws in index order, the digest as given"
+    );
+    assert_eq!(
+        read(1),
+        (vec![], IssuedDigest::ZERO),
+        "another epoch is untouched"
+    );
+
+    // A draw the index holds is not issued again, and the refused batch
+    // writes nothing: not the fresh draw listed before it, not the digest.
+    let again = store
+        .regtest_issue_draws(
+            Trust::UNANCHORED,
+            epoch(0),
+            &[draw(2, false), draw(1, false)],
+            IssuedDigest::ZERO,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            again,
+            StoreError::Cannot(StoreCannot::DrawAlreadyIssued { persona }) if persona == p
+        ),
+        "{again:?}"
+    );
+    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
+
+    // Not journaled: a block above the draws, popped, leaves them.
+    connect_empty(&store, &mut grown, RuleSet::GENESIS);
+    pop(&store);
+    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
     cleanup(&path);
 }

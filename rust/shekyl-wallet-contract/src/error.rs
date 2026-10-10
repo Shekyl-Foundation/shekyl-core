@@ -25,6 +25,8 @@ use shekyl_rpc_client::{
 };
 use thiserror::Error;
 
+pub use crate::shard_view::ShardViewNotOfferedCause;
+
 /// The Foundation CompleteTree terms, stated to the operator on the path
 /// that would take them on (`COMPLETETREE_ACTIVATION.md` §5, approved
 /// verbatim — **a defect in this text is a finding for the round record,
@@ -372,6 +374,17 @@ wallet_rpc_error_codes! {
     ServingIdentityUnavailable = -29532 => "SERVING_IDENTITY_UNAVAILABLE",
     /// Open (staker): serving needs the wallet's own node on loopback.
     ServingLocalNodeRequired = -29533 => "SERVING_LOCAL_NODE_REQUIRED",
+    /// `get_shard_view`: the shard is still open — the chain has not filled
+    /// it, so it has no view yet (the daemon's `-24`). Wait for it to close.
+    ShardStillOpen = -29534 => "SHARD_STILL_OPEN",
+    /// `get_shard_view`: the shard is closed and the daemon's fetch reached
+    /// no holder that served it (the daemon's `-22`). Transient; retry.
+    ShardUnavailable = -29535 => "SHARD_UNAVAILABLE",
+    /// `get_shard_view`: the daemon this wallet uses does not serve shard
+    /// views — the method is admin-only and this is its public listener
+    /// (`-19`), or the daemon holds no archival skeleton (`-25`).
+    /// `data.cause` says which; the remedy is another daemon, not a retry.
+    ShardViewNotOffered = -29536 => "SHARD_VIEW_NOT_OFFERED",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -1009,6 +1022,35 @@ pub enum WalletRpcError {
     )]
     ServingLocalNodeRequired,
 
+    /// `get_shard_view` (`-29534`): the shard is still open. Its picture
+    /// would change every block, so no view exists until it closes
+    /// (`SHARD_VIEW_FETCH.md` `SV-D5`). `data.detail` is the daemon's own
+    /// sentence, which names how far the open shard is from closing.
+    #[error("this shard is still open — it has no view until the chain closes it")]
+    ShardStillOpen {
+        /// The daemon's message (secret-free by contract).
+        detail: String,
+    },
+    /// `get_shard_view` (`-29535`): the shard is closed and the daemon's
+    /// fetch reached no holder that served it. Transient: the holder set
+    /// and the network change; retry later.
+    #[error("the shard could not be retrieved from any holder — try again later")]
+    ShardUnavailable {
+        /// The daemon's message, which carries the attempt count.
+        detail: String,
+    },
+    /// `get_shard_view` (`-29536`): the daemon this wallet is pointed at
+    /// does not serve shard views. Two causes, one remedy (another daemon):
+    /// the method is admin-only and this is a public listener, or the
+    /// daemon holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`).
+    #[error("this daemon does not serve shard views — point the wallet at a node that does")]
+    ShardViewNotOffered {
+        /// Why: the daemon's `restricted` refusal or its `skeleton_absent`.
+        cause: ShardViewNotOfferedCause,
+        /// The daemon's message.
+        detail: String,
+    },
+
     /// `verify_message` (`-29800`): the signature is well-formed and intact
     /// but does not verify for that address, message, and network. This is
     /// the method's honest negative *answer* (SM-R-6), carried as its own
@@ -1133,6 +1175,9 @@ impl WalletRpcError {
             Self::ServingTorUnusable => WalletRpcErrorCode::ServingTorUnusable,
             Self::ServingIdentityUnavailable => WalletRpcErrorCode::ServingIdentityUnavailable,
             Self::ServingLocalNodeRequired => WalletRpcErrorCode::ServingLocalNodeRequired,
+            Self::ShardStillOpen { .. } => WalletRpcErrorCode::ShardStillOpen,
+            Self::ShardUnavailable { .. } => WalletRpcErrorCode::ShardUnavailable,
+            Self::ShardViewNotOffered { .. } => WalletRpcErrorCode::ShardViewNotOffered,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1162,7 +1207,12 @@ impl WalletRpcError {
             | Self::UnstakeFateUnknown { detail }
             | Self::CollectSyncing { detail }
             | Self::CollectDaemonUnreachable { detail }
-            | Self::UnstakeLocalNodeRequired { detail } => Some(json!({ "detail": detail })),
+            | Self::UnstakeLocalNodeRequired { detail }
+            | Self::ShardStillOpen { detail }
+            | Self::ShardUnavailable { detail } => Some(json!({ "detail": detail })),
+            Self::ShardViewNotOffered { cause, detail } => {
+                Some(json!({ "cause": cause.as_str(), "detail": detail }))
+            }
             // The `-29511` pair shares one code with two remedies; the
             // structured discriminant is what lets automation branch
             // wait-vs-retry without parsing prose (the -29500 `data.detail`
@@ -1504,7 +1554,7 @@ impl From<SendError> for WalletRpcError {
 /// only. The "no answer" arm is `-29201`; a caller whose contract names a
 /// narrower "no answer" code (the fee query's `-29102`) matches that arm
 /// before delegating here.
-fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
+pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcError {
     match fault {
         DaemonFault::Unreachable => {
             tracing::info!(detail, "daemon did not answer");

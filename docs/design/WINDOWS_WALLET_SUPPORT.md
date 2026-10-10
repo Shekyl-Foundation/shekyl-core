@@ -4,6 +4,9 @@
 pipe with an owner-only security descriptor). Every other question raised in
 the round is decided here rather than deferred; **one** item remains open
 (§9.2, with a reopening criterion). §9.1 closed on the §6 scope ruling.
+**WP-D8 reopened 2026-10-09:** its no-label clause is contradicted by a
+measurement — a same-user low-integrity process can read the exported seed
+file — and a fix is proposed there, awaiting a ruling.
 **WP-W2 ruled 2026-08-20 (§8.1): Windows ships self-hosted only** — no
 `npipe://` and no `uds://` external form — and the client-side peer check is
 **live and load-bearing on the self-hosted path**, a correction of the first
@@ -454,6 +457,38 @@ One ACE, protected DACL, no broad principal; a second ACE here would be the
 #516 shape and P-16 asserts there is exactly one. **No mandatory label**: the
 read-up question for files is not this slice's, and adding a label without a
 ruling would be a default masquerading as a decision.
+
+> **REOPENED 2026-10-09 — the no-label clause, by measurement.** The
+> question this section left unasked now has an answer, and it is against
+> the policy above. A file created with exactly this descriptor — owner and
+> group the user's SID, a protected DACL with one full-access ACE for that
+> SID, no mandatory label — **was read by a low-integrity process running
+> as the same user** (Windows lane, 2026-10-08, reported in
+> [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §9.1; not reproduced elsewhere).
+> Windows' default integrity policy forbids writing up, not reading up, and
+> a DACL that grants the user grants every process running as the user.
+>
+> That is inside this round's threat model, not outside it: WP-D4 sets an
+> integrity **floor** for the pipe precisely because "a Low-IL process
+> running as you has your SID". The exported seed file has no such floor,
+> so the process the pipe refuses can read the seed off disk.
+>
+> **Proposed, awaiting a ruling:** `create_owner_only_file` applies a
+> no-read-up label, `S:(ML;;NR;;;ME)`, in the `SECURITY_ATTRIBUTES` it
+> already passes to `CreateFileW`, for every caller. The same measurement
+> fixes how: the label must be set **at creation**. A label inherited from
+> the directory, or applied afterwards with `icacls /setintegritylevel`,
+> yields no-write-up only while the file still shows a Medium label, so a
+> check for "a label is present" passes on the broken file. P-16, which
+> asserts the descriptor has exactly one ACE, gains a second assertion that
+> reads back the label's policy bits and requires `NR`.
+>
+> **Why it is not changed in the commit that records this:** the fix is a
+> security-descriptor change in `unsafe` Windows code, and its only honest
+> verification is a low-integrity read attempt on a Windows machine. It is
+> carried in `FOLLOWUPS.md` under this document until that run exists.
+> "Policy, fixed 2026-08-20" above describes what is landed, not what is
+> sufficient.
 
 ### WP-D9 — WP-B4, the disk probe
 
