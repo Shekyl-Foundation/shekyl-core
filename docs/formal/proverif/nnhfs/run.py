@@ -16,6 +16,15 @@
 #                                EncryptAndHash(empty payload)
 #     Split                      k_i2r = HKDF(ck)[1], k_r2i = HKDF(ck)[2]
 #
+# WHAT THE PHASE-1 VARIANTS SAY. `independent_of_later_ephemerals` is
+# session independence: a completed session's records stay secret when the
+# ephemerals of sessions started afterwards are published. It is not forward
+# secrecy — NN has no long-term key for that term to be about.
+# `own_ephemerals_exposed` publishes the completed session's own ephemerals
+# and is pinned FALSE: what protects a completed session is erasure, and the
+# code performs it (the ephemerals are dropped, ZeroizeOnDrop, at the end of
+# read_message2 / finish; see the README for what Split keeps).
+#
 # The primitives come from ../lib/noise.pvl, the library shared with the RPC
 # channel's hybridXK model (RT-P7). This file declares only the protocol.
 #
@@ -235,8 +244,9 @@ let Responder(nid: bitstring, link: channel, rep: bitstring, leak: bool) =
 
 
 # The main processes. `passive` pairs the honest roles over hs; `active`
-# puts them on c. `cross` adds a responder on the other network. `fs_*` add
-# phase-1 sessions that publish their ephemerals.
+# puts them on c. `cross` adds a responder on the other network. `fs_later`
+# adds phase-1 sessions that publish their ephemerals (session
+# independence); `fs_own` has the session publish its own (erasure).
 #
 # Where a leaking session runs decides its leak prefix (see `protocol`).
 LEAK_PREFIX = {"passive": "phase 1; ", "active": "phase 1; ", "cross": "phase 1; ",
@@ -275,12 +285,15 @@ QUERIES = {
     "rep_secret": "query attacker(rep0).",
     "req_secret_p1": "query attacker(req0) phase 1.",
     "rep_secret_p1": "query attacker(rep0) phase 1.",
-    "key_secret": (
+    "key_secret_i2r": (
         "query n: bitstring, k1: key, k2: key;\n"
         "  event(InitiatorDone(n, k1, k2)) && attacker(k1)."),
     "cross_network": (
         "query k1: key, k2: key;\n"
         "  event(InitiatorDone(nidA, k1, k2)) && event(ResponderDone(nidB, k1, k2))."),
+    "key_secret_r2i": (
+        "query n: bitstring, k1: key, k2: key;\n"
+        "  event(InitiatorDone(n, k1, k2)) && attacker(k2)."),
     # Not properties: these must be REACHABLE, or every claim is true of a
     # protocol that cannot run.
     "reach_pair": (
@@ -295,19 +308,19 @@ QUERIES = {
 # reach_* rows that is the wanted verdict.
 VARIANTS = [
     # --- the properties --------------------------------------------------
-    ("passive",            "passive",  set(),           set(),          {"req_secret": "true", "rep_secret": "true", "key_secret": "true", "reach_pair": "false"}),
-    ("hybrid_dh_broken",   "passive",  set(),           {"dh"},         {"req_secret": "true", "rep_secret": "true", "key_secret": "true", "reach_pair": "false"}),
-    ("hybrid_kem_broken",  "passive",  set(),           {"kem"},        {"req_secret": "true", "rep_secret": "true", "key_secret": "true", "reach_pair": "false"}),
-    ("fs_later_ephemerals","fs_later", set(),           set(),          {"req_secret_p1": "true", "rep_secret_p1": "true"}),
+    ("passive",            "passive",  set(),           set(),          {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
+    ("hybrid_dh_broken",   "passive",  set(),           {"dh"},         {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
+    ("hybrid_kem_broken",  "passive",  set(),           {"kem"},        {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
+    ("independent_of_later_ephemerals","fs_later", set(),           set(),          {"req_secret_p1": "true", "rep_secret_p1": "true"}),
     ("network_binding",    "cross",    set(),           set(),          {"cross_network": "true", "reach_pair": "false"}),
     # --- stated non-properties ------------------------------------------
     ("active_mitm",        "active",   set(),           set(),          {"req_secret": "false", "rep_secret": "false", "reach_pair": "false"}),
     ("both_broken",        "passive",  set(),           {"dh", "kem"},  {"req_secret": "false", "rep_secret": "false"}),
-    ("fs_own_ephemerals",  "fs_own",   set(),           set(),          {"req_secret_p1": "false", "rep_secret_p1": "false"}),
+    ("own_ephemerals_exposed",  "fs_own",   set(),           set(),          {"req_secret_p1": "false", "rep_secret_p1": "false"}),
     # --- the named edits: each property observed failing -----------------
     ("edit_no_ekem_dh_broken",  "passive",  {"no_ekem"},          {"dh"},   {"req_secret": "false", "rep_secret": "false"}),
     ("edit_no_ee_kem_broken",   "passive",  {"no_ee"},            {"kem"},  {"req_secret": "false", "rep_secret": "false"}),
-    ("edit_no_ee_no_ekem",      "passive",  {"no_ee", "no_ekem"}, set(),    {"req_secret": "false", "rep_secret": "false", "key_secret": "false"}),
+    ("edit_no_ee_no_ekem",      "passive",  {"no_ee", "no_ekem"}, set(),    {"req_secret": "false", "rep_secret": "false", "key_secret_i2r": "false", "key_secret_r2i": "false"}),
     ("edit_no_prologue",        "cross",    {"no_prologue"},      set(),    {"cross_network": "false"}),
     ("edit_reuse_ephemeral",    "fs_later", {"reuse_eph"},        set(),    {"req_secret_p1": "false", "rep_secret_p1": "false"}),
 ]

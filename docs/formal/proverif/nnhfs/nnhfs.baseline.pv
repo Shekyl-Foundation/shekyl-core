@@ -97,6 +97,8 @@ query attacker(req0).
 query attacker(rep0).
 query n: bitstring, k1: key, k2: key;
   event(InitiatorDone(n, k1, k2)) && attacker(k1).
+query n: bitstring, k1: key, k2: key;
+  event(InitiatorDone(n, k1, k2)) && attacker(k2).
 query k1: key, k2: key;
   event(InitiatorDone(nidA, k1, k2)) && event(ResponderDone(nidA, k1, k2)).
 

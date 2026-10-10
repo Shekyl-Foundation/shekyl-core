@@ -47,7 +47,7 @@ One declaration of each primitive, loaded with `proverif -lib`:
 
 The names and signatures are the ones the RT-P7 model declared inline
 (`rust/shekyl-rpc-channel/model/run.py`, #1020), so that model adopts the
-library by replacing its prelude with `-lib` and nothing else.
+library by replacing its prelude with `-lib` and nothing else (FOLLOWUPS).
 
 ## The NNhfs model — `nnhfs/run.py`
 
@@ -67,14 +67,14 @@ the non-property as a verdict rather than a sentence.
 
 | Variant | Asks | Pinned verdict |
 | --- | --- | --- |
-| `passive` | secrecy of both transport records and of the initiator's Split key; honest completion reachable | secret; reachable |
+| `passive` | secrecy of both transport records and of both Split keys (`k_i2r`, `k_r2i`); honest completion reachable | secret; reachable |
 | `hybrid_dh_broken` | the same with every X25519 result public | secret — ML-KEM carries it |
 | `hybrid_kem_broken` | the same with every ML-KEM secret public | secret — X25519 carries it |
-| `fs_later_ephemerals` | a session's records after later sessions' ephemerals are published (phase 1) | secret |
+| `independent_of_later_ephemerals` | a completed session's records after the ephemerals of sessions started afterwards are published (phase 1) — session independence, not forward secrecy (NN has no long-term key for that term to be about) | secret |
 | `network_binding` | an initiator on network A and a responder on network B completing with the same keys | unreachable |
 | `active_mitm` | secrecy against an active attacker | **not secret — stated non-property: NN has no authentication, by design** |
 | `both_broken` | both primitives public | not secret, as expected |
-| `fs_own_ephemerals` | a session's records after **its own** ephemerals are published | **not secret** — NN's forward secrecy is the erasure of the ephemerals at `Split` (`noise.rs` drops them and zeroizes `ck`), not a property of the pattern |
+| `own_ephemerals_exposed` | a completed session's records after **its own** ephemerals are published | **not secret** — pinned so: what protects a completed session is erasure, not the pattern. `noise.rs` drops the ephemerals (`ZeroizeOnDrop`) at the end of `read_message2` / `finish`; `split` zeroes the symmetric state's `ck` but hands that value to both `Direction`s, where it persists as the rekey chain (`channel.rs` `halves`) — the chain is RT-W8 part 2's subject |
 
 **Each property is shown failing under a named edit before its success
 counts** (rule 47). The edits remove one thing the pattern carries:
@@ -83,9 +83,9 @@ counts** (rule 47). The edits remove one thing the pattern carries:
 | --- | --- | --- |
 | `no_ekem` + X25519 broken | the KEM ciphertext | the hybrid claim's ML-KEM leg |
 | `no_ee` + ML-KEM broken | the X25519 exchange | the hybrid claim's X25519 leg |
-| `no_ee` + `no_ekem` | both | plain secrecy and key secrecy |
+| `no_ee` + `no_ekem` | both | plain secrecy and the secrecy of both Split keys |
 | `no_prologue` | the network id from `h` | network binding: cross-network completion becomes reachable |
-| `reuse_eph` | fresh initiator ephemerals (one pair across sessions) | forward secrecy under later-session compromise |
+| `reuse_eph` | fresh initiator ephemerals (one pair across sessions) | session independence under later-session compromise |
 
 An edit whose property still holds fails the run: either the edit is not
 what it says, or the property does not depend on what the design says it
@@ -108,7 +108,7 @@ refuses to run if `nnhfs.baseline.pv` is not what it would generate
 to this directory, to `noise.rs`, or to the workflow, and fails if any
 verdict changes.
 
-`install_proverif.sh` is byte-identical to the RPC channel model's copy, so
-the two CI jobs share one cache; it builds ProVerif 2.05 from source with a
-pinned OCaml, every download checked against a recorded SHA-256. When the
-RT-P7 model adopts the library its copy goes and the workflow points here.
+`install_proverif.sh` is the one recipe: it builds ProVerif 2.05 from
+source under a pinned OCaml from a pinned opam-repository revision, every
+download checked against a recorded SHA-256. The RT-P7 model (#1020)
+adopts it and the library, deleting its own copy (FOLLOWUPS).

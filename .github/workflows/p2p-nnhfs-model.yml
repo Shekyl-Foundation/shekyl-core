@@ -10,16 +10,18 @@
 # docs/formal/proverif/nnhfs/run.py, over the shared library
 # docs/formal/proverif/lib/noise.pvl. This job installs the one ProVerif
 # version those verdicts are pinned to, by the same script a developer runs
-# (install_proverif.sh beside them; byte-identical to the RPC channel
-# model's copy so the two jobs share one cache), and runs every variant. It
-# fails if any query's result changes: a property that stops holding, and
-# equally a named edit under which the property no longer fails.
+# (install_proverif.sh beside them, the one recipe), and runs every
+# variant. It fails if any query's result changes: a property that stops
+# holding, and equally a named edit under which the property no longer
+# fails.
 #
-# It runs when the model, the library, this file, or noise.rs changes. The
-# model is symbolic and does not read the Rust, so a change to noise.rs
-# cannot move a verdict by itself; it is on the list because that is the
-# moment to ask whether the model still describes the code, and the run's
-# log beside the diff is where a reviewer asks it. Like the sibling job it
+# It runs when the model, the library, this file, or the handshake's Rust
+# changes: noise.rs (the message order), prefix.rs (the network id the
+# prologue mixes), aead.rs (the hash, HKDF and AEAD the symmetric state
+# is built from). The model is symbolic and does not read the Rust, so a
+# code change cannot move a verdict by itself; those files are on the list
+# because that is the moment to ask whether the model still describes the
+# code, and the run's log beside the diff is where a reviewer asks it. Like the sibling job it
 # carries no merge_group trigger: an uncached ProVerif build is a quarter
 # of an hour, and this is not a required check (06-branching.mdc).
 
@@ -31,6 +33,8 @@ on:
     paths:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"
+      - "rust/shekyl-p2p-transport/src/prefix.rs"
+      - "rust/shekyl-p2p-transport/src/aead.rs"
       - ".github/workflows/p2p-nnhfs-model.yml"
   workflow_dispatch:
 

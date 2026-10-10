@@ -4,11 +4,12 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Install the ProVerif that rust/shekyl-rpc-channel/model/run.py is pinned to,
-# into a directory of the caller's choosing, without root.
+# Install the ProVerif that the models under docs/formal/proverif/ are pinned
+# to, into a directory of the caller's choosing, without root. This is the
+# one recipe; a model's runner refuses any other version.
 #
-# ONE RECIPE, HERE AND IN CI. The model's verdicts are pinned to one ProVerif
-# version (run.py refuses any other). Two installs made two different ways
+# ONE RECIPE, HERE AND IN CI. A model's verdicts are pinned to one ProVerif
+# version (its runner refuses any other). Two installs made two different ways
 # can still differ in how they were built, so the developer's machine and the
 # CI job both run this script and nothing else.
 #
