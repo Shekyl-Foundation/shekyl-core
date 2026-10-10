@@ -27,8 +27,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
-    PostureDeclaration, SegmentPin, ServedFrameHeader, ServingReader, TargetKind, TreePosition,
-    LEAF_BYTES,
+    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition, LEAF_BYTES,
 };
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
@@ -306,20 +305,13 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     (sig, rest)
 }
 
-/// Leaf bytes a 200 response actually carries, read through the served frame
-/// (`RF-D4`) the way a fetcher does: the two leading lengths, the segment,
-/// then the envelope that closes the response. Asserting on the raw body length would now be asserting
-/// on the header too, and would pass just as well if the frame were malformed.
+/// Body bytes a 200 response actually carries ahead of the envelope that
+/// closes it. The serve loop writes the provider's bytes and nothing of
+/// its own (`SF-D8` amendment 2026-10-08), so for the interim leaf
+/// provider this is the segment's leaves, exactly.
 fn served_segment_len(response: &[u8]) -> u64 {
-    let (_, mut body) = envelope_of(response);
-    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
-    assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
-    assert_eq!(
-        body.len() as u64,
-        frame.framed_len() - frame.encoded_len() as u64,
-        "the frame accounts for every byte after the header"
-    );
-    frame.segment_bytes()
+    let (_, body) = envelope_of(response);
+    u64::try_from(body.len()).expect("body length fits u64")
 }
 
 /// Whether a response is the endpoint's bare 503: a store or tip the

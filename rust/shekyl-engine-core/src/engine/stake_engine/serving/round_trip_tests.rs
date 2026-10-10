@@ -22,8 +22,8 @@ use std::time::Duration;
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_p_host::signer_at_synced_tip;
 use shekyl_p_loopback::{
-    endpoint_and_client, fetch_target, one_leaf, request_header, AcceptAny, FetchError,
-    PFetchClient, PServeEndpoint, Timeouts, FIXTURE_SHARD_ID,
+    endpoint_and_client, fetch_target, fixture_body, fixture_expectation, request_header,
+    DiscardTxs, FetchError, PFetchClient, PServeEndpoint, Timeouts, FIXTURE_SHARD_ID,
 };
 use shekyl_types::BlockHeight;
 use tempfile::TempDir;
@@ -86,7 +86,7 @@ async fn serve_persona(seed: u8) -> ResidentServe {
     let key = ResidentPassKey::new(&stake, identity.p_slot);
     let signer = signer_at_synced_tip(key, BlockHeight::from_raw(OWN_HEIGHT), TIP_MAX_AGE);
     let (endpoint, client) =
-        endpoint_and_client(FIXTURE_SHARD_ID, one_leaf(), signer, proving_timeouts()).await;
+        endpoint_and_client(FIXTURE_SHARD_ID, fixture_body(), signer, proving_timeouts()).await;
     ResidentServe {
         _wallet: wallet,
         _engine: engine,
@@ -102,17 +102,18 @@ async fn serve_persona(seed: u8) -> ResidentServe {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_daemon_client_accepts_a_pass_the_resident_key_signed() {
     let serve = serve_persona(SIGNER_SEED).await;
-    let target = fetch_target(serve.identity.bond_id.clone(), FIXTURE_SHARD_ID);
+    let target = fetch_target(serve.identity.bond_id.clone());
     let shard = serve
         .client
         .fetch(
             &target,
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect("the resident key's countersignature verifies under bond_id");
-    assert_eq!(shard.shard_id(), FIXTURE_SHARD_ID);
+    assert_eq!(shard.shard_id().to_raw(), FIXTURE_SHARD_ID);
     assert_eq!(serve.endpoint.served_count(), 1);
     assert_eq!(serve.endpoint.sign_failure_count(), 0);
     assert_eq!(serve.endpoint.late_sign_failure_count(), 0);
@@ -131,13 +132,14 @@ async fn a_requester_with_the_wrong_key_refuses_the_same_pass() {
         "two wallets, two identities"
     );
 
-    let target = fetch_target(other.bond_id, FIXTURE_SHARD_ID);
+    let target = fetch_target(other.bond_id);
     let err = serve
         .client
         .fetch(
             &target,
             &request_header(BlockHeight::from_raw(ANCHOR)),
-            Arc::new(AcceptAny),
+            &fixture_expectation(FIXTURE_SHARD_ID),
+            Arc::new(DiscardTxs),
         )
         .await
         .expect_err("a pass signed by another identity is refused");

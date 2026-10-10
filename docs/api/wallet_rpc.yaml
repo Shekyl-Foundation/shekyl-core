@@ -186,6 +186,19 @@
 #       the git history of this entry; the gate's four conditions and their
 #       narrowing history are preserved in PRINCIPAL_STAKE_LIFECYCLE.md's
 #       PR-P4 row.)
+#   SPECIFIED (SV-D — shard view through a real fetch):
+#     get_shard_view                               (one closed archival
+#                                                   shard's aggregate —
+#                                                   view hash, counts,
+#                                                   close height — answered
+#                                                   by the wallet's daemon,
+#                                                   which fetches the body
+#                                                   from a holder. Read-only;
+#                                                   the viewer renders
+#                                                   locally. Open shard, miss
+#                                                   and not-offered are
+#                                                   -29534..-29536, never an
+#                                                   empty result)
 #
 #   RESERVED: none at present. (sign_message / verify_message shipped with
 #     PR-SM-2; match_transfer_to_request was re-ruled REJECTED 2026-09-07 —
@@ -309,8 +322,9 @@
 #                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
 #                            the exit pair); -29530..-29533 are a staker's
-#                            open-time refusals; rest reserved — never reuse
-#                            an allocated code)
+#                            open-time refusals; -29534..-29536 live on
+#                            `get_shard_view` (SV-D); rest reserved — never
+#                            reuse an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
 #   -29700..-29799           air-gapped bundles (RESERVED, UNUSED — and
 #                            NOT pending work. Cold signing was rejected
@@ -397,7 +411,14 @@ info:
   # that finds the file still holding another chain refuses again. When the
   # refusal arrives during a rescan, history_cleared is true because that
   # reset already emptied wallet history. api_version stays 1.
-  # 0.11.0: staking_info and get_wallet_info.staking gain the optional
+  # 0.11.0: get_shard_view (SV-D) — one closed archival shard's aggregate
+  # (view hash, counts, close_height) answered through the wallet's daemon,
+  # which fetches the body from a holder (request_archival_shard). Three
+  # codes keep the daemon's refusals distinct across the hop: -29534
+  # SHARD_STILL_OPEN, -29535 SHARD_UNAVAILABLE (transient miss), -29536
+  # SHARD_VIEW_NOT_OFFERED (data.cause "restricted" | "skeleton_absent").
+  # api_version stays 1.
+  # 0.12.0: staking_info and get_wallet_info.staking gain the optional
   # integer serving_priority_not_lowered (SH-3). Absent when no serving
   # lifecycle is parked. Zero is the steady reading: every serving thread
   # that is running was lowered. Blocking threads start only when a
@@ -408,7 +429,7 @@ info:
   # runtime retires after it has been idle. Serving continues, and the
   # wallet log names the cause once. The count does not say whether the
   # daemon received more CPU. api_version stays 1.
-  version: 0.11.0
+  version: 0.12.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -481,6 +502,7 @@ x-shekyl-method-registry:
   check_reserve_proof: { status: SPECIFIED }
   sign_message: { status: SPECIFIED }
   verify_message: { status: SPECIFIED }
+  get_shard_view: { status: SPECIFIED }
   match_transfer_to_request: { status: REJECTED }
   claim: { status: REJECTED }
   claim_rewards: { status: REJECTED }
@@ -602,6 +624,7 @@ components:
             - check_reserve_proof
             - sign_message
             - verify_message
+            - get_shard_view
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -752,6 +775,9 @@ components:
         - -29531   # SERVING_TOR_UNUSABLE
         - -29532   # SERVING_IDENTITY_UNAVAILABLE
         - -29533   # SERVING_LOCAL_NODE_REQUIRED
+        - -29534   # SHARD_STILL_OPEN
+        - -29535   # SHARD_UNAVAILABLE
+        - -29536   # SHARD_VIEW_NOT_OFFERED
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1399,6 +1425,23 @@ components:
                                           wallet's own node on loopback — point
                                           the daemon address at a local node
                                           (the -29528 posture, for serving)
+          -29534 SHARD_STILL_OPEN         get_shard_view: the shard has not
+                                          closed, so it has no view yet (the
+                                          daemon's -24). A viewer shows
+                                          "still open", not a picture
+          -29535 SHARD_UNAVAILABLE        get_shard_view: the shard is closed
+                                          and no holder served its body on
+                                          this attempt (the daemon's -22).
+                                          Transient — retry later. A viewer
+                                          shows "could not be retrieved"
+          -29536 SHARD_VIEW_NOT_OFFERED   get_shard_view: this daemon does not
+                                          serve shard views. data.cause is
+                                          "restricted" (the method is
+                                          admin-only and the wallet reached a
+                                          public listener — point it at its
+                                          own node) or "skeleton_absent" (the
+                                          daemon's store holds no archival
+                                          skeleton, SV-D9). Not transient
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -3578,3 +3621,90 @@ components:
             The signature verifies for the address, message, and
             network. Present so scripted callers read a self-describing
             field rather than inferring success from an empty object.
+
+    GetShardViewParams:
+      type: object
+      required: [shard_id]
+      additionalProperties: false
+      description: >
+        One closed archival shard to view. The wallet holds no archival
+        bytes a daemon can read, so every view — including a shard this
+        wallet itself serves — is answered by the wallet's configured
+        daemon, which fetches the body from a holder
+        (`request_archival_shard`, SHARD_VIEW_FETCH.md SV-D3) and folds the
+        view hash (SV-D1). Rendering is the viewer's: the result carries
+        exactly the renderer's aggregate fields. No size or format
+        parameter — a picture is never on this wire.
+      properties:
+        shard_id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The W-byte archival partition's id (SHT-Q2).
+
+    GetShardViewResult:
+      type: object
+      required:
+        - shard_id
+        - shard_hash
+        - archival_len
+        - block_count
+        - tx_count
+        - output_count
+        - coinbase_output_count
+        - time_range_seconds
+        - close_height
+      additionalProperties: false
+      description: >
+        The daemon's aggregate without its `status` envelope. Every field
+        is a deterministic function of the shard's body and the public
+        skeleton (SV-D4): two honest daemons answer one closed shard
+        identically, so a viewer may cache the result — and anything drawn
+        from it — by (shard_id, shard_hash). The view hash is the identity
+        that moves with the body: a reorg that replaces a block at the same
+        height leaves close_height where it was and changes shard_hash.
+      properties:
+        shard_id:
+          type: integer
+          format: int64
+        shard_hash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >
+            The view hash folded over the fetched archival bytes (SV-D1;
+            cSHAKE256, `ShardViewHasher`). Distinct from the challenge
+            hash and from the serving-shard hash: the picture is drawn
+            from the pruned components, so a daemon that did not fetch
+            them cannot produce it.
+        archival_len:
+          type: integer
+          format: int64
+          description: Archival bytes the fetched body carried.
+        block_count:
+          type: integer
+          format: int64
+          description: Blocks the shard's transactions span, inclusive.
+        tx_count:
+          type: integer
+          format: int64
+        output_count:
+          type: integer
+          format: int64
+          description: >
+            Outputs of the shard's transactions plus the span's coinbase
+            outputs.
+        coinbase_output_count:
+          type: integer
+          format: int64
+        time_range_seconds:
+          type: integer
+          format: int64
+          description: Last block's timestamp minus the first's.
+        close_height:
+          type: integer
+          format: int64
+          description: >
+            The block that closed the shard: where it sits on the chain,
+            and the height a rendering-spec version is pinned to. Not a
+            cache key — a reorg at this very height changes shard_hash
+            and not this.

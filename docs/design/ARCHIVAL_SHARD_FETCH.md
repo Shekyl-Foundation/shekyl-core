@@ -152,7 +152,7 @@ inherited as "the client waits."
 | Pin | Where | What it fixes |
 | --- | --- | --- |
 | Serve route | `rust/shekyl-p-serve/src/serve.rs:57` — `ROUTE_PREFIX = "/shard/"` | The path the client dials (`RF-R1`) |
-| Served body | `rust/shekyl-curve-tree/src/served_frame.rs:282` — `ServedFrameHeader::read` | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable |
+| Served body | `rust/shekyl-curve-tree/src/served_frame.rs@f317d979c:282` — `ServedFrameHeader::read` — **RETIRED 2026-10-08** (module deleted; the body is `shekyl_wire::shard_frame`, `SF-D8` amendment) | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable (as pinned 2026-09-12) |
 | Content-verify function | `rust/shekyl-curve-tree/src/store/ops.rs:139` — `recompute_segment_r_k(&[[u8; 128]]) -> Result<[u8; 32], _>` | Content-authentication half only; today its only non-store caller is `p-serve/tests/store_axis.rs` — no production fetcher |
 | Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `pub(crate) SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Number RULED 80** (`SF-D5`). `MAX_STREAMS` stays SPIKE-PIN. **Home** is `shekyl-curve-tree` (`SF-D4`); this `pub(crate)` is the current location, not the home — the implementation PR moves the declaration |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
@@ -190,8 +190,8 @@ inherited as "the client waits."
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-need exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret (LANDED 2026-10-06, `SH2_RESIDENT_KEY_AUDIT.md`: in-actor sign, weak handle). The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is the decoded header ‖ `shard_id_le[8]` ‖ the delivery digest: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`** (112 bytes) — requester-random, the requester's chain anchor at `tip − 720`, the `u64` `P` parsed from `/shard/{id}`, then `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1", nonce ‖ framed)[..32]` over the exact response body ahead of the signature, under `shekyl/archival-attestation-scheme-v3` (the v1 nonce-only and v2 digest-less domains are retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard; `D` commits the signature to the bytes delivered under this nonce. The pass record **carries** `nonce`, `anchor_height` and `D` (none is recomputable at admission); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0); the `D` term and the v3 domain RULED and LANDED 2026-10-04 | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2), 2026-10-04; LANDED |
-| **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
-| **Response carrier:** the HTTP body is the unchanged `RF-D4` frame, then an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length) as the response's **last** bytes: the signature covers a digest of everything ahead of it. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13; AMENDED 2026-10-04 |
+| **Inner frame — RETIRED 2026-10-08:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding), codec owned by `shekyl-curve-tree`, is deleted; the body ahead of the envelope is the `SHT-Q2` tx-range body framed per transaction in `shekyl_wire::shard_frame`, and the serve loop writes the provider's bytes unframed (`SF-D8` amendment 2026-10-08) | `RF-D4` (retired), `SF-D8` |
+| **Response carrier:** the HTTP body is the shard body (`shekyl_wire::shard_frame` since the 2026-10-08 amendment; ~~the unchanged `RF-D4` frame~~), then an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length) as the response's **last** bytes: the signature covers a digest of everything ahead of it. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13; AMENDED 2026-10-04 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
 | SP-T3's numbers measured persona→persona and must re-base daemon→wallet before promotion | `EU-D1` consequence 4 |
@@ -216,7 +216,18 @@ freeze-row `R_k` is consensus metadata, not a body, and is not a local
 shortcut around fetch. Answering from bytes this node already holds
 (staker set, or a prior view-cache) is still this scheduler, not a second
 protocol. The HTTP request names only the shard; the destination is whom
-the scheduler named, not a caller tag on the wire.
+the scheduler named, not a caller tag on the wire. **UPDATE 2026-10-08
+(`SV-D1`, `SV-D2` RULED; [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md)):**
+the view caller's answer is built from the body this fetch verified — its
+`shard_hash` is a cSHAKE256 fold over the archival bytes (prunable regions
+and `pqc_auths`) folded by the verifying pass itself, one transaction
+resident (`SV-D8`), so a node without the body cannot answer and a
+skeleton-only answer is rejected for the view. The response's `shard_hash`
+*was* `R_k` (the retired partition's root) until this update; the fold is
+the definition for `W`-byte shards. A closed shard's aggregate is cached
+keyed on its close height and that block's hash; the open tip shard is a
+typed refusal (`SV-D5`). The view caller lands with the Sub-PR 2 scheduler
+(§9.1 row), not before it.
 
 Reopen if a storage-only pruned-daemon path is shown to exercise the
 serve endpoint end to end without a fetch client. (Also if `EU-D1` or
@@ -439,8 +450,9 @@ Refused homes (graph, not FFI):
 - `shekyl-archival-retention` — consensus assignment / Merkle verify.
 - `shekyl-chain-store` — storage; the fill scheduler *calls* fetch.
 - `shekyl-curve-tree` — codec; network I/O stays out.
-- `shekyl-shard-source` — GUI fixture seam toward Stage 5
-  `ArchivalEngine`; wrong side.
+- `shekyl-shard-source` — the GUI's fixture-only preview source (its
+  `ArchivalShardSource` stub deleted 2026-10-08; live views are the
+  wallet contract's `get_shard_view`); wrong side.
 - A module of a future `shekyl-daemon` — that crate does not exist.
 
 - **Reopen if:** at implementation, the client turns out to be a thin
@@ -617,7 +629,7 @@ refusal, not a retry of an address the witness never had.
   qualifier is now always true and is kept only as a record of the
   split it used to make.
 
-**Length.** `ServedFrameHeader::framed_len()` declares the **inner
+**Length** *(records-was; `ServedFrameHeader` RETIRED 2026-10-08 — the declared length is now the provider's `ShardBody::len()`, and the client's ceiling is `ExpectedShard::max_response_len()`).* `ServedFrameHeader::framed_len()` declares the **inner
 frame** (header + `leaf_count × LEAF_BYTES` + `padding_len`), never
 frozen `SHARD_BYTES = 3,326,976` as the whole HTTP body size. That
 constant is the **segment**. `SF-D8` (RULED) puts a returned-signature
@@ -637,7 +649,7 @@ ambiguous between a padding variant and a fault.
 HTTP `content-length` and the decoded outer-envelope-plus-frame length
 **must agree**. Disagreement is malformed, not truncation.
 
-**Pre-read cap.** A hostile `Content-Length: 2^63` is refused **from
+**Pre-read cap** *(the bound below is records-was: since 2026-10-08 it is `ExpectedShard::max_response_len()`, derived from the range's `txid_parts`).* A hostile `Content-Length: 2^63` is refused **from
 the HTTP headers**, before any body byte, if it exceeds
 `signature_envelope_len + max framed_len()` (`RF-D7`'s padding cap,
 already enforced inside `ServedFrameHeader::read`). That is a
@@ -1115,7 +1127,8 @@ The original `R_k`-only lean was incomplete. The fetcher's output is a
 checks:
 
 1. parse the returned response envelope and inner frame
-   (`ServedFrameHeader::read`);
+   (`ServedFrameHeader::read`) — *RETIRED 2026-10-08; the parse is
+   `shekyl_wire::shard_frame` per transaction, streamed*;
 2. recompute `R_k` (`recompute_segment_r_k`) and compare it with the
    daemon's local `FrozenSegmentRecord`;
 3. verify P's hybrid countersignature under `SF-D13` against the ruled
@@ -1184,8 +1197,9 @@ D = cSHAKE256(N = "", S = "shekyl/archival-pass-delivery-digest-v1",
               X = nonce[32] ‖ framed)[..32]
 ```
 
-with `framed` the exact response body ahead of the signature — the
-`ServedFrameHeader` bytes, the payload and the padding, as sent. Both
+with `framed` the exact response body ahead of the signature — since
+2026-10-08 the `shard_frame` body bytes as sent (~~the `ServedFrameHeader`
+bytes, the payload and the padding~~; `pass_delivery_digest(nonce, body)`). Both
 signature legs cover that message. The fetch client reconstructs the
 first 80 bytes from the header it sent and the shard id it requested,
 and recomputes `D` from the bytes it received; it never reads any of
@@ -1393,8 +1407,9 @@ its own independent pins (computed outside the crate) in
 the pre-(a) HTTP response carried no countersignature, so the signature
 needed a home that is neither the inner frame nor a header:
 
-- **Carrier:** the HTTP body is the existing `ServedFrameHeader` and
-  segment bytes, followed by an outer binary response envelope carrying
+- **Carrier:** the HTTP body is the shard body (since 2026-10-08
+  `shekyl_wire::shard_frame`; ~~the existing `ServedFrameHeader` and
+  segment bytes~~), followed by an outer binary response envelope carrying
   the canonical `HybridSignature` (both legs, the fixed canonical length
   from `shekyl-crypto-pq`) as the response's **last** bytes.
 - **The envelope closes the body because the signature covers it.**
@@ -1447,6 +1462,108 @@ needed a home that is neither the inner frame nor a header:
 
 Whether a verify failure is remembered is `SF-D12`: it is not a
 selection input. It is logged (`SF-D12`).
+
+**AMENDMENT 2026-10-08 — the body is the archival good, framed per
+transaction, and the verify seam streams (fetch Sub-PR 2; `SV-D8`).**
+The `RF-D4` carrier (`ServedFrameHeader` ‖ segment ‖ padding) and the
+`&[u8]` `ContentVerify` hole above are **records-was**: both are deleted
+by this amendment's landing, on both ends. The 2026-10-03 `SF-D7`
+amendment asked for a response ceiling `W` could not give because a
+tx-range body "also carries its prefix and base"; this amendment answers
+by not sending them.
+
+- **Unit: the archival good only.** The body of `/shard/{k}` is, for
+  each in-domain transaction of `[b_k, b_{k+1})` in storage order, its
+  `pqc_auths` segment and its prunable region — exactly the two rows a
+  body store holds (`txs_pqc_auths`, `txs_prunable`) and a pruned node
+  lacks (`SHT-Q1`, `SHT-Q2`). The prefix and base travel on no body:
+  every node keeps them as the skeleton, so sending them would spend
+  `P`'s bandwidth on bytes the requester already has and put the
+  response length outside `W`'s reach. With the archival good alone,
+  `Σ archival_len` over the range is a skeleton-derived figure the
+  requester knows **before the dial**, and the response length is exact
+  up to varint widths.
+- **Frame** — `shekyl_wire::shard_frame`, the one codec both ends read
+  (`SF-D4`: shared, not mirrored; `shekyl-wire` joins the client's
+  positive dependency limb in `check_p_fetch_dep_cut.py`):
+
+  ```text
+  version:  u8 = 1
+  tx_count: varint
+  per transaction, range order:
+    pqc_auth_count: varint
+    pqc_auths_len:  varint
+    prunable_len:   varint
+    pqc_auths bytes ‖ prunable bytes
+  ```
+
+  No txid, no digest, no shard id on the wire: order is the range's
+  and identity is the requester's expectation. Anything `P` could put
+  there would be a claim about the body (`RF-D6`). The varints are the
+  canonical `shekyl-wire` LEB128 (`varint.rs`), at most ten bytes each.
+  The three varints lead the entry's bytes so the lengths are held
+  against the row before a segment byte is read (next item); an
+  interleaved layout (`len ‖ bytes ‖ len ‖ bytes`) would have put the
+  first segment resident before the second length was known.
+- **An expectation replaces the hole.** The entry point is
+  `fetch(&FetchTarget, &RequestHeader, &ExpectedShard, Arc<dyn TxSink>)`.
+  `FetchTarget` is now `{ endpoint, verifying_key }` — the shard moved
+  to the expectation, so one value names it. `ExpectedShard
+  { shard_id: ShardId, txs: Vec<TxidParts> }` is built by the caller
+  from skeleton rows (txid, `txs_pqc_auth_hash`, `txs_prunable_hash`,
+  `txs_archival_len`) and the cumulative archival length before the
+  range; its constructor refuses an empty range, an entry that carries
+  no archival good (`carries_archival_good`), an entry whose
+  cumulative-before falls outside shard `k` (`shard_of`), and a range
+  that does not close the shard (`PDM-Q-F32`'s boundary pair, checked
+  as far as the range alone can check it; that `b_k − 1` lies in shard
+  `k − 1` is the caller's fold). The `ContentVerify` trait is gone: the
+  one content check is the retained rows, so it is the client's, not a
+  caller's.
+- **Per-transaction verify, one resident (`PDM-Q6` item 5).** For each
+  entry the client reads the three varints, refuses unless
+  `pqc_auths_len + prunable_len == archival_len` (and `pqc_auths_len == 0`
+  when the row is `None`) **before** a segment byte is read, reads the
+  two segments, and on the blocking pool checks
+  `pqc_auth_hash_of(count, pqc_auths)` and `prunable_hash_of(prunable)`
+  against the rows (`shekyl_wire::shard_frame::check_components`), folds
+  the entry into the `SV-D1` view hash (`ShardViewHasher`) and hands the
+  verified components to the caller's `TxSink` (the organic caller's
+  store write; the challenge and view callers discard). The entry is
+  then dropped. The delivery digest `D` folds every body byte as it is
+  read (`PassDeliveryHasher`), frame bytes included.
+- **Refusal order keeps `SF-D6`'s meaning.** A content mismatch is
+  remembered, the remaining body is drained into `D` and discarded, the
+  envelope is read, and the countersignature is verified; the fetch is
+  `ContentRefused` only if the signature verifies and
+  `BadCountersignature` otherwise — so `ContentRefused` stays evidence
+  that *this* `P` answered *this* request with those bytes. Components
+  handed to the sink before a refusal are correct by the rows whoever
+  sent them; the signature decides `P`'s credit, not the bytes' truth.
+  The refusal trailer is still read before any verification
+  (`Unsigned`).
+- **Ceiling.** `ExpectedShard::max_response_len()` = `1 + 10 +
+  Σ (archival_len_i + 3·10) + SIGNATURE_ENVELOPE_LEN`; exactness is
+  still enforced by the read (a frame that does not end at
+  `content-length − envelope` is `Malformed`). `SF-D7`'s memory leg is
+  as the 2026-10-03 amendment states it: `N` times one entry's peak.
+- **Result.** `VerifiedShard { shard_id, delivery_digest, signature,
+  view_hash, tx_count, archival_len }` — no body. The pass record reads
+  the first three; the view reads the next three; the organic caller
+  already has what it wanted through the sink.
+- **Serve side, same amendment.** `shekyl-p-serve` writes
+  `content-length = body.len() + envelope` and streams the provider's
+  bytes unframed: the serving loop is unit-agnostic, and the `RF-D4`
+  frame header it used to prepend is deleted with
+  `shekyl_curve_tree::served_frame`. The leaf `StoreShardProvider`
+  still exists until the wallet lane's store rebuild (`WSS-`) replaces
+  it; its raw segment bytes satisfy no `ExpectedShard`, so a fetch
+  against today's wallet is a grammar refusal (`Malformed::Frame`: the
+  first leaf byte is not the frame's version byte) or, where that byte
+  happens to match, `ContentRefused` — never `Miss`. Named in
+  `SHARD_VIEW_FETCH.md` §4 as the interim state, and the reason no
+  consumer may read either refusal as evidence against `P` until `WSS`
+  lands.
 
 ### `SF-D9` — `RF-R1` heading correction
 

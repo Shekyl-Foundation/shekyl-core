@@ -12,23 +12,22 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_curve_tree::ServedFrameHeader;
 use shekyl_types::BlockHeight;
 
 use super::{
-    bind, fetch, head_of, is_refusal_trailer, leaves, render_not_found, render_unavailable,
+    bind, fetch, filler, head_of, is_refusal_trailer, render_not_found, render_unavailable,
     FixtureProvider, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
     REFUSAL_TRAILER_BYTE, SIGNATURE_ENVELOPE_LEN,
 };
 use crate::countersign::{PassKey, PassSigner, SignRefused};
 
 #[tokio::test]
-async fn the_countersignature_is_released_only_after_the_whole_frame() {
+async fn the_countersignature_is_released_only_after_the_whole_body() {
     // The signature is released last. It is exactly the response's last
     // bytes, and no copy of it appears anywhere ahead of them — so every
     // proper prefix of the response, which is all a reader that stops early
     // can have, is without it.
-    let payload = leaves(9, 0x40);
+    let payload = filler(9 * 128, 0x40);
     let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
 
@@ -51,16 +50,17 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
     )
     .expect("the closing signature covers this request and the bytes ahead of it");
 
-    // The first body bytes are the frame, not a signature.
-    let mut framed = &before[end..];
-    let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
-    assert_eq!(frame.segment_bytes(), payload.len() as u64);
-    assert_eq!(framed, &payload[..], "frame header, then the whole segment");
+    // The body is the provider's bytes from the first one, not a signature.
+    assert_eq!(
+        &before[end..],
+        &payload[..],
+        "the whole body, and nothing ahead of it"
+    );
 
     // No earlier copy: a prefix reader never sees the signature.
     assert!(
         !before.windows(SIGNATURE_ENVELOPE_LEN).any(|w| w == sealed),
-        "the signature must not appear ahead of the frame it seals"
+        "the signature must not appear ahead of the body it seals"
     );
 }
 
@@ -91,7 +91,7 @@ async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer()
     // says so itself: the envelope is the refusal trailer, and the response
     // is its full declared length. A requester never has to infer a refusal
     // from a response that stopped.
-    let payload = leaves(9, 0x40);
+    let payload = filler(9 * 128, 0x40);
     let signer: Arc<dyn PassSigner> = Arc::new(RefusesLate);
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]), signer)
         .await
@@ -105,17 +105,12 @@ async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer()
         .expect("response has a head")
         + 4;
     let (before, trailer) = r.split_at(r.len() - SIGNATURE_ENVELOPE_LEN);
-    let mut framed = &before[end..];
-    let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
-    assert_eq!(framed, &payload[..], "the whole segment went out");
+    assert_eq!(&before[end..], &payload[..], "the whole body went out");
     assert!(
-        head_of(&r).contains(&format!("content-length: {}", (r.len() - end) as u64)),
+        head_of(&r).contains(&format!("content-length: {}", r.len() - end)),
         "the response is exactly its declared length"
     );
-    assert_eq!(
-        (r.len() - end) as u64,
-        frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64
-    );
+    assert_eq!(r.len() - end, payload.len() + SIGNATURE_ENVELOPE_LEN);
     assert!(is_refusal_trailer(trailer));
     assert_eq!(trailer, [REFUSAL_TRAILER_BYTE; SIGNATURE_ENVELOPE_LEN]);
     assert!(
@@ -175,7 +170,7 @@ async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
     // bare 503. An unheld shard is still the 404, and an invalid request
     // still the 400 — the key is not what decides either.
     let signer: Arc<dyn PassSigner> = Arc::new(Keyless);
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(9, 0x40))]), signer)
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, filler(9 * 128, 0x40))]), signer)
         .await
         .expect("bind");
     assert_eq!(
