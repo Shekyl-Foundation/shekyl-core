@@ -1,7 +1,9 @@
 # `RT-P4`: is ML-KEM-768 decapsulation constant-time? Runs of 2026-10-10
 
-**State of this record: the x86 run is in and PASSES; the floor-device run
-has NOT been made.** RT-P4 asks for both machines, so RT-P4 is not closed.
+**State of this record: the x86 run PASSES; the floor-device run FAILS its
+registered lines.** RT-P4 is therefore **not met**. What the failure is a
+failure of — the crate or the harness — is not yet established; see "The
+floor device" below.
 Everything under "Registered before the run" was committed and pushed
 (`cd65ab8af1`) before the first timed run that counts. Results are added
 below it and that section is not edited afterwards.
@@ -124,11 +126,54 @@ The control was calibrated and run under the later, slower condition and
 was still detected by a wide margin, so the sensitivity line was met where
 it was hardest to meet.
 
-### The floor device — NOT RUN
+### The floor device — FAIL
 
-No run has been made and no claim has been filed. The login to the floor
-device from the dev box needs a key this lane cannot unlock without the
-maintainer. The registered method stands unchanged for it.
+Run once, 2026-10-10 19:34:26Z to 20:15:16Z, on the Pi 4 (Model B rev 1.4,
+kernel 7.0.0-1020-raspi, governor `ondemand`), under a quiet claim in the
+estate's usage ledger. A fresh checkout of the pushed commit `67faff8290`,
+`rustc` 1.94.0, release profile, `--locked`; binary sha256 `76aa66d0…`.
+The device's resident testnet daemon was running throughout, as it always
+is, at about 1 % of one core; nothing else was. SoC temperature 55.5 °C at
+the start and 57.5 °C at the end.
+
+```text
+RT-P4 ML-KEM-768 decapsulation timing (fips203)
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100
+pass: |t| < 4.5 on every real comparison; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=502.54 median_ns=267888 n0=499521 n1=500479 verdict=LEAK
+comparison=fixed-vs-invalid max_abs_t=12.16 median_ns=267480 n0=500483 n1=499517 verdict=LEAK
+comparison=fixed-vs-bitflip max_abs_t=19.73 median_ns=267592 n0=500478 n1=499522 verdict=LEAK
+comparison=valid-vs-invalid max_abs_t=463.66 median_ns=267684 n0=499020 n1=500980 verdict=LEAK
+control=planted-leak fraction=0.005 planted_ns=1338 max_abs_t=952.25 verdict=detected
+result=FAIL worst_real_abs_t=502.54 control_abs_t=952.25
+```
+
+| Line | Registered | Observed | |
+|---|---|---|---|
+| (a) every comparison | `|t|` < 4.5 | 502.54, 12.16, 19.73, 463.66 | **not met**, all four above 10 |
+| (b) the control | `|t|` > 10 | 952.25 | met |
+
+**This is the registered run and it is a fail.** It is not re-run to get a
+different answer and the lines are not moved.
+
+**What the figures do and do not say.** The harness draws the same inputs
+on both machines (the class counts are identical to the x86 run's), so the
+x86 run passed on the very ciphertexts this one failed on. The two
+comparisons that involve a *freshly encapsulated* ciphertext stand apart
+(502, 464); the two that do not are far smaller (12, 20), though still over
+the line. A fixed valid ciphertext and a fresh valid one take the same path
+through decapsulation, so validity is not what separates them. In this
+harness a fresh valid ciphertext is one this same thread encapsulated
+immediately before the timed region. Whether the difference belongs to the
+decapsulation or to what that encapsulation leaves behind in the core is
+the open question, and nothing in this section answers it.
+
+**Shake-down, disclosed.** Before the registered run the same binary was
+run at 30,000 samples to confirm it works on the device. It reported no
+comparison above 3.22 and a detected control (142.54). No threshold, count
+or comparison was changed after it. At that size few of the cut-offs keep
+the 10,000 samples per class the harness requires, so it could not have
+seen what the full run saw.
 
 ### The source, read
 
