@@ -23,6 +23,10 @@ on:
       - 'rust/shekyl-archival-retention/**'
       - 'rust/shekyl-standoff/**'
       - 'rust/shekyl-crypto-pq/**'
+      # Scheme 3's preimage is `cshake256_64` from this crate
+      # (`hybrid_combiner::preimage`). A change here moves the signed bytes
+      # on every architecture; the aarch64 KAT is the pin that they match.
+      - 'rust/shekyl-crypto-hash/**'
       - 'rust/Cargo.lock'
       # The FN-DSA fixture the crypto-pq KAT reads lives outside the crate.
       - 'docs/test_vectors/FN_DSA_HYBRID_V1_KAT.json'
