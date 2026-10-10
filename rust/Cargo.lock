@@ -4612,6 +4612,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p-store"
+version = "3.1.0"
+dependencies = [
+ "rand_core 0.6.4",
+ "redb",
+ "shekyl-chacha",
+ "shekyl-crypto-hash",
+ "shekyl-types",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-p-transport"
 version = "3.1.0"
 dependencies = [

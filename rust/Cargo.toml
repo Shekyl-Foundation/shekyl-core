@@ -283,6 +283,10 @@ members = [
     # binary is deleted and is not linked into this crate.
     "shekyl-p2p-harness",
 
+    # P's serving body store: chunk-sealed shard_frame bodies under
+    # StakeEngine (WSS-Q1(a)). No Tor, no daemon (WSS-17).
+    "shekyl-p-store",
+
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
     "shekyl-p-serve",
