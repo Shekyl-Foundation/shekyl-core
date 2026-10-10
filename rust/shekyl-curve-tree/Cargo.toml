@@ -44,10 +44,6 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # (RTN-4); this crate keeps only `TreePosition` (tree-local) and the
 # redb key wrapper `GindexKey` (orphan rule).
 shekyl-types = { path = "../shekyl-types" }
-# The workspace varint used by the served-frame header (`served_frame.rs`).
-# The same encoder/decoder the archival wire modules use, so one length has
-# one encoding across every Shekyl format.
-shekyl-curve-io = { path = "../shekyl-curve-io" }
 # Reads `config/consensus_constants.json` to emit the FCMP++
 # reference-block age constants (`build.rs`). Mirrors
 # `rust/shekyl-difficulty`'s build-time JSON read so the wallet's

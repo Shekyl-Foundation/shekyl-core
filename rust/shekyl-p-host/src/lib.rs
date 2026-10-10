@@ -55,11 +55,12 @@
 //! status line, header set, route) is `RF-R1`
 //! (`docs/design/ARCHIVAL_SERVING_ROUTE.md`), not a format-round candidate;
 //! §9.5's exclusion of it from that round stands. The response *payload* is
-//! no longer open: `RF-D4` ruled it on 2026-08-20 and `shekyl-p-serve` emits
-//! the frame (`shekyl_curve_tree::served_frame`). Nothing in this crate
-//! reads or writes it — the host wires lifecycle, not bytes — but "the
-//! response wire format is undecided" has stopped being true and should not
-//! be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
+//! no longer open: it is the `shekyl_wire::shard_frame` body over the
+//! shard's archival good (`SF-D8` amendment 2026-10-08), which the
+//! provider holds and `shekyl-p-serve` streams unframed. Nothing in this
+//! crate reads or writes it — the host wires lifecycle, not bytes — but
+//! "the response wire format is undecided" has stopped being true and
+//! should not be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
 //! sweep is the wiring slice's job (SH-2b), on the crate that owns the
 //! claim-source decode and the curve-tree actor; this crate owns the
 //! refresh *behaviour* and the seam ([`ServeSetPinner`]) the sweep plugs

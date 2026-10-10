@@ -3,6 +3,47 @@
 ## [Unreleased]
 
 - Docs: `RPC_CHANNEL.md` (`RT-`) records a round ruled 2026-10-08 and 2026-10-09 and not yet implemented. Once it is built: every RPC leg that leaves the host runs inside one hybrid post-quantum Noise channel, mutually authenticated, in place of the pinned mutual TLS that was ruled before and never built; a caller running as the same user as the daemon reaches it over an owner-only socket or pipe with no keys to provision; per-connection grants replace the restricted listener, and what a remote key may see or do is the operator's choice at enrolment; and the daemon may run as a service under a dedicated account, never as SYSTEM or root. `RPC_TRANSPORT_POSTURE.md` loses the superseded mechanism text and keeps its premise, threat model and landed slices. The first slice, `RT-W8` (the handshake's model, vectors and registry rows; no listener), is authorized, and its pre-flight is `RPC_CHANNEL_RT_W8_PREFLIGHT.md`.
+
+### Shard view — a picture of a shard is drawn from a real fetch
+
+- **Wallet RPC: `get_shard_view { shard_id }`** (contract 0.11.0,
+  `SHARD_VIEW_FETCH.md`). The wallet forwards the id to its daemon, which
+  fetches the shard's body from an archivist, verifies it per transaction
+  and returns the aggregate the viewers draw from: `shard_hash`,
+  `archival_len`, `block_count`, `tx_count`, `output_count`,
+  `coinbase_output_count`, `time_range_seconds`, `close_height`. A shard
+  the wallet itself holds is still answered through the daemon; the point
+  of the method is the fetch. New codes: `-29534 SHARD_STILL_OPEN`,
+  `-29535 SHARD_UNAVAILABLE` (no archivist could serve it), `-29536
+  SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` or
+  `skeleton_absent`.
+- **Daemon RPC: `request_archival_shard` is served in Rust (RPC 3.43).**
+  The C++ handler and its struct are deleted; `shekyl-daemon-rpc` answers
+  natively. The response gains `close_height`; `shard_hash` is now the
+  **view hash** — a cSHAKE256 fold over the shard's archival bytes that
+  requires the pruned components to derive (`SV-D1`), distinct from the
+  per-transaction verification digests the challenge path uses. The
+  method stays restricted. New code `-25 ARCHIVAL_SKELETON_ABSENT`: the
+  daemon has no shard-range read until the `DRS-E3` store cutover
+  (`SV-D9`), so **every daemon in this release answers it** and every
+  viewer shows *not offered by this daemon*.
+- **Fetch client and scheduler (`SF` Sub-PR 2).** `shekyl-p-fetch` reads
+  the tx-range body as a stream, one transaction resident, verifying each
+  against the `txs_prunable_hash` / `txs_pqc_auth_hash` rows and the
+  boundary pair; `shekyl-archival-fetch-sched` is the one scheduler that
+  challenge, organic and view callers enter, drawing holders from the
+  epoch's drawable set with an in-flight cap of 8. Until the serve side
+  speaks the same unit (`WSS-Q1`), a fetch against a shipped archivist is
+  a typed content miss, never a picture.
+- **CLI: `shard fetch <id> [--png <path>] [--size <n>]`** prints the
+  aggregate and optionally writes the candidate.v1 render. **GUI:** the
+  Shards page draws a card from `get_shard_view`, with *fetching*, *still
+  open*, *could not be retrieved* (retry) and *not offered* as visible
+  states; the fixture-only `ArchivalShardSource` stub is deleted.
+  **shekyl-web:** `shekyl-shard-visual` gains the `shekyl-shard-render`
+  binary (feature `cli`; JSON view on stdin, PNG on stdout) for the site's
+  server-side route.
+
 - **Archival settlement (Rust validator; `SO-D10`).** The Rust slash pass settles each epoch before it slashes on it: it reads the epoch's issued draws, checks them against the epoch's digest, writes one settlement row per pair with a counted draw, and slashes only on a Missed row. The failure window passes over an unobserved epoch and reads nothing below the retention horizon, the same constant the settlement rows' prune will use. No block issues a draw yet, so the Rust pass settles and slashes nothing off Fakechain; the C++ daemon is unchanged and stays consensus. Chain-store layout is 22: `archival_settlement` is shaped, `archival_issued_draw` and `archival_issued_digest` are new, and a store written under 21 is refused at open. New store invariant SI-25. The count fold `settle_epoch`, the FFI exports `shekyl_archival_settlement_row` and `shekyl_archival_settlement_row_validate`, and the C++ `set_`/`get_archival_settlement` are deleted.
 - **Consensus validator (Rust): every spend's FCMP++ proof is now verified, and a bond post's funding spend is judged like a spend.** `shekyl-chain-rules` runs CEN-I13 (the declared tree depth is the tree's at the reference height) and CEN-I15 (the membership proof verifies over the reference's anchor, the inputs' key images and the PQC-bound prefix) on the Spend class, and the new CEN-J27 runs the same reference sequence and proof verification over a bond post's funding inputs — which the Rust validator had not judged at all (CEN-H21's recorded finding; the C++ did, `blockchain.cpp:3654`). Until now the Rust validator ran I13's predicate and I15's body only under an emission claim (CEN-J21/J26); a regular spend carrying a wrong depth or a proof not made in this chain's tree was admitted by it and refused only by the C++ daemon. Registry `implemented 116 → 119`, validator-enforced `151 → 152` (`CONSENSUS_RULE_CENSUS.md` §4.I, §4.J; `CHAIN_RULES_SLICE_6.md` §5 rows 6, 8). Test substrate: the store's, ingest's and rules crate's filler-spend and fixture-join tests now run over chains the harness spender grew, with real proofs; `shekyl-harness-spender` gains `Persona` (the archival persona and its bond posts).
 - **Daemon RPC.** `get_info` reports `already_generated_coins`, the gross coins emitted through the tip, in atomic units. Net circulating supply is that figure minus `total_burned`. `CORE_RPC_VERSION` is 3.42. `get_version` is otherwise unchanged.

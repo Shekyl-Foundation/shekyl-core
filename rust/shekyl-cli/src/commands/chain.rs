@@ -3,12 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Chain/daemon health command.
+//! Chain/daemon health and archival-shard commands.
 
 use serde_json::{json, Value};
+use shekyl_shard_visual::{render_candidate_png, ShardAggregate};
 
+use super::require_open;
 use crate::daemon::DaemonClient;
-use crate::outcome::{failed, CommandResult};
+use crate::outcome::{failed, refusal, CommandResult};
+use crate::rpc_client::RpcSession;
 
 pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
@@ -131,39 +134,91 @@ pub(crate) fn show_shard(val: &Value) {
     }
 }
 
-/// `shard fetch <id>` — ask the daemon to retrieve the shard. Text only.
-pub fn cmd_shard_fetch(daemon: Option<&DaemonClient>, shard_id: u64) -> CommandResult {
-    let dc = require_daemon(daemon)?;
-    match dc.request_archival_shard(shard_id) {
-        Ok(fetch) => Ok(json!({
-            "shard_id": fetch.shard_id,
-            "shard_hash": fetch.shard_hash,
-            "block_count": fetch.block_count,
-            "output_count": fetch.output_count,
-        })),
+/// The edge length `shard fetch --png` draws at when `--size` is not given.
+/// The GUI's preview band is 64..=512; a file a user keeps gets the top of
+/// it.
+const DEFAULT_PNG_SIZE: u32 = 512;
+
+/// `shard fetch <id> [--png <path>] [--size <n>]` — the shard's view
+/// through the open wallet's daemon (`get_shard_view`, SV-D), which
+/// fetches the body from a holder and folds the view hash. The wallet
+/// answers with the aggregate; the picture, when asked for, is drawn here
+/// with `shekyl-shard-visual` into a new owner-only file.
+///
+/// The wallet's refusals are shown as they arrive: still open, could not
+/// be retrieved, not offered by this daemon. None of them is an empty
+/// picture.
+pub fn cmd_shard_fetch(
+    rpc: &RpcSession,
+    shard_id: u64,
+    png: Option<&str>,
+    size: Option<u32>,
+) -> CommandResult {
+    require_open(rpc)?;
+    let view = rpc
+        .call("get_shard_view", json!({ "shard_id": shard_id }))
+        .map_err(|e| rpc.report("Shard view", &e))?;
+
+    let Some(path) = png else {
+        return Ok(view);
+    };
+    let size = size.unwrap_or(DEFAULT_PNG_SIZE);
+    // The wallet's result is the renderer's aggregate plus the fields the
+    // renderer does not take (archival_len, close_height), which serde
+    // ignores. A result that does not parse is the wallet breaking its
+    // own contract, not a bad shard.
+    let aggregate: ShardAggregate = serde_json::from_value(view.clone()).map_err(|e| {
+        refusal(format!(
+            "Shard view: the wallet's answer is not an aggregate: {e}"
+        ))
+    })?;
+    let bytes = render_candidate_png(&aggregate, size).map_err(|e| refusal(e.to_string()))?;
+
+    let path = std::path::Path::new(path);
+    let write = super::scripted::open_owner_only_excl(path, "shard image").and_then(
+        |mut file| -> Result<(), Box<dyn std::error::Error>> {
+            use std::io::Write;
+            file.write_all(&bytes)?;
+            file.flush()?;
+            Ok(())
+        },
+    );
+    match write {
+        Ok(()) => {
+            let mut out = view;
+            out["png"] = json!({ "path": path.display().to_string(), "size": size });
+            Ok(out)
+        }
         Err(e) => failed(e.to_string()),
     }
 }
 
 pub(crate) fn show_fetch(val: &Value) {
+    let field = |name: &str| val.get(name).and_then(Value::as_u64).unwrap_or(0);
+    println!("Shard {} retrieved.", field("shard_id"));
     println!(
-        "Shard {} fetch requested.",
-        val.get("shard_id").and_then(Value::as_u64).unwrap_or(0)
-    );
-    println!(
-        "  Hash:    {}",
+        "  View hash:        {}",
         val.get("shard_hash")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
     );
+    println!("  Closed at height: {}", field("close_height"));
+    println!("  Archival bytes:   {}", field("archival_len"));
+    println!("  Blocks:           {}", field("block_count"));
+    println!("  Transactions:     {}", field("tx_count"));
     println!(
-        "  Blocks:  {}",
-        val.get("block_count").and_then(Value::as_u64).unwrap_or(0)
+        "  Outputs:          {} ({} coinbase)",
+        field("output_count"),
+        field("coinbase_output_count")
     );
-    println!(
-        "  Outputs: {}",
-        val.get("output_count").and_then(Value::as_u64).unwrap_or(0)
-    );
+    println!("  Time span:        {} s", field("time_range_seconds"));
+    if let Some(png) = val.get("png") {
+        println!(
+            "  Image:            candidate.v1 ({}px) written to {}",
+            png.get("size").and_then(Value::as_u64).unwrap_or(0),
+            png.get("path").and_then(|v| v.as_str()).unwrap_or("?")
+        );
+    }
 }
 
 fn coverage_json(list: &crate::daemon::ArchivalShardCoverage) -> Value {

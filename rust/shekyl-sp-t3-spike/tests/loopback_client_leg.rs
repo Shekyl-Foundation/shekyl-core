@@ -21,10 +21,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use shekyl_p_fetch::{FetchTarget, ServingEndpoint};
-use shekyl_p_serve::{PServeEndpoint, PassSigner, ShardBody, TestKeySigner};
+use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner};
 use shekyl_socks::accept_userpass;
-use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, LEAF_BYTES};
+use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, FramedObject, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
 use shekyl_sp_t3_spike::measure::FailureKind;
 use shekyl_types::BlockHeight;
@@ -94,8 +94,12 @@ fn target_for(signer: &TestKeySigner) -> FetchTarget {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
         verifying_key: signer.public_key().clone(),
-        shard_id: 0,
     }
+}
+
+/// What the leg expects of the payload served as shard 0.
+fn expectation() -> ExpectedShard {
+    FramedObject::new(&payload()).expectation(0)
 }
 
 #[tokio::test]
@@ -107,17 +111,14 @@ async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
     let leg = ClientLeg::new(proxy, 1);
 
     let len = leg
-        .fetch_once(0, &target_for(&signer))
+        .fetch_once(0, &target_for(&signer), &expectation())
         .await
         .expect("the apparatus anchor must pass P's height gate and verify");
 
-    // The length the apparatus would derive at bring-up, through the same
-    // contract the endpoint writes with.
-    let expected = ShardBody::flat(payload())
-        .expect("four whole leaves")
-        .header()
-        .framed_len();
-    assert_eq!(u64::try_from(len).expect("fits"), expected);
+    // The archival length the client verified out of the frame is the
+    // payload's, the figure the apparatus derives at bring-up from the
+    // same object the endpoint serves.
+    assert_eq!(len, payload().len());
     assert_eq!(ep.served_count(), 1);
 }
 
@@ -133,7 +134,9 @@ async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
     let leg = ClientLeg::new(proxy, 1);
 
-    let outcome = leg.fetch_once(0, &target_for(&signer)).await;
+    let outcome = leg
+        .fetch_once(0, &target_for(&signer), &expectation())
+        .await;
 
     assert_eq!(outcome, Err(FailureKind::Refused));
     assert_eq!(ep.served_count(), 0, "a 400 is not a serve");
@@ -151,7 +154,7 @@ async fn a_body_under_the_wrong_key_is_refused() {
     let (_ep, proxy) = persona(signer).await;
     let leg = ClientLeg::new(proxy, 1);
 
-    let outcome = leg.fetch_once(0, &target_for(&other)).await;
+    let outcome = leg.fetch_once(0, &target_for(&other), &expectation()).await;
 
     assert_eq!(outcome, Err(FailureKind::Refused));
 }

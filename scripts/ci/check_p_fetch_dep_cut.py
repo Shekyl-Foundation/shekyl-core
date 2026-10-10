@@ -88,6 +88,9 @@ SOCKS = "shekyl-socks"
 # mirrored). The positive limb of the cut.
 CLIENT_MUST_REACH = (
     "shekyl-curve-tree",
+    # The body grammar (`shard_frame`) and the `txid_parts` row — the
+    # SF-D8 amendment's codec, shared with the serve side's writer.
+    "shekyl-wire",
     "shekyl-archival-retention",
     "shekyl-onion-v3",
     SOCKS,
@@ -118,6 +121,7 @@ NO_SOCKS = (
     # rather than to whichever consumer happens to be listed.
     "shekyl-store-codec",
     "shekyl-curve-tree",
+    "shekyl-wire",
     "shekyl-archival-retention",
     SERVER,
 )
