@@ -180,8 +180,8 @@ fn cen_d3_the_seed_is_block_zero_through_the_first_epoch_and_lag() {
         );
         let seed = expected_seed(&chain);
         let at_seed_height = chain.with_view(|view| {
-            match crate::harness::infallible(view.block_at(BlockHeight::from_raw(seed_height))) {
-                AtHeight::Recorded(block) => block.hash,
+            match crate::harness::infallible(view.header_at(BlockHeight::from_raw(seed_height))) {
+                AtHeight::Recorded(record) => record.hash,
                 AtHeight::AboveTip => panic!("recorded"),
             }
         });

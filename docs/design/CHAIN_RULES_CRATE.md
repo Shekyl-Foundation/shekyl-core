@@ -65,7 +65,7 @@ is a hope; none of these is.
 | G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either package in any dependency table of the crate's `Cargo.toml`; **the belt** `scripts/ci/check_chain_rules_no_store.sh` (in `rust-audit-test.yml`) captures the crate's `cargo tree -e normal,dev --target all` closure and refuses either package in it (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
 | G2 | **The conversion ban.** No `From`/`Into`/`TryFrom`/`TryInto` between any `StoreError`/`StoreInvariant`/`StoreCannot` and `InvalidBlock`; no `match` arm maps a store token onto `InvalidBlock`. This crate never *names* a store error type; the store's fault reaches `validate` only as the opaque `V::Fault` (§4.3), which has no bound a rule could inspect. | `check_store_error_conversion_ban.py` clauses 1 and 3, **raised in this PR** so `verdict_defs == 0` is a failure now that the subject exists (§7); genericity of `Fault`. |
 | G3 | **The verdict names the row.** `InvalidBlock { rule: CenRow, locus: Locus }` — a typed census row id, never a string, never "some rejection". | `CenRow` is a closed `enum`; `InvalidBlock` has no string field. |
-| G4 | **One transaction, one brand.** `ChainValid<'id, V>` carries an *invariant* `'id` and is parameterized by the view type `V` that minted it. An unbranded `impl<'id> ChainView<'id> for Evil` can pick up a batch's `'id`, but produces `ChainValid<'id, Evil>`, which does not unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will demand. | `PhantomData<fn(V) -> V>` plus `'id`; `validate` returns `ChainValid<'id, V>`; two `compile_fail` doctests (cross-`'id` and unbranded-`V`) (§8.3). |
+| G4 | **One transaction, one brand.** `ChainValid<'id, V>` carries an *invariant* `'id` and is parameterized by the view type `V` that minted it. An unbranded `impl<'id> ChainView<'id> for Evil` can pick up a batch's `'id`, but produces `ChainValid<'id, Evil>`, which does not unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will demand. | `PhantomData<fn(V) -> V>` plus `'id`; `validate` returns `ChainValid<'id, V>`; two `trybuild` `compile_fail` programs with whole-stderr snapshots and a positive control (`tests/trybuild/`, §8.3; `compile_fail` doctests until 2026-10-10, when they were found green for the wrong reason). |
 | G5 | **Private constructor.** Nothing outside the crate can build a `ChainValid` or a `ValidatedBlock`. | Fields private; no `pub` constructor; `compile_fail` doctest. The FFI-shim construction path is rejected by the ruling (§9.2) and does not exist. |
 | G6 | **Coverage is carried, not declared.** Every `ChainValid` carries `RuleCoverage` (rows actually evaluated) and the `RuleSetId` it was checked under. With zero rules, coverage is empty and `is_complete_for` is `false`. Mint additionally requires `covers_landed` — every *implemented* row the rule set enforces is in coverage — so a forgotten `validate` call cannot produce the token during porting. | Struct fields, set only by `validate`; `ChainValid::mint` panics if `covers_landed` is false; unit tests pin empty/`is_complete_for`/`covers_landed`. |
 | G7 | **The flag partitions first — by type.** Consensus rows and policy rows are **sibling enums** (`CenRow`, `PolicyRow`); a policy row cannot be inserted into a `RuleCoverage`, and `RuleSet` cannot name a `PolicyRow`. `implemented / enforced` and `ratified / enforced` are computed per flag; `E = rows of that flag − bucket 3`; both numbers always printed together with the definition of `E`. | Two enums, two `Coverage<R>` instantiations, two denominators (round-1 ruling Q4); `scripts/ci/check_chain_rules_coverage.py` (§6). |
@@ -375,7 +375,7 @@ has no `expect`. `RuleSet` gained its first parameter, `enforced`, so
 `enforced()` reads data rather than returning `CenRow::ALL` regardless of
 `self`. Same public API.
 
-### 4.3 `ChainView<'id>`, `AtHeight<T>`, `RecordedBlock` (`view.rs`)
+### 4.3 `HeaderView<'id>`, `ChainView<'id>`, `AtHeight<T>`, `HeaderRecord`, `RecordedBlock` (`view.rs`)
 
 ```rust
 /// A by-height lookup against the recorded chain. Matched exhaustively;
@@ -403,13 +403,24 @@ pub enum AtHeight<T> {
 /// sums make the volume window (slice 4). Fields grow with rows, never
 /// ahead of them. The block's *weights* are not here: G6 reads them in bulk
 /// through `weights_window`, below.
+///
+/// DRS-E5 a2 (2026-10-10, `E5-13`): the header facts are their own record,
+/// embedded — `block.header.hash`, never a `Deref` — so a `HeaderView`
+/// answers them without the block's accumulators. *Records-was:* `hash`,
+/// `header` and `cumulative_difficulty` were flat fields of `RecordedBlock`
+/// from slice 1 until a2.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock {
+pub struct HeaderRecord {
     pub hash: BlockHash,
     pub header: shekyl_wire::BlockHeader,
     pub cumulative_difficulty: CumulativeDifficulty,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedBlock {
+    pub header: HeaderRecord,
     pub coins_generated: AtomicUnits,
     pub cumulative_tx_count: u64,
+    pub cumulative_archival_len: ArchivalLength,   // DRS-E4
 }
 
 /// The two weights the store records for one block — what CEN-G6's two
@@ -419,21 +430,38 @@ pub struct RecordedBlock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedWeights { pub weight: BlockWeight, pub long_term_weight: LongTermWeight }
 
-/// The narrow, read-only view a rule consumes. Implemented by the store over
-/// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
-/// tests. `'id` is the transaction brand: a `ChainValid<'id, V>` is minted
-/// only against the `V: ChainView<'id>` it names, of the same `'id`.
-pub trait ChainView<'id> {
+/// The header facts alone — what the cheap tier of alt-block admission can
+/// answer stateless from a window of headers (DRS-E5 `E5-14`, a2). Two
+/// methods, measured, not four: `height_of` and `depth_at` are header facts
+/// by classification with no cheap-tier caller, so they stay on `ChainView`
+/// (rule 21). A rule that reads only these is a `HeaderRule` (§4.6).
+pub trait HeaderView<'id> {
     /// What the view's **substrate** can fail with: the store's engine error
     /// for the projection, `Infallible` for the mock. Opaque to every rule —
     /// no bound, so nothing in this crate can inspect, match, or convert it
     /// (G2 by genericity). A fault is not a verdict: `validate` returns it
     /// *outside* the `Result<ChainValid, InvalidBlock>` and the caller halts.
+    /// Declared once, here; `ChainView` inherits it (`V::Fault` resolves).
     type Fault;
+    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
+    /// B1 does not read the tip: the rule set is an input. `None` is the empty
+    /// chain — slice 1, Q1. (On `ChainView` until a2.)
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+    /// `block_at`'s header projection — the same read, the accumulators
+    /// dropped. CEN-A2, CEN-A4, CEN-C2, CEN-C3, CEN-D3, CEN-D4, CEN-E1.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault>;
+}
 
+/// The narrow, read-only view a rule consumes. Implemented by the store over
+/// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
+/// tests. `'id` is the transaction brand: a `ChainValid<'id, V>` is minted
+/// only against the `V: ChainView<'id>` it names, of the same `'id`.
+pub trait ChainView<'id>: HeaderView<'id> {
     /// CEN-I7 (chain-wide key-image uniqueness); CEN-L1's chain half.
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault>;
-    /// CEN-A2, CEN-A4, CEN-C2, CEN-C3.
+    /// The header record and the executed accumulators together — CEN-F13,
+    /// CEN-F20, CEN-F17's `n`. A reader that needs only the former asks
+    /// `HeaderView::header_at`.
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
@@ -444,10 +472,7 @@ pub trait ChainView<'id> {
     /// commit 5 (2026-09-25); the store shares one body between
     /// `ReadSnapshot` and `BatchView`.
     fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Self::Fault>;
-    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
-    /// B1 does not read the tip: the rule set is an input. `None` is the empty
-    /// chain — slice 1, Q1.
-    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+    // `tip` is on `HeaderView` since DRS-E5 a2 (2026-10-10); it was here from slice 1.
     // DRS-E3 (2026-09-26): the three reads the growth derivation consumes —
     // not a rule's, `validate`'s (`drain.rs`), which runs after the last rule
     // and derives `ValidatedBlock::{root_after, drain}` (CTW-Q1: the root
@@ -509,6 +534,21 @@ each with its row named above. No
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in
 `validate`'s signature, and `V` names the implementor itself.
+
+**The header split (DRS-E5 a2, 2026-10-10; `DRS_E5_POOL_ALT_PRUNE.md`
+`E5-13`/`E5-14`).** `HeaderView<'id>` is the supertrait: `tip` and
+`header_at`, the latter `block_at`'s projection (the store's `BatchView`
+answers both from one `block_body` read, and its conformance suite asserts
+`header_at == block_at.map(|b| b.header)` at every height). The split was
+measured, not designed: of the ten rule files, five read only header facts
+(D1, C1, C2, E1 as `HeaderRule`s; the D3/D4/C3/E5 helpers and B4's
+`anchor_window` bound on `HeaderView`), and the two header-classified
+reads with no cheap-tier caller stayed on `ChainView`. A generic
+`V: ChainView<'id>` calls `tip`/`header_at` without naming the supertrait;
+a concrete call site (`BatchView` in the ingest connector and the store's
+tests) imports `HeaderView`. A hole below the tip on a header read is
+`Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`, through
+`recorded_header` (`rules/mod.rs`) as `recorded` does for the block.
 
 **Why a fault channel (Q12-1).** The store's projection reads a redb
 transaction; reads can fail. An infallible trait would leave the projection
@@ -740,7 +780,7 @@ impl ReleaseAnchors {
     pub const fn current(&self) -> Option<Anchor>;                           // `C`
     pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
     /// CEN-E5, run once by the writer at open; the remedy is the writer's.
-    pub fn conflict_with<'id, V: ChainView<'id>>(&self, view: &V) -> Result<Option<AnchorConflict>, V::Fault>;
+    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<AnchorConflict>, H::Fault>;   // `HeaderView` since DRS-E5 a2
 }
 pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
 impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
@@ -809,9 +849,15 @@ stored bond key that is not canonical is `ViewRead::Corrupt`. `validate`
 maps that into `Fault` once (`Fault::from`). The type over-claims — every
 block rule *can* halt the writer by its signature, and only B4 does — so the
 claim is held by a falsifier rather than a comment:
-`scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each `impl
-BlockRule` body for a way `Corrupt` can enter its error and refuses unless
-the set with a site is exactly `{B4}`. A transaction rule's error stays
+`scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each rule impl
+body — `impl BlockRule for X` and `impl HeaderRule for X` alike, the trait
+set derived from the blanket impl rather than listed — for a way `Corrupt`
+can enter its error and refuses unless the set with a site is exactly
+`{B4}`. A rule that reads header facts only is a `HeaderRule`
+(`check<'id, H: HeaderView<'id>>(cx, view) -> Result<Verdict<()>,
+ViewRead<H::Fault>>`), made a `BlockRule` by `impl<R: HeaderRule> BlockRule
+for R` so `run` composes it unchanged (DRS-E5 a2, 2026-10-10: D1, C1, C2,
+E1). A transaction rule's error stays
 `V::Fault`; `tx_against` widens to `ViewRead` at its own boundary, where I12
 already did. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx **at the slot each occupies** — both stages derive at the slot they
@@ -1099,6 +1145,7 @@ figures are still printed, as derived), **0** when they agree.
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
 | entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
+| `Var by_construction(rust::path, "falsifier"),` — the falsifier **must** exist (rule 47) in one of three shapes: a `#[test] fn <name>` defined in the crate; `doctest:<item>`, a ```` ```compile_fail ```` doctest in the `///` block above `fn <item>`; or `trybuild:<test>` (added 2026-10-10, DRS-E5 a2), a `#[test] fn <test>` defined in `src/` or `tests/` whose body calls `.compile_fail(…)` — the test that compares a must-not-compile program's stderr to its snapshot. A shared `#[test]` falsifier names every row it serves as `CenRow::<id>` (slice 5 Q6) | `falsifier … is not a #[test] fn defined in the crate` / `names no fn <item> … carrying a compile_fail doctest` / `is not a #[test] fn <test> defined in the crate (src/ or tests/)` / `runs no compile_fail(…) program` / `serves N rows but its body does not name CenRow::<id>` (1) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
 | no duplicate variant across both registries | `duplicate entry X` (1) |
@@ -1272,8 +1319,19 @@ strips `//` comments, collects every function whose return type is
 `Result<…, ViewRead<…>>` (the lifting functions; `recorded` must be among
 them or the gate refuses its own subject) and every function whose return
 type is `ViewRead` itself (the converters: `parent_read`,
-`record_invariant`), then walks each balanced `impl BlockRule for X {}`
-body. A site is the path `ViewRead::Corrupt` in either form the crate
+`record_invariant`), then walks each balanced rule impl body — `impl T for X
+{}` for every rule trait `T`. **The rule traits are derived, not listed**
+(DRS-E5 a2, 2026-10-10): `BlockRule`, whose declaration must exist, plus
+every trait a blanket impl lifts into one, to a fixed point
+(`impl<R: HeaderRule> BlockRule for R` — in either the bound or the
+`where` form — adds `HeaderRule`). The derivation asserts itself: the gate
+independently finds every `fn check` with a rule's signature
+(`-> Result<Verdict<()>, ViewRead<…>>`), under a `trait` declaration or an
+`impl … for`, and refuses (exit 2) when that trait is not in the derived
+set — a third rule form reached by no blanket impl is a red run, not a
+quiet shortfall. The shortfall is what prompted this: with `IMPL_RE` reading
+only `impl BlockRule for X`, the four `HeaderRule`s of a2 dropped the count
+from 15 to 11 under a floor of 10, green. A site is the path `ViewRead::Corrupt` in either form the crate
 writes — the call `ViewRead::Corrupt(…)` or the constructor passed as a
 function, `map_err(ViewRead::Corrupt)`, which is how the archival folds
 lift a `Corrupt` — unless that path opens a match arm
@@ -1297,14 +1355,22 @@ message opening with "if the halt is intended, add it" invited whitelisting
 the defect. The same sentence is what a reader needs at a match guard on the
 variant (`ViewRead::Corrupt(c) if … =>`), which the walk counts as a site: a
 guard that stops the halt is consumption, not a false positive (reworded
-2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `impl BlockRule`,
-fewer than ten of them, no lifting function, `recorded` not a lifter.
-`--describe` prints every rule's sites; `--selftest` bites each refusal on
-synthetic sources, including `map_err(ViewRead::Corrupt)?` and
-`map_err(parent_read)?`, and proves the non-sites stay clean: a refusal
+2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `trait BlockRule`,
+no rule impl in any derived form, fewer than fourteen of them summed over
+the forms (15 at a2: 11 + 4), a rule-shaped `check` under an unreached
+trait, no lifting function, `recorded` not a lifter.
+`--describe` prints every rule's sites and the count per form; `--selftest`
+bites each refusal on synthetic sources (23 at a2), including
+`map_err(ViewRead::Corrupt)?` and `map_err(parent_read)?`, the three probes
+on a `HeaderRule` (a direct `Err(ViewRead::Corrupt(..))`, a `?` on an
+unlisted `ViewRead`-returning helper, the same helper in another module),
+the blanket impl removed, and a third form declared without one; and
+proves the non-sites stay clean: a refusal
 built inside a `match`, `Err(_) =>` and `ViewRead::Corrupt(c) =>` as
-patterns, `map_err(ViewRead::View)?`, and `Vec::extend` sharing a lifting
-method's name. Wired as two steps in `docs-gates.yml` after the §6.4 pair,
+patterns, `map_err(ViewRead::View)?`, `Vec::extend` sharing a lifting
+method's name, and the `where`-clause blanket form. The same three probes
+were planted in D1 (a `HeaderRule`) on the real tree at a2: each exit 1
+naming `rules/pow.rs`. Wired as two steps in `docs-gates.yml` after the §6.4 pair,
 same append pattern. Falsified on the real tree before landing: a
 `recorded(view, cx.connecting)?` planted in G1 produced `block rule G1 can
 produce ViewRead::Corrupt (rules/body.rs:181 recorded(…)?)`, exit 1. The
@@ -1368,7 +1434,13 @@ lint scans them as production — no debug macros anywhere).
 - `compile_fail`: `use redb::Database;`
 - `compile_fail`: `use shekyl_chain_store::store::ChainStore;`
 - `compile_fail`: `ChainValid { … }` / `ValidatedBlock { … }` from outside.
-- `compile_fail`: cross-view handoff (on `validate`) —
+- cross-view handoff and unbranded view (on `validate`) — **`trybuild` since
+  2026-10-10 (DRS-E5 a2), `tests/trybuild.rs`**: `verdict_does_not_escape_its_view.rs`
+  (the program below, `E0521` at `connect`), `unbranded_view_does_not_connect.rs`
+  (`ChainValid<'_, Evil>` at `connect`, `E0308`), and the positive control
+  `verdict_connects_under_its_own_view.rs` (`t.pass`), all over one complete
+  stub view in `tests/trybuild/stub_view.rs`. *Records-was:* two `compile_fail`
+  doctests here until that day; see the amendment below for why.
   ```rust
   with_view(|outer| {
       with_view(|inner| {
@@ -1390,8 +1462,10 @@ links the ordinary library build, where no `cfg(doctest)` item exists to
 resolve (the Rust reference says so of the cfg; verified empirically at
 commit 6 — a snippet naming `shekyl_chain_rules::harness::MockChain` fails
 to resolve under `cargo test --doc`). So `harness` is `#[cfg(test)]` only, and the one
-doctest that needs a branded view — the cross-view pin above — declares an
-inline three-method `View<'id>` with its own `with_view`/`connect`. The
+doctest that needed a branded view — the cross-view pin above — declared an
+inline three-method `View<'id>` with its own `with_view`/`connect` (until
+2026-10-10; the stub now lives in `tests/trybuild/stub_view.rs`, where a
+`trybuild` program can `#[path]`-include it). The
 alternative, a `pub` harness behind a `test-support` feature, was not taken:
 it would put a mock `ChainView` on the crate's public surface for one pin.
 
@@ -1402,7 +1476,9 @@ silently ignored, so writing one claims a precision the gate does not have
 (verified at commit 4: `E0999` passed). None is written. Instead every pin
 was compiled once outside rustdoc to read the error it actually produces, so
 a snippet that fails for a typo rather than for its reason is a review item,
-not a hidden state. All eleven, at commit 8:
+not a hidden state. All eleven, at commit 8 (the unbranded-view row was
+added 2026-10-10: that pin sat beside the cross-view one in `validate.rs`
+and was not tabled here):
 
 | pin | where | error |
 | --- | --- | --- |
@@ -1416,12 +1492,44 @@ not a hidden state. All eleven, at commit 8:
 | `ChainValid<'long>` → `ChainValid<'short>` | `verdict.rs` | *lifetime may not live long enough* (no code; the invariance error) |
 | `ChainValid { .. }` from outside | `verdict.rs` | `E0451` field is private |
 | `ValidatedBlock { .. }` from outside | `block.rs` | `E0451` field is private |
-| cross-view `connect(&outer, valid)` | `validate.rs` | `E0521` borrowed data escapes the closure (the inner brand cannot become the outer) |
+| cross-view `connect(&outer, valid)` | `validate.rs` → `tests/trybuild/` (2026-10-10) | `E0521` borrowed data escapes the closure (the inner brand cannot become the outer) — now a stderr snapshot |
+| unbranded `connect(&view, valid)` | `validate.rs` → `tests/trybuild/` (2026-10-10) | `E0308` `ChainValid<'_, Stub<()>>` is not `ChainValid<'_, Stub<Brand<'_>>>` — now a stderr snapshot |
 
 The G1 pair is *not* `E0432` ×2 as an earlier draft of this section said —
 an unknown crate root is `E0433`, an unknown item in a known crate `E0432`.
-Exact-diagnostic pinning (`trybuild`) is not adopted: the pins here are
-second lines behind the belt and the type shapes, not gates.
+Exact-diagnostic pinning (`trybuild`) is not adopted for the pins whose
+stub cannot drift: they are second lines behind the belt and the type
+shapes, not gates.
+
+**Amended by finding (DRS-E5 a2, 2026-10-10): compiled-once is not
+compiled-every-time.** The paragraph above relied on each pin having been
+compiled outside rustdoc *once*, so that a snippet failing for a reason
+other than its own would be a review item. That holds only while the
+snippet's stub stays complete. The two `validate` brand pins carried an
+inline `ChainView` stub, and when `ChainView` grew the archival reads
+(`5fb2132fa`, 2026-09-29, E4 commit 2) the stubs did not: from that day
+both doctests passed on `E0046` (sixteen methods missing) — the stub no
+longer implemented the trait, so `connect` was never reached. A
+`compile_fail` that goes red for any reason is a gate whose subject can
+vanish while it stays green (rule 47). Pinning an error code did not close
+it: rustdoc requires the code to be *among* the errors, and borrowck still
+ran beside the E0046, so a drift probe stayed green. The two pins are
+`trybuild` programs now, whose whole stderr is compared against a snapshot
+and whose stub is a complete `HeaderView` + `ChainView` impl: a method
+added to either trait turns all three programs red (the positive control
+fails to compile; both negatives mismatch on the E0046 line), which is the
+behaviour the doctests were assumed to have. Reading a mismatch: an E0046
+means fix the stub, never regenerate; a reworded diagnostic under a
+toolchain bump is `TRYBUILD=overwrite` after reading the new text; a
+different error at `connect` is a finding against `validate`. `trybuild`
+was already in `Cargo.lock` (crypto-pq's and logging's dev-dependency,
+rule 17); the toolchain pin makes the snapshots deterministic. The other
+pins in this table have no stub to drift and stay as doctests. CEN-F19's
+registry falsifier moved with the pins — `doctest:validate` →
+`trybuild:a_verdict_connects_under_the_view_it_was_judged_against_and_no_other`
+— and the completeness gate learned the shape (§6.2): the named `#[test]`
+must exist under `src/` or `tests/` and call `.compile_fail(…)`, so the
+row cannot be re-keyed to a test that only passes programs.
 
 ### 8.4 Rule sets and schedule (`rule_set_tests.rs`)
 

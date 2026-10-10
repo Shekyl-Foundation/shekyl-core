@@ -88,8 +88,8 @@
 use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, SlashLogFloor, Tip,
-    TreeFrontier,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
+    SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow};
 use shekyl_types::{
@@ -147,9 +147,37 @@ impl<'b, 'id> BatchView<'b, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for BatchView<'_, 'id> {
+impl<'id> HeaderView<'id> for BatchView<'_, 'id> {
     type Fault = StoreError;
 
+    /// `block_info.last()` through the shared read body — the same row
+    /// `block_at` / `root_at` classify against, so the tip a rule reads and
+    /// the tip absence is judged by are one read (SCW-13). `None` is the
+    /// empty chain; an undecodable last row is SI-7 through `arm`.
+    fn tip(&self) -> Result<Option<Tip>, StoreError> {
+        Ok(self.tip_row()?.map(|(height, info)| Tip {
+            height: BlockHeight::from_raw(height),
+            hash: info.hash,
+        }))
+    }
+
+    /// The header half of [`ChainView::block_at`], from the **same** read
+    /// ([`chain_reads::block_body`]): the store has no header-only table —
+    /// the header lives inside the `blocks` blob, which must hash to the
+    /// identity `block_info` records (CEN-B6) — so a header fact costs the
+    /// store exactly what the whole record does. The partition is by
+    /// field, not by table (DRS-E5 `E5-13`); what the narrower return buys
+    /// is the bound, not a cheaper read. Absence classifies as `block_at`
+    /// does: `AboveTip` above the tip, SI-7 at or below it.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
+        Ok(match self.block_at(height)? {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded(block) => AtHeight::Recorded(block.header),
+        })
+    }
+}
+
+impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read
     /// from the table SI-1 guards. The body is [`chain_reads::has_key_image`],
     /// shared with the read snapshot (S-OUT-KI K1); a membership read has no
@@ -177,25 +205,16 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         Ok(match body {
             AtHeight::AboveTip => AtHeight::AboveTip,
             AtHeight::Recorded((info, block)) => AtHeight::Recorded(RecordedBlock {
-                hash: info.hash,
-                header: block.header,
-                cumulative_difficulty: info.cumulative_difficulty,
+                header: HeaderRecord {
+                    hash: info.hash,
+                    header: block.header,
+                    cumulative_difficulty: info.cumulative_difficulty,
+                },
                 coins_generated: info.coins_generated,
                 cumulative_tx_count: info.cumulative_tx_count,
                 cumulative_archival_len: info.cumulative_archival_len,
             }),
         })
-    }
-
-    /// `block_info.last()` through the shared read body — the same row
-    /// `block_at` / `root_at` classify against, so the tip a rule reads and
-    /// the tip absence is judged by are one read (SCW-13). `None` is the
-    /// empty chain; an undecodable last row is SI-7 through `arm`.
-    fn tip(&self) -> Result<Option<Tip>, StoreError> {
-        Ok(self.tip_row()?.map(|(height, info)| Tip {
-            height: BlockHeight::from_raw(height),
-            hash: info.hash,
-        }))
     }
 
     /// `block_heights[hash]` — CEN-I10's read. The body is

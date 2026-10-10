@@ -7,7 +7,7 @@
 //! DRS-E2 RD-Q4). Own file so `connect_tests` stays the write-set and belt
 //! suite rather than growing past the 1k line.
 
-use shekyl_chain_rules::{ChainView, FrontierFault, LeafInput, RuleSet};
+use shekyl_chain_rules::{FrontierFault, HeaderView, LeafInput, RuleSet};
 use shekyl_types::{BlockHeight, GlobalOutputIndex, ShardId};
 
 use super::connect_fixtures::{candidate, connect_chain, judge};
@@ -54,7 +54,7 @@ fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
     // reaches the tables.
     let again: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let tip = HeaderView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
@@ -224,7 +224,7 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
     // the tables.
     let again: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let tip = HeaderView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
         Ok(batch.connect(judge(&view, cand)?, RuleSet::GENESIS)?)
     });
@@ -539,7 +539,7 @@ fn inspect_aborts_so_a_later_write_still_runs() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<Option<BlockHeight>, TestErr> = store.inspect(|batch| {
         let view = batch.chain_view();
-        Ok(ChainView::tip(&view)?.map(|t| t.height))
+        Ok(HeaderView::tip(&view)?.map(|t| t.height))
     });
     assert_eq!(out.expect("inspect"), None);
     let again: Result<(), TestErr> = store.write(|_batch| Ok(()));

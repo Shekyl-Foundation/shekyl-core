@@ -320,7 +320,7 @@ impl super::Transition {
                 check: SettlementCheck::BeaconNotRecorded,
             }));
         }
-        let beacon = recorded(view, BlockHeight::from_raw(at))?.hash;
+        let beacon = recorded(view, BlockHeight::from_raw(at))?.header.hash;
         Ok(*beacon.as_bytes())
     }
 

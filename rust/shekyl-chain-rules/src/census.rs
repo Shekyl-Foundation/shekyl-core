@@ -101,9 +101,13 @@ pub enum RowStatus {
     /// type or item that holds the property — not a rule type, so no
     /// `ROW` assertion applies), and `falsifier` names the test in this
     /// crate that would fail if the property lapsed — a `#[test]` that
-    /// exercises the parser, or `doctest:<item>` for a `compile_fail`
-    /// doctest on `<item>` (F19's). The gate asserts the falsifier is
-    /// defined (rule 47: a property with no way to fail is a claim).
+    /// exercises the parser, `doctest:<item>` for a `compile_fail`
+    /// doctest on `<item>`, or `trybuild:<test>` for the `#[test]` under
+    /// `tests/` that compares `compile_fail` programs against stderr
+    /// snapshots (F19's since 2026-10-10: its doctests had been green on
+    /// a stub that no longer implemented `ChainView`, not at `connect`).
+    /// The gate asserts the falsifier is defined (rule 47: a property
+    /// with no way to fail is a claim).
     ///
     /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), as
     /// [`EnforcedAt`](Self::EnforcedAt) is, and counted as Rust-enforced by
@@ -392,7 +396,7 @@ census_rows! {
         F16 implemented(crate::rules::reward::F16),
         F17 implemented(crate::rules::reward::F17),
         F18 implemented(crate::rules::reward::F18),
-        F19 by_construction(crate::view::ChainView, "doctest:validate"),
+        F19 by_construction(crate::view::ChainView, "trybuild:a_verdict_connects_under_the_view_it_was_judged_against_and_no_other"),
         F20 implemented(crate::rules::miner::F20),
         F21 by_construction(shekyl_economics::EMISSION_SPLIT_EPOCH, "the_staker_share_starts_at_block_one"),
         // 4.G Block body (per-tx and block-level, main-chain connect)

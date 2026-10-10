@@ -84,7 +84,7 @@ pub fn expected_seed(chain: &MockChain) -> BlockHash {
         return BlockHash::NULL;
     };
     match chain.block(seed_height) {
-        AtHeight::Recorded(block) => block.hash,
+        AtHeight::Recorded(block) => block.header.hash,
         AtHeight::AboveTip => unreachable!("the seed height is below the tip"),
     }
 }

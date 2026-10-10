@@ -87,7 +87,7 @@ fn push_records_densely_from_zero_and_reads_back_by_height() {
     assert_eq!(tip.height, BlockHeight::from_raw(2));
     assert_eq!(
         tip.hash,
-        recorded(1_120).hash,
+        recorded(1_120).header.hash,
         "the tip's identity is the last block's"
     );
     assert_eq!(Tip::connecting_height(Some(&tip)), BlockHeight::from_raw(3));

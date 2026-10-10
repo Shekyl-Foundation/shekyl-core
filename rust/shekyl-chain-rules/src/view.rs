@@ -14,6 +14,28 @@
 //! (round-1 ruling Q3): narrowness is what keeps rules mockable and the mock
 //! smaller than the store.
 //!
+//! # Two views, one partition: header facts and executed facts
+//!
+//! [`HeaderView`] is the supertrait: the **header facts** — the tip, and at
+//! each height the identity, the header as recorded and the work through it
+//! ([`HeaderRecord`]). A chain of headers that has **not been executed**
+//! can answer them, which is what an alt chain is before it switches
+//! (DRS-E5 `E5-Q3`, ruled 2026-10-10; `E5-13`/`E5-14` measured the
+//! partition): the alt view stitches an alt branch's headers onto the main
+//! chain below the fork and answers `header_at` honestly across the seam.
+//! [`ChainView`] adds the **executed facts** — key images, roots, leaf
+//! counts, outputs, weights, emission, the archival state — that only a
+//! chain whose blocks were applied can hold. A rule that reads header facts
+//! only is a `HeaderRule` (`rules/mod.rs`) and runs at both tiers; a rule
+//! that reads an executed fact is a `BlockRule` and runs at promotion.
+//! Which trait a rule is bound to is what the alt path *can* run, held by
+//! the type and not by a list.
+//!
+//! The partition is by **field**, not by table (`E5-13`): the store's
+//! `block_info` row carries both kinds, so [`RecordedBlock`] embeds the
+//! [`HeaderRecord`] and adds the executed columns beside it, and a reader
+//! that wants a header fact asks `header_at` and gets nothing else.
+//!
 //! # Three answers, three positions
 //!
 //! Every method returns `Result<_, Self::Fault>`. The `Err` is the view's
@@ -151,19 +173,21 @@ impl Tip {
     }
 }
 
-/// A block the chain has recorded, as a rule reads it.
+/// The **header facts** of a block the chain has recorded — what a chain of
+/// headers knows about it before any block is executed, and therefore what
+/// an alt chain can answer across the fork (module docs; DRS-E5 `E5-13`).
 ///
 /// Every field is here because a named row reads it (round-1 ruling Q3):
 /// `hash` — CEN-A2 (`prev_id` is the tip's hash), CEN-A4 (the parent is a
-/// known block), CEN-D3 (the seed block's identity); `header` — CEN-C2,
-/// CEN-C3 (the timestamps of the eleven preceding blocks), CEN-D4 (the
-/// LWMA-1 window's timestamps); `cumulative_difficulty` — CEN-D4 (the
-/// window's work); `coins_generated` — CEN-F13 (the parent's accumulator
-/// is the subsidy curve's operand); `cumulative_tx_count` — CEN-F20 (two
-/// prefix sums make the volume window). Weight arrives with 4.G; fields
-/// grow with rows, never ahead of them.
+/// known block), CEN-D3 (the seed block's identity), CEN-B4's anchor
+/// window; `header` — CEN-C2, CEN-C3 (the timestamps of the eleven
+/// preceding blocks), CEN-D4 (the LWMA-1 window's timestamps);
+/// `cumulative_difficulty` — CEN-D4 (the window's work) and the fork
+/// choice (CEN-K6). Each is a function of the headers alone: the identity
+/// is the header's hash, and the work is the parent's plus this header's
+/// target.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock {
+pub struct HeaderRecord {
     /// The block's identity, derived once when it was recorded (CEN-B6).
     pub hash: BlockHash,
     /// The header as recorded.
@@ -174,6 +198,25 @@ pub struct RecordedBlock {
     /// reports
     /// [`Corrupt::CumulativeDifficultyNotMonotone`](crate::Corrupt::CumulativeDifficultyNotMonotone).
     pub cumulative_difficulty: CumulativeDifficulty,
+}
+
+/// A block the chain has recorded **and executed**, as a rule reads it:
+/// its [`HeaderRecord`] and the accumulators that exist only because the
+/// block was applied (`E5-13`: the partition is by field, not by table —
+/// the store keeps both in one `block_info` row).
+///
+/// Every executed field is here because a named row reads it (round-1
+/// ruling Q3): `coins_generated` — CEN-F13 (the parent's accumulator is
+/// the subsidy curve's operand); `cumulative_tx_count` — CEN-F20 (two
+/// prefix sums make the volume window); `cumulative_archival_len` — the
+/// shard partition's operand. Weight arrives through
+/// [`ChainView::weights_window`]; fields grow with rows, never ahead of
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedBlock {
+    /// The header facts: identity, header, work (what
+    /// [`HeaderView::header_at`] answers on its own).
+    pub header: HeaderRecord,
     /// Gross emission through this block (`block_info.coins_generated`):
     /// the parent's plus this block's paid reward. CEN-F13's operand — the
     /// subsidy curve reads the **parent's** value for a candidate at
@@ -230,7 +273,45 @@ pub struct BlockOutputs {
     pub listed: Vec<LeafSource>,
 }
 
-/// The narrow, read-only view a rule consumes.
+/// The **header facts** of a recorded chain: the tip and, by height, the
+/// [`HeaderRecord`]. The supertrait of [`ChainView`], and the whole of
+/// what a `HeaderRule` may read (module docs, "Two views, one partition").
+///
+/// Two methods and not more (DRS-E5 `E5-14`, measured): `height_of` and
+/// `depth_at` are header facts by classification but have no caller that
+/// is not a promotion-tier rule, and a method with no caller is
+/// pre-provisioning (rule 21). A header fact that gains a cheap-tier
+/// reader moves here with its reader, not ahead of it.
+///
+/// Implemented by everything that implements [`ChainView`] — the store's
+/// `BatchView`, the harness views — and, on its own, by the alt view
+/// DRS-E5 PR-a builds over a header branch stitched onto the committed
+/// chain below its fork.
+pub trait HeaderView<'id> {
+    /// What the view's substrate can fail with. Opaque to every rule (no
+    /// bound): the store's engine error for its projection,
+    /// [`Infallible`](core::convert::Infallible) for the mock. A fault is
+    /// not a verdict — see the module docs.
+    type Fault;
+
+    /// The last recorded block, or `None` for an empty chain (genesis
+    /// admission). See [`Tip`] for why `Option`.
+    ///
+    /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
+    /// [`Tip::connecting_height`]).
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+
+    /// The header record at `height`: identity, header, work.
+    ///
+    /// CEN-A4, CEN-D3 (the seed block, by hash); CEN-C2, CEN-C3 (the
+    /// preceding timestamps); CEN-D4 (the LWMA-1 window); CEN-B4's anchor
+    /// window. A reader of an executed fact asks
+    /// [`ChainView::block_at`] instead and gets this record inside it.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault>;
+}
+
+/// The narrow, read-only view a rule consumes: the header facts of
+/// [`HeaderView`] and the **executed** facts beside them.
 ///
 /// `'id` is the transaction brand (`WriteBatch<'_, 'id>`). `validate` mints
 /// `ChainValid<'id, V>` so the verdict is branded with **both** the batch
@@ -245,22 +326,17 @@ pub struct BlockOutputs {
 /// Implementors answer about the **recorded** chain only. A pool decorator
 /// (DRS-E5) that also knows the pool's own key images implements this trait
 /// over an inner view; this crate never names it.
-pub trait ChainView<'id> {
-    /// What the view's substrate can fail with. Opaque to every rule (no
-    /// bound): the store's engine error for its projection,
-    /// [`Infallible`](core::convert::Infallible) for the mock. A fault is
-    /// not a verdict — see the module docs.
-    type Fault;
-
+pub trait ChainView<'id>: HeaderView<'id> {
     /// Whether `key_image` has been spent on the recorded chain.
     ///
     /// CEN-I7 (chain-wide key-image uniqueness); the chain half of CEN-L1.
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault>;
 
-    /// The block recorded at `height`.
+    /// The block recorded at `height`, header facts and executed facts
+    /// together. A reader that needs only the former asks
+    /// [`HeaderView::header_at`].
     ///
-    /// CEN-A2, CEN-A4 (the parent, by hash); CEN-C2, CEN-C3 (the preceding
-    /// timestamps).
+    /// CEN-F13, CEN-F20, CEN-F17's `n` (the accumulators).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
 
     /// The height the block `hash` is recorded at, or `None` if the chain
@@ -288,13 +364,6 @@ pub trait ChainView<'id> {
     ///
     /// CEN-I12.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
-
-    /// The last recorded block, or `None` for an empty chain (genesis
-    /// admission). See [`Tip`] for why `Option`.
-    ///
-    /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
-    /// [`Tip::connecting_height`]).
-    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 
     /// The curve tree as the next grow needs it: its leaf count and every
     /// layer's last chunk hash (DRS-E3 §3.1; CTW-8 — the only chunks a grow

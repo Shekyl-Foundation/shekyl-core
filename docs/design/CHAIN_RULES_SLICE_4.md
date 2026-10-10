@@ -398,7 +398,7 @@ the ingest/spec re-key ahead of the row it protects):**
 
 | # | Commit | What |
 | --- | --- | --- |
-| 1 | `RowStatus::ByConstruction` (Q4) | The fourth status; `by_construction(property, "falsifier")`; the gate's `#[test]`-or-`doctest:<item>` falsifier check; excluded from per-block completeness like `EnforcedAt`. No row takes it yet |
+| 1 | `RowStatus::ByConstruction` (Q4) | The fourth status; `by_construction(property, "falsifier")`; the gate's `#[test]`-or-`doctest:<item>` falsifier check; excluded from per-block completeness like `EnforcedAt`. No row takes it yet. UPDATE 2026-10-10 (DRS-E5 a2): a third falsifier shape, `trybuild:<test>`, for a `compile_fail` program whose stub can drift — F19 re-keyed to it (`CHAIN_RULES_CRATE.md` §6.2, §8.3) |
 | 2 | `RuleSet` parameters (Q5) | `mined_money_unlock_window` (60), pinned to `cryptonote_config.h` rather than restated. The split epoch landed here as a field and was moved off `RuleSet` by #10 |
 | 3 | `RecordedBlock` grows | `coins_generated`, `cumulative_tx_count` — store projection, harness, mock-vs-store conformance |
 | 4 | `chain-ingest`: `WrongReward → F18`, `ExpectedPlace::Miner` (Q6, Q8) | The one cross-lane edit, landed **before** F13 flips so the family is green at every commit; `DRS_E2_REPLAY_DRIVER.md` §3.10 row |

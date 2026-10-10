@@ -132,6 +132,16 @@ shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # and takes no dependency on a crate for two numbers; a leaf crate
 # (shekyl-difficulty is its only workspace dep).
 shekyl-consensus = { path = "../shekyl-consensus" }
+# Compile-fail harness for `tests/trybuild.rs`: `validate`'s brand gate — a
+# verdict connects under the view it was judged against and no other — is
+# enforced by the type system and has no runtime behaviour to test. It was
+# two `compile_fail` doctests until 2026-10-10, when both were found green
+# for the wrong reason (their stub views had fallen behind `ChainView`; a
+# doctest cannot say *why* a program failed). `trybuild` snapshots stderr,
+# so the cause is what the test asserts. Already a dev-dependency of
+# `shekyl-crypto-pq` and `shekyl-logging`, so already in `Cargo.lock` —
+# this adds no package to the supply chain (`17-dependency-discipline`).
+trybuild = "1"
 
 [lints]
 workspace = true

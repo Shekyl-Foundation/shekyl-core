@@ -11,7 +11,9 @@
 //! poison path.
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet, Trust};
+use shekyl_chain_rules::{
+    validate, AtHeight, Candidate, ChainView, Fault, HeaderView, RuleSet, Trust,
+};
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
@@ -195,8 +197,13 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
             panic!("the tip's height is recorded");
         };
         assert_eq!(
-            recorded.hash, tip.hash,
+            recorded.header.hash, tip.hash,
             "tip() and block_at(tip.height) name one block"
+        );
+        assert_eq!(
+            view.header_at(tip.height)?,
+            AtHeight::Recorded(recorded.header),
+            "header_at is block_at's header projection (E5-13)"
         );
         Ok(())
     });
@@ -262,8 +269,8 @@ fn block_at_returns_the_identity_and_the_header_parsed_from_the_recorded_blob() 
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is recorded");
         };
-        assert_eq!(recorded.hash, blk.hash());
-        assert_eq!(recorded.header, blk.header);
+        assert_eq!(recorded.header.hash, blk.hash());
+        assert_eq!(recorded.header.header, blk.header);
         assert_eq!(
             view.block_at(BlockHeight::from_raw(1))?,
             AtHeight::AboveTip,
@@ -427,7 +434,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is visible to the second block's validation");
         };
-        assert_eq!(recorded.hash, genesis.hash());
+        assert_eq!(recorded.header.hash, genesis.hash());
         Ok(())
     });
     assert_eq!(out, Ok(()));
@@ -546,7 +553,7 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
 #[test]
 fn the_read_transaction_body_agrees_with_the_batch_body() {
     use super::chain_reads;
-    use shekyl_chain_rules::RecordedBlock;
+    use shekyl_chain_rules::{HeaderRecord, RecordedBlock};
     let path = tmp("view-chain-reads-agree");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let blk0 = block(0, 1_000);
@@ -578,9 +585,11 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash: info.hash,
-                    header: body.header,
-                    cumulative_difficulty: info.cumulative_difficulty,
+                    header: HeaderRecord {
+                        hash: info.hash,
+                        header: body.header,
+                        cumulative_difficulty: info.cumulative_difficulty,
+                    },
                     coins_generated: info.coins_generated,
                     cumulative_tx_count: info.cumulative_tx_count,
                     cumulative_archival_len: info.cumulative_archival_len,
@@ -716,7 +725,7 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
         else {
             panic!("height 1 is recorded");
         };
-        assert_eq!(recorded.hash, block(1, 1_060).hash());
+        assert_eq!(recorded.header.hash, block(1, 1_060).hash());
         Ok(())
     });
     assert_eq!(out, Ok(()), "the recorded rows are as they were");

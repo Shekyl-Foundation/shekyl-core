@@ -104,8 +104,8 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
     const EPOCH: u64 = 1;
     const NONCE: [u8; PASS_NONCE_LEN] = [0x5A; PASS_NONCE_LEN];
     const DIGEST: [u8; 32] = [0xD1; 32];
-    let anchor_hash = chain.with_view(|view| match view.block_at(anchor) {
-        Ok(AtHeight::Recorded(block)) => *block.hash.as_bytes(),
+    let anchor_hash = chain.with_view(|view| match view.header_at(anchor) {
+        Ok(AtHeight::Recorded(record)) => *record.hash.as_bytes(),
         Ok(AtHeight::AboveTip) => unreachable!("the anchor is on the chain"),
         Err(never) => match never {},
     });
@@ -329,8 +329,8 @@ fn cen_b4_anchor_window_is_filled_from_the_connecting_chain() {
         let height = first
             .checked_add(BlockCount::from_raw(offset))
             .expect("fits");
-        let expected = chain.with_view(|view| match infallible(view.block_at(height)) {
-            AtHeight::Recorded(block) => *block.hash.as_bytes(),
+        let expected = chain.with_view(|view| match infallible(view.header_at(height)) {
+            AtHeight::Recorded(record) => *record.hash.as_bytes(),
             AtHeight::AboveTip => unreachable!("below the predecessor"),
         });
         assert_eq!(window.hash_at(height), Some(&expected));
@@ -371,12 +371,14 @@ fn cen_b4_a_hole_in_the_anchor_window_is_corrupt_not_a_refusal() {
     let candidate = carrying(&chain, record);
     let formed = formed_on(&chain, candidate);
     let connecting = Tip::connecting_height(chain.tip().as_ref());
+    // The window is block identities — header facts (DRS-E5 `E5-15`'s
+    // working half of B4) — so the hole is the header record's.
     let hole = ViewRead::Corrupt(Corrupt::HoleBelowTip {
         at: BlockHeight::ZERO,
-        record: PerHeightRecord::Block,
+        record: PerHeightRecord::Header,
     });
     chain.with_view(|inner| {
-        let view = inner.withholding(WithheldRead::BlockAt(BlockHeight::ZERO));
+        let view = inner.withholding(WithheldRead::HeaderAt(BlockHeight::ZERO));
         assert_eq!(anchor_window(&view, connecting), Err(hole));
         assert_eq!(
             B4::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view,),

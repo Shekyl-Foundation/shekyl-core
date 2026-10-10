@@ -154,8 +154,8 @@ fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault
     let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) else {
         return Ok(BlockHash::NULL);
     };
-    Ok(match view.block_at(seed_height)? {
-        AtHeight::Recorded(block) => block.hash,
+    Ok(match view.header_at(seed_height)? {
+        AtHeight::Recorded(record) => record.hash,
         AtHeight::AboveTip => panic!("the seed height is below the tip"),
     })
 }

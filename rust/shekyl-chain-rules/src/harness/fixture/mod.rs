@@ -742,7 +742,11 @@ fn fcmp_auths_mut(tx: &mut Transaction) -> Option<&mut Vec<PqcAuth>> {
 #[must_use]
 pub fn anchored_on(chain: &MockChain, tx: Transaction) -> Transaction {
     let connecting = Tip::connecting_height(chain.tip().as_ref());
-    let hashes: Vec<BlockHash> = chain.recorded.iter().map(|block| block.hash).collect();
+    let hashes: Vec<BlockHash> = chain
+        .recorded
+        .iter()
+        .map(|block| block.header.hash)
+        .collect();
     anchored_at(&hashes, connecting.to_raw(), tx)
 }
 
@@ -980,9 +984,11 @@ pub fn recorded_with_work(
         transaction_hashes: Vec::new(),
     };
     RecordedBlock {
-        hash: block.hash(),
-        header: block.header,
-        cumulative_difficulty,
+        header: HeaderRecord {
+            hash: block.hash(),
+            header: block.header,
+            cumulative_difficulty,
+        },
         // No emission recorded and no listed transactions: a chain
         // whose fixtures are not about the coinbase reads the tail
         // subsidy at every height and a zero volume window. A fixture
@@ -1009,7 +1015,11 @@ mod anchor_tests {
     #[test]
     fn an_emission_with_no_fee_input_is_anchored_and_a_serve_credit_is_not() {
         let chain = chain_of(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw());
-        let hashes: Vec<BlockHash> = chain.recorded.iter().map(|block| block.hash).collect();
+        let hashes: Vec<BlockHash> = chain
+            .recorded
+            .iter()
+            .map(|block| block.header.hash)
+            .collect();
         let height = crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw();
 
         let mut emission = listed([0x11; 32]);
