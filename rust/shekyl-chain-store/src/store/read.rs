@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
+use shekyl_chain_rules::{AtHeight, RecordedWeights, SlashLogFloor, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
@@ -929,12 +929,15 @@ impl ReadSnapshot<'_> {
     /// **A2.** Every slash logged against `persona` strictly above `height`,
     /// in log order — the history half of the as-of-height holdings fold
     /// (`shekyl-archival-retention::holds_shard_at`). Empty when none.
+    /// `floor` is the log's retirement floor under the caller's rule set; a
+    /// range starting below it is SI-26, not an empty answer.
     pub fn slash_log_after(
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(&self.txn, persona, height)
+        archival_reads::slash_log_after(&self.txn, persona, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
