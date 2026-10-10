@@ -209,10 +209,16 @@ what follows from it, in one change:
 - [ ] the nonce in `src/cryptonote_config.h`;
 - [ ] the block id, from `cargo run -p shekyl-genesis-tool -- block-id --network testnet`,
       in `rust/shekyl-rpc-types/src/identity.rs` (`TESTNET_GENESIS`),
+      `rust/shekyl-chain-rules/src/anchors.rs` (`ReleaseAnchors::TESTNET`, a
+      byte array, so a search for the hex string does not find it),
       `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
 - [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which
       fails and prints the new bytes until they are recorded, and the same
       two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
+
+Each of these is held by a test, so a pin left behind fails: run
+`cargo test --workspace --no-fail-fast` to see all of them at once, since a
+plain run stops at the first crate that fails.
 
 The genesis transaction, the recipients files and the other networks do not
 change. "The consensus surface moved" is read from the reviewed constants
