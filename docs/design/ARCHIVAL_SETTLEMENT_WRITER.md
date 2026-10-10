@@ -7,8 +7,9 @@ it re-derived a constraint the tree already enforced**; **`SO-D8` OPENED** and
 assigned out of this round. **`SO-D10` RULED 2026-10-08** — the writer's
 wiring ahead of the secret draw, §14. **`SO-D11` RULED 2026-10-09** —
 accrual reads the row and the gather moves to the slash pass, §15.
-**`SO-D12` POSED 2026-10-10** — admission and the draw, §16: ten
-questions, each with a recommendation, none ruled. Nothing in §16 is built.
+**`SO-D12` RULED 2026-10-10** — admission and the draw, §16: ten
+questions, ruled the day they were posed (§16.6, §16.7). Nothing in §16
+is built. Increment 1 is cleared to start.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -709,7 +710,7 @@ added (Q15).
 | `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it at that single site from `shekyl_archival_settlement_epoch_at_height(·)` of the block whose epoch the record claims — `current_height` on the **pre-cutover R-A path** (the connecting block), the **validated issuing block `h`** under **R-B** (proposal §1 "what is ruled is the site", §2.1 item 3) — making "the record's epoch is the block's epoch" an explicit enforced rule rather than a bound on *when* implicit in `h_close`. The *site* is independent of `SO-D8`'s shape; the *operand* is not, and the two pre-FFI C++ bounds (`h_close`, `challenge_seal_on_chain`) mean (i) on the R-A operand flips exactly one block per epoch (proposal §1 "Ordering", Q14). **Implementation not yet built** and **not to be built on the C++ path** (Q15, 2026-09-16): the row lands in `shekyl-chain-rules` with the R-B cutover, operand `h`. **Prohibition:** do not repair the tautology in `blockchain.cpp` — that would be a consensus tightening on the live LMDB daemon for a path being replaced. FOLLOWUPS row. Proposal: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 / Q15 | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D10` | Wiring the writer ahead of the secret draw: it reads the issued-draw index, empty until the draw lands; the walk-back skips an unobserved epoch inside a standing run; the pass fact lives on the draw's index entry; accrual follows as its own change and gates the draw (§14) | **RULED 2026-10-08** |
 | `SO-D11` | Accrual reads the settlement row (`SO-D10d`), so the emission gather moves to the slash pass (`SO-D8c`): what is credited, CEN-J15's price row, when an epoch is claimable, `SI-21`, and the cutover gate. §15 | **RULED 2026-10-09** |
-| `SO-D12` | Admission and the draw (§14.4 step 5): the increments and their order, the drawable set as of the epoch's open, the receipt key the bond record does not carry, the wire, the per-block draw state, the `D` digest, the one home of the pass fact, the deletions, and the census rows. §16 | **POSED 2026-10-10** |
+| `SO-D12` | Admission and the draw (§14.4 step 5): the increments and their order, the drawable set as of the epoch's open, the receipt key the bond record does not carry, the wire, the per-block draw state, the `D` digest, the one home of the pass fact, the deletions, and the census rows. §16 | **RULED 2026-10-10** |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual
@@ -872,7 +873,7 @@ live validator; the C++ daemon stays consensus, on the beacon, until
    capture stays as a record and goes with the capture tooling
    (`DEL-008`).
 4. **`SO-D10d`**: accrual reads the row. **LANDED** as `SO-D11`, §15.
-5. **Admission and the draw.** **POSED** as `SO-D12`, §16.
+5. **Admission and the draw.** **RULED** as `SO-D12`, §16. Not built.
 
 ### 14.5 Rulings (maintainer, 2026-10-08)
 
@@ -1107,10 +1108,13 @@ the watermark and the closed-not-settled cases.
 
 ---
 
-## 16. `SO-D12` — admission and the draw — POSED 2026-10-10
+## 16. `SO-D12` — admission and the draw — RULED 2026-10-10
 
-**Status:** POSED. Ten questions (§16.4), each with a recommendation.
-Nothing here is built. Grounded at `dev@e28979ff2`.
+**Status:** RULED 2026-10-10 (§16.6). Ten questions (§16.4), posed with
+recommendations and ruled the same day. Nothing here is built. The check
+`SO-D12i` was ruled conditional on is in §16.7 with the ruling that
+followed it; increment 1 is cleared to start. Grounded at
+`dev@e28979ff2`.
 
 **The charge.** §14.4 step 5. The mechanism is ruled in
 [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 to §10
@@ -1241,7 +1245,7 @@ needs only increment 1's types.
 its receipts.** Increment 3 is code with no caller on a block path;
 increment 4 is the one change that makes a carrier admissible.
 
-### 16.4 Posed
+### 16.4 Posed, with the recommendation made
 
 | # | Question | Recommendation |
 | --- | --- | --- |
@@ -1262,3 +1266,88 @@ The producer and challenger (§16.3). The weight rule for the prunable
 part of a carrier (the fee-and-weight round's). `BA-T31` and `BA-T32`.
 The settlement-timing question `ESR-12`.
 
+### 16.6 Rulings (maintainer, relayed 2026-10-10)
+
+| # | Ruling |
+| --- | --- |
+| `SO-D12a` | **Agreed.** Four increments; the producer side is a separate lane |
+| `SO-D12b` | **Agreed: journal the Release pre-image.** It is not new design: Q3 (2026-09-16) already defines `D` as a pure function over the append-only bond journals, and the Rust store never got the unbond journal that function assumes. Building it completes Q3 and does not reopen the snapshot refusal. Two conditions. **Reinstate is a third event:** if a Reinstate connected after `h_open(E)` restores holdings the pair did not have at `h_open(E)`, the walk-back reverses it too (checked, §16.7). **Compute once per epoch, not per admission:** `D` is built at `h_open(E)` into an in-memory cache that is never persisted as consensus state, rebuilt deterministically from tip and journals on restart and after a reorg across `h_open(E)`, and guarded by the digest check |
+| `SO-D12c` | **Agreed.** Increment 3 is staged. No network-type branch |
+| `SO-D12d` | **This lane takes FN-DSA increments 2 to 4.** The receipt key lives in the bond record those increments already touch, and the receipt check is increment 4's gate. One owner for one validation surface (rule 19); a second lane would recreate the handoff circle `SCV-1` found. The scheme lane's work is done |
+| `SO-D12e` | **Agreed.** Rust deletions in the increment that replaces each piece; C++ deletions at `DEL-008` |
+| `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
+| `SO-D12g` | **Agreed** |
+| `SO-D12h` | **Agreed.** The same journal fixes the complete-tree flag |
+| `SO-D12i` | **Required, on one condition: verify the live chain first.** The C++ daemon is consensus on testnet. If its coinbase check refuses `0x0C`, a template that writes it produces blocks the live validator refuses. Before increment 1 lands, confirm which code builds coinbases on testnet and whether the C++ admits `0x0C`. If it does not, the grammar change lands on both validators in one rule-07 change |
+| `SO-D12j` | **Deferred** to increment 4's design text |
+
+The check `SO-D12i` asked for, and the ruling on what it found, are §16.7.
+
+### 16.7 The two checks the rulings asked for
+
+**Reinstate (`SO-D12b`, condition 1): it does not change holdings, so
+the walk-back has nothing to reverse for it.** A Reinstate is refused
+unless the post's shard set equals the record's current one
+(`ReinstateConnectError::HoldingsChanged`; `bond_post.rs`,
+`ReinstateHoldingsChanged`) and refused on an empty post. Its only write
+is the end of the open bad interval (`archival/inputs.rs`, `reinstate`).
+A released record has no shards, so it cannot be reinstated into a set:
+the post would have to be empty. Increment 2 pins this with a test, so
+that a Reinstate that one day restores holdings fails there and not in
+admission.
+
+**The live chain (`SO-D12i`): requiring `0x0C` is a consensus change on
+every network that already has a chain, and it changes genesis. Ruled
+below: required from increment 1.**
+
+- **Who builds coinbases.** The C++ `construct_miner_tx`
+  (`src/cryptonote_core/cryptonote_tx_utils.cpp`). It does not lay out
+  the extra itself: it calls the Rust writer through
+  `shekyl_coinbase_extra` (`rust/shekyl-ffi/src/tx_extra_codec_ffi.rs`,
+  over `shekyl-wire`'s `build_coinbase_extra`).
+- **Who judges them.** The C++ `check_tx_extra_shape`
+  (`src/cryptonote_basic/cryptonote_format_utils.cpp`), called on the
+  miner transaction from `blockchain.cpp`, hands the bytes to
+  `shekyl_tx_extra_shape_of`, which runs `shekyl-wire`'s closed coinbase
+  grammar. The Rust validator runs the same function
+  (`rules/tx_extra.rs`).
+- **So there is one grammar and one writer, in Rust, and both
+  validators link it.** The C++ refuses `0x0C` today because the shared
+  grammar does. A change to `COINBASE_TAGS` changes the writer and both
+  validators in the same binary; the "both validators in one change"
+  condition is met by construction.
+- **What is not met.** The grammar is an exact ordered list. Requiring
+  `0x0C`:
+  - refuses every block already on a chain, on a node that resyncs
+    under the new binary;
+  - refuses each network's genesis coinbase, which is a hex constant
+    (`GENESIS_TX` in `src/cryptonote_config.h`, three of them). A new
+    genesis transaction is a new genesis hash;
+  - splits a network whose nodes do not all upgrade at once.
+- **The record has the same exposure.** The C++ serve-credit gate reads
+  the serve-credit input through the Rust record type
+  (`shekyl_archival_serve_credit_extract`). Replacing that record's
+  layout in increment 1 changes what the live daemon parses, not only
+  what the Rust validator does.
+
+**Ruled (maintainer, relayed 2026-10-10): require `0x0C` from increment
+1.** The testnet runs tagged releases, so nothing on `dev` reaches it
+before the next tag, and that tag is a regenesis. There is no
+compatibility window to manage and no height gate.
+
+The condition that remains is correctness. At the next tag the C++
+daemon is still the consensus validator and must accept the blocks, so
+the grammar that requires `0x0C` lands for the validator that judges
+blocks in that release, and the C++ must not refuse the tag. That is
+part of increment 1 itself, not a later step. Because the grammar is one
+Rust function both validators call, increment 1 meets it by changing
+that function and the writer together, with:
+
+- the C++ `construct_miner_tx` passing through whatever the writer now
+  needs, and the daemon's own block tests connecting blocks that carry
+  the tag;
+- the three `GENESIS_TX` constants regenerated, if the genesis coinbase
+  is judged by the grammar;
+- the record layout's change carried through the C++ serve-credit gate's
+  one read of it, so the daemon parses what the template and the wallet
+  write.
