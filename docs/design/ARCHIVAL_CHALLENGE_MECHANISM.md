@@ -1597,7 +1597,8 @@ consensus now, still permit adaptive selection, and buy nothing.
 **2. The sampled-leaf floor is weaker until responses are pinned to their
 assignment blocks — RETIRED BY RULING with the leaf unit (`PDM-Q6` item 4:
 `challenge_leaf_index` and the `c1_layers` / `c2_layers` path are retired by
-ruling, live in code, deleted at E4 / S-ARCH); the per-challenge binding this
+ruling, live in code, deleted at the cutover — `DEL-008`; *was* "at E4 /
+S-ARCH", corrected 2026-10-10); the per-challenge binding this
 cutover restores is now the count bound alone (item 1).** *Record:* `PC-D3` made
 the challenged leaf index vary per block. Under
 the beacon a response may land anywhere in its `H_fire` window, so a prover gets
@@ -1662,8 +1663,9 @@ against these.
 
 2. **Current (2026-09-19): resolved upward by `PDM-Q6` — there is no leaf to
    sample.** `verify_segment_path` / `challenge_leaf_index` are retired by
-   ruling, live in code, and deleted at E4 / S-ARCH with the serve-credit
-   verifier (`PDM-Q6` item 4, rows 1 and 4); verification is per-tx against
+   ruling, live in code, and deleted at the cutover with the C++ serve-credit
+   verifier (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10 —
+   `PDM-Q6` item 4, rows 1 and 4); verification is per-tx against
    the hash rows (§2 step 2). The entry below is the record of how the
    deletion surface was reached, and it stands.
 
