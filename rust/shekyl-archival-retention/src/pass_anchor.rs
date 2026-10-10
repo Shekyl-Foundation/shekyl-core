@@ -277,25 +277,25 @@ impl PassRequestHeader {
 }
 
 /// Digest of one delivered response, salted by the request's nonce:
-/// `cSHAKE256(PASS_DELIVERY_DIGEST_CUSTOMIZATION, nonce ‖ framed)[..32]`.
+/// `cSHAKE256(PASS_DELIVERY_DIGEST_CUSTOMIZATION, nonce ‖ body)[..32]`.
 ///
-/// `framed` is exactly the response body `P` sends ahead of its
-/// countersignature — the `RF-D4` frame header, the payload and any padding,
-/// byte for byte as it goes on the wire. `P` signs this digest inside the
-/// transcript ([`pass_countersignature_message`]), so the signature commits
-/// to the bytes delivered for *this* request.
+/// `body` is exactly the response body `P` sends ahead of its
+/// countersignature — the `shekyl_wire::shard_frame` body over the shard's
+/// archival good, byte for byte as it goes on the wire (`SF-D8` amendment
+/// 2026-10-08; the serve loop prepends nothing). `P` signs this digest
+/// inside the transcript ([`pass_countersignature_message`]), so the
+/// signature commits to the bytes delivered for *this* request.
 ///
 /// **The nonce is the salt.** It is requester-random, so `P` cannot compute
 /// the digest before the request arrives, and a digest made for one request
 /// answers no other. It leads the preimage and has a fixed width, so the
 /// split between salt and body is unambiguous without a length field.
 ///
-/// **The whole framed body.** Every byte of `framed` enters the preimage.
-/// `SF-D8` (`ARCHIVAL_SHARD_FETCH.md`) relies on that flat hash: a later
-/// holder of the shard recomputes a recorded pass, and a hash of a
-/// precomputable summary can be signed after the bytes are gone and still
-/// match. Whether a padding scheme still allows that recomputation is
-/// `ServedFrameHeader::padding_len`'s constraint, stated in `SF-D8`.
+/// **The whole body.** Every byte of `body` enters the preimage. `SF-D8`
+/// (`ARCHIVAL_SHARD_FETCH.md`) relies on that flat hash: a later holder of
+/// the shard recomputes a recorded pass from the shard's archival good and
+/// the nonce, and a hash of a precomputable summary can be signed after
+/// the bytes are gone and still match.
 ///
 /// **What this does not claim.** It does not show that `P` stores the bytes:
 /// a `P` that fetches them from a co-holder on demand produces the same
@@ -309,10 +309,10 @@ impl PassRequestHeader {
 #[must_use]
 pub fn pass_delivery_digest(
     nonce: &[u8; PASS_NONCE_LEN],
-    framed: &[u8],
+    body: &[u8],
 ) -> [u8; PASS_DELIVERY_DIGEST_LEN] {
     let mut hasher = PassDeliveryHasher::new(nonce);
-    hasher.update(framed);
+    hasher.update(body);
     hasher.finalize()
 }
 

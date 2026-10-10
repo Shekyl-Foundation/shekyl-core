@@ -52,7 +52,10 @@
 #define CORE_RPC_ERROR_CODE_STALE_PAYMENT         -18
 #define CORE_RPC_ERROR_CODE_RESTRICTED            -19
 #define CORE_RPC_ERROR_CODE_PAYMENTS_NOT_ENABLED  -21
-#define CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE  -22
+// -22 ARCHIVAL_UNAVAILABLE, -24 ARCHIVAL_SHARD_OPEN, -25 ARCHIVAL_SKELETON_ABSENT
+// are `request_archival_shard`'s, emitted only by the Rust server
+// (`rust/shekyl-rpc-types/src/archival.rs`); no C++ handler emits them. Listed
+// so the slots are not re-minted here.
 // get_block_template was sent reserve_size > 8 or an extra_nonce longer than
 // 8 bytes; the coinbase nonce is fixed at SHEKYL_COINBASE_NONCE_BYTES
 // (TXE-Q6'). Distinct so a pool stack sees the cause.
@@ -80,7 +83,6 @@ static inline const char *get_rpc_server_error_message(int64_t code)
     case CORE_RPC_ERROR_CODE_STALE_PAYMENT: return "Stale payment";
     case CORE_RPC_ERROR_CODE_RESTRICTED: return "Parameters beyond restricted allowance";
     case CORE_RPC_ERROR_CODE_PAYMENTS_NOT_ENABLED: return "Payments not enabled";
-    case CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: return "Archive unavailable";
     case CORE_RPC_ERROR_CODE_COINBASE_NONCE_BOUND: return "reserve_size / extra_nonce exceed the 8-byte coinbase nonce";
     default: MERROR("Unknown error: " << code); return "Unknown error";
   }

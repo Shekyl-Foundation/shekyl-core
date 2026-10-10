@@ -19,19 +19,18 @@
 //! took to produce them.
 //!
 //! One outcome is not held here: a 200 that ends short because the store
-//! failed mid-body or yielded a body that is not its frame's length. No
-//! fixture in this crate can build such a body, since an in-memory body
-//! derives its frame from its own length.
+//! failed mid-body or yielded a body that is not the length it was opened
+//! at. No fixture in this crate can build such a body, since an in-memory
+//! body's length is its own.
 
 use std::sync::Arc;
 
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SHARD_LENGTH};
 
 use super::invariant::{CountingProvider, CountingSigner, Signs};
 use super::{
-    good_get_shard_0, good_header, header_at, header_line, is_refusal_trailer, leaves,
+    filler, good_get_shard_0, good_header, header_at, header_line, is_refusal_trailer,
     parse_served, prehead_in_memory, read_and_fold_in_memory, request_raw, serve_one_in_memory,
     InMemoryServe, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
     SIGNATURE_ENVELOPE_LEN, WRITE_CHUNK_BYTES,
@@ -99,8 +98,7 @@ fn head_for(path: &str, anchor: u64) -> String {
 async fn a_served_response_is_the_same_bytes_for_the_same_work() {
     // Three chunks and a part, so the read loop turns more than once and
     // ends on a short chunk.
-    let leaves_in_body = (3 * WRITE_CHUNK_BYTES + WRITE_CHUNK_BYTES / 2) / LEAF_BYTES;
-    let body = leaves(leaves_in_body, 0x11);
+    let body = filler(3 * WRITE_CHUNK_BYTES + WRITE_CHUNK_BYTES / 2, 0x11);
     let chunks = body.len().div_ceil(WRITE_CHUNK_BYTES);
     let head = good_get_shard_0();
 
@@ -125,11 +123,7 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
     // ahead of them is identical, and each envelope verifies.
     assert_eq!(wire.len(), memory.len());
     let cut = wire.len() - SIGNATURE_ENVELOPE_LEN;
-    assert_eq!(
-        wire[..cut],
-        memory[..cut],
-        "head, frame and body are identical"
-    );
+    assert_eq!(wire[..cut], memory[..cut], "head and body are identical");
     for (response, signer) in [(&wire, &wire_signer), (&memory, &memory_signer)] {
         let served = parse_served(response);
         verify_pass_transcript(
@@ -138,7 +132,7 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
             BlockHeight::from_raw(IN_GATE_ANCHOR),
             &ANCHOR_HASH,
             0,
-            &pass_delivery_digest(&NONCE, &served.framed),
+            &pass_delivery_digest(&NONCE, &served.body),
             &served.signature,
         )
         .expect("each envelope verifies under its key");
@@ -147,7 +141,7 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
 
 #[tokio::test]
 async fn every_refusal_is_the_same_bytes_for_the_same_work() {
-    let body = leaves(9, 0x40);
+    let body = filler(9 * 128, 0x40);
     let cases: [(&str, Signs, String, InMemoryServe, Cost); 5] = [
         (
             "an unknown route",
@@ -220,7 +214,7 @@ async fn every_refusal_is_the_same_bytes_for_the_same_work() {
 
 #[tokio::test]
 async fn a_late_refusal_is_the_same_trailer_for_the_same_work() {
-    let body = leaves(9, 0x40);
+    let body = filler(9 * 128, 0x40);
     let head = good_get_shard_0();
     let (wire, wire_cost, _) = over_the_wire(&body, Signs::FailsLate, &head).await;
     let (memory, memory_cost, outcome, _) = in_memory(&body, Signs::FailsLate, &head);
@@ -245,12 +239,13 @@ async fn the_pre_head_arm_is_the_head_of_the_response_and_reads_no_body() {
     // The abuse arm. What it renders is byte for byte what the endpoint
     // sends ahead of the first body chunk, and producing it opens the
     // shard once, reads no chunk and signs nothing — for the smallest
-    // body and for a whole segment. That is the size-independence the
+    // body and for a whole shard. That is the size-independence the
     // gate's two pre-head cells are compared for: Callgrind's counts are
     // not visible to the process being counted, so the bench cannot
     // assert it, and this does.
-    for leaves_in_body in [1, leaves_per_segment()] {
-        let body = leaves(leaves_in_body, 0x21);
+    let full = usize::try_from(SHARD_LENGTH.to_raw()).expect("W fits usize");
+    for body_bytes in [1, full] {
+        let body = filler(body_bytes, 0x21);
         let head = good_get_shard_0();
         let provider = CountingProvider::new(body.clone());
         let signer = CountingSigner::new();
@@ -261,24 +256,24 @@ async fn the_pre_head_arm_is_the_head_of_the_response_and_reads_no_body() {
             head.as_bytes(),
             &mut ahead
         ));
-        assert_eq!(provider.opens(), 1, "{leaves_in_body} leaves");
-        assert_eq!(provider.reads(), 0, "{leaves_in_body} leaves: no body read");
-        assert_eq!(signer.asked_to_sign(), 0, "{leaves_in_body} leaves");
+        assert_eq!(provider.opens(), 1, "{body_bytes} bytes");
+        assert_eq!(provider.reads(), 0, "{body_bytes} bytes: no body read");
+        assert_eq!(signer.asked_to_sign(), 0, "{body_bytes} bytes");
 
         let (wire, _, _) = over_the_wire(&body, Signs::Always, &head).await;
         assert_eq!(
             wire[..ahead.len()],
             ahead[..],
-            "{leaves_in_body} leaves: the endpoint's first bytes"
+            "{body_bytes} bytes: the endpoint's first bytes"
         );
         assert_eq!(
             wire.len(),
             ahead.len() + body.len() + SIGNATURE_ENVELOPE_LEN,
-            "{leaves_in_body} leaves: and the body and envelope are all that follow"
+            "{body_bytes} bytes: and the body and envelope are all that follow"
         );
     }
     // A request the endpoint refuses has no 200 head to be ready.
-    let provider = CountingProvider::new(leaves(1, 0x21));
+    let provider = CountingProvider::new(filler(1, 0x21));
     let signer = CountingSigner::that(Signs::NotReady);
     let mut ahead = Vec::new();
     assert!(!prehead_in_memory(
@@ -296,11 +291,13 @@ fn the_read_and_fold_arm_is_the_delivery_digest_at_the_serve_chunk_size() {
     // digest, of the same bytes, reached by reading at the size the serve
     // loop reads at; otherwise the difference between the two cells is
     // not the cost of interleaving.
-    let leaves_in_body = (2 * WRITE_CHUNK_BYTES + WRITE_CHUNK_BYTES / 2) / LEAF_BYTES;
-    let body = leaves(leaves_in_body, 0x66);
+    let body = filler(2 * WRITE_CHUNK_BYTES + WRITE_CHUNK_BYTES / 2, 0x66);
     let provider = CountingProvider::new(body.clone());
     let digest = read_and_fold_in_memory(&*provider, 0, &NONCE).expect("held, and whole");
 
+    // The digest is over the body alone: the head carries nothing the
+    // signature covers, so what the pre-head arm renders ends exactly at
+    // the head's terminator.
     let mut ahead = Vec::new();
     assert!(prehead_in_memory(
         &*CountingProvider::new(body.clone()),
@@ -308,14 +305,11 @@ fn the_read_and_fold_arm_is_the_delivery_digest_at_the_serve_chunk_size() {
         good_get_shard_0().as_bytes(),
         &mut ahead
     ));
-    let frame_at = ahead
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .expect("a head")
-        + 4;
-    let mut framed = ahead[frame_at..].to_vec();
-    framed.extend_from_slice(&body);
-    assert_eq!(digest, pass_delivery_digest(&NONCE, &framed));
+    assert!(
+        ahead.ends_with(b"\r\n\r\n"),
+        "the head is all that is rendered"
+    );
+    assert_eq!(digest, pass_delivery_digest(&NONCE, &body));
     assert_eq!(provider.opens(), 1);
     assert_eq!(provider.reads(), body.len().div_ceil(WRITE_CHUNK_BYTES));
     assert!(read_and_fold_in_memory(&*provider, 9, &NONCE).is_none());

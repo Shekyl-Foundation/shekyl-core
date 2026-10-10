@@ -402,7 +402,7 @@ a live node.
 | --- | --- | --- | --- | --- | --- |
 | **BA-T1** | Pool-admission verify at the modal shape | T1, CI runner | gungraun; scope per BA-Q9 | BA-I10 | relay privacy |
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
-| **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, four `crypto_bench_serve_*` functions (manifest §12) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
+| **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, five `crypto_bench_serve_*` functions (manifest §12; the signature's cost in its own cell since PR #1015, so a wire change cannot re-roll ML-DSA's trajectory under the serve cells) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
 | **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. **Session 2, 2026-10-09**, a discovery run by ruling (no pass lines; predictions recorded against measurements): [`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md). N in {8, 16, 32, 64} with the daemon idle, syncing the chain beside the probe, and syncing with the probe at nice 19; time to first byte at one in flight. Serving under sync runs at 70 % of idle throughput with the daemon keeping about a third (31 to 37 %) of its no-serve sync rate; nice 19 gives the daemon 90 to 97 % back at a seventh to a fifth of the serving throughput; throughput flat from N = 16, p99 lateness rising steeply with N (× 2 to × 3 across each of the first two doublings, × 1.1 to × 1.4 across the last); TTFB 0.19 ms p50 idle; one refusal in 6,144 at N = 64. Five of seven predictions held | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
@@ -490,9 +490,11 @@ the documents that record it state what the second read and the digest cost.
    carries the nonce and `D`, so anyone who later holds the shard can
    recompute `D` and check a historical pass. A pass signed for bytes that
    were not the shard is permanent evidence against its signer. This holds
-   while the frame is a function of the shard, which the write-zero padding
-   rule makes it today (`rust/shekyl-curve-tree/src/served_frame.rs:162`);
-   a padding scheme keeps it only if the padded frame stays recomputable.
+   while the body is a function of the shard, which it is by construction
+   since 2026-10-08: the serve loop writes the provider's bytes with no
+   frame or padding of its own (~~the write-zero padding rule of
+   `served_frame.rs:162`~~, deleted); a padding scheme, if one is ever
+   ruled, keeps it only if the padded body stays recomputable.
 
 `D` does not show that the persona stores the shard; that is unchanged in
 every option below.

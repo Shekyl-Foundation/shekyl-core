@@ -3806,7 +3806,16 @@ dependencies = [
 name = "shekyl-archival-fetch-sched"
 version = "3.1.0"
 dependencies = [
+ "getrandom 0.2.17",
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
  "shekyl-p-fetch",
+ "shekyl-p-loopback",
+ "shekyl-p-serve",
+ "shekyl-types",
+ "shekyl-wire",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -3991,6 +4000,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-logging",
  "shekyl-rpc-transport",
+ "shekyl-shard-visual",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wallet-rpc",
@@ -4129,7 +4139,6 @@ dependencies = [
  "serde_json",
  "shekyl-consensus",
  "shekyl-crypto-pq",
- "shekyl-curve-io",
  "shekyl-fcmp",
  "shekyl-types",
  "tempfile",
@@ -4610,6 +4619,7 @@ dependencies = [
  "shekyl-p-serve",
  "shekyl-socks",
  "shekyl-types",
+ "shekyl-wire",
  "tokio",
 ]
 
@@ -4634,11 +4644,11 @@ version = "3.1.0"
 dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
- "shekyl-curve-tree",
  "shekyl-p-fetch",
  "shekyl-p-serve",
  "shekyl-socks",
  "shekyl-types",
+ "shekyl-wire",
  "tokio",
 ]
 
@@ -4935,6 +4945,7 @@ dependencies = [
  "shekyl-socks",
  "shekyl-tor-control-client",
  "shekyl-types",
+ "shekyl-wire",
  "tempfile",
  "tokio",
  "ureq",
@@ -5153,6 +5164,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-rpc-client",
+ "shekyl-rpc-types",
  "shekyl-types",
  "thiserror",
  "tracing",

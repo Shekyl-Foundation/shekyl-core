@@ -92,5 +92,6 @@ pub mod handlers;
 pub mod methods;
 pub mod middleware;
 pub mod server;
+pub mod shard_view;
 pub mod submit;
 pub mod types;
