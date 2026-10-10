@@ -44,7 +44,7 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::SettlementEpochBlocks;
+use crate::codec::{SettlementEpochBlocks, SigmaWorkMilli};
 use crate::ids::ServeCreditKey;
 use crate::schema::ARCHIVAL_SERVE_CREDIT;
 
@@ -271,21 +271,19 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
 
 // ------------------------------------------------------------- phase 9c
 
-/// On the `SHORT` schedule `CLOSING_HEIGHT` closes `CREDIT_EPOCH` —
-/// the first epoch the persona who joined at `FIRST_SPEND_HEIGHT`, in
-/// `JOIN_EPOCH`, may serve (CEN-J5), and so the first close with a credit
-/// in it: the credit for that epoch is listed at `CREDIT_HEIGHT`, inside
-/// the epoch and past its seal block. The close's `r_market` (the credited
-/// shard), `Σwork` and `budget` land as the verdict computed them, and the
-/// accruing row is **removed** rather than left as a second copy of the
-/// budget. The pop restores the accruing row to the post-image of the
-/// block below the close and clears the three close rows; the re-connect closes again,
-/// identically. *Records-was:* until E6 slice 8 row 3 this closed epoch 0
-/// at block 15 over a credit for epoch 0 listed beside its join — a credit
-/// the C++ refuses twice over (no record before the block, CEN-J4; the
-/// join's own epoch, CEN-J5).
+/// On the `SHORT` schedule `CLOSING_HEIGHT` closes `CREDIT_EPOCH` — the
+/// first epoch the persona who joined at `FIRST_SPEND_HEIGHT`, in
+/// `JOIN_EPOCH`, may serve (CEN-J5). SI-21's two write sets, a block
+/// apart in kind and an epoch apart in time: the close freezes `budget`
+/// and **removes** the accruing row; the epoch's `r_market` and `Σwork`
+/// are the slash pass's, written an epoch later with the settlement rows
+/// they are folded over (`SO-D11`). Between the two the epoch has a
+/// budget and no `Σwork`. The pop restores the accruing row to the
+/// post-image of the block below the close, takes the budget back and
+/// takes the earlier epoch's gather the same block wrote; the re-connect
+/// writes them again, identically.
 #[test]
-fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back() {
+fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
     let path = tmp("aw-close");
     let store = short_store(&path);
     let mut grown = Grown::new();
@@ -317,7 +315,7 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     );
 
     let closing = connect_one(&store, &mut grown, &[], SHORT);
-    let close = closing
+    let close = *closing
         .close()
         .unwrap_or_else(|| panic!("block {CLOSING_HEIGHT} closes epoch {CREDIT_EPOCH}"));
     assert_eq!(close.epoch(), epoch(CREDIT_EPOCH));
@@ -326,45 +324,54 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
         close.budget(),
         "the close's budget is the open epoch's accrual through this block"
     );
-    let r_market = close.r_market().to_vec();
-    assert!(
-        r_market.iter().any(|(s, _)| *s == shard(0)),
-        "the credited shard is in the close: {r_market:?}"
+    // The same block runs the slash pass of the epoch before, and that
+    // pass is what gathers (`SO-D11`): one gather, for `CREDIT_EPOCH − 1`.
+    let earlier = epoch(CREDIT_EPOCH - 1);
+    assert_eq!(
+        closing
+            .gathers()
+            .iter()
+            .map(shekyl_chain_rules::EpochGather::epoch)
+            .collect::<Vec<_>>(),
+        [earlier]
     );
+    let zero = SigmaWorkMilli::from_raw(0);
+    assert_eq!(closing.gathers()[0].sigma_work(), zero);
 
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
-        Some(close.budget())
-    );
-    assert_eq!(
-        snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
-        Some(close.sigma_work())
-    );
-    for (s, r) in &r_market {
+    // The state between an epoch's close and its slash pass: a budget and
+    // no denominator.
+    let between = |store: &ChainStore| {
+        let snap = store.begin_read().expect("read");
         assert_eq!(
-            snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"),
-            Some(*r)
+            snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
+            Some(close.budget())
         );
-    }
-    assert_eq!(
-        snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
-        None,
-        "ARW-Q3: the accruing row is removed at the close"
-    );
-    assert!(
-        snap.bond_record(&p).expect("read").is_some(),
-        "the record outlives the close"
-    );
-    drop(snap);
+        assert_eq!(
+            snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
+            None,
+            "the closed epoch has no Σwork until its slash pass"
+        );
+        assert_eq!(snap.sigma_work(earlier).expect("read"), Some(zero));
+        assert_eq!(
+            snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
+            None,
+            "ARW-Q3: the accruing row is removed at the close"
+        );
+        assert!(
+            snap.bond_record(&p).expect("read").is_some(),
+            "the record outlives the close"
+        );
+    };
+    between(&store);
 
     pop(&store);
     let snap = store.begin_read().expect("read");
     assert_eq!(snap.budget(epoch(CREDIT_EPOCH)).expect("read"), None);
-    assert_eq!(snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"), None);
-    for (s, _) in &r_market {
-        assert_eq!(snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"), None);
-    }
+    assert_eq!(
+        snap.sigma_work(earlier).expect("read"),
+        None,
+        "the pop takes the gather the block wrote with it"
+    );
     assert_eq!(
         snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
         Some(accrued_before_close),
@@ -375,19 +382,42 @@ fn a_close_freezes_the_verdicts_figures_removes_the_accruing_row_and_pops_back()
     grown.pop();
     let again = connect_one(&store, &mut grown, &[], SHORT);
     assert_eq!(again, closing, "the same block, the same verdict");
+    between(&store);
+
+    // One epoch on, the pass of `CREDIT_EPOCH` gathers it. The persona's
+    // serve credit is a pass row, not a Served settlement row — no draw
+    // was issued — so it is credited nothing (`SO-D11a`), and the epoch's
+    // Σwork is a written zero a claim can cite.
+    let mut last = None;
+    for _ in 0..SHORT_SEB {
+        last = Some(connect_empty(&store, &mut grown, SHORT));
+    }
+    let settling = last.expect("an epoch of blocks");
+    assert_eq!(
+        settling
+            .gathers()
+            .iter()
+            .map(|g| (g.epoch(), g.sigma_work()))
+            .collect::<Vec<_>>(),
+        [(epoch(CREDIT_EPOCH), zero)]
+    );
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
-        Some(close.budget())
-    );
-    assert_eq!(
         snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
-        Some(close.sigma_work())
+        Some(zero)
     );
-    assert_eq!(
-        snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
-        None
+    assert!(
+        snap.served_at(&p, &[epoch(CREDIT_EPOCH)])
+            .expect("read")
+            .is_empty(),
+        "no draw was issued, so no shard is Served"
     );
+    for (s, r) in settling.gathers()[0].r_market() {
+        assert_eq!(
+            snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"),
+            Some(*r)
+        );
+    }
     drop(snap);
     drop(store);
     cleanup(&path);
