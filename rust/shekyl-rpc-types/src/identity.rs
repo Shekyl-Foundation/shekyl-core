@@ -386,7 +386,7 @@ mod tests {
             version: CORE_RPC_VERSION,
             release: false,
             current_height: 1,
-            target_height: 0,
+            target_height: crate::Nullable::NULL,
             consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
             nettype: DaemonNetwork::Mainnet,
             genesis_hash: HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet)),

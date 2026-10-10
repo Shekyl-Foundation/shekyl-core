@@ -1223,10 +1223,15 @@ fn sync_info(src: &Source) -> Result<String, String> {
         crate::methods::sync_info(&chain, &p2p)
     })?;
     require_ok(&reply.status)?;
-    // A target below our own height means we are ahead of what we were told
-    // to reach; the progress line uses our height so the percentage cannot
-    // exceed 100 or divide by zero.
-    let target = reply.target_height.max(reply.height).max(1);
+    // No target, or one below our own height (we are ahead of what we were
+    // told to reach): the progress line uses our height, so the percentage
+    // cannot exceed 100 or divide by zero.
+    let target = reply
+        .target_height
+        .into_option()
+        .unwrap_or(reply.height)
+        .max(reply.height)
+        .max(1);
     #[expect(
         clippy::cast_precision_loss,
         reason = "a percentage for a human, from two heights"

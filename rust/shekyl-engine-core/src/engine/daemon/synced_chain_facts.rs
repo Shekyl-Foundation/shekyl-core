@@ -26,63 +26,37 @@
 //! compiling, which is what `50-testing`'s *"name the edit that makes this
 //! red"* asks of a check that guards a destructive verb.
 //!
-//! # The predicate, and where it came from
+//! # The predicate: the daemon's `synchronized` flag, and nothing else
 //!
-//! ```text
-//! synchronized && (target_height == 0 || height >= target_height)
-//! ```
+//! Whether the node has caught up is the daemon's call, and it makes that
+//! call with more context than the wallet has. So the wallet reads one
+//! source, `get_info.synchronized`, and [`SyncedChainFacts::new`] is where
+//! it is read; the submit watchdog's `DaemonHealthContext::is_synced` reads
+//! the same member of the same [`DaemonHealth`].
 //!
-//! The predicate has **one site**, [`daemon_reports_synchronized`]. This
-//! constructor calls it and adds chain identity; the submit watchdog's
-//! `DaemonHealthContext::is_synced` calls it and adds nothing, because the
-//! escape ladder needs a boolean and holds no identity to build the type
-//! with. Neither derives the predicate, so a change to what "synced" means
-//! cannot leave the ladder and the release gate disagreeing. Its
-//! **height half** is the watchdog's own — `is_synced` was, until this type
-//! landed, the only honest reading of sync state in the wallet — and the
-//! `synchronized` half is what that reading lacked.
+//! **The wallet does not compare its daemon's height with its target.** The
+//! core's target is the tallest chain any peer has *claimed* in a handshake.
+//! A comparison `height >= target` would let one peer advertising a tall
+//! chain make a healthy node read as behind: the submit watchdog would wait
+//! indefinitely and the persona's poller would stop serving, for the price
+//! of a handshake. The target is shown to people (the CLI, the console);
+//! nothing here decides on it, and the wallet's decision types do not carry
+//! it.
 //!
-//! **The predicate is ours; the C++ is provenance, not authority.** What the
-//! conjunction is doing is absorbing the *shape of the response it consumes*.
-//! This constructor reads `get_info`. The method is served from Rust since
-//! RK-5c, at parity with the inherited handler it replaced, so the shape it
-//! answers with is still the inherited one. That surface
-//! encodes sync state twice: a `synchronized` bool, the protocol's own
-//! predicate, **and** a `target_height` overloaded with a zero sentinel —
-//! `0` when synchronized, the core's target otherwise. Both are written by
-//! the daemon's `get_info` method (`rust/shekyl-daemon-rpc/src/info.rs`,
-//! which keeps the sentinel until RK-D15's commit retires it). That is what
-//! the guide *does*; it does not define what we require.
+//! This was a two-field conjunction, `synchronized && (target == 0 ||
+//! height >= target)`, until `CORE_RPC_VERSION` 3.46. It read two fields
+//! because `get_info` wrote `target_height` as `0` for a synchronized node,
+//! a sentinel that also described a daemon that had just started with no
+//! peers; the flag was what told those apart. Under the sentinel the height
+//! half never decided anything: a synchronized daemon always reported `0`.
+//! RK-D15 retired the sentinel, the target became the core's real one, and
+//! the conjunction collapsed to the flag, as this module had said it would
+//! (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §1 RK-D15, §5 commit 6).
 //!
-//! We require both fields because, on that shape, **neither alone is
-//! sufficient**. A daemon that has just started with no peers reports
-//! `target_height == 0` — the sentinel that *means* synchronized — while
-//! `synchronized` is false and its height is genesis-adjacent. That is
-//! exactly `WSS-25`'s state: a rebuilt database, before the node has anyone
-//! to catch up from. Reading only the sentinel mints facts for it. Reading
-//! only the flag accepts a node that contradicts itself by sitting below its
-//! own target. Absent on the wire, the flag reads `false` — the direction
-//! that refuses.
-//!
-//! **This is a seam, and it simplifies when the producer moves.** The Rust
-//! contract already models this correctly — `shekyl-daemon-rpc`'s `ChainTip`
-//! (`chain_facts.rs`) carries a raw `target_height` and a separate
-//! `synchronized` bool, and its own doc disclaims the zero sentinel as "the
-//! handler's". The sentinel survives only at the wire boundary, and only
-//! until the p2p layer migrates. When `get_info` gains a Rust handler over
-//! `ChainTip`, the sentinel arm has nothing left to absorb and this
-//! conjunction collapses to the flag. Until then a reader should not have to
-//! re-derive why both fields are read: it is the guide's shape, not our
-//! contract's.
-//!
-//! The `synchronized` half is the `WSS-24` lane's finding (PR #791), which
-//! derived the same predicate independently and found the gap; `WSS-Q14`'s
-//! brief said to lift the watchdog's form verbatim, and verbatim was not
-//! enough. #791 landed first, with its own copy of the conjunction in the
-//! anchor gate's daemon-tip reading (`stake_engine/serving/daemon_tip.rs`);
-//! this PR landed second and converged it, as both lanes' docs had
-//! committed: that reading decodes through [`health_from_get_info`] and takes
-//! its verdict from [`daemon_reports_synchronized`].
+//! What the flag does not cover is in [`SyncedChainFacts`]'s own docs: it
+//! is one-way in the daemon, so a node that synchronized once and then lost
+//! every peer still reports it. The persona's poller adds its own checks
+//! for that (`stake_engine/serving/daemon_tip.rs`).
 //!
 //! # The `R1` seam
 //!
@@ -147,12 +121,11 @@ impl SyncedChainFacts {
     /// The sole constructor: chain facts **iff** the daemon reports
     /// synchronized, otherwise `None`.
     ///
-    /// `chain_height` is the response's block count, `target_height` its
-    /// network estimate under the *"0 when synchronized"* convention,
-    /// `synchronized` its own word, and `top_hash` the identity of the chain
-    /// the count belongs to. All four come from one response — do not pair a
-    /// height from one read with a target or a hash from another, which is
-    /// why this takes them together rather than offering a setter.
+    /// `chain_height` is the response's block count, `synchronized` its own
+    /// word, and `top_hash` the identity of the chain the count belongs to.
+    /// All three come from one response — do not pair a height from one
+    /// read with a flag or a hash from another, which is why this takes
+    /// them together rather than offering a setter.
     ///
     /// `None` is not an error. It is the `R-B` answer: while the daemon
     /// reports syncing, consensus-derived facts are **unknown**, and a caller
@@ -160,11 +133,10 @@ impl SyncedChainFacts {
     /// a view it cannot vouch for.
     pub(crate) fn new(
         chain_height: ChainCount,
-        target_height: u64,
         synchronized: bool,
         top_hash: BlockHash,
     ) -> Option<Self> {
-        daemon_reports_synchronized(chain_height, target_height, synchronized).then_some(Self {
+        synchronized.then_some(Self {
             chain_height,
             top_hash,
         })
@@ -179,7 +151,6 @@ impl SyncedChainFacts {
     pub(crate) fn from_health(health: DaemonHealth, top_hash: BlockHash) -> Option<Self> {
         Self::new(
             ChainCount::from_raw(health.height),
-            health.target_height,
             health.synchronized,
             top_hash,
         )
@@ -271,24 +242,6 @@ impl BracketedChainFacts {
     pub(crate) fn facts(&self) -> &SyncedChainFacts {
         &self.facts
     }
-}
-
-/// The sync predicate: `synchronized && (target_height == 0 || height >=
-/// target_height)`. **The one site.**
-///
-/// [`SyncedChainFacts::new`] is this plus chain identity; the submit
-/// watchdog's `DaemonHealthContext::is_synced` is this alone, because the
-/// ladder needs a boolean and holds no chain identity to build the type
-/// with. Both call here, so a change to what "synced" means cannot leave
-/// the ladder and the release gate disagreeing. The module docs carry the
-/// reasoning for each arm.
-pub(crate) fn daemon_reports_synchronized(
-    chain_height: ChainCount,
-    target_height: u64,
-    synchronized: bool,
-) -> bool {
-    let heights_agree = target_height == 0 || chain_height.to_raw() >= target_height;
-    synchronized && heights_agree
 }
 
 /// The identity of a chain at one height: **which** block sits there.
@@ -554,8 +507,8 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 pub(crate) struct GetInfoDocument {
     /// Block count (`get_info.height`), not the tip's index.
     pub(crate) chain_count: ChainCount,
-    /// Network target under the wire's "0 when synchronized" convention.
-    pub(crate) target_height: u64,
+    /// The core's target, `None` when it reports none.
+    pub(crate) target_height: Option<u64>,
     /// The daemon's own flag.
     pub(crate) synchronized: bool,
     /// Identity of the chain `chain_count` counts.
@@ -580,7 +533,7 @@ impl GetInfoDocument {
             health: InfoHealth {
                 height: self.chain_count.to_raw(),
                 top_block_hash: HashHex::from_bytes(*self.top_hash.as_bytes()),
-                target_height: self.target_height,
+                target_height: self.target_height.into(),
                 synchronized: self.synchronized,
                 busy_syncing: false,
                 offline: false,
@@ -647,10 +600,10 @@ impl GetInfoDocument {
 /// `height`, `target_height`, `synchronized` or `top_block_hash`, or
 /// carrying one of the wrong shape, never becomes a value this function is
 /// handed. That is the property the hand-written decoder this replaces
-/// defended field by field — above all for `target_height`, where `0` is
-/// the synchronized sentinel and a default would manufacture the very claim
-/// [`SyncedChainFacts::new`] exists to verify. It now holds for every
-/// member, by construction.
+/// defended field by field. It now holds for every member, by construction.
+///
+/// `target_height` is decoded and not carried: nothing the wallet decides
+/// reads it (module docs).
 ///
 /// The connection counts are a Status field, which a daemon may withhold
 /// from this caller. Withheld reads as zero — "none known", which routes at
@@ -664,7 +617,6 @@ pub(crate) fn health_from_get_info(info: &GetInfoResponse) -> DaemonHealth {
     DaemonHealth {
         connections,
         height: info.health.height,
-        target_height: info.health.target_height,
         synchronized: info.health.synchronized,
     }
 }

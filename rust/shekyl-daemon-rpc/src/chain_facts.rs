@@ -112,8 +112,8 @@ pub struct ChainTip {
     /// The core's target count. `None` when the core reported `0`: that
     /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
     /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
-    /// count (`0` only for `None`). `get_info` still writes `0` when the
-    /// node is synchronized.
+    /// count, and write `None` as `null`; `get_info` reports the same fact
+    /// from its own snapshot.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,

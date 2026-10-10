@@ -72,6 +72,7 @@ pub mod hash;
 pub mod headers;
 pub mod identity;
 pub mod info;
+pub mod nullable;
 pub mod p2p;
 pub mod transactions;
 pub use archival::{
@@ -108,6 +109,7 @@ pub use info::{
     GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
     InfoPeers, InfoPool, InfoStatus,
 };
+pub use nullable::Nullable;
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,

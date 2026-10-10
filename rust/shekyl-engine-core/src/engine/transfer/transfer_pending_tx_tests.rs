@@ -1791,7 +1791,6 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
     let healthy = DaemonHealthContext {
         connections: 8,
         height: 20,
-        target_height: 0,
         synchronized: true,
     };
     let horizon_reached = 20 + config.escape_horizon_blocks;

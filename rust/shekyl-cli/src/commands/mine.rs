@@ -143,11 +143,11 @@ pub fn cmd_mine_start(
     // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
     // BUSY. Refuse here with the height copy rather than confirm-and-fail.
     if !info.health.synchronized {
-        let (height, target) = (info.health.height, info.health.target_height);
-        let of_target = if target > height {
-            format!("height {height} of {target}")
-        } else {
-            format!("height {height}")
+        let height = info.health.height;
+        // The target is for the message only; the refusal is the flag's.
+        let of_target = match info.health.target_height.into_option() {
+            Some(target) if target > height => format!("height {height} of {target}"),
+            _ => format!("height {height}"),
         };
         return failed(format!(
             "The daemon is still syncing ({of_target}) and will not start mining \

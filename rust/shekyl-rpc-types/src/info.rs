@@ -54,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use crate::chain::RpcStatus;
 use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
+use crate::nullable::Nullable;
 
 /// A part of a reply that a caller may be refused: the part, or its absence.
 ///
@@ -87,11 +88,12 @@ pub struct InfoHealth {
     /// The chain count: the top block's height plus one.
     pub height: u64,
     pub top_block_hash: HashHex,
-    /// The core's target, **or `0` when the node is synchronized** — and
-    /// also `0` when the core has no target, which is why the two cannot be
-    /// told apart from this member. Read [`Self::synchronized`]. The
-    /// sentinel is retired by RK-D15.
-    pub target_height: u64,
+    /// The core's target, `null` when the core reports none (RK-D15,
+    /// RK-Q7). It is information: a synchronized node reports its target
+    /// too, and whether the node is synchronized is [`Self::synchronized`]
+    /// alone. The target comes from heights peers claim, so nothing is
+    /// decided from it.
+    pub target_height: Nullable<u64>,
     pub synchronized: bool,
     pub busy_syncing: bool,
     pub offline: bool,
@@ -239,7 +241,7 @@ struct GetInfoWire {
     // Health.
     height: u64,
     top_block_hash: HashHex,
-    target_height: u64,
+    target_height: Nullable<u64>,
     synchronized: bool,
     busy_syncing: bool,
     offline: bool,

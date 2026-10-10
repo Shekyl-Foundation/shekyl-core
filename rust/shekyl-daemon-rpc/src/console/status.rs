@@ -139,8 +139,14 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let mining = fetch_mining_status(src)?;
     let target = crate::consensus::DAA_TARGET_SECONDS;
 
-    let (height, target_height) = (info.health.height, info.health.target_height);
-    let net_height = target_height.max(height);
+    let height = info.health.height;
+    // The core's target is shown, not judged. With none, or one this node
+    // is already past, the line is measured against the node's own height.
+    let net_height = info
+        .health
+        .target_height
+        .into_option()
+        .map_or(height, |target| target.max(height));
     let network = network_label(info.identity.nettype);
     // Status is a part a daemon may withhold. Today a restricted one writes
     // stand-ins there instead — a start time of zero, zero connections — and
@@ -178,7 +184,7 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
          {}(out)+{}(in) connections",
         height,
-        sync_percentage(height, target_height),
+        sync_percentage(height, net_height),
         outgoing,
         incoming
     );

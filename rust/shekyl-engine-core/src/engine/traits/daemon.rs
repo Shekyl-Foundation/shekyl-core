@@ -235,18 +235,13 @@ pub(crate) struct DaemonHealth {
     pub connections: u64,
     /// The daemon's current chain height.
     pub height: u64,
-    /// The daemon's network-estimated target height (`0` when synced —
-    /// the info surface's convention).
-    pub target_height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as
-    /// `get_info` reports it.
+    /// `get_info` reports it, and the wallet's one source for whether the
+    /// daemon has caught up.
     ///
-    /// **Not decoration on top of the heights.** A daemon that has just
-    /// started with no peers reports `target_height == 0` *and*
-    /// `synchronized == false`: the height comparison alone reads that as
-    /// synced, at a genesis-adjacent height. That is the rebuilt-database
-    /// case `WSS-25` is about, so both halves are required —
-    /// `SyncedChainFacts` is where the two are combined.
+    /// The daemon's target height is deliberately not here. It comes from
+    /// heights peers claim, so the wallet decides nothing on it
+    /// (`daemon/synced_chain_facts.rs`, module docs).
     pub synchronized: bool,
 }
 

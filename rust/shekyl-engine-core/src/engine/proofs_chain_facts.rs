@@ -522,11 +522,10 @@ mod witness_admission {
     fn witness_at(count: u64) -> SyncedChainFacts {
         SyncedChainFacts::new(
             ChainCount::from_raw(count),
-            0,
             true,
             BlockHash::from_bytes([0x11; 32]),
         )
-        .expect("target 0 with the flag set is synchronized")
+        .expect("the flag set is synchronized")
     }
 
     /// Bites against rejecting an equal gather. Does not cover the sync

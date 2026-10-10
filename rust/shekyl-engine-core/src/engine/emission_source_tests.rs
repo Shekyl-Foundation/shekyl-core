@@ -604,7 +604,7 @@ impl Rpc for BracketDaemon {
         let result = if method == "get_info" {
             crate::engine::daemon::synced_chain_facts::GetInfoDocument {
                 chain_count: shekyl_types::ChainCount::from_raw(WITNESS_COUNT),
-                target_height: 0,
+                target_height: None,
                 synchronized: true,
                 top_hash: shekyl_types::BlockHash::from_bytes(
                     crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),

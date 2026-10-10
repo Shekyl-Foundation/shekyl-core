@@ -109,3 +109,18 @@ above, and takes a new case name
 because `synced_v7` onward carry a target. It replaced a per-pair test
 that was renamed at each bump, which is how a chain with a missing vector
 passed.
+
+**3.46 restated the target, and every vector it moved is derived.** "No
+target" became `null` on `get_info`, `get_version` and `sync_info`, and
+`get_info` stopped writing `0` for a synchronized node (RK-D15, RK-Q7). No
+C++ stood to capture from, so each successor is its predecessor with only
+the named members restated, and
+`the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated`
+holds each pair to that: `get_version_absent_target_v2`,
+`get_version_all_defaults_v3` (which also gains `current_height: 0`),
+`sync_info_empty_v3`, and the `_v2` of four `get_info` fixtures. The
+synchronized `get_info` fixtures take the core's target, 1234567, which is
+what `shekyl-daemon-rpc`'s method tests produce from the capture's own
+facts. `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1`
+carried a target already; their replies did not move and they have no
+successor. The side cases keep their predecessor's `version`, as before.

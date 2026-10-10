@@ -28,9 +28,7 @@
 //! # The seam, now that `get_info` is served from Rust
 //!
 //! The reply this module reads is the daemon's `get_info`, served natively
-//! since RK-5c and defined once, as `shekyl_rpc_types::GetInfoResponse`
-//! (`target_height` still under the "0 when synchronized" rule until
-//! RK-D15's commit retires it).
+//! since RK-5c and defined once, as `shekyl_rpc_types::GetInfoResponse`.
 //!
 //! Daemon elements still in flux stay behind a seam the wallet owns
 //! (standing ruling, 2026-09-19). That is what [`PersonaIsolatedTransport`]
@@ -59,9 +57,7 @@ use shekyl_p_host::DaemonTipCache;
 use shekyl_rpc_types::GetInfoResponse;
 use shekyl_types::{BlockHeight, ChainCount};
 
-use crate::engine::daemon::synced_chain_facts::{
-    daemon_reports_synchronized, health_from_get_info,
-};
+use crate::engine::daemon::synced_chain_facts::health_from_get_info;
 
 use crate::engine::block_fetch::refuse_unless_ok;
 use crate::engine::prpc::PersonaIsolatedTransport;
@@ -162,8 +158,6 @@ pub(crate) enum NotFollowing {
     Degraded,
     /// `synchronized` is false — it has never caught up since start.
     NeverSynchronized,
-    /// Its own `height` is behind its own `target_height`.
-    BehindItsTarget,
     /// No peers. A daemon with nobody to learn from is not tracking the
     /// chain, whatever a sticky flag from an earlier epoch still says.
     NoPeers,
@@ -190,13 +184,10 @@ pub(crate) enum TipReading {
 /// `synchronized` is **sticky**. In `cryptonote_protocol_handler.inl` the
 /// backing `m_synchronized` is written exactly twice — the constructor, and
 /// a one-way `compare_exchange_strong(expected, true)`. Nothing ever stores
-/// `false`: not a disconnect, not a pop, not a refused reorg. `get_info`
-/// then forces `target_height` to `0` whenever that bit is set, so the
-/// height half of the predicate is satisfied by construction too.
+/// `false`: not a disconnect, not a pop, not a refused reorg.
 ///
 /// A once-synced daemon that later loses every peer therefore keeps
-/// reporting `synchronized: true, target_height: 0` at a frozen height,
-/// forever. Stamping that as fresh re-creates the unbounded lag `WSS-24`
+/// reporting `synchronized: true` at a frozen height, forever. Stamping that as fresh re-creates the unbounded lag `WSS-24`
 /// exists to remove — by a different route, and silently, because every
 /// signature stays well-formed.
 ///
@@ -206,18 +197,24 @@ pub(crate) enum TipReading {
 /// | fact | reverts? | zeroed by `--restricted-rpc`? |
 /// |---|---|---|
 /// | `synchronized` | never (one-way) | no |
-/// | `height` vs `target_height` | yes | no |
 /// | `offline` | yes | no |
 /// | `following_degraded` | never (one-way, refusing) | no |
 /// | connection counts | yes | **yes** |
 ///
-/// The sync **verdict** is [`daemon_reports_synchronized`] — the one site
-/// (`WSS-Q14`), shared with the submit watchdog's
-/// `DaemonHealthContext::is_synced` and with `SyncedChainFacts`. This
-/// reading adds, on top of it, the facts that can go false again. The two
-/// [`NotFollowing`] members the predicate covers are a *diagnosis* for the
-/// operator, each naming the half that failed; neither is a second verdict.
-/// Converged in PR #792, which landed second.
+/// The sync **verdict** is the daemon's flag, read from the one
+/// [`DaemonHealth`](crate::engine::traits::daemon::DaemonHealth) projection
+/// the submit watchdog's `DaemonHealthContext::is_synced` and
+/// `SyncedChainFacts` also read (`WSS-Q14`). This reading adds, on top of
+/// it, the facts that can go false again.
+///
+/// **`height` against `target_height` is not one of them.** It would
+/// revert, which is what this table wants, but the target is the tallest
+/// chain any peer has claimed in a handshake: one peer advertising a tall
+/// chain would stop this persona serving. Until `CORE_RPC_VERSION` 3.46 a
+/// `BehindItsTarget` refusal stood here; it could not fire, because a
+/// synchronized daemon then wrote its target as `0`, and it went with that
+/// sentinel rather than become a lever (`daemon/synced_chain_facts.rs`,
+/// module docs).
 ///
 /// # `--restricted-rpc` zeroes the connection counts *by policy*
 ///
@@ -242,8 +239,7 @@ pub(crate) enum TipReading {
 /// reads it as [`TipReading::Unusable`] — the held tip ages out as for a
 /// dropped poll. That covers every absence the hand-written decoder this
 /// replaces gave a direction to, and in the one direction that cannot
-/// manufacture a claim: no `height`, no `target_height` (where `0` is the
-/// synchronized *sentinel*), no `synchronized`, no refusal trigger.
+/// manufacture a claim: no `height`, no `synchronized`, no refusal trigger.
 ///
 /// What is left to decide here is what a well-formed reply *says*:
 ///
@@ -281,11 +277,6 @@ pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
         Some(NotFollowing::Degraded)
     } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
-    } else if !daemon_reports_synchronized(chain_height, health.target_height, health.synchronized)
-    {
-        // The verdict is the shared predicate's; with the flag already
-        // true, the only half left to fail is the heights.
-        Some(NotFollowing::BehindItsTarget)
     } else if !info.restricted && health.connections == 0 {
         Some(NotFollowing::NoPeers)
     } else {
@@ -431,7 +422,7 @@ mod tests {
     fn reply(over: &serde_json::Value) -> serde_json::Value {
         let mut doc = crate::engine::daemon::synced_chain_facts::GetInfoDocument {
             chain_count: ChainCount::from_raw(9_001),
-            target_height: 0,
+            target_height: None,
             synchronized: true,
             top_hash: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
             outgoing_connections: 8,
@@ -477,7 +468,7 @@ mod tests {
         const TOP_BLOCK: u64 = CHAIN_HEIGHT - 1;
 
         let info = json!({
-            "height": CHAIN_HEIGHT, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": CHAIN_HEIGHT, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
         let reading = reading_of(&info);
@@ -499,7 +490,7 @@ mod tests {
     async fn the_conversion_reaches_the_cache_not_only_the_reading() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         })));
         refresh_tip_once(&rpc, &tip).await;
@@ -510,13 +501,11 @@ mod tests {
         );
     }
 
-    /// The case `synchronized` exists for: a freshly started daemon with no
-    /// peers reports `target_height == 0`, which the height half alone reads
-    /// as synced. Dropping `synchronized` from the predicate turns this red.
+    /// A daemon that has never caught up says so, and is not followed.
     #[test]
-    fn a_peerless_daemon_reporting_target_zero_is_syncing_not_synced() {
+    fn a_daemon_that_never_synchronized_is_not_followed() {
         let info = json!({
-            "height": 5, "target_height": 0, "status": "OK", "synchronized": false,
+            "height": 5, "status": "OK", "synchronized": false,
             "outgoing_connections_count": 8
         });
         assert_eq!(
@@ -525,56 +514,55 @@ mod tests {
         );
     }
 
-    /// The height half of the lifted predicate, with `synchronized` true so
-    /// only the heights can decide.
+    /// **A target a peer claimed does not stop this persona serving.** The
+    /// daemon says it is synchronized; its target is whatever the tallest
+    /// claim in a handshake was. Until 3.46 a height below the target was
+    /// refused as `BehindItsTarget`, which a synchronized daemon could not
+    /// then report. Now that it can, the refusal would be a lever any peer
+    /// could pull, so the target decides nothing.
+    ///
+    /// The edit that turns this red is a height comparison coming back.
     #[test]
-    fn a_daemon_behind_its_own_target_is_syncing() {
-        let behind = json!({
-            "height": 9_000, "target_height": 9_500, "status": "OK", "synchronized": true,
-            "outgoing_connections_count": 8
-        });
-        assert_eq!(
-            reading_of(&behind),
-            TipReading::NotFollowing(NotFollowing::BehindItsTarget)
-        );
-
-        let level = json!({
-            "height": 9_500, "target_height": 9_500, "status": "OK", "synchronized": true,
-            "outgoing_connections_count": 8
-        });
-        assert_eq!(
-            reading_of(&level),
-            TipReading::Synced(BlockHeight::from_raw(9_499)),
-            "height >= target is the lifted predicate's accepting edge"
-        );
+    fn a_target_above_the_height_does_not_stop_a_synchronized_daemon_being_followed() {
+        for target in [9_000u64, 9_001, 9_500, 12_000, u64::MAX] {
+            let info = json!({
+                "height": 9_000, "target_height": target, "status": "OK",
+                "synchronized": true, "outgoing_connections_count": 8
+            });
+            assert_eq!(
+                reading_of(&info),
+                TipReading::Synced(BlockHeight::from_raw(8_999)),
+                "target {target}"
+            );
+        }
     }
 
-    /// The reading's sync verdict IS the shared predicate's (`WSS-Q14`):
-    /// over the tuples the watchdog's convergence test uses, including the
-    /// peerless fresh daemon, `Synced` iff `daemon_reports_synchronized`.
-    ///
-    /// The edit that turns this red is a second copy of the conjunction here
-    /// drifting from the shared one.
+    /// The reading's sync verdict is the daemon's flag (`WSS-Q14`), whatever
+    /// the heights say: over tuples that include a target above the height,
+    /// one below it and none, `Synced` iff `synchronized`.
     #[test]
-    fn the_sync_verdict_is_the_shared_predicates() {
+    fn the_sync_verdict_is_the_daemons_flag() {
         for (height, target, synchronized) in [
-            (5, 0, false),
-            (9_000, 9_500, true),
-            (9_500, 9_500, true),
-            (9_001, 0, true),
-            (10, 5, false),
-            (7, 0, true),
+            (5, None, false),
+            (9_000, Some(9_500), true),
+            (9_500, Some(9_500), true),
+            (9_001, None, true),
+            (10, Some(5), false),
+            (10, Some(50), false),
+            (7, Some(0), true),
         ] {
-            let reading = reading_of(&json!({
-                "height": height, "target_height": target, "status": "OK",
+            let mut over = json!({
+                "height": height, "status": "OK",
                 "synchronized": synchronized, "outgoing_connections_count": 8
-            }));
-            let expected =
-                daemon_reports_synchronized(ChainCount::from_raw(height), target, synchronized);
+            });
+            if let Some(target) = target {
+                over["target_height"] = json!(target);
+            }
+            let reading = reading_of(&over);
             assert_eq!(
                 matches!(reading, TipReading::Synced(_)),
-                expected,
-                "({height}, {target}, {synchronized}) -> {reading:?}"
+                synchronized,
+                "({height}, {target:?}, {synchronized}) -> {reading:?}"
             );
         }
     }
@@ -596,8 +584,8 @@ mod tests {
         assert_eq!(
             reading_of(&json!({ "target_height": null })),
             TipReading::Unusable,
-            "absent `target_height` is refused, not read as 0: 0 is the synchronized \
-             sentinel, and a default would manufacture it"
+            "a reply without `target_height` is not the contract. The member is \
+             required and may be null; absent is neither (RK-D23)"
         );
         assert_eq!(
             reading_of(
@@ -709,7 +697,7 @@ mod tests {
     async fn a_synced_reply_stamps_the_top_block_height() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         })));
         assert_eq!(
@@ -728,16 +716,16 @@ mod tests {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "target_height": 12_000, "status": "OK", "synchronized": true
+            "height": 9_001, "status": "OK", "synchronized": true, "offline": true
         })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
-            TipReading::NotFollowing(NotFollowing::BehindItsTarget)
+            TipReading::NotFollowing(NotFollowing::Offline)
         );
         assert_eq!(
             tip.height(),
             None,
-            "a daemon that says it is behind must invalidate the tip it gave before"
+            "a daemon that says it is offline must invalidate the tip it gave before"
         );
     }
 
@@ -780,11 +768,10 @@ mod tests {
 
     // ── F2: the sticky `synchronized` flag is not sufficient ────────────
     //
-    // `m_synchronized` is written once, one-way, and never cleared, and
-    // `get_info` forces `target_height` to 0 whenever it is set. Every case
-    // below therefore presents `synchronized: true, target_height: 0` — a
-    // reply the pre-F2 predicate accepted unconditionally — and differs only
-    // in a fact that CAN revert.
+    // `m_synchronized` is written once, one-way, and never cleared. Every
+    // case below presents `synchronized: true` — a reply the pre-F2
+    // predicate accepted unconditionally — and differs only in a fact that
+    // CAN revert.
 
     /// The motivating case: a once-synced daemon that has lost every peer
     /// keeps claiming synchronization at a frozen height. Dropping the
@@ -793,7 +780,7 @@ mod tests {
     #[test]
     fn a_once_synced_daemon_with_no_peers_is_not_following() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
         });
         assert_eq!(
@@ -810,7 +797,7 @@ mod tests {
             // Both counts stated: the one under test is 1 and the other 0,
             // so the peer that counts is the one named.
             let info = json!({
-                "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+                "height": 9_001, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 0, "incoming_connections_count": 0,
                 field: 1
             });
@@ -831,7 +818,7 @@ mod tests {
     #[test]
     fn a_restricted_daemons_zeroed_counts_are_not_read_as_no_peers() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0,
             "restricted": true
         });
@@ -848,7 +835,7 @@ mod tests {
     #[test]
     fn a_degraded_daemon_is_not_following_however_synchronized_it_claims_to_be() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8, "following_degraded": true
         });
         assert_eq!(
@@ -860,7 +847,7 @@ mod tests {
     #[test]
     fn an_offline_daemon_is_not_following() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8, "offline": true
         });
         assert_eq!(
@@ -901,7 +888,7 @@ mod tests {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+            "height": 9_001, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
         })));
         assert_eq!(
@@ -925,7 +912,7 @@ mod tests {
     fn a_non_ok_status_makes_a_plausible_body_unusable() {
         for status in ["BUSY", "Failed", "PAYMENT REQUIRED", "ok", ""] {
             let info = json!({
-                "status": status, "height": 9_001, "target_height": 0,
+                "status": status, "height": 9_001,
                 "synchronized": true, "outgoing_connections_count": 8
             });
             assert_eq!(
@@ -952,7 +939,7 @@ mod tests {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
         let rpc = CannedRpc::replying(&reply(&json!({
-            "status": "BUSY", "height": 12_345, "target_height": 0,
+            "status": "BUSY", "height": 12_345,
             "synchronized": true, "outgoing_connections_count": 8
         })));
         assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);

@@ -19,10 +19,12 @@
 //!
 //! # Parity
 //!
-//! The method answers exactly what the C++ handler it replaced answered,
-//! and five oracle vectors captured from that handler's own computation
-//! hold it to that. So it still writes what the design retires in later commits, each
-//! marked where it is written: the `target_height` sentinel, the restricted
+//! The method first answered exactly what the C++ handler it replaced
+//! answered, and five oracle vectors captured from that handler's own
+//! computation held it to that. Each later commit moves one thing off
+//! parity, with a vector derived from its predecessor: the `target_height`
+//! sentinel went first (RK-D15, 3.46). It still writes what the design
+//! retires after that, each marked where it is written: the restricted
 //! stand-ins, the clearnet-only connection counts and their subtraction, a
 //! refused burn computation reported as zero, and a pool count whose
 //! meaning depends on the caller.
@@ -208,15 +210,12 @@ pub fn get_info(
         health: InfoHealth {
             height,
             top_block_hash: HashHex::from_bytes(*chain.top_hash.as_bytes()),
-            // Parity: the sentinel. `0` when synchronized, and also `0` when
-            // the core has no target. RK-D15 retires it.
-            target_height: if chain.synchronized {
-                0
-            } else {
-                chain
-                    .core_target_height
-                    .map_or(0, shekyl_types::ChainCount::to_raw)
-            },
+            // The core's target as the core reports it, synchronized or
+            // not, and `null` when it has none (RK-D15).
+            target_height: chain
+                .core_target_height
+                .map(shekyl_types::ChainCount::to_raw)
+                .into(),
             synchronized: chain.synchronized,
             busy_syncing: chain.busy_syncing,
             offline: chain.offline,
@@ -302,7 +301,9 @@ pub(crate) mod tests {
 
     /// The facts of the emitter's `synced_facts()`
     /// (the emitter that captured the `get_info_*_v1.json` vectors; it was
-    /// deleted with the C++ handler).
+    /// deleted with the C++ handler). The `_v2` files are those with the
+    /// target restated at 3.46, and the core target below is where their
+    /// value comes from.
     pub(crate) fn synced_facts() -> FakeInfoFacts {
         FakeInfoFacts {
             chain: InfoChainFacts {
@@ -408,9 +409,34 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&synced_facts(), Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v1.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v2.json"
             ))
         );
+    }
+
+    /// **RK-D15: the target is the core's, synchronized or not, and `null`
+    /// when the core has none.** The four combinations, each read off the
+    /// wire. Until 3.46 the two synchronized rows wrote `0`, which is also
+    /// what the fourth row wrote, so a synchronized node and a node with
+    /// nobody to learn a target from were the same bytes.
+    #[test]
+    fn the_target_is_the_cores_and_null_when_it_has_none() {
+        for (synchronized, core_target, on_the_wire) in [
+            (true, Some(1_234_567), serde_json::json!(1_234_567)),
+            (true, None, serde_json::Value::Null),
+            (false, Some(1_300_000), serde_json::json!(1_300_000)),
+            (false, None, serde_json::Value::Null),
+        ] {
+            let mut facts = synced_facts();
+            facts.chain.synchronized = synchronized;
+            facts.chain.core_target_height = core_target.map(ChainCount::from_raw);
+            let reply = ours(&facts, Disclosure::FULL);
+            assert_eq!(
+                reply["target_height"], on_the_wire,
+                "synchronized {synchronized}, core target {core_target:?}"
+            );
+            assert_eq!(reply["synchronized"], serde_json::json!(synchronized));
+        }
     }
 
     #[test]
@@ -443,7 +469,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&facts, Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v1.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v2.json"
             ))
         );
     }
@@ -456,7 +482,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&synced_facts(), Disclosure::VIEW),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v1.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v2.json"
             ))
         );
     }
@@ -469,7 +495,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&facts, Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v1.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v2.json"
             ))
         );
     }

@@ -40,6 +40,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::RpcStatus;
+use crate::nullable::Nullable;
 
 /// Response of `GET|POST /get_net_stats`. The request body is empty.
 ///
@@ -277,10 +278,9 @@ pub struct SyncInfoResponse {
     pub status: RpcStatus,
     /// Chain height: top block height plus one.
     pub height: u64,
-    /// The core's target count. `0` when the core reported none. A
-    /// synchronized node reports the target the core named. `get_info`
-    /// still writes `0` when synchronized; this method does not.
-    pub target_height: u64,
+    /// The core's target count, `null` when the core reports none. A
+    /// synchronized node reports the target the core named.
+    pub target_height: Nullable<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<SyncInfoPeer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

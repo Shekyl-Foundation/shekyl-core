@@ -587,7 +587,7 @@ mod tests {
                 let result = if is_get_info {
                     crate::engine::daemon::synced_chain_facts::GetInfoDocument {
                         chain_count: shekyl_types::ChainCount::from_raw(10_000),
-                        target_height: if synced { 0 } else { 1_000_000 },
+                        target_height: (!synced).then_some(1_000_000),
                         synchronized: synced,
                         top_hash: shekyl_types::BlockHash::from_bytes(
                             crate::engine::test_support::test_block_hash_at(9_999),

@@ -690,7 +690,6 @@ impl VouchedClaimSource {
     pub(crate) fn for_test(source: EmissionClaimSource) -> Self {
         let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
             source.chain_height,
-            0,
             true,
             shekyl_types::BlockHash::from_bytes(crate::engine::test_support::test_block_hash_at(
                 source.chain_height.to_raw().saturating_sub(1),

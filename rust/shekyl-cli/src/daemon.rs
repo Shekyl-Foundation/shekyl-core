@@ -455,7 +455,7 @@ mod tests {
             health: InfoHealth {
                 height: 1,
                 top_block_hash: HashHex::from_bytes([7; 32]),
-                target_height: 0,
+                target_height: shekyl_rpc_types::Nullable::NULL,
                 synchronized: true,
                 busy_syncing: false,
                 offline: false,
