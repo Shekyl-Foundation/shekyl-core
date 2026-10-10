@@ -27,6 +27,7 @@
   - [x] V4 PQC Privacy Roadmap published
   - [ ] **Hybrid signature construction frozen (SA-2, `SIGNATURE_ALIGNMENT.md`):** the nested combiner (`HYBRID_SIG_VERSION = 2`, PQ-inner / Ed25519-outer over a domain-separated preimage) and the per-surface `SCHEME_DOMAIN_*` strings are consensus-visible on bonded/settlement surfaces (bond-post auth, attestation witness, emission auth). After genesis a change here is a hard fork; the version byte is the security boundary. Landed pre-genesis in PR-SA-2.
   - [x] **Bond-preimage reconciliation closed (SA-2b, `SIGNATURE_ALIGNMENT.md` §2.2):** the P-role replay analysis found the surface-A whole-tx hash (which binds the vin type tag) forecloses cross-role replay, so **generic won**. The bond vin's `pqc_auths` slot signs the generic surface-A payload hash; S1 + `signature_preimage` + `SCHEME_DOMAIN_BOND_POST` deleted. No wire change. Landed pre-genesis in PR-SA-2b.
+  - [ ] **`fn-dsa` at 1.0 or later (genesis gate).** Hybrid scheme 3 (Ed25519 + FN-DSA-1024) rests on a pre-standard crate whose keys and signatures change when FIPS 206 is final. `scripts/ci/check_fn_dsa_genesis_gate.py` refuses a tag with no pre-release suffix while the locked `fn-dsa` packages are below 1.0; pre-release tags pass. This row checks when the crate is updated and every scheme-3 vector is regenerated (`docs/design/FN_DSA_HYBRID.md` §4, and its FOLLOWUPS row).
 - [ ] PQC crypto review
   - [ ] hybrid sign/verify implementation reviewed (external audit pending)
   - [ ] FFI ownership / zeroization reviewed (external audit pending)

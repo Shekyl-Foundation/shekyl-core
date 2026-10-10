@@ -28,6 +28,7 @@ dependencies = [
  "blake2",
  "cpufeatures",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -41,6 +42,12 @@ name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64ct"
@@ -63,6 +70,7 @@ dependencies = [
  "bitcoin_hashes",
  "serde",
  "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]
@@ -200,12 +208,6 @@ checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "crunchy"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-bigint"
@@ -436,6 +438,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fips205"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f5626bf5534df4ebdbd2536465d7eaa8a9dc2cdeb7e036e0ecf291dcc80ffb6"
+dependencies = [
+ "rand_core",
+ "sha2",
+ "sha3",
+ "zeroize",
+]
+
+[[package]]
 name = "flexible-transcript"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,6 +461,57 @@ dependencies = [
  "std-shims",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "fn-dsa"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13662b90285f1d8d0cf7bc600808b036a52802eeadbd9912992bc9a357fbdfd0"
+dependencies = [
+ "fn-dsa-comm",
+ "fn-dsa-kgen",
+ "fn-dsa-sign",
+ "fn-dsa-vrfy",
+]
+
+[[package]]
+name = "fn-dsa-comm"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1635e68ba9d301da36ab5fb4a78e5dc006c3b0faa8ea07f2acb986d880512579"
+dependencies = [
+ "cpufeatures",
+ "rand_core",
+]
+
+[[package]]
+name = "fn-dsa-kgen"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1dcea5794c0cd70a7b084851a6ab8b070c956b332d8b91760d569e5a6778218"
+dependencies = [
+ "fn-dsa-comm",
+ "zeroize",
+]
+
+[[package]]
+name = "fn-dsa-sign"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a64adea5213c0f5d5f77d862b5d06b56a47dc317f19d7e3b164830c92f4693"
+dependencies = [
+ "fn-dsa-comm",
+ "zeroize",
+]
+
+[[package]]
+name = "fn-dsa-vrfy"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1028459ccd32c695ce0ca44ae5d59ea7046a04bc145004cc1b8aabd91d3457a7"
+dependencies = [
+ "fn-dsa-comm",
 ]
 
 [[package]]
@@ -489,6 +554,7 @@ dependencies = [
  "multiexp",
  "rand_core",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -592,6 +658,12 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hex-conservative"
@@ -783,6 +855,27 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "postcard-derive"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0232bd009a197ceec9cc881ba46f727fcd8060a2d8d6a9dde7a69030a6fe2bb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "postcard-schema"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9475666d89f42231a0a57da32d5f6ca7f9b5cd4c335ea1fe8f3278215b7a21ff"
+dependencies = [
+ "postcard-derive",
+ "serde",
 ]
 
 [[package]]
@@ -987,7 +1080,7 @@ dependencies = [
 name = "shekyl-crypto-hash"
 version = "3.1.0"
 dependencies = [
- "tiny-keccak",
+ "sha3",
 ]
 
 [[package]]
@@ -995,6 +1088,7 @@ name = "shekyl-crypto-pq"
 version = "3.1.0"
 dependencies = [
  "argon2",
+ "base64",
  "bip39",
  "blake2",
  "chacha20poly1305",
@@ -1003,8 +1097,16 @@ dependencies = [
  "ed25519-dalek",
  "fips203",
  "fips204",
+ "fips205",
+ "fn-dsa",
+ "fn-dsa-comm",
+ "fn-dsa-kgen",
+ "fn-dsa-sign",
+ "fn-dsa-vrfy",
  "helioselene",
+ "hex",
  "hkdf",
+ "postcard-schema",
  "rand",
  "rand_chacha",
  "serde",
@@ -1013,8 +1115,9 @@ dependencies = [
  "sha3",
  "shekyl-address",
  "shekyl-crypto-hash",
- "shekyl-generators",
- "shekyl-primitives",
+ "shekyl-curve-generators",
+ "shekyl-curve-primitives",
+ "shekyl-types",
  "thiserror",
  "x25519-dalek",
  "zeroize",
@@ -1029,15 +1132,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-encoding"
-version = "3.1.0"
-dependencies = [
- "bech32",
- "thiserror",
-]
-
-[[package]]
-name = "shekyl-generators"
+name = "shekyl-curve-generators"
 version = "0.4.0"
 dependencies = [
  "blake2",
@@ -1050,13 +1145,13 @@ dependencies = [
  "group",
  "helioselene",
  "sha3",
- "shekyl-io",
+ "shekyl-curve-io",
  "std-shims",
  "subtle",
 ]
 
 [[package]]
-name = "shekyl-io"
+name = "shekyl-curve-io"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek",
@@ -1065,14 +1160,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-primitives"
+name = "shekyl-curve-primitives"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek",
  "sha3",
- "shekyl-generators",
- "shekyl-io",
+ "shekyl-curve-generators",
+ "shekyl-curve-io",
  "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-encoding"
+version = "3.1.0"
+dependencies = [
+ "bech32",
+ "thiserror",
+]
+
+[[package]]
+name = "shekyl-types"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-units",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-units"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "zeroize",
 ]
 
@@ -1159,15 +1281,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "tiny-keccak"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
-dependencies = [
- "crunchy",
 ]
 
 [[package]]

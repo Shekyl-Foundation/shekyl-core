@@ -2,6 +2,11 @@
 
 **Status: OPEN.** Design before code. Rule 26 is cited. No
 implementation starts from this file until a review of it has closed.
+**UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
+field on any connector (the handshake-address ruling below, which
+replaces "The address we announce"); `disclose_count` is the protocol
+constant `DISCLOSE_COUNT = 12` (slice 1 brief D3); the timed-sync
+self-insertion is deleted at the cutover.
 Lines below were read on `dev` at `f317d979c4` (2026-10-08), which
 contains #991 and #1002. `record_addr_failed` takes the address, the
 cause, and the reply (`net_node.h:675`). `shekyl_seam_session_cause`
@@ -33,8 +38,8 @@ together.
 | --- | --- | --- |
 | `hidden_out` | `MIN_PROVISIONED_OUT_PEERS` (12, `shekyl-relay-privacy/src/params.rs:203`) | This slice. The hidden-address pool. No hidden session above it |
 | `clearnet_out` | `P2P_DEFAULT_OUT_PEERS` (12, `params.rs:179`), written by `set_max_out_peers` (`net_node.inl:2957`; the `arg_out_peers` call is `:621`) | The setter. A cap of 0 stays legal. A positive cap below the floor is refused. Clearnet is not folded into `hidden_out` |
-| `disclose_count` | That connector's outbound target. 12 on each of these two | Slice 1, per connector. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) as the sample size |
-| `white_diversity_floor` | `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `disclose_count`, so about 48 | Slice 1. The multiple is the interim until slice 1's derivation names the floor. The refill line stays above the floor |
+| `DISCLOSE_COUNT` | 12, a protocol constant: the same on every node and every connector (D3, Rick 2026-10-09). Not tied to the outbound target | Slice 1. Replaces `P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) and `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`) as the sample size and the receiver limit. *Records-was: `disclose_count`, that connector's outbound target* |
+| `white_diversity_floor` | `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48 | Slice 1. The multiple is the interim until slice 1's derivation names the floor, on the Rust path after PR-3. The refill line stays above the floor |
 
 `hidden_out` is the outbound sessions whose connector declares
 `address_hidden_from_peer`. On `dev`, `net_node.inl:984` assigns
@@ -63,12 +68,19 @@ approval. The ceiling comes from resources. `(h, 0)`, including
 on §96. A total of 16 was an illustration in the §95.2 grid, and that
 grid is records-was. It is not a degree this composition uses.
 
-Stem-slot routing is §95.3: one slot from the hidden pool, the other
-from the remaining outbound sessions, the local source mapped to the
-hidden slot, relays forwarding with probability `1 − q`. This slice
-does not restate a shorter routing. `own_edge` and `NoOwnEdge` stay
-on `dev` until the relay lane lands §95.3. This slice depends on
-nothing in them and does not choose the slot.
+Stem-slot routing is §95.3: one slot from the hidden outbound
+sessions, the other from the remaining outbound sessions, the local
+source pinned on the hidden slot, relays forwarding with probability
+`1 − q`. This slice does not restate a shorter routing. **UPDATE
+2026-10-09:** the relay lane landed §95.3 as PR-1 (#1018,
+`DAEMON_RELAY_PRIVACY.md` §98); `own_edge()` is deleted and
+`NoOwnEdge` is the plan when no outbound session hides the address or
+the origin's pin is exhausted. *Records-was: "`own_edge` and `NoOwnEdge`
+stay on `dev` until the relay lane lands §95.3."* This slice depends
+on nothing in them and does not choose the slot. Vocabulary (§98.11):
+*dial candidates* are the gray and white lists; *hidden outbound
+sessions* are the address-hiding subset of the live outbound sessions;
+a *pin* is a source's frozen set in `StemMap`.
 
 A later connector, I2P included, is a declaration column, that
 connector's measured transit added in `verify_cost`
@@ -318,7 +330,25 @@ when the tip changes. The handshake reads the latest snapshot. A tip
 that moves while the handshake is in flight stays the snapshot the
 request already took. The fields are public chain data.
 
-**The address we announce.** `get_local_node_data`
+**Handshake address — RULED 2026-10-09 (Rick).** `COMMAND_HANDSHAKE`
+carries no address field on any connector. A node's own dialable
+address is one uniform member of that connector's disclosure
+population (slice 1 brief §5a), with no special position; our clearnet
+entry is included when it is known, as today. A node discloses nothing
+on a connector until its eligible white list reaches
+`white_diversity_floor`. The timed-sync self-insertion
+(`net_node.inl:2717` to `:2735`, `outgoing_to_same_zone` inserting
+`zone.m_our_address` into the peerlist it sends) is deleted at the
+cutover; it is in the deletion table below. The ProxyMark rerun
+(`DAEMON_RELAY_PRIVACY.md` §99, PM-1) measures step 1 — identity in the
+cached sample — against this design, with per-boot and persistent
+onions, shortly after restart and in steady state; its result decides
+whether the onion stays per-boot (PWD-E7). This ruling replaces the
+section that follows, kept as records-was of what `get_local_node_data`
+does on `dev`.
+
+**The address we announce — SUPERSEDED 2026-10-09 (records-was).**
+`get_local_node_data`
 (`net_node.inl:2477`) writes it. The address is this node's own
 address on the connector being dialed. The declaration decides the
 shape. The rule does not name a connector.
@@ -339,10 +369,12 @@ shape. The rule does not name a connector.
   does not hide our address carries a zero address. Nothing dialable
   is announced.
 
-Wargame: a handshake whose connector hides our address carries this
-node's address on that connector, or the unknown placeholder. It does
-not carry the clearnet port. A clearnet port on that handshake links
-the hidden identity to the clearnet one.
+Wargame (records-was with the section above): a handshake whose
+connector hides our address carries this node's address on that
+connector, or the unknown placeholder. It does not carry the clearnet
+port. A clearnet port on that handshake links the hidden identity to
+the clearnet one. Under the ruling the handshake carries no address at
+all, so the join it guarded against has no field to ride.
 
 **`network_id` and the flags we send.** The same `node_data` carries
 `m_network_id` and that connector's `support_flags`, the two
@@ -504,8 +536,9 @@ inbound handshake and timed sync, and these three go with it.
 Dial pacing, the handshake gap per connector (D9), and the in-flight
 bound are measured after the cutover, on the Rust dialer, into the
 register (`DAEMON_RELAY_PRIVACY.md` §97, Ruling B). Then the white
-floor, the refill line and the per-source gray share are re-derived
-from those readings. No derivation and no measurement gates the
+floor, the refill line, `DISCLOSE_COUNT` and the per-session intake cap
+(the per-source share is folded into it, slice 1 brief D-PR2-1) are
+re-derived from those readings. No derivation and no measurement gates the
 cutover PR; a number taken with the C++ dial path in front would be
 thrown away.
 
@@ -603,6 +636,7 @@ keep the callers named below.
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
+| The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
 | The C++ in-flight nonce mint and erase | call `:1347`, guard `:1348`, `mint_recorded_handshake_nonce` `:1497`, `erase_outbound_handshake_nonce` `:1516` | `rg -n -e mint_recorded_handshake_nonce -e erase_outbound_handshake_nonce src/p2p` returns nothing. `rg -n -e detect_self_handshake src/p2p` still hits the declaration and the call in `handle_handshake` (`:2789`). Zero hits on `detect_self_handshake` fails. The dialer's `HandshakeNonceSet` is what `shekyl_dial_take_handshake_nonce` reads |
 
 ---
@@ -664,7 +698,7 @@ the pool the dialer keeps is `hidden_out` (12), which is also what
 onion circuits on the managed Tor, where the old target opened 4. The
 in-flight dial bound limits how fast they open. Total outbound is
 `clearnet_out` plus `hidden_out`, and relayed stems are drawn over
-all of them. Both the hidden pool and that total are lower limits.
+all of them. Both the hidden outbound sessions and that total are lower limits.
 *Records-was: the capture was written `p^k`.*
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a

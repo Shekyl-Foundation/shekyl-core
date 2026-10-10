@@ -147,10 +147,16 @@ fn expected_key_image(keys: &ArchivalPKeys, m: &FundingOutputMatch) -> Result<[u
 fn spawn_actor() -> Result<StakeEngineHandle, String> {
     let keys = persona()?;
     let slot = PSlot::from_raw(SLOT);
+    // `test_fixtures` is `cfg(test)`, and this harness is `not(test)`
+    // (Guard 1). The store is empty: the fire path does not serve.
+    let bodies =
+        shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes([0x5a; 32]))
+            .map_err(|e| e.to_string())?;
     Ok(StakeEngineHandle::spawn(
         BTreeMap::from([(slot, keys)]),
         BTreeSet::from([slot]),
         Some(slot),
+        bodies,
     ))
 }
 

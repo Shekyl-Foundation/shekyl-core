@@ -62,6 +62,7 @@ use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
 use crate::rules::recorded;
 use crate::view::ChainView;
 
+use super::close::settled_for;
 use super::{emptied, Slash};
 
 /// Apply one slash to `record` (`db_lmdb.cpp` `apply_archival_slash_one`,
@@ -182,11 +183,8 @@ impl super::Transition {
                 Holdings::CompleteTree => {
                     // A complete tree holds every shard, so its candidates
                     // are the shards it has a row for, in shard order.
-                    let settled: Vec<ShardId> = self
-                        .settled
-                        .range((epoch, *persona, ShardId::from_raw(0))..)
-                        .take_while(|((e, p, _), _)| *e == epoch && p == persona)
-                        .map(|((_, _, shard), _)| *shard)
+                    let settled: Vec<ShardId> = settled_for(&self.settled, epoch, persona)
+                        .map(|(shard, _)| shard)
                         .collect();
                     for shard in settled {
                         if self.challenge_failed(view, *persona, record, shard, epoch)? {
@@ -204,7 +202,11 @@ impl super::Transition {
                 }
             }
         }
-        Ok(())
+        // The emission gather, over the records as the epoch's slashes
+        // left them: a record slashed for `epoch` carries the interval
+        // that opens at `epoch` and is out of its market, and that is the
+        // record a later claim's verify reads back (`close.rs`, `gather`).
+        self.gather(view, epoch)
     }
 
     /// Settle `epoch`: check its issued-draw index against its digest and
@@ -325,6 +327,9 @@ impl super::Transition {
     /// The slashes logged against `persona` strictly above `height`: the
     /// recorded ones (A2) and this block's own, which sit at the connecting
     /// height and so are above every height the pass asks about.
+    ///
+    /// The read is handed `self.slash_floor`. A scan whose start key lies
+    /// in the retired range is SI-26 (`SlashLogReadBelowFloor`).
     fn slashed_after<'id, V: ChainView<'id>>(
         &self,
         view: &V,
@@ -332,7 +337,7 @@ impl super::Transition {
         height: BlockHeight,
     ) -> Result<Vec<SlashLogEntry>, ViewRead<V::Fault>> {
         let mut log = view
-            .slash_log_after(&persona, height)
+            .slash_log_after(&persona, height, self.slash_floor)
             .map_err(ViewRead::View)?;
         log.extend(
             self.slashes

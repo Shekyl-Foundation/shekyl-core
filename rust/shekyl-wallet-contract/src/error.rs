@@ -1741,6 +1741,7 @@ fn from_io_error(io: IoError) -> WalletRpcError {
     match io {
         IoError::WalletFile(e) => from_wallet_file_error(&e),
         IoError::CurveTreeStore { fault, detail } => from_store_open_fault(fault, &detail),
+        IoError::PStore { detail } => internal_detail("p-store", detail),
         IoError::Daemon { fault, detail } => from_daemon_fault(fault, &detail),
         // Only this wallet's own view material reaches here as a scanner
         // failure (a daemon's malformed block is a `Daemon` protocol fault):

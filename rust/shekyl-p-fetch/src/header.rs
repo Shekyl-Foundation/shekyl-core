@@ -70,10 +70,11 @@ impl RequestHeader {
 
     /// A header over a caller-chosen nonce.
     ///
-    /// For tests and for callers that persist a header across a process
-    /// restart mid-retry. Production callers minting a *new* header use
-    /// [`Self::fresh`]; a nonce that is not OS-random is a pass record an
-    /// adversary can pre-compute.
+    /// Organic reads mint with [`Self::fresh`]. A challenge supplies the
+    /// nonce `challenge_nonce` derived (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+    /// §5.2): indistinguishable from random until the seed is revealed.
+    /// A nonce that is neither is a pass record an adversary can
+    /// pre-compute.
     #[must_use]
     pub const fn with_nonce(
         nonce: [u8; PASS_NONCE_LEN],

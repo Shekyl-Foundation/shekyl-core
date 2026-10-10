@@ -766,6 +766,17 @@ at `h_close` must be re-pinned to the slash pass in the same change.
 settlement slashes on absolute-2; `PC-D6` says *"no economic disposition
 opens"* and this proposal does not open one.
 
+**UPDATE 2026-10-09 (`SO-D11`):** the consumers did not tolerate the move as
+written. CEN-J15, the claim gate and `SI-21` each assumed the close-time
+snapshot, and the claim verify re-gathers at claim time. What was ruled is
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15: CEN-J15
+reads `r_market` at the slash watermark; an epoch is claimable one epoch
+later, once its `Σwork` row exists; `SI-21` is two write sets; the verify
+re-gathers from the Served settlement rows. A pair is credited iff its
+settlement row is Served, which closes the presence-versus-absolute-2 note
+above. The Rust validator is built so; the C++ daemon still gathers at the
+close on any pass until `DEL-008`.
+
 ## 6. `SO-D8d` RULED 2026-09-16 — three local layers, none of them on chain; amended same day against `dev@5fde3b1ce`
 
 > **Form under the secret draw, RULED 2026-10-07 (`SCS-F11` closed).** Three layers stand, as [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.5 states them: (1) the stored issued-draw index equals the running digest folded as its draws were issued; (2) the persisted digest of `D` equals a re-walk; (3) `passes ≤ issued`. This section owns the reasoning: which direction costs a bond, the Fault disposition, the rejected on-chain digest.
@@ -1225,6 +1236,18 @@ record's holdings as they stood → filter → emit in canonical order.
    drawable set. Slice C's rows do that; the C++ gate that runs today
    does not (§8.0 item 3, the credit on a shard the persona does not
    hold). Slice C carries it as an invariant test, in §8's evidence plan.
+
+   **UPDATE 2026-10-09 (`SO-D11f`): ruled the other way, and the writer
+   moved.** The rows are written by the epoch's slash pass now, and their
+   universe is **closed and final**
+   ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md)
+   §15.8). The judgment above weighed the row as a count and missed what
+   reads it: CEN-J15 prices a join by it, and a zero row on a shard that
+   is closed and not yet final prices that shard as maximally scarce
+   while nobody can bond it. The cost named above is accepted: a shard
+   that becomes final between two passes has no row, CEN-J15 reads
+   `None` and refuses, and the join waits for the next pass. One
+   predicate for bonding, drawing and pricing.
 3. **Canonical order sorts `shard_id` numerically.** Not wire bytes.
    The crate-level comment names this as a second-implementation hazard
    and `ChallengeUrn::new` rejects violations, so it fails loudly — but

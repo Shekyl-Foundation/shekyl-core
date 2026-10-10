@@ -227,9 +227,11 @@ jobs:
         run: python3 scripts/ci/check_followups_owners.py --selftest
 
       - name: Relay production code does not name a connector
-        # shekyl-relay reads declaration cells. ConnectorId::Clearnet and
-        # ConnectorId::Tor may appear only in its test modules. The
-        # selftest proves a production hit fails and an empty subject fails.
+        # shekyl-relay and shekyl-relay-privacy read declaration cells. Any
+        # ConnectorId:: or NetworkColumn:: variant may appear only in their
+        # #[cfg(test)] code (DAEMON_RELAY_PRIVACY.md §98.4, structure). The
+        # selftest proves a production hit fails, in either crate, and an
+        # empty subject fails.
         if: '!cancelled()'
         run: python3 scripts/ci/check_relay_connector_agnostic.py
 

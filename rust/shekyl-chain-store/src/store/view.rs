@@ -85,8 +85,11 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
+use std::collections::BTreeMap;
+
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
+    AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, SlashLogFloor, Tip,
+    TreeFrontier,
 };
 use shekyl_types::archival::{IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow};
 use shekyl_types::{
@@ -279,8 +282,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(self.batch.txn(), persona, height).map_err(|f| self.arm(f))
+        archival_reads::slash_log_after(self.batch.txn(), persona, height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn last_served_epoch(
@@ -361,5 +366,13 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
 
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
         archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
     }
 }
