@@ -115,6 +115,11 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bridge. Sabotage 2026-10-10, daemon rebuilt: the listener's posture
 #     mapped to full disclosure for every caller; panicked at "each listener
 #     must say which it is".
+#   get_info_console_commands_answer_on_the_in_process_arm — RK-5c commit
+#     4: status, diff, version and print_pool_stats on the daemon's own
+#     console. Sabotage 2026-10-10, daemon rebuilt: `diff` cut off from the
+#     native method; panicked at "the in-process diff must name the live
+#     tip" after `status` had passed.
 #   restricted_listener_hides_a_transaction_this_node_has_not_broadcast —
 #     the origin guard anchored on include_sensitive (RK-5c commit 1), two
 #     daemons. Sabotage 2026-10-09, twice, each rebuilding the daemon:
@@ -152,6 +157,7 @@ ARMED=(
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::get_info_console_commands_answer_on_the_in_process_arm
 )
 
 # Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the

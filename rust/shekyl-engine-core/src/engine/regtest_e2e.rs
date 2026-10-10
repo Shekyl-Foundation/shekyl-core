@@ -6086,6 +6086,79 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
     );
 }
 
+/// The console commands that read `get_info` answer on the daemon's **own**
+/// console.
+///
+/// RK-5c's half of the gate above. `get_info` is served in Rust, and seven
+/// console commands read it. Four were already rendered in Rust over a
+/// bridged leg and now call the method directly; three — `diff`, `version`
+/// and `print_pool_stats` — were rendered in C++ by calling the handler,
+/// and moved because that handler is deleted next.
+///
+/// On the in-process arm nothing crosses HTTP: the console calls the native
+/// method over the live core, with full disclosure, since the operator at
+/// the daemon's own console is the host's administrator. What this pins is
+/// that each command reaches that core and renders its own text rather than
+/// a transport failure — the failure RK-4c shipped, silently, because
+/// nothing exercised this arm.
+///
+/// `print_pool_stats` also reads `/get_transaction_pool_stats`, which is
+/// still served from the C++ dispatch table (RK-6). That bridged leg is
+/// covered here so that the slice which deletes the route turns this red.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn get_info_console_commands_answer_on_the_in_process_arm() {
+    let mut daemon = RegtestDaemon::start_with_console().await;
+    let info: GetInfoResponse = daemon
+        .rpc()
+        .json_rpc_call("get_info", None)
+        .await
+        .expect("get_info");
+    let top_hash = hex::encode(info.health.top_block_hash.to_bytes());
+    let version = info
+        .node
+        .shown()
+        .expect("the harness's own listener is shown Status")
+        .version
+        .clone();
+    assert!(!version.is_empty(), "the daemon reports a version");
+
+    let out = daemon.console("status");
+    assert!(
+        out.contains("Height: 1/1 (100.0%)") && out.contains("uptime"),
+        "the in-process status line must read the live core, start time \
+         included; got:\n{out}"
+    );
+
+    let out = daemon.console("diff");
+    assert!(
+        out.contains(&format!("BH: 1, TH: {top_hash}, DIFF: ")),
+        "the in-process diff must name the live tip; got:\n{out}"
+    );
+
+    let out = daemon.console("version");
+    assert!(
+        out.contains(&version),
+        "the in-process version must print the build's own version \
+         ({version}); got:\n{out}"
+    );
+
+    let out = daemon.console("print_pool_stats");
+    assert!(
+        out.contains("0 tx(es), 0 bytes total") && out.contains("no backlog"),
+        "the in-process print_pool_stats must render an empty pool from both \
+         of its legs; got:\n{out}"
+    );
+
+    for command in ["status", "diff", "version", "print_pool_stats"] {
+        let out = daemon.console(command);
+        assert!(
+            !out.contains("no reply") && !out.contains("console command failed"),
+            "`{command}` must not be reaching a route that is gone; got:\n{out}"
+        );
+    }
+}
+
 /// The five p2p console commands answer on the daemon's **own** console.
 ///
 /// RK-5a's half of the gate above. Four of them read only this slice's

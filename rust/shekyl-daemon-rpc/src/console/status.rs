@@ -5,8 +5,8 @@
 
 //! `show_status`.
 
-use super::info::fetch_get_info;
-use super::{wide_difficulty_value, Source};
+use super::info::{fetch_get_info, network_label};
+use super::Source;
 use crate::ctl_client;
 
 /// The `/mining_status` reply, as much of it as `show_status` reads.
@@ -139,14 +139,19 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let mining = fetch_mining_status(src)?;
     let target = crate::consensus::DAA_TARGET_SECONDS;
 
-    let net_height = info.target_height.max(info.height);
-    let network = if info.testnet {
-        "testnet"
-    } else if info.stagenet {
-        "stagenet"
-    } else {
-        "mainnet"
-    };
+    let (height, target_height) = (info.health.height, info.health.target_height);
+    let net_height = target_height.max(height);
+    let network = network_label(info.identity.nettype);
+    // Status is a part a daemon may withhold. Today a restricted one writes
+    // stand-ins there instead — a start time of zero, zero connections — and
+    // a withheld part reads the same way here.
+    let (start_time, outgoing, incoming) = info.node.shown().map_or((0, 0, 0), |status| {
+        (
+            status.start_time,
+            status.outgoing_connections_count,
+            status.incoming_connections_count,
+        )
+    });
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),
@@ -164,21 +169,23 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // Network hash rate as difficulty per target second. `checked_div` for
     // the same reason as everywhere else in this file: `T` is genesis-frozen
     // and generated; a zero would be a build defect, not a daemon value.
-    let net_hash = wide_difficulty_value(&info.wide_difficulty)
-        .and_then(|d| d.checked_div(u128::from(target)))
+    let net_hash = info
+        .chain
+        .difficulty
+        .checked_div(u128::from(target))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
          {}(out)+{}(in) connections",
-        info.height,
-        sync_percentage(info.height, info.target_height),
-        info.outgoing_connections_count,
-        info.incoming_connections_count
+        height,
+        sync_percentage(height, target_height),
+        outgoing,
+        incoming
     );
     // A restricted listener does not disclose the start time, and the C++
     // omitted the whole clause rather than reporting an uptime of zero.
-    if info.start_time != 0 {
-        let uptime = now.saturating_sub(info.start_time);
+    if start_time != 0 {
+        let uptime = now.saturating_sub(start_time);
         line.push_str(&format!(
             ", uptime {}d {}h {}m {}s",
             uptime / 86_400,

@@ -31,6 +31,7 @@ mod alt_chain;
 mod blockchain;
 mod identity;
 mod info;
+mod node;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -695,10 +696,9 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
     // only: the live arm renders from this process, so every axis would
     // compare a value to itself and the check could not fail (VC-D6).
     //
-    // §3.6.2's exemption for a `version` command has **no subject in this
-    // table today** — `version` is still rendered by C++ and moves here with
-    // RK-C. Written as a note rather than an unreachable match arm: a branch
-    // no input can reach is the shape this round keeps finding.
+    // §3.6.2's exemption for `version` is in the command itself
+    // (`node::version`), which asks without the handshake: it exists to show
+    // the operator what they reached.
     let result = match args[0].as_str() {
         "print_height" => print_height(&source),
         "print_block_by_hash" | "print_block_by_height" => {
@@ -755,6 +755,11 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             alt_chain_info(&source, tip, above, last_blocks, unix_now())
         }
         "status" => show_status(&source, unix_now()),
+        // RK-5c. The three commands the C++ console still rendered from
+        // `get_info`.
+        "diff" => node::show_difficulty(&source),
+        "version" => node::version(&source),
+        "print_pool_stats" => node::print_transaction_pool_stats(&source, unix_now()),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
     match result {
