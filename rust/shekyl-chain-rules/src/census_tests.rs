@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use crate::census::{CenRow, Flag, PolicyRow, Row, RowStatus};
-use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::topology::A2;
 use crate::rules::Rule;
 
@@ -106,7 +106,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::B4,
             CenRow::B5,
             CenRow::B6,
-            CenRow::B7,
             CenRow::C1,
             CenRow::C2,
             CenRow::C3,
@@ -283,7 +282,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(<B2 as Rule>::ROW, CenRow::B2);
     assert_eq!(<B5 as Rule>::ROW, CenRow::B5);
     assert_eq!(<B6 as Rule>::ROW, CenRow::B6);
-    assert_eq!(<B7 as Rule>::ROW, CenRow::B7);
 }
 
 #[test]
@@ -323,8 +321,12 @@ fn registries_are_the_expected_size_at_this_increment() {
     // not inflate the denominator. 153 → 154 on 2026-10-08: CEN-J27 (the
     // bond post's funding half — its reference context and the proof over
     // its funding spends, one row) minted with its implementation, per the
-    // H21 cell's ruling of 2026-10-07 (slice 6 row 6).
-    assert_eq!(CenRow::ALL.len(), 154);
+    // H21 cell's ruling of 2026-10-07 (slice 6 row 6). 154 → 153 on
+    // 2026-10-08: CEN-B7 (the one-time warning on a block version above
+    // the last scheduled one) went to bucket 3 with the hard-fork
+    // mechanism: a higher version is refused by B1, and there is nothing
+    // to warn about.
+    assert_eq!(CenRow::ALL.len(), 153);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

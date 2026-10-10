@@ -10,7 +10,6 @@ src/blockchain_db/lmdb/db_lmdb.cpp	2	transaction version	always true for an admi
 src/blockchain_db/shekyl_types.h	3	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (p[0] != kVersion)
 src/blockchain_db/shekyl_types.h	3	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (p[off++] != kVersion)
 src/blockchain_db/shekyl_types.h	1	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (version != kVersion)
-src/blockchain_db/testdb.h	1	hard-fork table	a test double's stub	delete	hardfork	virtual uint8_t get_hard_fork_version(uint64_t height) const override { return 0; }
 src/blockchain_utilities/blockchain_import.cpp	1	bootstrap file version	the import's file format, compared with the build's, as the LMDB schema version is	none	none	if (major_version != bootstrap::BOOTSTRAP_MAJOR_VERSION
 src/blockchain_utilities/blockchain_import.cpp	1	bootstrap file version	the import's file format, compared with the build's, as the LMDB schema version is	none	none	|| minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
 src/cryptonote_basic/cryptonote_basic.h	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (!(version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0])))
@@ -25,56 +24,21 @@ src/cryptonote_basic/cryptonote_format_utils.cpp	2	transaction version	false for
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_coinbase(tx))
 src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	return version <= 1;
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: whether the asked version is enabled	delete	hardfork	const bool enabled = current_version >= version;
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	earliest_height = get_earliest_ideal_height_for_version(version);
-src/cryptonote_basic/hardfork.cpp	1	block major version	CEN-B1: the major version is the one the height schedule names	delete	hardfork	if (major_version != version_at_height(height))
-src/cryptonote_basic/hardfork.cpp	1	block minor version	CEN-B2: the minor version is reserved; it is not a vote	collapse	hardfork	if (minor_version != CURRENT_BLOCK_MINOR_VERSION)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: the earliest height of a version in the table	delete	hardfork	if (i->version >= version) {
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping: a new fork's version must increase	delete	hardfork	if (version <= heights.back().version)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	if (version == 0)
-src/cryptonote_basic/hardfork.cpp	1	hard-fork table	the mechanism's own bookkeeping	delete	hardfork	return db.get_hard_fork_version(height);
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	b.major_version = m_hardfork->get_current_version();
-src/cryptonote_core/blockchain.cpp	2	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-src/cryptonote_core/blockchain.cpp	2	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t hf_version = m_hardfork->get_current_version();
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t ideal_hf_version = get_ideal_hard_fork_version(top_height);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	const uint8_t major_version = m_hardfork->get_ideal_version(height);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	if (!seen_future_version && bl.major_version > m_hardfork->get_ideal_version())
 src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (cur_tx.tx.version < 3)
-src/cryptonote_core/blockchain.cpp	1	block major version, from the table	always true at 1: the start-up pop of pre-fork blocks never runs	delete	hardfork	if (ideal_hf_version <= 1 || ideal_hf_version == top_block.major_version)
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	the mechanism's own bookkeeping: re-validate the pool when the current fork changes on connect	delete	hardfork	if (new_hf_version != hf_version)
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	the mechanism's own bookkeeping: re-validate the pool when the current fork changes on pop	delete	hardfork	if (new_hf_version != previous_hf_version)
 src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (tx.version < 3)
 src/cryptonote_core/blockchain.cpp	1	transaction version	a second statement of the admission bound; both locals are 3	delete	tx-version	if (tx.version < min_tx_version)
 src/cryptonote_core/blockchain.cpp	1	transaction version	a second statement of the admission bound; both locals are 3	delete	tx-version	if (tx.version > max_tx_version)
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_archival_serve_credit_only)
 src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0])
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	major_version = m_hardfork->get_ideal_version(height);
-src/cryptonote_core/blockchain.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t version = get_ideal_hard_fork_version(m_db->height());
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return m_hardfork->get_earliest_ideal_height_for_version(version); }
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_current_hard_fork_version() const { return m_hardfork->get_current_version(); }
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_hard_fork_version(uint64_t height) const { return m_hardfork->get(height); }
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_ideal_hard_fork_version() const { return m_hardfork->get_ideal_version(); }
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_ideal_hard_fork_version(uint64_t height) const { return m_hardfork->get_ideal_version(height); }
-src/cryptonote_core/blockchain.h	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	uint8_t get_next_hard_fork_version() const { return m_hardfork->get_next_version(); }
 src/cryptonote_core/cryptonote_core.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
-src/cryptonote_core/relay_floor_ring.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-src/cryptonote_core/tx_pool.cpp	1	hard-fork table	the mechanism's own bookkeeping: skip non-input consensus when the tx already passed it at this fork	delete	hardfork	if (version != nic_verified_hf_version && !cryptonote::ver_non_input_consensus(tx, tvc, version))
-src/cryptonote_core/tx_pool.cpp	1	block major version	always false at 1: the reward-aware arm is dead, the pre-v5 arm ships	move-to-rust	template-fill	if (version >= 5)
-src/cryptonote_core/tx_pool.cpp	1	block major version	always false at 1: the reward-aware arm is dead, the pre-v5 arm ships	move-to-rust	template-fill	size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
 src/cryptonote_core/tx_pqc_verify.cpp	1	PQC auth version	the rule: auth_version is 1	none	none	if (auth.auth_version != 1)
 src/cryptonote_core/tx_pqc_verify.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
-src/cryptonote_core/tx_verification_utils.cpp	1	hard-fork table	the mechanism's own bookkeeping: the pool supplement was already checked at this fork	delete	hardfork	if (ps.nic_verified_hf_version == hf_version)
 src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	live admission bound; both locals are 3, and the parser still admits 1 and 2	collapse	tx-version	if (tx.version < min_tx_version || tx.version > max_tx_version)
 src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2)
-src/cryptonote_protocol/cryptonote_protocol_handler.inl	1	hard-fork table, by height	always 1: advertised to peers, read by nobody since the dead check went; the field is deleted with the handshake port	delete	hardfork	hshd.top_version = m_core.get_ideal_hard_fork_version(hshd.current_height);
-src/daemon/command_parser_executor.cpp	1	CLI argument	validates a number typed by the operator	none	none	if (version <= 0 || version > 255) {
 src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if (header.version != 5)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
-src/rpc/core_rpc_server.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-src/rpc/rpc_facts_ffi.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();
+src/cryptonote_core/blockchain.cpp	1	block major version	CEN-B1: the major version is 1	none	none	return b.major_version == CURRENT_BLOCK_MAJOR_VERSION
+src/cryptonote_core/blockchain.cpp	1	block minor version	CEN-B2: the minor version is reserved at 0; it is not a vote	none	none	&& b.minor_version == CURRENT_BLOCK_MINOR_VERSION;

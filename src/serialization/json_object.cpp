@@ -1083,40 +1083,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::tx_in_pool& tx)
   GET_FROM_JSON_OBJECT(val, tx.double_spend_seen, double_spend_seen);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::rpc::hard_fork_info& info)
-{
-  dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, version, info.version);
-  INSERT_INTO_JSON_OBJECT(dest, enabled, info.enabled);
-  INSERT_INTO_JSON_OBJECT(dest, window, info.window);
-  INSERT_INTO_JSON_OBJECT(dest, votes, info.votes);
-  INSERT_INTO_JSON_OBJECT(dest, threshold, info.threshold);
-  INSERT_INTO_JSON_OBJECT(dest, voting, info.voting);
-  INSERT_INTO_JSON_OBJECT(dest, state, info.state);
-  INSERT_INTO_JSON_OBJECT(dest, earliest_height, info.earliest_height);
-
-  dest.EndObject();
-}
-
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::hard_fork_info& info)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, info.version, version);
-  GET_FROM_JSON_OBJECT(val, info.enabled, enabled);
-  GET_FROM_JSON_OBJECT(val, info.window, window);
-  GET_FROM_JSON_OBJECT(val, info.votes, votes);
-  GET_FROM_JSON_OBJECT(val, info.threshold, threshold);
-  GET_FROM_JSON_OBJECT(val, info.voting, voting);
-  GET_FROM_JSON_OBJECT(val, info.state, state);
-  GET_FROM_JSON_OBJECT(val, info.earliest_height, earliest_height);
-}
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::rpc::output_amount_count& out)
 {
   dest.StartObject();

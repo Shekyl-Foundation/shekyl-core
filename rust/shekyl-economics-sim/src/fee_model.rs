@@ -303,7 +303,7 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_economics::{calc_effective_emission_share, relay_fee_floor, FeeCorrection};
+    use shekyl_economics::{emission_share_at, relay_fee_floor, FeeCorrection};
     use shekyl_tx_weight::predict_weight;
 
     use crate::burden::normal_tx_shape;
@@ -378,13 +378,7 @@ mod tests {
     fn the_production_fee_falls_with_the_reward_and_the_control_does_not() {
         let params = EconomicParams::default();
         let late_generated = params.emission_curve_asymptote / 100 * 98;
-        let late_sigma = calc_effective_emission_share(
-            30 * shekyl_economics::BLOCKS_PER_YEAR,
-            1,
-            shekyl_economics::STAKER_EMISSION_SHARE,
-            shekyl_economics::STAKER_EMISSION_DECAY,
-            shekyl_economics::BLOCKS_PER_YEAR,
-        );
+        let late_sigma = emission_share_at(30 * shekyl_economics::BLOCKS_PER_YEAR);
         let early = point(0, &params);
         let late = FeePoint {
             sigma_scaled: late_sigma,

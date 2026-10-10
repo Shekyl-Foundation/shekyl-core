@@ -78,10 +78,8 @@ namespace cryptonote {
   /* Cryptonote helper functions                                          */
   /************************************************************************/
   //-----------------------------------------------------------------------------------------------
-  size_t get_min_block_weight(uint8_t /* version */)
+  size_t get_min_block_weight()
   {
-    // Shekyl activates all hard-fork features from genesis (HF1).
-    // The legacy Monero version ladder (ZONE_V1, ZONE_V2) is unused.
     return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   }
   //-----------------------------------------------------------------------------------------------
@@ -90,17 +88,17 @@ namespace cryptonote {
     return CRYPTONOTE_MAX_TX_SIZE;
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward) {
     // The M_r-NEUTRAL view: baseline volume pins the release multiplier at
     // exactly 1, so this equals the pre-FL-R12' unmodulated reward
     // bit-for-bit for every state at or below the emission-curve asymptote.
     // Production consumers are the fee/relay floors that must not track
     // demand (CEN-M3's held machinery); everything reward-paying calls the
     // volume-aware overload below.
-    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
+    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, shekyl::tx_volume_window tx_volume)
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, shekyl::tx_volume_window tx_volume)
   {
     // Marshaling shim for THE one owner of the paid reward
     // (shekyl-economics `paid_block_reward`, FL-R12' signed composition):

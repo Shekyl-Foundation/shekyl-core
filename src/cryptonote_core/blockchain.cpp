@@ -53,7 +53,6 @@
 #include "cryptonote_basic/events.h"
 #include "cryptonote_config.h"
 #include "cryptonote_basic/miner.h"
-#include "hardforks/hardforks.h"
 #include "shekyl/economics.h"
 #include "misc_language.h"
 #include "profile_tools.h"
@@ -101,6 +100,17 @@ DISABLE_VS_WARNINGS(4267)
 
 namespace
 {
+  // CEN-B1 and CEN-B2: a block's version is 1.0, at every height.
+  //
+  // There is no height schedule and no activation machinery. A future
+  // consensus change is a design document first, and the mechanism that
+  // activates it is written then.
+  bool header_version_is_valid(const cryptonote::block& b)
+  {
+    return b.major_version == CURRENT_BLOCK_MAJOR_VERSION
+      && b.minor_version == CURRENT_BLOCK_MINOR_VERSION;
+  }
+
   // LWMA-1 bridge — Phase 4 commit 3 of the DAA cutover.
   //
   // Converts the daemon's canonical inputs (oldest-first `uint64_t`
@@ -208,7 +218,7 @@ namespace
 
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
-  m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_timestamps_and_difficulties_height(0), m_reset_timestamps_and_difficulties_height(true), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
+  m_db(), m_tx_pool(tx_pool), m_timestamps_and_difficulties_height(0), m_reset_timestamps_and_difficulties_height(true), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
   m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
@@ -339,24 +349,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     MWARNING("regtest schedule override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks and the reorg cap is " << shekyl_archival_reorg_depth_blocks() << " instead of the genesis pins — epoch closes, serve-credit windows, emission claims and the reorg depth computed under this schedule are valid only among fakechain nodes running the same override");
   }
 
-  if (m_hardfork == nullptr)
-    m_hardfork = new HardFork(*db, 1);
-  // The harness names its own schedule. Every issued network installs
-  // the one protocol table; there is no per-network table to select.
-  if (m_nettype == FAKECHAIN)
-  {
-    for (size_t n = 0; test_options->hard_forks[n].first; ++n)
-      m_hardfork->add_fork(test_options->hard_forks[n].first, test_options->hard_forks[n].second, n + 1);
-  }
-  else
-  {
-    for (size_t n = 0; n < num_hard_fork_schedule; ++n)
-      m_hardfork->add_fork(hard_fork_schedule[n].version, hard_fork_schedule[n].height, hard_fork_schedule[n].time);
-  }
-  m_hardfork->init();
-
-  m_db->set_hard_fork(m_hardfork);
-
   // if the blockchain is new, add the genesis block
   // this feels kinda kludgy to do it this way, but can be looked at later.
   // TODO: add function to create and store genesis block,
@@ -407,55 +399,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   MINFO("Blockchain initialized. last block: " << m_db->height() - 1 << ", " << epee::misc_utils::get_time_interval_string(timestamp_diff) << " time ago, current difficulty: " << get_difficulty_for_next_block());
 
   rtxn_guard.stop();
-
-  uint64_t num_popped_blocks = 0;
-  while (!m_db->is_read_only())
-  {
-    uint64_t top_height;
-    const crypto::hash top_id = m_db->top_block_hash(&top_height);
-    const block top_block = m_db->get_top_block();
-    const uint8_t ideal_hf_version = get_ideal_hard_fork_version(top_height);
-    if (ideal_hf_version <= 1 || ideal_hf_version == top_block.major_version)
-    {
-      if (num_popped_blocks > 0)
-        MGINFO("Initial popping done, top block: " << top_id << ", top height: " << top_height << ", block version: " << (uint64_t)top_block.major_version);
-      break;
-    }
-    else
-    {
-      if (num_popped_blocks == 0)
-        MGINFO("Current top block " << top_id << " at height " << top_height << " has version " << (uint64_t)top_block.major_version << " which disagrees with the ideal version " << (uint64_t)ideal_hf_version);
-      if (num_popped_blocks % 100 == 0)
-        MGINFO("Popping blocks... " << top_height);
-      ++num_popped_blocks;
-      block popped_block;
-      std::vector<transaction> popped_txs;
-      try
-      {
-        m_db->pop_block(popped_block, popped_txs);
-      }
-      // anything that could cause this to throw is likely catastrophic,
-      // so we re-throw
-      catch (const std::exception& e)
-      {
-        MERROR("Error popping block from blockchain: " << e.what());
-        throw;
-      }
-      catch (...)
-      {
-        MERROR("Error popping block from blockchain, throwing!");
-        throw;
-      }
-    }
-  }
-  if (num_popped_blocks > 0)
-  {
-    m_timestamps_and_difficulties_height = 0;
-    m_reset_timestamps_and_difficulties_height = true;
-    uint64_t top_block_height;
-    crypto::hash top_block_hash = get_tail_id(top_block_height);
-    m_tx_pool.on_blockchain_dec(top_block_height, top_block_hash);
-  }
 
   if (test_options && test_options->long_term_block_weight_window)
   {
@@ -520,16 +463,6 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   return true;
 }
 //------------------------------------------------------------------
-bool Blockchain::init(BlockchainDB* db, HardFork*& hf, const network_type nettype, bool offline)
-{
-  if (hf != nullptr)
-    m_hardfork = hf;
-  bool res = init(db, nettype, offline, NULL);
-  if (hf == nullptr)
-    hf = m_hardfork;
-  return res;
-}
-//------------------------------------------------------------------
 bool Blockchain::store_blockchain()
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -591,8 +524,6 @@ bool Blockchain::deinit()
     LOG_ERROR("There was an issue closing/storing the blockchain, shutting down now to prevent issues!");
   }
 
-  delete m_hardfork;
-  m_hardfork = NULL;
   delete m_db;
   m_db = NULL;
   return true;
@@ -676,7 +607,6 @@ block Blockchain::pop_block_from_blockchain()
 
   CHECK_AND_ASSERT_THROW_MES(m_db->height() > 1, "Cannot pop the genesis block");
 
-  const uint8_t previous_hf_version = get_current_hard_fork_version();
   try
   {
     m_db->pop_block(popped_block, popped_txs);
@@ -707,19 +637,13 @@ block Blockchain::pop_block_from_blockchain()
     {
       cryptonote::tx_verification_context tvc = AUTO_VAL_INIT(tvc);
 
-      // FIXME: HardFork
-      // Besides the below, popping a block should also remove the last entry
-      // in hf_versions.
-      uint8_t version = get_ideal_hard_fork_version(m_db->height());
-
       // We assume that if they were in a block, the transactions are already known to the network
       // as a whole. However, if we had mined that block, that might not be always true. Unlikely
       // though, and always relaying these again might cause a spike of traffic as many nodes
       // re-relay all the transactions in a popped block when a reorg happens. You might notice that
-      // we also set the "nic_verified_hf_version" paramater. Since we know we took this transaction
-      // from the mempool earlier in this function call, when the mempool has the same current fork
-      // version, we can return it without re-verifying the consensus rules on it.
-      const bool r = m_tx_pool.add_tx(tx, tvc, relay_method::block, true, version, version);
+      // we also set the "nic_verified" parameter. The transaction was in a block this node
+      // connected, so it is returned without re-verifying the consensus rules on it.
+      const bool r = m_tx_pool.add_tx(tx, tvc, relay_method::block, true, /*nic_verified=*/true);
       if (!r)
       {
         LOG_ERROR("Error returning transaction to tx_pool");
@@ -735,13 +659,6 @@ block Blockchain::pop_block_from_blockchain()
   crypto::hash top_block_hash = get_tail_id(top_block_height);
   m_tx_pool.on_blockchain_dec(top_block_height, top_block_hash);
   invalidate_block_template_cache();
-
-  const uint8_t new_hf_version = get_current_hard_fork_version();
-  if (new_hf_version != previous_hf_version)
-  {
-    MINFO("Validating txpool for v" << (unsigned)new_hf_version);
-    m_tx_pool.validate(new_hf_version);
-  }
 
   {
     db_wtxn_guard wtxn_guard(m_db);
@@ -773,7 +690,6 @@ bool Blockchain::reset_and_set_genesis_block(const block& b)
   invalidate_block_template_cache();
   m_db->reset();
   m_db->drop_alt_blocks();
-  m_hardfork->init();
 
   db_wtxn_guard wtxn_guard(m_db);
   block_verification_context bvc = {};
@@ -1364,7 +1280,7 @@ static bool check_commitment_mask_valid(const transaction& tx);
 //   correct miner tx unlock time
 //   a non-overflowing tx amount (dubious necessity on this check)
 //   valid output types
-bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version)
+bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
@@ -1479,7 +1395,7 @@ uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint64_t frozen_segment_count, uint64_t total_burned)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1503,15 +1419,14 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   // definitional bug; E6 slice 4 §3.1 S15). C++ passes facts, defines nothing.
   const shekyl::supply_facts supply{already_generated_coins, total_burned};
 
-  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume))
+  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, tx_volume))
   {
     MERROR_VER("block weight " << cumulative_block_weight << " is bigger than allowed for this blockchain");
     return false;
   }
 
   // Component 4: split emission between miner and staker pool.
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income.
@@ -1686,7 +1601,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // every surviving path. The RPC refuses prev_block loudly rather than
   // silently building on the tip. Reopen: see docs/FOLLOWUPS.md.
     height = m_db->height();
-    b.major_version = m_hardfork->get_current_version();
+    b.major_version = CURRENT_BLOCK_MAJOR_VERSION;
     b.minor_version = CURRENT_BLOCK_MINOR_VERSION;
     b.prev_id = get_tail_id();
     median_weight = m_current_block_cumul_weight_limit / 2;
@@ -1732,7 +1647,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 
   size_t txs_weight;
   uint64_t fee;
-  if (!m_tx_pool.fill_block_template(b, median_weight, already_generated_coins, height, txs_weight, fee, expected_reward, b.major_version))
+  if (!m_tx_pool.fill_block_template(b, median_weight, txs_weight, fee))
   {
     return false;
   }
@@ -1785,19 +1700,17 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
    block weight, so first miner transaction generated with fake amount of money, and with phase we know think we know expected block weight
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob weight
-  uint8_t hf_version = b.major_version;
   size_t max_outs = 1;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(height);
   // Parent-state facts the supply is derived from in Rust (FL-R16c); the
   // template and connect read the same two so they agree by construction.
   const shekyl::supply_facts supply{already_generated_coins, m_db->get_total_burned()};
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, tx_volume, supply);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1806,7 +1719,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, tx_volume, supply);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     const size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -1858,6 +1771,11 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
     // retains a stale value (ARCHIVAL_CREDIT_WIRE.md §3).
     b.attestation_root = empty_attestation_root();
 
+    // What this template pays its miner: the coinbase just built, whose
+    // amount is the miner's emission leg plus its fee income at the weight
+    // the block has. The pool's fill prices nothing.
+    expected_reward = get_outs_money_amount(b.miner_tx);
+
     // Always cacheable now: every template extends the tip (from_block deleted).
     cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
     return true;
@@ -1871,7 +1789,7 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
   prev_id = m_db->top_block_hash(&height);
   ++height;
 
-  major_version = m_hardfork->get_ideal_version(height);
+  major_version = CURRENT_BLOCK_MAJOR_VERSION;
 
   seed_hash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height));
 
@@ -2079,12 +1997,11 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
-  // CEN-B1 and CEN-B2, both inside check_for_height.
-  const uint8_t hf_version = m_hardfork->get_ideal_version(block_height);
-  if (!m_hardfork->check_for_height(b, block_height))
+  // CEN-B1 and CEN-B2.
+  if (!header_version_is_valid(b))
   {
     LOG_PRINT_L1("Block with id: " << id << std::endl << "has version " << (unsigned)b.major_version << "." << (unsigned)b.minor_version
-        << " at height " << block_height << ", expected " << (unsigned)hf_version << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
+        << " at height " << block_height << ", expected " << (unsigned)CURRENT_BLOCK_MAJOR_VERSION << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     return false;
   }
@@ -2221,7 +2138,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       return false;
     }
 
-    if(!prevalidate_miner_transaction(b, bei.height, hf_version))
+    if(!prevalidate_miner_transaction(b, bei.height))
     {
       MERROR_VER("Block with id: " << epee::string_tools::pod_to_hex(id) << " (as alternative) has incorrect miner transaction.");
       reject_block_form(bvc);
@@ -2246,7 +2163,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
 
     // Now that we have the PoW verification out of the way, verify all pool supplement txs
     tx_verification_context tvc{};
-    if (!ver_non_input_consensus(extra_block_txs, tvc, hf_version))
+    if (!ver_non_input_consensus(extra_block_txs, tvc))
     {
       MERROR_VER("Transaction pool supplement verification failure for alt block " << id);
       reject_block_from_tvc(bvc, tvc);
@@ -2264,7 +2181,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       tx_verification_context tvc{};
       if ((!m_tx_pool.have_tx(txid, relay_category::broadcasted) &&
           !m_db->tx_exists(txid) &&
-          !m_tx_pool.add_tx(tx, tvc, relay_method::block, /*relayed=*/true, hf_version, hf_version))
+          !m_tx_pool.add_tx(tx, tvc, relay_method::block, /*relayed=*/true, /*nic_verified=*/true))
           || tvc.m_verifivation_failed)
       {
         MERROR_VER("Transaction " << txid <<
@@ -2286,7 +2203,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       }
     }
     extra_block_txs.txs_by_txid.clear();
-    extra_block_txs.nic_verified_hf_version = 0;
+    extra_block_txs.nic_verified = false;
 
     bei.block_cumulative_weight = cryptonote::get_transaction_weight(b.miner_tx);
     for (const crypto::hash &txid: b.tx_hashes)
@@ -2593,8 +2510,7 @@ void Blockchain::get_output_key_mask_unlocked(const uint64_t& amount, const uint
   key = o_data.pubkey;
   mask = o_data.commitment;
   tx_out_index toi = m_db->get_output_tx_and_index(amount, index);
-  const uint8_t hf_version = m_hardfork->get_current_version();
-  unlocked = is_tx_spendtime_unlocked(m_db->get_tx_unlock_time(toi.first), hf_version);
+  unlocked = is_tx_spendtime_unlocked(m_db->get_tx_unlock_time(toi.first));
 }
 //------------------------------------------------------------------
 // This function takes a list of block hashes from another node
@@ -3201,7 +3117,7 @@ static bool check_commitment_mask_valid(const transaction& tx)
   }
 }
 //------------------------------------------------------------------
-bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context &tvc, std::uint8_t hf_version)
+bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context &tvc)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -3303,7 +3219,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
 
-  const uint8_t hf_version = m_hardfork->get_current_version();
   const bool is_fcmp_pp = ct::is_ct_fcmp_pp_pqc(tx.ct_signatures.type);
 
   // Shared archival-tx taxonomy (classify_archival_tx, cryptonote_basic.h):
@@ -4248,7 +4163,6 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward
 
 void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const
 {
-  const uint8_t version = get_current_hard_fork_version();
   const uint64_t db_height = m_db->height();
 
   CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
@@ -4260,7 +4174,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
   // M_r-neutral total: max(curve(remaining), TAIL). M_r lives inside C.
-  if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward, version))
+  if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward))
   {
     MERROR("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
     base_reward = BLOCK_REWARD_OVERESTIMATE;
@@ -4273,7 +4187,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 //------------------------------------------------------------------
 // This function checks to see if a tx is unlocked.  unlock_time is either
 // a block index or a unix time.
-bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time, uint8_t hf_version) const
+bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   if(unlock_time < CRYPTONOTE_MAX_BLOCK_NUMBER)
@@ -5186,8 +5100,6 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   TIME_MEASURE_START(t1);
 
-  static bool seen_future_version = false;
-
   db_rtxn_guard rtxn_guard(m_db);
   uint64_t blockchain_height;
   const crypto::hash top_hash = get_tail_id(blockchain_height);
@@ -5200,24 +5112,11 @@ leave:
     return false;
   }
 
-  // warn users if they're running an old version
-  if (!seen_future_version && bl.major_version > m_hardfork->get_ideal_version())
-  {
-    seen_future_version = true;
-    const el::Level level = el::Level::Warning;
-    MCLOG_RED(level, "global", "**********************************************************************");
-    MCLOG_RED(level, "global", "A block was seen on the network with a version higher than the last");
-    MCLOG_RED(level, "global", "known one. This may be an old version of the daemon, and a software");
-    MCLOG_RED(level, "global", "update may be required to sync further. Try running: update check");
-    MCLOG_RED(level, "global", "**********************************************************************");
-  }
-
-  // CEN-B1 and CEN-B2, both inside check.
-  const uint8_t hf_version = get_current_hard_fork_version();
-  if (!m_hardfork->check(bl))
+  // CEN-B1 and CEN-B2.
+  if (!header_version_is_valid(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has version " << (unsigned)bl.major_version << "." << (unsigned)bl.minor_version
-        << ", expected " << (unsigned)hf_version << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
+        << ", expected " << (unsigned)CURRENT_BLOCK_MAJOR_VERSION << "." << (unsigned)CURRENT_BLOCK_MINOR_VERSION);
     reject_block_form(bvc);
     goto leave;
   }
@@ -5364,7 +5263,7 @@ leave:
   }
 
   // sanity check basic miner tx properties;
-  if(!prevalidate_miner_transaction(bl, blockchain_height, hf_version))
+  if(!prevalidate_miner_transaction(bl, blockchain_height))
   {
     MERROR_VER("Block with id: " << id << " failed to pass prevalidation");
     reject_block_form(bvc);
@@ -5375,7 +5274,7 @@ leave:
   {
     tx_verification_context tvc{};
     // If fail non-input consensus rule checking...
-    if (!ver_non_input_consensus(extra_block_txs, tvc, hf_version))
+    if (!ver_non_input_consensus(extra_block_txs, tvc))
     {
       MERROR_VER("Pool supplement provided for block with id: " << id << " failed to pass validation");
       reject_block_from_tvc(bvc, tvc);
@@ -5394,7 +5293,7 @@ leave:
   std::vector<txpool_event> txpool_events;
 
   // this lambda returns relevant txs back to the mempool
-  auto return_txs_to_pool = [this, &txs, &txs_meta, &hf_version]()
+  auto return_txs_to_pool = [this, &txs, &txs_meta]()
   {
     if (txs_meta.size() != txs.size())
     {
@@ -5418,12 +5317,12 @@ leave:
       // as a whole. However, if we had mined that block, that might not be always true. Unlikely
       // though, and always relaying these again might cause a spike of traffic as many nodes
       // re-relay all the transactions in a popped block when a reorg happens. You might notice that
-      // we also set the "nic_verified_hf_version" paramater. Since we know we took this transaction
-      // from the mempool earlier in this function call, when the mempool has the same current fork
-      // version, we can return it without re-verifying the consensus rules on it.
+      // we also set the "nic_verified" parameter. We took this transaction from the mempool
+      // earlier in this function call, so it is returned without re-verifying the consensus
+      // rules on it.
       cryptonote::tx_verification_context tvc{};
       if (!m_tx_pool.add_tx(tx, txid, tx_blob, tx_weight, tvc, relay_method::block, true,
-          hf_version, hf_version))
+          /*nic_verified=*/true))
         MERROR("Failed to return taken transaction with hash: " << txid << " to tx_pool");
     }
   };
@@ -5758,7 +5657,7 @@ leave:
   // as for frozen_segment_count): circulating_supply = already_generated_coins
   // − total_burned is derived in Rust from this pair (FL-R16c).
   const uint64_t total_burned = m_db->get_total_burned();
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, frozen_segment_count, total_burned))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     reject_block_form(bvc);
@@ -5771,24 +5670,14 @@ leave:
   // Staker-inflow accrual (ARCHIVAL_BUDGET_SCHEDULE.md §2.2): one per-height
   // write of the block's staker inflow into the `archival_budget_accrual`
   // row the epoch close freezes into budget(E). Unconditional for every
-  // non-genesis block: archival emission is a genesis fact — the block
-  // version floor is 1, so the claim-era "burn the inflow pre-activation"
-  // leg that used to gate this write on HF_VERSION_ARCHIVAL_EMISSION was
-  // unreachable-by-construction and has been deleted along with the
-  // constant (rule 60; git history has the shape). The burn amount below
-  // carries ONLY the fee-burn's destroyed share.
+  // non-genesis block: archival emission is a genesis fact. The burn amount
+  // below carries ONLY the fee-burn's destroyed share.
   //
   // Computed HERE, before m_db->add_block, for one load-bearing reason, and
   // with a version read that must stay absent:
-  //  - The version operand (F-B1b) is retired. compute_emission_split and
-  //    compute_fee_burn take no version. The historical bug read
-  //    get_current_version() after add_block, which names the next block,
-  //    or get_ideal_version, which was a table lookup that ignored the vote.
-  //    The vote is gone, and get_ideal_version now agrees with the check;
-  //    neither read is an operand of this block. Do NOT reintroduce a
-  //    get_block_reward call or either version read here. If a version
-  //    operand ever returns, it is bl.major_version, the byte accepts_header
-  //    already required (tripwire:
+  //  - No version operand (F-B1b). compute_emission_split and
+  //    compute_fee_burn take none, and the block version is the constant
+  //    1. Do NOT reintroduce a get_block_reward call here (tripwire:
   //    scripts/ci/check_archival_reward_gates.sh).
   //  - Write ordering (F-B1a): the accrual amount rides into add_block and is
   //    written before the epoch-close hook fires, so the close of epoch E
@@ -5828,10 +5717,8 @@ leave:
   uint64_t block_burn_amount = 0;
   if (blockchain_height > 0)
   {
-    const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        base_reward, blockchain_height, genesis_ng_height);
+        base_reward, blockchain_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_window(blockchain_height),
@@ -5953,19 +5840,6 @@ leave:
   get_difficulty_for_next_block(); // just to cache it
   invalidate_block_template_cache();
 
-  const uint8_t new_hf_version = get_current_hard_fork_version();
-  if (new_hf_version != hf_version)
-  {
-    // the genesis block is added before everything's setup, and the txpool is empty
-    // when we start from scratch, so we skip this
-    const bool is_genesis_block = new_height == 1;
-    if (!is_genesis_block)
-    {
-      MGINFO("Validating txpool for v" << (unsigned)new_hf_version);
-      m_tx_pool.validate(new_hf_version);
-    }
-  }
-
   const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(new_height));
 
   // Make sure that txpool notifications happen BEFORE block and miner data notifications
@@ -6005,10 +5879,8 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
 
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  // when we reach this, the last hf version is not yet written to the db
   const uint64_t db_height = m_db->height();
-  const uint8_t hf_version = get_current_hard_fork_version();
-  uint64_t full_reward_zone = get_min_block_weight(hf_version);
+  uint64_t full_reward_zone = get_min_block_weight();
 
   {
     const uint64_t nblocks = std::min<uint64_t>(m_long_term_block_weights_window, db_height);
@@ -6657,16 +6529,6 @@ void Blockchain::safesyncmode(const bool onoff)
   }
 }
 
-HardFork::State Blockchain::get_hard_fork_state() const
-{
-  return m_hardfork->get_state();
-}
-
-bool Blockchain::get_hard_fork_voting_info(uint8_t version, uint32_t &window, uint32_t &votes, uint32_t &threshold, uint64_t &earliest_height, uint8_t &voting) const
-{
-  return m_hardfork->get_voting_info(version, window, votes, threshold, earliest_height, voting);
-}
-
 uint64_t Blockchain::get_difficulty_target() const
 {
   return SHEKYL_DAA_TARGET_SECONDS;
@@ -6795,7 +6657,7 @@ void Blockchain::send_miner_notifications(uint64_t height, const crypto::hash &s
   if (m_miner_notifiers.empty())
     return;
 
-  const uint8_t major_version = m_hardfork->get_ideal_version(height);
+  const uint8_t major_version = CURRENT_BLOCK_MAJOR_VERSION;
   const difficulty_type diff = get_difficulty_for_next_block();
   const uint64_t median_weight = m_current_block_cumul_weight_median;
 

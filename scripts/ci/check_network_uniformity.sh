@@ -61,8 +61,8 @@ FENCE=(src/cryptonote_core src/checkpoints src/blockchain_db)
 # entry absorb a second, longer branch that happens to share its opening.
 # Empty on purpose. The hard-fork schedule used to be chosen by public-net
 # branches: three identical tables, and before that two constructor
-# spellings. It is one table now (`hard_fork_schedule`), installed by every
-# issued network, so no branch remains to allow. A new public-net `if`
+# spellings. The schedule is deleted and the block version is one constant
+# on every network, so no branch remains to allow. A new public-net `if`
 # still fails the checks below. FAKECHAIN stays outside this gate.
 ALLOWLIST=$(cat <<'EOF'
 EOF

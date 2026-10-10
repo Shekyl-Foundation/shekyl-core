@@ -441,6 +441,60 @@ fn closed_and_final_is_false_through_the_cap_and_true_from_it() {
     });
 }
 
+/// The gather's universe is the per-shard predicate taken over every shard
+/// at once (`SO-D11f`): for a block connecting at `at + 1`, whose parent
+/// is `at`, [`ClosedUniverse::final_before`] counts exactly the shards
+/// [`closed_and_final`] accepts at `at` — at every height, for the caps
+/// that put the boundary before, on and after each close, and a chain not
+/// yet a cap deep counts none. The two were written apart; this holds them
+/// to one arithmetic.
+#[test]
+fn the_final_universe_counts_the_shards_the_predicate_accepts() {
+    use shekyl_archival_retention::ShardClose;
+    let chain = chain_closing_two_shards();
+    chain.with_view(|view| {
+        for cap in [0u64, 1, 2, 3, 7] {
+            let cap = BlockCount::from_raw(cap);
+            for at in 0..5u64 {
+                let accepted = (0..3u64)
+                    .filter(|shard| {
+                        closed_and_final(
+                            &view,
+                            ShardId::from_raw(*shard),
+                            BlockHeight::from_raw(at),
+                            cap,
+                        )
+                        .expect("recorded")
+                    })
+                    .count();
+                let universe =
+                    ClosedUniverse::final_before(&view, BlockHeight::from_raw(at + 1), cap)
+                        .expect("recorded");
+                assert_eq!(
+                    universe.count().get(),
+                    u64::try_from(accepted).expect("fits"),
+                    "cap {cap:?}, parent {at}"
+                );
+            }
+        }
+        // Shards close in order, so the accepted set is a prefix and the
+        // count names it; cap 2 at parent 3 is shard 0 alone.
+        let universe =
+            ClosedUniverse::final_before(&view, BlockHeight::from_raw(4), BlockCount::from_raw(2))
+                .expect("recorded");
+        assert_eq!(universe.count().get(), 1);
+        assert!(matches!(
+            shard_close(&view, ShardId::from_raw(0), &universe).expect("recorded"),
+            ShardClose::ClosedAt(h) if h == BlockHeight::from_raw(1)
+        ));
+        assert_eq!(
+            shard_close(&view, ShardId::from_raw(1), &universe).expect("recorded"),
+            ShardClose::Open,
+            "closed at 3 and not yet final: outside the universe"
+        );
+    });
+}
+
 /// Exemption 3. A fold that fell back below a shard's end after reaching
 /// it — a sequence the store's monotone `cumulative_archival_len` cannot
 /// hold — is the cut the search cannot verify (SI-13): height 0 reached the end, the later

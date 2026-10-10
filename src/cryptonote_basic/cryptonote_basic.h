@@ -78,7 +78,7 @@ namespace cryptonote
     crypto::hash hash;
   };
 
-  // outputs <= HF_VERSION_VIEW_TAGS
+  // an output with no view tag: the wire still parses it, admission refuses it
   struct txout_to_key
   {
     txout_to_key() { }
@@ -86,7 +86,7 @@ namespace cryptonote
     crypto::public_key key;
   };
 
-  // outputs >= HF_VERSION_VIEW_TAGS
+  // an output with a view tag: the one form admitted
   struct txout_to_tagged_key
   {
     txout_to_tagged_key() { }

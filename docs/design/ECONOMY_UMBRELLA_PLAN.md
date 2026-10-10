@@ -149,9 +149,10 @@ the same duration here, and what remains of that class is a per-minute
 convention (A).
 
 The walk found a fourth operand: **the hard-fork version.** Monero gates
-behaviour on its fork numbers; Shekyl's block version is 1 on every network
-(`src/hardforks/hardforks.cpp`), so a branch gated on a Monero number at 2
-or above never runs here, and its `else` arm is what ships.
+behaviour on its fork numbers. Shekyl's block version is the constant 1
+(`CURRENT_BLOCK_MAJOR_VERSION`) on every network, so a branch gated on a
+Monero number at 2 or above never ran, and those arms are deleted
+([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).
 
 **The walk.** Each row is answered from its record, read at source at
 `e9b41e3115`. "Derived" means a ruling on record used Shekyl's operand.
@@ -165,7 +166,7 @@ or above never runs here, and its `else` arm is what ships.
 | Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New. RULED** (§3.2, 2): derived, with a compile-time assertion; `FOLLOWUPS.md` |
 | Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
 | Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"). **RULED** (§3.2, 3): a criterion, in §4 |
-| Template fill, `tx_pool.cpp` `version >= 5` | Hard-fork version | **Not derived: the reward-aware fill never runs.** At block version 1 the daemon takes Monero's pre-v5 arm: list bodies in fee order until their weight passes the median, bounded at `1.3·median − 600`. The arm that admits a body only if it does not lower the coinbase, bounded at `2·median − 600`, is dead code | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
+| Template fill, `decide_listed_body` | Hard-fork version | **Not derived: the reward-aware fill does not run.** The version test is deleted. The daemon's scan lists bodies in fee order, passes one that would exceed 13/10 of the median minus the 600-byte reserve, and stops once listed weight is past the median. `shekyl_block_template::Fill` is the reward-aware policy and is not that scan | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
 | Cumulative output count, `db_lmdb.cpp` `major_version >= 4` | Hard-fork version | **Was not derived; deleted 2026-10-05.** `bi_cum_rct` accumulated only from version 4, so each block stored its own count. Its reader, `get_output_distribution`, had no caller, so the surface was deleted and not repaired | [`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6 |
 | Peer top-version check, `cryptonote_protocol_handler.inl` `version >= 6` | Hard-fork version | **Was not derived; deleted 2026-10-05.** A peer advertising a block version other than the ideal one was refused only from version 6, so never | [`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §4 |
 | Input cap, 8 | Verifier time per input | **Not derived.** Carried as inherited and unjustified | CEN-I4; `FOLLOWUPS.md` |
@@ -184,13 +185,13 @@ fill rule; the sim's blocks are built by it, and finding 1 (22 of 50
 transactions a block until `ρ` crosses) is a property of it. The daemon does
 not run that comparison. Its live rule lists one body past the median in
 every block that has the demand, whatever the fee, so the median can move
-without the fee ever covering the penalty. Read at source, three facts: the
-hard-fork tables hold version 1 alone, the template takes its version from
-them (`blockchain.cpp`, `b.major_version`), and the comparison sits under
-`version >= 5`. The one live observation agrees and cannot discriminate: the
-`median-full` capture stopped one transaction past the median, which both
-arms predict at Standard fees. The live rule has not been simulated, so no
-number is claimed for it.
+without the fee ever covering the penalty. The block version is the constant
+1 (`src/cryptonote_core/blockchain.cpp:1604` writes
+`CURRENT_BLOCK_MAJOR_VERSION`), and the scan is `decide_listed_body`: there
+is no `version >= 5` arm left to take. The one live observation agrees and
+cannot discriminate: the `median-full` capture stopped one transaction past
+the median, which both policies predict at Standard fees. The live rule has
+not been simulated, so no number is claimed for it.
 
 Both consequences were decisions, and both are ruled (§3.2): the
 reward-aware fill is the design and moves to its Rust owner, and the

@@ -607,13 +607,7 @@ mod tests {
                 if h % shekyl_economics::BLOCKS_PER_YEAR == 0 {
                     let base = shekyl_economics::emission::base_block_reward(ag, &p)
                         .expect("base reward along the trajectory");
-                    let sigma = shekyl_economics::calc_effective_emission_share(
-                        h,
-                        1,
-                        shekyl_economics::STAKER_EMISSION_SHARE,
-                        shekyl_economics::STAKER_EMISSION_DECAY,
-                        shekyl_economics::BLOCKS_PER_YEAR,
-                    );
+                    let sigma = shekyl_economics::emission_share_at(h);
                     for v in [0u64, 5, 50, 100, 200, 500] {
                         let b = shekyl_economics::calc_burn_pct(
                             shekyl_economics::TxVolume::per_block(v),

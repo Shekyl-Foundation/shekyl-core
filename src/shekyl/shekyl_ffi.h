@@ -462,13 +462,10 @@ uint64_t shekyl_advance_already_generated(
     uint64_t already_generated_coins,
     uint64_t block_reward);
 
-/// Calculate emission share (Component 4) based on chain age and decay curve.
-uint64_t shekyl_calc_emission_share(
-    uint64_t current_height,
-    uint64_t genesis_height,
-    uint64_t initial_share,
-    uint64_t annual_decay,
-    uint64_t blocks_per_year);
+/// The staker emission share in force at height, in SCALE units: zero at
+/// genesis, the shipped share decayed from block 1 after it (CEN-F21). The
+/// epoch and the share constants are shekyl-economics', not arguments.
+uint64_t shekyl_emission_share_at(uint64_t height);
 
 struct ShekylEmissionSplit {
     uint64_t miner_emission;
@@ -479,15 +476,12 @@ ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
 
-/// The emission split (CEN-F16) as ONE owner: the effective share at
-/// current_height measured from genesis_ng_height (CEN-F21's epoch, 1 on
-/// every shipped network), the split, and the zero-emission arm — all Rust,
-/// with the three share/decay constants read from shekyl-economics rather
-/// than marshaled (E6 slice 4 §3.1 S4/S5/S6). Infallible.
+/// The emission split (CEN-F16) as ONE owner: the share in force at
+/// current_height (shekyl_emission_share_at), the split, and the
+/// zero-emission arm, all Rust. Genesis pays no staker share. Infallible.
 ShekylEmissionSplit shekyl_compute_emission_split(
     uint64_t block_emission,
-    uint64_t current_height,
-    uint64_t genesis_ng_height);
+    uint64_t current_height);
 
 /// Generate self-signed SSL certificate (Ed25519 key + X.509 via rcgen).
 bool shekyl_generate_ssl_certificate(

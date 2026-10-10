@@ -1,10 +1,10 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
-// End-to-end supply-conservation KAT with a fork-boundary block —
+// End-to-end supply-conservation KAT —
 // the C-1 budget fast-follow (REWARD_EMISSION_E3_GATING_ROUND.md §9.9;
 // ARCHIVAL_BUDGET_SCHEDULE.md §2.2 / §7 KAT B1's production-path
 // counterpart). Drives the REAL connect path (handle_block_to_main_chain)
-// across a multi-entry fork table and asserts, per block:
+// and asserts, per block:
 //
 //   coinbase + accrual row + burn row == already_generated_coins advance
 //
@@ -20,18 +20,8 @@
 // deleted per rule 60), so the expectations are unconditional: whole
 // inflow in the accrual row, zero in the burn row (fee-free fixture).
 //
-// The fork table still crosses v1 -> v2 mid-chain, but NOT for the reason it
-// used to. major_version is no longer an operand of compute_emission_split /
-// compute_fee_burn at all: the `hf_version < HF_VERSION_SHEKYL_NG` arm those
-// helpers opened with was unreachable on every network and has been deleted
-// along with the parameters it justified. The F-B1b operand pin is therefore
-// RETIRED — it pinned the threading of an operand that no longer exists, and
-// keeping the claim would misdescribe what this fixture guards.
-//
-// What the crossing still earns: the pop/reconnect leg replays a fork
-// boundary through the rewound hardfork machinery, so the reorg path is
-// exercised against a version transition rather than a flat chain. That is
-// the surviving justification, and it is the reason the crossing stays.
+// The chain is then popped and reconnected, and every row must come back
+// byte-identical (accrual-row pop symmetry, §3.1).
 //
 // Fee-leg coverage gap (disclosed): the fixture is fee-free, so only the
 // emission half of production's staker_inflow
@@ -47,10 +37,10 @@
 #include "chaingen.h"
 #include "cryptonote_config.h"
 
-class archival_budget_conservation_boundary : public test_chain_unit_base
+class archival_budget_conservation : public test_chain_unit_base
 {
 public:
-  archival_budget_conservation_boundary();
+  archival_budget_conservation();
 
   bool generate(std::vector<test_event_entry>& events) const;
 
@@ -59,35 +49,13 @@ public:
       size_t ev_index,
       const std::vector<test_event_entry>& events);
 
-  // First height whose block carries major_version k_post_fork_version (the
-  // fork-table entry below). Mid-chain and epoch-unaligned on purpose: the
-  // boundary block is the fixture requirement named in the FOLLOWUPS pin.
-  static constexpr uint64_t k_fork_height = 8;
-  // The fork table's top block version — the single source for the
-  // fork-table entry and the per-block version selection in the .cpp.
-  static constexpr uint8_t k_post_fork_version = 2;
   // Blocks connected on top of genesis. Short by design — the identity is
   // per block; epoch close (SETTLEMENT_EPOCH_BLOCKS = 10 000) is covered by
   // the unit-level F-B1a KAT, not re-proven here.
   static constexpr unsigned k_chain_blocks = 16;
-  // Pop depth crossing the fork boundary (back to height 5 < k_fork_height),
-  // so reconnect replays the boundary through the rewound fork machinery.
+  // Pop depth: back to height 5, then reconnect.
   static constexpr unsigned k_pop_count = 12;
 
 private:
   mutable cryptonote::account_base m_miner;
-};
-
-template<>
-struct get_test_options<archival_budget_conservation_boundary>
-{
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {
-    std::make_pair((uint8_t)1, (uint64_t)0),
-    std::make_pair(archival_budget_conservation_boundary::k_post_fork_version,
-                   archival_budget_conservation_boundary::k_fork_height),
-    std::make_pair((uint8_t)0, (uint64_t)0)
-  };
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
 };

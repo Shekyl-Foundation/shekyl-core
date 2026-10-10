@@ -4,12 +4,9 @@
 // BSD-3-Clause
 
 //! Negative fixtures for census 4.B (`CHAIN_RULES_SLICE_1.md` §7): version
-//! rows (B1, B2, B7), the curve-tree root (B5) and identity (B6). Each test
-//! names its row; each asserts a *refusal* where the row refuses, and — for
-//! the two rows whose statement is "does not reject" — that the mutated
-//! field trips **no** row, or the row that does trip is the one the census
-//! says. Pipeline coverage of the six landed rows lives in
-//! `validate_tests.rs`.
+//! rows (B1, B2), the curve-tree root (B5) and identity (B6). Each test
+//! names its row and asserts a *refusal* where the row refuses. Pipeline
+//! coverage of the landed rows lives in `validate_tests.rs`.
 
 use super::*;
 use crate::block::Candidate;
@@ -132,24 +129,6 @@ fn cen_b2_does_not_follow_the_major_version() {
         CenRow::B2,
         Locus::Block,
     );
-}
-
-// --- CEN-B7 ---------------------------------------------------------------
-
-#[test]
-fn cen_b7_never_refuses_a_future_version_is_b1s_refusal() {
-    // B7 called on its own passes the header that trips the C++'s warning
-    // branch — the pipeline would stop at B1 first, so this is the only way
-    // to observe B7 on such a header, and a B7 that started refusing future
-    // versions fails here.
-    for major in [2, 7, u8::MAX] {
-        check_alone::<B7>(&with_versions(major, 0), &RuleSet::GENESIS)
-            .unwrap_or_else(|refused| panic!("B7 refused major_version {major}: {refused}"));
-    }
-    // Through the pipeline the same header is refused — by B1, never by B7
-    // (`assert_refused` bites on the wrong row).
-    assert_refused(judge(with_versions(2, 0)), CenRow::B1, Locus::Block);
-    assert_refused(judge(with_versions(u8::MAX, 0)), CenRow::B1, Locus::Block);
 }
 
 // --- CEN-B5 ---------------------------------------------------------------
@@ -295,7 +274,7 @@ fn cen_b6_identity_is_block_hash_and_records_the_row() {
 
 #[test]
 fn a_refusal_leaves_no_coverage_behind_it() {
-    // B1 refuses before B2/B7 run; the verdict is the refusal, and there is
+    // B1 refuses before B2 runs; the verdict is the refusal, and there is
     // no partial coverage to read — `validate` returns before the mint.
     assert_refused(judge(with_versions(2, 0)), CenRow::B1, Locus::Block);
 }

@@ -6429,3 +6429,38 @@ in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
    value is estimated until that run promotes it.
 
 ---
+
+## 2026-10-09 — Accrual reads the settlement row; the emission gather moves to the slash pass (`SO-D11`)
+
+**Decision (maintainer, relayed 2026-10-09, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§15).** `SO-D8c` (2026-09-16) moved the emission gather to the slash pass
+and said the consumers tolerate the move. Grounded, three did not as
+written: CEN-J15's price row would exist for one parent height per epoch,
+a claim would be refused for an epoch longer than today, and `SI-21`
+excludes a budget written an epoch before its work total. The claim
+verify also re-gathers on any pass, so it moves with the gather.
+
+1. **A pair is credited for an epoch iff its settlement row is Served.**
+   Paying on the test used for slashing closes the mismatch `PC-D6`
+   noted and left unopened.
+2. **No Rust consensus before the draw is live.** With an empty index the
+   Rust validator slashes nothing and pays nothing. One gate with
+   `SO-D10d`'s, on the `DEL-008` row.
+3. **"Settled" is the slash watermark.** CEN-J15 reads `r_market` there.
+4. **An epoch is claimable once its `Σwork` row exists**, one epoch later
+   than before. `MAX_CLAIM_AGE_W_EPOCHS` stays 26, so the claimable span
+   is 25 epochs. Moving the retention horizon to keep 26 was refused.
+5. **`SI-21` is two write sets in one row**: the close freezes the
+   budget; the slash pass settles whole.
+6. **The gather reads the state as of the slash pass, over shards that
+   are closed and final.** The epoch close used plain "closed" while bond
+   admission and the drawable set use closed-and-final; a shard closed
+   inside the reorg cap would have priced joins as maximally scarce
+   before it was bondable. One predicate.
+7. **The wallet and the claim-source RPC do not change in this step.**
+   The RPC lane's cutover item is on the `DEL-008` row.
+8. **The design text that pins materialisation at the close is re-pinned
+   in the implementing change.**
+
+---

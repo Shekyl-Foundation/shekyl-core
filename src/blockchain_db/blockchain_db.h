@@ -40,7 +40,7 @@
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
-#include "cryptonote_basic/hardfork.h"
+#include "syncobj.h"
 #include "cryptonote_protocol/enums.h"
 #include "net/enums.h"
 #include "blockchain_db/shekyl_types.h"
@@ -750,14 +750,13 @@ protected:
   uint64_t time_commit1 = 0;  //!< a performance metric
   bool m_auto_remove_logs = true;  //!< whether or not to automatically remove old logs
 
-  HardFork* m_hardfork;
 
 public:
 
   /**
    * @brief An empty constructor.
    */
-  BlockchainDB(): m_hardfork(NULL), m_open(false) { }
+  BlockchainDB(): m_open(false) { }
 
   /**
    * @brief An empty destructor.
@@ -986,8 +985,6 @@ public:
   virtual void block_rtxn_stop() const = 0;
   virtual void block_rtxn_abort() const = 0;
 
-  virtual void set_hard_fork(HardFork* hf);
-
   // adds a block with the given metadata to the top of the blockchain, returns the new height
   /**
    * @brief handles the addition of a new block to BlockchainDB
@@ -1008,8 +1005,7 @@ public:
    * @param coins_generated the number of coins generated total after this block
    * @param archival_budget_accrual the block's staker inflow
    *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 when the inflow is zero (genesis,
-   *   or fully decayed). Computed by the caller BEFORE add_block so the
-   *   hardfork operand is the connecting block's own validated version, and
+   *   or fully decayed). Computed by the caller BEFORE add_block and
    *   written here (keyed at the block's index) before the epoch-close hook
    *   fires, so the close of an epoch sees its final block's row
    *   (F-B1a/F-B1b).
@@ -1908,37 +1904,6 @@ public:
    */
   virtual bool for_all_alt_blocks(std::function<bool(const crypto::hash &blkid, const alt_block_data_t &data, const cryptonote::blobdata_ref *blob)> f, bool include_blob = false) const = 0;
 
-
-  //
-  // Hard fork related storage
-  //
-
-  /**
-   * @brief sets which hardfork version a height is on
-   *
-   * @param height the height
-   * @param version the version
-   */
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version) = 0;
-
-  /**
-   * @brief checks which hardfork version a height is on
-   *
-   * @param height the height
-   *
-   * @return the version
-   */
-  virtual uint8_t get_hard_fork_version(uint64_t height) const = 0;
-
-  /**
-   * @brief verify hard fork info in database
-   */
-  virtual void check_hard_fork_info() = 0;
-
-  /**
-   * @brief delete hard fork info from database
-   */
-  virtual void drop_hard_fork_info() = 0;
 
   /**
    * @brief is BlockchainDB in read-only mode?

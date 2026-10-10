@@ -209,7 +209,6 @@ so scripts can check it without parsing the output.
 | `print_height` | Current blockchain height |
 | `diff` | Current mining difficulty |
 | `sync_info` | Detailed sync and peer download state |
-| `hard_fork_info` | Current and upcoming hard fork versions |
 | `version` | Daemon version string |
 
 **Mining**
