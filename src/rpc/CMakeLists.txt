@@ -50,6 +50,7 @@ set(rpc_private_headers
   core_rpc_server.h
   core_rpc_ffi.h
   core_rpc_ffi_internal.h
+  get_info_build.h
   rpc_tx_json.h
   daemon_submit_ffi.h
   rpc_facts_ffi.h

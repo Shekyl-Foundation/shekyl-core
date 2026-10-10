@@ -30,8 +30,15 @@ caught in review and reverted; on inspection the property it violated had no
 consumer, so it was retired deliberately rather than defended by habit.
 
 The emitter is deleted with the structs it captures, so each slice writes its
-own and takes it away again; these files are the oracle's memory. **RK-5b was
-the most recent slice to run one** (`get_last_block_header`,
+own and takes it away again; these files are the oracle's memory. **RK-5c's
+is standing now**, for `get_info`, and it is the first of a second kind: the
+five `get_info_*_v1.json` files are not a hand-built response serialized, but
+`build_get_info` run over fixed facts — the computation `on_get_info` itself
+calls after gathering — because that handler decides things (a synchronized
+sentinel, the restricted stand-ins, a subtraction across two counts, a burn
+computation that can refuse) and a serializer-only capture would pin none of
+them (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §4.4). It goes with the handler.
+**RK-5b was the most recent slice before it** (`get_last_block_header`,
 `get_block_header_by_hash`, `get_block_headers_range`, `hard_fork_info`,
 `get_fee_estimate`), and it is gone with those structs too. To read one, or
 to see how a capture was set up, check out the commit that added

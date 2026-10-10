@@ -76,5 +76,5 @@ src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
 src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
-src/rpc/core_rpc_server.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+src/rpc/core_rpc_server.cpp	1	hard-fork table, by version	live: resolves CEN-F21's epoch from the table	collapse	cen-f21	facts.genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 src/rpc/rpc_facts_ffi.cpp	1	hard-fork table	always 1 today; the comparisons of this value are their own rows	delete	hardfork	requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();
