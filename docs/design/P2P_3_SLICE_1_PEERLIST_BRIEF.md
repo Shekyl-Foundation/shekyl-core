@@ -1,10 +1,17 @@
 # P2P-3 slice 1 — the peerlist
 
-**Status:** **REVISED 2026-10-08 (decision-anchored: PR #1001).**
-The interim composition is the dialer brief's. Per connector,
-`disclose_count` is that connector's outbound target and
-`white_diversity_floor` is `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4)
-times that count. The list writer is `apply(DialOutcome)`. The
+**Status:** **REVISED 2026-10-09 (decision-anchored: Rick's D3, D4
+and D-S1 rulings and the PR-2 kickoff, recorded in #1018).**
+`DISCLOSE_COUNT = 12` is a protocol constant, the same on every node
+and every connector (D3, §5a); a ban demotes a white entry to gray and
+never removes it (D4, §5b); gray intake is capped per session at
+`2 × DISCLOSE_COUNT` distinct addresses in any 24-hour span (D-S1,
+§5c); the handshake carries no address (dialer brief). PR-2 is slice 1
+increments 1 and 2, pre-flight first (§16). *Records-was: REVISED
+2026-10-08 (decision-anchored: PR #1001): per connector,
+`disclose_count` was that connector's outbound target and
+`white_diversity_floor` was `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4)
+times that count.* The floor is still 4 × 12 = 48. The list writer is `apply(DialOutcome)`. The
 derivation of the floor runs on the Rust path after the slice 3
 cutover (Ruling B, 2026-10-08); it does not gate this slice's crate
 increments. Until then the floor, the refill line and the per-source
@@ -52,7 +59,9 @@ writes through this slice's type contract. *Records-was: the dial and the
 socket stay in C++ until later slices, and they report an outcome.* They
 do not insert, replace, or erase list entries except through that contract.
 Gray admission refuses an address the failed-address memory holds, and
-a banned one (`handle_remote_peerlist`, `net_node.inl:2472`). Until
+a banned one (`handle_remote_peerlist`, `net_node.inl:2472`; D4, §5b:
+refused at admit during the ban, and a white entry under a ban is
+demoted to gray when white is next read). Until
 slice 3 lands, this slice takes that predicate from the C++ cache.
 Slice 3 replaces where the predicate comes from. The dialer emits
 `DialOutcome`. This slice's `apply` is the only list writer.
@@ -79,7 +88,8 @@ only to gray.
 no claim about who is there.
 
 Only white is sent when another peer asks for a peerlist. The sample is a
-uniform draw from white. Gray is never in that message.
+uniform draw of `min(DISCLOSE_COUNT, white)` from white, cached per
+connector per 24-hour window (D3, §5a). Gray is never in that message.
 
 Three properties fall out of the door.
 
@@ -127,21 +137,23 @@ The 2026-09-25 ruling stands: the floor is not "twice the out-degree",
 and it is not today's 1,000 cap. *Records-was, the same ruling: both
 levels had no number yet.*
 
-**Interim working values (Rick, 2026-10-08), until this slice's
-derivation.** They are the dialer brief's composition, not a second
-degree. `disclose_count` is that connector's outbound target:
-`hidden_out` or `clearnet_out`, each `MIN_PROVISIONED_OUT_PEERS` or
-`P2P_DEFAULT_OUT_PEERS` (both 12) until a ruled operating point.
-`white_diversity_floor` is `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4)
-times `disclose_count`, so about 48. These replace
-`P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) as
-the size this node aims to send. *Records-was: that 250, and
-`P2P_MAX_PEERS_IN_HANDSHAKE` beside it at `:194`, also 250. Records-was
-the same day: outbound degree 16, `disclose(n)` with `n = 16`, floor
-about 64. Sixteen was the withdrawn §95.2 illustration.* The
-operating point (`DAEMON_RELAY_PRIVACY.md` §95) is still unchosen.
-When it is ruled, `disclose_count` and the floor move with that
-connector's target. **The derivation is not a gate before the cutover
+**`DISCLOSE_COUNT = 12` (D3, Rick, 2026-10-09).** A protocol
+constant, the same on every node and every connector. It replaces
+`P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193`) and
+`P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`, also 250): the size this node
+sends and the most it accepts in one message. It is not tied to the
+outbound target. `white_diversity_floor` is
+`INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48.
+Both are labelled `Assumption` in `DAEMON_RELAY_PRIVACY.md` §97 and
+derived on the Rust path after PR-3. *Records-was (2026-10-08):
+`disclose_count` was that connector's outbound target, `hidden_out` or
+`clearnet_out`, each `MIN_PROVISIONED_OUT_PEERS` or
+`P2P_DEFAULT_OUT_PEERS` (both 12) until a ruled operating point, and
+"when it is ruled, `disclose_count` and the floor move with that
+connector's target". Records-was the same day: outbound degree 16,
+`disclose(n)` with `n = 16`, floor about 64. Sixteen was the withdrawn
+§95.2 illustration.* The operating point (`DAEMON_RELAY_PRIVACY.md`
+§95) is still unchosen; under D3 it no longer moves the sample size. **The derivation is not a gate before the cutover
 (Ruling B, 2026-10-08).** The white floor, the refill line and the
 per-source gray share ship as named interim constants, each labelled
 `Assumption` in the register (`DAEMON_RELAY_PRIVACY.md` §97). They are
@@ -263,7 +275,8 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `draw_gray()` | One uniform gray address, remembered as an outstanding draw |
 | `draw_white()` | One uniform white address. Used to re-contact, which can refresh the clock. Not a promotion |
-| `disclose(disclose_count)` | The connector's cached sample: `disclose_count` distinct white addresses of that connector, uniform, order randomized. Gray is absent. `last_observed` is absent. Interim `disclose_count` is the composition's 12 |
+| `disclose()` | The connector's cached sample: `min(DISCLOSE_COUNT, white)` distinct white addresses of that connector, drawn uniformly once per 24-hour window and sent unchanged to every requester in the window (D3, §5a). Empty while that connector's eligible white list is below `white_diversity_floor`. Gray is absent. `last_observed` is absent. No exceptions by default |
+| `snapshot()` | Read-only, for the RPC `peers` grant: every address and which list it is on. No `last_observed`, no order (PR-2, Rick 2026-10-09) |
 | `apply(outcome)` | The only writer of `White`, and the only drop of an outstanding gray draw. The match is total |
 
 `apply` matches `DialOutcome`:
@@ -291,27 +304,32 @@ walk for
 either caller. The property PWD-I2 kept is the one `disclose` has to keep: two
 answers cannot be lined up to infer which address was confirmed more recently.
 
-### Cached disclosure — INTERIM 2026-10-08
+### Cached disclosure — RULED 2026-10-09 (D3)
 
-One sample per connector. It is drawn once and kept for a window. The
-window starts at the 24-hour white expiry (`EXPIRATION_PERIOD`). Every
-requester in that window, on that connector, receives that sample.
-Refresh draws a new sample for that connector only. Interim
-`disclose_count` (12) is the sample size and the number of addresses
-this node accepts from one message.
+One sample per connector. It is drawn uniformly once per 24-hour
+window and kept for the window. Every requester in that window, on
+that connector, receives that sample unchanged. Refresh draws a new
+sample for that connector only. `DISCLOSE_COUNT` (12) is the sample
+size — `min(12, white)` when white is short — and the most this node
+accepts from one message. *Records-was (INTERIM 2026-10-08): the
+window started at the 24-hour white expiry (`EXPIRATION_PERIOD`) and
+the size was the interim `disclose_count`.*
 
 The cache is per connector. Serving one sample on two connectors
 links this node's IP and its onion: the same addresses on both
 answers are the join.
 
 **Receiver limits, every connector.** A message with more than
-`disclose_count` addresses is a violation. It is not trimmed and kept.
-Gray also has a per-source share limit, so one sender cannot fill the
-list. The share is part of the derivation of `disclose_count` above,
-which runs on the Rust path after the cutover: intake diversity, honest
-fill, and per-reply exposure. Until then the share ships as a named
-interim constant, labelled `Assumption` in the register. The crate PR
-names it; this brief does not pick the number.
+`DISCLOSE_COUNT` addresses is `PeerlistRefused`. It is not trimmed and
+kept. Gray intake is also capped per session (D-S1, §5c): more than
+`2 × DISCLOSE_COUNT` distinct addresses from one session in any
+24-hour span is `PeerlistRefused`, and an honest peer's cached sample
+cannot reach it. Gray also has a per-source share, so one sender
+cannot fill the list; the share ships as a named interim constant,
+labelled `Assumption` in the register, and the crate PR names it —
+this brief does not pick the number. The derivation of all three runs
+on the Rust path after the cutover: intake diversity, honest fill, and
+per-reply exposure.
 
 **Wargame: fresh samples enumerate white.** A requester who is
 answered with a new uniform draw each time unions the answers and
@@ -319,13 +337,89 @@ walks white, and white includes the peers this node currently dials.
 The cached sample closes that inside the window: a repeat adds no
 address. The window is what limits how often the union grows.
 
+### 5a. D3 — the sample's exceptions (RULED 2026-10-09)
+
+**Default: the sample has no exceptions.** It is the uniform draw of
+§5, with this node's own dialable address as one uniform member when
+it is known (the dialer brief's handshake-address ruling: the
+clearnet entry is included when known; a hidden connector's address
+likewise; it has no special position). A node discloses nothing on a
+connector until that connector's eligible white list reaches
+`white_diversity_floor`.
+
+An exception — leaving out this node's current outbound sessions —
+goes in only if a conformance measurement in PR-2 shows it helps:
+
+- *The observer:* a requester that polls the cached sample every
+  window. Run once controlling some of our outbound peers, and once
+  controlling none.
+- *What it tries to identify:* our current outbound peers, and our
+  hidden stem slot.
+- *The comparison:* the uniform sample against the sample that leaves
+  out current outbound sessions. Report how much better the observer
+  guesses under each.
+- *The rule:* the exception is adopted only if it lowers the
+  observer's success and no observer gains from it. Otherwise the
+  uniform sample stands.
+
+The banned-entry exclusion is not measured: under D4 (§5b) a banned
+white entry is already demoted to gray before white is sampled, so
+there is nothing to exclude. **Results:** recorded here by PR-2's
+instrument (`shekyl-peerlist`, conformance), in this section.
+
+### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09)
+
+**Demotion.** A white entry covered by an active ban (host, or IPv4
+subnet, per the transport layer's ban list) is moved to gray. The
+demotion happens when white is next counted, drawn from, or sampled;
+the transport layer never writes the peer list. White therefore holds
+only unbanned, confirmed peers, so the floor and the refill line count
+white as it stands.
+
+**Gray handling.** A demoted entry is an ordinary gray entry, subject
+to normal random eviction, with no protection. While the ban lasts,
+the dialer's pre-dial ban check skips it, and gray admission refuses
+it if it is gossiped back in. After the ban expires, it can be drawn,
+dialled, and earn white again through `SessionAccepted` or
+`Confirmed` — the normal door, §2.
+
+**Disclosure is unchanged:** gray is never disclosed, and the cached
+sample is not rebuilt on a ban.
+
+**Scope:** the clearnet partition only. Tor has no bannable address
+(`P2P_TRANSPORT_LAYER.md` D7).
+
+**Tests (PR-2):** a banned white entry is demoted on the next white
+read; the floor count drops with it; it is evictable from gray; it is
+skipped by the pre-dial check during the ban; after expiry it re-earns
+white only through the normal door.
+
+### 5c. D-S1 — gray intake per session (RULED 2026-10-09)
+
+Gray intake is limited per session, the same on every connector: at
+most `2 × DISCLOSE_COUNT` distinct addresses per session in any
+24-hour span (24 today). Exceeding it is `PeerlistRefused`: an honest
+peer's cached sample cannot exceed it. The limit is a named constant
+derived from `DISCLOSE_COUNT`, labelled `Assumption` in
+`DAEMON_RELAY_PRIVACY.md` §97, and applies to inbound and outbound
+sessions alike.
+
+*Measurement*, part of the `DAEMON_RELAY_PRIVACY.md` §96 item 3
+instrument: time for an attacker to fill gray and the resulting
+`p_h`, per connector, under this limit.
+
+*Transport-layer question*, registered in `P2P_TRANSPORT_LAYER.md`
+and not built in PR-2: a reconnect throttle on clearnet. Tor has no
+host to throttle; that is recorded there as the residual.
+
 ---
 
 ## 6. Operations beside the door
 
 | Operation | Effect |
 | --- | --- |
-| `admit_gray(address)` | Insert into gray. Does not touch a white entry at that address. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load |
+| `admit_gray(address)` | Insert into gray. Does not touch a white entry at that address. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
+| ban demotion | A white entry under an active ban moves to gray at the next white read: count, draw, or sample (D4, §5b). The clock is not copied across |
 | `bootstrap_harvested(addresses)` | `admit_gray` for each returned address. The dialed harvest peer is not promoted by this call |
 | expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
 
@@ -475,6 +569,19 @@ They check different things. Neither stands for the other.
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
    comments included. A gate that allowlists the word in a comment or a
    negative test has not finished.
+5. **PR-2 additions (Rick, 2026-10-09).** Beside §11.1 to §11.3:
+   - *D4:* a banned white entry is demoted on the next read, the floor
+     count drops with it, and the entry is evictable from gray.
+   - *D-S1:* the 25th distinct address from one session within 24 hours
+     is a violation.
+   - *Sampling:* below the floor the sample is empty; above it, our own
+     address is drawn uniformly as one member.
+   - *Snapshot:* the read-only snapshot for the RPC `peers` grant lists
+     addresses and which list each is on, with no `last_observed`.
+   - *The D3 exception measurement:* a conformance instrument compares
+     the uniform sample with the sample that leaves out current
+     outbound sessions, under the observer of §5a; the results are
+     recorded in §5a.
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
 §8 is a list of intentional divergences.
@@ -518,8 +625,8 @@ cannot express. Fix the signature. That does not widen white.
 
 | # | Content | Greens when |
 | --- | --- | --- |
-| 1 | The crate: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the address file. No FFI | The crate's tests cover §11.2, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
-| 2 | The divergence ledger of §8, checked against the tree at the increment's pin | Each §8 row names the Rust operation that replaces it, and §11.1 passes |
+| 1 | The crate `shekyl-peerlist`: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the cached sample (D3), ban demotion (D4), the per-session intake cap (D-S1), the snapshot, the address file. No FFI, no C++ | The crate's tests cover §11.2, §11.3 and §11.5, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
+| 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes |
 | 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/` | §11.3 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
@@ -564,11 +671,21 @@ It does not re-open §4.2's ordering.
 It does not claim the C++ peerlist is the specification. §8 is the list a port
 would otherwise preserve.
 
-**Ban-list coordination is open (2026-09-28).** The ban list and these
-lists are separate today. Discovery's pre-dial check is the only link,
-so a banned host can still be drawn and disclosed. This slice decides,
-per connector — only clearnet addresses can be banned
-([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D7) — whether a ban
-removes or marks entries, whether banned addresses are refused at admit
-and excluded from disclosure, and what an expiry does. That decision is
-not inherited from the two lists staying independent.
+**Ban-list coordination — RULED 2026-10-09 (D4, §5b).** A ban
+demotes; it does not remove. *Records-was (open 2026-09-28): the ban
+list and these lists were separate, discovery's pre-dial check was
+the only link, so a banned host could still be drawn and disclosed;
+this slice was to decide, per connector — only clearnet addresses can
+be banned ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D7) —
+whether a ban removes or marks entries, whether banned addresses are
+refused at admit and excluded from disclosure, and what an expiry
+does.*
+
+## 16. PR-2 — pre-flight (rule 26 Round 0)
+
+PR-2 is increments 1 and 2 (§13) on a branch stacked on #1018 and
+rebased onto `dev` when #1018 merges. Its first commit is docs only:
+the D3, D4, D-S1 and handshake-address rulings written here, in the
+dialer brief, in `DAEMON_RELAY_PRIVACY.md` §96 and §97, and in the
+index. The rule 26 Round 0 substrate re-check is recorded in this
+section before the crate's first production commit.

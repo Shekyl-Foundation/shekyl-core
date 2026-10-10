@@ -90,7 +90,7 @@ fn a_synthetic_column_drives_stem_own_edge_and_embargo() {
     assert_eq!(
         plan,
         RelayPlan::OwnEdge(id(1)),
-        "the own-edge pool is the column that hides the address, not the clearnet label"
+        "the hidden slot's class is the column that hides the address, not the clearnet label"
     );
 
     let tx = TxId::from_bytes([9u8; 32]);

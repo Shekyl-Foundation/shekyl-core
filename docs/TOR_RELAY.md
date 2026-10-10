@@ -46,9 +46,12 @@ relay Tor whose volume never sees those cells.
   onion on this process) or `--no-ephemeral-tor` (no overlay inbound).
   `--tx-proxy` to a SocksPort that is not this relay is still uncovered.
   `--out-peers` does not set the address-hiding outbound target. That
-  target is `MIN_PROVISIONED_OUT_PEERS` (12): the outbound sessions
-  whose connector hides this node's address, the pool an originated
-  transaction rotates over. *Records-was: `HOP0_OUTBOUND_TARGET`, 4.*
+  target is `MIN_PROVISIONED_OUT_PEERS` (12): the hidden outbound
+  sessions, those whose connector hides this node's address, from which
+  the relay draws the hidden stem slot that this node's own
+  transactions ride (`DAEMON_RELAY_PRIVACY.md` §95.3). *Records-was:
+  "the pool an originated transaction rotates over";
+  `HOP0_OUTBOUND_TARGET`, 4.*
   The D-5 receiver's outbound count stayed
   0 because its one dial closed before the handshake. Omit the clearnet
   outbound count (the default satisfies the floor of 12; an explicit

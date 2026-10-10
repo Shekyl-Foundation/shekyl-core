@@ -531,3 +531,357 @@ pub fn simulate_induced_churn_exposure<R: RelayRng + ?Sized>(
         independent_reference: 1.0 - (1.0 - effective_share).powf((forced_rerolls + 1) as f64),
     }
 }
+
+/// How the adversary of [`HiddenSlotChurnExposure`] chooses which hidden
+/// session drops at each step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenSlotChurn {
+    /// The origin's **current honest hidden hop** drops. This adversary knows
+    /// which of the origin's Tor sessions is carrying its stem right now — the
+    /// link Tor is built to hide — so these rows are a worst-case bound, not
+    /// an expected exposure.
+    Targeted,
+    /// A **uniformly random live hidden session** drops, whichever it is. The
+    /// adversary (or ambient churn) cannot see the origin's hop; its drops land
+    /// on the hop with probability `1 / H` per step.
+    Random,
+}
+
+/// **§98.10 (PR-1, D-PR1-1):** exposure of the *local source* under induced
+/// churn when its first hop is the hidden stem slot, against an adversary who
+/// floods onion addresses into the dial candidates (gray) and forces drops.
+///
+/// The sibling of [`InducedChurnExposure`] for the §95.3 routing. There the
+/// sessions were the whole outbound set and the frozen set was the `stems`
+/// slot peers; here the sessions are the address-hiding class alone and the
+/// question was what the local source's pin should freeze. Four shapes are
+/// measured on the same trial:
+///
+/// - **`slot_only_exposure` — (a), posed.** The pin is the slot peer alone:
+///   no re-roll ever, and a hold after the first drop.
+/// - **`follow_slot_exposure` — (b), posed.** The hidden slot refills with a
+///   uniform draw from the hidden sessions live at the merge, and the local
+///   source rides whatever the slot holds. Each drop of its hop is a fresh
+///   roll over sessions the flood has had one more refill to enrich.
+/// - **`frozen_all_exposure` — (c), ruled then withdrawn.** The pin froze
+///   every hidden session live at that moment, slot peer first; a drop walked
+///   to the next live frozen candidate. Targeted drops walk it onto the
+///   adversary with certainty at `k = H − 1`.
+/// - **`frozen_stems_exposure` — (c′), ruled.** The pin is the slot peer plus
+///   `stems − 1` alternates drawn uniformly from the other hidden sessions
+///   live at the pin. A drop of the hop walks to the live alternate;
+///   exhaustion holds (`NoOwnEdge`) for the rest of the epoch. Exposure is
+///   `P(any of the stems frozen candidates is adversarial)`, at most
+///   `stems / H` with one adversarial session, at every `k` and every flood,
+///   under either churn.
+///
+/// Each `*_held_share` is the share of trials in which that shape's frozen
+/// set was exhausted by the `k`-th drop, so the origin held until the epoch.
+/// Under [`HiddenSlotChurn::Targeted`] the adversary stops once it is the
+/// hop, so held and exposed are exclusive; under
+/// [`HiddenSlotChurn::Random`] an adversarial hop can itself be dropped.
+///
+/// **The adversary.** Holds `round(g · H)` of the `H` hidden sessions at the
+/// epoch's start. Its own sessions are never the targeted victim. Every
+/// dropped session is replaced by the dialer from gray before the next
+/// merge, and the replacement is the adversary's with probability
+/// `flood_share` — the flood. With `flood_share` at the ambient share `g`
+/// there is no flood; near one, gray is the adversary's.
+///
+/// # Panics
+///
+/// Panics if `trials` is zero, `hidden_degree < 2`, `stems` is zero or
+/// exceeds `hidden_degree`, or either share is outside `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HiddenSlotChurnExposure {
+    /// `H` — the origin's address-hiding outbound degree (the dialer floor is
+    /// `MIN_PROVISIONED_OUT_PEERS`, 12).
+    pub hidden_degree: usize,
+    /// Stem width: the size of every source's frozen set
+    /// (`CRYPTONOTE_DANDELIONPP_STEMS = 2`).
+    pub stems: usize,
+    /// Nominal `g` — the adversary's share of the hidden sessions at pin time.
+    pub adversarial_share: f64,
+    /// Effective integer share `round(g · H) / H` the trial places.
+    pub effective_share: f64,
+    /// Probability that a dialer refill from gray is the adversary's.
+    pub flood_share: f64,
+    /// Drops per trial.
+    pub forced_drops: usize,
+    /// Which session drops at each step.
+    pub churn: HiddenSlotChurn,
+    /// (a): `P(the local source is ever routed to an adversarial hidden hop)`
+    /// with the slot peer as the whole pin.
+    pub slot_only_exposure: f64,
+    /// (a): share of trials whose single candidate was gone by drop `k`.
+    pub slot_only_held_share: f64,
+    /// (b): the same exposure when the local source follows the refilled slot.
+    pub follow_slot_exposure: f64,
+    /// (c), withdrawn: the same when the pin froze every hidden session live
+    /// at the pin.
+    pub frozen_all_exposure: f64,
+    /// (c), withdrawn: share of trials whose full frozen set was exhausted.
+    pub frozen_all_held_share: f64,
+    /// (c′), ruled: the same when the pin is the slot peer plus `stems − 1`
+    /// drawn alternates.
+    pub frozen_stems_exposure: f64,
+    /// (c′), ruled: share of trials whose `stems` candidates were all gone by
+    /// drop `k` — the origin held until the epoch.
+    pub frozen_stems_held_share: f64,
+}
+
+/// A hidden session in the model: its id and whether the adversary holds it.
+type Session = (usize, bool);
+
+/// A W3c pin as the model walks it: a frozen candidate list and a cursor.
+/// (a), (c) and (c′) are this with different lists.
+struct WalkArm {
+    frozen: Vec<Session>,
+    cursor: usize,
+    exposed: bool,
+    held: bool,
+}
+
+impl WalkArm {
+    fn new(frozen: Vec<Session>) -> Self {
+        let exposed = frozen.first().is_some_and(|s| s.1);
+        Self {
+            frozen,
+            cursor: 0,
+            exposed,
+            held: false,
+        }
+    }
+
+    /// The hop this pin currently resolves to, if the set is not exhausted.
+    fn hop(&self) -> Option<Session> {
+        self.frozen.get(self.cursor).copied()
+    }
+
+    /// `victim` dropped and `live` is what remains (replacement included).
+    /// A drop of the hop walks the frozen list to its next live candidate; a
+    /// drop of anything else is noticed when the walk reaches it.
+    fn on_drop(&mut self, victim: usize, live: &[Session]) {
+        if self.hop().is_none_or(|hop| hop.0 != victim) {
+            return;
+        }
+        let is_live = |s: &Session| live.iter().any(|l| l.0 == s.0);
+        self.cursor += 1;
+        while self.cursor < self.frozen.len() && !is_live(&self.frozen[self.cursor]) {
+            self.cursor += 1;
+        }
+        match self.frozen.get(self.cursor) {
+            Some(next) => self.exposed |= next.1,
+            None => self.held = true,
+        }
+    }
+}
+
+/// (b): the local source rides whatever the hidden slot holds.
+struct FollowArm {
+    hop: Session,
+    exposed: bool,
+}
+
+impl FollowArm {
+    fn on_drop<R: RelayRng + ?Sized>(&mut self, victim: usize, live: &[Session], rng: &mut R) {
+        if self.hop.0 != victim {
+            return;
+        }
+        let pick = usize_from(bounded_uniform(rng, (live.len() - 1) as u64));
+        self.hop = live[pick];
+        self.exposed |= self.hop.1;
+    }
+}
+
+/// Drop `victim` from `live` and let the dialer replace it from gray.
+fn churn_one<R: RelayRng + ?Sized>(
+    live: &mut Vec<Session>,
+    victim: usize,
+    next_id: &mut usize,
+    flood_num: u64,
+    flood_denom: u64,
+    rng: &mut R,
+) {
+    live.retain(|s| s.0 != victim);
+    live.push((*next_id, bernoulli(rng, flood_num, flood_denom)));
+    *next_id += 1;
+}
+
+/// Measure [`HiddenSlotChurnExposure`]; see the type for the arms and the
+/// adversary.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
+    hidden_degree: usize,
+    stems: usize,
+    adversarial_share: f64,
+    flood_share: f64,
+    forced_drops: usize,
+    churn: HiddenSlotChurn,
+    trials: usize,
+    rng: &mut R,
+) -> HiddenSlotChurnExposure {
+    assert!(trials > 0, "need at least one trial");
+    assert!(hidden_degree >= 2, "need at least two hidden sessions");
+    assert!(
+        stems >= 1 && stems <= hidden_degree,
+        "stems must be between 1 and the hidden degree"
+    );
+    assert!(
+        (0.0..=1.0).contains(&adversarial_share),
+        "adversarial share must be in [0, 1]"
+    );
+    assert!(
+        (0.0..=1.0).contains(&flood_share),
+        "flood share must be in [0, 1]"
+    );
+
+    const FLOOD_DENOM: u64 = 10_000;
+    let h = hidden_degree;
+    let a = (adversarial_share * h as f64).round() as usize;
+    let flood_num = (flood_share * FLOOD_DENOM as f64).round() as u64;
+
+    let mut slot_hits = 0_usize;
+    let mut slot_held = 0_usize;
+    let mut follow_hits = 0_usize;
+    let mut all_hits = 0_usize;
+    let mut all_held = 0_usize;
+    let mut stems_hits = 0_usize;
+    let mut stems_held = 0_usize;
+
+    for _ in 0..trials {
+        // The hidden sessions at pin time: the adversary holds the first `a`.
+        // Ids from `h` upward are dialer refills.
+        let initial: Vec<Session> = (0..h).map(|id| (id, id < a)).collect();
+        let mut next_id = h;
+
+        // Slot 0 at the epoch: uniform over the hidden class, as the reserved
+        // slot's constructor draws it. The local source pins to it.
+        let primary = initial[usize_from(bounded_uniform(rng, (h - 1) as u64))];
+        let mut rest: Vec<Session> = initial
+            .iter()
+            .copied()
+            .filter(|s| s.0 != primary.0)
+            .collect();
+        // Shuffle the rest once; (c) freezes all of it in this order and (c′)
+        // takes its first `stems − 1` as the uniform alternates.
+        for i in (1..rest.len()).rev() {
+            let pick = usize_from(bounded_uniform(rng, i as u64));
+            rest.swap(i, pick);
+        }
+        let mut frozen_all = Vec::with_capacity(h);
+        frozen_all.push(primary);
+        frozen_all.extend(rest.iter().copied());
+        let frozen_stems: Vec<Session> = frozen_all[..stems].to_vec();
+
+        let mut slot = WalkArm::new(vec![primary]);
+        let mut all = WalkArm::new(frozen_all);
+        let mut two = WalkArm::new(frozen_stems);
+        let mut follow = FollowArm {
+            hop: primary,
+            exposed: primary.1,
+        };
+
+        match churn {
+            HiddenSlotChurn::Random => {
+                // One session set; each step drops a uniformly random live
+                // session and every arm sees the same drop.
+                let mut live = initial.clone();
+                for _ in 0..forced_drops {
+                    let victim = live[usize_from(bounded_uniform(rng, (live.len() - 1) as u64))].0;
+                    churn_one(&mut live, victim, &mut next_id, flood_num, FLOOD_DENOM, rng);
+                    slot.on_drop(victim, &live);
+                    all.on_drop(victim, &live);
+                    two.on_drop(victim, &live);
+                    follow.on_drop(victim, &live, rng);
+                }
+            }
+            HiddenSlotChurn::Targeted => {
+                // Each arm's hop is what the adversary drops when it is
+                // honest, so each arm's session set evolves on its own.
+                let mut live_slot = initial.clone();
+                let mut live_all = initial.clone();
+                let mut live_two = initial.clone();
+                let mut live_follow = initial;
+                let mut id_slot = next_id;
+                let mut id_all = next_id;
+                let mut id_two = next_id;
+                let mut id_follow = next_id;
+                for _ in 0..forced_drops {
+                    if let Some(hop) = slot.hop().filter(|hop| !hop.1) {
+                        churn_one(
+                            &mut live_slot,
+                            hop.0,
+                            &mut id_slot,
+                            flood_num,
+                            FLOOD_DENOM,
+                            rng,
+                        );
+                        slot.on_drop(hop.0, &live_slot);
+                    }
+                    if let Some(hop) = all.hop().filter(|hop| !hop.1) {
+                        churn_one(
+                            &mut live_all,
+                            hop.0,
+                            &mut id_all,
+                            flood_num,
+                            FLOOD_DENOM,
+                            rng,
+                        );
+                        all.on_drop(hop.0, &live_all);
+                    }
+                    if let Some(hop) = two.hop().filter(|hop| !hop.1) {
+                        churn_one(
+                            &mut live_two,
+                            hop.0,
+                            &mut id_two,
+                            flood_num,
+                            FLOOD_DENOM,
+                            rng,
+                        );
+                        two.on_drop(hop.0, &live_two);
+                    }
+                    if !follow.hop.1 {
+                        let victim = follow.hop.0;
+                        churn_one(
+                            &mut live_follow,
+                            victim,
+                            &mut id_follow,
+                            flood_num,
+                            FLOOD_DENOM,
+                            rng,
+                        );
+                        follow.on_drop(victim, &live_follow, rng);
+                    }
+                }
+            }
+        }
+
+        slot_hits += usize::from(slot.exposed);
+        slot_held += usize::from(slot.held);
+        follow_hits += usize::from(follow.exposed);
+        all_hits += usize::from(all.exposed);
+        all_held += usize::from(all.held);
+        stems_hits += usize::from(two.exposed);
+        stems_held += usize::from(two.held);
+    }
+
+    let t = trials as f64;
+    HiddenSlotChurnExposure {
+        hidden_degree: h,
+        stems,
+        adversarial_share,
+        effective_share: a as f64 / h as f64,
+        flood_share,
+        forced_drops,
+        churn,
+        slot_only_exposure: slot_hits as f64 / t,
+        slot_only_held_share: slot_held as f64 / t,
+        follow_slot_exposure: follow_hits as f64 / t,
+        frozen_all_exposure: all_hits as f64 / t,
+        frozen_all_held_share: all_held as f64 / t,
+        frozen_stems_exposure: stems_hits as f64 / t,
+        frozen_stems_held_share: stems_held as f64 / t,
+    }
+}
