@@ -422,6 +422,37 @@ async fn a_challenge_read_carries_the_derived_nonce() {
 }
 
 #[tokio::test]
+async fn a_nonce_read_with_a_wide_budget_dials_only_the_assigned_holder() {
+    // The public nonce door, not `challenge_read`. A budget of three
+    // holders must not spend the nonce on the other two.
+    let s = stack(FIXTURE_SHARD_ID + 7, 5).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("a holder");
+    let err = s
+        .scheduler
+        .read_from_nonce(
+            &assigned,
+            SHARD,
+            [0x5a; 32],
+            Arc::new(DiscardTxs),
+            budget(3, 1),
+        )
+        .await
+        .unwrap_err();
+    let ReadFailure::Exhausted { attempts } = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0].holder, assigned.id);
+    assert!(matches!(attempts[0].error, FetchError::Miss));
+}
+
+#[tokio::test]
 async fn a_challenge_read_does_not_fall_through_to_another_holder() {
     // The serve holds a different shard, and the budget names three
     // holders. A challenge still dials only the persona the draw named:

@@ -153,6 +153,10 @@ pub struct FetchScheduler<F, H> {
     client: PFetchClient,
 }
 
+/// A nonce names one persona. [`FetchScheduler::read_from_nonce`] dials
+/// that holder and no other, whatever holder count the caller passed.
+const CHALLENGE_HOLDERS: NonZeroUsize = NonZeroUsize::MIN;
+
 impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// A scheduler over the daemon's facts, dialling through `client`.
     pub fn new(facts: Arc<F>, holders: Arc<H>, client: PFetchClient) -> Self {
@@ -215,10 +219,10 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// already minted one. A 400 retry derives a fresh anchor and keeps
     /// it (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.2).
     ///
-    /// A nonce bound to one persona must not be passed here with
-    /// `budget.holders` above one. This primitive still falls through to
-    /// other holders, and those holders would see the nonce. [`challenge_read`]
-    /// is the typed entry that forces one holder.
+    /// A nonce is bound to one persona, so this dials only `assigned`.
+    /// `budget.holders` is not an input: a second holder would see a nonce
+    /// the draw did not name for them. Stall redials stay the caller's,
+    /// on that one holder.
     ///
     /// # Errors
     ///
@@ -231,7 +235,11 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
     ) -> Result<Read, ReadFailure> {
-        self.drive(shard_id, sink, budget, Some(assigned), Some(nonce))
+        let one_holder = NeedBudget {
+            holders: CHALLENGE_HOLDERS,
+            stall_redials: budget.stall_redials,
+        };
+        self.drive(shard_id, sink, one_holder, Some(assigned), Some(nonce))
             .await
     }
 
@@ -400,11 +408,6 @@ impl ChallengeDraw {
     }
 }
 
-/// A challenge names one persona. [`FetchScheduler::read_from_nonce`]
-/// would otherwise spend the rest of [`NeedBudget::holders`] on other
-/// holders, and those holders would see a nonce bound to this draw.
-const CHALLENGE_HOLDERS: NonZeroUsize = NonZeroUsize::MIN;
-
 /// Why [`challenge_read`] did not produce a [`Read`].
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ChallengeReadError {
@@ -422,11 +425,9 @@ pub enum ChallengeReadError {
 ///
 /// The request on the wire is an ordinary read. What is the challenger's
 /// own is the nonce and the named `P` (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
-/// §5.1). The caller's `holders` is ignored: the drawn persona is the
-/// only dial, so a success from another holder cannot satisfy the
-/// challenge and the nonce is not sent to a holder the draw did not
-/// name. Stall redials, and the 400 retry that keeps the nonce, stay
-/// on that one holder (§5.2–§5.3).
+/// §5.1). [`FetchScheduler::read_from_nonce`] dials only that persona,
+/// so the caller's holder count is not used. Stall redials, and the 400
+/// retry that keeps the nonce, stay on that one holder (§5.2–§5.3).
 ///
 /// # Errors
 ///
@@ -446,12 +447,8 @@ pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
             bound: CHALLENGE_READS,
         });
     }
-    let one_holder = NeedBudget {
-        holders: CHALLENGE_HOLDERS,
-        stall_redials: budget.stall_redials,
-    };
     Ok(scheduler
-        .read_from_nonce(assigned, shard_id, draw.nonce(), sink, one_holder)
+        .read_from_nonce(assigned, shard_id, draw.nonce(), sink, budget)
         .await?)
 }
 
