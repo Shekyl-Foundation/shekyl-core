@@ -140,6 +140,7 @@ use crate::account::{
     MASTER_SEED_BYTES,
 };
 use crate::derivation::keygen_from_seed;
+use crate::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa};
 use crate::kem::ML_KEM_768_EK_LEN;
 use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
@@ -208,6 +209,23 @@ pub const ARCHIVAL_P_HS_ID_INFO: &[u8] = b"shekyl-archival-p-hs-id-ed25519-v1";
 /// network-scoped, so the published key links nothing across personas or
 /// networks (the same property SM-R-4 R4-c pins for the principal).
 pub const ARCHIVAL_P_MSG_SIGN_INFO: &[u8] = b"shekyl-archival-p-msg-sign-slh-dsa-192s-v1";
+
+/// HKDF info-label for the Ed25519 half of `P`'s **receipt** key (`L=32`,
+/// RFC 8032 seed) — `ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.3.
+///
+/// The receipt key is Ed25519 + FN-DSA-1024 (hybrid scheme 3) and signs
+/// serve-credit receipts and nothing else. It is a second key beside the
+/// identity key so that persona identity stays on a finalized standard while
+/// the pre-standard scheme touches only signatures whose value expires within
+/// an epoch. Its seeds therefore share no label with the identity key's: a
+/// break of scheme 3, or a change to how it generates keys, moves no identity
+/// byte. Per-slot and network-scoped like every sibling label.
+pub const ARCHIVAL_P_RECEIPT_ED_INFO: &[u8] = b"shekyl-archival-p-receipt-ed25519-v1";
+
+/// HKDF info-label for the FN-DSA-1024 half of `P`'s **receipt** key (`L=32`,
+/// the seed [`HybridEd25519FnDsa::keypair_from_seeds`] expands for key
+/// generation).
+pub const ARCHIVAL_P_RECEIPT_FN_DSA_INFO: &[u8] = b"shekyl-archival-p-receipt-fn-dsa-1024-v1";
 
 /// Single-byte separator between the info label and the little-endian `p_slot`.
 /// Frozen into the wire from genesis (`ARCHIVAL_FIREWALL_GATE6.md` §9.3).
@@ -438,6 +456,34 @@ pub fn derive_p_msg_sign_pk(
     pk.into_bytes()
 }
 
+/// Receipt-key Ed25519 RFC 8032 seed (32 B).
+#[must_use]
+pub fn derive_p_receipt_ed_seed(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: u32,
+) -> Zeroizing<[u8; 32]> {
+    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_RECEIPT_ED_INFO, p_slot)
+}
+
+/// Receipt-key FN-DSA-1024 keygen seed (32 B).
+#[must_use]
+pub fn derive_p_receipt_fn_dsa_seed(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    p_slot: u32,
+) -> Zeroizing<[u8; 32]> {
+    p_expand_32(
+        master_seed,
+        net,
+        fmt,
+        ARCHIVAL_P_RECEIPT_FN_DSA_INFO,
+        p_slot,
+    )
+}
+
 // --- hybrid keypair assembly -------------------------------------------------
 
 /// Build a seed-keyed hybrid `(public, secret)` pair from a 32-byte Ed25519 RFC
@@ -492,8 +538,9 @@ fn build_hybrid(
 /// `Zeroize` (and carry no secret). Instead every secret-bearing field is
 /// individually `ZeroizeOnDrop` — `spend_sk` / `view_sk` ([`SpendSecret`] /
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
-/// `bond_spend_sk` ([`HybridSecretKey`]) and `hs_id_seed` ([`Zeroizing`]) — so each wipes on drop via its own
-/// destructor. This is the rule-35 per-field discipline applied to a struct that
+/// `bond_spend_sk` ([`HybridSecretKey`]), `receipt_sign_sk`
+/// ([`FnDsaHybridSecretKey`], both halves [`Zeroizing`]) and `hs_id_seed`
+/// ([`Zeroizing`]) — so each wipes on drop via its own destructor. This is the rule-35 per-field discipline applied to a struct that
 /// also holds non-`Zeroize` public material.
 ///
 /// **Not persisted at rest.** Persist only `p_slot` (and the public
@@ -533,6 +580,15 @@ pub struct ArchivalPKeys {
     pub bond_spend_pk: HybridPublicKey,
     /// GF-1 bond-debit authorizer hybrid secret.
     pub bond_spend_sk: HybridSecretKey,
+
+    /// The receipt key's public half (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.3):
+    /// Ed25519 + FN-DSA-1024, for serve-credit receipts and nothing else.
+    /// Its type is not the identity key's or the bond-spend key's, so
+    /// neither can be handed where this one is wanted.
+    pub receipt_sign_pk: FnDsaHybridPublicKey,
+    /// The receipt key's secret half. Nothing signs with it yet; the receipt
+    /// moves onto it when the bond record carries the public half.
+    pub receipt_sign_sk: FnDsaHybridSecretKey,
 
     /// GF-9 serving-side v3 onion identity **seed** (32 B), from
     /// [`derive_p_hs_id_seed`].
@@ -676,6 +732,12 @@ pub fn derive_archival_p_keys(
     let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, fmt, p_slot);
     let (bond_spend_pk, bond_spend_sk) = build_hybrid(&bond_ed_seed, &bond_ml_dsa_seed)?;
 
+    // --- Receipt key: Ed25519 + FN-DSA-1024 (seed consumers) ---
+    let receipt_ed_seed = derive_p_receipt_ed_seed(master_seed, net, fmt, p_slot);
+    let receipt_fn_dsa_seed = derive_p_receipt_fn_dsa_seed(master_seed, net, fmt, p_slot);
+    let (receipt_sign_pk, receipt_sign_sk) =
+        HybridEd25519FnDsa::keypair_from_seeds(&receipt_ed_seed, &receipt_fn_dsa_seed)?;
+
     Ok(ArchivalPKeys {
         p_slot,
         spend_pk,
@@ -690,6 +752,8 @@ pub fn derive_archival_p_keys(
         hybrid_sign_sk,
         bond_spend_pk,
         bond_spend_sk,
+        receipt_sign_pk,
+        receipt_sign_sk,
         hs_id_seed,
     })
 }
@@ -903,6 +967,122 @@ mod tests {
             k0.spend_pk.as_canonical_bytes(),
             k1.spend_pk.as_canonical_bytes()
         );
+    }
+
+    /// Recovery: a wallet restored from its seed holds the receipt key the
+    /// bond record names. A receipt signed before the restore verifies under
+    /// the public half derived after it, and the derivation is the one the
+    /// two seed functions and the scheme's seeded key generation compose to.
+    #[test]
+    fn receipt_key_recovers_from_the_seed() {
+        use crate::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
+
+        let before = keys();
+        let after = keys();
+        assert_eq!(before.receipt_sign_pk, after.receipt_sign_pk);
+
+        let transcript = [0x5a_u8; 112];
+        let receipt = HybridEd25519FnDsa
+            .sign(&before.receipt_sign_sk, SCHEME_DOMAIN_RECEIPT, &transcript)
+            .expect("the receipt key signs");
+        HybridEd25519FnDsa
+            .verify(
+                &after.receipt_sign_pk,
+                SCHEME_DOMAIN_RECEIPT,
+                &transcript,
+                &receipt,
+            )
+            .expect("a receipt made before a restore verifies after it");
+
+        let ed =
+            derive_p_receipt_ed_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+        let fn_dsa =
+            derive_p_receipt_fn_dsa_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+        let (composed, _) =
+            HybridEd25519FnDsa::keypair_from_seeds(&ed, &fn_dsa).expect("seeded keygen");
+        assert_eq!(
+            composed, before.receipt_sign_pk,
+            "the bundle's receipt key is the two labelled seeds through seeded keygen"
+        );
+    }
+
+    /// The receipt key is per slot and per network, as every sibling is: a
+    /// persona's receipts link to no other persona of the wallet, and the
+    /// same wallet's receipt key on stagenet is not its key on mainnet.
+    #[test]
+    fn receipt_key_is_scoped_to_slot_and_network() {
+        let here = keys();
+        let other_slot =
+            derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 1)
+                .expect("slot 1");
+        let other_net =
+            derive_archival_p_keys(&MASTER, DerivationNetwork::Stagenet, SeedFormat::Bip39, 0)
+                .expect("stagenet");
+        let other_seed = derive_archival_p_keys(
+            &[0x34u8; MASTER_SEED_BYTES],
+            DerivationNetwork::Mainnet,
+            SeedFormat::Bip39,
+            0,
+        )
+        .expect("another wallet");
+        for (what, other) in [
+            ("slot", &other_slot),
+            ("network", &other_net),
+            ("seed", &other_seed),
+        ] {
+            assert_ne!(
+                here.receipt_sign_pk, other.receipt_sign_pk,
+                "a different {what} must give a different receipt key"
+            );
+        }
+    }
+
+    /// Algorithm isolation (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.3): the
+    /// receipt key shares no seed with the identity key, the bond-spend key
+    /// or the onion identity. Its Ed25519 half is the one place a shared seed
+    /// would show as equal public bytes.
+    #[test]
+    fn receipt_key_shares_no_seed_with_its_siblings() {
+        let net = DerivationNetwork::Mainnet;
+        let fmt = SeedFormat::Bip39;
+        let receipt_ed = derive_p_receipt_ed_seed(&MASTER, net, fmt, 0);
+        let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(&MASTER, net, fmt, 0);
+        assert_ne!(receipt_ed.as_slice(), receipt_fn_dsa.as_slice());
+        for (what, sibling) in [
+            (
+                "account-sign",
+                derive_p_account_sign_seed(&MASTER, net, fmt, 0),
+            ),
+            ("ml-dsa", derive_p_ml_dsa_seed(&MASTER, net, fmt, 0)),
+            (
+                "bond-spend ed25519",
+                derive_p_bond_spend_ed_seed(&MASTER, net, fmt, 0),
+            ),
+            (
+                "bond-spend ml-dsa",
+                derive_p_bond_spend_ml_dsa_seed(&MASTER, net, fmt, 0),
+            ),
+            ("hs-id", derive_p_hs_id_seed(&MASTER, net, fmt, 0)),
+        ] {
+            assert_ne!(
+                receipt_ed.as_slice(),
+                sibling.as_slice(),
+                "receipt ed25519 vs {what}"
+            );
+            assert_ne!(
+                receipt_fn_dsa.as_slice(),
+                sibling.as_slice(),
+                "receipt fn-dsa vs {what}"
+            );
+        }
+
+        let k = keys();
+        let receipt_ed_pk = SigningKey::from_bytes(&receipt_ed)
+            .verifying_key()
+            .to_bytes();
+        assert_ne!(receipt_ed_pk, k.hybrid_sign_pk.ed25519);
+        assert_ne!(receipt_ed_pk, k.bond_spend_pk.ed25519);
+        assert_ne!(&receipt_ed_pk, k.spend_pk.as_canonical_bytes());
     }
 
     /// The frozen info-string layout: `LABEL ‖ 0x00 ‖ p_slot_le32`.

@@ -1,16 +1,17 @@
 # FN-DSA hybrid signatures — scheme 3, its dependency, and the lane
 
 **Status:** OPEN — increment 1 (the scheme in `shekyl-crypto-pq`, no
-consumers) recorded 2026-10-09. Increments 2–4 (receipt-key derivation, the
-bond record carrying the receipt key, receipts moving onto it) each land as
-their own change and are recorded here as they do. Closes when increment 4
+consumers) recorded 2026-10-09 and merged 2026-10-10; increment 2 (the
+receipt key derived per persona slot, §7) recorded 2026-10-10. Increments 3
+and 4 (the bond record carrying the receipt key, receipts moving onto it)
+each land as their own change and are recorded here as they do. Closes when increment 4
 lands; the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
 carries its summary row.
 **Substrate verified at:** `origin/dev` = `6b23eab315`.
 **Authority:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
 §6, §11 and §13.1 R2–R4 (ruled 2026-10-07).
-**Findings:** `FND-1…FND-10` (§5), registered in
+**Findings:** `FND-1…FND-12` (§5), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 ---
@@ -203,14 +204,16 @@ open a second road to a release.
 | `FND-8` | The lock file moved an unrelated edge (`bindgen` → `itertools`) when the dependency was added without `--locked` | Restored by hand; the lock differs from `dev` by the five packages only |
 | `FND-9` | Sign and verify figures on the floor device are owed, and so is a run of the vectors on aarch64 hardware: their agreement there was shown under emulation, which computes IEEE arithmetic in software and so cannot show what the device's own floating point does | The benches exist (§3.1). Registered as `BA-T33`'s floor arm with a FOLLOWUPS row; the capture is a floor-device session |
 | `FND-10` | The brief asks for a floor-device row in the measurement ledger for sign and verify. The ledger holds one row per **constant** whose value rests on a measurement (`defined_in` and `needle` are required), and scheme 3 has no such constant yet: nothing budgets against its cost until the receipt is signed with it | Not entered: a row with no constant would not parse. The measurement is registered where a ledger row would point, `BA-T33` in the tracked set. The ledger row lands with the first constant that reads the figure |
+| `FND-11` | The specification gave the receipt key "its own label" and listed one HKDF row; the brief asks for two. The key is a hybrid with two independently seeded halves, as the identity key is (`ARCHIVAL_P_ACCOUNT_SIGN_INFO`, `ARCHIVAL_P_ML_DSA_INFO`), so one label cannot seed it | Two labels, one per half. The specification's §6.3 and §16 now name both |
+| `FND-12` | Deriving a persona's keys now includes one FN-DSA-1024 key generation per slot: 6.2 ms on an x86_64 development host, and unmeasured on the floor device. It is paid at engine assembly, for the lookahead set (two slots, plus a first-stake intent slot), by stakers only, inside the blocking unit that already runs one ML-KEM and two ML-DSA key generations per slot. The bond watch's probe window does not pay it: it derives identity public keys alone (`derive_archival_p_identity_pk`) | Recorded. The floor figure rides `BA-T33`'s floor arm, which already times seeded key generation |
 
 ## 6. What the later increments inherit
 
 - **Increment 2** derives the receipt key per persona slot from the wallet
   master seed under two new HKDF labels and calls
-  `HybridEd25519FnDsa::keypair_from_seeds`.
-- **Increment 3** puts `FnDsaHybridPublicKey::to_canonical_bytes()` in the
-  JoinMarket post; admission's "parses" is
+  `HybridEd25519FnDsa::keypair_from_seeds`. Done: §7.
+- **Increment 3** puts `ArchivalPKeys::receipt_sign_pk`, as
+  `FnDsaHybridPublicKey::to_canonical_bytes()`, in the JoinMarket post; admission's "parses" is
   `FnDsaHybridPublicKey::from_canonical_bytes`, which checks both halves.
 - **Increment 4** signs the unchanged 112-byte transcript under
   `SCHEME_DOMAIN_RECEIPT`. The refusal trailer's `0xFF` fill is already
@@ -218,3 +221,38 @@ open a second road to a release.
 - **Slice C** uses `HybridEd25519FnDsa::generate_keypair` for the witness's
   per-block key and `SCHEME_DOMAIN_WITNESS_CARRIER` for its signature. That
   key is random, never seeded and never stored.
+
+## 7. Increment 2 — the receipt key
+
+The persona's receipt key is derived with the rest of its keys, from the
+wallet master seed, by slot.
+
+| Piece | Where |
+| --- | --- |
+| The two labels | `ARCHIVAL_P_RECEIPT_ED_INFO` = `shekyl-archival-p-receipt-ed25519-v1`, `ARCHIVAL_P_RECEIPT_FN_DSA_INFO` = `shekyl-archival-p-receipt-fn-dsa-1024-v1` (`rust/shekyl-crypto-pq/src/archival_p.rs`) |
+| The seeds | `derive_p_receipt_ed_seed`, `derive_p_receipt_fn_dsa_seed`: 32 bytes each, `HKDF-SHA-512(salt_for(net, fmt), info = LABEL ‖ 0x00 ‖ p_slot_le32)`, the frozen layout every sibling label uses |
+| The key | `ArchivalPKeys::receipt_sign_pk` / `receipt_sign_sk`, from `HybridEd25519FnDsa::keypair_from_seeds` over the two seeds, inside `derive_archival_p_keys` |
+| Vectors | `ARCHIVAL_P_DERIVE_V1` amended in version: four Tier-1 rows (the two seeds, a label separation against the identity seed, a network separation) and the canonical public key in each of the four Tier-2 cells. No existing vector changed |
+
+**Network scoping is inherited, not added.** The salt carries the network
+and the seed format, so the same wallet's receipt key on one network is not
+its key on another. The corpus pins that as an inequality on a live
+computation, and the Tier-2 matrix pins the key on three networks.
+
+**Where it is derived.** `derive_archival_p_keys` is what engine assembly
+calls for each slot it will hold (`rust/shekyl-engine-core/src/engine/lifecycle/assemble.rs`).
+The stake-engine actor receives the bundles and no seed, so it holds the
+receipt key exactly as it holds the identity key. Nothing else changed in
+the engine: there is no receipt-signing message and no serving capability
+for this key yet, because nothing signs with it until the bond record
+carries its public half. Both land with their caller in increment 4.
+
+**The secret half is pinned through its seeds.** `FnDsaHybridSecretKey` has
+no encoding by design, so the corpus holds the two seeds and the public key,
+not secret-key bytes.
+
+**Recovery.** `receipt_key_recovers_from_the_seed` signs a transcript with
+one derivation's key and verifies it under a second derivation's public
+half; `receipt_key_is_scoped_to_slot_and_network` and
+`receipt_key_shares_no_seed_with_its_siblings` hold the scoping and the
+isolation from the identity, bond-spend and onion keys.
