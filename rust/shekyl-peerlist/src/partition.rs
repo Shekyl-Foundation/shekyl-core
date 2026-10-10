@@ -235,7 +235,7 @@ impl Partition {
             let Some(victim) = pick(&candidates, rng).map(|a| (*a).clone()) else {
                 break;
             };
-            self.demote(&victim);
+            self.demote(&victim, rng);
         }
     }
 
@@ -250,10 +250,17 @@ impl Partition {
         }
     }
 
-    /// White to gray, the clock not copied across.
-    pub(crate) fn demote(&mut self, address: &NetworkAddress) -> bool {
+    /// White to gray, the clock not copied across. The entry enters gray
+    /// through the capped insert (F3, Rick 2026-10-09): over capacity a
+    /// uniformly random other gray entry is dropped, so a mass demotion —
+    /// an expiry sweep, a subnet ban — cannot push gray over its cap.
+    pub(crate) fn demote<R: RelayRng + ?Sized>(
+        &mut self,
+        address: &NetworkAddress,
+        rng: &mut R,
+    ) -> bool {
         if self.white.remove(address).is_some() {
-            self.gray.insert(address.clone());
+            self.insert_gray(address, rng);
             true
         } else {
             false
@@ -277,7 +284,7 @@ impl Partition {
 
     /// Demote every white entry that has gone `EXPIRATION_PERIOD` without
     /// contact. Returns how many moved.
-    pub(crate) fn expire(&mut self, now: Tick) -> usize {
+    pub(crate) fn expire<R: RelayRng + ?Sized>(&mut self, now: Tick, rng: &mut R) -> usize {
         let expired: Vec<NetworkAddress> = self
             .white
             .iter()
@@ -287,7 +294,7 @@ impl Partition {
             .map(|(a, _)| a.clone())
             .collect();
         for address in &expired {
-            self.demote(address);
+            self.demote(address, rng);
         }
         expired.len()
     }
@@ -315,10 +322,11 @@ impl Partition {
     /// D4: move every white entry under an active ban to gray. The clock is
     /// not copied. Only an address with an IP can be banned (D7), so a Tor
     /// partition never demotes here. Returns how many moved.
-    pub(crate) fn demote_banned(
+    pub(crate) fn demote_banned<R: RelayRng + ?Sized>(
         &mut self,
         is_banned: &mut dyn FnMut(IpAddr, Tick) -> bool,
         now: Tick,
+        rng: &mut R,
     ) -> usize {
         let banned: Vec<NetworkAddress> = self
             .white
@@ -327,7 +335,7 @@ impl Partition {
             .cloned()
             .collect();
         for address in &banned {
-            self.demote(address);
+            self.demote(address, rng);
         }
         banned.len()
     }
@@ -355,6 +363,27 @@ impl Partition {
         true
     }
 
+    /// D-S1 for a whole list (F2, Rick 2026-10-09): would admitting every
+    /// address in `candidates` take `session` past `SESSION_INTAKE_CAP`
+    /// distinct addresses within the intake span? Counted before any entry
+    /// is admitted, so a list that would cross the cap admits nothing. An
+    /// address the session already offered counts once.
+    pub(crate) fn would_exceed_intake(
+        &mut self,
+        session: SessionId,
+        candidates: &[&NetworkAddress],
+        now: Tick,
+    ) -> bool {
+        let ledger = self.intake.entry(session).or_default();
+        ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
+        let fresh: BTreeSet<&NetworkAddress> = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| !ledger.contains_key(*candidate))
+            .collect();
+        ledger.len() + fresh.len() > SESSION_INTAKE_CAP
+    }
+
     /// The session ended: its intake ledger goes with it.
     pub(crate) fn forget_session(&mut self, session: SessionId) {
         self.intake.remove(&session);
@@ -375,25 +404,28 @@ impl Partition {
         self.own_address = address;
     }
 
-    /// D3: the connector's cached sample. `eligible` is the white count
-    /// after demotion and expiry; below `floor` nothing is disclosed and
-    /// no sample is drawn. Otherwise the cached sample while its window
-    /// lasts, else a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
-    /// over white plus this node's own address, cached for the window. A
-    /// ban does not rebuild the sample.
+    /// D3: the connector's cached sample. A sample, once drawn, is served
+    /// unchanged until its window ends — whatever white does meanwhile
+    /// (F1, Rick 2026-10-09): a demotion, an expiry or a ban in the window
+    /// does not change the reply, since a reply that changed would tell
+    /// the requester what changed. The floor is checked only when a
+    /// sample is drawn: below `floor` (the eligible white count after
+    /// demotion and expiry) nothing is drawn and the reply is empty.
+    /// Otherwise a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
+    /// over white plus this node's own address, cached for the window.
     pub(crate) fn disclose<R: RelayRng + ?Sized>(
         &mut self,
         floor: usize,
         now: Tick,
         rng: &mut R,
     ) -> Vec<NetworkAddress> {
-        if self.white.len() < floor {
-            return Vec::new();
-        }
         if let Some(sample) = &self.sample {
             if now.get().saturating_sub(sample.drawn_at.get()) < DISCLOSE_WINDOW_NANOS {
                 return sample.addresses.clone();
             }
+        }
+        if self.white.len() < floor {
+            return Vec::new();
         }
         let mut population: Vec<NetworkAddress> = self.white.keys().cloned().collect();
         if let Some(own) = &self.own_address {

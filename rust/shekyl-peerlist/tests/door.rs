@@ -189,7 +189,10 @@ fn incoming_and_add_peer_stay_gray() {
     );
     assert!(list.is_gray(&v4(4)) && list.is_gray(&v4(5)));
     assert!(!list.is_white(&v4(4)) && !list.is_white(&v4(5)));
-    assert_eq!(list.white_count(connector, at_hours(0), &mut NoBans), 0);
+    assert_eq!(
+        list.white_count(connector, at_hours(0), &mut NoBans, &mut rng),
+        0
+    );
 }
 
 #[test]
@@ -208,7 +211,10 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         at_hours(0),
         &mut rng,
     );
-    assert_eq!(list.white_count(connector, at_hours(23), &mut NoBans), 1);
+    assert_eq!(
+        list.white_count(connector, at_hours(23), &mut NoBans, &mut rng),
+        1
+    );
     assert_eq!(
         list.next_expiry(connector),
         Some(Tick::new(EXPIRATION_PERIOD_NANOS)),
@@ -221,7 +227,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         &mut rng,
     );
     assert_eq!(
-        list.white_count(connector, at_hours(43), &mut NoBans),
+        list.white_count(connector, at_hours(43), &mut NoBans, &mut rng),
         1,
         "the clock moved"
     );
@@ -236,7 +242,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
         "a white entry is untouched by an admit"
     );
     assert_eq!(
-        list.white_count(connector, at_hours(44), &mut NoBans),
+        list.white_count(connector, at_hours(44), &mut NoBans, &mut rng),
         0,
         "24 h after the last contact this node opened"
     );
@@ -261,7 +267,10 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
         draw_until(&mut list, &v4(n), &mut rng);
         list.apply(&DialOutcome::Confirmed(v4(n)), at_hours(0), &mut rng);
     }
-    assert_eq!(list.white_count(connector, at_hours(0), &mut NoBans), 10);
+    assert_eq!(
+        list.white_count(connector, at_hours(0), &mut NoBans, &mut rng),
+        10
+    );
     let saved = list.persistable();
     assert_eq!(saved.len(), 50);
 
@@ -272,7 +281,7 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
         let mut fresh = Peerlist::new(fleet());
         assert_eq!(fresh.restore(saved.clone(), &mut rng), 50);
         assert_eq!(
-            fresh.white_count(connector, at_hours(0), &mut NoBans),
+            fresh.white_count(connector, at_hours(0), &mut NoBans, &mut rng),
             0,
             "reload is gray only"
         );
@@ -467,7 +476,7 @@ fn white_eviction_demotes_a_random_other_entry() {
         list.apply(&DialOutcome::Confirmed(a.clone()), at_hours(0), &mut rng);
     }
     assert_eq!(
-        list.white_count(connector, at_hours(0), &mut NoBans),
+        list.white_count(connector, at_hours(0), &mut NoBans, &mut rng),
         WHITE_CAP
     );
     let last = v4_wide(u16::try_from(WHITE_CAP).expect("fits"));

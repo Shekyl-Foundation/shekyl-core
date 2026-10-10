@@ -275,7 +275,7 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `draw_gray()` | One uniform gray address, remembered as an outstanding draw |
 | `draw_white()` | One uniform white address. Used to re-contact, which can refresh the clock. Not a promotion |
-| `disclose()` | The connector's cached sample: `min(DISCLOSE_COUNT, white)` distinct white addresses of that connector, drawn uniformly once per 24-hour window and sent unchanged to every requester in the window (D3, §5a). Empty while that connector's eligible white list is below `white_diversity_floor`. Gray is absent. `last_observed` is absent. No exceptions by default |
+| `disclose()` | The connector's cached sample: `min(DISCLOSE_COUNT, white)` distinct white addresses of that connector, drawn uniformly once per 24-hour window and sent unchanged to every requester in the window (D3, §5a). A sample once drawn is served until its window ends, whatever white does meanwhile; the floor is checked only when a sample is drawn, and below `white_diversity_floor` nothing is drawn (F1, 2026-10-09). Gray is absent. `last_observed` is absent. No exceptions by default |
 | `snapshot()` | Read-only, for the RPC `peers` grant: every address and which list it is on. No `last_observed`, no order (PR-2, Rick 2026-10-09) |
 | `apply(outcome)` | The only writer of `White`, and the only drop of an outstanding gray draw. The match is total |
 
@@ -345,7 +345,10 @@ it is known (the dialer brief's handshake-address ruling: the
 clearnet entry is included when known; a hidden connector's address
 likewise; it has no special position). A node discloses nothing on a
 connector until that connector's eligible white list reaches
-`white_diversity_floor`.
+`white_diversity_floor` — checked when the window's sample is drawn; a
+sample already drawn is served until the window ends even if white
+falls below the floor meanwhile (F1), since a reply that changed
+mid-window would tell the requester what changed.
 
 An exception — leaving out this node's current outbound sessions —
 goes in only if a conformance measurement in PR-2 shows it helps:
@@ -415,7 +418,9 @@ only unbanned, confirmed peers, so the floor and the refill line count
 white as it stands.
 
 **Gray handling.** A demoted entry is an ordinary gray entry, subject
-to normal random eviction, with no protection. While the ban lasts,
+to normal random eviction, with no protection; it enters gray through
+the capped insert, so a mass demotion — a subnet ban, an expiry sweep —
+leaves gray at or below its cap (F3). While the ban lasts,
 the dialer's pre-dial ban check skips it, and gray admission refuses
 it if it is gossiped back in. After the ban expires, it can be drawn,
 dialled, and earn white again through `SessionAccepted` or
@@ -437,7 +442,10 @@ white only through the normal door.
 Gray intake is limited per session, the same on every connector: at
 most `2 × DISCLOSE_COUNT` distinct addresses per session in any
 24-hour span (24 today). Exceeding it is `PeerlistRefused`: an honest
-peer's cached sample cannot exceed it. The limit is a named constant
+peer's cached sample cannot exceed it. The cap is checked for a whole
+received list before any entry is admitted, so a list that would cross
+it admits nothing (F2); a banned entry never enters gray and is not
+counted. The limit is a named constant
 derived from `DISCLOSE_COUNT`, labelled `Assumption` in
 `DAEMON_RELAY_PRIVACY.md` §97, and applies to inbound and outbound
 sessions alike.
@@ -611,7 +619,9 @@ They check different things. Neither stands for the other.
    - *D4:* a banned white entry is demoted on the next read, the floor
      count drops with it, and the entry is evictable from gray.
    - *D-S1:* the 25th distinct address from one session within 24 hours
-     is a violation.
+     is a violation; a list that would cross the cap admits nothing (F2).
+   - *F1:* white drops below the floor mid-window and the reply is
+     unchanged. *F3:* mass demotion leaves gray at or below its cap.
    - *Sampling:* below the floor the sample is empty; above it, our own
      address is drawn uniformly as one member.
    - *Snapshot:* the read-only snapshot for the RPC `peers` grant lists
@@ -866,7 +876,11 @@ it lowers both observers' success. Results are recorded in §5a.
    dialer is PR-3, named in §10 as the consumer). `65e94ad1d4`.
 3. `peerlist: the cached sample (D3), ban demotion (D4), the intake cap
    (D-S1)` — §11.5's tests; the snapshot landed with commit 2.
-   `9ecc3f02e2`; gray as an indexed set `093d4dbb3b`.
+   `9ecc3f02e2`; gray as an indexed set `093d4dbb3b`; F1–F3 (Rick,
+   2026-10-09: the drawn sample served to the window's end, the cap
+   checked for the whole list, demotion through the capped insert) with
+   their tests, and F4's FOLLOWUPS row (the RNG trait's home), in the
+   fix commit named below.
 4. `peerlist: the D3 exception instrument` — 16.5, results into §5a.
    `cf380509b9`.
 5. `docs: the §8 divergence ledger at the increment's pin` — increment

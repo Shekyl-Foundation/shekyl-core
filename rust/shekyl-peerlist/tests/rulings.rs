@@ -12,7 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_peerlist::{
     white_diversity_floor, BanQuery, DialOutcome, NetworkAddress, NoBans, Peerlist, Refusal,
-    SessionId, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, SESSION_INTAKE_CAP,
+    SessionId, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP,
     WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
@@ -245,14 +245,17 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 50, &mut rng);
     let mut bans = BanList::new();
-    assert_eq!(list.white_count(connector, at_hours(1), &mut bans), 50);
+    assert_eq!(
+        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        50
+    );
     let banned = white[7].clone();
     assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
     // The transport layer wrote nothing in the peer list: still white until
     // white is next read.
     assert!(list.is_white(&banned));
     assert_eq!(
-        list.white_count(connector, at_hours(2), &mut bans),
+        list.white_count(connector, at_hours(2), &mut bans, &mut rng),
         49,
         "the floor count drops with it"
     );
@@ -261,7 +264,8 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
         "demoted to gray, not removed"
     );
     assert!(
-        list.below_refill_line(connector, at_hours(2), &mut bans) == (49 < WHITE_REFILL_LINE),
+        list.below_refill_line(connector, at_hours(2), &mut bans, &mut rng)
+            == (49 < WHITE_REFILL_LINE),
         "the refill line counts white as it stands"
     );
 }
@@ -275,7 +279,10 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
     let banned = white[3].clone();
     let mut bans = BanList::new();
     assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
-    assert_eq!(list.white_count(connector, at_hours(1), &mut bans), 9);
+    assert_eq!(
+        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        9
+    );
     assert!(list.is_gray(&banned));
     // Skipped by the pre-dial check during the ban.
     assert!(!Peerlist::pre_dial_check(&banned, at_hours(2), &mut bans));
@@ -305,7 +312,10 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
         let banned = white[3].clone();
         let mut bans = BanList::new();
         assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(1)));
-        assert_eq!(list.white_count(connector, at_hours(1), &mut bans), 9);
+        assert_eq!(
+            list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+            9
+        );
         // 20 000 evictions, each a uniform draw over about 5 000 entries:
         // the demoted one is hit with probability about 0.98 per trial.
         for n in 1000..1000 + 25_000u16 {
@@ -382,7 +392,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
         list.apply(&DialOutcome::Confirmed(onion(n)), at_hours(0), &mut rng);
     }
     assert_eq!(
-        list.white_count(hidden, at_hours(1), &mut BanAll),
+        list.white_count(hidden, at_hours(1), &mut BanAll, &mut rng),
         3,
         "D7: Tor has no bannable address"
     );
@@ -506,4 +516,161 @@ fn the_intake_cap_is_the_same_on_every_connector() {
         ),
         Err(Refusal::PeerlistRefused)
     );
+}
+
+// ---------------------------------------------------------------- F1–F3 (Rick, 2026-10-09)
+
+/// F1: a window's sample, once drawn, is served until the window ends;
+/// the floor is checked only when drawing.
+#[test]
+fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_window() {
+    let mut rng = SplitMix64::new(21);
+    let mut list = Peerlist::new(Vec::new());
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    let floor = u16::try_from(white_diversity_floor()).expect("fits");
+    let white = with_white(&mut list, 1, floor, &mut rng);
+    let mut bans = BanList::new();
+    let sample = list.disclose(connector, at_hours(1), &mut bans, &mut rng);
+    assert_eq!(
+        sample.len(),
+        DISCLOSE_COUNT,
+        "at the floor a sample is drawn"
+    );
+    // Mid-window, white drops below the floor: a ban demotes one entry at
+    // the next white read.
+    assert!(bans.ban_host(ip_of(&white[0]), at_hours(20), at_hours(2)));
+    assert_eq!(
+        list.white_count(connector, at_hours(2), &mut bans, &mut rng),
+        white_diversity_floor() - 1
+    );
+    assert_eq!(
+        list.disclose(connector, at_hours(3), &mut bans, &mut rng),
+        sample,
+        "the reply is unchanged for the rest of the window"
+    );
+    assert_eq!(
+        list.disclose(connector, at_hours(24), &mut bans, &mut rng),
+        sample,
+        "to the window's last tick"
+    );
+    // At the next draw the floor is checked: still below it, nothing.
+    for a in &white[1..] {
+        list.apply(&DialOutcome::Confirmed(a.clone()), at_hours(24), &mut rng);
+    }
+    assert!(
+        list.disclose(
+            connector,
+            Tick::new(at_hours(1).get() + DISCLOSE_WINDOW_NANOS),
+            &mut bans,
+            &mut rng
+        )
+        .is_empty(),
+        "a new window below the floor draws nothing"
+    );
+}
+
+/// F2: the session cap is checked for the whole list before any entry is
+/// admitted.
+#[test]
+fn a_list_that_would_cross_the_session_cap_admits_nothing() {
+    let mut rng = SplitMix64::new(22);
+    let mut list = Peerlist::new(Vec::new());
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    let s = session(7);
+    let first: Vec<NetworkAddress> = (1..=12).map(v4).collect();
+    let second: Vec<NetworkAddress> = (13..=20).map(v4).collect();
+    assert_eq!(
+        list.admit_received_list(&first, s, connector, at_hours(0), &mut NoBans, &mut rng),
+        Ok(12)
+    );
+    assert_eq!(
+        list.admit_received_list(&second, s, connector, at_hours(1), &mut NoBans, &mut rng),
+        Ok(8)
+    );
+    assert_eq!(list.intake_count(connector, s, at_hours(1)), 20);
+    let before = list.gray_count(connector);
+    // Twelve fresh addresses would take the session to 32: refused whole.
+    let crossing: Vec<NetworkAddress> = (100..=111).map(v4).collect();
+    assert_eq!(
+        list.admit_received_list(&crossing, s, connector, at_hours(2), &mut NoBans, &mut rng),
+        Err(Refusal::PeerlistRefused)
+    );
+    assert_eq!(list.gray_count(connector), before, "nothing was admitted");
+    assert!(crossing.iter().all(|a| !list.is_gray(a)));
+    assert_eq!(
+        list.intake_count(connector, s, at_hours(2)),
+        20,
+        "and nothing was charged"
+    );
+    // Four fresh plus eight re-offers is exactly the cap: admitted.
+    let mut exact: Vec<NetworkAddress> = (200..=203).map(v4).collect();
+    exact.extend(second.iter().cloned());
+    assert_eq!(
+        list.admit_received_list(&exact, s, connector, at_hours(2), &mut NoBans, &mut rng),
+        Ok(4)
+    );
+    assert_eq!(
+        list.intake_count(connector, s, at_hours(2)),
+        SESSION_INTAKE_CAP
+    );
+    // A banned entry in a list is not counted against the cap.
+    let mut bans = BanList::new();
+    let banned = v4(300);
+    assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(2)));
+    assert_eq!(
+        list.admit_received_list(&[banned], s, connector, at_hours(3), &mut bans, &mut rng),
+        Ok(0),
+        "a banned entry is skipped, not a refusal of the list, and not charged"
+    );
+}
+
+/// F3: demotion goes through the capped gray insert, so a mass demotion
+/// leaves gray at or below its cap.
+#[test]
+fn mass_demotion_leaves_gray_at_or_below_its_cap() {
+    let mut rng = SplitMix64::new(23);
+    let mut list = Peerlist::new(Vec::new());
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    // 200 white, confirmed at hour 0.
+    let white = with_white(&mut list, 1, 200, &mut rng);
+    // Gray filled to its cap with reloaded addresses.
+    for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
+        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut NoBans, &mut rng);
+    }
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    assert_eq!(
+        list.white_count(connector, at_hours(1), &mut NoBans, &mut rng),
+        200
+    );
+    // The expiry sweep demotes all 200 into a full gray list.
+    assert_eq!(
+        list.white_count(connector, at_hours(25), &mut NoBans, &mut rng),
+        0
+    );
+    assert!(
+        list.gray_count(connector) <= GRAY_CAP,
+        "gray is at or below its cap after 200 demotions: {}",
+        list.gray_count(connector)
+    );
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
+    let demoted_in_gray = white.iter().filter(|a| list.is_gray(a)).count();
+    assert!(
+        demoted_in_gray >= 190,
+        "the demoted entries are the ones kept, bar the few a later demotion evicted: {demoted_in_gray}"
+    );
+    // The same through a subnet ban.
+    let mut list = Peerlist::new(Vec::new());
+    let white = with_white(&mut list, 1, 200, &mut rng);
+    for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
+        let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut NoBans, &mut rng);
+    }
+    let mut bans = BanList::new();
+    for a in &white {
+        assert!(bans.ban_host(ip_of(a), at_hours(10), at_hours(1)));
+    }
+    assert_eq!(
+        list.white_count(connector, at_hours(1), &mut bans, &mut rng),
+        0
+    );
+    assert_eq!(list.gray_count(connector), GRAY_CAP);
 }

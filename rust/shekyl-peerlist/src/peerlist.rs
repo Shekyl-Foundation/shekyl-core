@@ -148,6 +148,19 @@ impl Peerlist {
                 Some(_) => {}
             }
         }
+        // D-S1 for the whole list (F2): a banned entry never enters gray, so
+        // it is not counted; everything else is, before any entry is
+        // admitted. A list that would cross the cap admits nothing.
+        let counted: Vec<&NetworkAddress> = addresses
+            .iter()
+            .filter(|a| !a.ip().is_some_and(|ip| bans.is_banned(ip, now)))
+            .collect();
+        if self
+            .partition_mut(connector)
+            .would_exceed_intake(session, &counted, now)
+        {
+            return Err(Refusal::PeerlistRefused);
+        }
         let mut admitted = 0;
         for address in addresses {
             match self.admit_gray(
@@ -192,11 +205,12 @@ impl Peerlist {
         self.partition_mut(connector).set_own_address(address);
     }
 
-    /// The connector's disclosure sample (D3): empty while the eligible
-    /// white list is below [`white_diversity_floor`]; otherwise the cached
-    /// sample for the window, drawn uniformly from white plus this node's
-    /// own address. Demotion (D4) and expiry run first; a ban does not
-    /// rebuild the sample.
+    /// The connector's disclosure sample (D3): the window's sample, once
+    /// drawn, served unchanged until the window ends; at the draw, empty
+    /// while the eligible white list is below [`white_diversity_floor`],
+    /// else `min(DISCLOSE_COUNT, population)` drawn uniformly from white
+    /// plus this node's own address. Demotion (D4) and expiry run first,
+    /// and neither rebuilds a sample already drawn.
     pub fn disclose<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
@@ -205,8 +219,8 @@ impl Peerlist {
         rng: &mut R,
     ) -> Vec<NetworkAddress> {
         let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
-        partition.expire(now);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
         partition.disclose(white_diversity_floor(), now, rng)
     }
 
@@ -230,8 +244,8 @@ impl Peerlist {
         rng: &mut R,
     ) -> Option<NetworkAddress> {
         let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
-        partition.expire(now);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
         partition.draw_white(rng)
     }
 
@@ -268,16 +282,18 @@ impl Peerlist {
     }
 
     /// White entries of `connector` at `now`, after demotion (D4) and
-    /// expiry: the eligible count the floor and the refill line read.
-    pub fn white_count(
+    /// expiry: the eligible count the floor and the refill line read. The
+    /// draw is for the gray eviction a demotion may cause (F3).
+    pub fn white_count<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        rng: &mut R,
     ) -> usize {
         let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
-        partition.expire(now);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
         partition.white_len()
     }
 
@@ -302,13 +318,14 @@ impl Peerlist {
     /// Whether `connector`'s white list is below [`WHITE_REFILL_LINE`] at
     /// `now`: the refill trigger (brief §2). Reported at once when it is;
     /// otherwise [`Self::next_expiry`] is when to ask again.
-    pub fn below_refill_line(
+    pub fn below_refill_line<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
+        rng: &mut R,
     ) -> bool {
-        self.white_count(connector, now, bans) < WHITE_REFILL_LINE
+        self.white_count(connector, now, bans, rng) < WHITE_REFILL_LINE
     }
 
     /// The earliest white expiry of `connector`: the one deadline the
