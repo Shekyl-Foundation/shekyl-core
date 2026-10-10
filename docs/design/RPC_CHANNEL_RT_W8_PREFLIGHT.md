@@ -280,8 +280,9 @@ is asked*, neither to what it says, brought every row back under it:
   finding it. They do not need the hint and do not carry it.
 
 The slowest row takes about 15 minutes on the dev box. The tightest is the
-later-key-leak pair, which peaks at 5.5 GiB of the 6: the runner prints
-each row's peak so that margin stays visible. Two further steps were
+later-key-leak pair, which peaks at 5,509 MiB of the 6,144, or 89.7 %: the
+runner prints each row's peak and warns, without failing, when one passes
+90 % of the cap. That pair sits just under the warning today. Two further steps were
 planned if these had not sufficed, injectivity by a freshness argument and
 bounded-session variants; neither was needed and neither was tried.
 
