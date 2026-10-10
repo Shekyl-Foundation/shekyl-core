@@ -4778,6 +4778,7 @@ dependencies = [
 name = "shekyl-rpc-channel"
 version = "3.1.0"
 dependencies = [
+ "fips203",
  "hex",
  "serde_json",
  "shekyl-crypto-hash",

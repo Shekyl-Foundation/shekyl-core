@@ -20,6 +20,10 @@ hex = "0.4"
 # (`shekyl-crypto-pq`). Neither is a production edge.
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# RT-P4 (examples/rt_p4_decaps_timing.rs) times this crate's decapsulation
+# directly. Pinned exactly, to the version `shekyl-crypto-pq` pins: the probe
+# is a statement about one build of one crate.
+fips203 = "=0.4.3"
 
 [lints]
 workspace = true
