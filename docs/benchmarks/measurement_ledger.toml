@@ -109,6 +109,7 @@ stale_through = [
   { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "48670ca6c9", note = "Three commits to signature.rs. The first moves the Ed25519 + ML-DSA-65 nested sign and verify and the canonical header onto one body shared with a second scheme; the bytes signed and the order of the two halves are unchanged, and the existing vectors pass untouched. The second adds a scheme byte and two domain constants that no transaction path reads. The third edits one doc comment. The gated sign count moved from 7,163,792 to 7,161,994 instructions on an x86 development host (crypto_bench_hybrid_sign_1_input, -0.025 %). Verify has no gated arm and was not measured; no floor run." },
+  { through = "e9546ed247", note = "The nested verifier checks the same ML-DSA signature the classical half wraps. Verify no longer clones that vector onto the heap before the check; it still copies the bytes once into the fixed array the ML-DSA verifier takes. The signed bytes and the order of the two halves are unchanged. Not re-measured. The block-weight rows stay stale from PL-D3." },
 ]
 
 [[constant]]
