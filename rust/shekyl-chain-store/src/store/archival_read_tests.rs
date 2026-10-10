@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use redb::Value;
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
@@ -37,7 +37,7 @@ use crate::schema::{
     ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
-fn persona(fill: u8) -> PCanonicalId {
+pub(super) fn persona(fill: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([fill; 32])
 }
 
@@ -63,8 +63,9 @@ fn record() -> BondRecord {
     }
 }
 
-/// Plant rows raw: `f` receives the open write transaction.
-fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
+/// Plant rows raw: `f` receives the open write transaction. Shared with
+/// `prune_tests`, which plants slash rows across the retirement floor.
+pub(super) fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     f(&txn);
@@ -145,7 +146,7 @@ fn a1_absent_is_none_present_decodes_and_a_bad_row_is_si7() {
 // A2 — the slash log strictly above a height
 // ---------------------------------------------------------------------------
 
-fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
+pub(super) fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
     SlashLogEntry {
         persona: *p,
         shard: shard(s),
@@ -156,7 +157,7 @@ fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
     }
 }
 
-fn plant_slash(txn: &redb::WriteTransaction, h: u64, seq: u32, entry: &SlashLogEntry) {
+pub(super) fn plant_slash(txn: &redb::WriteTransaction, h: u64, seq: u32, entry: &SlashLogEntry) {
     let mut t = txn.open_table(ARCHIVAL_SLASH_LOG).expect("t");
     t.insert(
         SlashLogKey::new(BlockHeight::from_raw(h), seq).key(),
@@ -171,10 +172,15 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let p = persona(0xa2);
     let other = persona(0xb2);
+    // The rows are planted, not connected, and no boundary has run: the
+    // log has no retirement floor, so every read here hands A2 `NONE`.
+    // The floor's own arm (SI-26) is exercised where a chain crosses the
+    // window, not on a planted table.
+    let floor = SlashLogFloor::NONE;
     assert!(store
         .begin_read()
         .unwrap()
-        .slash_log_after(&p, BlockHeight::ZERO)
+        .slash_log_after(&p, BlockHeight::ZERO, floor)
         .unwrap()
         .is_empty());
     drop(store);
@@ -202,7 +208,10 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    let after = |h: u64| snap.slash_log_after(&p, BlockHeight::from_raw(h)).unwrap();
+    let after = |h: u64| {
+        snap.slash_log_after(&p, BlockHeight::from_raw(h), floor)
+            .unwrap()
+    };
 
     // Strictly above: rows *at* `h` are excluded (a slash at `h` is
     // already-removed state at `h`); the other persona's rows never appear.
@@ -221,7 +230,7 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
     assert_eq!(after(u64::MAX), vec![]);
     // A stranger has no rows at any height.
     assert!(snap
-        .slash_log_after(&persona(0xc2), BlockHeight::ZERO)
+        .slash_log_after(&persona(0xc2), BlockHeight::ZERO, floor)
         .unwrap()
         .is_empty());
     drop(snap);
@@ -241,12 +250,12 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
     let err = snap
-        .slash_log_after(&p, BlockHeight::from_raw(250))
+        .slash_log_after(&p, BlockHeight::from_raw(250), floor)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_slash_log"), "{err}");
     // Below the bad row the read is unaffected — it never reaches it.
     assert_eq!(
-        snap.slash_log_after(&p, BlockHeight::from_raw(300))
+        snap.slash_log_after(&p, BlockHeight::from_raw(300), floor)
             .unwrap(),
         vec![at_400, at_last]
     );

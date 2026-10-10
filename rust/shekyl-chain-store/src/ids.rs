@@ -743,6 +743,16 @@ impl SlashLogKey {
             None => None,
         }
     }
+
+    /// Every row at a height **strictly below** `floor`: `.. (floor, 0)` —
+    /// the range the boundary batch retires (`PDM-Q-F19`, `SLK-Q1`). Rows
+    /// at the floor are the first kept. The read's soundness check is this
+    /// same range: `slash_log_after` refuses when [`Self::above`]'s start
+    /// lies in it (SI-26).
+    #[must_use]
+    pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<SlashLogTuple> {
+        ..(floor.to_raw(), 0)
+    }
 }
 
 #[cfg(test)]
@@ -813,5 +823,27 @@ mod tests {
         // rather than starting at the last height and including its rows.
         assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX)).is_none());
         assert!(SlashLogKey::above(BlockHeight::from_raw(u64::MAX - 1)).is_some());
+    }
+
+    #[test]
+    fn slash_log_below_is_the_start_of_the_scan_above_the_height_under_the_floor() {
+        // Floor 3: rows at 3 are the first kept. A scan strictly above 2
+        // starts at (3, 0), outside the retired range. A scan strictly
+        // above 1 starts at (2, 0), inside it. The boundary deletes this
+        // range, and SI-26 refuses a scan whose start lies in it.
+        let floor = BlockHeight::from_raw(3);
+        let retired = SlashLogKey::below(floor);
+        let kept_scan = SlashLogKey::above(BlockHeight::from_raw(2)).expect("a next height");
+        let retired_scan = SlashLogKey::above(BlockHeight::from_raw(1)).expect("a next height");
+        assert!(
+            !retired.contains(&kept_scan.start),
+            "a scan that starts at the floor reads kept rows"
+        );
+        assert!(
+            retired.contains(&retired_scan.start),
+            "a scan that starts below the floor reads retired rows"
+        );
+        assert!(retired.contains(&SlashLogKey::new(BlockHeight::from_raw(2), u32::MAX).key()));
+        assert!(!retired.contains(&SlashLogKey::new(floor, 0).key()));
     }
 }

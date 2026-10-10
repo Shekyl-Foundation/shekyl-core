@@ -71,6 +71,17 @@
 //!   *pruned* height reads as is S-PRUNE's to say when it deletes anything
 //!   here; until a prune exists the two states are exhaustive.
 //!
+//! # SI-26 is armed here
+//!
+//! The slash log is read only where it is kept. A2 takes the log's
+//! retirement floor from its caller — computed on the consensus side from
+//! the rule set the slash pass runs (`SlashLogFloor`, `SLK-Q1` / `SLK-2`)
+//! — and refuses a scan whose start lies in [`SlashLogKey::below`]
+//! ([`StoreInvariant::SlashLogReadBelowFloor`]) rather than fold a retired
+//! range as "never slashed". The store compares; it does not source the
+//! floor, because the horizon is a consensus expression and a store setting
+//! must not be able to move it.
+//!
 //! # SI-15 is armed here
 //!
 //! Every serve-credit row names a persona with a bond record (the connect
@@ -93,7 +104,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use redb::ReadableTable;
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
@@ -159,14 +170,30 @@ pub(super) fn bond_record<T: ReadTables>(
 /// [`SlashLogKey::above`] has no range to give (no height lies above it),
 /// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
 /// case here. A row that does not decode is SI-7.
+///
+/// `floor` is the log's retirement floor under the caller's rule set.
+/// The scan is [`SlashLogKey::above`]; a start that lies in
+/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
+/// The last height has no range, so it needs no check.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
+    floor: SlashLogFloor,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
     let Some(above) = SlashLogKey::above(height) else {
         return Ok(Vec::new());
     };
+    if let Some(kept_from) = floor.height() {
+        if SlashLogKey::below(kept_from).contains(&above.start) {
+            return Err(ReadFault::Invariant(
+                StoreInvariant::SlashLogReadBelowFloor {
+                    asked: height,
+                    floor: kept_from,
+                },
+            ));
+        }
+    }
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
     let mut out = Vec::new();
     for row in table.range(above)? {
