@@ -198,7 +198,8 @@ Run 2026-10-10 with ProVerif 2.05: **31 verdicts, all as
 `RPC_CHANNEL.md` §4.1 and §4.2 predict.** The table of variants, queries
 and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`. The first
 run had 27; review the same day added the ML-KEM half of the client's
-static identity to each of the four identity variants.
+static identity to each of the four identity variants, and then
+strengthened what every row is asked (below).
 
 - **Daemon authentication is hybrid:** it holds with X25519 broken and with
   ML-KEM broken.
@@ -239,11 +240,50 @@ model will meet them:
   once the daemon's static ML-KEM key was published. The model now makes
   every shared secret of a broken primitive a public constant, which gives
   the attacker at least what a real break would, and every variant
-  finishes: about 22 minutes for the slowest on the dev box.
+  finishes.
 - **RT-P7's row named a third edit, moving `skem` after `e`.** A symbolic
   model does not distinguish token order within a message, so it has no
   verdict to move. That edit is checked where it can fail: clatter refuses
   the pattern at construction (`shekyl-rpc-channel-xcheck`, §4.1).
+
+**What review strengthened, and what it took (2026-10-10).** Three changes
+were asked for; all three are in the committed model and all 31 verdicts
+still come out as predicted, under the same 6 GiB and one-hour caps.
+
+- **Authentication is injective.** Each of the three agreement queries now
+  says every acceptance answers to its own send, so a replayed handshake is
+  not an acceptance. Where an attack is expected, ProVerif reports that the
+  plain correspondence fails too; the runner refuses a verdict that is only
+  a replay.
+- **A second client is enrolled whose static keys the attacker holds.** The
+  honest client's authentication, its secrecy and its identity are checked
+  against it, in every variant. The two client-authentication queries name
+  the honest client's keys, since the second client is accepted without any
+  honest send, as it should be.
+- **Both halves of the client's identity are queried**, as above.
+
+Written the obvious way these did not fit: four of the twelve variants ran
+out of memory on their first query, and the unbroken variant was still on
+its first query at 13 GiB when a one-hour limit stopped a diagnostic run
+under a 24 GiB cap. The cap was not raised. Two changes to *how the model
+is asked*, neither to what it says, brought every row back under it:
+
+- **One query per ProVerif run**, and the second client as an entry in the
+  daemon's enrolment table, read by one daemon process, in place of a third
+  process. This alone is enough for ten of the twelve variants.
+- **One proof-search hint, on two variants** (the unbroken one and the
+  later-key-leak one): do not resolve on "the attacker knows `exp(x, y)`"
+  during saturation. A hint changes the order of the search and never the
+  clauses, so a "true" under it is a proof; what it can cost is precision,
+  which shows as "cannot be proved" and is counted as a failure. That cost
+  is real here: under the hint the variants that expect an attack stop
+  finding it. They do not need the hint and do not carry it.
+
+The slowest row takes about 15 minutes on the dev box. The tightest is the
+later-key-leak pair, which peaks at 5.5 GiB of the 6: the runner prints
+each row's peak so that margin stays visible. Two further steps were
+planned if these had not sufficed, injectivity by a freshness argument and
+bounded-session variants; neither was needed and neither was tried.
 
 **Installing ProVerif.** One version, 2.05, by one recipe,
 `rust/shekyl-rpc-channel/model/install_proverif.sh`, run on the dev box and
@@ -267,7 +307,7 @@ Each is one unit of work, pushed as it is made.
 | 2 | Delete `shekyl-rt-p2-spike` | F-17; the lock diff is read and stated |
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
 | 4–6 | **Landed as one commit** (accepted 2026-10-09), because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
-| 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted, 31 after review added the ML-KEM half of the identity queries (§4.2) | RT-O15; RT-P7 |
+| 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted; 31 after review, with injective agreement and a second enrolled client in the attacker's hands (§4.2) | RT-O15; RT-P7 |
 | 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` — **x86 run 2026-10-10 passes; the floor-device run of the same day fails its registered lines**, so this row is open and RT-P4 is not met | Host claimed first |
 
 RT-W9 is not started from this branch.

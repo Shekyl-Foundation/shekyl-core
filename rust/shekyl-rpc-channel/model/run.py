@@ -36,11 +36,16 @@
 # the byte encodings, or about Shekyl's code: those are RT-P4, the vectors,
 # and RT-W9.
 #
-# Run:  python3 run.py              # every variant; exit 1 on any unexpected verdict
+# ONE QUERY PER PROVERIF RUN. Every row of the table is its own process with
+# its own memory cap. Grouped, the queries of the unbroken model did not fit
+# the cap once the second client and injective agreement were added; alone,
+# with the one proof-search hint described at HINTED, each does.
+#
+# Run:  python3 run.py              # every row; exit 1 on any unexpected verdict
 #       python3 run.py --list       # the table, without running
 #       python3 run.py --keep DIR   # also leave the generated .pv files in DIR
-#       python3 run.py --jobs N     # variants in parallel (default: up to 4)
-#       python3 run.py --only NAME  # one variant, for working on the model
+#       python3 run.py --jobs N     # rows in parallel (default: up to 4)
+#       python3 run.py --only NAME  # one variant's rows, for working on the model
 #
 # ONE ProVerif version, here and in CI. The verdicts are pinned to it; this
 # script reads the version of the proverif it finds and refuses any other.
@@ -58,9 +63,9 @@ import time
 
 PROVERIF_VERSION = "2.05"
 
-# One variant is one ProVerif process, and the slow ones take tens of
-# minutes. A variant that outlives this is reported as a failure, never
-# skipped: a property nobody waited for is not a property that holds.
+# One row (a variant and one query) is one ProVerif process. A row that
+# outlives this is reported as a failure, never skipped: a property nobody
+# waited for is not a property that holds.
 VARIANT_TIMEOUT_SECONDS = 60 * 60
 
 # ...and one that outgrows this is stopped by the operating system, which
@@ -130,6 +135,18 @@ free cs_kem: kemsk [private].
 free first_request: bitstring [private].
 free first_reply: bitstring [private].
 
+(* A second client the daemon has enrolled, whose static secrets the
+   attacker holds: a stolen or malicious device. Public names, so the
+   attacker has them from the start. What the daemon sends it is public too;
+   the honest client's reply is what must stay secret. *)
+free ms_dh: scalar.
+free ms_kem: kemsk.
+free other_reply: bitstring.
+
+(* The daemon's enrolment list: a static key pair and what that client is
+   served. One daemon process admits whoever is on it. *)
+table enrolled(point, kempk, bitstring).
+
 event DaemonSentM2(point, kempk, bitstring).
 event ClientAcceptsDaemon(point, kempk, bitstring).
 event ClientSentM3(point, kempk, bitstring).
@@ -159,15 +176,22 @@ const broken_kem: bitstring.
 """
 
 QUERIES = {
+    # The three authentication claims are INJECTIVE: each acceptance answers
+    # to its own send, so a replayed handshake is not an acceptance. The two
+    # client claims name the honest client's keys, because the daemon's list
+    # also carries a second client whose keys the attacker holds, and that
+    # client is accepted without any honest send, as it should be.
     "daemon_auth": (
         "query rs: point, rk: kempk, h: bitstring;\n"
-        "  event(ClientAcceptsDaemon(rs, rk, h)) ==> event(DaemonSentM2(rs, rk, h))."),
+        "  inj-event(ClientAcceptsDaemon(rs, rk, h)) ==> inj-event(DaemonSentM2(rs, rk, h))."),
     "client_auth_m3": (
-        "query s: point, sk: kempk, h: bitstring;\n"
-        "  event(DaemonAcceptsClassical(s, sk, h)) ==> event(ClientSentM3(s, sk, h))."),
+        "query h: bitstring;\n"
+        "  inj-event(DaemonAcceptsClassical(exp(g, cs_dh), kpk(cs_kem), h))\n"
+        "    ==> inj-event(ClientSentM3(exp(g, cs_dh), kpk(cs_kem), h))."),
     "client_auth_record": (
-        "query s: point, sk: kempk, h: bitstring;\n"
-        "  event(DaemonAcceptsHybrid(s, sk, h)) ==> event(ClientSentFirstRecord(s, sk, h))."),
+        "query h: bitstring;\n"
+        "  inj-event(DaemonAcceptsHybrid(exp(g, cs_dh), kpk(cs_kem), h))\n"
+        "    ==> inj-event(ClientSentFirstRecord(exp(g, cs_dh), kpk(cs_kem), h))."),
     "request_secret": "query attacker(first_request).",
     "reply_secret": "query attacker(first_reply).",
     # Both halves of the client's static identity, each its own query.
@@ -179,8 +203,10 @@ QUERIES = {
     # of a protocol that cannot run.
     "reach_client": (
         "query s: point, sk: kempk, h: bitstring; event(ClientSentFirstRecord(s, sk, h))."),
+    # The daemon's, for the honest client specifically: with a second client
+    # in the attacker's hands, "some client was accepted" proves nothing.
     "reach_daemon": (
-        "query s: point, sk: kempk, h: bitstring; event(DaemonAcceptsHybrid(s, sk, h))."),
+        "query h: bitstring; event(DaemonAcceptsHybrid(exp(g, cs_dh), kpk(cs_kem), h))."),
 }
 
 
@@ -325,7 +351,7 @@ let Client(rs: point, rsk: kempk) =
   let answer = adec(split2(ck6), n0, empty, reply) in
   0.
 
-let Daemon(enrolled_s: point, enrolled_sk: kempk) =
+let Daemon() =
   let rs = exp(g, rs_dh) in
   let rsk = kpk(rs_kem) in
   let hh0 = mixh(mixh(mixh(hinit(protocol_name), prologue), p2b(rs)), kpk2b(rsk)) in
@@ -362,9 +388,9 @@ let Daemon(enrolled_s: point, enrolled_sk: kempk) =
   let kpk2b(skpub) = adec(k4, n2, h7, cs2) in
   let h8 = mixh(h7, cs2) in{d_se}
   let h9 = mixh(h8, c3) in
-  (* enrolment: only the enrolled client's statics are admitted *)
-  if spub = enrolled_s then
-  if skpub = enrolled_sk then
+  (* enrolment: only statics on the list are admitted, both halves of one
+     entry *)
+  get enrolled(=spub, =skpub, reply_for_it) in
   event DaemonAcceptsClassical(spub, skpub, h9);
   (* message 4 *){d_m4}
   (* first transport record: nothing is served before it opens *)
@@ -376,7 +402,7 @@ let Daemon(enrolled_s: point, enrolled_sk: kempk) =
      named edit that removes message 4's skem exposed, by passing. *)
   let request = adec(split1(ck6), n0, empty, record) in
   event DaemonAcceptsHybrid(spub, skpub, h12);
-  out(c, aead(split2(ck6), n0, empty, first_reply)).
+  out(c, aead(split2(ck6), n0, empty, reply_for_it)).
 """
     if "dh" in breaks:
         text, count = re.subn(r"let (dh_\w+) = exp\([^()]*\) in", r"let \1 = broken_dh in", text)
@@ -396,11 +422,15 @@ def main_process(publish_client, leak_daemon_later, replicate):
     bang = "!" if replicate else ""
     return f"""
 process
+  (* Two clients are enrolled: the honest one, and one whose keys the
+     attacker holds. *)
+  insert enrolled(exp(g, cs_dh), kpk(cs_kem), first_reply);
+  insert enrolled(exp(g, ms_dh), kpk(ms_kem), other_reply);
   (* The daemon's bundle is not a secret: every enrolled client holds it. *)
   out(c, (exp(g, rs_dh), kpk(rs_kem)));
   {publish}
   ( ({bang}Client(exp(g, rs_dh), kpk(rs_kem)))
-  | ({bang}Daemon(exp(g, cs_dh), kpk(cs_kem)))
+  | ({bang}Daemon())
   {leak} )
 """
 
@@ -454,10 +484,34 @@ VARIANTS = [
 
 BOUNDED = {"reachable"}
 
+# A PROOF-SEARCH HINT, and where it is used. ProVerif proves a property by
+# saturating a set of clauses, and which hypothesis it resolves on next is a
+# choice that decides whether saturation ends. Left to its default, two
+# variants grow past the memory cap once the second client is enrolled: the
+# unbroken model on each of its three authentication queries, and the
+# later-key-leak variant on both of its queries. An attacker who holds one
+# enrolled key can finish handshakes, and every Diffie-Hellman value it
+# might have fed them becomes a case. The hint tells ProVerif not to resolve
+# on "the attacker knows exp(x, y)" during saturation, and to try it a
+# bounded number of times when checking the goal.
+#
+# A hint changes the search, never the model: the clauses are the same and
+# resolution is sound whatever is selected. What it can cost is precision
+# (ProVerif's manual, section 6.7.2: such declarations "help the saturation
+# procedure to terminate but they may lower the precision"). So a verdict of
+# "true" under the hint is a proof, and the price shows up as "cannot be
+# proved" -- which this script counts as a failure. That price is real: with
+# the hint, the variants that expect an attack report "cannot be proved"
+# instead of finding it. They do not need the hint and do not get it.
+NOUNIF_DH = "nounif x: point, y: scalar; attacker(exp( *x, *y)) [ignoreAFewTimes].\n"
+HINTED = {"baseline", "identity_daemon_key_leaks_later"}
+
 
 def source(name, breaks, edits, publish_client, leak_daemon_later, queries):
     replicate = name not in BOUNDED
     parts = [PRELUDE, BROKEN]
+    if name in HINTED:
+        parts.append(NOUNIF_DH)
     parts.extend(QUERIES[q] + "\n" for q in queries)
     parts.append(protocol(set(edits), set(breaks)))
     parts.append(main_process(publish_client, leak_daemon_later, replicate))
@@ -502,13 +556,12 @@ def _cap_memory():
     resource.setrlimit(resource.RLIMIT_AS, (VARIANT_MEMORY_BYTES, VARIANT_MEMORY_BYTES))
 
 
-def _report_as_done(results, keep_dir):
+def _report_as_done(results):
     for result in results:
-        name, _expected, _queries, returncode, output, seconds = result
+        name, query, _want, returncode, _output, seconds, peak_mib = result
         state = "timed out" if returncode is None else f"exit {returncode}"
-        print(f"..   {name}: finished, {state}, {seconds:.0f} s", flush=True)
-        if keep_dir is not None:
-            (keep_dir / f"{name}.out").write_text(output, encoding="utf-8")
+        print(f"..   {name}: {query}: finished, {state}, {seconds:.0f} s, peak {peak_mib} MiB",
+              flush=True)
         yield result
 
 
@@ -538,7 +591,7 @@ def main():
     if keep is not None:
         keep.mkdir(parents=True, exist_ok=True)
 
-    # Capped by default: each variant may take VARIANT_MEMORY_BYTES.
+    # Capped by default: each row may take VARIANT_MEMORY_BYTES.
     jobs = int(args[args.index("--jobs") + 1]) if "--jobs" in args else min(os.cpu_count() or 1, 4)
     only = args[args.index("--only") + 1] if "--only" in args else None
     variants = [v for v in VARIANTS if only in (None, v[0])]
@@ -546,55 +599,70 @@ def main():
         print(f"no variant is named {only!r}", file=sys.stderr)
         return 2
 
-    def run_variant(variant, work):
-        name, breaks, edits, publish, leak, expected = variant
-        queries = list(expected)
-        path = work / f"{name}.pv"
-        path.write_text(source(name, breaks, edits, publish, leak, queries), encoding="utf-8")
+    def run_row(row, work):
+        (name, breaks, edits, publish, leak, expected), query = row
+        path = work / f"{name}.{query}.pv"
+        path.write_text(source(name, breaks, edits, publish, leak, [query]), encoding="utf-8")
         started = time.monotonic()
-        try:
-            run = subprocess.run([binary, str(path)], capture_output=True, text=True,
-                                 timeout=VARIANT_TIMEOUT_SECONDS, preexec_fn=_cap_memory)
-        except subprocess.TimeoutExpired:
-            return name, expected, queries, None, "", time.monotonic() - started
-        return (name, expected, queries, run.returncode, run.stdout + run.stderr,
-                time.monotonic() - started)
+        # Output goes to a file, not a pipe, so the child can be reaped with
+        # wait4 and its own peak memory read: the cap is only a good cap if
+        # somebody can see how close each row runs to it.
+        with open(work / f"{name}.{query}.out", "w+", encoding="utf-8") as sink:
+            child = subprocess.Popen([binary, str(path)], stdout=sink, stderr=subprocess.STDOUT,
+                                     preexec_fn=_cap_memory)
+            deadline = started + VARIANT_TIMEOUT_SECONDS
+            while True:
+                pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if pid:
+                    break
+                if time.monotonic() > deadline:
+                    child.kill()
+                    os.wait4(child.pid, 0)
+                    return name, query, expected[query], None, "", time.monotonic() - started, 0
+                time.sleep(0.2)
+            child.returncode = os.waitstatus_to_exitcode(status)
+            sink.seek(0)
+            output = sink.read()
+        return (name, query, expected[query], child.returncode, output,
+                time.monotonic() - started, usage.ru_maxrss // 1024)
 
+    rows = [(variant, query) for variant in variants for query in variant[5]]
     failures = 0
     checked = 0
     with tempfile.TemporaryDirectory() as tmp:
         work = keep or pathlib.Path(tmp)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-            pending = [pool.submit(run_variant, v, work) for v in variants]
+            pending = [pool.submit(run_row, row, work) for row in rows]
             results = (f.result() for f in concurrent.futures.as_completed(pending))
-            # Reported as each variant finishes: the slow ones take tens of
-            # minutes, and a silent job looks like a hung one.
-            results = list(_report_as_done(results, work if keep else None))
-        for name, expected, queries, returncode, output, seconds in results:
+            # Reported as each row finishes: the slow ones take minutes, and
+            # a silent job looks like a hung one.
+            results = list(_report_as_done(results))
+        order = {(row[0][0], row[1]): index for index, row in enumerate(rows)}
+        results.sort(key=lambda r: order[(r[0], r[1])])
+        for name, query, want, returncode, output, seconds, peak_mib in results:
             if returncode is None:
                 failures += 1
-                print(f"FAIL {name}: no verdict within {VARIANT_TIMEOUT_SECONDS} s",
+                print(f"FAIL {name}: {query}: no verdict within {VARIANT_TIMEOUT_SECONDS} s",
                       file=sys.stderr)
                 continue
             got = verdicts(output)
-            if returncode != 0 or len(got) != len(queries):
+            if returncode != 0 or len(got) != 1:
                 failures += 1
-                print(f"FAIL {name}: proverif exit {returncode}, "
-                      f"{len(got)} verdict(s) for {len(queries)} quer(ies)", file=sys.stderr)
+                print(f"FAIL {name}: {query}: proverif exit {returncode}, "
+                      f"{len(got)} verdict(s) for one query", file=sys.stderr)
                 for line in output.strip().splitlines()[-6:]:
                     print("     " + line, file=sys.stderr)
                 continue
-            for query, verdict in zip(queries, got):
-                want = expected[query]
-                # A reachability query is "not event(...)": false means reachable.
-                ok = (verdict == "attack") if want == REACHABLE else (verdict == want)
-                checked += 1
-                if ok:
-                    print(f"ok   {name}: {query} -> {want}  ({seconds:.0f} s)")
-                else:
-                    failures += 1
-                    print(f"FAIL {name}: {query} expected {want}, ProVerif says {verdict}",
-                          file=sys.stderr)
+            verdict = got[0]
+            # A reachability query is "not event(...)": false means reachable.
+            ok = (verdict == "attack") if want == REACHABLE else (verdict == want)
+            checked += 1
+            if ok:
+                print(f"ok   {name}: {query} -> {want}  ({seconds:.0f} s, peak {peak_mib} MiB)")
+            else:
+                failures += 1
+                print(f"FAIL {name}: {query} expected {want}, ProVerif says {verdict}",
+                      file=sys.stderr)
     if checked == 0:
         print("no verdict was checked: the model did not run", file=sys.stderr)
         return 2

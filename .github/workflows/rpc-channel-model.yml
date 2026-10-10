@@ -39,9 +39,9 @@ jobs:
   model:
     name: "RT-P7: hybridXK ProVerif model"
     runs-on: ubuntu-latest
-    # One variant is one ProVerif process; the slow ones take tens of
-    # minutes on four cores. run.py bounds each variant itself and reports a
-    # timeout as a failure.
+    # One row (a variant and one query) is one ProVerif process. run.py
+    # bounds each row in time and in memory itself and reports either bound
+    # as a failure.
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
@@ -59,4 +59,6 @@ jobs:
       - name: Run the model
         run: |
           export PATH="$HOME/.cache/shekyl-proverif/proverif2.05:$PATH"
-          python3 rust/shekyl-rpc-channel/model/run.py
+          # Two rows at a time: each may grow to run.py's 6 GiB cap, and
+          # two caps fit a hosted runner's memory where four would not.
+          python3 rust/shekyl-rpc-channel/model/run.py --jobs 2

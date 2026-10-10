@@ -449,7 +449,9 @@ failing under a named edit** before its pass is trusted:
    daemon authentication under either break; client authentication broken
    at message 3 by a broken X25519 and intact at the first record; secrecy
    of the first request and reply and of the client's identity under either
-   break; and each named edit failing as it must
+   break; and each named edit failing as it must. Authentication is
+   proved injectively, and all of it against a second enrolled client
+   whose static keys the attacker holds
    (`rust/shekyl-rpc-channel/model/run.py`; the record is in the RT-W8
    pre-flight, §4.2).
 
