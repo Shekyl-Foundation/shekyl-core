@@ -143,7 +143,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `4C771D503D5D43D9`, `166195003AFF953A` | No — follows T1 |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `C3DC15690125728A`, `166195003AFF953A` | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
@@ -3589,7 +3589,7 @@ it is re-recorded with the new genesis:
 | Network | `network_id` | Prefix |
 | --- | --- | --- |
 | mainnet | `8E2F854EE0623A16D1218496DC17D398` | `A7BED0CCF3F623E8` |
-| testnet | `C9FF7876B68A92F94EC019872BE78957` | `4C771D503D5D43D9` |
+| testnet | `D61AF1FE4475B6754B5F0340AA735A63` | `C3DC15690125728A` |
 | stagenet | `C1E3B5498DB1E7A63BB892C19E7F768C` | `166195003AFF953A` |
 
 **Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
@@ -3862,7 +3862,7 @@ after them because it governs every vector added later:
    is **dropped at the framing layer, before any Noise processing**, and one
    opening with this network's prefix **proceeds to the transport handshake**. Its inputs
    are the three derived prefixes — mainnet `A7BED0CCF3F623E8`, testnet
-   `4C771D503D5D43D9`, stagenet `166195003AFF953A` — so a cross-pair (dial
+   `C3DC15690125728A`, stagenet `166195003AFF953A` — so a cross-pair (dial
    mainnet with the testnet prefix) is a real, runnable case rather than a
    synthetic one.
 

@@ -221,7 +221,7 @@ const fn hex32(s: &[u8; 64]) -> [u8; 32] {
 const MAINNET_GENESIS: [u8; 32] =
     hex32(b"16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3");
 const TESTNET_GENESIS: [u8; 32] =
-    hex32(b"52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8");
+    hex32(b"b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76");
 const STAGENET_GENESIS: [u8; 32] =
     hex32(b"65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0");
 
@@ -362,7 +362,7 @@ mod tests {
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Testnet)).to_string(),
-            "52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8"
+            "b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76"
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Stagenet)).to_string(),

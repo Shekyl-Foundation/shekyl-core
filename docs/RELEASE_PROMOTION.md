@@ -190,6 +190,40 @@ the candidate SHA:
 If **any** changed → re-run the rehearsal from clean datadirs per
 `TESTNET_REHEARSAL_CHECKLIST.md` before this candidate can become a release.
 
+**The other direction is a gate, and it is scripted:**
+
+```bash
+python3 scripts/release/check_frozen_tuple.py <previous-tag> <frozen-SHA>
+```
+
+It fails when the consensus surface moved since the previous tag and the
+testnet genesis hash did not. Two builds with one genesis share a network id:
+they find each other, connect, reject each other's blocks and ban each other.
+That is what a cut from `dev` after `v3.1.0-alpha.9` would have shipped: the
+rule that reserved the header's minor version made every block the alpha.9
+fleet had mined invalid, and the genesis, and so the id, was unchanged.
+
+The remedy is one integer. Move `config::testnet::GENESIS_NONCE` and re-record
+what follows from it, in one change:
+
+- [ ] the nonce in `src/cryptonote_config.h`;
+- [ ] the block id, from `cargo run -p shekyl-genesis-tool -- block-id --network testnet`,
+      in `rust/shekyl-rpc-types/src/identity.rs` (`TESTNET_GENESIS`),
+      `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
+- [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which
+      fails and prints the new bytes until they are recorded, and the same
+      two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
+
+The genesis transaction, the recipients files and the other networks do not
+change. "The consensus surface moved" is read from the reviewed constants
+digest and from the captured replay chains; either moving is enough, and the
+script's header says why both are read.
+
+A rotated id partitions the old fleet from the new at the handshake. It does
+not remove the reason to stop the whole fleet before starting any of it on
+the new build: an old node that keeps dialing a new one is scored and banned
+for a day, as the `v3.1.0-alpha.9` changelog records.
+
 Also pin the deterministic artifacts per `GENESIS_TRANSPARENCY.md`: block 0 hash,
 block 0 blob, block 0 miner-tx hash, daemon version + git commit, startup tuple.
 All three seeds must compare byte-for-byte.
