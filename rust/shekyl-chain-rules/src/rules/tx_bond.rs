@@ -236,9 +236,14 @@ impl Rule for J14 {
 ///    shard is admitted there (rule 16: the predicate was ruled, not
 ///    inherited) and refused here.
 /// 2. [`ChainView::r_market`] at the **last settled epoch as of the
-///    parent** ([`SettlementSchedule::last_settled_epoch_as_of_parent`]).
-///    `None` — an epoch that never closed for the shard — refuses the
-///    join (slice 8 Q4, ruled fail-closed). The C++ reads the row's
+///    parent**: the slash watermark ([`ChainView::last_settled_slash_epoch`],
+///    A9), the last epoch whose slash pass — and so whose emission gather —
+///    has run (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D11c`). One recorded
+///    definition of "settled", not `epoch(parent) − 1`: the price rows of
+///    that epoch are written by the pass at the last block of the
+///    parent's epoch, an epoch after it closed. `None` — no epoch settled
+///    yet, or a shard that was not closed and final when the epoch was
+///    gathered — refuses the join (slice 8 Q4, ruled fail-closed). The C++ reads the row's
 ///    absence as `0` and scores it; that is the one ruled non-parity on
 ///    this row, and a conformance trip over a chain whose join lands
 ///    before the shard's first close reproduces it as a Rust refusal
@@ -457,9 +462,9 @@ fn judge_join_market<'id, V: ChainView<'id>>(
 /// compact set connecting at genesis has no parent to read and no shard
 /// can be closed, so it is not admissible. Per shard, in list order:
 /// [`closed_and_final`] under the rule set's reorg cap, then the price at
-/// the last settled epoch as of the parent — `None` is not admissible
-/// (slice 8 Q4) — then the age of the close the predicate just read,
-/// under the rule set's schedule.
+/// the slash watermark as of the parent — `None`, watermark or row, is not
+/// admissible (slice 8 Q4) — then the age of the close the predicate just
+/// read, under the rule set's schedule.
 ///
 /// # Errors
 ///
@@ -487,8 +492,9 @@ fn holding_admissible<'id, V: ChainView<'id>>(
         return Ok(false);
     };
     let schedule = rule_set.settlement_schedule();
-    let settled =
-        SettlementEpoch::from_raw(schedule.last_settled_epoch_as_of_parent(parent.to_raw()));
+    let Some(settled) = view.last_settled_slash_epoch().map_err(ViewRead::View)? else {
+        return Ok(false);
+    };
     let mut gathered = Vec::with_capacity(holdings.shard_ids.len());
     for &raw in holdings.shard_ids.as_slice() {
         let shard = ShardId::from_raw(raw);

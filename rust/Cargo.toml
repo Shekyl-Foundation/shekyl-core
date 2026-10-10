@@ -55,6 +55,7 @@ members = [
     # one of them (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to
     # nothing off Windows. See docs/design/WINDOWS_WALLET_SUPPORT.md.
     "shekyl-win-sec",
+    "shekyl-thread-priority",
 
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
@@ -260,6 +261,10 @@ members = [
     # stack plan, socket counts, the ban list. No sockets. The Noise
     # layer stays shekyl-p2p-transport. Levin is the session above the plan.
     "shekyl-transport-layer",
+    # The peer lists (P2P_3_SLICE_1_PEERLIST_BRIEF.md): gray, white, the
+    # one door between them, the cached disclosure sample, ban demotion,
+    # the per-session intake cap. Data only: no socket, no dial, no FFI.
+    "shekyl-peerlist",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
     "shekyl-socks",
@@ -282,6 +287,10 @@ members = [
     # Nothing in the production graph depends on it. The epee recording
     # binary is deleted and is not linked into this crate.
     "shekyl-p2p-harness",
+
+    # P's serving body store: chunk-sealed shard_frame bodies under
+    # StakeEngine (WSS-Q1(a)). No Tor, no daemon (WSS-17).
+    "shekyl-p-store",
 
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)

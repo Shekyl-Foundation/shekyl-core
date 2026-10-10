@@ -127,12 +127,20 @@ pub struct MockChain {
     /// view keys it ([`with_r_market`](Self::with_r_market)). Empty unless
     /// a fixture prices a shard.
     r_market: BTreeMap<(ShardId, SettlementEpoch), RMarket>,
-    /// Planted frozen closes — CEN-J23's `budget` and CEN-J25's
-    /// `sigma_work` reads, per epoch ([`with_close`](Self::with_close)).
-    /// With the prices, the archival reads this chain plants; every other
-    /// archival read answers *no bonds*. Empty unless a fixture closes an
-    /// epoch.
-    closes: BTreeMap<SettlementEpoch, (SigmaWorkMilli, AtomicUnits)>,
+    /// Planted frozen budgets — CEN-J23's `budget` read, per epoch
+    /// ([`with_close`](Self::with_close)). Empty unless a fixture closes
+    /// an epoch.
+    budgets: BTreeMap<SettlementEpoch, AtomicUnits>,
+    /// Planted work totals — CEN-J23's `sigma_work` read and CEN-J25's
+    /// denominator, per epoch ([`with_gather`](Self::with_gather)). Empty
+    /// unless a fixture settles an epoch.
+    sigma_works: BTreeMap<SettlementEpoch, SigmaWorkMilli>,
+    /// The slash watermark: the last epoch whose slash pass has run. A
+    /// planted price or work total is a row that pass wrote, so planting
+    /// either raises this to its epoch. With the prices, budgets and work
+    /// totals, the archival reads this chain plants; every other archival
+    /// read answers *no bonds*.
+    slash_watermark: Option<SettlementEpoch>,
 }
 
 impl Default for MockChain {
@@ -145,7 +153,9 @@ impl Default for MockChain {
             transactions: BTreeSet::new(),
             total_burned: AtomicUnits::ZERO,
             r_market: BTreeMap::new(),
-            closes: BTreeMap::new(),
+            budgets: BTreeMap::new(),
+            sigma_works: BTreeMap::new(),
+            slash_watermark: None,
         }
     }
 }
@@ -256,36 +266,51 @@ impl MockChain {
         self
     }
 
-    /// Plant `shard`'s market price at `epoch`'s close — what CEN-J15
-    /// reads at the last settled epoch as of the parent. Planted archival
-    /// state, and why: J15's accept needs a shard that is closed, final
-    /// **and priced**, the close is the fold's (which the chain already
-    /// synthesizes), and no driven chain in the tree reaches a close — a
-    /// shard is `SHARD_LENGTH` of real proof bytes. A price is a value the
-    /// epoch close wrote, not a record; planting it tests no construction
-    /// (DRS-E4 §5.2's concern). A shard with no planted price reads
-    /// `None`, which is J15's Q4 refusal.
+    /// Plant `shard`'s market price at `epoch` — what CEN-J15 reads at the
+    /// slash watermark as of the parent. The row is one `epoch`'s slash
+    /// pass wrote, so planting it settles `epoch`: the watermark is raised
+    /// to at least it ([`Self::settled_through`]). Planted archival state,
+    /// and why: J15's accept needs a shard that is closed, final **and
+    /// priced**, the close is the fold's (which the chain already
+    /// synthesizes), and no driven chain in the tree reaches a slash pass
+    /// over a closed shard — a shard is `SHARD_LENGTH` of real proof
+    /// bytes. A price is a value the pass wrote, not a record; planting it
+    /// tests no construction (DRS-E4 §5.2's concern). A shard with no
+    /// planted price reads `None`, which is J15's Q4 refusal.
     #[must_use]
     pub fn with_r_market(mut self, shard: ShardId, epoch: SettlementEpoch, price: RMarket) -> Self {
         self.r_market.insert((shard, epoch), price);
+        self.settled_through(epoch)
+    }
+
+    /// Plant `epoch`'s frozen budget — what the epoch close writes, and
+    /// half of what CEN-J23 reads to admit a claimed epoch. A closed epoch
+    /// with no planted work total is the ordinary state between its close
+    /// and its slash pass, and J23's refusal. The same justification as
+    /// [`with_r_market`](Self::with_r_market): a settled value, not a
+    /// record.
+    #[must_use]
+    pub fn with_close(mut self, epoch: SettlementEpoch, budget: AtomicUnits) -> Self {
+        self.budgets.insert(epoch, budget);
         self
     }
 
-    /// Plant `epoch`'s frozen close — the `Σwork(E)` and `budget(E)` the
-    /// fold writes in one event, what CEN-J23 reads to admit a claimed
-    /// epoch and CEN-J25 verifies against. The same justification as
-    /// [`with_r_market`](Self::with_r_market): a frozen close is a settled
-    /// value, not a record, and J25's refusal arm needs a claimed epoch
-    /// J23 admits (`rules/tx_emission_against.rs`). An epoch with no
-    /// planted close reads `None` for both, which is J23's refusal.
+    /// Plant `epoch`'s `Σwork` — what the epoch's slash pass writes, the
+    /// row whose existence lets a claim cite the epoch (CEN-J23) and the
+    /// denominator CEN-J25 verifies against. Planting it settles `epoch`
+    /// ([`Self::settled_through`]). J25's refusal arm needs a claimed
+    /// epoch J23 admits (`rules/tx_emission_against.rs`).
     #[must_use]
-    pub fn with_close(
-        mut self,
-        epoch: SettlementEpoch,
-        sigma_work: SigmaWorkMilli,
-        budget: AtomicUnits,
-    ) -> Self {
-        self.closes.insert(epoch, (sigma_work, budget));
+    pub fn with_gather(mut self, epoch: SettlementEpoch, sigma_work: SigmaWorkMilli) -> Self {
+        self.sigma_works.insert(epoch, sigma_work);
+        self.settled_through(epoch)
+    }
+
+    /// Raise the slash watermark to at least `epoch`: the slash pass has
+    /// run for it and every epoch below.
+    #[must_use]
+    pub fn settled_through(mut self, epoch: SettlementEpoch) -> Self {
+        self.slash_watermark = Some(self.slash_watermark.map_or(epoch, |w| w.max(epoch)));
         self
     }
 
@@ -464,10 +489,18 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // held shard is a real chain that posted the bond, through `connect`.
     // The planted reads are the market price (`MockChain::with_r_market`,
     // which says why: CEN-J15's accept over a closed shard has no driven
-    // witness, a shard being `SHARD_LENGTH` of real proof bytes) and the
-    // frozen close (`MockChain::with_close`: CEN-J25's refusal needs an
-    // epoch CEN-J23 admits).
-    crate::archival_reads!(empty, r_market from chain.r_market, close from chain.closes);
+    // witness, a shard being `SHARD_LENGTH` of real proof bytes), the
+    // frozen budget and the work total (`MockChain::with_close`,
+    // `with_gather`: CEN-J25's refusal needs an epoch CEN-J23 admits, and
+    // J23's a closed epoch not yet settled), and the slash watermark the
+    // price is read at.
+    crate::archival_reads!(
+        empty,
+        r_market from chain.r_market,
+        sigma_work from chain.sigma_works,
+        budget from chain.budgets,
+        slash_watermark from chain.slash_watermark
+    );
 }
 
 mod assert;

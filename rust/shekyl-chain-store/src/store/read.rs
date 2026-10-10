@@ -37,6 +37,8 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
+use std::collections::BTreeMap;
+
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
@@ -460,6 +462,27 @@ impl ReadSnapshot<'_> {
             AtHeight::Recorded(info) => AtHeight::Recorded(info.cumulative_tx_count),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
+    }
+
+    /// How many outputs the transaction at `id` recorded, from
+    /// `tx_outputs` (**T5**). The shard fold counts in-domain outputs from
+    /// this row, not by parsing the pruned segment.
+    ///
+    /// # Errors
+    ///
+    /// As [`tx_prunable`](Self::tx_prunable): an id at or past the dense
+    /// count is [`AtIndex::BeyondCount`]; a hole below it is SI-9.
+    pub fn tx_output_count(&self, id: TxStorageId) -> Result<AtIndex<u64>, StoreError> {
+        Ok(
+            match tx_reads::output_indices_at(&self.txn, id)
+                .map_err(chain_reads::ReadFault::into_plain)?
+            {
+                AtIndex::Recorded(indices) => AtIndex::Recorded(
+                    u64::try_from(indices.0.len()).expect("an output count fits u64"),
+                ),
+                AtIndex::BeyondCount => AtIndex::BeyondCount,
+            },
+        )
     }
 
     /// The long-term weight median **in force for** the block at `height`
@@ -1035,6 +1058,18 @@ impl ReadSnapshot<'_> {
     /// [`IssuedDigest::ZERO`] when none was.
     pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
         archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A17.** The shards `persona` was Served on at each of `epochs`,
+    /// ascending per epoch. An epoch with none is absent. One hop of the
+    /// persona's shards, then a point read of each epoch (`SO-D2`).
+    pub fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(&self.txn, persona, epochs)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// The archival state as of this snapshot, as the E2 trace carries it

@@ -960,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the full evidence set: 12 cells x 8 seeds, ~1.3M draws per maturity run; run with --release --ignored"]
+    #[ignore = "the full evidence set: 12 cells x 8 seeds, ~1.3M draws per maturity run; run with --release --ignored; nightly economics-sim-ignored"]
     fn the_evidence_set_runs_and_the_table_renders() {
         let cells = evidence_cells();
         assert_eq!(cells.len(), 12);

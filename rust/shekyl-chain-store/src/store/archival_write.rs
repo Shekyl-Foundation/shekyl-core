@@ -294,29 +294,35 @@ impl<'id> WriteBatch<'_, 'id> {
         self.upsert_property::<TotalBurnedCell>(&total)
     }
 
-    /// Phase 9: the accrual, the settlement rows and the slashes decided on
-    /// them, the close — the C++'s order (`blockchain_db.cpp:689–693`),
-    /// with settlement ahead of the slash it decides (`SO-D7`).
+    /// Phase 9: the accrual, the settlement rows, the slashes decided on
+    /// them, the settled epochs' emission gather, and the close — the
+    /// C++'s order (`blockchain_db.cpp:689–693`), with settlement ahead of
+    /// the slash it decides (`SO-D7`) and the gather after it (`SO-D11`).
+    ///
+    /// SI-21's two write sets are here. The close freezes the budget:
+    /// `archival_budget[E]`, insert-once. The slash pass settles whole:
+    /// `archival_sigma_work[E]` and every `(shard, E)` row of
+    /// `archival_r_market` its snapshot named, each insert-once on `E`.
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
         valid: &ChainValid<'id, V>,
     ) -> Result<(), StoreError> {
         let delta = valid.block().archival();
-        if self.apply_policy().applies(ArchivalFamily::BudgetAccrual) {
+        let policy = self.apply_policy();
+        if policy.applies(ArchivalFamily::BudgetAccrual) {
             self.write_accrual(delta)?;
         }
         self.write_settlements(delta)?;
         self.write_slashes(connecting, delta)?;
-        if let Some(close) = delta.close() {
-            let policy = self.apply_policy();
-            let epoch = close.epoch();
+        for gather in delta.gathers() {
+            let epoch = gather.epoch();
             if policy.applies(ArchivalFamily::RMarket) {
                 let mut table = self.open_insert_table(
                     ARCHIVAL_R_MARKET,
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?;
-                for (shard, r_market) in close.r_market() {
+                for (shard, r_market) in gather.r_market() {
                     table.insert(
                         (shard.to_raw(), epoch.to_raw()),
                         r_market.encoded().as_encoded(),
@@ -328,9 +334,12 @@ impl<'id> WriteBatch<'_, 'id> {
                     ARCHIVAL_SIGMA_WORK,
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
-                .insert(epoch.to_raw(), close.sigma_work().encoded().as_encoded())?;
+                .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
             }
+        }
+        if let Some(close) = delta.close() {
             if policy.applies(ArchivalFamily::Budget) {
+                let epoch = close.epoch();
                 self.open_insert_table(
                     ARCHIVAL_BUDGET,
                     StoreInvariant::EpochCloseRewritten { epoch },

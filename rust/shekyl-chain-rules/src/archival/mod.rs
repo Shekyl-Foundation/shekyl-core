@@ -44,8 +44,9 @@
 //!   **count** after this block connects, and every schedule test is
 //!   written against it: an epoch's slashes fold when
 //!   `count > deadline(E)`; an epoch closes when
-//!   `schedule.close_due_at_height(count)`; the close's
-//!   `close_block_height` is `count`. This module keeps that convention
+//!   `schedule.close_due_at_height(count)`; an epoch's
+//!   `close_block_height`, which its gather reads ages at, is the `count`
+//!   of its close. This module keeps that convention
 //!   and names it `count` (= `connecting + 1`) so a reader does not mistake
 //!   it for the connecting height. The retention crate's own docs sometimes
 //!   say "connecting"; the operand is the count.
@@ -57,11 +58,17 @@
 //!   FFI's entry points. The validator reads no environment; a chain
 //!   captured under a shortened regtest epoch replays under a Fakechain
 //!   set naming that epoch, in any process.
-//! - **Zero is a value** (`ARW-Q4`, §3.6). The close writes an `RMarket`
-//!   for **every closed shard**, zeros included; the C++ skipped zeros on
-//!   the same screen it wrote a zero budget row *because* zero must be
-//!   distinguishable. A6's `None` then means exactly "this epoch did not
-//!   close with this shard in it".
+//! - **Zero is a value** (`ARW-Q4`, §3.6). The gather writes an `RMarket`
+//!   for **every shard of its universe**, zeros included; the C++ skipped
+//!   zeros on the same screen it wrote a zero budget row *because* zero
+//!   must be distinguishable. A6's `None` then means exactly "this epoch
+//!   was not gathered with this shard in it".
+//! - **The close freezes the budget; the slash pass gathers** (`SO-D11`,
+//!   `ARCHIVAL_SETTLEMENT_WRITER.md` §15). An epoch's co-holder counts and
+//!   `Σwork` are folded over its settlement rows, which the slash pass
+//!   writes an epoch after the close, so that pass computes them
+//!   ([`EpochGather`]) over the pairs settled Served and the shards closed
+//!   and final. The C++ gathers at the close on any pass.
 //! - **One accrual row per epoch** (`ARW-Q3`, §3.5). The C++ wrote a row
 //!   per block and range-summed at the close. Here the delta carries the
 //!   open epoch's **post-image total** — what `archival_budget_accruing[E]`
@@ -93,8 +100,9 @@
 //! # Order
 //!
 //! Listed transactions in block order, inputs in transaction order, then
-//! the accrual, then the slash scan (every epoch whose deadline `count`
-//! passes, ascending; records in persona-key order), then the close. The
+//! the accrual, then the slash pass (every epoch whose deadline `count`
+//! passes, ascending: settle, slash in persona-key order, gather), then
+//! the close. The
 //! store writes the delta in the same order (§3.2 phase 2 and phase 9), so
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
@@ -102,16 +110,18 @@
 mod arm;
 mod close;
 mod delta;
+mod drawable;
 mod inputs;
 mod slash;
 
 pub(crate) use arm::BondArm;
-pub(crate) use close::{accrue, gather_epoch_snapshot, recorded_credits, EpochSnapshot};
+pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
-    Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
-    Slash,
+    Accrual, ArchivalDelta, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey,
+    Settlement, Slash,
 };
+pub use drawable::DrawableSet;
 pub(crate) use slash::apply_slash;
 
 use std::collections::btree_map::Entry;
@@ -119,7 +129,7 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
 use shekyl_types::archival::{BondRecord, Holdings, SettlementRow};
-use shekyl_types::{BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::block::Candidate;
@@ -165,7 +175,11 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     accrual: AtomicUnits,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<ArchivalDelta>, ViewRead<V::Fault>> {
-    let mut transition = Transition::new(connecting, rule_set.settlement_schedule());
+    let mut transition = Transition::new(
+        connecting,
+        rule_set.settlement_schedule(),
+        rule_set.reorg_cap(),
+    );
     for (n, tx) in candidate.transactions.iter().enumerate() {
         for (i, input) in tx.prefix.inputs.iter().enumerate() {
             let locus = Locus::Input {
@@ -179,7 +193,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     }
     let accrued = transition.accrue(view, accrual)?;
     transition.scan_slashes(view)?;
-    let close = transition.close(view, accrued)?;
+    let close = transition.close(accrued);
     coverage.insert(L7::ROW);
     Ok(Ok(transition.into_delta(accrued, close)))
 }
@@ -223,12 +237,18 @@ struct Transition {
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
     settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    /// The emission gather of each epoch the pass has settled, in epoch
+    /// order.
+    gathers: Vec<EpochGather>,
+    /// The in-force reorg cap: what makes a closed shard final, and so
+    /// part of the gather's universe.
+    reorg_cap: BlockCount,
     slashes: Vec<Slash>,
     slash_watermark: Option<SettlementEpoch>,
 }
 
 impl Transition {
-    fn new(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
+    fn new(connecting: BlockHeight, schedule: SettlementSchedule, reorg_cap: BlockCount) -> Self {
         Self {
             connecting,
             schedule,
@@ -236,6 +256,8 @@ impl Transition {
             posts: BTreeMap::new(),
             serve_credits: Vec::new(),
             settled: BTreeMap::new(),
+            gathers: Vec::new(),
+            reorg_cap,
             slashes: Vec::new(),
             slash_watermark: None,
         }
@@ -324,15 +346,16 @@ impl Transition {
                 row,
             })
             .collect();
-        ArchivalDelta::new(
+        ArchivalDelta {
             records,
-            self.serve_credits,
+            serve_credits: self.serve_credits,
             settlements,
-            self.slashes,
-            self.slash_watermark,
+            gathers: self.gathers,
+            slashes: self.slashes,
+            slash_watermark: self.slash_watermark,
             accrual,
             close,
-        )
+        }
     }
 }
 
