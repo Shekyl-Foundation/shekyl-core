@@ -53,7 +53,6 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "rpc/archival_claim_source.h"
 #include "rpc/archival_shard_coverage.h"
-#include "rpc/archival_shard_fetch.h"
 #include "rpc/rpc_args.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
@@ -1515,38 +1514,6 @@ namespace cryptonote
       MERROR("Failed to gather archival shard coverage: " << e.what());
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Failed to gather archival shard coverage";
-      return false;
-    }
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_request_archival_shard(const COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::request& req, COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(request_archival_shard);
-    (void)ctx;
-    /* Restricted gate is Rust `RESTRICTED_METHODS` (RK-D6), same as
-       `on_relay_tx`. Coverage stays public; this fetch is admin-only. */
-    try
-    {
-      if (req.shard_id == std::numeric_limits<uint64_t>::max())
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "shard_id is required";
-        return false;
-      }
-      if (!rpc::fill_request_archival_shard(req.shard_id, res))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE;
-        error_resp.message = "could not retrieve this archive";
-        return false;
-      }
-    }
-    catch (const std::exception& e)
-    {
-      MERROR("Failed to request archival shard: " << e.what());
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "could not retrieve this archive";
       return false;
     }
     res.status = CORE_RPC_STATUS_OK;

@@ -5,8 +5,16 @@ The archival mechanism functions without this; this layer makes
 archival legible to humans. Originally drafted as V4-scoped; rescoped
 to V3 by the 2026-04-27 actor-architecture decision-log entry, which
 established `shekyl-shard-visual` as a domain-primitive library crate
-(no actor wrapping; pure-CPU, async-free, deterministic) shipping
-alongside the V3.x `ArchivalEngine` (Stage 5) ship.
+(no actor wrapping; pure-CPU, async-free, deterministic). **Production
+input (2026-10-08,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md) `SV-D`):** the
+aggregate a daemon answers to `request_archival_shard` after fetching the
+shard's archival body from a holder, reached by every viewer through the
+wallet contract's `get_shard_view` (CLI `shard fetch`, the GUI's Shards
+page) or, for shekyl-web, the site's own daemon server-side. The
+`ArchivalEngine` (Stage 5) framing this document was drafted under is
+*records-was*: the daemon's fetch scheduler is the producer, not a wallet
+engine.
 
 This is a library crate, not an actor. The 2026-04-27 actor-
 architecture decision pinned actor-shape as wrong for visualization:
@@ -190,8 +198,17 @@ Candidate derived properties, with their ruling-A dispositions
 (*Parameter admissibility* below; the original draft called all of
 these "public", which the sweep found untrue of the real chain):
 
-- Shard hash (256 bits, uniformly distributed) — **admitted**
-- Block count in shard — **admitted**
+- Shard hash (256 bits, uniformly distributed) — **admitted**; **defined
+  2026-10-08 (`SV-D1` RULED,
+  [`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md))** as a
+  cSHAKE256 fold over the shard's archival bytes (each in-domain
+  transaction's prunable region and `pqc_auths`, in storage order). It
+  requires the pruned components to compute — a node holding only skeleton
+  rows cannot produce it — and is distinct from the per-transaction
+  verification digests a challenge checks. *Was:* the frozen curve-tree
+  sub-root `R_k` of the retired leaf-segment partition.
+- Block count in shard — **admitted** (`SV-D4`: the span `[h_first, h_last]`
+  of the shard's `tx_id` range; a boundary block counts in both neighbours)
 - Transaction count (aggregate) — **admitted**
 - Time range (first block timestamp to last block timestamp) — **admitted**
 - Output count (new outputs in the shard's block range) — **admitted**
@@ -225,6 +242,15 @@ derived while walking the list. It is the design-review checkpoint from
 > no key, no wallet state, no holder-specific privilege — so that a
 > rendering publishes nothing about the shard that holding the shard
 > does not.**
+
+**Re-keyed 2026-10-08 (`SV-D7` PROPOSED,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)):** under
+`SHT-Q2` a holder holds the **archival good** — prunable regions and
+`pqc_auths` — not blocks; block headers, coinbases and timestamps are
+skeleton rows every node holds. Read "the shard's serialized blocks" as
+*held archival bytes plus the skeleton every node holds*. The intent is
+unchanged; the four admitted features stay admitted; the shard hash's
+input is the archival good only (`SV-D1`).
 
 Two clarifications that do work:
 
@@ -308,12 +334,17 @@ property (a rendering would be a function of wallet state). Cost of
 (a): conforming implementations carry superseded renderers; spec
 versions are expected to be rare enough that this is bounded.
 
-Enforcement of the height pin lands with the Stage 5 cutover, when
-shards acquire creation heights — the named blocker (rule 22): no
-height exists for a fixture aggregate, and only one spec version
-exists today. What lands now is the operand: every `CandidateRecipe`
-carries `spec_version` (`"candidate.v1"`), so exports are
-self-describing and the future comparison has its field.
+Enforcement of the height pin is blocked by name (rule 22) on a second
+spec version existing: with one, there is nothing to select between.
+**The height half of the blocker lifted 2026-10-08 (`SV-D5`)**: every
+`get_shard_view` answer carries the shard's `close_height`, the height
+the pin reads — the earlier text, *"lands with the Stage 5 cutover, when
+shards acquire creation heights"*, is records-was. What is landed is the
+operand on both sides: every `CandidateRecipe` carries `spec_version`
+(`"candidate.v1"`) and every production view carries `close_height`, so
+the comparison has both its fields and awaits only a `candidate.v2`.
+Falsify by a second `spec_version` existing with no selector keyed on
+`close_height`.
 
 ### Overridden renders are visibly non-canonical (hash-override ruling)
 
@@ -341,9 +372,11 @@ aggregate handed to the constructor, unmodified, with no override and
 no synthetic input. It does not attest that the aggregate is truthful
 chain data — the renderer is a pure function and cannot know; that
 binding belongs to the layer that produces aggregates
-(`shekyl-shard-source` rejects a stale handle whose hash disagrees
-with the resolved aggregate today; `ArchivalEngine` supplies verified
-shards at Stage 5). Asking the render layer to verify its input
+(the daemon's fetch scheduler, which answers the aggregate only after
+the body verified against the requester's own skeleton rows and folds
+the view hash in that same pass — `SV-D2`, `SV-D8`; the fixture-only
+`shekyl-shard-source` rejects a stale handle whose hash disagrees with
+the resolved aggregate). Asking the render layer to verify its input
 against the chain would put a chain-integrity check at a
 pure-function boundary that has no chain access — the same
 wrong-layer shape as demanding wire properties of a seal-admission
@@ -610,14 +643,15 @@ layout), so the two implementations agree on the structural draws.
 
 ### Pre-archival preview exception (GUI wallet)
 
-Before `ArchivalEngine` (Stage 5) ships, the GUI wallet may expose a
-**beta preview** on the Staking page that renders **fixture aggregates**
-(illustrative fake-chain samples) and optional user-supplied shard hashes with
-preset feature vectors. This is **not** production archival UI; it validates
-the `shekyl-shard-visual` library and gives stakers a tangible preview of
-deterministic shard identity. Production cutover replaces fixtures with real
-archived shards from `ArchivalEngine`; cache keys use `(shard_id,
-shard_content_hash)` per below.
+The GUI wallet's Staking page may expose a **beta preview** that renders
+**fixture aggregates** (illustrative fake-chain samples) and optional
+user-supplied shard hashes with preset feature vectors. This is **not**
+production archival UI; it validates the `shekyl-shard-visual` library and
+gives stakers a tangible preview of deterministic shard identity. The
+production surface is the Shards page, drawn from the wallet contract's
+`get_shard_view` (`SV-D`, 2026-10-08): real shards, each a real fetch by
+the wallet's daemon; cache keys use `(shard_id, shard_view_hash)` per below.
+The preview retires when the fixtures have no remaining caller.
 
 ---
 
@@ -1264,7 +1298,11 @@ result, and re-renders only if the shard content changes (reorg).
 
 Cache invalidation: keyed on (shard_id, shard_content_hash, and the
 crate's exported `RENDER_REVISION`). The content hash changes on a
-reorg; the revision changes when the pixel derivation itself changes
+reorg (the daemon's aggregate cache is keyed on the shard's
+`close_height` and that block's hash, and an **open** tip shard is
+refused rather than rendered — `SV-D5`,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)); the
+revision changes when the pixel derivation itself changes
 pre-freeze (review #617: a cache keyed without it can serve a stale
 PNG alongside a recipe the current code would not produce). Once a
 spec version freezes, a revision bump within it is a defect.
@@ -1306,29 +1344,32 @@ any X with a deterministic parameter mapping.
 
 ## V3-ship implications
 
-This feature ships in V3.x alongside the V3.x `ArchivalEngine` Stage 5
-ship. The mechanism is purely an addition layered on top of the V3.x
-archival system. Visualizations are computed client-side from public
-chain data; no consensus involvement, no new protocol surface, no new
-RPC methods.
+**Superseded 2026-10-08 (`SV-D`,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)).** The
+paragraphs below were written when the producer of a shard's aggregate was
+to be a wallet-side `ArchivalEngine` and the layer added no RPC. Neither
+holds: the producer is the daemon's fetch scheduler, and the layer added
+one wallet method, `get_shard_view` (`wallet_rpc.yaml` 0.11.0), over the
+daemon's existing restricted `request_archival_shard`. Visualizations are
+still computed client-side from public chain data with no consensus
+involvement. What ships, and what gates it:
 
-The dependencies and timing:
+- **The surface is landed; the daemon's facts are not.** CLI `shard
+  fetch`, the GUI Shards page and shekyl-web's staking guide all draw from
+  `get_shard_view` / `request_archival_shard`. Until the `DRS-E3` store
+  cutover gives the daemon a shard-range read, every shipped daemon answers
+  `ARCHIVAL_SKELETON_ABSENT` (`SV-D9`) and every viewer shows *not offered
+  by this daemon* — a state, never an empty picture.
+- **Shards that closed before the facts exist get visualizations
+  retroactively.** The view is a function of the archival bytes and the
+  skeleton, both of which the network already holds.
 
-- **V3.0 ships without production visualization.** The
-  `shekyl-shard-visual` crate exists and is integrated today, but only
-  behind the pre-archival GUI preview (fixture aggregates on the
-  Staking tab, per the preview exception above); no production shard
-  surface renders visuals until `ArchivalEngine` (Stage 5) provides
-  real shards.
-- **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
-  together.** They are companion features: archival produces the
-  shards; visualization makes them legible. Both gate on the
-  simulation work described in `docs/V3_STAKER_ARCHIVAL.md`. Both
-  ship in the same V3.x dot-release.
-- **Existing shards in any earlier V3.x phase get visualizations
-  retroactively.** Visualizations are derived from existing public
-  data; activating the rendering layer in a later V3.x dot-release
-  produces visuals for shards that already existed.
+*Records-was (the text this supersedes):* This feature ships in V3.x
+alongside the V3.x `ArchivalEngine` Stage 5 ship; no new RPC methods.
+V3.0 ships without production visualization; the crate is integrated only
+behind the pre-archival GUI preview until `ArchivalEngine` (Stage 5)
+provides real shards; both gate on the simulation work in
+`docs/V3_STAKER_ARCHIVAL.md`.
 
 V3.0's design surface forecloses nothing here. The
 domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
@@ -1389,8 +1430,10 @@ time (immutable); (b) shards re-render with the latest algorithm
 is more "true to the data." **RULED IN PART: ruled on its privacy half** — path (a),
 immutable render at the creation height — in *Spec version is chain data
 (algorithm-versioning ruling)*. What remains is enforcement of the height
-pin, blocked by name (rule 22) on Stage 5 creation heights: no height
-exists for a fixture aggregate today.
+pin, blocked by name (rule 22) on a second spec version existing; the
+height it would read, `close_height`, arrives with every production view
+since 2026-10-08 (`SV-D5`). *Records-was:* blocked on Stage 5 creation
+heights.
 
 ---
 
@@ -1432,21 +1475,27 @@ This is on-chain data with on-chain visualization, with deliberately
 *no* trading mechanism. The visual exists to make data legible, full
 stop.
 
-V3.x ships this alongside `docs/V3_STAKER_ARCHIVAL.md`. Together they
+This layer ships beside `docs/V3_STAKER_ARCHIVAL.md`'s mechanism, and
+its production input is that mechanism's own fetch (`SV-D2`): a picture
+of a shard is drawn from the bytes an archivist served. Together they
 make archival economically incentivized, distributed, and culturally
 resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
-(stakers see their portfolios). V3.0 ships the architectural surface
-that makes V3.x activation purely additive (rename entry pre-commits
-the `shekyl-shard-visual` crate name; the no-tradeability
-enforcement-point inventory is codified in *Not tradeable*).
+(stakers see their portfolios). The surface is landed (`get_shard_view`,
+CLI, GUI, shekyl-web); what it waits on is the daemon's shard-range read
+(`SV-D9`) and the archivist serving the same unit the client verifies
+(`WSS-Q1`). *Records-was:* V3.x ships this; V3.0 ships only the
+architectural surface that makes activation additive.
 
 ---
 
 ## References and cross-cutting concerns
 
 - `docs/V3_STAKER_ARCHIVAL.md` — the archival mechanism this layer
-  visualizes (companion document, ships together in V3.x)
+  visualizes (companion document)
+- `docs/design/SHARD_VIEW_FETCH.md` — the `SV-D` round: the view hash,
+  the fetch that produces the aggregate, the Rust RPC, the viewers, and
+  the `SV-D9` blocker on the daemon's facts
 - `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture:
   actor model with staged migration from composition* (pin of
   `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —

@@ -915,7 +915,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 19] = [
+    let links: [(&str, &str); 20] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -992,6 +992,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v19.json"),
             include_str!("vectors/rpc/get_version_synced_v20.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v20.json"),
+            include_str!("vectors/rpc/get_version_synced_v21.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1010,7 +1014,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 19] = [
+    const ADDED_AT_LINK: [&[&str]; 20] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1029,7 +1033,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &["target_height"], // 3.40 (synced replies carry the core target; 0 is no longer "synchronized")
         &[], // 3.41 (the regtest serve-credit injector returns its receipt `height`, DRS-E4 commit 7; get_version gains nothing)
         &[], // 3.42 (get_info reports already_generated_coins; get_version gains nothing)
-        &[], // 3.43 (get_version drops hard_forks; hard_fork_info deleted; get_version gains nothing)
+        &[], // 3.43 (request_archival_shard served natively over the W-shard view: archival_len, close_height, the open/absent codes, SV-D3; get_version gains nothing)
+        &[], // 3.44 (get_version drops hard_forks; hard_fork_info deleted; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1040,8 +1045,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // Per link, the members that bump is allowed to retire — the mirror of
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
-    // 3.43 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 19] = [
+    // 3.44 one retires nothing.
+    const REMOVED_AT_LINK: [&[&str]; 20] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1060,7 +1065,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[],             // 3.40
         &[],             // 3.41
         &[],             // 3.42
-        &["hard_forks"], // 3.43 (block version is the constant 1; no schedule to report)
+        &[],             // 3.43 (the shard view; get_version retires nothing)
+        &["hard_forks"], // 3.44 (block version is the constant 1; no schedule to report)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1142,7 +1148,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
 
 /// **Subtraction.** The two `get_version` cases that sit beside the chain —
 /// a syncing node, and a node whose core reported no target — lose
-/// `hard_forks` at 3.43 and nothing else. Neither is a link of the chain
+/// `hard_forks` at 3.44 and nothing else. Neither is a link of the chain
 /// above (that one is the synced case), so each is derived here from the
 /// vector its parity test read before the bump. `version` is left as the
 /// predecessor's: `assert_version_parity` pins the constant, these files pin
@@ -1501,7 +1507,7 @@ fn sync_info_empty_matches_the_oracle() {
 //
 // **A green parity run here does NOT mean "Rust matches C++".** Three of this
 // slice's methods changed shape at 3.27; two are still served (the third,
-// `hard_fork_info`, went at 3.43 with its vectors), so their `_v1` captures
+// `hard_fork_info`, went at 3.44 with its vectors), so their `_v1` captures
 // are the *before* half of a pair and the `_v2` files are the 3.27 shape.
 // Each `_v2` is held honest by a delta test below that **re-derives it from
 // `_v1`**, so a hand-edited `_v2` fails rather than passing as its own

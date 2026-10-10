@@ -64,6 +64,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod archival;
 pub mod bin_commands;
 pub mod chain;
 pub mod consensus_digest;
@@ -72,6 +73,10 @@ pub mod headers;
 pub mod identity;
 pub mod p2p;
 pub mod transactions;
+pub use archival::{
+    RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
+    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+};
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
     GetOIndexesResponse,

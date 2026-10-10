@@ -33,6 +33,7 @@ use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
 use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
+use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
 use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
 use axum::http::{HeaderValue, Method};
@@ -54,6 +55,8 @@ pub struct AppState {
     /// Live connection accounting; shared with the [`LimitedListener`] and read
     /// by `get_info` to report `rpc_connections_count`.
     pub conn_tracker: Arc<ConnTracker>,
+    /// What `request_archival_shard` reads (`shard_view::ShardViewFacts`).
+    pub shard_view: Arc<dyn ShardViewFacts>,
 }
 
 pub struct ServerConfig {
@@ -63,6 +66,10 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
     /// Concurrent-connection caps enforced by the [`LimitedListener`].
     pub conn_limits: ConnLimits,
+    /// The shard view's facts source. The composition root that can compose
+    /// a `ViewDesk` (the daemon image, `SV-D9`) supplies it; the default is
+    /// [`SkeletonAbsent`], a daemon that serves no shard view.
+    pub shard_view: Arc<dyn ShardViewFacts>,
 }
 
 impl Default for ServerConfig {
@@ -72,6 +79,7 @@ impl Default for ServerConfig {
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
             conn_limits: ConnLimits::default(),
+            shard_view: Arc::new(SkeletonAbsent),
         }
     }
 }
@@ -495,6 +503,7 @@ pub async fn serve_listeners(
         submit_engine,
         restricted: config.restricted,
         conn_tracker: conn_tracker.clone(),
+        shard_view: config.shard_view.clone(),
     });
     let app = build_router(state, &config.cors_origins);
     info!(

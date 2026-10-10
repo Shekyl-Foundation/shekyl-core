@@ -38,7 +38,7 @@ to see how a capture was set up, check out the commit that added
 `tests/unit_tests/rpc_oracle_vectors.cpp` in the slice you care about —
 `git log --diff-filter=A --follow -- tests/unit_tests/rpc_oracle_vectors.cpp`
 lists every one of them. `hard_fork_info` and its two vectors were deleted
-with the method at 3.43, so that capture has no file here.
+with the method at 3.44, so that capture has no file here.
 
 Once a method's C++ is deleted there is nothing left to capture from *for that
 method*, so a later shape change to it cannot be re-captured and must be argued
@@ -95,7 +95,8 @@ predecessor by that constant and by the members that link declares added or
 removed, no link may be skipped, and the newest may not go stale against the
 constant. `get_version_absent_target_v1.json` is the one `_v1` here that is
 not a C++ capture: it is `get_version_synced_v6.json` minus `hard_forks`
-(3.43), derived by the subtraction test above, and takes a new case name
+(the member `get_version` drops at 3.44), derived by the subtraction test
+above, and takes a new case name
 because `synced_v7` onward carry a target. It replaced a per-pair test
 that was renamed at each bump, which is how a chain with a missing vector
 passed.

@@ -352,6 +352,31 @@ struct JsonRpcResponse<T> {
     result: T,
 }
 
+/// A JSON-RPC `error` member the daemon answered with: the method ran and
+/// refused, with a code the caller is meant to branch on.
+///
+/// [`Rpc::json_rpc_call`] folds this into [`RpcError::InvalidNode`] with
+/// the raw body as text, which is right for the calls that have no
+/// refusal to read (a missing `result` *is* a protocol fault there). A
+/// method whose refusals are part of its contract — `request_archival_shard`'s
+/// open / unavailable / absent codes — reads them through
+/// [`Rpc::json_rpc_call_or_refusal`] and gets this value instead.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct JsonRpcRefusal {
+    /// The daemon's error code (`CORE_RPC_ERROR_CODE_*`).
+    pub code: i64,
+    /// The daemon's message. Daemon RPC messages are secret-free by
+    /// contract; a wallet may show them, never parse them.
+    pub message: String,
+}
+
+/// The full envelope, for the calls that read `error` as an answer.
+#[derive(Debug, Deserialize)]
+struct JsonRpcEnvelope<T> {
+    result: Option<T>,
+    error: Option<JsonRpcRefusal>,
+}
+
 fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
     hex::decode(value).map_err(|_| RpcError::InvalidNode("expected hex wasn't hex".to_string()))
 }
@@ -464,6 +489,42 @@ pub trait Rpc: Sync + Clone {
                 .rpc_call::<_, JsonRpcResponse<Response>>("json_rpc", Some(req))
                 .await?
                 .result)
+        }
+    }
+
+    /// A JSON-RPC call whose `error` member is an answer, not a fault.
+    ///
+    /// `Ok(Ok(response))` is a `result`; `Ok(Err(refusal))` is the daemon's
+    /// typed refusal, code and message intact; `Err(_)` is the transport or
+    /// a body that is neither (no `result` and no `error`, or both). Use this
+    /// for a method whose refusal codes the caller maps onto its own
+    /// contract; [`Rpc::json_rpc_call`] is for the methods where any
+    /// non-`result` reply is a protocol fault.
+    fn json_rpc_call_or_refusal<Response: DeserializeOwned + Debug>(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> impl Send + Future<Output = Result<Result<Response, JsonRpcRefusal>, RpcError>> {
+        async move {
+            let mut req = json!({ "jsonrpc": "2.0", "id": 0, "method": method });
+            if let Some(params) = params {
+                req.as_object_mut()
+                    .expect("accessing object as object failed?")
+                    .insert("params".into(), params);
+            }
+            let envelope = self
+                .rpc_call::<_, JsonRpcEnvelope<Response>>("json_rpc", Some(req))
+                .await?;
+            match (envelope.result, envelope.error) {
+                (Some(result), None) => Ok(Ok(result)),
+                (None, Some(refusal)) => Ok(Err(refusal)),
+                (Some(_), Some(_)) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried both result and error".to_string(),
+                )),
+                (None, None) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried neither result nor error".to_string(),
+                )),
+            }
         }
     }
 

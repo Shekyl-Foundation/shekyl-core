@@ -15,7 +15,6 @@ use crate::segment::{
     leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS,
 };
-use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
@@ -457,39 +456,11 @@ pub struct FrozenSegmentBody {
 impl FrozenSegmentBody {
     /// Bytes not yet read. Before the first [`Self::next_chunk`] this is
     /// the whole segment, known without touching a leaf — which is what
-    /// lets the response head go out before any store read.
-    ///
-    /// **The segment, not the whole response.** A served response also
-    /// carries the frame header and, eventually, padding; its length is
-    /// [`ServedFrameHeader::framed_len`] via [`Self::frame_header`]. Both
-    /// are computable in this same pre-read window, which is the property
-    /// that matters.
+    /// lets the response head go out before any store read: the serve
+    /// loop takes this once at open as the body's declared length.
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         usize::try_from(self.end - self.next).expect("segment length fits usize") * LEAF_BYTES
-    }
-
-    /// The served-frame header for this body — [`RF-D4`], the two leading
-    /// lengths of the response.
-    ///
-    /// **Before the first [`Self::next_chunk`]**, like
-    /// [`Self::remaining_bytes`]: it describes what is still to be written,
-    /// and the frame's `leaf_count` is only the segment's leaf count while
-    /// nothing has been read.
-    ///
-    /// Infallible, and the reason belongs here rather than at the caller: a
-    /// *frozen segment* spans `[k·E, (k+1)·E)`, so its leaf count is at most
-    /// `leaves_per_segment()` by construction. The bound
-    /// [`ServedFrameHeader::for_segment`] enforces is a property this type
-    /// already has, and a caller made to handle its failure would be handling
-    /// a case the store cannot produce.
-    ///
-    /// [`RF-D4`]: crate::served_frame
-    #[must_use]
-    pub fn frame_header(&self) -> ServedFrameHeader {
-        let leaves = usize::try_from(self.end - self.next).expect("segment length fits usize");
-        ServedFrameHeader::for_segment(leaves)
-            .expect("a frozen segment spans at most leaves_per_segment() leaves")
     }
 
     /// Next body chunk of at most `max_bytes`, or `None` once the segment

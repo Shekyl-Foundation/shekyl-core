@@ -217,6 +217,7 @@ enum NativeMethod {
     BlockHeaderByHash,
     BlockHeadersRange,
     FeeEstimate,
+    RequestArchivalShard,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -244,6 +245,9 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
         "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,
         "get_fee_estimate" => NativeMethod::FeeEstimate,
+        // One spelling: the method was born in the Rust registry (3.31)
+        // and never had a C++ alias.
+        "request_archival_shard" => NativeMethod::RequestArchivalShard,
         _ => return None,
     })
 }
@@ -374,6 +378,18 @@ async fn native_method(
                     crate::methods::get_fee_estimate(&FfiChainFacts::new(core), &request)
                 })
                 .await,
+            ))
+        }
+        NativeMethod::RequestArchivalShard => {
+            let request = match crate::shard_view::request_archival_shard_request(params) {
+                Ok(request) => request,
+                Err(fault) => return Some(Err(fault)),
+            };
+            // Not `run_blocking`: the facts source is async by contract — a
+            // fetch over the network when a composition root supplies one —
+            // and holds no C++ core, so no worker is taken.
+            Some(frame_native(
+                crate::shard_view::request_archival_shard(state.shard_view.as_ref(), request).await,
             ))
         }
         NativeMethod::BlockHeaderByHeight => {
@@ -540,6 +556,11 @@ mod tests {
             false,
         ),
         ("get_fee_estimate", NativeMethod::FeeEstimate, false),
+        (
+            "request_archival_shard",
+            NativeMethod::RequestArchivalShard,
+            true,
+        ),
     ];
 
     /// The dispatcher's own recognizer answers every specified name and

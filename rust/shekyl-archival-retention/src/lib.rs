@@ -32,6 +32,9 @@
 //!   ([`AttestationSet`]: parse, root, countersignatures) the daemon FFI
 //!   and the Rust validator (CEN-B4) both run.
 //! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
+//! - [`shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
+//!   streaming [`ShardViewHasher`] over each in-domain transaction's prunable
+//!   region and `pqc_auths`. Not a verification digest; never a skeleton row.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
@@ -73,6 +76,7 @@ pub mod segment_freeze;
 pub mod serve_eligibility;
 pub mod settlement_select;
 pub mod shard_coverage;
+pub mod shard_view_hash;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -206,6 +210,9 @@ pub use segment_freeze::{
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use shard_coverage::{
     join_scarcity_micro, order_shard_coverage, ShardCoverageIn, ShardCoverageOut,
+};
+pub use shard_view_hash::{
+    shard_view_hash, ArchivalTx, ShardViewHasher, SHARD_VIEW_HASH_CUSTOMIZATION,
 };
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,

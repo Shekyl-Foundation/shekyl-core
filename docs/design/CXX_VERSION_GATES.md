@@ -114,7 +114,7 @@ left a fork mechanism with pieces missing:
   `header_version_is_valid` compares against the two constants.
 - **The `HF_VERSION_*` constants.** All four were 1 and none gated anything.
 - **The RPC surface.** `hard_fork_info` and `get_version.hard_forks`
-  (`CORE_RPC_VERSION` 3.43), the console command, and the fork clauses of
+  (`CORE_RPC_VERSION` 3.44), the console command, and the fork clauses of
   the `status` and dynamic-stats lines. No wallet read any of it.
 - **The handshake's `top_version`**, in the C++ and in `shekyl-levin`. A
   peer that still sends it is read with the key ignored.

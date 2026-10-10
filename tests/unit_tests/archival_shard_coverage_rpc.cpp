@@ -5,13 +5,11 @@
 
 #include "gtest/gtest.h"
 
-#include <limits>
 #include <stdexcept>
 #include <vector>
 
 #include "archival_lmdb_test_helpers.h"
 #include "rpc/archival_shard_coverage.h"
-#include "rpc/archival_shard_fetch.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "shekyl/consensus_constants_generated.h"
 #include "shekyl/shekyl_ffi.h"
@@ -55,25 +53,6 @@ public:
 };
 
 }  // namespace
-
-TEST(archival_shard_coverage_rpc, fetch_is_typed_miss_until_scheduler)
-{
-  COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::response res{};
-  EXPECT_FALSE(rpc::fill_request_archival_shard(0, res));
-  EXPECT_EQ(res.shard_id, 0u);
-  EXPECT_TRUE(res.shard_hash.empty());
-}
-
-TEST(archival_shard_coverage_rpc, omitted_shard_id_is_sentinel_zero_is_real)
-{
-  COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::request omitted{};
-  ASSERT_TRUE(epee::serialization::load_t_from_json(omitted, "{}"));
-  EXPECT_EQ(omitted.shard_id, std::numeric_limits<uint64_t>::max());
-
-  COMMAND_RPC_REQUEST_ARCHIVAL_SHARD::request zero{};
-  ASSERT_TRUE(epee::serialization::load_t_from_json(zero, "{\"shard_id\":0}"));
-  EXPECT_EQ(zero.shard_id, 0u);
-}
 
 TEST(archival_shard_coverage_rpc, empty_frozen_universe_is_empty_list_at_tip)
 {

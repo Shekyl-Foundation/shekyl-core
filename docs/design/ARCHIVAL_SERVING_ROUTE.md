@@ -30,10 +30,12 @@ not route grammar: `shekyl-onion-v3` is the one rend-spec transform,
 typed on the daemon as `ServingEndpoint` and on the wallet as
 `OnionIdentity` (`PWD-E9`).
 
-The body after `\r\n\r\n` is the `RF-D4` frame then the
-**countersignature envelope**:
-`shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload ‖
-`HybridSignature` canonical bytes
+The body after `\r\n\r\n` is the shard body then the
+**countersignature envelope**: the provider's bytes, unframed by the
+serve loop (the `SHT-Q2` tx-range body in `shekyl_wire::shard_frame`,
+`SF-D8` as amended 2026-10-08; ~~the `RF-D4`
+`shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload~~, retired
+the same day) ‖ `HybridSignature` canonical bytes
 (`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385)
 (`SF-D8`). The envelope is the response's last bytes: the signed
 transcript includes a digest of every body byte ahead of it, salted with
