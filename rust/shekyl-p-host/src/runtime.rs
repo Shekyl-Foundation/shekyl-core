@@ -22,21 +22,23 @@
 //! contention, timing already reveals load, and a population of personas
 //! that could opt out would be a fingerprint. When the platform refuses,
 //! the thread serves at normal priority for as long as it keeps running.
-//! It is counted on [`PriorityFailures`] until it exits, and the first
-//! refusal's cause is kept there for the engine, which logs one warning
-//! per host (rule 82). This crate is on `P`'s serving path and writes no
-//! log line of its own (`WSS-20`). Serving is never refused for it.
+//! It is recorded on [`PriorityFailures`] until it exits. The first
+//! refusal's cause is kept beside that set, under the same lock, and the
+//! counter wakes the engine, which logs one warning per host (rule 82).
+//! This crate is on `P`'s serving path and writes no log line of its own
+//! (`WSS-20`). Serving is never refused for it.
 
-use std::cell::Cell;
+use std::collections::HashSet;
 use std::io;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::ThreadId;
 use std::time::Duration;
 
 use shekyl_p_serve::MAX_INFLIGHT;
 use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
 use shekyl_thread_priority::{lower_current_thread, NotLowered};
+use tokio::sync::Notify;
 
 /// The serving runtime's async workers.
 ///
@@ -71,15 +73,6 @@ const SERVING_BLOCKING_THREADS: NonZeroUsize = match NonZeroUsize::new(SERVING_B
     None => panic!("SERVING_BLOCKING is zero"),
 };
 
-// Set by the start hook, cleared by the stop hook. A thread that exits
-// — shutdown, or Tokio retiring an idle blocking thread — leaves the
-// gauge only when this is set, so a thread that was lowered is not
-// subtracted and a stop without a start cannot wrap the count.
-// `thread_local!` does not take a doc comment.
-std::thread_local! {
-    static THIS_THREAD_NOT_LOWERED: Cell<bool> = const { Cell::new(false) };
-}
-
 /// How long the runtime's shutdown waits for a blocking hop still running.
 ///
 /// A hop is one chunk read and folded, or one sign round trip into the
@@ -92,81 +85,133 @@ const SERVING_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 ///
 /// Born by the caller that reports serving status and handed to the host,
 /// so the count outlives any one host and is readable without holding it.
-/// The start hook adds a thread whose call failed. The stop hook removes
-/// it when that thread exits, including when the runtime retires an idle
-/// blocking thread and starts another for the next hop. The count is
-/// therefore the live set, at most [`SERVING_WORKERS`] plus
-/// [`SERVING_BLOCKING`], and zero is the expected reading on every
-/// supported platform. It is the OS call's result for the threads that
-/// are still running, and nothing more: it does not say whether the
-/// lowered priority yields CPU to the daemon, which depends on the two
-/// processes being in one scheduling group (§9.8, the confirming run).
+/// The start hook records a thread whose call failed. The stop hook
+/// removes it when that thread exits, including when the runtime retires
+/// an idle blocking thread and starts another for the next hop. The count
+/// is that live set. Steady state stays within the runtime's budget
+/// ([`SERVING_WORKERS`] plus [`SERVING_BLOCKING`]). A thread whose stop
+/// has not yet run can still be in the set for a moment beside the thread
+/// that replaced it — Tokio drops its blocking-pool count before the stop
+/// hook — and the set is not clamped to hide that. Zero is the expected
+/// reading on every supported platform. It is the OS call's result for the
+/// threads that are still running, and nothing more: it does not say
+/// whether the lowered priority yields CPU to the daemon, which depends on
+/// the two processes being in one scheduling group (§9.8, the confirming
+/// run).
 ///
-/// The first refusal's cause is kept beside the count
-/// ([`Self::first_refusal`]) so the engine can say why in the one warning
-/// it logs per host. This crate logs nothing itself (`WSS-20`).
+/// The first refusal's cause sits in the same state as the set
+/// ([`Self::first_refusal`]), so a reader that sees a count sees the cause.
+/// [`Self::until_first_refusal`] wakes on that first record. This crate
+/// logs nothing itself (`WSS-20`).
 #[derive(Clone, Debug, Default)]
 pub struct PriorityFailures(Arc<Refusals>);
 
+/// The set of threads whose lowering failed, the first cause, and the
+/// wake that publishes the cause.
+///
+/// One mutex, not a counter beside a separate cell: on aarch64 a relaxed
+/// increment can be observed while an earlier store to a different atomic
+/// is still invisible, and the warning would then burn its only line on a
+/// missing cause. The cause and the set change together or not at all.
 #[derive(Debug, Default)]
 struct Refusals {
-    live: AtomicU32,
-    first_cause: OnceLock<String>,
+    state: Mutex<RefusalState>,
+    /// Wakes every [`PriorityFailures::until_first_refusal`] subscribed
+    /// when the first cause is stored. A level, not a permit: the cause
+    /// stays set, `notify_waiters` wakes every waiter parked at that
+    /// moment, and a waiter that arrives later reads the cause. Tokio
+    /// 1.51 snapshots this call's generation inside `notified()`, so a
+    /// future created before the call completes on its first poll even
+    /// when it had not yet registered a waiter.
+    notify: Notify,
+}
+
+/// Threads at normal priority, and why the first of them was not lowered.
+#[derive(Debug, Default)]
+struct RefusalState {
+    /// Threads whose call failed and that have not yet exited.
+    ///
+    /// A [`ThreadId`] is not reused, so a thread that has exited cannot
+    /// be removed by a later thread's stop, and a stop that never
+    /// retained finds nothing to remove.
+    unlowered: HashSet<ThreadId>,
+    /// Why the first call failed, as the platform put it.
+    first_cause: Option<String>,
 }
 
 impl PriorityFailures {
-    /// A fresh counter at zero.
+    /// A fresh counter: no thread unlowered, no cause.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The refusal state, recovering a poisoned lock.
+    ///
+    /// The critical sections insert or remove one thread id and, once,
+    /// store a cause. A panic while holding the lock cannot leave a torn
+    /// pair, and propagating the poison would turn that panic into a
+    /// serving thread that stops answering — a slash.
+    fn lock(&self) -> std::sync::MutexGuard<'_, RefusalState> {
+        self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Serving threads running at normal priority because lowering failed.
     #[must_use]
     pub fn count(&self) -> u32 {
-        self.0.live.load(Ordering::Relaxed)
+        let live = self.lock().unlowered.len();
+        u32::try_from(live).unwrap_or(u32::MAX)
     }
 
     /// Why the first thread that failed was not lowered, as the platform
-    /// put it, or `None` while every thread's call has succeeded. Set
+    /// put it, or `None` while every thread's call has succeeded. Stored
     /// once per counter; a later refusal does not replace it.
     #[must_use]
     pub fn first_refusal(&self) -> Option<String> {
-        self.0.first_cause.get().cloned()
+        self.lock().first_cause.clone()
     }
 
-    /// A refusal recorded without a thread, for a test of the engine's
-    /// one warning. Dev edge only, on the same feature as the test signer;
-    /// `scripts/ci/check_p_fetch_dep_cut.py` keeps that feature out of
-    /// every production graph.
-    #[cfg(feature = "test-signer")]
-    pub fn refused_for_test(&self, cause: &NotLowered) {
-        self.retain(cause);
-    }
-
-    /// This thread is one of the live set.
-    fn retain(&self, cause: &NotLowered) {
-        // `set` fails when a cause is already kept; the first stays.
-        let _already_kept = self.0.first_cause.set(cause.to_string());
-        self.0.live.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// This thread has exited. A release without a retain leaves the
-    /// gauge where it is: wrapping would publish a huge count for a set
-    /// that got smaller.
-    fn release(&self) {
-        // `Err` is a release that found zero. The gauge stays: wrapping
-        // would publish a huge count for a set that got smaller. The
-        // returned value is the reading the update observed.
-        match self
-            .0
-            .live
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                count.checked_sub(1)
-            }) {
-            Ok(previous) => debug_assert!(previous > 0),
-            Err(already_zero) => debug_assert_eq!(already_zero, 0),
+    /// The first cause, once a thread has failed to lower.
+    ///
+    /// The wait is created before the read. Tokio 1.51's `notified()`
+    /// snapshots `notify_waiters`'s generation at that moment, so a
+    /// refusal that lands between the snapshot and the read is either
+    /// observed by the read or delivered when the wait is polled. A cause
+    /// already stored returns without waiting. The notification is a
+    /// level: every waiter subscribed when the first cause is stored is
+    /// woken, and a second waiter is not left asleep on a single permit.
+    #[must_use]
+    pub async fn until_first_refusal(&self) -> String {
+        loop {
+            let notified = self.0.notify.notified();
+            if let Some(cause) = self.first_refusal() {
+                return cause;
+            }
+            notified.await;
         }
+    }
+
+    /// This thread is one of the live set. The first call also stores
+    /// the cause and wakes every subscriber.
+    fn retain(&self, cause: &NotLowered) {
+        let first = {
+            let mut state = self.lock();
+            let first = state.first_cause.is_none();
+            if first {
+                state.first_cause = Some(cause.to_string());
+            }
+            state.unlowered.insert(std::thread::current().id());
+            first
+        };
+        if first {
+            self.0.notify.notify_waiters();
+        }
+    }
+
+    /// This thread has exited. A release that does not match a retain
+    /// removes nothing: the id was never inserted, so the set cannot wrap.
+    fn release(&self) {
+        self.lock().unlowered.remove(&std::thread::current().id());
     }
 
     /// The start and stop hooks that keep [`Self::count`] equal to the
@@ -174,7 +219,9 @@ impl PriorityFailures {
     ///
     /// The pair is one value. The start hook cannot be installed without
     /// the stop hook that removes the same thread, so a retired blocking
-    /// thread cannot stay in the count.
+    /// thread cannot stay in the count. The stop hook runs on every
+    /// thread of the pool; a thread that was lowered is not in the set,
+    /// and removing it changes nothing.
     fn thread_hooks(
         &self,
         lower: impl Fn() -> Result<(), NotLowered> + Send + Sync + 'static,
@@ -184,15 +231,10 @@ impl PriorityFailures {
         ThreadHooks::pair(
             move || {
                 if let Err(cause) = lower() {
-                    THIS_THREAD_NOT_LOWERED.with(|slot| slot.set(true));
                     retained.retain(&cause);
                 }
             },
-            move || {
-                if THIS_THREAD_NOT_LOWERED.with(|slot| slot.replace(false)) {
-                    released.release();
-                }
-            },
+            move || released.release(),
         )
     }
 }
@@ -275,6 +317,56 @@ mod tests {
 
     use super::*;
 
+    /// The first refusal wakes every waiter subscribed before it, keeps
+    /// that cause, and a release of the same thread brings the count to
+    /// zero. A second refusal does not replace the cause or grow the set.
+    #[tokio::test]
+    async fn the_first_refusal_wakes_every_waiter_and_keeps_its_cause() {
+        let failures = PriorityFailures::new();
+        let mut first = std::pin::pin!(failures.until_first_refusal());
+        let mut second = std::pin::pin!(failures.until_first_refusal());
+        tokio::select! {
+            biased;
+            _ = &mut first => panic!("the first waiter woke with no refusal"),
+            _ = &mut second => panic!("the second waiter woke with no refusal"),
+            () = tokio::time::sleep(Duration::from_millis(30)) => {}
+        }
+
+        failures.retain(&NotLowered::Unsupported);
+        let cause = tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .expect("the first refusal wakes every subscribed waiter");
+        let also = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("a second waiter is not left asleep on one permit");
+        assert_eq!(cause, also);
+        assert!(
+            cause.contains("no per-thread priority under normal scheduling"),
+            "{cause}"
+        );
+        assert_eq!(failures.count(), 1);
+        assert_eq!(failures.first_refusal().as_deref(), Some(cause.as_str()));
+
+        // The same thread, a different cause: one member, and the first
+        // cause is the one the warning will name.
+        failures.retain(&NotLowered::Refused(io::Error::from_raw_os_error(1)));
+        assert_eq!(failures.count(), 1);
+        assert_eq!(failures.first_refusal().as_deref(), Some(cause.as_str()));
+
+        failures.release();
+        assert_eq!(failures.count(), 0);
+        // A release that matches no retain leaves the set alone.
+        failures.release();
+        assert_eq!(failures.count(), 0);
+
+        // The cause stays after the thread has exited. A waiter that
+        // arrives then reads it and does not wait.
+        let late = tokio::time::timeout(Duration::from_millis(50), failures.until_first_refusal())
+            .await
+            .expect("a cause already kept returns without waiting");
+        assert_eq!(late, cause);
+    }
+
     /// Every thread the serving runtime hands work to reads back at the
     /// serving nice value, and the test's own runtime's threads do not move.
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -332,7 +424,7 @@ mod tests {
     }
 
     /// The failure path: the setter refuses on every thread, every thread
-    /// is counted once, one warning is logged, and an endpoint bound on
+    /// is counted once, the first cause is kept, and an endpoint bound on
     /// that runtime still answers.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_lowering_is_counted_once_per_thread_and_serving_goes_on() {
@@ -368,9 +460,12 @@ mod tests {
         }
         let seen = threads.lock().expect("seen").len();
         assert!(seen >= 2, "a worker and a blocking thread ran: {seen}");
-        // The count is the threads still up whose call failed, so it
-        // cannot pass the budget. Threads start as work arrives, so the
-        // count is at least the threads that took work.
+        // Sampled after the work has finished, while those threads are still
+        // inside the pool: the live set is within the budget. Threads start
+        // as work arrives, so the count is at least the threads that took
+        // work. A thread whose stop hook has not yet run can sit beside its
+        // replacement for a moment; that overlap is not clamped, and this
+        // sample is not it.
         let counted = failures.count() as usize;
         assert!(counted >= seen, "counted {counted}, saw {seen} threads");
         assert!(counted <= SERVING_WORKERS + SERVING_BLOCKING);

@@ -2303,9 +2303,13 @@ by default.
    runtime retires an idle blocking thread and the next hop starts
    another. The count therefore stays within the runtime's budget. The
    host keeps the first cause and logs nothing — it is on `P`'s serving
-   path, which carries no logging surface (`WSS-20`); the engine's serving
-   task logs one warning per host naming that cause, where the count is,
-   and that serving continues. Serving is never refused for this: a
+   path, which carries no logging surface (`WSS-20`). The counter wakes
+   the engine's serving task on the first refusal, and that task logs
+   one warning per host naming that cause, where the count is, and that
+   serving continues. The warning does not ride the serve-set refresh:
+   that loop awaits the store actor with no timeout, and a refusal
+   during the wait is the case the line exists for. Serving is never
+   refused for this: a
    persona that stops answering accrues misses toward a slash, and a
    priority it could not set is not a reason to be slashed. The counter
    reports the OS call's result for the threads that are still running,
@@ -2327,8 +2331,10 @@ blocking task on it, and reads each thread's nice value back
 (`getpriority(PRIO_PROCESS, 0)` on the thread itself, cross-checked
 against `/proc/self/task/<tid>/stat`), asserting 19; the same test
 asserts the test's own runtime threads are unchanged. The failure path
-runs through an injected failing setter and asserts the counter, the
-single warning, and that the endpoint still answers. A further failure
+runs through an injected failing setter and asserts the counter and
+that the endpoint still answers. The counter's own test asserts that
+the first refusal wakes every subscribed waiter and keeps that cause.
+The engine test asserts the one warning's text. A further failure
 test waits out Tokio's blocking-thread keep-alive, asserts the retired
 thread has left the count, asserts the thread that replaces it is
 counted on its own call, and asserts shutdown brings the count to zero.

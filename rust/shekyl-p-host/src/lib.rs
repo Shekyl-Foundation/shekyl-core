@@ -88,13 +88,10 @@ pub mod signer;
 pub use daemon_tip::DaemonTipCache;
 pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
 pub use runtime::{PriorityFailures, SERVING_BLOCKING, SERVING_WORKERS};
-// Why a serving thread was not lowered: the type `PriorityFailures::first_refusal`
-// summarises and the dev-edge recorder takes.
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
     Staleness, StalenessBound,
 };
 pub use shekyl_p_serve::{sign_pass_transcript, PassKey, ServeCounterReader, SignRefused};
-pub use shekyl_thread_priority::NotLowered;
 #[cfg(any(test, feature = "test-signer"))]
 pub use signer::{signer_at_synced_tip, RefusingKey};
