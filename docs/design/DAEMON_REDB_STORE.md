@@ -1403,14 +1403,20 @@ rows are the C++'s own reading, committed as data in every captured trace
 (E4 commit 7 re-captures the six). The rule's text above is kept as the
 record of what gated E4; it no longer gates anything.
 
-*Bound on one family, 2026-10-09 (`SLK-Q1` built, `SLK-5`):* the
-snapshot's `slash_log` family is **rows at or above the slash log's
-retirement floor**, `tip − ((k + n)·SEB + reorg_cap)` — the whole log only
-while the chain is under that window, which every captured corpus chain is
-(the round's `SLK-5`, read at the manifests) and the slash witness is (a
-compile-time assertion in `slash_scan_bench_tests.rs`, `WITNESS_TIP <
-WINDOW`). A comparison across the window compares two
-retiring nodes' readings, not a node's against history.
+*Bound on one family, 2026-10-09 (`SLK-Q1` built, `SLK-5`), corrected
+2026-10-10:* the snapshot's `slash_log` family is the table, walked whole
+(`ReadSnapshot::archival_snapshot`). A boundary deletes rows strictly
+below that boundary's floor, `height − ((k + n)·SEB + reorg_cap)`, and the
+delete is not journaled, so a pop does not restore them. The snapshot does
+not re-filter to the floor of the tip it is taken at: between boundaries
+the table still holds rows the next boundary will drop, and after a pop it
+holds whatever the boundaries that already committed left. At a boundary,
+just after that prune, the table is rows at or above that boundary's floor
+— the whole log while the chain is under the window. Every captured corpus
+chain is under the window (the round's `SLK-5`, read at the manifests) and
+the slash witness is (`slash_scan_bench_tests.rs`, `WITNESS_TIP < WINDOW`),
+so those readings are the whole log. A comparison across the window
+compares two retiring nodes' readings, not a node's against history.
 
 Pop-reversal atomicity is FCMP++ Phase-4 load-bearing.
 
