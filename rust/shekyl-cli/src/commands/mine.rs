@@ -22,10 +22,11 @@
 
 use serde_json::{json, Value};
 
-use crate::daemon::{DaemonClient, DaemonInfo};
+use crate::daemon::DaemonClient;
 use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
 use crate::rpc_client::RpcSession;
+use shekyl_rpc_types::GetInfoResponse;
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
 /// Not a tuned miner — operators who care pass a count or drive `shekyld`
@@ -44,7 +45,7 @@ fn gate<'a>(
     rpc: &RpcSession,
     daemon: Option<&'a DaemonClient>,
     network: &str,
-) -> Result<(&'a DaemonClient, DaemonInfo), CommandFailed> {
+) -> Result<(&'a DaemonClient, GetInfoResponse), CommandFailed> {
     // F5 — mining verbs are wallet verbs: the payout address is this
     // wallet's. The daemon console is the wallet-less path.
     if rpc.open_wallet_name().is_none() {
@@ -73,21 +74,17 @@ fn gate<'a>(
     }
 
     // F2 — network mismatch: a testnet wallet pointing at a mainnet daemon
-    // would mine (and pay out) on the wrong network. An omitted/empty nettype
-    // is a malformed reply, not a skip.
-    if info.nettype.is_empty() {
-        return Err(refusal(format!(
-            "The daemon at {} did not report its network; refusing mining control.",
-            dc.url()
-        )));
-    }
-    if info.nettype != network {
+    // would mine (and pay out) on the wrong network. The network is a typed
+    // member of the reply: one that is omitted or unknown does not decode,
+    // so there is no empty case to skip.
+    let daemon_network = info.identity.nettype.as_str();
+    if daemon_network != network {
         return Err(refusal(format!(
             "Network mismatch: this CLI is on {network} but the daemon at {} reports {}.\n\
              Restart shekyl-cli or shekyld so both use the same \
              --testnet/--stagenet flag.",
             dc.url(),
-            info.nettype
+            daemon_network
         )));
     }
 
@@ -145,11 +142,12 @@ pub fn cmd_mine_start(
 
     // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
     // BUSY. Refuse here with the height copy rather than confirm-and-fail.
-    if !info.synchronized {
-        let of_target = if info.target_height > info.height {
-            format!("height {} of {}", info.height, info.target_height)
+    if !info.health.synchronized {
+        let (height, target) = (info.health.height, info.health.target_height);
+        let of_target = if target > height {
+            format!("height {height} of {target}")
         } else {
-            format!("height {}", info.height)
+            format!("height {height}")
         };
         return failed(format!(
             "The daemon is still syncing ({of_target}) and will not start mining \

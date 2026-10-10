@@ -13,6 +13,9 @@ path = "src/main.rs"
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
+# The daemon's `get_info` reply is one type, defined once (RK-D1); the CLI
+# reads it for `chain_health` and the mining gates.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
 # `shard fetch --png`: the candidate.v1 renderer over the aggregate
 # `get_shard_view` returns. Rendering is the viewer's; no picture crosses

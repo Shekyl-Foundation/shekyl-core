@@ -16,15 +16,30 @@ use crate::rpc_client::RpcSession;
 pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
     match dc.get_info() {
-        Ok(info) => Ok(json!({
-            "status": info.status,
-            "height": info.height,
-            "target_height": info.target_height,
-            "difficulty": info.difficulty,
-            "tx_count": info.tx_count,
-            "outgoing_connections_count": info.outgoing_connections_count,
-            "incoming_connections_count": info.incoming_connections_count,
-        })),
+        Ok(info) => {
+            // The connection counts are a Status field, which a daemon may
+            // withhold. Today a restricted daemon writes zeros there, and a
+            // withheld part reads the same until this output learns to say
+            // "not disclosed" (RK-Q8).
+            let (outgoing, incoming) = info.node.shown().map_or((0, 0), |status| {
+                (
+                    status.outgoing_connections_count,
+                    status.incoming_connections_count,
+                )
+            });
+            Ok(json!({
+                "status": info.status.0,
+                "height": info.health.height,
+                "target_height": info.health.target_height,
+                // The low 64 bits, which is what the wire's `difficulty`
+                // member carries and what this output has always shown.
+                "difficulty": u64::try_from(info.chain.difficulty & u128::from(u64::MAX))
+                    .unwrap_or(u64::MAX),
+                "tx_count": info.chain.tx_count,
+                "outgoing_connections_count": outgoing,
+                "incoming_connections_count": incoming,
+            }))
+        }
         Err(e) => failed(e.to_string()),
     }
 }

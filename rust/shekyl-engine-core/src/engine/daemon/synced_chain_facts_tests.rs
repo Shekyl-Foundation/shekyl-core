@@ -16,9 +16,12 @@ fn any_hash() -> BlockHash {
 
 /// A `get_info` reply built by [`GetInfoDocument`], not a private schema.
 /// `target_height` follows the info surface's convention: `0` means the
-/// daemon considers itself synchronized. Connection counts are non-zero so
-/// this document does not take the decoder's default.
-fn info(height: u64, target_height: u64) -> Value {
+/// daemon considers itself synchronized.
+fn info(height: u64, target_height: u64) -> GetInfoResponse {
+    document(height, target_height).to_reply()
+}
+
+fn document(height: u64, target_height: u64) -> GetInfoDocument {
     GetInfoDocument {
         chain_count: ChainCount::from_raw(height),
         target_height,
@@ -27,7 +30,40 @@ fn info(height: u64, target_height: u64) -> Value {
         outgoing_connections: 5,
         incoming_connections: 3,
     }
-    .to_value()
+}
+
+/// The reply as JSON with `over`'s members laid over it. A member given as
+/// JSON `null` is removed.
+fn info_json(over: &Value) -> Value {
+    let mut doc = document(500, 0).to_value();
+    let members = doc.as_object_mut().expect("a reply is an object");
+    for (key, value) in over.as_object().expect("an overlay is an object") {
+        if value.is_null() {
+            members.remove(key);
+        } else {
+            members.insert(key.clone(), value.clone());
+        }
+    }
+    doc
+}
+
+/// A transport that answers `get_info` with one canned result, so the
+/// decode is exercised where production does it: inside
+/// [`fetch_synced_chain_facts`].
+#[derive(Clone)]
+struct OneReply(Value);
+
+impl Rpc for OneReply {
+    fn post(
+        &self,
+        _route: &str,
+        _body: Vec<u8>,
+    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+        let bytes = json!({ "jsonrpc": "2.0", "id": 0, "result": self.0 })
+            .to_string()
+            .into_bytes();
+        async move { Ok(bytes) }
+    }
 }
 
 /// With the daemon's own flag set, `target_height: 0` is the steady state —
@@ -90,60 +126,113 @@ fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
     );
 }
 
-/// A reply without `height` is a malformed reply, not a synced chain of
-/// length zero. Defaulting here would mint a `SyncedChainFacts` vouching for
-/// a view that does not exist — the one decode error that must not fail soft.
-#[test]
-fn a_reply_without_a_height_is_refused_rather_than_defaulted() {
-    let err = health_from_get_info(&json!({ "target_height": 0 }))
-        .expect_err("a missing height is malformed");
-    assert_eq!(err, GetInfoFault::HeightMissing);
-}
-
-/// Only the connection counts are optional, and only because zero is
-/// honestly "none known" there.
+/// **The mandatory members, as one property.** A reply missing `height`,
+/// `target_height`, `synchronized` or `top_block_hash`, or carrying one of
+/// the wrong shape, does not become facts — it is a contract fault, and it
+/// is classified as one.
 ///
-/// `target_height` is **not** among them: zero is its synchronized sentinel,
-/// so a default would have the decoder manufacture the claim the constructor
-/// verifies. The edit that turns this red is restoring `.unwrap_or(0)` for
-/// symmetry — which is exactly the tempting edit, hence the test.
-#[test]
-fn only_the_non_destructive_connection_counts_default() {
-    let health = health_from_get_info(
-        &json!({ "height": 77, "target_height": 0, "top_block_hash": hex::encode([0u8; 32]) }),
-    )
-    .expect("height and target are enough");
-    assert_eq!(health.height, 77);
-    assert_eq!(health.connections, 0);
-
-    let err = health_from_get_info(&json!({ "height": 500, "synchronized": true }))
-        .expect_err("an absent target_height is contract drift, not an omission");
-    assert_eq!(err, GetInfoFault::TargetHeightMissing);
+/// Each of these had its own refusal in the hand-written decoder this
+/// replaced, and its own reason: no `height` would mint facts for a chain
+/// of length zero; `0` is `target_height`'s synchronized *sentinel*, so a
+/// default would manufacture the claim [`SyncedChainFacts::new`] exists to
+/// verify; there is no honest default for an identity. The shared type
+/// decodes strictly, so the property now holds for every member, and it is
+/// tested through the read production makes.
+///
+/// The edit that turns this red is a `#[serde(default)]` on any of them.
+#[tokio::test]
+async fn a_reply_missing_or_misshaping_a_mandatory_member_yields_no_facts() {
+    for (over, what) in [
+        (json!({ "height": null }), "no height"),
+        (json!({ "height": "500" }), "a height that is not a number"),
+        (json!({ "target_height": null }), "no target_height"),
+        (
+            json!({ "target_height": "soon" }),
+            "a non-numeric target_height",
+        ),
+        (json!({ "synchronized": null }), "no synchronized"),
+        (json!({ "top_block_hash": null }), "no top_block_hash"),
+        (
+            json!({ "top_block_hash": 7 }),
+            "a top_block_hash that is not a string",
+        ),
+        (
+            json!({ "top_block_hash": "not hex" }),
+            "a top_block_hash that is not hex",
+        ),
+        (
+            json!({ "top_block_hash": "abcd" }),
+            "a top_block_hash that is not 32 bytes",
+        ),
+    ] {
+        let err = fetch_synced_chain_facts(&OneReply(info_json(&over)))
+            .await
+            .expect_err(what);
+        assert!(
+            matches!(err, RpcError::InvalidNode(_)),
+            "{what} is a contract fault, not a transport one: {err:?}"
+        );
+        assert_eq!(
+            TimelineBreak::from_facts_error(&err),
+            TimelineBreak::FactsUnreadable,
+            "{what} must send an operator to the daemon's version, not to the network"
+        );
+    }
 }
 
-/// A non-numeric `target_height` is refused for the same reason — the
-/// `and_then(as_u64)` arm must not fall through to the sentinel either.
+/// The control for the test above: the same document with nothing removed
+/// is facts, and with a target above it is "syncing", not an error.
+#[tokio::test]
+async fn a_whole_reply_yields_facts_and_a_climbing_one_yields_none() {
+    let synced = fetch_synced_chain_facts(&OneReply(info_json(&json!({}))))
+        .await
+        .expect("a whole reply decodes")
+        .expect("and is synchronized");
+    assert_eq!(synced.tip(), BlockHeight::from_raw(499));
+    assert_eq!(synced.top_hash(), any_hash());
+
+    assert!(
+        fetch_synced_chain_facts(&OneReply(info_json(&json!({ "target_height": 900 }))))
+            .await
+            .expect("a climbing reply decodes")
+            .is_none()
+    );
+}
+
+/// A member this build does not know is refused too: the reply is one type,
+/// defined once, and a daemon that sends more than it is at another version.
+#[tokio::test]
+async fn a_reply_with_an_unknown_member_yields_no_facts() {
+    let err = fetch_synced_chain_facts(&OneReply(info_json(&json!({ "emission_era": "Tail" }))))
+        .await
+        .expect_err("an unknown member is not the contract");
+    assert!(matches!(err, RpcError::InvalidNode(_)), "{err:?}");
+}
+
+/// The connection counts are a Status field, which a daemon may withhold.
+/// Withheld reads as zero — "none known" — and nothing else about the reply
+/// changes.
 #[test]
-fn a_non_numeric_target_height_is_refused_rather_than_defaulted() {
-    let err = health_from_get_info(&json!({ "height": 500, "target_height": "soon" }))
-        .expect_err("a string target_height does not decode");
-    assert_eq!(err, GetInfoFault::TargetHeightMissing);
+fn withheld_connection_counts_read_as_none_known() {
+    let mut reply = info(77, 0);
+    assert_eq!(health_from_get_info(&reply).connections, 8);
+    reply.node = shekyl_rpc_types::Hidden::Withheld;
+    let health = health_from_get_info(&reply);
+    assert_eq!(health.connections, 0);
+    assert_eq!(health.height, 77);
 }
 
 /// Connection counts are summed with `saturating_add`, so a daemon reporting
 /// absurd counts cannot wrap the sum to a peerless reading.
 #[test]
 fn the_connection_sum_saturates_rather_than_wrapping() {
-    let health = health_from_get_info(&json!({
-        "height": 1,
-        // Mandatory since the sentinel may not be manufactured by the
-        // decoder; this test's subject is the connection sum, not the gate.
-        "target_height": 0,
-        "outgoing_connections_count": u64::MAX,
-        "incoming_connections_count": 4,
-    }))
-    .expect("decodes");
-    assert_eq!(health.connections, u64::MAX);
+    let reply = GetInfoDocument {
+        outgoing_connections: u64::MAX,
+        incoming_connections: 4,
+        ..document(1, 0)
+    }
+    .to_reply();
+    assert_eq!(health_from_get_info(&reply).connections, u64::MAX);
 }
 
 /// The decode and the constructor compose: a synced reply yields facts at the
@@ -151,19 +240,13 @@ fn the_connection_sum_saturates_rather_than_wrapping() {
 #[test]
 fn the_decode_and_the_constructor_compose() {
     let reply = info(500, 0);
-    let synced = SyncedChainFacts::from_health(
-        health_from_get_info(&reply).expect("ok"),
-        top_hash_from_get_info(&reply).expect("ok"),
-    )
-    .expect("synced");
+    let synced =
+        SyncedChainFacts::from_health(health_from_get_info(&reply), top_hash_from_get_info(&reply))
+            .expect("synced");
     assert_eq!(synced.tip(), BlockHeight::from_raw(499));
 
     assert!(
-        SyncedChainFacts::from_health(
-            health_from_get_info(&info(500, 900)).expect("ok"),
-            any_hash()
-        )
-        .is_none(),
+        SyncedChainFacts::from_health(health_from_get_info(&info(500, 900)), any_hash()).is_none(),
         "a climbing daemon yields no facts to act on",
     );
 }
@@ -183,12 +266,16 @@ fn a_peerless_fresh_daemon_is_not_synchronized_despite_the_zero_target() {
         "target 0 is the daemon's sentinel for synced, but the daemon itself \
          says it is not — the flag is not decoration on the heights",
     );
+    let peerless = GetInfoDocument {
+        synchronized: false,
+        outgoing_connections: 0,
+        incoming_connections: 0,
+        ..document(5, 0)
+    }
+    .to_reply();
     assert!(
-        health_from_get_info(&json!({ "height": 5, "target_height": 0 }))
-            .map(|h| SyncedChainFacts::from_health(h, any_hash()))
-            .expect("decodes")
-            .is_none(),
-        "an absent `synchronized` reads as false — the direction that refuses",
+        SyncedChainFacts::from_health(health_from_get_info(&peerless), any_hash()).is_none(),
+        "the reply's own flag is carried through the decode, not replaced by the heights",
     );
 }
 
@@ -309,39 +396,13 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
 
 // ── Chain identity: the anchor and its decode ───────────────────────────
 
-/// `top_block_hash` is mandatory for the same reason `target_height` is:
-/// there is no honest default for an identity. A made-up hash would let the
-/// ledger carry observations across a reorg it could not see.
+/// `top_block_hash` is the chain's identity, carried as the reply's 32
+/// bytes. (A reply without one, or with one that is not 32 hex bytes, is
+/// refused where the other mandatory members are:
+/// `a_reply_missing_or_misshaping_a_mandatory_member_yields_no_facts`.)
 #[test]
-fn a_reply_without_a_top_hash_is_refused_rather_than_defaulted() {
-    for (bad, fault) in [
-        (
-            json!({ "height": 5, "target_height": 0 }),
-            GetInfoFault::TopBlockHashMissing,
-        ),
-        (
-            json!({ "height": 5, "target_height": 0, "top_block_hash": 7 }),
-            GetInfoFault::TopBlockHashMissing,
-        ),
-        (
-            json!({ "height": 5, "target_height": 0, "top_block_hash": "not hex" }),
-            GetInfoFault::TopBlockHashNotHex,
-        ),
-        (
-            json!({ "height": 5, "target_height": 0, "top_block_hash": "abcd" }),
-            GetInfoFault::TopBlockHashWrongLength,
-        ),
-    ] {
-        assert_eq!(
-            top_hash_from_get_info(&bad).expect_err("must refuse"),
-            fault,
-            "each shape names its own fault: {bad}"
-        );
-    }
-    assert_eq!(
-        top_hash_from_get_info(&info(5, 0)).expect("well-formed"),
-        any_hash()
-    );
+fn the_top_hash_is_the_replys() {
+    assert_eq!(top_hash_from_get_info(&info(5, 0)), any_hash());
 }
 
 /// **The anchor is at the observed height, and only a view that has one can
@@ -389,42 +450,4 @@ fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
             .expect_err("a rolled-back view has no anchor"),
         TimelineBreak::ChainRolledBack
     );
-}
-
-/// **The error contract, as a type.** Every `get_info` contract fault is
-/// `InvalidNode` — the daemon answered, and its answer is not the shape this
-/// wallet was built against — and so classifies as `FactsUnreadable`, never
-/// as the daemon being unreachable. A caller reading a fault as a transport
-/// failure would send an operator to the network for a version mismatch.
-///
-/// Enumerated over every member so a fault added later without a mapping
-/// is a compile error here, not a silent transport misclassification.
-#[test]
-fn every_contract_fault_is_a_node_fault_and_never_a_transport_failure() {
-    for fault in [
-        GetInfoFault::HeightMissing,
-        GetInfoFault::TargetHeightMissing,
-        GetInfoFault::TopBlockHashMissing,
-        GetInfoFault::TopBlockHashNotHex,
-        GetInfoFault::TopBlockHashWrongLength,
-    ] {
-        let err = RpcError::from(fault);
-        assert!(
-            matches!(err, RpcError::InvalidNode(ref m) if m.starts_with("get_info ")),
-            "{fault:?} converts to InvalidNode naming the reply: {err:?}"
-        );
-        assert_eq!(
-            TimelineBreak::from_facts_error(&err),
-            TimelineBreak::FactsUnreadable,
-            "{fault:?} is a contract fault, not a connectivity problem"
-        );
-    }
-    // The member list above is the whole enum: a new member fails here.
-    let _exhaustive = |f: GetInfoFault| match f {
-        GetInfoFault::HeightMissing
-        | GetInfoFault::TargetHeightMissing
-        | GetInfoFault::TopBlockHashMissing
-        | GetInfoFault::TopBlockHashNotHex
-        | GetInfoFault::TopBlockHashWrongLength => (),
-    };
 }

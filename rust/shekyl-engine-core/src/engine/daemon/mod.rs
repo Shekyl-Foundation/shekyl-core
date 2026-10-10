@@ -422,8 +422,9 @@ impl DaemonEngine for DaemonClient {
     /// defensive-parsing rationale moved with it.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
-            let info: Value = self.json_rpc_call("get_info", None).await?;
-            Ok(synced_chain_facts::health_from_get_info(&info)?)
+            let info: shekyl_rpc_types::GetInfoResponse =
+                self.json_rpc_call("get_info", None).await?;
+            Ok(synced_chain_facts::health_from_get_info(&info))
         }
     }
 }

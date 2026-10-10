@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::fmt;
 
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
+use shekyl_rpc_types::GetInfoResponse;
 
 /// Errors from the daemon RPC client with differentiated failure modes.
 #[derive(Debug)]
@@ -91,25 +92,6 @@ impl fmt::Display for DaemonError {
 }
 
 impl std::error::Error for DaemonError {}
-
-/// The fields `get_info` must carry for mining gates and `chain_health`.
-///
-/// No field is defaulted: these are `KV_SERIALIZE` (not `OPT`) on
-/// `COMMAND_RPC_GET_INFO`, so absence means the contract moved, not a safe
-/// zero. A missing `restricted` must not read as unrestricted.
-#[derive(Debug, Deserialize)]
-pub struct DaemonInfo {
-    pub status: String,
-    pub height: u64,
-    pub target_height: u64,
-    pub difficulty: u64,
-    pub tx_count: u64,
-    pub outgoing_connections_count: u64,
-    pub incoming_connections_count: u64,
-    pub restricted: bool,
-    pub nettype: String,
-    pub synchronized: bool,
-}
 
 /// The fields `mine status` / the already-mining preflight read.
 /// Extra daemon fields (`pow_algorithm`, …) are ignored on purpose.
@@ -289,7 +271,11 @@ impl DaemonClient {
     }
 
     /// Fetch daemon info (`get_info`). Used by `chain_health` and mining gates.
-    pub fn get_info(&self) -> Result<DaemonInfo, DaemonError> {
+    ///
+    /// The reply is the shared [`GetInfoResponse`], which decodes strictly:
+    /// a member that is absent means the contract moved, not a safe zero. In
+    /// particular a missing `restricted` cannot read as unrestricted.
+    pub fn get_info(&self) -> Result<GetInfoResponse, DaemonError> {
         let value = self.json_rpc("get_info", &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
@@ -413,7 +399,7 @@ fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_path_status, is_loopback_endpoint, DaemonError, DaemonInfo};
+    use super::{classify_path_status, is_loopback_endpoint, DaemonError, GetInfoResponse};
 
     #[test]
     fn loopback_classification_uses_the_canonical_host_check() {
@@ -458,39 +444,85 @@ mod tests {
         }
     }
 
-    #[test]
-    fn daemon_info_refuses_a_missing_gate_field() {
-        let missing_restricted = serde_json::json!({
-            "status": "OK",
-            "height": 1,
-            "target_height": 0,
-            "difficulty": 1,
-            "tx_count": 0,
-            "outgoing_connections_count": 0,
-            "incoming_connections_count": 0,
-            "nettype": "mainnet",
-            "synchronized": true,
-        });
-        assert!(
-            serde_json::from_value::<DaemonInfo>(missing_restricted).is_err(),
-            "a missing restricted field must not deserialize as unrestricted"
-        );
+    /// A complete `get_info` reply, as the daemon serializes it.
+    fn get_info_reply() -> serde_json::Value {
+        use shekyl_rpc_types::{
+            DaemonNetwork, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+            InfoPeers, InfoPool, InfoStatus, RpcStatus,
+        };
+        serde_json::to_value(GetInfoResponse {
+            status: RpcStatus::ok(),
+            health: InfoHealth {
+                height: 1,
+                top_block_hash: HashHex::from_bytes([7; 32]),
+                target_height: 0,
+                synchronized: true,
+                busy_syncing: false,
+                offline: false,
+                following_degraded: false,
+            },
+            identity: InfoIdentity {
+                nettype: DaemonNetwork::Testnet,
+                protocol_version: 3,
+            },
+            chain: InfoChain {
+                difficulty: 1,
+                cumulative_difficulty: 1,
+                target: 120,
+                tx_count: 0,
+                block_weight_limit: 600_000,
+                block_weight_median: 300_000,
+                adjusted_time: 0,
+            },
+            economics: InfoEconomics {
+                already_generated_coins: 0,
+                release_multiplier: 1_000_000,
+                burn_pct: 0,
+                total_burned: 0,
+                staker_emission_share_effective: 0,
+            },
+            pool: InfoPool { tx_pool_size: 0 },
+            node: Hidden::Shown(InfoStatus {
+                start_time: 1,
+                free_space: 1,
+                database_size: 1,
+                version: "test".to_owned(),
+                outgoing_connections_count: 0,
+                incoming_connections_count: 0,
+                alt_blocks_count: 0,
+                rpc_connections_count: 0,
+            }),
+            peers: Hidden::Shown(InfoPeers {
+                public_incoming_socket_count: 0,
+                public_outgoing_socket_count: 0,
+                tor_incoming_socket_count: 0,
+                tor_outgoing_socket_count: 0,
+                white_peerlist_size: 0,
+                grey_peerlist_size: 0,
+            }),
+            restricted: false,
+        })
+        .expect("a get_info reply serializes")
+    }
 
-        let complete = serde_json::json!({
-            "status": "OK",
-            "height": 1,
-            "target_height": 0,
-            "difficulty": 1,
-            "tx_count": 0,
-            "outgoing_connections_count": 0,
-            "incoming_connections_count": 0,
-            "restricted": false,
-            "nettype": "testnet",
-            "synchronized": true,
-        });
-        let info: DaemonInfo = serde_json::from_value(complete).expect("complete get_info");
+    /// The mining gates read `restricted`, `nettype` and `synchronized`. A
+    /// reply missing any of them does not decode — above all a missing
+    /// `restricted` must not read as unrestricted.
+    #[test]
+    fn get_info_refuses_a_missing_gate_field() {
+        for gate in ["restricted", "nettype", "synchronized", "height"] {
+            let mut reply = get_info_reply();
+            reply.as_object_mut().expect("object").remove(gate);
+            assert!(
+                serde_json::from_value::<GetInfoResponse>(reply).is_err(),
+                "a reply without `{gate}` must not decode"
+            );
+        }
+
+        let info: GetInfoResponse =
+            serde_json::from_value(get_info_reply()).expect("complete get_info");
         assert!(!info.restricted);
-        assert_eq!(info.nettype, "testnet");
-        assert!(info.synchronized);
+        assert_eq!(info.identity.nettype.as_str(), "testnet");
+        assert!(info.health.synchronized);
     }
 }

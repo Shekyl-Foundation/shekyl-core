@@ -3949,6 +3949,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-logging",
  "shekyl-rpc-transport",
+ "shekyl-rpc-types",
  "shekyl-shard-visual",
  "shekyl-types",
  "shekyl-units",

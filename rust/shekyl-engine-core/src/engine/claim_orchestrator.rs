@@ -585,16 +585,17 @@ mod tests {
                     .is_some_and(|m| m == "get_info");
                 let synced = self.1;
                 let result = if is_get_info {
-                    json!({
-                        "height": 10_000,
-                        "target_height": if synced { 0 } else { 1_000_000 },
-                        "synchronized": synced,
-                        "top_block_hash": hex::encode(
+                    crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                        chain_count: shekyl_types::ChainCount::from_raw(10_000),
+                        target_height: if synced { 0 } else { 1_000_000 },
+                        synchronized: synced,
+                        top_hash: shekyl_types::BlockHash::from_bytes(
                             crate::engine::test_support::test_block_hash_at(9_999),
                         ),
-                        "outgoing_connections_count": 8,
-                        "incoming_connections_count": 0,
-                    })
+                        outgoing_connections: 8,
+                        incoming_connections: 0,
+                    }
+                    .to_value()
                 } else {
                     (*self.0).clone()
                 };

@@ -55,19 +55,26 @@ impl Rpc for ClaimSourceDaemon {
             .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
             .is_some_and(|m| m == "get_info");
         let result = if is_get_info {
-            serde_json::json!({
-                "height": self.0.get("chain_height").and_then(serde_json::Value::as_u64)
-                    .expect("the fixture source carries a chain height"),
-                "target_height": 0,
-                "synchronized": true,
-                "top_block_hash": hex::encode(test_block_hash_at(
-                    self.0.get("chain_height").and_then(serde_json::Value::as_u64)
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("the fixture source carries a chain height"),
+                ),
+                target_height: 0,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
                         .expect("the fixture source carries a chain height")
                         .saturating_sub(1),
                 )),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+                outgoing_connections: 8,
+                incoming_connections: 0,
+            }
+            .to_value()
         } else {
             (*self.0).clone()
         };
@@ -554,16 +561,15 @@ impl Rpc for ScheduledDaemon {
             // claim source below reports, because both come off one
             // `db.height()` read on the daemon.
             let tip = self.step().tip;
-            serde_json::json!({
-                "height": tip + 1,
-                "target_height": self.target_height,
-                // A resyncing daemon says so outright; the heights are
-                // the second half of the same statement.
-                "synchronized": self.target_height == 0,
-                "top_block_hash": hex::encode(test_block_hash_at(tip)),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
+                target_height: self.target_height,
+                synchronized: self.target_height == 0,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(tip)),
+                outgoing_connections: 8,
+                incoming_connections: 0,
+            }
+            .to_value()
         } else {
             // `chain_height` is a COUNT; the schedule is expressed in
             // tips, so the record answers one more than the tip — the

@@ -91,9 +91,10 @@
 //! The type is wallet-side and is built from the engine's daemon client. A
 //! DRS change to the daemon's chain-facts response shape lands in
 //! [`health_from_get_info`], [`top_hash_from_get_info`] and
-//! [`fetch_synced_chain_facts`], with its contract enumerated by
-//! [`GetInfoFault`], and nowhere else — every consumer holds the type, not
-//! the response.
+//! [`fetch_synced_chain_facts`], which read the shared
+//! [`GetInfoResponse`] — the one definition of the reply, in
+//! `shekyl-rpc-types` — and nowhere else. Every consumer holds the type,
+//! not the response.
 //!
 //! # Units
 //!
@@ -105,8 +106,10 @@
 //! the count/height confusion cannot be made by a consumer. Consumers that
 //! want the newest existing block's height take [`SyncedChainFacts::tip`].
 
+#[cfg(test)]
 use serde_json::Value;
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_types::GetInfoResponse;
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 
 use crate::engine::traits::daemon::DaemonHealth;
@@ -540,86 +543,26 @@ fn tip_of(count: ChainCount) -> BlockHeight {
     })
 }
 
-/// A `get_info` reply that does not meet this decoder's contract — one
-/// member per mandatory field and the way it can fail.
+/// The `get_info` reply [`health_from_get_info`] and
+/// [`top_hash_from_get_info`] read, with the members a test chooses.
 ///
-/// This is the error contract of [`health_from_get_info`],
-/// [`top_hash_from_get_info`] and [`fetch_synced_chain_facts`], as a type
-/// rather than a paragraph: a caller that wants to know which faults exist
-/// reads the members, and a new mandatory field cannot be added without
-/// adding one. Every member is a **contract** fault — the daemon answered,
-/// and its answer is not the shape this wallet was built against — which is
-/// why all of them convert to [`RpcError::InvalidNode`] and none to a
-/// transport error: [`TimelineBreak::from_facts_error`] reads that
-/// distinction, and a caller must not send an operator to the network for
-/// a version mismatch.
-///
-/// The fields that are **not** here, and why: `synchronized` absent reads
-/// `false`, which is the refusing direction, so its absence costs nothing
-/// that a fault would protect; the two connection counts default to zero,
-/// which is honestly "none known" and only ever routes to the operator-alarm
-/// rung. Both are declared on the response (`KV_SERIALIZE(synchronized)`,
-/// `core_rpc_server_commands_defs.h:302`), so their absence is still drift —
-/// but drift in a direction this decoder can absorb without claiming
-/// anything false.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GetInfoFault {
-    /// `height` absent, or not an unsigned integer. Defaulting it would
-    /// mint facts for a chain of length zero that does not exist.
-    HeightMissing,
-    /// `target_height` absent, or not an unsigned integer. Cannot default:
-    /// `0` is the synchronized *sentinel*, so a default would manufacture
-    /// the claim [`SyncedChainFacts::new`] exists to verify.
-    TargetHeightMissing,
-    /// `top_block_hash` absent, or not a string. There is no honest default
-    /// for an identity.
-    TopBlockHashMissing,
-    /// `top_block_hash` is not hex.
-    TopBlockHashNotHex,
-    /// `top_block_hash` decodes to other than 32 bytes.
-    TopBlockHashWrongLength,
-}
-
-impl std::fmt::Display for GetInfoFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::HeightMissing => "get_info missing height",
-            Self::TargetHeightMissing => "get_info missing target_height",
-            Self::TopBlockHashMissing => "get_info missing top_block_hash",
-            Self::TopBlockHashNotHex => "get_info top_block_hash is not hex",
-            Self::TopBlockHashWrongLength => "get_info top_block_hash is not 32 bytes",
-        })
-    }
-}
-
-impl From<GetInfoFault> for RpcError {
-    /// Every member is a contract fault, so every member is `InvalidNode` —
-    /// never a transport error.
-    fn from(fault: GetInfoFault) -> Self {
-        RpcError::InvalidNode(fault.to_string())
-    }
-}
-
-/// The `get_info` fields [`health_from_get_info`] and
-/// [`top_hash_from_get_info`] read.
-///
-/// Test daemons build the reply from this struct, so the field set lives
-/// next to the parser. A new mandatory field is a compile error at every
-/// caller, not a second JSON document that can drift. Test-only: production
-/// reads the daemon's reply, it does not build one.
+/// Test daemons build the reply from this struct, so the choices live next
+/// to the reader. It produces a **complete** reply: the shared type refuses
+/// a document missing any member, so a double that answered with only the
+/// fields this wallet reads would be answering with something no daemon
+/// sends. Test-only: production reads the daemon's reply, it does not build
+/// one.
 #[cfg(test)]
 pub(crate) struct GetInfoDocument {
     /// Block count (`get_info.height`), not the tip's index.
     pub(crate) chain_count: ChainCount,
     /// Network target under the wire's "0 when synchronized" convention.
     pub(crate) target_height: u64,
-    /// The daemon's own flag. Absent on the wire reads as false; this
-    /// struct always sets it, so a caller chooses the value.
+    /// The daemon's own flag.
     pub(crate) synchronized: bool,
     /// Identity of the chain `chain_count` counts.
     pub(crate) top_hash: BlockHash,
-    /// Outbound peer count. Zero is "none known"; the decoder defaults
-    /// an absence to zero, and this struct does not rely on that default.
+    /// Outbound peer count. Zero is "none known".
     pub(crate) outgoing_connections: u64,
     /// Inbound peer count. Same contract as [`Self::outgoing_connections`].
     pub(crate) incoming_connections: u64,
@@ -627,116 +570,114 @@ pub(crate) struct GetInfoDocument {
 
 #[cfg(test)]
 impl GetInfoDocument {
+    /// The reply as the shared type. Every member this struct does not
+    /// choose holds a fixed, unremarkable value.
+    pub(crate) fn to_reply(&self) -> GetInfoResponse {
+        use shekyl_rpc_types::{
+            DaemonNetwork, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+            InfoPeers, InfoPool, InfoStatus, RpcStatus,
+        };
+        GetInfoResponse {
+            status: RpcStatus::ok(),
+            health: InfoHealth {
+                height: self.chain_count.to_raw(),
+                top_block_hash: HashHex::from_bytes(*self.top_hash.as_bytes()),
+                target_height: self.target_height,
+                synchronized: self.synchronized,
+                busy_syncing: false,
+                offline: false,
+                following_degraded: false,
+            },
+            identity: InfoIdentity {
+                nettype: DaemonNetwork::Fakechain,
+                protocol_version: 3,
+            },
+            chain: InfoChain {
+                difficulty: 1,
+                cumulative_difficulty: u128::from(self.chain_count.to_raw()),
+                target: 120,
+                tx_count: 0,
+                block_weight_limit: 600_000,
+                block_weight_median: 300_000,
+                adjusted_time: 1_700_000_000,
+            },
+            economics: InfoEconomics {
+                already_generated_coins: 0,
+                release_multiplier: 1_000_000,
+                burn_pct: 0,
+                total_burned: 0,
+                staker_emission_share_effective: 0,
+            },
+            pool: InfoPool { tx_pool_size: 0 },
+            node: Hidden::Shown(InfoStatus {
+                start_time: 1_700_000_000,
+                free_space: 1 << 40,
+                database_size: 1 << 30,
+                version: "test".to_owned(),
+                outgoing_connections_count: self.outgoing_connections,
+                incoming_connections_count: self.incoming_connections,
+                alt_blocks_count: 0,
+                rpc_connections_count: 1,
+            }),
+            peers: Hidden::Shown(InfoPeers {
+                public_incoming_socket_count: 0,
+                public_outgoing_socket_count: 0,
+                tor_incoming_socket_count: 0,
+                tor_outgoing_socket_count: 0,
+                white_peerlist_size: 0,
+                grey_peerlist_size: 0,
+            }),
+            restricted: false,
+        }
+    }
+
     /// The JSON object a `get_info` result carries.
     pub(crate) fn to_value(&self) -> Value {
-        serde_json::json!({
-            "height": self.chain_count.to_raw(),
-            "target_height": self.target_height,
-            "synchronized": self.synchronized,
-            "top_block_hash": hex::encode(self.top_hash.as_bytes()),
-            "outgoing_connections_count": self.outgoing_connections,
-            "incoming_connections_count": self.incoming_connections,
-        })
+        serde_json::to_value(self.to_reply()).expect("a get_info reply serializes")
     }
 }
 
-/// Decode the daemon's `get_info` result into [`DaemonHealth`].
+/// Project the daemon's `get_info` reply onto [`DaemonHealth`].
 ///
-/// The single parse site for this response, shared by
+/// The single place this reply is read for health, shared by
 /// [`DaemonEngine::get_health`](crate::engine::traits::daemon::DaemonEngine::get_health) and
 /// [`fetch_synced_chain_facts`], so the two cannot come to disagree about what
-/// the daemon said. Two decoders over one wire response with no cross-check is
-/// exactly the shape that lets a field's meaning drift on one side only.
+/// the daemon said.
 ///
-/// Untrusted-daemon input is parsed defensively (`20-rust-vs-cpp-policy` §3):
-/// a response missing the mandatory `height` field is a malformed reply
-/// ([`GetInfoFault::HeightMissing`]), not a silently defaulted zero — a false
-/// "synced at height 0" would be a *constructible* [`SyncedChainFacts`]
-/// vouching for a view that does not exist.
+/// **There is nothing left to refuse here.** The reply is the shared
+/// [`GetInfoResponse`], and that type decodes strictly: a document missing
+/// `height`, `target_height`, `synchronized` or `top_block_hash`, or
+/// carrying one of the wrong shape, never becomes a value this function is
+/// handed. That is the property the hand-written decoder this replaces
+/// defended field by field — above all for `target_height`, where `0` is
+/// the synchronized sentinel and a default would manufacture the very claim
+/// [`SyncedChainFacts::new`] exists to verify. It now holds for every
+/// member, by construction.
 ///
-/// **`target_height` is mandatory**, and is the one field here that cannot
-/// take a default: `0` is not a neutral absence, it is the *synchronized
-/// sentinel*, so defaulting it would have this decoder manufacture the very
-/// claim [`SyncedChainFacts::new`] exists to verify. Absent or non-numeric
-/// is [`GetInfoFault::TargetHeightMissing`]. Only the connection counts
-/// default, because zero is honestly "none known" there and routes at worst
-/// to the operator-alarm rung; the sum is `saturating_add` (rule §4).
-/// `synchronized` absent reads `false`, the refusing direction.
-///
-/// # Errors
-///
-/// [`GetInfoFault::HeightMissing`] and [`GetInfoFault::TargetHeightMissing`]
-/// — the two mandatory fields this projection carries. The identity is
-/// decoded beside it by [`top_hash_from_get_info`], not here: the watchdog's
-/// health projection does not carry a chain identity.
-pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, GetInfoFault> {
-    let height = info
-        .get("height")
-        .and_then(Value::as_u64)
-        .ok_or(GetInfoFault::HeightMissing)?;
-    // **Mandatory, and this one cannot take a default.** `0` is not a
-    // neutral absence here — it is the synchronized *sentinel*, so defaulting
-    // an absent or non-numeric `target_height` would have the decoder
-    // manufacture the very claim the constructor is supposed to verify. That
-    // is fail-OPEN: `{"height": 500, "synchronized": true}` would mint facts
-    // for a daemon that never said it was caught up.
-    //
-    // The field is declared on the response
-    // (`core_rpc_server_commands_defs.h:269`, `KV_SERIALIZE(target_height)`),
-    // so its absence is contract drift, not an optional-field omission.
-    // Do not restore a default here for symmetry with the connection counts
-    // below: those default because zero is honestly "none known" and only
-    // ever routes to the operator-alarm rung, whereas zero here is an
-    // assertion about the chain.
-    let target_height = info
-        .get("target_height")
-        .and_then(Value::as_u64)
-        .ok_or(GetInfoFault::TargetHeightMissing)?;
-    let outgoing = info
-        .get("outgoing_connections_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let incoming = info
-        .get("incoming_connections_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let synchronized = info
-        .get("synchronized")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok(DaemonHealth {
-        connections: outgoing.saturating_add(incoming),
-        height,
-        target_height,
-        synchronized,
-    })
+/// The connection counts are a Status field, which a daemon may withhold
+/// from this caller. Withheld reads as zero — "none known", which routes at
+/// worst to the operator-alarm rung. The sum is `saturating_add`.
+pub(crate) fn health_from_get_info(info: &GetInfoResponse) -> DaemonHealth {
+    let connections = info.node.shown().map_or(0, |status| {
+        status
+            .outgoing_connections_count
+            .saturating_add(status.incoming_connections_count)
+    });
+    DaemonHealth {
+        connections,
+        height: info.health.height,
+        target_height: info.health.target_height,
+        synchronized: info.health.synchronized,
+    }
 }
 
-/// Decode `top_block_hash` from the daemon's `get_info` result.
+/// The chain's identity from the daemon's `get_info` reply.
 ///
-/// **Mandatory.** It is the chain's identity, and there is no honest
-/// default for an identity: a made-up hash would let a ledger carry
-/// observations across a reorg it could not see, which is the exact hazard
-/// the anchor exists to close. The field is declared on the response
-/// (`core_rpc_server.cpp:208`, `res.top_block_hash = pod_to_hex(top_hash)`),
-/// so its absence is contract drift, not an omission.
-///
-/// # Errors
-///
-/// [`GetInfoFault::TopBlockHashMissing`] when the field is absent or not a
-/// string, [`GetInfoFault::TopBlockHashNotHex`] when it does not decode as
-/// hex, [`GetInfoFault::TopBlockHashWrongLength`] when it decodes to other
-/// than 32 bytes.
-pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, GetInfoFault> {
-    let hex_str = info
-        .get("top_block_hash")
-        .and_then(Value::as_str)
-        .ok_or(GetInfoFault::TopBlockHashMissing)?;
-    let bytes = hex::decode(hex_str).map_err(|_| GetInfoFault::TopBlockHashNotHex)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| GetInfoFault::TopBlockHashWrongLength)?;
-    Ok(BlockHash::from_bytes(bytes))
+/// Mandatory on the wire, and typed there: there is no honest default for
+/// an identity, and a reply without a 32-byte hex `top_block_hash` does not
+/// decode.
+pub(crate) fn top_hash_from_get_info(info: &GetInfoResponse) -> BlockHash {
+    BlockHash::from_bytes(info.health.top_block_hash.to_bytes())
 }
 
 /// One `get_info` read, yielding [`SyncedChainFacts`] only if the daemon says
@@ -757,19 +698,20 @@ pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, GetInfoF
 /// # Errors
 ///
 /// A transport [`RpcError`] when the daemon did not answer; otherwise
-/// [`RpcError::InvalidNode`] carrying one [`GetInfoFault`] — the reply
-/// arrived and is not the contract: `height` or `target_height` absent or
-/// non-numeric, `top_block_hash` absent, not a string, not hex, or not 32
-/// bytes. The two classes are what [`TimelineBreak::from_facts_error`]
-/// separates, so a contract fault reaches an operator as "check the
-/// daemon's version", never as "check the network".
+/// [`RpcError::InvalidNode`] — the reply arrived and is not a
+/// [`GetInfoResponse`]: a member absent or of the wrong shape, an unknown
+/// member, or two names for one value disagreeing. The two classes are what
+/// [`TimelineBreak::from_facts_error`] separates, so a contract fault
+/// reaches an operator as "check the daemon's version", never as "check the
+/// network".
 pub(crate) async fn fetch_synced_chain_facts<R: Rpc>(
     rpc: &R,
 ) -> Result<Option<SyncedChainFacts>, RpcError> {
-    let info: Value = rpc.json_rpc_call("get_info", None).await?;
-    let health = health_from_get_info(&info)?;
-    let top_hash = top_hash_from_get_info(&info)?;
-    Ok(SyncedChainFacts::from_health(health, top_hash))
+    let info: GetInfoResponse = rpc.json_rpc_call("get_info", None).await?;
+    Ok(SyncedChainFacts::from_health(
+        health_from_get_info(&info),
+        top_hash_from_get_info(&info),
+    ))
 }
 
 #[cfg(test)]

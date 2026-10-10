@@ -65,7 +65,7 @@ use serde_json::json;
 use shekyl_chain_ingest::source::{Injection, ServeCredit};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, GetInfoResponse};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
@@ -176,36 +176,6 @@ enum Peering {
         /// drops every transaction a peer sends it and relays none.
         sink: bool,
     },
-}
-
-/// `get_info` result fields we care about.
-#[derive(Deserialize, Debug)]
-struct GetInfoResp {
-    height: u64,
-    /// Pool population — the mined-yet signal for a submitted tx (see
-    /// `mine_until_pool_empty`).
-    #[serde(default)]
-    tx_pool_size: u64,
-    /// Daemon version string — provenance for the live-oracle spend capture.
-    #[serde(default)]
-    version: String,
-    /// Cumulative destroyed atomic units — `compute_fee_burn`'s
-    /// `actually_destroyed` term only (`blockchain.cpp` feeds it
-    /// `block_burn_amount` and rolls it back on pop). The sibling
-    /// `staker_pool_amount` term does *not* land here; it goes to the
-    /// `archival_budget_accrual` row. See the A6 assertion for why the
-    /// destroyed half is nonetheless evidence about the pool half.
-    #[serde(default)]
-    total_burned: u64,
-    /// The C++'s block-weight limit in force for the next block —
-    /// `Blockchain::get_current_cumulative_block_weight_limit`, twice the
-    /// effective median (CEN-G6b). What the C++ template fills up to.
-    #[serde(default)]
-    block_weight_limit: u64,
-    /// The C++'s effective median in force for the next block
-    /// (`get_current_cumulative_block_weight_median`).
-    #[serde(default)]
-    block_weight_median: u64,
 }
 
 /// `generateblocks` result fields we care about.
@@ -477,7 +447,7 @@ impl RegtestDaemon {
             }
             match self
                 .rpc
-                .json_rpc_call::<GetInfoResp>("get_info", None)
+                .json_rpc_call::<GetInfoResponse>("get_info", None)
                 .await
             {
                 Ok(_) => return,
@@ -494,9 +464,10 @@ impl RegtestDaemon {
 
     pub(super) async fn height(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .health
             .height
     }
 
@@ -507,19 +478,24 @@ impl RegtestDaemon {
     /// it, and this crate's version is not that identity.
     pub(super) async fn version(&self) -> String {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .node
+            .shown()
+            .expect("the harness's own listener is shown Status")
             .version
+            .clone()
     }
 
     /// Transactions currently in the daemon's pool — the drain loop's
     /// condition and the pop legs' return-to-pool observable.
     pub(super) async fn tx_pool_size(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .pool
             .tx_pool_size
     }
 
@@ -528,10 +504,13 @@ impl RegtestDaemon {
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let info = self
             .rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info");
-        (info.block_weight_median, info.block_weight_limit)
+        (
+            info.chain.block_weight_median,
+            info.chain.block_weight_limit,
+        )
     }
 
     /// Non-coinbase transaction hashes carried by the block named by `hash`
@@ -592,9 +571,10 @@ impl RegtestDaemon {
     /// pins it to 0 (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .economics
             .total_burned
     }
 
@@ -898,10 +878,6 @@ impl StemSinkPair {
     }
 
     async fn await_linked(&self) {
-        #[derive(Deserialize, Debug)]
-        struct Synchronized {
-            synchronized: bool,
-        }
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = String::new();
         while Instant::now() < deadline {
@@ -916,19 +892,18 @@ impl StemSinkPair {
                 .iter()
                 .filter(|c| !c.incoming)
                 .count();
-            let info: Synchronized = self
+            let synchronized = self
                 .origin
                 .rpc
-                .json_rpc_call("get_info", None)
+                .json_rpc_call::<GetInfoResponse>("get_info", None)
                 .await
-                .expect("origin get_info");
-            if outbound >= 1 && info.synchronized {
+                .expect("origin get_info")
+                .health
+                .synchronized;
+            if outbound >= 1 && synchronized {
                 return;
             }
-            last = format!(
-                "outbound sessions {outbound}, synchronized {}",
-                info.synchronized
-            );
+            last = format!("outbound sessions {outbound}, synchronized {synchronized}");
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         self.origin.panic_with_log(
@@ -2109,9 +2084,10 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         .expect("already_generated_coins");
     let total_burned = daemon
         .rpc
-        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .json_rpc_call::<GetInfoResponse>("get_info", None)
         .await
         .expect("get_info")
+        .economics
         .total_burned;
     // CEN-F20's operand over the C++'s headers: the listed-transaction
     // count over the prior `min(height, W)` blocks.
@@ -5481,37 +5457,41 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
 }
 
-/// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
+/// The restricted listener's posture reaches two native handlers.
 ///
-/// This is the regression guard for the bridge's origin context. Until
-/// 2026-08-26 the dispatchers passed `nullptr` for the handler's
-/// `connection_context*`, so `m_restricted && ctx` was false at every site and
-/// a restricted listener behaved as an unrestricted one — no request caps,
-/// and, on the pool paths, disclosure of transactions the node had not
-/// broadcast.
+/// This test was the regression guard for the FFI bridge's origin context,
+/// and every leg of it has since moved off the bridge: `/get_transactions`
+/// and `/is_key_image_spent` in RK-4c (now
+/// `native_handlers_apply_their_own_request_caps`), the header methods in
+/// RK-5b, and `/get_info` in RK-5c. What it asserts is still worth
+/// asserting live — that the listener a request arrives on decides what the
+/// handler discloses — but it says nothing about the bridge any more, and
+/// its name no longer claims to. **The bridge's guard is
+/// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`**,
+/// on the pool routes, which are the bridged subjects that remain.
 ///
-/// **Every leg here crosses the bridge, and only those legs are here.** RK-4c
-/// migrated `/get_transactions` and `/is_key_image_spent` to native Rust, so
-/// their cap assertions stopped saying anything about the bridge while still
-/// passing under a name that claimed they did — six green assertions where the
-/// bridge had three. They now live in
-/// `native_handlers_apply_their_own_request_caps`, which is what they actually
-/// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
-/// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
-/// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
-/// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
-/// in `shekyl-daemon-rpc`. The pool routes' sensitivity flag — the bridge's
-/// durable subject once `/get_info` moves — is
-/// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`. The WE result-envelope shape is
+/// Two legs, both native:
+///
+/// - `/get_info`: the listener's posture becomes the handler's
+///   `Disclosure`. A restricted caller gets the stand-ins for Status
+///   (`start_time` 0, `free_space` `u64::MAX`, an empty `version`) and is
+///   told it is restricted; the unrestricted listener gets the real values.
+/// - `get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT` is refused on
+///   the restricted listener.
+///
+/// Admin-only method gating is
+/// `admin_methods_are_refused_only_on_the_restricted_listener` in
+/// `shekyl-daemon-rpc`. The WE result-envelope shape is
 /// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
 /// histogram deletion gate is `get_output_histogram_stays_unrouted`.
 ///
 /// Both listeners come from one daemon, so the postures are compared against
 /// the same chain in the same process, and the unrestricted rows are the
-/// blast-radius check: the fix must not narrow the admin listener.
+/// blast-radius check: the restricted posture must not narrow the admin
+/// listener.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
+async fn restricted_listener_gets_stand_ins_and_caps_from_native_handlers() {
     /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
     const BLOCK_CAP: usize = 1000;
 
@@ -5527,52 +5507,60 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
     // fires before any lookup, so the chain's contents are irrelevant.
     let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
 
-    // ── the bridge's REST template ──────────────────────────────────────
-    //
-    // The two capped routes above are native as of RK-4c, so they no longer
-    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
-    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
-    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
-    // without a populated chain. If a dispatcher stops passing the origin,
-    // these two answers become the admin ones.
-    let admin_info: serde_json::Value = unrestricted
+    // ── /get_info: the listener decides the disclosure ──────────────────
+    let admin_info: GetInfoResponse = unrestricted
         .rpc_call("get_info", None::<serde_json::Value>)
         .await
         .expect("admin get_info");
-    let restricted_info: serde_json::Value = restricted
+    let restricted_info: GetInfoResponse = restricted
         .rpc_call("get_info", None::<serde_json::Value>)
         .await
         .expect("restricted get_info");
-    assert_eq!(
-        restricted_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "a restricted listener must not disclose the node's start time; if this \
-         is the real start time the handler saw a null connection context"
+    let admin_status = admin_info
+        .node
+        .shown()
+        .expect("the admin listener is shown Status");
+    // At parity a restricted reply still carries Status, holding stand-ins.
+    let restricted_status = restricted_info
+        .node
+        .shown()
+        .expect("a restricted reply carries the Status stand-ins until RK-Q8");
+    assert!(
+        restricted_info.restricted && !admin_info.restricted,
+        "each listener must say which it is"
     );
     assert_eq!(
-        restricted_info
-            .get("free_space")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::MAX),
+        restricted_status.start_time, 0,
+        "a restricted listener must not disclose the node's start time; if this \
+         is the real start time the handler answered a restricted caller in full"
+    );
+    assert_eq!(
+        restricted_status.free_space,
+        u64::MAX,
         "a restricted listener must not disclose free space"
     );
-    assert!(
-        admin_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            > 0,
-        "the admin listener must still report the start time — otherwise the \
-         assertions above would hold for a daemon that reports nothing to anyone"
+    assert_eq!(
+        restricted_status.version, "",
+        "a restricted listener must not disclose the build's version"
     );
+    assert!(
+        admin_status.start_time > 0 && !admin_status.version.is_empty(),
+        "the admin listener must still report the start time and the version — \
+         otherwise the assertions above would hold for a daemon that reports \
+         nothing to anyone; got {admin_status:?}"
+    );
+    assert_ne!(
+        admin_status.free_space,
+        u64::MAX,
+        "the admin listener must report the volume's real free space"
+    );
+    // The two listeners describe the same chain.
+    assert_eq!(restricted_info.health.height, admin_info.health.height);
 
-    // JSON-RPC goes through `dispatch_jsonrpc_we`, a separate template. Over
-    // the block cap the handler writes `error_resp`, so the reply is an error
-    // envelope and `result` never appears. That is the remaining origin
-    // witness on this template: if the dispatcher stops passing `ctx`, the
-    // cap does not fire.
+    // ── JSON-RPC: the header cap ────────────────────────────────────────
+    //
+    // Over the block cap the handler refuses, so the reply is an error
+    // envelope and `result` never appears.
     let hdr: serde_json::Value = restricted
         .rpc_call(
             "json_rpc",
@@ -5587,7 +5575,7 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         hdr.pointer("/error/message").and_then(|m| m.as_str()),
         Some("Too many block headers requested in restricted mode"),
         "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
-         if this succeeds the JSON-RPC template stopped passing the origin"
+         if this succeeds the handler answered a restricted caller without its cap"
     );
 }
 
@@ -5598,7 +5586,7 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
 /// (`get_output_histogram` was the last). The remaining witness is a
 /// universal cap on the admin listener. This is not an origin check: if a
 /// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_applies_request_caps_through_the_ffi_bridge`.
+/// `restricted_listener_gets_stand_ins_and_caps_from_native_handlers`.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {

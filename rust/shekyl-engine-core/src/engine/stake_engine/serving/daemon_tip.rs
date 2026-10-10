@@ -57,9 +57,8 @@
 use std::sync::Weak;
 use std::time::Duration;
 
-use serde_json::Value;
 use shekyl_p_host::DaemonTipCache;
-use shekyl_rpc_types::RpcStatus;
+use shekyl_rpc_types::GetInfoResponse;
 use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::engine::daemon::synced_chain_facts::{
@@ -239,55 +238,48 @@ pub(crate) enum TipReading {
 /// Each absence has a named direction, and none of them is the convenient
 /// one by accident:
 ///
-/// - `status` absent or not `OK` ⇒ [`TipReading::Unusable`], **checked before
-///   any other field is read**. `Rpc::json_rpc_call` only unwraps `result`;
-///   it does not enforce the wire's `status`, so a daemon may answer `BUSY`
+/// The reply is the shared [`GetInfoResponse`], which decodes strictly: a
+/// document missing a member, carrying one of the wrong shape, or carrying
+/// one this build does not know is not a reply, and [`refresh_tip_once`]
+/// reads it as [`TipReading::Unusable`] — the held tip ages out as for a
+/// dropped poll. That covers every absence the hand-written decoder this
+/// replaces gave a direction to, and in the one direction that cannot
+/// manufacture a claim: no `height`, no `target_height` (where `0` is the
+/// synchronized *sentinel*), no `synchronized`, no refusal trigger.
+///
+/// What is left to decide here is what a well-formed reply *says*:
+///
+/// - `status` not `OK` ⇒ [`TipReading::Unusable`], **checked before any
+///   other member is read**. `Rpc::json_rpc_call` only unwraps `result`; it
+///   does not enforce the wire's `status`, so a daemon may answer `BUSY`
 ///   and a plausible body in one document. Nothing in that document is then
 ///   evidence. The check is [`refuse_unless_ok`] — the one shared refusal
 ///   every typed RPC consumer here reaches for — and the outcome is
 ///   *Unusable* rather than *NotFollowing* on purpose: a refusal says nothing
 ///   about the tip either way, so the held one ages out as for a dropped
 ///   poll instead of being cleared by a `BUSY` at startup.
-/// - `height` absent or unparseable ⇒ [`TipReading::Unusable`]. There is no
-///   safe default: a silent `0` is a claim about the chain.
-/// - `target_height` absent or unparseable ⇒ [`TipReading::Unusable`], for
-///   the same reason in its sharpest form: `0` is the synchronized
-///   *sentinel*, so a default would have the decoder manufacture the claim
-///   the predicate exists to verify. Both refusals are the shared decoder's
-///   (`GetInfoFault::HeightMissing`, `GetInfoFault::TargetHeightMissing`).
-/// - `synchronized` absent ⇒ `false` ⇒ refuse. The conservative direction.
-/// - `offline`, `following_degraded`, `restricted` absent ⇒ `false`. These
-///   are **refusal** triggers, so absent-as-true would refuse every daemon
-///   too old to carry the field — a self-inflicted outage on an upgrade skew.
-/// - connection counts absent ⇒ `0`, which refuses only when the daemon also
-///   said it was unrestricted, i.e. when it claimed the numbers were real.
+/// - connection counts withheld ⇒ `0`, which refuses only when the daemon
+///   also said it was unrestricted, i.e. when it claimed the numbers were
+///   real.
 /// - `height == 0` ⇒ [`TipReading::Unusable`]: no top block to stamp, and a
 ///   chain always has genesis, so this is a broken reply rather than a young
 ///   chain.
-pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
-    // Status first, before any field becomes evidence. An absent status is
-    // not the contract either — a reply that omits it cannot be refused on
-    // it, so it is not accepted on it.
-    let Some(status) = info.get("status").and_then(Value::as_str) else {
-        return TipReading::Unusable;
-    };
-    if refuse_unless_ok(&RpcStatus(status.to_owned()), "get_info").is_err() {
+pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
+    // Status first, before any member becomes evidence.
+    if refuse_unless_ok(&info.status, "get_info").is_err() {
         return TipReading::Unusable;
     }
-    // The fields the watchdog and the sync witness also read decode in the
-    // one shared place; a reply that fails its contract is not evidence.
-    let Ok(health) = health_from_get_info(info) else {
-        return TipReading::Unusable;
-    };
-    let flag = |name: &str| info.get(name).and_then(Value::as_bool).unwrap_or(false);
+    // The members the watchdog and the sync witness also read are projected
+    // in the one shared place.
+    let health = health_from_get_info(info);
     let chain_height = ChainCount::from_raw(health.height);
 
     // Ordered most-specific first, so the reported cause is the one an
     // operator can act on: "offline" is actionable, "never synchronized" is
     // the symptom it would also produce.
-    let cause = if flag("offline") {
+    let cause = if info.health.offline {
         Some(NotFollowing::Offline)
-    } else if flag("following_degraded") {
+    } else if info.health.following_degraded {
         Some(NotFollowing::Degraded)
     } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
@@ -296,7 +288,7 @@ pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
         // The verdict is the shared predicate's; with the flag already
         // true, the only half left to fail is the heights.
         Some(NotFollowing::BehindItsTarget)
-    } else if !flag("restricted") && health.connections == 0 {
+    } else if !info.restricted && health.connections == 0 {
         Some(NotFollowing::NoPeers)
     } else {
         None
@@ -322,10 +314,11 @@ pub(crate) async fn refresh_tip_once<R>(rpc: &R, tip: &DaemonTipCache) -> TipRea
 where
     R: PersonaIsolatedTransport,
 {
-    let reading = match rpc.json_rpc_call::<Value>("get_info", None).await {
+    let reading = match rpc.json_rpc_call::<GetInfoResponse>("get_info", None).await {
         Ok(info) => tip_reading_from_info(&info),
-        // An unreachable daemon is absence of a fact, not a fact: stamp
-        // nothing and let the held tip age out (`DaemonTipCache`'s contract).
+        // An unreachable daemon is absence of a fact, not a fact — and so is
+        // a reply that is not the contract: stamp nothing and let the held
+        // tip age out (`DaemonTipCache`'s contract).
         Err(_) => TipReading::Unusable,
     };
     match reading {
@@ -387,7 +380,7 @@ mod tests {
     /// explicitly ("the pin is against production misuse, not test
     /// plumbing"), and without one the dispatch below — which reading stamps
     /// what — has no oracle at all: every other test in this module calls
-    /// `tip_reading_from_info` and then stamps by hand, which is the thing
+    /// [`reading_of`] and then stamps by hand, which is the thing
     /// under test doing the test's job.
     #[derive(Clone)]
     struct CannedRpc(std::sync::Arc<Result<Vec<u8>, RpcError>>);
@@ -430,6 +423,41 @@ mod tests {
 
     impl PersonaIsolatedTransport for CannedRpc {}
 
+    /// A complete `get_info` reply with `over`'s members laid over it.
+    ///
+    /// The shared type refuses a document missing any member, so a test
+    /// states the members it is about and this supplies the rest: a
+    /// synchronized daemon at count 9_001 with eight outbound peers. A member
+    /// given as JSON `null` is **removed**, which is how a test builds a
+    /// reply that is missing one.
+    fn reply(over: &serde_json::Value) -> serde_json::Value {
+        let mut doc = crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+            chain_count: ChainCount::from_raw(9_001),
+            target_height: 0,
+            synchronized: true,
+            top_hash: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
+            outgoing_connections: 8,
+            incoming_connections: 0,
+        }
+        .to_value();
+        let members = doc.as_object_mut().expect("a reply is an object");
+        for (key, value) in over.as_object().expect("an overlay is an object") {
+            if value.is_null() {
+                members.remove(key);
+            } else {
+                members.insert(key.clone(), value.clone());
+            }
+        }
+        doc
+    }
+
+    /// What [`refresh_tip_once`] reads from the reply [`reply`] builds: a
+    /// document that does not decode is `Unusable`, as it is there.
+    fn reading_of(over: &serde_json::Value) -> TipReading {
+        serde_json::from_value::<GetInfoResponse>(reply(over))
+            .map_or(TipReading::Unusable, |info| tip_reading_from_info(&info))
+    }
+
     /// The block target this suite reasons in, matching the mainnet default.
     const BLOCK_TARGET: u64 = 120;
 
@@ -454,7 +482,7 @@ mod tests {
             "height": CHAIN_HEIGHT, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
-        let reading = tip_reading_from_info(&info);
+        let reading = reading_of(&info);
         assert_eq!(
             reading,
             TipReading::Synced(BlockHeight::from_raw(TOP_BLOCK)),
@@ -472,10 +500,10 @@ mod tests {
     #[tokio::test]
     async fn the_conversion_reaches_the_cache_not_only_the_reading() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        let rpc = CannedRpc::replying(&json!({
+        let rpc = CannedRpc::replying(&reply(&json!({
             "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
-        }));
+        })));
         refresh_tip_once(&rpc, &tip).await;
         assert_eq!(
             tip.height(),
@@ -494,7 +522,7 @@ mod tests {
             "outgoing_connections_count": 8
         });
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&info),
             TipReading::NotFollowing(NotFollowing::NeverSynchronized)
         );
     }
@@ -508,7 +536,7 @@ mod tests {
             "outgoing_connections_count": 8
         });
         assert_eq!(
-            tip_reading_from_info(&behind),
+            reading_of(&behind),
             TipReading::NotFollowing(NotFollowing::BehindItsTarget)
         );
 
@@ -517,7 +545,7 @@ mod tests {
             "outgoing_connections_count": 8
         });
         assert_eq!(
-            tip_reading_from_info(&level),
+            reading_of(&level),
             TipReading::Synced(BlockHeight::from_raw(9_499)),
             "height >= target is the lifted predicate's accepting edge"
         );
@@ -539,7 +567,7 @@ mod tests {
             (10, 5, false),
             (7, 0, true),
         ] {
-            let reading = tip_reading_from_info(&json!({
+            let reading = reading_of(&json!({
                 "height": height, "target_height": target, "status": "OK",
                 "synchronized": synchronized, "outgoing_connections_count": 8
             }));
@@ -557,32 +585,24 @@ mod tests {
     #[test]
     fn absent_fields_take_their_named_directions() {
         assert_eq!(
-            tip_reading_from_info(&json!({
-                "target_height": 0, "status": "OK", "synchronized": true,
-                "outgoing_connections_count": 8
-            })),
+            reading_of(&json!({ "height": null })),
             TipReading::Unusable,
             "no height is not height 0"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({
-                "height": 9_001, "target_height": 0, "status": "OK",
-                "outgoing_connections_count": 8
-            })),
-            TipReading::NotFollowing(NotFollowing::NeverSynchronized),
-            "absent `synchronized` is false, which refuses"
+            reading_of(&json!({ "synchronized": null })),
+            TipReading::Unusable,
+            "a reply without `synchronized` is not the contract; it is not read \
+             as synchronized, and not as a daemon that said it was not"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({
-                "height": 9_001, "status": "OK", "synchronized": true,
-                "outgoing_connections_count": 8
-            })),
+            reading_of(&json!({ "target_height": null })),
             TipReading::Unusable,
             "absent `target_height` is refused, not read as 0: 0 is the synchronized \
-             sentinel, and a default would have the decoder manufacture it"
+             sentinel, and a default would manufacture it"
         );
         assert_eq!(
-            tip_reading_from_info(
+            reading_of(
                 &json!({"height": "nope", "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8})
             ),
@@ -590,7 +610,7 @@ mod tests {
             "an unparseable height is never silently defaulted"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": 0, "status": "OK", "synchronized": true,
+            reading_of(&json!({"height": 0, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8})),
             TipReading::Unusable,
             "chain height 0 has no top block to stamp"
@@ -607,10 +627,7 @@ mod tests {
         tip.stamp_synced(BlockHeight::from_raw(9_000));
 
         // What `refresh_tip_once` does for each reading, without a transport.
-        assert_eq!(
-            tip_reading_from_info(&json!({"height": "nope"})),
-            TipReading::Unusable
-        );
+        assert_eq!(reading_of(&json!({"height": "nope"})), TipReading::Unusable);
         assert_eq!(
             tip.height(),
             Some(BlockHeight::from_raw(9_000)),
@@ -693,10 +710,10 @@ mod tests {
     #[tokio::test]
     async fn a_synced_reply_stamps_the_top_block_height() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        let rpc = CannedRpc::replying(&json!({
+        let rpc = CannedRpc::replying(&reply(&json!({
             "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
-        }));
+        })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::Synced(BlockHeight::from_raw(9_000))
@@ -712,9 +729,9 @@ mod tests {
     async fn a_reply_that_stopped_following_clears_a_held_tip() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&json!({
+        let rpc = CannedRpc::replying(&reply(&json!({
             "height": 9_001, "target_height": 12_000, "status": "OK", "synchronized": true
-        }));
+        })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::NotFollowing(NotFollowing::BehindItsTarget)
@@ -782,7 +799,7 @@ mod tests {
             "outgoing_connections_count": 0, "incoming_connections_count": 0
         });
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&info),
             TipReading::NotFollowing(NotFollowing::NoPeers)
         );
     }
@@ -792,12 +809,15 @@ mod tests {
     #[test]
     fn a_single_peer_of_either_kind_still_counts() {
         for field in ["outgoing_connections_count", "incoming_connections_count"] {
+            // Both counts stated: the one under test is 1 and the other 0,
+            // so the peer that counts is the one named.
             let info = json!({
                 "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
+                "outgoing_connections_count": 0, "incoming_connections_count": 0,
                 field: 1
             });
             assert_eq!(
-                tip_reading_from_info(&info),
+                reading_of(&info),
                 TipReading::Synced(BlockHeight::from_raw(9_000)),
                 "{field} = 1 is somebody to learn from"
             );
@@ -818,7 +838,7 @@ mod tests {
             "restricted": true
         });
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&info),
             TipReading::Synced(BlockHeight::from_raw(9_000)),
             "a policy-zeroed count is an absent fact, not a peerless daemon"
         );
@@ -834,7 +854,7 @@ mod tests {
             "outgoing_connections_count": 8, "following_degraded": true
         });
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&info),
             TipReading::NotFollowing(NotFollowing::Degraded)
         );
     }
@@ -846,25 +866,33 @@ mod tests {
             "outgoing_connections_count": 8, "offline": true
         });
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&info),
             TipReading::NotFollowing(NotFollowing::Offline)
         );
     }
 
-    /// The three refusal triggers must read as FALSE when absent. A daemon
-    /// too old to carry the field would otherwise be refused on every poll —
-    /// an outage we would inflict on ourselves at an upgrade skew.
+    /// The three refusal triggers, when false, do not refuse — and a reply
+    /// that omits one is not read as if it had said false. A daemon whose
+    /// reply lacks a member is a daemon at another version: its reply is
+    /// `Unusable`, which holds the tip and lets it age out, and never
+    /// `NotFollowing`, which would clear it. That keeps an upgrade skew from
+    /// becoming a refusal on every poll without pretending to know a fact
+    /// the reply did not carry.
     #[test]
-    fn absent_refusal_triggers_do_not_refuse() {
-        let info = json!({
-            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
-            "outgoing_connections_count": 8
-        });
+    fn false_refusal_triggers_do_not_refuse_and_absent_ones_are_not_read() {
         assert_eq!(
-            tip_reading_from_info(&info),
+            reading_of(&json!({
+                "offline": false, "following_degraded": false, "restricted": false
+            })),
             TipReading::Synced(BlockHeight::from_raw(9_000)),
-            "absent `offline` / `following_degraded` / `restricted` are all false"
         );
+        for trigger in ["offline", "following_degraded", "restricted"] {
+            assert_eq!(
+                reading_of(&json!({ trigger: null })),
+                TipReading::Unusable,
+                "a reply without `{trigger}` is not the contract"
+            );
+        }
     }
 
     /// Through the real producer, not just the parse: a peerless daemon
@@ -874,10 +902,10 @@ mod tests {
     async fn a_peerless_daemon_clears_the_tip_instead_of_restamping_it() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&json!({
+        let rpc = CannedRpc::replying(&reply(&json!({
             "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
-        }));
+        })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::NotFollowing(NotFollowing::NoPeers)
@@ -903,7 +931,7 @@ mod tests {
                 "synchronized": true, "outgoing_connections_count": 8
             });
             assert_eq!(
-                tip_reading_from_info(&info),
+                reading_of(&info),
                 TipReading::Unusable,
                 "status {status:?} must not let its body be read as a tip"
             );
@@ -914,11 +942,7 @@ mod tests {
     /// omits it cannot fail on it, so a reply that omits it must not pass.
     #[test]
     fn an_absent_status_is_unusable_not_assumed_ok() {
-        let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
-            "outgoing_connections_count": 8
-        });
-        assert_eq!(tip_reading_from_info(&info), TipReading::Unusable);
+        assert_eq!(reading_of(&json!({ "status": null })), TipReading::Unusable);
     }
 
     /// Through the producer: a `BUSY` HOLDS a held tip rather than clearing
@@ -929,10 +953,10 @@ mod tests {
     async fn a_busy_daemon_holds_the_tip_it_cannot_speak_to() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&json!({
+        let rpc = CannedRpc::replying(&reply(&json!({
             "status": "BUSY", "height": 12_345, "target_height": 0,
             "synchronized": true, "outgoing_connections_count": 8
-        }));
+        })));
         assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);
         assert_eq!(
             tip.height(),
