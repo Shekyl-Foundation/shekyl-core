@@ -258,7 +258,7 @@ this lane.
    because the stem map is redrawn each epoch, so observations of the
    previous map do not help learn the new one — the stem-map inference
    §VII-A reconstructs — while which nodes exist, their degrees, and
-   the own-edge pool's membership survive the redraw and are outside
+   the hidden outbound sessions' membership survive the redraw and are outside
    this bound. The count is stem arrivals at one honest node during
    one epoch, not the network origination rate.
 
@@ -16785,8 +16785,8 @@ not bound `g`. It is one draw; churn is
 `simulate_induced_churn_exposure` (`InducedChurnExposure`), which is
 higher under a refill. ProxyMark is the attack named in §6.9 and
 §12.6. There is no separate ProxyMark simulator. This occupancy is the
-two stem slots drawn from the whole outbound pool. Reading 3's
-capture is the hidden pool over epochs, using this churn instrument's
+two stem slots drawn from every outbound session. Reading 3's
+capture is the hidden outbound sessions over epochs, using this churn instrument's
 refill, and the one-draw `p_h^h` is that reading's reference.
 `simulate_epsilon_greedy_selection` is the §12.11
 selection reading and is not this sweep. `tests/hop_sensitivity.rs`
@@ -16838,10 +16838,10 @@ constant.
    sessions would spread. It is not the posterior. A single-transaction
    walk that counts a relay only when the path revisits the pin is not
    the posterior either. The epoch tally is §95.3.
-3. **Full own-edge pool capture.** At the onion-candidate spy share
-   `p_h` (not `q`: `q` is the fluff probability), the chance every
-   hidden session is a spy is `p_h^h`. Report that number, and check
-   it by drawing the pool. `simulate_two_slot_occupancy` stays the
+3. **Full capture of the hidden outbound sessions.** At the spy share of
+   the onion dial candidates `p_h` (not `q`: `q` is the fluff
+   probability), the chance every hidden session is a spy is `p_h^h`.
+   Report that number, and check it by drawing the sessions. `simulate_two_slot_occupancy` stays the
    stem-slot residual at its own `D_out`. This proposal leaves `STEMS`
    and the §12.6 table where they are.
 4. **Fluff return at the mixed composition, against 3250 ms.** p90
@@ -16885,13 +16885,16 @@ the embargo uses. `fluff_return_ms = 3250` is provisional pending
 the operational test in §96 item 2, so the system can be built and
 tested. It is not that approval.
 
-The origin's own send is a stem slot under `HiddenStemSlot`, the
-routing the relay lane is to ship: one slot drawn from the hidden
-pool, the other from the remaining outbound sessions, and the local
-source mapped to the hidden slot. When every outbound session is
-hidden, both slots are the paper's draw and the local source is an
-ordinary stem-map pin. Relays still forward with probability `1 − q`.
-`own_edge()` is not that routing. This change does not delete it.
+The origin's own send is a stem slot under `HiddenStemSlot`, **the
+routing the relay ships** (PR-1, #1018, `ed87cc03cd`; §98): one slot
+drawn from the hidden outbound sessions, the other from the remaining
+outbound sessions, and the local source pinned on the hidden slot's
+peer with one alternate from the same sessions (D-PR1-1 (c′)). When
+every outbound session is hidden, both slots are the paper's draw and
+the local source is an ordinary stem-map pin. Relays still forward
+with probability `1 − q`. *Records-was (2026-10-08): "`own_edge()` is
+not that routing. This change does not delete it." — the separate draw
+was deleted by PR-1.*
 
 **Epoch tally, 2026-10-08.** Every node originates once per epoch.
 Each node keeps a `StemMap` for that epoch. The epoch tally and the
@@ -17052,15 +17055,16 @@ No new identifier family.
 
 Each item is open. Its carrier is the only thing that closes it.
 
-1. **Stem-slot routing.** Own transactions ride a stem slot, as
-   ruled in §95: the origin's own send is always a stem, and each
-   relay forwards with probability `1 − q`. Rejected as a basis for
-   recommending Tor-only until the relay lane confirms that routing.
-   **Carrier:** the relay lane, after #1004 confirms it. **Closes
-   when** #1004 is on `dev` and the landed §95.3 states that the
-   origin's own send is a stem slot under the routing the relay
-   ships. **Re-evaluation:** the relay lane writes that sentence in
-   the landed section. Closing this item does not recommend Tor-only.
+1. **Stem-slot routing — CLOSED 2026-10-09 (PR-1, #1018,
+   `ed87cc03cd`).** Own transactions ride a stem slot, as ruled in
+   §95: the origin's own send is always a stem, and each relay forwards
+   with probability `1 − q`. The landed §95.3 states that the origin's
+   own send is a stem slot under the routing the relay ships
+   (`HiddenStemSlot`, `graph/hidden_slot.rs`). Closing this item does
+   not recommend Tor-only. *Posed:* rejected as a basis for recommending
+   Tor-only until the relay lane confirmed that routing; carrier the
+   relay lane after #1004; closes when #1004 is on `dev` and the landed
+   §95.3 states the sentence above.
 2. **The operational replacement for the provisional 3250 ms.**
    The simulation in §95.3 is not this closure: it shows the
    transit-free input is short once Tor transit is on the return
@@ -17191,10 +17195,10 @@ wanted: the operational replacement for 3250 ms, on the Rust path.
 
 ## 98. PR-1 pre-flight — `HiddenStemSlot` in `shekyl-relay` (Round 0, 2026-10-09)
 
-**Status: OPEN — pre-flight recorded; D-PR1-2 and the structure ruled
-2026-10-09, D-PR1-1 ruled (c) and revised to (c′) the same day on
-98.10's table (98.4); implementation landing on `feat/hidden-stem-slot`
-(#1018), one commit at a time.** Rule 26 is cited: this is the substrate
+**Status: OPEN — implementation landed on `feat/hidden-stem-slot`
+(#1018, `ed87cc03cd`); D-PR1-2 and the structure ruled 2026-10-09,
+D-PR1-1 ruled (c) and revised to (c′) the same day on 98.10's table
+(98.4). Closes as record when #1018 merges.** Rule 26 is cited: this is the substrate
 re-check between the §95 ruling and PR-1's first production commit.
 The governing design is §95.3's `HiddenStemSlot` paragraph, §96 item 1,
 and `TOR_COVER_POSTURE.md`'s 2026-10-08 UPDATE. Lines were read on `dev`
@@ -17207,10 +17211,10 @@ family.
 
 | | the instrument (`conformance/composition/mod.rs`) | production after PR-1 (`shekyl-relay/src/graph/`) |
 | --- | --- | --- |
-| mixed pool, hidden connector configured | `mixed_hidden_slot` (`:534` to `:561`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)` | `rebuild_stems`: one id drawn uniformly from the hidden-address outbound sessions, one from the remaining outbound sessions, `StemMap::new(slots, stems, rng)`; the local source resolves with `stem_for_among(None, &hidden_live)` where `hidden_live` is every outbound session whose declaration hides the address; its first pin freezes `stems` of them: slot 0's peer and `stems − 1` alternates drawn uniformly from the rest (D-PR1-1 (c′)). The instrument passes the slot peer alone and measures one origination per epoch, so the two agree on the primary, which is what §95.3 counts; the churn behaviour is 98.10's measurement |
-| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over the pool, local source `stem_for(None)` | the same call: every session is in the allowed set, so the primary is the load-balanced slot the paper's `stem_for(None)` would pick and the alternate is drawn from the rest of the hidden outbound sessions. One code path, two cases |
+| mixed outbound sessions, hidden connector configured | `mixed_hidden_slot` (`:534` to `:561`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)` | `rebuild_stems`: one id drawn uniformly from the hidden-address outbound sessions, one from the remaining outbound sessions, `StemMap::new(slots, stems, rng)`; the local source resolves with `stem_for_among(None, &hidden_live)` where `hidden_live` is every outbound session whose declaration hides the address; its first pin freezes `stems` of them: slot 0's peer and `stems − 1` alternates drawn uniformly from the rest (D-PR1-1 (c′)). The instrument passes the slot peer alone and measures one origination per epoch, so the two agree on the primary, which is what §95.3 counts; the churn behaviour is 98.10's measurement |
+| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over every outbound session, local source `stem_for(None)` | the same call: every session is in the allowed set, so the primary is the load-balanced slot the paper's `stem_for(None)` would pick and the alternate is drawn from the rest of the hidden outbound sessions. One code path, two cases |
 | no hidden connector | `paper_map` | unchanged: `plan_relay`'s existing `stem_for` arm (`mod.rs:946` to `:952`), plan `Stem` |
-| hidden connector, hidden pool empty | `hidden.is_empty()` takes the paper branch; the instrument has no "hidden connector with no hidden session" node | production holds: `NoOwnEdge`. The instrument never models this state, so nothing is transferred for it (coverage statement, 98.5) |
+| hidden connector, no hidden outbound session | `hidden.is_empty()` takes the paper branch; the instrument has no "hidden connector with no hidden session" node | production holds: `NoOwnEdge`. The instrument never models this state, so nothing is transferred for it (coverage statement, 98.5) |
 
 The instrument's draw and production's are the same `StemMap` calls in
 the same order. Where the candidate orderings differ (the instrument
@@ -17227,7 +17231,7 @@ not available and the distributional test in 98.6 is the pin.
 | `rebuild_stems` is class-blind `StemMap::new`; `update_stems` is class-blind `StemMap::update` | `graph/mod.rs:854` to `:860`; `:834` to `:840`; `StemMap::new` `stem_map/mod.rs:178` to `:209`, `update` `:216` to `:283` | yes. `update` backfills any empty slot from any candidate not in use; a class-aware refill needs an API this PR adds (98.3) |
 | `stem_for_among` restricts the first pin to `allowed` and later walks that frozen set; exhaustion is `None`, re-drawn at the epoch | `stem_map/mod.rs:362` to `:372`, `resolve_pin` `:379` on; the W3c argument at `:330` to `:343` | yes. For a relayed source this is the ruled behaviour. For the local source it is decision D-PR1-1 |
 | Production stem width is 2 | `CRYPTONOTE_DANDELIONPP_STEMS` `src/cryptonote_config.h:115`; `public_zone_params` `levin_notify.cpp:206` to `:209`; noise requires `stems == NOISE_CHANNELS` (`graph/mod.rs:511`) | yes (B6: value read at the line). Width 1 is reachable only from tests |
-| The hidden pool target is 12 | `MIN_PROVISIONED_OUT_PEERS` `params.rs:203` | yes (B6) |
+| The hidden outbound sessions' target is 12 | `MIN_PROVISIONED_OUT_PEERS` `params.rs:203` | yes (B6) |
 | The carrier: `OwnEdge` leaves on the ordinary connection; a `Stem` on an open link with noise on is its slot's channel | `carrier_for` `graph/mod.rs:1176` to `:1206` | yes. Unchanged by PR-1: a hidden slot's peer is on Tor, where `noise_destination` is false |
 | Stem candidates are outbound sessions with an assessed transit; `hides_address` reads the declaration | `stem_candidate` `graph/mod.rs:786` to `:790`, `outbound_ids` `:798` to `:804`, `hides_address` `:101`, `any_hides_address_from_peer` `:117` | yes |
 | The measurements PR-1 transfers | §95.3: `HiddenStemSlot` own-edge posterior 0.61 to 0.64 at 48 nodes and 20 epochs; the all-clearnet baseline 0.64; `HiddenOwnEdge` (today's draw) 0.82 at `(12, 0)` | model results (Ruling B class 1); transferred by 98.6's distributional test, not re-run |
@@ -17267,9 +17271,9 @@ refill is what the origin needs before it resolves), then returns
 `OwnEdge` over the pin — made at first origination over the supplied
 list, walked afterwards with `hidden_live` as the allowed set — or
 `NoOwnEdge`. No field names the hidden slot: it is slot 0 by
-construction. The pool-of-one
-rotation report stays, at rebuild, when the hidden class has exactly one
-session. `Relay::new` refuses `stems < 2` with a hidden connector (a new
+construction. The class-of-one
+rotation report (`hop-0 edge cannot rotate`) stays, at rebuild, when
+exactly one outbound session hides the address. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
 handle). No connector is named anywhere in either crate's production
 code; the gate of 98.4 holds that.
@@ -17354,7 +17358,7 @@ hidden peer; `own_edge()` replaced a dead edge the same way today
 (`own_edge.rs:35` to `:52`), §95's capture reading is per-epoch and
 already counts one draw per epoch per node, and the extra rolls an
 adversary can buy are bounded by how many of the origin's hidden peers
-it can make drop, which is the pool the dialer refills at 12.
+it can make drop, which the dialer refills to 12.
 Recommended (b) at the time. Rules 2 and 3 read that way ("while no
 hidden session is available"), and rule 4 scoped W3c to relayed
 sources. Ruled (c), above.
@@ -17366,14 +17370,14 @@ one slot meanwhile, and no pinned relayed source is re-pointed. (ii)
 Fill both slots from the rest and, on a hidden arrival, evict one: that
 re-points every relayed source pinned on the evicted slot, which W3c
 forbids. (iii) Wait for the epoch: rule 3 says not to.
-Recommended (i): an empty hidden pool under a hidden connector is a boot
+Recommended (i): no hidden outbound session under a hidden connector is a boot
 transient once the dialer keeps 12 (the dialer brief's wargame: hidden
 sessions open one at a time, and the first fills the slot), and (i) is
 the only option that keeps both W3c and rule 3. Ruled (i), above.
 
 ### 98.5 Coverage statements (rule 50)
 
-- *Hidden connector configured, hidden pool empty.* Production holds
+- *Hidden connector configured, no hidden outbound session.* Production holds
   (`NoOwnEdge`). The instrument's `hidden.is_empty()` branch is the
   no-hidden-connector node and uses the paper's draw; production never
   takes that branch while a hidden connector is configured. No §95.3
@@ -17389,7 +17393,7 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   local source holds (`NoOwnEdge`) until the epoch ends, however many
   hidden sessions the dialer opens afterwards (rule 2: a session opened
   after the pin never serves it this epoch). Slot 0 refills from those
-  sessions for relayed traffic. The pool-of-one rotation report names
+  sessions for relayed traffic. The class-of-one rotation report names
   the state at rebuild.
 
 ### 98.6 Tests, named by property
@@ -17398,7 +17402,7 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   not hide the address: across epochs, mid-epoch churn of the hidden
   slot, loss of every hidden session (`NoOwnEdge`), and their return;
 - relayed sources reach both slots over epochs;
-- the slot draw is uniform over the hidden pool and the other slot
+- the slot draw is uniform over the hidden outbound sessions and the other slot
   uniform over the rest (chi-square over 200 rebuilds, the shape
   `four_hidden_peers_share_the_own_edge` already uses, `edge.rs:210`),
   the distributional pin of `mixed_hidden_slot`;
@@ -17439,9 +17443,10 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
    against a pinned source, and what drops can reach is the `stems`
    frozen candidates: exposure at most `stems / H`. Resolved by D-PR1-1
    (c′); measured in 98.10.
-2. *A spy as the only hidden peer.* With a pool of one, every origination
-   rides the spy, every epoch; the rotation report names it and the
-   dialer keeps the pool at 12. Absorbed: the report stays, at rebuild.
+2. *A spy as the only hidden peer.* With one hidden outbound session,
+   every origination rides the spy, every epoch; the rotation report
+   names it and the dialer keeps the sessions at 12. Absorbed: the
+   report stays, at rebuild.
 3. *A clearnet peer as the local origin's first hop.* The failure
    `HiddenStemSlot` exists to prevent. Rules 1 and 2 and the first test in
    98.6; `stem_for_among` makes a non-allowed peer not a candidate
@@ -17477,30 +17482,25 @@ as first written.
 3. `ci: the relay connector gate covers every variant and both crates`
    — the structure ruling's gate, with its selftest. Landed
    `e715d56431`.
-4. `relay: revise D-PR1-1 to (c′) in §98` — this section as it stands.
+4. `relay: revise D-PR1-1 to (c′) in §98` — landed `353256f295`.
 5. `relay-privacy: (c′) and random-churn arms in the hidden-slot
    instrument` — the (c′) arm with exposure and held share, pinned at
    `stems / H`; a random-churn mode; the worst-case statement; the
-   table of 98.10 re-recorded under both.
+   table of 98.10 re-recorded under both. Landed `1b18a87c7f`.
 6. `relay-privacy: stem_map gains a reserved slot` — the API of 98.3
-   with its unit tests; no caller yet in this commit, so it is inert and
-   named here as the next commit's consumer (rule 22: the caller is
-   commit 7 of the same PR).
+   with its unit tests; no caller in that commit, named there as the
+   next commit's consumer (rule 22). Landed `ddeecebef9`.
 7. `relay: a local origin rides the hidden stem slot` — `rebuild_stems`,
    `update_stems`, `plan_relay`, the refusal; `own_edge.rs`,
-   `hop0_edge`, `hop0_peer_live` deleted in this commit, not later; the
-   tests of 98.6.
+   `hop0_edge`, `hop0_peer_live` deleted in the same commit; the tests
+   of 98.6; the C++ fixtures green through the daemon build. Landed
+   `ed87cc03cd`.
 8. `docs: HiddenStemSlot is the routing the relay ships` — §95.3's
-   sentence, §96 item 1 closed with the commit, `TOR_COVER_POSTURE.md`
-   and `TOR_RELAY.md` corrected, the dialer brief's "stay on `dev`"
-   sentence to records-was, `params.rs:211` "own-edge pool", the RP
-   index row, this section's status; and the vocabulary fixed once
-   (Rick, 2026-10-09): **dial candidates** for the gray and white lists
-   (addresses considered for dialling), **pin** for a source's frozen
-   set (the code's word), and **hidden outbound sessions** in place of
-   "hidden pool" (the Tor subset of the live outbound sessions). The
-   five layers — gray, white, outbound sessions, stem slots, pins — each
-   get one name in this document and the dialer brief.
+   sentence, §96 item 1 closed, `TOR_COVER_POSTURE.md` and
+   `TOR_RELAY.md` corrected, the dialer brief's "stay on `dev`" sentence
+   to records-was, `params.rs:211` "own-edge pool", the RP index row,
+   the CHANGELOG, this section's status; and the vocabulary fixed once
+   (98.11, Rick 2026-10-09).
 
 Gates per commit: `cargo fmt --check`; `cargo clippy -p
 shekyl-relay-privacy -- -D warnings` (the lib as a dependant sees it),
@@ -17607,6 +17607,31 @@ the drop lands on the origin's hop with probability `1 / H`.
 than (b) and the PR paused; Rick withdrew (c) and ruled (c′) (98.4). The
 PR continues at 98.8 commit 6.
 
+### 98.11 Vocabulary — five layers, one name each (Rick, 2026-10-09)
+
+The documents reused "candidate" and "pool" across layers: in the
+dialer brief a *candidate* was an address being considered for
+dialling, in `StemMap` a peer in a source's pin; the "hidden pool" was
+the Tor sessions while `p_h`, the "onion-candidate share", was the
+adversary's share of onion addresses in the lists. Fixed once, here and
+in the dialer brief:
+
+| # | Layer | What it holds | Size (interim) | Lifetime | Owner |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **Gray list** — *dial candidates* | Every address this node has heard of: gossip, inbound peers, `--add-peer`, reload from disk. Hypotheses. | up to 5000 per connector | until evicted | slice 1 (peerlist) |
+| 2 | **White list** — *dial candidates* | Addresses this node itself dialled and confirmed. The only way in is our own dial. | floor ≈ 48, cap 1000, per connector | 24 h without contact, then back to gray | slice 1 |
+| 3 | **Outbound sessions** | Live connections the dialer keeps open, drawn from white (re-contact) or gray (promotion). The address-hiding subset is the **hidden outbound sessions**. | 12 hidden + 12 clearnet | while the connection lasts | slice 3 (dialer) |
+| 4 | **Stem slots** | Two of the outbound sessions, drawn by the relay each epoch as next hops for stem traffic. The **hidden slot** is slot 0, reserved for the hidden outbound sessions. | 2 | one epoch (~10 min) | relay (`StemMap`) |
+| 5 | **Pin** (`Pin` in code) | Per source: the peers that source may use this epoch, fixed when it first sends (W3c). The local source's is the hidden slot's peer plus one alternate. | 2 | one epoch, per source | relay (`StemMap`) |
+
+The pin is four layers below the white list. White is "addresses I have
+proven exist", over days; the pin is "which of my current next hops
+this source may use", over the next ten minutes. The flooding adversary
+of 98.10 enters at layer 1; an address reaches layer 2 only through this
+node's own successful dial, layer 3 only when the dialer draws it to
+replace a dropped session, and never layer 5 within the epoch it
+arrived: that is what freezing at layer 5 says, and what D-PR1-1 asked.
+
 ### 98.9 Round denominator
 
 Examined and yielding nothing: `relay_zone_ffi/mod.rs` (the plan mapping
@@ -17621,4 +17646,4 @@ alone once slot 0 is reserved — the state the class-blind draw already
 produced whenever it slotted a hidden peer, now the steady one, and §20.3
 volume cover on the hidden link is unchanged. Not
 examined: `shekyl-tor` and the connector crates, which PR-1 does not
-touch; the dialer's view of the hidden pool, which is PR-3's.
+touch; the dialer's view of the hidden outbound sessions, which is PR-3's.

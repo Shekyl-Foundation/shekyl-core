@@ -63,12 +63,19 @@ approval. The ceiling comes from resources. `(h, 0)`, including
 on §96. A total of 16 was an illustration in the §95.2 grid, and that
 grid is records-was. It is not a degree this composition uses.
 
-Stem-slot routing is §95.3: one slot from the hidden pool, the other
-from the remaining outbound sessions, the local source mapped to the
-hidden slot, relays forwarding with probability `1 − q`. This slice
-does not restate a shorter routing. `own_edge` and `NoOwnEdge` stay
-on `dev` until the relay lane lands §95.3. This slice depends on
-nothing in them and does not choose the slot.
+Stem-slot routing is §95.3: one slot from the hidden outbound
+sessions, the other from the remaining outbound sessions, the local
+source pinned on the hidden slot, relays forwarding with probability
+`1 − q`. This slice does not restate a shorter routing. **UPDATE
+2026-10-09:** the relay lane landed §95.3 as PR-1 (#1018,
+`DAEMON_RELAY_PRIVACY.md` §98); `own_edge()` is deleted and
+`NoOwnEdge` is the plan when no outbound session hides the address or
+the origin's pin is exhausted. *Records-was: "`own_edge` and `NoOwnEdge`
+stay on `dev` until the relay lane lands §95.3."* This slice depends
+on nothing in them and does not choose the slot. Vocabulary (§98.11):
+*dial candidates* are the gray and white lists; *hidden outbound
+sessions* are the address-hiding subset of the live outbound sessions;
+a *pin* is a source's frozen set in `StemMap`.
 
 A later connector, I2P included, is a declaration column, that
 connector's measured transit added in `verify_cost`
@@ -664,7 +671,7 @@ the pool the dialer keeps is `hidden_out` (12), which is also what
 onion circuits on the managed Tor, where the old target opened 4. The
 in-flight dial bound limits how fast they open. Total outbound is
 `clearnet_out` plus `hidden_out`, and relayed stems are drawn over
-all of them. Both the hidden pool and that total are lower limits.
+all of them. Both the hidden outbound sessions and that total are lower limits.
 *Records-was: the capture was written `p^k`.*
 
 **What a peer can make us dial.** A peerlist, an advertisement, and a
