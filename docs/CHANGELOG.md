@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- CI: the nightly workflow gains `economics-sim-ignored`, which runs the four `#[ignore]`d tests of `shekyl-economics-sim` (the two `--stage2` narration fixtures, the challenge-coverage reproduction and the secret draw's evidence set) on `main` and `dev`. No lane ran them before; the narration fixtures drifted on PR #1009 and CI stayed green. The job fails if the crate's ignored set is anything but those four and the two regeneration helpers, which it never runs.
 ### Shard view — a picture of a shard is drawn from a real fetch
 
 - **Wallet RPC: `get_shard_view { shard_id }`** (contract 0.11.0,

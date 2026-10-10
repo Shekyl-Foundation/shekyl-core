@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      job:
+        description: "Run only this job (proptest-exhaustive, store-ignored or economics-sim-ignored). Empty runs all three."
+        required: false
+        default: ""
+      ref:
+        description: "economics-sim-ignored only: check out this ref on both legs, not main and dev. For proving the lane on a branch."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -13,6 +22,7 @@ env:
 
 jobs:
   proptest-exhaustive:
+    if: ${{ !inputs.job || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
     # schedule picks up whichever version of this file is on main. The matrix
     # below makes each scheduled run cover both active branches in parallel;
@@ -72,6 +82,7 @@ jobs:
           cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture
 
   store-ignored:
+    if: ${{ !inputs.job || inputs.job == 'store-ignored' }}
     # The chain store's `#[ignore]`d set: the shard-boundary deletion test
     # over real multi-input spends (`prune_tests::
     # the_boundary_batch_discards_closed_shards_on_real_spends`, minutes of
@@ -171,6 +182,156 @@ jobs:
             // Exact-title match over open issues, not text search: the search
             // API's in:title is a substring match and lags on freshly created
             // issues, which would fork the thread on back-to-back nightly reds.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
+
+  economics-sim-ignored:
+    if: ${{ !inputs.job || inputs.job == 'economics-sim-ignored' }}
+    # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
+    # against their committed fixtures (150 s and 100 s in release), the
+    # full-scale challenge-coverage reproduction, and the secret draw's
+    # evidence set. This job is the lane that invokes them. Before it none
+    # did: on PR #1009 the sim's share calls moved onto a function that is
+    # zero at height 0 (783053554), both narrations drifted, and CI stayed
+    # green until a fresh clone ran the tests by hand two commits later
+    # (e3d0931d77).
+    #
+    # The crate's other two ignored tests, `regen_baseline_fixture` and
+    # `regen_stage2_narration_fixtures`, WRITE the committed fixtures. They
+    # are named below as helpers and never run here: a lane that
+    # regenerated the fixtures and then compared against them would pass
+    # every night.
+    #
+    # Same matrix and same caveat as above: the schedule runs main's copy of
+    # this file over both branches, so the `main` leg is red until the
+    # release that carries the tests it names (and threads onto one tracking
+    # issue until then); `workflow_dispatch` with ref=dev runs the newer
+    # config. A dispatch may also name a `ref` input: both legs then check
+    # out that ref, which is how the lane is shown red on a branch before it
+    # merges. A dispatched red opens no issue; the person who dispatched it
+    # is reading it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      # For the on-failure step: a red must reach a human.
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || matrix.branch }}
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-economics-sim-ignored-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-economics-sim-ignored-${{ matrix.branch }}-
+
+      - name: Run the economics sim's ignored tests
+        working-directory: rust
+        # Rule 47: the lane asserts its subject before running it. The
+        # crate's ignored set must be EXACTLY the tests run here plus the
+        # two regeneration helpers. A renamed, deleted or un-ignored member
+        # fails by name; a new ignored test fails too, until someone decides
+        # here whether it is run or is a helper. The tests are passed by
+        # exact name, so the helpers cannot be reached by a filter.
+        #
+        # The crate is a binary with no library target: the tests are in
+        # `--bin shekyl-economics-sim`.
+        run: |
+          set -eu
+          run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
+          stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
+          challenge_coverage::tests::full_scale_maturity_reproduces_doc_figures
+          secret_draw::tests::the_evidence_set_runs_and_the_table_renders'
+          helpers='record::tests::regen_baseline_fixture
+          stage2::tests::regen_stage2_narration_fixtures'
+          run_tests=$(printf '%s\n' "$run_tests" | sed 's/^ *//')
+          helpers=$(printf '%s\n' "$helpers" | sed 's/^ *//')
+
+          listing=$(cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
+          found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | sort)
+          expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | sort)
+          if [ "$found" != "$expected" ]; then
+            echo "::error::shekyl-economics-sim's ignored set is not the one this lane was written for."
+            echo "expected (the tests run, then the helpers that are not):"
+            printf '%s\n' "$expected"
+            echo "found:"
+            printf '%s\n' "$found"
+            echo "Decide in nightly.yml whether each new ignored test is run here or is a regeneration helper."
+            exit 1
+          fi
+
+          START=$(date +%s)
+          # The verdict does not travel through a pipe (rule 46): the log
+          # is written, the exit kept, then the log shown.
+          status=0
+          # shellcheck disable=SC2086 # one test name per word, by design
+          cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- \
+            --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
+          cat sim-ignored.log
+          if [ "$status" -ne 0 ]; then
+            echo "::error::economics-sim-ignored: a named test failed. If a narration drifted, regenerate with regen_stage2_narration_fixtures only if the sim change is intended; otherwise the sim drifted from its record."
+            exit "$status"
+          fi
+          ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
+          want=$(printf '%s\n' "$run_tests" | grep -c .)
+          if [ "$ran" != "$want" ]; then
+            echo "::error::${ran:-0} of ${want} named tests ran: a name above no longer matches a test exactly."
+            exit 1
+          fi
+          END=$(date +%s)
+          echo "::notice::Economics sim ignored tests completed on ${{ inputs.ref || matrix.branch }} in $((END - START))s (budget 180m)"
+
+      - name: notify on red
+        # Same step as `store-ignored`'s: a nightly red nobody reads is the
+        # silence this lane exists to end.
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = `nightly economics-sim ignored tests RED (${{ matrix.branch }})`;
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              'Branch: ${{ matrix.branch }}',
+              'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `full_scale_maturity_reproduces_doc_figures` and `the_evidence_set_runs_and_the_table_renders`.',
+              'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
+              'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
+            ].join('\n');
+            // Exact-title match over open issues, not text search (see
+            // `store-ignored`).
             const open = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
