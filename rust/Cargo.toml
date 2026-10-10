@@ -260,6 +260,10 @@ members = [
     # stack plan, socket counts, the ban list. No sockets. The Noise
     # layer stays shekyl-p2p-transport. Levin is the session above the plan.
     "shekyl-transport-layer",
+    # The peer lists (P2P_3_SLICE_1_PEERLIST_BRIEF.md): gray, white, the
+    # one door between them, the cached disclosure sample, ban demotion,
+    # the per-session intake cap. Data only: no socket, no dial, no FFI.
+    "shekyl-peerlist",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
     "shekyl-socks",
