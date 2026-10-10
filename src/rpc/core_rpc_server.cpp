@@ -279,8 +279,7 @@ namespace cryptonote
     }
 
     // Component 4: effective staker emission share at current height
-    res.staker_emission_share_effective = shekyl_calc_emission_share(
-        res.height, facts.genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
+    res.staker_emission_share_effective = shekyl_emission_share_at(res.height);
 
     res.status = CORE_RPC_STATUS_OK;
   }
@@ -330,7 +329,6 @@ namespace cryptonote
     facts.tx_volume_count_sum = tx_volume.tx_count_sum;
     facts.tx_volume_blocks = tx_volume.blocks;
     facts.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
-    facts.genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
 
     build_get_info(facts, restricted, res);
     return true;

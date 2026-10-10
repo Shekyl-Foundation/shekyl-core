@@ -138,7 +138,6 @@ namespace
     f.total_burned = 4200000000ull;
     f.tx_volume_count_sum = 6000;
     f.tx_volume_blocks = 100;
-    f.genesis_ng_height = 0;
     return f;
   }
 

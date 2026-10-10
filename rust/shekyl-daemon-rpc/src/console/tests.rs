@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 use super::alt_chain::headers_in_correspondence;
-use super::blockchain::{median, version_tally};
-use super::status::{fork_extra_info, mining_speed, sync_percentage};
+use super::blockchain::median;
+use super::status::{mining_speed, sync_percentage};
 use super::*;
 use crate::ctl_client;
 use std::ffi::CString;
@@ -75,7 +75,6 @@ fn agreeing_get_version() -> String {
         release: false,
         current_height: 1,
         target_height: 0,
-        hard_forks: vec![],
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
@@ -1385,17 +1384,6 @@ fn the_median_is_epees_including_its_even_length_average() {
     assert_eq!(median(&mut [u64::MAX, u64::MAX]), u64::MAX);
 }
 
-/// The version tallies list ascending, omit versions with no votes, and
-/// separate with `", "` — the string the C++ built by hand.
-#[test]
-fn a_version_tally_lists_only_the_versions_present() {
-    let mut counts = [0u32; 256];
-    assert_eq!(version_tally(&counts), "");
-    counts[2] = 3;
-    counts[1] = 1;
-    assert_eq!(version_tally(&counts), "1 v1, 3 v2");
-}
-
 /// A range reply that does not fill the window it was asked for is refused,
 /// not summarised.
 ///
@@ -1502,8 +1490,10 @@ fn dynamic_stats_reports_the_window_it_summarized() {
     assert!(out.contains("avg num txes 2"), "{out}");
     assert!(out.contains("avg. reward 600.000000000"), "{out}");
     assert!(out.contains("median block weight 200"), "{out}");
-    assert!(out.contains("Block versions: 3 v1"), "{out}");
-    assert!(out.contains("Voting for: 2 v0, 1 v2"), "{out}");
+    assert!(
+        out.trim_end().ends_with("median block weight 200"),
+        "nothing follows the window line: {out}"
+    );
 
     // The window: height 10, three blocks, so [7, 9].
     // The identity handshake is a request too (VC-3), and it is not one of
@@ -1877,25 +1867,6 @@ fn an_unknown_tip_is_named() {
     );
 }
 
-fn fork_reply(active: u8, queried: u8, earliest: u64) -> String {
-    typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::HardForkInfoResponse {
-            status: RpcStatus::ok(),
-            queried_version: queried,
-            active_version: active,
-            enabled: true,
-            window: 10080,
-            votes: 10080,
-            threshold: 0,
-            voting: active,
-            state: 2,
-            earliest_height: earliest,
-        },
-    }))
-}
-
 fn mining_reply(active: bool, speed: u64, background: bool) -> String {
     serde_json::json!({
         "status": "OK",
@@ -1945,32 +1916,11 @@ fn the_sync_percentage_never_rounds_up_to_a_hundred() {
     assert!((sync_percentage(0, 0) - 0.0).abs() < f64::EPSILON);
 }
 
-/// The fork countdown, in each of its units and in the cases that say
-/// nothing.
-#[test]
-fn the_fork_countdown_changes_units_where_the_cpp_did() {
-    assert_eq!(fork_extra_info(100, 100, 120), " (forking now)");
-    // Already past: nothing to count down to.
-    assert_eq!(fork_extra_info(50, 100, 120), "");
-    assert_eq!(fork_extra_info(120, 100, 120), " (next fork in 20 blocks)");
-    // 720 blocks/day at a 120 s target, so 30 blocks/hour: 100 blocks is
-    // under half a day and reads in hours.
-    assert_eq!(fork_extra_info(200, 100, 120), " (next fork in 3.3 hours)");
-    assert_eq!(fork_extra_info(1_540, 100, 120), " (next fork in 2.0 days)");
-    // Past thirty days, nothing.
-    assert_eq!(fork_extra_info(100_000, 100, 120), "");
-    // A target the daemon reports as zero, or as longer than an hour,
-    // divided straight through in the C++.
-    assert_eq!(fork_extra_info(200, 100, 0), "");
-    assert_eq!(fork_extra_info(200, 100, 90_000), "");
-}
-
-/// The whole status line, on the remote arm, with all three legs.
+/// The whole status line, on the remote arm, with both legs.
 #[test]
 fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     let address = route_server(vec![
         ("/get_info", info_reply(100)),
-        ("json_rpc:hard_fork_info", fork_reply(3, 7, 100)),
         ("/mining_status", mining_reply(true, 2500, false)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
@@ -1980,14 +1930,12 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     // net hash = difficulty 123456 / target 120, integer-divided to
     // 1028 H/s, which reads as 1.03 kH/s.
     assert!(out.contains("net hash 1.03 kH/s"), "{out}");
-    // **`v3`, not `v7`.** The fixture's queried and active versions
-    // differ on purpose: `on_hard_fork_info` set `res.version` from
-    // `get_current_hard_fork_version()` regardless of the request, so
-    // this line is the active fork. Reading `queried_version` here would
-    // invert the reason RK-5b split the two.
-    assert!(out.contains("v3 (forking now)"), "{out}");
-    assert!(out.contains("8(out)+3(in) connections"), "{out}");
-    assert!(out.contains(", uptime "), "{out}");
+    // The connection counts follow the hash rate directly: the line carries
+    // no block-version clause, so nothing sits between the two.
+    assert!(
+        out.contains("net hash 1.03 kH/s, 8(out)+3(in) connections, uptime "),
+        "{out}"
+    );
 }
 
 /// A restricted daemon discloses no start time, and the uptime clause is
@@ -1998,7 +1946,6 @@ fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
     info["start_time"] = serde_json::json!(0);
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
         ("/mining_status", mining_reply(false, 0, false)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
@@ -2011,15 +1958,12 @@ fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
 /// status line.
 ///
 /// A restricted listener does not serve the route at all — an ordinary
-/// posture, not a fault — so the eight other things the line knows are
+/// posture, not a fault — so the seven other things the line knows are
 /// still worth printing. The route server has no `/mining_status` row, so
 /// it answers 404.
 #[test]
 fn a_restricted_remote_daemon_still_reports_its_status() {
-    let address = route_server(vec![
-        ("/get_info", info_reply(100)),
-        ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
-    ]);
+    let address = route_server(vec![("/get_info", info_reply(100))]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("mining info unavailable"), "{out}");
@@ -2031,7 +1975,6 @@ fn a_restricted_remote_daemon_still_reports_its_status() {
 fn a_busy_mining_status_reads_as_syncing() {
     let address = route_server(vec![
         ("/get_info", info_reply(100)),
-        ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
         (
             "/mining_status",
             serde_json::json!({
@@ -2046,44 +1989,6 @@ fn a_busy_mining_status_reads_as_syncing() {
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains(", syncing,"), "{out}");
-}
-
-/// `hard_fork_info` names the fork its numbers describe.
-///
-/// The fixture gives queried, active and voting three **different**
-/// values, so each of the two lines pins its own field: a port that
-/// confused any pair could not pass by coincidence. The C++ labelled
-/// line one with `voting` when asked about no particular version, which
-/// here would print `v9`.
-#[test]
-fn hard_fork_info_labels_line_one_with_the_version_it_counted() {
-    let reply = typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::HardForkInfoResponse {
-            status: RpcStatus::ok(),
-            queried_version: 7,
-            active_version: 3,
-            enabled: false,
-            window: 10080,
-            votes: 42,
-            threshold: 8064,
-            voting: 9,
-            state: 2,
-            earliest_height: 0,
-        },
-    }));
-    let address = route_server(vec![("json_rpc:hard_fork_info", reply)]);
-    let (code, out) = run(&["hard_fork_info", "0"], Some(&address));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(
-        lines,
-        [
-            "version 7 not enabled, 42/10080 votes, threshold 8064",
-            "current version 3, voting for version 9",
-        ]
-    );
 }
 
 /// After VC-D11 the T warning is gone: the digest handshake is the instrument,
@@ -2101,7 +2006,6 @@ fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
     info["target"] = serde_json::json!(60);
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("json_rpc:hard_fork_info", fork_reply(3, 3, 0)),
         ("/mining_status", mining_reply(false, 0, false)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
@@ -2179,7 +2083,6 @@ fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse))
         release: false,
         current_height: 1,
         target_height: 0,
-        hard_forks: vec![],
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(

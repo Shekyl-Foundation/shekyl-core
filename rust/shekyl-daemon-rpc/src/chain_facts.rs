@@ -8,8 +8,8 @@
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
 //! needs and decides the rest itself. [`FfiChainFacts`] is today's only
-//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` /
-//! `shekyl_rpc_hardforks` (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
+//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` and
+//! its siblings (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
 //! store lands (DRS-E) a second implementation reads it directly and this
 //! one is deleted; the handlers and their tests do not move.
 //!
@@ -182,13 +182,6 @@ pub struct BlockHeaderAt {
     pub chain_height: ChainCount,
 }
 
-/// One row of the hard-fork schedule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HardFork {
-    pub version: u8,
-    pub height: BlockHeight,
-}
-
 /// Why a facts read could not be served. Each variant is a distinct C return
 /// code (rule 40: codes, not booleans), so the transport can choose between
 /// "try again" and "this daemon is broken".
@@ -258,7 +251,6 @@ pub trait ChainFacts: Send + Sync {
     /// The daemon's identity facts (`nettype`, genesis hash). Constant for
     /// the process's life, so a caller may read it once per connection.
     fn identity(&self) -> Result<DaemonIdentity, FactsFault>;
-    fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
@@ -270,10 +262,6 @@ pub trait ChainFacts: Send + Sync {
         at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
-    /// Hard-fork voting info for one version. `requested` is `None` for
-    /// "the next fork" — the daemon resolves it and reports which it chose,
-    /// so the sentinel never reaches a caller.
-    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault>;
     /// The dynamic base-fee estimate. A `grace_blocks` above
     /// [`Self::fee_grace_blocks_max`] is refused by the caller first; the
     /// facts layer refuses it too rather than letting the estimator throw.
@@ -348,29 +336,6 @@ pub trait P2pFacts: Send + Sync {
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
     fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
-}
-
-/// Hard-fork info, carried verbatim from the daemon.
-///
-/// The daemon writes `window`, `votes` and `threshold` as 0: there is no
-/// vote, and this struct does not invent one. CEN-B2 (the reserved minor
-/// byte) is ratified in `shekyl-chain-rules`. CEN-B3 (the height schedule
-/// and the class that owns it) stays bucket 4 until `hard_fork_info` is
-/// deleted; this is that projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HardForkInfo {
-    /// The version the fields below describe — resolved, so the request's
-    /// "next fork" sentinel never reaches a reader.
-    pub queried_version: u8,
-    /// The chain's current fork version. Not the subject of the fields below.
-    pub active_version: u8,
-    pub enabled: bool,
-    pub window: u32,
-    pub votes: u32,
-    pub threshold: u32,
-    pub voting: u8,
-    pub state: u32,
-    pub earliest_height: u64,
 }
 
 /// The dynamic base-fee estimate: three priced tiers and the quantization mask.
@@ -522,24 +487,6 @@ impl ChainFacts for FfiChainFacts {
         })
     }
 
-    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
-        let pod = self
-            .core
-            .hard_fork_info(requested.unwrap_or(0))
-            .map_err(FactsFault::from_code)?;
-        Ok(HardForkInfo {
-            queried_version: pod.queried_version,
-            active_version: pod.active_version,
-            enabled: pod.enabled != 0,
-            window: pod.window,
-            votes: pod.votes,
-            threshold: pod.threshold,
-            voting: pod.voting,
-            state: pod.state,
-            earliest_height: pod.earliest_height,
-        })
-    }
-
     fn fee_grace_blocks_max(&self) -> u64 {
         // The C++ constant, single-sourced: `CRYPTONOTE_REWARD_BLOCKS_WINDOW`
         // behind a handle-free export, never restated here.
@@ -611,17 +558,6 @@ impl ChainFacts for FfiChainFacts {
             }),
             chain_height,
         })
-    }
-
-    fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
-        let rows = self.core.hardforks().map_err(FactsFault::from_code)?;
-        Ok(rows
-            .into_iter()
-            .map(|r| HardFork {
-                version: r.version,
-                height: BlockHeight::from_raw(r.height),
-            })
-            .collect())
     }
 }
 

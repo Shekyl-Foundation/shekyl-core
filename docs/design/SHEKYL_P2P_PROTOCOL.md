@@ -2372,36 +2372,41 @@ revert to describing a degraded path rather than a blocker.
 #### Chain-identity divergence is RULED OUT, with the discriminator named
 
 **Not "untested" — ruled out by two discriminators already present in the
-captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`). Recorded
-because the obvious check ran the wrong way round: the genesis comparison was
-made against the node that *worked*, and a chain-identity mismatch would hide
-in the one that failed.
+captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`; the handler
+pins re-read 2026-10-09, after `top_version` and the pruning seed left
+`CORE_SYNC_DATA`). Recorded because the obvious check ran the wrong way
+round: the genesis comparison was made against the node that *worked*, and a
+chain-identity mismatch would hide in the one that failed.
 
 **Discriminator 1 — `white_list: 0 / gray_list: 0` rules out a genesis fork.**
 A mismatched genesis lets the handshake **complete**; the divergence surfaces
-later, at block validation. The chain, verified:
+later, at block validation. The chain, re-read 2026-10-09:
 
 - peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
-  (`net_node.inl:1260`) or a `COMMAND_TIMED_SYNC` response (`:1332`) — both
-  inside the *response* handler, so both require a completed exchange;
-- `process_payload_sync_data` has exactly **two** `return false` paths
-  (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
-  weird pruning seed) and **neither is genesis-related**. Two nodes on the same
-  binary with different genesis share a hard-fork schedule, so both pass;
-- therefore a genesis-forked peer's handshake completes, `:1260` runs, and its
+  (`src/p2p/net_node.inl:1377`, `handle_remote_peerlist`) or a
+  `COMMAND_TIMED_SYNC` response (`src/p2p/net_node.inl:1461`) — both inside
+  the *response* handler, so both require a completed exchange;
+- `process_payload_sync_data`
+  (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:391`) returns
+  true on every path. It records the peer's height and top id. It does not
+  compare genesis. `CORE_SYNC_DATA` carries no block version and no pruning
+  seed, so the handshake's "returned false, dropping connection" arms
+  (`src/p2p/net_node.inl:1387`, `src/p2p/net_node.inl:2796`) do not fire;
+- therefore a genesis-forked peer's handshake completes, `:1377` runs, and its
   lists fill.
 
 **The refused node's lists are empty, so no handshake response was ever
 processed.** That is the opposite of the genesis-fork signature.
 
 **Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
-`network_id` mismatch is checked at `net_node.inl:1254` and logged at `:1256`
+`network_id` mismatch is checked at `src/p2p/net_node.inl:1370` and logged at
+`src/p2p/net_node.inl:1372`
 — `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
-**dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
+**dialing** node's own response handler, at `LOG_WARNING_CC`. **Unlike the per-IP
 refusal, which is visible only on the refusing node**, this one is visible on
 the side that is being refused. Its absence from the refused node's log is
 therefore evidence, not a gap. (The accepting side logs its own variant at
-`:2843`/`:2846`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+`src/p2p/net_node.inl:2754` and `src/p2p/net_node.inl:2757`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
 two sides do **not** log at the same level, and "loud on both sides" would
 overstate it. The half this discriminator needs is the **refused** side, and
 that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the

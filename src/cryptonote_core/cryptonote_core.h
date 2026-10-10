@@ -88,7 +88,6 @@ namespace cryptonote
                            db_sync_settings &out, std::string &error);
 
    struct test_options {
-     const std::pair<uint8_t, uint64_t> *hard_forks;
      const size_t long_term_block_weight_window;
    };
 
@@ -688,34 +687,6 @@ namespace cryptonote
      uint64_t get_target_blockchain_height() const;
 
      /**
-      * @brief returns the newest hardfork version known to the blockchain
-      *
-      * @return the version
-      */
-     uint8_t get_ideal_hard_fork_version() const;
-
-     /**
-      * @brief return the ideal hard fork version for a given block height
-      *
-      * @return what it says above
-      */
-     uint8_t get_ideal_hard_fork_version(uint64_t height) const;
-
-     /**
-      * @brief return the hard fork version for a given block height
-      *
-      * @return what it says above
-      */
-     uint8_t get_hard_fork_version(uint64_t height) const;
-
-     /**
-      * @brief return the earliest block a given version may activate
-      *
-      * @return what it says above
-      */
-     uint64_t get_earliest_ideal_height_for_version(uint8_t version) const;
-
-     /**
       * @brief gets start_time
       *
       */
@@ -805,12 +776,10 @@ namespace cryptonote
       *
       * @param tx the transaction to check
       * @param tvc tx verification context where extra fail flags are stored
-      * @param hf_version hard fork version
       *
       * @return true if all the checks pass, otherwise false
       */
-     static bool check_tx_semantic(const transaction& tx, tx_verification_context& tvc,
-      uint8_t hf_version);
+     static bool check_tx_semantic(const transaction& tx, tx_verification_context& tvc);
 
      /**
       * @brief verify that each input key image in a transaction is unique
@@ -825,11 +794,10 @@ namespace cryptonote
       * @brief verify that each ring uses distinct members
       *
       * @param tx the transaction to check
-      * @param hf_version the hard fork version rules to use
       *
       * @return false if any ring uses duplicate members, true otherwise
       */
-     static bool check_tx_inputs_ring_members_diff(const transaction& tx, const uint8_t hf_version);
+     static bool check_tx_inputs_ring_members_diff(const transaction& tx);
 
      /**
       * @brief verify that each input key image in a transaction is in
@@ -953,7 +921,6 @@ namespace cryptonote
      cryptonote_protocol_stub m_protocol_stub; //!< cryptonote protocol stub instance
 
      epee::math_helper::once_a_time_seconds<60*60*12, false> m_store_blockchain_interval; //!< interval for manual storing of Blockchain, if enabled
-     epee::math_helper::once_a_time_seconds<60*60*2, true> m_fork_moaner; //!< interval for checking HardFork status
      epee::math_helper::once_a_time_seconds<60*10, true> m_check_disk_space_interval; //!< interval for checking for disk space
      epee::math_helper::once_a_time_seconds<90, false> m_block_rate_interval; //!< interval for checking block rate
 

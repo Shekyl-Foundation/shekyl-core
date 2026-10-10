@@ -91,7 +91,6 @@ set(unit_tests_sources
   test_peerlist.cpp
   test_protocol_pack.cpp
   threadpool.cpp
-  hardfork.cpp
   util.cpp
   varint.cpp
   fcmp.cpp

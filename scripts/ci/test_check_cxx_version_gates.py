@@ -35,9 +35,9 @@ FILL = """bool fill(uint8_t version)
 """
 
 FILL_ROWS = (
-    "src/pool.cpp\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
+    "src/pool.cpp\t1\tblock major version\talways false\tcollapse\ttx-version\t"
     "size_t bound = version >= 5 ? wide : narrow;\n"
-    "src/pool.cpp\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
+    "src/pool.cpp\t1\tblock major version\talways false\tcollapse\ttx-version\t"
     "if (version >= 5)\n"
 )
 
@@ -67,7 +67,7 @@ NAMED_ROW = (
 FORK = "return block_version == heights[i].version;\n"
 FORK_ROW = (
     "src/fork.cpp\t1\thard-fork table\tthe mechanism's own bookkeeping\t"
-    "delete\thardfork\treturn block_version == heights[i].version;\n"
+    "delete\ttx-version\treturn block_version == heights[i].version;\n"
 )
 ROWVER = "if (p[0] != kVersion)\n  return false;\n"
 ROWVER_ROW = (
@@ -75,7 +75,7 @@ ROWVER_ROW = (
 )
 CC = "bool note(uint8_t version) { if (version >= 5) return true; return false; }\n"
 CC_ROW = (
-    "src/note.cc\t1\tblock major version\talways false\tmove-to-rust\ttemplate-fill\t"
+    "src/note.cc\t1\tblock major version\talways false\tcollapse\ttx-version\t"
     "bool note(uint8_t version) { if (version >= 5) return true; return false; }\n"
 )
 
@@ -159,11 +159,13 @@ expect(
     "NOT IN THE INVENTORY (1x)",
 )
 
-# A hard-fork table call is extracted; its definition and declaration are not.
-LOOKUP = (
+# A definition or a declaration of a hard-fork table function is not a call.
+# A call is refused under every landing, including a row that names it
+# `tx-version`: the vocabulary check alone would accept that row.
+DEFINITIONS = (
     "uint8_t Chain::get_ideal_hard_fork_version(uint64_t height) const\n"
     "{\n"
-    "  return m_hardfork->get_ideal_version(height);\n"
+    "  return 1;\n"
     "}\n"
     "struct S\n"
     "{\n"
@@ -171,13 +173,30 @@ LOOKUP = (
     "  uint8_t get_ideal_hard_fork_version(uint64_t height) const;\n"
     "};\n"
 )
+CALL = "  return m_hardfork->get_ideal_version(height);\n"
+CALL_ROW = (
+    "src/chain.cpp\t1\thard-fork table\talways 1\tdelete\ttx-version\t"
+    "return m_hardfork->get_ideal_version(height);\n"
+)
 expect(
-    "a table call is a row, a definition is not",
-    {"src/chain.cpp": LOOKUP},
-    HEADER
-    + "src/chain.cpp\t1\thard-fork table\talways 1\tdelete\thardfork\t"
-    "return m_hardfork->get_ideal_version(height);\n",
+    "a table definition is not a site",
+    {"src/pool.cpp": FILL, "src/chain.cpp": DEFINITIONS},
+    HEADER + FILL_ROWS,
     0,
+)
+expect(
+    "a table call inventoried under tx-version is refused",
+    {"src/pool.cpp": FILL, "src/chain.cpp": CALL},
+    HEADER + FILL_ROWS + CALL_ROW,
+    1,
+    "not a classifiable site",
+)
+expect(
+    "a table call with no row is refused",
+    {"src/pool.cpp": FILL, "src/chain.cpp": CALL},
+    HEADER + FILL_ROWS,
+    1,
+    "not a classifiable site",
 )
 
 # A named bound, a table comparison, a persisted-row byte and a `.cc` file are
@@ -230,21 +249,21 @@ expect(
 expect(
     "an empty disposition fails",
     {"src/pool.cpp": FILL},
-    HEADER + FILL_ROWS.replace("\tmove-to-rust\t", "\t\t", 1),
+    HEADER + FILL_ROWS.replace("\tcollapse\t", "\t\t", 1),
     1,
     "is not one of",
 )
 expect(
     "an unknown disposition fails",
     {"src/pool.cpp": FILL},
-    HEADER + FILL_ROWS.replace("\tmove-to-rust\t", "\tlater\t", 1),
+    HEADER + FILL_ROWS.replace("\tcollapse\t", "\tlater\t", 1),
     1,
     "later",
 )
 expect(
     "an unknown landing fails",
     {"src/pool.cpp": FILL},
-    HEADER + FILL_ROWS.replace("\ttemplate-fill\t", "\tsoon\t", 1),
+    HEADER + FILL_ROWS.replace("\ttx-version\t", "\tsoon\t", 1),
     1,
     "soon",
 )

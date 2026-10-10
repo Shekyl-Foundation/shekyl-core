@@ -40,7 +40,6 @@
 #include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "cryptonote_basic/hardfork.h"
 #include "string_tools.h"
 
 #include "archival_lmdb_test_helpers.h"
@@ -90,7 +89,7 @@ bool extra_parses(const transaction& tx)
 bool semantic_accepts(const transaction& tx)
 {
   tx_verification_context tvc{};
-  return core::check_tx_semantic(tx, tvc, 1) && !tvc.m_verifivation_failed;
+  return core::check_tx_semantic(tx, tvc) && !tvc.m_verifivation_failed;
 }
 
 transaction load_serve_credit_fixture()
@@ -293,9 +292,6 @@ TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_entry_field_ins
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
   append_minimal_blocks(db, 3);
   fixture.db.batch_stop();
   fixture.db.batch_start();

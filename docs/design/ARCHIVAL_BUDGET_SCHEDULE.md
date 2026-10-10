@@ -39,9 +39,10 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
 ```
 
 - `staker_emission`: the staking share of block emission,
-  `compute_emission_split` (`src/shekyl/economics.h:69–91`) — zero when
-  `hf_version < HF_VERSION_SHEKYL_NG` or `block_emission == 0`, else the
-  decayed share (`shekyl_calc_emission_share`). The split operand is
+  `compute_emission_split` (`src/shekyl/economics.h:92-98`) — zero when
+  `block_emission == 0`, and zero at genesis because the share starts at
+  block 1 (`shekyl_economics::EMISSION_SPLIT_EPOCH`). Above that, the
+  decayed share. The split operand is
   verify's **modulated** `base_reward` (6-arg `get_block_reward`:
   weight-penalized, release-scaled — the F-B1c-c2 disposition-(a)
   remediation, gating round §9.9), the same quantity the coinbase is
@@ -279,8 +280,8 @@ accrual side.
 
 ### 2.3 Pre-genesis posture note
 
-The hard-fork schedule is a single entry, all features from genesis
-(`src/hardforks/hardforks.cpp:38–40`; `HF_VERSION_SHEKYL_NG = 1`), and
+Every feature is active from genesis (the block version is the constant
+1; the hard-fork schedule that used to say so was deleted 2026-10-08), and
 C-1 shipped in the genesis feature set — which is what made §2.1's
 transition machinery dead-on-arrival and drove its deletion. The
 semantics remain per-block, **never** per-epoch: the accrual write and
@@ -449,7 +450,8 @@ same file) drives accrual amounts through the real
 final block's row, plus pop/re-connect byte-identity of the frozen row.
 
 B1's **full-connect-path counterpart** landed 2026-07-09:
-`archival_budget_conservation_boundary`
+`archival_budget_conservation` (named `…_boundary` until 2026-10-08, when
+its mid-chain block-version crossing left with the hard-fork mechanism)
 (`tests/core_tests/archival_budget_conservation.{h,cpp}`, chaingen
 harness; CI: the `conservation` subcommand of
 `run_economics_c2a_prime.sh`). It drives `handle_block_to_main_chain`

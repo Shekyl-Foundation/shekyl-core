@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
-//! the version fields (B1, B2, B7), the curve-tree root (B5) and the block's
+//! the version fields (B1, B2), the curve-tree root (B5) and the block's
 //! identity (B6). B3 is surface-bound and the store's; B4 (the
 //! attestation set) is `rules::attestation` (slice 8 row 10), and A3 is
 //! its empty-witness arm.
@@ -17,21 +17,12 @@
 //! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities, and neither
 //! is a vote or an "at least".
 //!
-//! The C++ holds both equalities in `HardFork::accepts_header`, which
-//! `check`, `check_for_height` and `add` all call. The major byte must
-//! equal the version the height schedule names; every network's table has
-//! one entry, version 1. The minor byte must equal
-//! `CURRENT_BLOCK_MINOR_VERSION`. There is no vote, and a minor of `0` is
-//! not read as `1`. `rule_set_tests` holds the C++ defines equal to the
-//! values here; the table's single entry is `hardforks.cpp`'s.
-//!
-//! B7 was the C++'s one-time warning for a `major_version` above the latest
-//! scheduled one, and it never refused. Its operand is a schedule a rule
-//! cannot read — a `RuleSet` is the set in force, and the schedule is the
-//! caller's (rule 71) — so the rule evaluates (records its row) and refuses
-//! nothing, and the header that would have tripped the warning is refused by
-//! **B1**. The fixture pins both halves: B7 passes such a header when called
-//! directly, and the pipeline refuses it under B1, never B7.
+//! The C++ holds both equalities in one predicate
+//! (`header_version_is_valid`, `blockchain.cpp`), called on the main path
+//! and on the alternative-chain path, against
+//! `CURRENT_BLOCK_MAJOR_VERSION` and `CURRENT_BLOCK_MINOR_VERSION`. It has
+//! no height schedule. `rule_set_tests` holds those two defines equal to
+//! the values here.
 //!
 //! "The version at this height" is a property of the input, not a second
 //! code path: the caller hands `validate` the rule set
@@ -39,8 +30,8 @@
 //! alternative one alike.
 //!
 //! B1 reads the header and the rule set. B2 reads the header only: the
-//! reserved minor byte does not depend on which rule set is in force. B7
-//! reads neither and refuses nothing. All three are [`FormRule`]s — the
+//! reserved minor byte does not depend on which rule set is in force. Both
+//! are [`FormRule`]s — the
 //! stateless stage's, run in `form` outside the write transaction (slice 2,
 //! Q9: stage membership is view-dependence, not which slice landed the
 //! rule). B5 reads the tip and a root and stays a [`BlockRule`].
@@ -92,29 +83,6 @@ impl FormRule for B2 {
     }
 }
 
-/// CEN-B7: a `major_version` above the latest scheduled version is **not**
-/// a refusal on this row — the C++ (`blockchain.cpp:5212–5221`) logs once
-/// and continues, and B1 then refuses. Bucket 4, ported as-is: the row's
-/// whole effect is a log line the crate does not have, and its operand
-/// (`get_ideal_version()`, the schedule's last entry) is not a rule's to
-/// read, so nothing is computed here in its name. The row is *evaluated* —
-/// it enters coverage — and passes every header.
-///
-/// If the R-round that judges this row ratifies a refusal instead, the
-/// operand arrives as a `RuleSet` parameter with it; until then a computed
-/// condition with no consumer would be a claim the code does not act on.
-pub(crate) struct B7;
-
-impl Rule for B7 {
-    const ROW: CenRow = CenRow::B7;
-}
-
-impl FormRule for B7 {
-    fn check(_cx: &FormContext<'_>) -> Verdict<()> {
-        Ok(())
-    }
-}
-
 /// CEN-B5: the header's `curve_tree_root` is the tree state **at the
 /// connecting height** — after the parent connected, before this block
 /// drains its own leaves — i.e. `root_at(tip + 1)`, the last row the parent's
@@ -158,8 +126,7 @@ impl BlockRule for B5 {
 /// (live-oracle vectors; height 0 equals the published mainnet genesis id).
 ///
 /// A definition, not a predicate: nothing about a candidate can fail it.
-/// B7 is a no-op *policy* the C++ still evaluates, so it runs through
-/// [`BlockRule`] and [`crate::rules::run`]. B6 is the identity function,
+/// B6 is the identity function,
 /// so it is not a check that always passes — coverage is recorded here,
 /// when the identity is derived, and `implemented(rules::header::B6)`
 /// names this function (slice 1, Q5). **Derived once, by `form`**: the

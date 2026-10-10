@@ -34,7 +34,6 @@
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/difficulty.h"
-#include "cryptonote_basic/hardfork.h"
 #include <boost/format.hpp>
 #include <ctime>
 #include <string>
@@ -310,8 +309,8 @@ static std::string get_mining_speed(cryptonote::difficulty_type hr)
 
 
 bool t_rpc_command_executor::show_status() {
-  // RK-5b: `hard_fork_info` is served from Rust and the whole line renders
-  // there. `/get_info` (RK-5c) and `/mining_status` (RK-7) are still bridged,
+  // The whole line renders in Rust. `/get_info` (RK-5c) and
+  // `/mining_status` (RK-7) are still bridged,
   // and the "mining info unavailable" arm still belongs to the remote case
   // only — in-process a `/mining_status` that will not answer is this
   // daemon's own fault.
@@ -1026,14 +1025,6 @@ bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
 	return true;
 }
 
-bool t_rpc_command_executor::hard_fork_info(uint8_t version)
-{
-  // RK-5b: `hard_fork_info` is served from Rust and renders there. A zero
-  // still means the next scheduled version; the Rust side names that
-  // version in the line rather than labelling it with `voting`.
-  return run_rust_console({"hard_fork_info", std::to_string((unsigned)version)});
-}
-
 bool t_rpc_command_executor::print_bans()
 {
     cryptonote::COMMAND_RPC_GETBANS::request req;
@@ -1253,9 +1244,7 @@ bool t_rpc_command_executor::alt_chain_info(const std::string &tip, size_t above
 bool t_rpc_command_executor::print_blockchain_dynamic_stats(uint64_t nblocks)
 {
   // RK-5b: `get_fee_estimate` and `get_block_headers_range` are served from
-  // Rust, and the whole command renders there. The `hard_fork_info` leg is
-  // gone rather than moved: its only use was choosing between "byte" and
-  // "kB", and the "kB" arm was unreachable from genesis.
+  // Rust, and the whole command renders there.
   return run_rust_console({"print_blockchain_dynamic_stats", std::to_string(nblocks)});
 }
 

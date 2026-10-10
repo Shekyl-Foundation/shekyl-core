@@ -49,7 +49,6 @@
 #include "common/command_line.h"
 #include "cryptonote_config.h"
 #include "cryptonote_core/blockchain.h"
-#include "hardforks/hardforks.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
 #include "rolling_median.h"
@@ -350,12 +349,7 @@ int main(int argc, char* argv[])
     LOG_ERROR("Error opening database: " << e.what());
     return 1;
   }
-  // The daemon's regtest row (`regtest_hard_fork_row`). The export and
-  // the daemon that built the chain must measure CEN-F21 from the same height.
-  const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {
-    regtest_hard_fork_row(),
-    std::make_pair(0, 0)};
-  const cryptonote::test_options regtest_test_options = {regtest_hard_forks, 0};
+  const cryptonote::test_options regtest_test_options = {0};
   if (!core_storage->init(db, net_type, /*offline=*/true, opt_regtest ? &regtest_test_options : nullptr))
   {
     LOG_ERROR("Failed to initialize source blockchain storage");

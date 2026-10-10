@@ -173,9 +173,8 @@ namespace
 
     // A block whose miner transaction the serializer refuses. The chain's
     // coinbase is v1 with one input; a signature vector whose length is not
-    // that input count is the refusal. Set this after `init_blockchain`:
-    // `HardFork::init` rereads every height through `get_block_from_height`
-    // while the chain is built.
+    // that input count is the refusal. Set this after `init_blockchain`,
+    // which may read blocks through `get_block_from_height`.
     void set_unserializable_block(uint64_t height) { m_unserializable_block = height; }
 
     // `get_block_from_height` is what `blocks_by_height` reads. BaseTestDB
@@ -186,10 +185,9 @@ namespace
     cryptonote::block get_block_from_height(const uint64_t& height) const override
     {
       // Out of range only — deliberately NOT honouring `m_missing`, which
-      // models a failing *hash* lookup. `HardFork::init` rescans every height
-      // through this call while the chain is being built, so throwing for a
-      // missing height here fails `init_blockchain` itself and the test never
-      // reaches its subject.
+      // models a failing *hash* lookup. `init_blockchain` may read
+      // heights through this call, and a throw for a missing height there
+      // fails the fixture before the test reaches its subject.
       if (height >= m_height)
         throw BLOCK_DNE("no block at that height");
       cryptonote::block blk = block_at(height);
@@ -279,11 +277,7 @@ namespace
 
   bool init_blockchain(Blockchain& bc, BlockchainDB* db)
   {
-    const std::pair<uint8_t, uint64_t> hard_forks[] = {
-      std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-      std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-    };
-    const cryptonote::test_options test_options = {hard_forks, 5000};
+    const cryptonote::test_options test_options = {5000};
     return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
   }
 
@@ -631,34 +625,6 @@ TEST(rpc_facts_shims, a_hash_whose_coinbase_claims_a_height_past_the_tip_is_refu
 }
 
 // ── RK-5b: hard-fork voting info, and the fee estimate ──────────────────────
-
-// **The resolution the C++ did in a local and then reported a different
-// version beside.** `queried_version` is what the voting fields describe;
-// asking with 0 means "the next fork" and the answer says which that was.
-TEST(rpc_facts_shims, hard_fork_info_reports_which_version_it_answered_about)
-{
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
-
-  shekyl_rpc_hard_fork_facts zero{};
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 0, &zero));
-  EXPECT_NE(0, zero.queried_version)
-    << "0 is a sentinel meaning 'the next fork', and must be resolved before "
-       "it is reported";
-
-  // An explicit version is echoed, so a caller can tell what it got an answer
-  // about without re-deriving the daemon's default.
-  shekyl_rpc_hard_fork_facts explicit_v{};
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 1, &explicit_v));
-  EXPECT_EQ(1, explicit_v.queried_version);
-
-  // And the chain's own version is a separate field. They coincide at this
-  // fixture's single-entry table — which is exactly why the C++ collision was
-  // invisible — so what is pinned here is that they are two fields, not that
-  // they differ.
-  EXPECT_EQ(explicit_v.active_version, zero.active_version)
-    << "the active version does not depend on what was asked";
-}
 
 // The estimator asserts on `grace_blocks` and throws. The export refuses
 // first, so an out-of-range request is a named refusal rather than an
@@ -1112,13 +1078,6 @@ TEST(rpc_facts_shims, a_refused_export_never_leaves_a_stale_owner)
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
     shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, &owner));
   EXPECT_EQ(nullptr, owner) << "block_at left the caller a pointer to free twice";
-
-  const shekyl_rpc_hardfork_entry* rows = nullptr;
-  size_t len = 0;
-  owner = stale;
-  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
-    shekyl_rpc_hardforks(nullptr, &rows, &len, &owner));
-  EXPECT_EQ(nullptr, owner) << "hardforks left the caller a pointer to free twice";
 
   // A null owner slot is still refused rather than dereferenced.
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,

@@ -82,7 +82,6 @@ namespace cryptonote
     uint64_t total_burned = 0;
     uint64_t tx_volume_count_sum = 0;
     uint64_t tx_volume_blocks = 0;
-    uint64_t genesis_ng_height = 0;
   };
 
   // Compute the reply from the facts and the caller's posture. Reads nothing.
