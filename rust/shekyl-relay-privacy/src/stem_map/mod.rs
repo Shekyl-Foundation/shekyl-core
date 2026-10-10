@@ -226,11 +226,9 @@ impl StemMap<UniformSlots> {
         rng: &mut R,
     ) -> Self {
         if stems < out_connections.len() {
-            // Partial Fisher-Yates: draw `stems` distinct elements into the
-            // prefix, then truncate. The full shuffle below is a different
-            // sequence and stays its own loop.
+            // Partial Fisher-Yates. The reverse full shuffle below is a
+            // different sequence and stays its own loop.
             partial_shuffle(&mut out_connections, stems, rng);
-            out_connections.truncate(stems);
         } else {
             // Full shuffle so slot order carries no information about the
             // order the connection table happened to enumerate peers in.
@@ -870,7 +868,6 @@ impl StemMap<ReservedSlot> {
             .collect();
         let take = self.usage.len().saturating_sub(1).min(alternates.len());
         partial_shuffle(&mut alternates, take, rng);
-        alternates.truncate(take);
         let mut candidates = Vec::with_capacity(1 + take);
         candidates.push(primary);
         candidates.extend(alternates);
@@ -903,19 +900,21 @@ fn assert_partition(class: &[ConnectionId], rest: &[ConnectionId]) {
     );
 }
 
-/// Draw `take` distinct items into the prefix, leaving the tail in place.
+/// Keep a uniform sample of at most `take` items, in uniform order.
 ///
-/// The partial Fisher-Yates [`StemMap::new`] uses when there are more
-/// candidates than slots, and the same draw the local origin uses for its
-/// alternates. `take` above the length draws the whole slice. The reverse
-/// full shuffle is a different sequence and is not this function.
-fn partial_shuffle<R: RelayRng + ?Sized>(items: &mut [ConnectionId], take: usize, rng: &mut R) {
+/// A partial Fisher-Yates. The swaps that fill the sample also move the
+/// unselected tail, so that order is not a promise: the tail is dropped
+/// here. `take` above the length keeps every item, still in a drawn order.
+/// The reverse full shuffle in [`StemMap::new`] is a different sequence and
+/// is not this function.
+fn partial_shuffle<R: RelayRng + ?Sized>(items: &mut Vec<ConnectionId>, take: usize, rng: &mut R) {
     let take = take.min(items.len());
     for i in 0..take {
         let remaining = items.len() - i;
         let pick = i + usize_from_u64(bounded_uniform(rng, (remaining - 1) as u64));
         items.swap(i, pick);
     }
+    items.truncate(take);
 }
 
 /// Narrow a draw that is already bounded by a `usize`-derived range.
