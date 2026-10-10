@@ -248,6 +248,25 @@ impl Message<ServingBodies> for StakeEngine {
     }
 }
 
+/// A second handle on the actor's body-store writer.
+///
+/// The pin-release gate erases a shard when it releases the pin
+/// (`WSS-Q8`). The serve task still receives only [`ServingBodies`]'s
+/// reader. The clone shares the file; it does not copy the key.
+pub(crate) struct ShareBodyWriter;
+
+impl Message<ShareBodyWriter> for StakeEngine {
+    type Reply = Result<shekyl_p_store::BodyStore, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        _msg: ShareBodyWriter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.body_store.clone())
+    }
+}
+
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
 pub(crate) struct ActivePersona;

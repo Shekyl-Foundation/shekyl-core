@@ -278,13 +278,12 @@ impl BoundServe {
 ///   §9.6 item 4 hazard is not a startup step that could be reordered or
 ///   forgotten; there is no argument through which to hand in an
 ///   unpinned host.
-/// - **And it serves the store those pins are in.** The witness carries its
-///   own [`ServingReader`](shekyl_curve_tree::ServingReader); `start` takes
-///   no store argument at all. Pins applied to one store while another is
-///   served would leave the served store unpinned — the same silent-slash
-///   hazard, re-entering through the API's shape rather than through
-///   bookkeeping. A call site holding two opaque store handles is a call
-///   site that can pair them wrongly, so there is only ever one.
+/// - **The bytes it serves are not the bytes the pins retain.** `start`
+///   streams `serving.bodies`, `P`'s body store (`WSS-Q1`(a)). The witness
+///   still pins the curve-tree serve set (`CTS-7`: the concept survives,
+///   re-keyed to shard `k`). A pin does not keep a `.pstore` row. The
+///   body row is erased when the pin-release gate releases that shard
+///   (`WSS-Q8`), which is the pinner's write, not this host's.
 /// - **A serving persona always runs full vanguards.** The posture this host
 ///   writes is [`ServingPosture::Serving`], the one variant that carries both
 ///   the onion and `VanguardsMode::Managed`. The "onion without vanguards"

@@ -26,7 +26,7 @@ use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
-    SignPassTranscript,
+    ShareBodyWriter, SignPassTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -206,6 +206,18 @@ impl StakeEngineHandle {
     ) -> Result<shekyl_p_store::BodyStoreReader, StakeEngineError> {
         self.actor
             .ask(ServingBodies)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// The writer, shared, for the pin-release erase (`WSS-Q8`).
+    ///
+    /// Not for the serve loop: that path takes [`Self::serving_bodies`].
+    pub(crate) async fn share_body_writer(
+        &self,
+    ) -> Result<shekyl_p_store::BodyStore, StakeEngineError> {
+        self.actor
+            .ask(ShareBodyWriter)
             .await
             .map_err(collapse_send_error)
     }

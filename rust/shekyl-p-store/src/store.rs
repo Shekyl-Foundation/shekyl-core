@@ -89,6 +89,11 @@ pub(crate) struct Inner {
 }
 
 /// The writer: fill, refill, erase. The serving loop never holds this.
+///
+/// [`Clone`] shares the file. The stake actor keeps one, and the
+/// pin-release gate keeps another so an erase does not borrow the actor's
+/// field across the refresh. redb allows one write transaction at a time.
+#[derive(Clone)]
 pub struct BodyStore {
     inner: Arc<Inner>,
 }

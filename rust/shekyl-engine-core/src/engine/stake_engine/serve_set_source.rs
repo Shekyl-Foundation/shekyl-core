@@ -51,6 +51,8 @@
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
+use shekyl_p_store::BodyStore;
+use shekyl_types::ShardId;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
@@ -93,17 +95,26 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     /// The store's pin set as of the last reconcile — the other half of the
     /// release input, kept here so a refresh costs one actor round trip.
     last_pinned: std::sync::Mutex<Vec<u64>>,
+    /// `P`'s body store. A released pin erases that shard's row here
+    /// (`WSS-Q8`). The curve-tree pin does not retain `.pstore` bytes.
+    bodies: BodyStore,
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// Bind a pinner to one persona's canonical id and its own transport.
-    pub(crate) fn new(curve_tree: CurveTreeHandle, rpc: R, p_id: [u8; 32]) -> Self {
+    pub(crate) fn new(
+        curve_tree: CurveTreeHandle,
+        rpc: R,
+        p_id: [u8; 32],
+        bodies: BodyStore,
+    ) -> Self {
         Self {
             curve_tree,
             rpc,
             p_id,
             absent_since: std::sync::Mutex::new(DepartureLedger::default()),
             last_pinned: std::sync::Mutex::new(Vec::new()),
+            bodies,
         }
     }
 
@@ -218,6 +229,14 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             .pin_serve_set(shard_ids.clone(), releasable.clone())
             .await
             .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
+        // The gate released these shards. The body row is what a fetch
+        // reads; the curve-tree pin does not retain it. A missing row is
+        // success.
+        for id in &releasable {
+            self.bodies
+                .erase_shard(ShardId::from_raw(*id))
+                .map_err(|e| format!("body-store erase failed: {e}"))?;
+        }
         *self.last_pinned.lock().expect("pin view") = reply.pinned_now.clone();
         if reply.released > 0 {
             // Counts, never ids (`WSS-20`). A released shard id matched
