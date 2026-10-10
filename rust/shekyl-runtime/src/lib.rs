@@ -179,10 +179,11 @@ pub fn runtime_with_thread_hooks(
         .thread_name(name.as_str())
         .enable_io()
         .enable_time();
-    if let Some(hook) = hooks.on_start {
+    let ThreadHooks { on_start, on_stop } = hooks;
+    if let Some(hook) = on_start {
         builder.on_thread_start(move || hook());
     }
-    if let Some(hook) = hooks.on_stop {
+    if let Some(hook) = on_stop {
         builder.on_thread_stop(move || hook());
     }
     let runtime = builder.build()?;
