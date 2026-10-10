@@ -549,6 +549,11 @@ pub trait ChainView<'id> {
     /// is absent. What the emission gather credits (`SO-D11a`), read back
     /// by the claim verify.
     ///
+    /// `epochs` may repeat an epoch and may come in any order: a claim's
+    /// cited epochs are passed as the vin spells them. Every implementation
+    /// answers each shard once per epoch whatever the repetition. A shard
+    /// listed twice would be two credit pairs in the claim's gather.
+    ///
     /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
     /// persona's shards once and point-reads each requested epoch. CEN-J23
     /// asks once per bonded persona, for every epoch the claim cites.

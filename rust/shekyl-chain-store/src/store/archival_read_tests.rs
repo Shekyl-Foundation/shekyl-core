@@ -836,11 +836,10 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
     cleanup(&path);
 }
 
-/// `(P, 0, 0)..=(P, MAX, MAX)` and `(P, shard, 0)..=(P, shard, MAX)`. The
-/// hop and the window walk are these two ranges; a hand-built tuple would
-/// be a second definition of `SO-D2`.
+/// `(P, 0, 0)..=(P, MAX, MAX)`. The hop is this range; a hand-built tuple
+/// would be a second definition of `SO-D2`.
 #[test]
-fn settlement_key_ranges_are_the_persona_and_the_pair() {
+fn settlement_key_range_is_the_persona() {
     let p = persona(0xa7);
     let persona_span = SettlementKey::persona_range(p);
     assert_eq!(
@@ -855,15 +854,6 @@ fn settlement_key_ranges_are_the_persona_and_the_pair() {
             SettlementEpoch::from_raw(u64::MAX)
         )
         .key()
-    );
-    let pair_span = SettlementKey::shard_range(p, shard(100));
-    assert_eq!(
-        *pair_span.start(),
-        SettlementKey::new(p, shard(100), SettlementEpoch::ZERO).key()
-    );
-    assert_eq!(
-        *pair_span.end(),
-        SettlementKey::new(p, shard(100), SettlementEpoch::from_raw(u64::MAX)).key()
     );
 }
 

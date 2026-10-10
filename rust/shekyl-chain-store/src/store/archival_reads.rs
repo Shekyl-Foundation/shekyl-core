@@ -480,7 +480,7 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// of `epochs`, ascending per epoch.
 ///
 /// The table is keyed `(P, shard, E)` (`SO-D2`), which makes one pair's
-/// epochs a range ([`SettlementKey::shard_range`]) and `(P, E)` not a
+/// epochs adjacent rows and `(P, E)` not a
 /// range at all. This hops the persona's shards the way [`served_shards`]
 /// hops serve-credit — seek to the next shard, never walk the shard ids
 /// between — and point-reads each requested epoch. An epoch with no Served
