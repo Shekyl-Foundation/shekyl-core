@@ -10,8 +10,32 @@
 
 use super::*;
 
-use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::params::{inherited, DandelionParams};
 use shekyl_relay_privacy::rng::SplitMix64;
+
+/// One wider than the shipped noise width, so a frozen alternate can occupy
+/// a slot other than 0. Noise is off here; a hidden connector accepts any
+/// width of at least two. Production width stays `inherited::NOISE_CHANNELS`.
+const WIDE_STEMS: usize = inherited::NOISE_CHANNELS + 1;
+
+/// Slot 0, which the reserved map keeps for the address-hiding class.
+const HIDDEN_SLOT: usize = 0;
+
+fn originate(relay: &mut Relay, rng: &mut SplitMix64) -> RelayPlan {
+    relay.plan_relay(None, true, NodeSync::Synchronised, rng)
+}
+
+fn wide_relay(configured: &[ConnectorId], rng: &mut SplitMix64) -> Relay {
+    Relay::new(
+        DandelionParams::inherited(),
+        WIDE_STEMS,
+        false,
+        configured,
+        0,
+        rng,
+    )
+    .expect("width above the noise count is legal with noise off")
+}
 
 fn id(byte: u8) -> ConnectionId {
     let mut bytes = [0u8; 16];
@@ -429,4 +453,178 @@ fn relayed_sources_reach_both_slots_under_a_hidden_connector() {
         2,
         "relayed sources reach the hidden slot and the clear slot"
     );
+}
+
+/// Stem candidacy is the established outbound sessions whose transit is
+/// assessed, in connection-id order, split by whether the peer learns this
+/// node's address. Recorded height is not an input this relay has.
+///
+/// The inbound session is the negative control for the direction check in
+/// `stem_candidate`. The synthetic session is the negative control for the
+/// assessed-transit check: it is outbound, it hides the address, and its
+/// transit was never assessed. Dropping either check puts that session in
+/// the hidden partition.
+#[test]
+fn stem_candidates_are_established_outbound_sessions_with_an_assessed_transit() {
+    let mut rng = SplitMix64::new(0x2b);
+    let mut relay = Relay::new(
+        DandelionParams::inherited(),
+        inherited::NOISE_CHANNELS,
+        false,
+        &[ConnectorId::Clearnet, ConnectorId::Tor],
+        0,
+        &mut rng,
+    )
+    .unwrap();
+    // Higher ids first, so a partition that kept insertion order would fail.
+    relay.on_session_established(id(5), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    relay.on_session_established(
+        id(6),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    relay.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+    relay.on_session_established(
+        id(2),
+        PeerDirection::Outbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    relay.on_session_established(id(3), PeerDirection::Inbound, ConnectorId::Tor, &mut rng);
+    relay.admit_synthetic(
+        id(4),
+        PeerDirection::Outbound,
+        ConnectorId::Tor,
+        Declaration::synthetic(
+            Assessment::Assessed(YesNo::Yes),
+            Assessment::NotAssessed,
+            Assessment::Assessed(CoverClass::Volume),
+        ),
+    );
+
+    let (hidden, rest) = relay.partitioned_outbound_ids();
+    assert_eq!(
+        hidden,
+        vec![id(1), id(5)],
+        "outbound address-hiding sessions, in connection-id order"
+    );
+    assert_eq!(
+        rest,
+        vec![id(2), id(6)],
+        "outbound sessions that do not hide the address"
+    );
+}
+
+/// A live hop does not fill an empty later slot. At width three the clearnet
+/// session occupies a slot other than 0. Closing it and merging leaves that
+/// slot empty, and originating does not backfill it.
+#[test]
+fn a_live_hop_leaves_an_empty_later_slot_empty() {
+    for seed in 0..8 {
+        let mut rng = SplitMix64::new(81 + seed);
+        let mut relay = wide_relay(&[ConnectorId::Clearnet, ConnectorId::Tor], &mut rng);
+        relay.on_session_established(id(1), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        relay.on_session_established(id(2), PeerDirection::Outbound, ConnectorId::Tor, &mut rng);
+        let clear = id(11);
+        relay.on_session_established(
+            clear,
+            PeerDirection::Outbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+        relay.rebuild_stems(&mut rng);
+        assert!(
+            relay.stem_slots().contains(&Some(clear)),
+            "the clearnet session occupies a slot"
+        );
+        relay.on_connection_close(&clear);
+        relay.update_stems(&mut rng);
+        assert!(
+            relay.stem_slots().iter().any(Option::is_none),
+            "the clearnet slot stayed empty: nothing remained to backfill it"
+        );
+        let before = relay.stem_slots().to_vec();
+        let RelayPlan::OwnEdge(hop) = originate(&mut relay, &mut rng) else {
+            panic!("two address-hiding sessions and no pin");
+        };
+        assert_ne!(hop, clear);
+        assert_eq!(
+            relay.stem_slots(),
+            before.as_slice(),
+            "a live hop does not backfill the empty slot"
+        );
+        assert_eq!(originate(&mut relay, &mut rng), RelayPlan::OwnEdge(hop));
+        assert_eq!(relay.stem_slots(), before.as_slice());
+    }
+}
+
+/// Width three and three address-hiding sessions fill the map. Dropping the
+/// primary leaves slot 0 empty: both survivors already occupy a slot, and a
+/// live hop does not pull them. The walk is then on a hop that is not slot
+/// 0. Dropping that hop reaches the last frozen alternate.
+///
+/// Without the departed-hop merge the dead hop still occupies its slot, the
+/// walk returns it, the class check refuses it, and the cursor stays. This
+/// test then sees `NoOwnEdge` while the last alternate is live.
+#[test]
+fn a_departed_hop_off_slot_zero_walks_to_the_frozen_alternate() {
+    let sessions = [id(1), id(2), id(3)];
+    for seed in 0..16 {
+        let mut rng = SplitMix64::new(91 + seed);
+        let mut relay = wide_relay(&[ConnectorId::Tor], &mut rng);
+        for session in sessions {
+            relay.on_session_established(
+                session,
+                PeerDirection::Outbound,
+                ConnectorId::Tor,
+                &mut rng,
+            );
+        }
+        relay.rebuild_stems(&mut rng);
+        assert_eq!(relay.stem_slots().len(), WIDE_STEMS);
+        assert!(relay.stem_slots().iter().all(Option::is_some));
+
+        let RelayPlan::OwnEdge(primary) = originate(&mut relay, &mut rng) else {
+            panic!("three address-hiding sessions and no pin");
+        };
+        assert_eq!(relay.stem_slots()[HIDDEN_SLOT], Some(primary));
+
+        relay.on_connection_close(&primary);
+        let RelayPlan::OwnEdge(second) = originate(&mut relay, &mut rng) else {
+            panic!("the first alternate was live");
+        };
+        assert_ne!(second, primary);
+        assert!(
+            relay.stem_slots()[HIDDEN_SLOT].is_none(),
+            "both survivors were already slotted, so slot 0 stays empty"
+        );
+        let second_at = relay
+            .stem_slots()
+            .iter()
+            .position(|slot| *slot == Some(second))
+            .expect("the walked hop occupies a slot");
+        assert_ne!(second_at, HIDDEN_SLOT, "the walked hop is not slot 0");
+        let while_live = relay.stem_slots().to_vec();
+        assert_eq!(originate(&mut relay, &mut rng), RelayPlan::OwnEdge(second));
+        assert_eq!(
+            relay.stem_slots(),
+            while_live.as_slice(),
+            "a live hop does not fill the empty slot 0"
+        );
+
+        relay.on_connection_close(&second);
+        let RelayPlan::OwnEdge(third) = originate(&mut relay, &mut rng) else {
+            panic!("a departed hop off slot 0 held while a frozen alternate was live");
+        };
+        let remaining = sessions
+            .into_iter()
+            .find(|session| *session != primary && *session != second)
+            .expect("one session remains");
+        assert_eq!(third, remaining);
+        assert!(relay.stem_slots().contains(&Some(third)));
+
+        relay.on_connection_close(&third);
+        assert_eq!(originate(&mut relay, &mut rng), RelayPlan::NoOwnEdge);
+    }
 }

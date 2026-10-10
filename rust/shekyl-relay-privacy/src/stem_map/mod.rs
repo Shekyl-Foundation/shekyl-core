@@ -36,9 +36,10 @@
 //! map, and the paper's [`StemMap::update`] does not read the local pin. The
 //! map never learns what the class is. The relay names the address-hiding
 //! outbound sessions and routes its own transactions through
-//! [`StemMap::route_local_origin`], which fills slot 0 before it walks the
-//! pin. Everything else is intended to match the C++. Anything else that
-//! differs is a bug in this module, not an improvement.
+//! [`StemMap::route_local_origin`], which releases a departed pin hop and
+//! fills slot 0 before it walks the pin. Everything else is intended to
+//! match the C++. Anything else that differs is a bug in this module, not
+//! an improvement.
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -225,14 +226,9 @@ impl StemMap<UniformSlots> {
         rng: &mut R,
     ) -> Self {
         if stems < out_connections.len() {
-            // Partial Fisher-Yates: draw `stems` distinct elements into the
-            // prefix, then truncate.
-            for i in 0..stems {
-                let remaining = out_connections.len() - i;
-                let pick = i + usize_from_u64(bounded_uniform(rng, (remaining - 1) as u64));
-                out_connections.swap(i, pick);
-            }
-            out_connections.truncate(stems);
+            // Partial Fisher-Yates. The reverse full shuffle below is a
+            // different sequence and stays its own loop.
+            partial_shuffle(&mut out_connections, stems, rng);
         } else {
             // Full shuffle so slot order carries no information about the
             // order the connection table happened to enumerate peers in.
@@ -540,7 +536,7 @@ impl<Mode> StemMap<Mode> {
         source: SourceId,
         rng: &mut R,
     ) -> Option<ConnectionId> {
-        let index = self.select_slot(rng)?;
+        let index = self.select_matching(|_| true, rng)?;
         let primary = self.out[index.get()]?;
         let mut candidates = Vec::with_capacity(self.out.len());
         candidates.push(primary);
@@ -565,7 +561,7 @@ impl<Mode> StemMap<Mode> {
         allowed: &[ConnectionId],
         rng: &mut R,
     ) -> Option<ConnectionId> {
-        let index = self.select_slot_among(allowed, rng)?;
+        let index = self.select_matching(|peer| allowed.contains(&peer), rng)?;
         let primary = self.out[index.get()]?;
         if !allowed.contains(&primary) {
             return None;
@@ -591,10 +587,17 @@ impl<Mode> StemMap<Mode> {
         Some(primary)
     }
 
-    /// [`Self::select_slot`] over slots whose peer is in `allowed`.
-    fn select_slot_among<R: RelayRng + ?Sized>(
+    /// The live slot with the fewest sources routed through it, among slots
+    /// whose peer `matches`, breaking ties uniformly at random.
+    ///
+    /// The balancing matters: a slot that accumulates sources becomes a better
+    /// guess for an adversary correlating stem traffic, and the random
+    /// tiebreak is what stops the first slot from winning every tie. An empty
+    /// slot is not a choice. Stem width is 1 or 2 in practice; the `Vec` is
+    /// not a hot path.
+    fn select_matching<R: RelayRng + ?Sized>(
         &self,
-        allowed: &[ConnectionId],
+        mut matches: impl FnMut(ConnectionId) -> bool,
         rng: &mut R,
     ) -> Option<SlotIndex> {
         let mut lowest = usize::MAX;
@@ -603,7 +606,7 @@ impl<Mode> StemMap<Mode> {
             let Some(peer) = *slot else {
                 continue;
             };
-            if !allowed.contains(&peer) {
+            if !matches(peer) {
                 continue;
             }
             let used = self.usage[i];
@@ -615,37 +618,6 @@ impl<Mode> StemMap<Mode> {
                 choices.push(SlotIndex(i));
             }
         }
-        match choices.len() {
-            0 => None,
-            1 => Some(choices[0]),
-            n => Some(choices[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))]),
-        }
-    }
-
-    /// Pick the live slot with the fewest sources routed through it, breaking
-    /// ties uniformly at random.
-    ///
-    /// The balancing matters: a slot that accumulates sources becomes a better
-    /// guess for an adversary correlating stem traffic, and the random
-    /// tiebreak is what stops the first slot from winning every tie.
-    fn select_slot<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<SlotIndex> {
-        let mut lowest = usize::MAX;
-        // Stem width is 1 or 2 in practice; a Vec here is not a hot path.
-        let mut choices: Vec<SlotIndex> = Vec::with_capacity(self.out.len());
-        for (i, slot) in self.out.iter().enumerate() {
-            if slot.is_none() {
-                continue;
-            }
-            let used = self.usage[i];
-            if used < lowest {
-                lowest = used;
-                choices.clear();
-                choices.push(SlotIndex(i));
-            } else if used == lowest {
-                choices.push(SlotIndex(i));
-            }
-        }
-
         match choices.len() {
             0 => None,
             1 => Some(choices[0]),
@@ -786,14 +758,18 @@ impl StemMap<ReservedSlot> {
             .find(|candidate| among.binary_search(candidate).is_ok())
     }
 
-    /// The local origin's one route. The fill runs before the pin walk, and
+    /// The local origin's one route. The merge runs before the pin walk, and
     /// the relay cannot call them in the other order.
     ///
-    /// The merge runs only when slot 0's peer is in neither live list, or
-    /// slot 0 is empty and a class member occupies no slot. In the stranded
-    /// state — slot 0 empty, every class member already slotted — the merge
-    /// does not run, so an empty later slot is not backfilled as a side
-    /// effect of originating.
+    /// The merge runs when slot 0 needs its fill, or the local pin's current
+    /// hop has left the class. A close does not merge, so a departed hop that
+    /// is not slot 0 still occupies its slot: walking first would return that
+    /// hop, the class check would refuse it, and the cursor would stay.
+    /// Merging first releases the hop and slots the pin's next unslotted
+    /// candidate, and only then does the walk advance. In the stranded state
+    /// — slot 0 empty, every class member already slotted — a hop that is
+    /// still in the class does not merge, so an empty later slot is not
+    /// backfilled as a side effect of originating.
     ///
     /// Unpinned: the primary is slot 0's peer when the class contains it,
     /// otherwise a class member occupying a later slot (uniform when several
@@ -809,7 +785,7 @@ impl StemMap<ReservedSlot> {
     ) -> Option<ConnectionId> {
         assert_partition(reserved, rest);
         let pinned = self.is_pinned(None);
-        if self.slot_zero_needs_fill(reserved, rest) {
+        if self.origin_merge_due(reserved, rest, pinned) {
             let _change = self.update_with_reserved(reserved.to_vec(), rest.to_vec(), rng);
         }
         if pinned {
@@ -818,6 +794,31 @@ impl StemMap<ReservedSlot> {
         } else {
             let candidates = self.local_origin_candidates(reserved, rng);
             self.pin_over(None, candidates)
+        }
+    }
+
+    /// Slot 0 needs its fill, or this route is about to walk a hop that has
+    /// left the class. Captured `pinned` is the state from before the merge.
+    fn origin_merge_due(
+        &self,
+        class: &[ConnectionId],
+        rest: &[ConnectionId],
+        pinned: bool,
+    ) -> bool {
+        self.slot_zero_needs_fill(class, rest) || (pinned && self.pinned_hop_has_left(class))
+    }
+
+    /// The local pin's current hop is absent from `class`.
+    ///
+    /// No pin, or a cursor past the frozen list, is not this case: there is
+    /// no hop to release. A hop still in the class is not this case either.
+    fn pinned_hop_has_left(&self, class: &[ConnectionId]) -> bool {
+        let Some(pin) = self.inbound.get(&None) else {
+            return false;
+        };
+        match pin.candidates.get(pin.cursor) {
+            Some(hop) => !class.contains(hop),
+            None => false,
         }
     }
 
@@ -866,12 +867,7 @@ impl StemMap<ReservedSlot> {
             .filter(|peer| *peer != primary)
             .collect();
         let take = self.usage.len().saturating_sub(1).min(alternates.len());
-        for i in 0..take {
-            let remaining = alternates.len() - i;
-            let pick = i + usize_from_u64(bounded_uniform(rng, (remaining - 1) as u64));
-            alternates.swap(i, pick);
-        }
-        alternates.truncate(take);
+        partial_shuffle(&mut alternates, take, rng);
         let mut candidates = Vec::with_capacity(1 + take);
         candidates.push(primary);
         candidates.extend(alternates);
@@ -902,6 +898,23 @@ fn assert_partition(class: &[ConnectionId], rest: &[ConnectionId]) {
         rest.iter().all(|peer| !class.contains(peer)),
         "a session is in both the reserved class and the rest"
     );
+}
+
+/// Keep a uniform sample of at most `take` items, in uniform order.
+///
+/// A partial Fisher-Yates. The swaps that fill the sample also move the
+/// unselected tail, so that order is not a promise: the tail is dropped
+/// here. `take` above the length keeps every item, still in a drawn order.
+/// The reverse full shuffle in [`StemMap::new`] is a different sequence and
+/// is not this function.
+fn partial_shuffle<R: RelayRng + ?Sized>(items: &mut Vec<ConnectionId>, take: usize, rng: &mut R) {
+    let take = take.min(items.len());
+    for i in 0..take {
+        let remaining = items.len() - i;
+        let pick = i + usize_from_u64(bounded_uniform(rng, (remaining - 1) as u64));
+        items.swap(i, pick);
+    }
+    items.truncate(take);
 }
 
 /// Narrow a draw that is already bounded by a `usize`-derived range.
