@@ -30,7 +30,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
+use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS};
 use shekyl_p_fetch::{
     ExpectedShard, FetchError, NextMove, PFetchClient, RequestHeader, TxSink, VerifiedShard,
 };
@@ -186,7 +186,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
     ) -> Result<Read, ReadFailure> {
-        self.drive(shard_id, sink, budget, None).await
+        self.drive(shard_id, sink, budget, None, None).await
     }
 
     /// Read shard `shard_id` from an assigned holder first — a challenge's
@@ -206,7 +206,28 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
     ) -> Result<Read, ReadFailure> {
-        self.drive(shard_id, sink, budget, Some(assigned)).await
+        self.drive(shard_id, sink, budget, Some(assigned), None)
+            .await
+    }
+
+    /// As [`Self::read_from`], with the caller's nonce on every header of
+    /// this need — a challenge's derived nonce, or any other caller that
+    /// already minted one. A 400 retry derives a fresh anchor and keeps
+    /// it (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read_from`].
+    pub async fn read_from_nonce(
+        &self,
+        assigned: &Holder,
+        shard_id: ShardId,
+        nonce: [u8; 32],
+        sink: Arc<dyn TxSink>,
+        budget: NeedBudget,
+    ) -> Result<Read, ReadFailure> {
+        self.drive(shard_id, sink, budget, Some(assigned), Some(nonce))
+            .await
     }
 
     /// The one need. `assigned` is dialled first and removed from the urn
@@ -220,6 +241,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
         assigned: Option<&Holder>,
+        nonce: Option<[u8; 32]>,
     ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
         let holders = self.holders.holders_of(shard_id)?;
@@ -245,7 +267,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             };
             tried += 1;
             match self
-                .attempt(&holder, &closed.expected, Arc::clone(&sink), budget)
+                .attempt(&holder, &closed.expected, Arc::clone(&sink), budget, nonce)
                 .await?
             {
                 HolderOutcome::Served(shard, header) => {
@@ -278,8 +300,10 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     }
 
     /// A header over the requester's current anchor: the hash at
-    /// `tip − PASS_ANCHOR_DEPTH_BLOCKS`, one fresh nonce.
-    fn fresh_header(&self) -> Result<RequestHeader, ReadFailure> {
+    /// `tip − PASS_ANCHOR_DEPTH_BLOCKS`. `nonce` is the caller's when
+    /// supplied (a challenge, a 400 retry); otherwise a fresh OS-random
+    /// one.
+    fn fresh_header(&self, nonce: Option<[u8; 32]>) -> Result<RequestHeader, ReadFailure> {
         let tip = self.facts.tip_height()?;
         let anchor = tip
             .checked_sub_count(PASS_ANCHOR_DEPTH_BLOCKS)
@@ -288,7 +312,12 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             .facts
             .block_hash_at(anchor)?
             .ok_or(FactsFault::Inconsistent)?;
-        RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
+        match nonce {
+            Some(nonce) => Ok(RequestHeader::with_nonce(nonce, anchor, hash.to_bytes())),
+            None => {
+                RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
+            }
+        }
     }
 
     /// Every dial of one holder within this need.
@@ -303,8 +332,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
+        nonce: Option<[u8; 32]>,
     ) -> Result<HolderOutcome, ReadFailure> {
-        let mut header = self.fresh_header()?;
+        let mut header = self.fresh_header(nonce)?;
         let mut stalls = 0u32;
         let mut rejected_before = false;
         let mut errors = Vec::new();
@@ -329,7 +359,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 NextMove::RetrySameHeader if stalls < budget.stall_redials => stalls += 1,
                 NextMove::RetryFreshAnchor => {
                     rejected_before = true;
-                    header = self.fresh_header()?;
+                    // Fresh anchor, same nonce: a 400 minted no record, and
+                    // a challenge's nonce is bound to `(h, j, attempt)`.
+                    header = self.fresh_header(Some(*header.nonce()))?;
                 }
                 NextMove::RetrySameHeader | NextMove::NotHeld | NextMove::FailedRead => {
                     return Ok(HolderOutcome::Spent(errors));
@@ -337,6 +369,72 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             }
         }
     }
+}
+
+/// One draw's read: the seed, the issuing block's hash, `j`, and this
+/// read's `attempt`. The nonce is derived; nothing else on the request
+/// is the challenger's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChallengeDraw {
+    /// The block's unrevealed draw seed.
+    pub seed: [u8; 32],
+    /// `block_hash(h)` of the issuing block.
+    pub block_hash: [u8; 32],
+    /// Draw index `j` at `h`.
+    pub draw: u32,
+    /// This read of the draw, from 0. Admission refuses `≥ K`.
+    pub attempt: u8,
+}
+
+impl ChallengeDraw {
+    /// The nonce this read presents. Bound to `(seed, block_hash, j,
+    /// attempt)` so one receipt cannot serve two draws.
+    #[must_use]
+    pub fn nonce(&self) -> [u8; 32] {
+        challenge_nonce(&self.seed, &self.block_hash, self.draw, self.attempt)
+    }
+}
+
+/// Why [`challenge_read`] did not produce a [`Read`].
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum ChallengeReadError {
+    /// `attempt ≥ K`. Admission would refuse the record; the challenger
+    /// does not dial.
+    #[error("challenge attempt {attempt} is at or past K = {bound}")]
+    AttemptBound { attempt: u8, bound: u8 },
+    /// The need failed as any other read does.
+    #[error(transparent)]
+    Read(#[from] ReadFailure),
+}
+
+/// One challenge read: derive the nonce for `draw` and
+/// [`FetchScheduler::read_from_nonce`] the assigned holder.
+///
+/// The request on the wire is an ordinary read. What is the challenger's
+/// own is the nonce and the named `P` (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §5.1).
+///
+/// # Errors
+///
+/// [`ChallengeReadError::AttemptBound`] when `attempt ≥ K`; otherwise a
+/// [`ReadFailure`].
+pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
+    scheduler: &FetchScheduler<F, H>,
+    assigned: &Holder,
+    shard_id: ShardId,
+    draw: ChallengeDraw,
+    sink: Arc<dyn TxSink>,
+    budget: NeedBudget,
+) -> Result<Read, ChallengeReadError> {
+    if draw.attempt >= CHALLENGE_READS {
+        return Err(ChallengeReadError::AttemptBound {
+            attempt: draw.attempt,
+            bound: CHALLENGE_READS,
+        });
+    }
+    Ok(scheduler
+        .read_from_nonce(assigned, shard_id, draw.nonce(), sink, budget)
+        .await?)
 }
 
 /// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder

@@ -41,6 +41,10 @@ pub const DRAW_ATTEMPTS: u32 = 256;
 /// §4.3.
 pub const DRAW_HORIZON_FLOOR: u64 = 200;
 
+/// Reads of one draw before the challenger abandons it. Admission
+/// refuses `attempt ≥ K` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3, `SCS-P13`).
+pub const CHALLENGE_READS: u8 = 3;
+
 /// A pair's index in the epoch's static drawable set, and how many
 /// attempts the selection took (1 through [`DRAW_ATTEMPTS`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

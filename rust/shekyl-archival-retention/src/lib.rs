@@ -209,8 +209,8 @@ pub use reward_arithmetic::{
 };
 pub use secret_draw::{
     challenge_nonce, draw_commit, draw_count, draw_horizon, select_draw,
-    serve_credit_batch_commitment, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, DRAW_ATTEMPTS,
-    DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
+    serve_credit_batch_commitment, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
+    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
     SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{

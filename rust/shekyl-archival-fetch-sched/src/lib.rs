@@ -6,7 +6,8 @@
 //!
 //! Every reason a daemon reads a shard body from a holder — a challenge it
 //! must answer, an organic re-read, a test probe, a wallet's view — is one
-//! [`FetchScheduler::read`]: a shard id, a sink, a budget. The request on
+//! [`FetchScheduler::read`] (or [`challenge_read`], which is `read_from`
+//! with a derived nonce): a shard id, a sink, a budget. The request on
 //! the wire carries no caller tag (`SF-D1`); the holder is drawn uniformly
 //! from the shard's holders with no memory of earlier needs (`SF-D10`); a
 //! failed dial moves as the client's taxonomy directs (`SF-D6`) and is
@@ -38,10 +39,13 @@ pub use draw::DrawFault;
 pub use facts::{
     BlockSpan, ClosedShard, FactsFault, Holder, HolderSource, ShardClose, ShardFacts, ShardStanding,
 };
-pub use read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
+pub use read::{
+    challenge_read, Attempt, ChallengeDraw, ChallengeReadError, FetchScheduler, NeedBudget, Read,
+    ReadFailure,
+};
 pub use shekyl_p_fetch::{
-    DiscardTxs, ExpectedShard, FetchError, FetchTarget, NextMove, PFetchClient, Timeouts, TxSink,
-    VerifiedShard, VerifiedTx, MAX_INFLIGHT,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, NextMove, PFetchClient, RequestHeader,
+    Timeouts, TxSink, VerifiedShard, VerifiedTx, MAX_INFLIGHT,
 };
 pub use shekyl_types::ShardView;
 pub use view::{ViewDesk, ViewRefusal};

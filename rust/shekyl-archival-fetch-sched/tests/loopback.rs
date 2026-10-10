@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shekyl_archival_fetch_sched::{
-    BlockSpan, ClosedShard, DiscardTxs, FactsFault, FetchError, FetchScheduler, Holder,
-    HolderSource, NeedBudget, PFetchClient, ReadFailure, ShardClose, ShardFacts, ShardStanding,
-    Timeouts, ViewDesk, ViewRefusal,
+    challenge_read, BlockSpan, ChallengeDraw, ChallengeReadError, ClosedShard, DiscardTxs,
+    FactsFault, FetchError, FetchScheduler, Holder, HolderSource, NeedBudget, PFetchClient,
+    ReadFailure, ShardClose, ShardFacts, ShardStanding, Timeouts, ViewDesk, ViewRefusal,
 };
-use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
+use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS};
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
@@ -367,6 +367,58 @@ async fn read_from_dials_its_assigned_holder_even_when_the_urn_is_empty() {
         .expect("an empty urn does not refuse an assigned holder");
     assert_eq!(read.holder, assigned.id);
     assert_eq!(s.endpoint.served_count(), 2);
+}
+
+#[tokio::test]
+async fn a_challenge_read_carries_the_derived_nonce() {
+    let s = stack(FIXTURE_SHARD_ID, 1).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("one holder");
+    let draw = ChallengeDraw {
+        seed: [0x11; 32],
+        block_hash: [0x22; 32],
+        draw: 0,
+        attempt: 0,
+    };
+    let read = challenge_read(
+        &s.scheduler,
+        &assigned,
+        SHARD,
+        draw,
+        Arc::new(DiscardTxs),
+        NeedBudget::DEFAULT,
+    )
+    .await
+    .expect("the assigned holder serves");
+    assert_eq!(read.header.nonce(), &draw.nonce());
+    assert_eq!(
+        read.header.nonce(),
+        &challenge_nonce(&draw.seed, &draw.block_hash, draw.draw, draw.attempt)
+    );
+    let past = ChallengeDraw {
+        attempt: CHALLENGE_READS,
+        ..draw
+    };
+    assert!(matches!(
+        challenge_read(
+            &s.scheduler,
+            &assigned,
+            SHARD,
+            past,
+            Arc::new(DiscardTxs),
+            NeedBudget::DEFAULT,
+        )
+        .await,
+        Err(ChallengeReadError::AttemptBound {
+            attempt: CHALLENGE_READS,
+            bound: CHALLENGE_READS
+        })
+    ));
 }
 
 #[tokio::test]
