@@ -51,7 +51,7 @@
 # so a future "cleanup" cannot touch them without failing the gate.
 #
 # COLUMNS (tab-separated):
-#   mech    1..6 mechanism id (see below); "x" = excluded-with-reason
+#   mech    1..7 mechanism id (see below); "x" = excluded-with-reason
 #   literal exact bytes WITHOUT the b"" wrapper (the gate greps for b"<literal>")
 #   file    repo-root-relative path where the literal is DEFINED (the b"..." site)
 #   const   defining constant name, or a short site descriptor in parens
@@ -71,6 +71,7 @@
 #   4  Blake2b DST                    (first Blake2b512::update as a domain; sal_dst-padded tags)
 #   5  keccak / schnorr challenge DST (schnorr sign/verify domain, keccak256(...) hash-to-point/scalar prefix)
 #   6  SHA3-256 direct-prefix         (micro-bucket: a domain prefix fed straight to Sha3_256, outside 1..5)
+#   7  Noise prologue label           (micro-bucket: a label's own bytes mixed into a Noise handshake hash as prologue)
 #
 # SUB-LABELS ARE OUT OF SCOPE (documented, not rowed): FROST transcript field
 # labels appended via append_message (b"O_tilde", b"r_o", ...), the schnorr
@@ -129,6 +130,8 @@
 1	shekyl/chain-store/undo-log/post-image-v1	rust/shekyl-chain-store/src/codec/undo.rs	POST_IMAGE_DST	shekyl-live		S-CHAIN-W (DRS-E1 inc 3): cSHAKE256-32 post-image digest of the value a journaled write left under its key; replay compares it before counting an inverse reversed (SI-6 exact). Part of the undo_log row layout (SCHEMA_VERSION 2)
 1	shekyl/p2p-wire-prefix-v1	rust/shekyl-p2p-transport/src/prefix.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
 1	shekyl/p2p-network-id-v1	rust/shekyl-p2p-transport/src/prefix.rs	NETWORK_ID_DST	shekyl-live		first 16 bytes of cSHAKE256(S = this customization, X = genesis block hash). The handshake id; a regenesis rotates it because the hash moves
+1	shekyl/rpc-rendezvous-name-v1	rust/shekyl-rpc-channel/src/lib.rs	RENDEZVOUS_NAME_DST	shekyl-live		RT-O10/RT-O14: first 12 bytes of cSHAKE256(S = this customization, X = network_id || instance label). The name a daemon's local rendezvous is found under, so an instance name never reaches a path
+1	shekyl/rpc-static-fingerprint-v1	rust/shekyl-rpc-channel/src/lib.rs	STATIC_FINGERPRINT_DST	shekyl-live		RT-O14: cSHAKE256(S = this customization, X = X25519 public key || ML-KEM-768 encapsulation key), 32 bytes. The identity a daemon enrols an RPC client under
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
@@ -216,6 +219,13 @@
 #
 # ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket ──────────────────
 6	shekyl-mlkem-chacha-seed	rust/shekyl-crypto-pq/src/account.rs	MLKEM_CHACHA_SEED_PREFIX	shekyl-live		domain prefix fed straight to Sha3_256 (NOT cSHAKE) to derive a ChaCha seed; kept as its own bucket rather than silently folded into mechanism 1
+#
+# ── Mechanism 7 — Noise prologue label ──────────────────────────────────────
+# A label whose own bytes are mixed into a Noise handshake hash as (part of)
+# the prologue, before any message. It is hashed by the handshake's hash, not
+# by cSHAKE, so it is not mechanism 1. (The P2P handshake's prologue is the
+# network id alone, which is a mechanism-1 derivation and has no label here.)
+7	shekyl/rpc-channel-v1	rust/shekyl-rpc-channel/src/lib.rs	CHANNEL_DST	shekyl-live		RT-O14: the RPC channel's prologue is these bytes followed by the 16-byte network id, no separator. Binds the handshake to the channel protocol and to one network
 #
 # ── TEST-ONLY — domains minted by test/bench code, segregated from production ─
 # Registered so the SEGREGATION is machine-checked: a test-only domain spelled

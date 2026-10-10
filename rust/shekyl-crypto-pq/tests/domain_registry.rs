@@ -60,13 +60,14 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// a row is deliberately added/removed — the failure message names the drift.
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
-const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
-    ("1", 36, 0), // settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
+const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
+    ("1", 38, 0), // RT-W8: +2 (rpc-rendezvous-name-v1, rpc-static-fingerprint-v1); settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
     ("2", 47, 0), // PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 8, 0), // PL-D3: -1 (shekyl-pqc-leaf retired; the leaf key hash is mech 1 now)
     ("5", 6, 8), // SA-3c: -1 (snapshot-id left mechanism 5)
     ("6", 1, 0),
+    ("7", 1, 0), // RT-W8: the RPC channel's Noise prologue label (rpc-channel-v1)
 ];
 /// Pinned counts for the non-production sections.
 const EXCLUDED_EXPECTED: usize = 8;
@@ -76,7 +77,7 @@ const TEST_ONLY_EXPECTED: usize = 8;
 
 /// Well-formed mechanism ids: `1`..`6` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {
-    matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "x")
+    matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "x")
 }
 
 fn is_valid_status(status: &str) -> bool {
@@ -116,7 +117,7 @@ fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
         }
         if !is_valid_mech(mech) {
             return Err(format!(
-                "line {line_no}: bad mechanism id {mech:?} — expected 1..6 or x"
+                "line {line_no}: bad mechanism id {mech:?} — expected 1..7 or x"
             ));
         }
         if f.len() < 5 {

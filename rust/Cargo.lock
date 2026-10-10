@@ -4723,6 +4723,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rpc-channel"
+version = "3.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-p2p-transport",
+]
+
+[[package]]
 name = "shekyl-rpc-client"
 version = "0.1.0"
 dependencies = [

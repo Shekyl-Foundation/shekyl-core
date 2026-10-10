@@ -113,9 +113,9 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
   # Well-formed mechanism id (reject typos like "55" that would create a silent
   # collision bucket in the distinctness test).
   case "$mech" in
-    1|2|3|4|5|6|x) ;;
+    1|2|3|4|5|6|7|x) ;;
     *)
-      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..6 or x" >&2
+      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..7 or x" >&2
       fail=1
       continue
       ;;
@@ -296,7 +296,11 @@ count_pattern() {
 # `issued_draw_term` (shekyl/archival-issued-index-v1, one draw's term in
 # its epoch's digest). The tests call those through `select_counted` and
 # `issued_draw_term`; none adds a site.
-MECH1_EXPECTED=63
+# RT-W8: +2 (63 -> 65): `rendezvous_name` (shekyl/rpc-rendezvous-name-v1)
+# and `static_fingerprint` (shekyl/rpc-static-fingerprint-v1) in
+# shekyl-rpc-channel. Its tests call both through those functions and add
+# no site.
+MECH1_EXPECTED=65
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

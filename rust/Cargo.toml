@@ -246,6 +246,11 @@ members = [
     "shekyl-p-transport",
     "shekyl-p2p-transport",
 
+    # The RPC channel (docs/design/RPC_CHANNEL.md, round R1). Slice RT-W8:
+    # the three domain strings and the derivations that carry them, against
+    # independently generated vectors. The handshake lands here in RT-W9.
+    "shekyl-rpc-channel",
+
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
     "shekyl-net-address",

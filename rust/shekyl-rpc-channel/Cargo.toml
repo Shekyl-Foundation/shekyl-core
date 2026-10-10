@@ -1,0 +1,25 @@
+[package]
+name = "shekyl-rpc-channel"
+description = "The RPC channel's domain strings and names: prologue, rendezvous name, static fingerprint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# cSHAKE256: the one audited home (`shekyl-crypto-hash`), not a second copy.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+
+[dev-dependencies]
+# The known-answer vectors are JSON with hex fields.
+serde_json = "1"
+hex = "0.4"
+# Read only to hold two lengths this crate restates equal to their owners':
+# the network id (`shekyl-p2p-transport`) and the ML-KEM-768 encapsulation key
+# (`shekyl-crypto-pq`). Neither is a production edge.
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+
+[lints]
+workspace = true

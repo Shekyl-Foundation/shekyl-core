@@ -36,7 +36,7 @@ transcribed and **re-verified at source 2026-08-14** (crate manifests +
 | ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
 | SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
 | Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
-| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 36 domains) | RustCrypto audited lineage |
+| cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 38 domains) | RustCrypto audited lineage |
 | Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
 | SHA-512, Blake2b512 | `sha2` / `blake2 0.10` | HKDF backbone (mech 2); Blake2b DSTs incl. `DOMAIN_PQC_LEAF` (mech 4) | Same |
 | Bulletproof+ / FCMP++ curve stack | Vendored, manifest-gated (`check_vendored_crypto_manifest.sh`, 59 files) | Range proofs; membership + SAL | **The known non-PQ surface — see §4** |
@@ -110,10 +110,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-10-09, counted from the TSV's production rows): 109 registered rows across the five mechanisms —
-110 including the SHA3-256 micro-bucket.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-10-09, counted from the TSV's production rows): 111 registered rows across the five mechanisms —
+113 including the two one-entry micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 110: the five mechanisms 109, plus the 1-entry micro-bucket.) **This table is a
+sums to 113: the five mechanisms 111, plus the two 1-entry micro-buckets.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -148,22 +148,27 @@ refresh adds two mechanism-1 customizations for settlement:
 draws count) and `shekyl/archival-issued-index-v1` (one issued draw's term
 in its epoch's digest), and one for the shard view,
 `shekyl/archival-shard-view-hash-v1` (`SV-D1`'s view hash of a `W`-byte
-shard, over its archival bytes).
+shard, over its archival bytes). The RT-W8 refresh of the same date adds the
+RPC channel's three: two mechanism-1 customizations,
+`shekyl/rpc-rendezvous-name-v1` and `shekyl/rpc-static-fingerprint-v1`, and
+one label in a new one-entry mechanism 7, `shekyl/rpc-channel-v1`, whose own
+bytes are mixed into the channel's Noise handshake as its prologue.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 36 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 38 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 39 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
 | 6 — SHA3-256 direct-prefix (micro-bucket) | prefix fed straight to `Sha3_256` | 1 | 0 |
+| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 1 | 0 |
 
 Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, since
 three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
 derivations that differ only by salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 109 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 111 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
