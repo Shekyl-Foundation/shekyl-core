@@ -1713,3 +1713,308 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
         "`_v3` is `_v2` minus slot 2 and nothing else"
     );
 }
+
+// ---------------------------------------------------------------------------
+// get_info (RK-5c). The five `get_info_*_v1.json` vectors are the C++
+// handler's computation over fixed facts (`build_get_info`), not a
+// hand-built response serialized — `tests/unit_tests/rpc_oracle_vectors.cpp`.
+// These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
+// the response writes the vector back. The handler's parity is
+// `shekyl-daemon-rpc`'s.
+// ---------------------------------------------------------------------------
+
+mod get_info {
+    use super::{assert_parity, parsed, tagged_hash};
+    use shekyl_rpc_types::{
+        DaemonNetwork, GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+        InfoPeers, InfoPool, InfoStatus, RpcStatus,
+    };
+
+    /// The reply the emitter's `synced_facts()` produces for an unrestricted
+    /// caller.
+    fn synced() -> GetInfoResponse {
+        GetInfoResponse {
+            status: RpcStatus::ok(),
+            health: InfoHealth {
+                height: 1_234_567,
+                top_block_hash: tagged_hash(1),
+                target_height: 0,
+                synchronized: true,
+                busy_syncing: false,
+                offline: false,
+                following_degraded: false,
+            },
+            identity: InfoIdentity {
+                nettype: DaemonNetwork::Mainnet,
+                protocol_version: 3,
+            },
+            chain: InfoChain {
+                difficulty: (7u128 << 64) + 123_456_789,
+                cumulative_difficulty: (9u128 << 64) + 987_654_321,
+                target: 120,
+                tx_count: 65_433,
+                block_weight_limit: 600_000,
+                block_weight_median: 300_000,
+                adjusted_time: 1_700_000_123,
+            },
+            economics: InfoEconomics {
+                already_generated_coins: 1_444_065_674_085_133,
+                release_multiplier: 1_200_000,
+                burn_pct: 184,
+                total_burned: 4_200_000_000,
+                staker_emission_share_effective: 91_549,
+            },
+            pool: InfoPool { tx_pool_size: 12 },
+            node: Hidden::Shown(InfoStatus {
+                start_time: 1_699_990_000,
+                free_space: 123_456_789_012,
+                database_size: 7 * 1024 * 1024 * 1024 + 1,
+                version: "3.1.0-oracle".to_owned(),
+                outgoing_connections_count: 8,
+                incoming_connections_count: 12,
+                alt_blocks_count: 3,
+                rpc_connections_count: 0,
+            }),
+            peers: Hidden::Shown(InfoPeers {
+                public_incoming_socket_count: 13,
+                public_outgoing_socket_count: 10,
+                tor_incoming_socket_count: 4,
+                tor_outgoing_socket_count: 2,
+                white_peerlist_size: 500,
+                grey_peerlist_size: 2500,
+            }),
+            restricted: false,
+        }
+    }
+
+    #[test]
+    fn synced_matches_the_oracle() {
+        assert_parity(
+            include_str!("vectors/rpc/get_info_synced_v1.json"),
+            &synced(),
+        );
+    }
+
+    #[test]
+    fn syncing_matches_the_oracle() {
+        let mut built = synced();
+        built.health.synchronized = false;
+        built.health.target_height = 1_300_000;
+        built.health.busy_syncing = true;
+        built.health.following_degraded = true;
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v1.json"), &built);
+    }
+
+    #[test]
+    fn peerless_startup_matches_the_oracle() {
+        let mut built = synced();
+        built.identity.nettype = DaemonNetwork::Fakechain;
+        built.health.synchronized = false;
+        let Hidden::Shown(node) = &mut built.node else {
+            unreachable!("the fixture shows Status")
+        };
+        node.outgoing_connections_count = 0;
+        node.incoming_connections_count = 0;
+        let Hidden::Shown(peers) = &mut built.peers else {
+            unreachable!("the fixture shows Peers")
+        };
+        peers.public_incoming_socket_count = 0;
+        peers.public_outgoing_socket_count = 0;
+        peers.tor_incoming_socket_count = 0;
+        peers.tor_outgoing_socket_count = 0;
+        assert_parity(
+            include_str!("vectors/rpc/get_info_peerless_startup_v1.json"),
+            &built,
+        );
+    }
+
+    /// At parity a restricted reply carries every key, holding the
+    /// stand-ins. So the vector decodes as parts that are *shown*, with
+    /// stand-in values — not as withheld parts. RK-Q8 is where a restricted
+    /// reply stops carrying them.
+    #[test]
+    fn synced_restricted_matches_the_oracle() {
+        let mut built = synced();
+        built.restricted = true;
+        built.pool.tx_pool_size = 9;
+        built.node = Hidden::Shown(InfoStatus {
+            start_time: 0,
+            free_space: u64::MAX,
+            database_size: 10 * 1024 * 1024 * 1024,
+            version: String::new(),
+            outgoing_connections_count: 0,
+            incoming_connections_count: 0,
+            alt_blocks_count: 0,
+            rpc_connections_count: 0,
+        });
+        built.peers = Hidden::Shown(InfoPeers {
+            public_incoming_socket_count: 0,
+            public_outgoing_socket_count: 0,
+            tor_incoming_socket_count: 0,
+            tor_outgoing_socket_count: 0,
+            white_peerlist_size: 0,
+            grey_peerlist_size: 0,
+        });
+        assert_parity(
+            include_str!("vectors/rpc/get_info_synced_restricted_v1.json"),
+            &built,
+        );
+    }
+
+    #[test]
+    fn burn_refusal_matches_the_oracle() {
+        let mut built = synced();
+        built.economics.total_burned = built.economics.already_generated_coins + 1;
+        built.economics.burn_pct = 0;
+        assert_parity(
+            include_str!("vectors/rpc/get_info_burn_refusal_v1.json"),
+            &built,
+        );
+    }
+
+    const STATUS_KEYS: [&str; 8] = [
+        "start_time",
+        "free_space",
+        "database_size",
+        "version",
+        "outgoing_connections_count",
+        "incoming_connections_count",
+        "alt_blocks_count",
+        "rpc_connections_count",
+    ];
+    const PEERS_KEYS: [&str; 6] = [
+        "public_incoming_socket_count",
+        "public_outgoing_socket_count",
+        "tor_incoming_socket_count",
+        "tor_outgoing_socket_count",
+        "white_peerlist_size",
+        "grey_peerlist_size",
+    ];
+
+    fn decode(doc: &serde_json::Value) -> Result<GetInfoResponse, String> {
+        serde_json::from_value(doc.clone()).map_err(|e| e.to_string())
+    }
+
+    /// A part is wholly present or wholly absent. Removing ONE key of a
+    /// hidden part from a full reply is an error naming the part and the
+    /// key, for every key of both parts — never a part read as withheld.
+    #[test]
+    fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v1.json"));
+        for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
+            for key in keys {
+                let mut doc = full.clone();
+                assert!(
+                    doc.as_object_mut().unwrap().remove(*key).is_some(),
+                    "{key} must be in the vector before it is removed"
+                );
+                let refusal = decode(&doc).expect_err("a partial part must not decode");
+                assert!(
+                    refusal.contains(part) && refusal.contains(key),
+                    "the refusal must name the {part} part and `{key}`; got {refusal:?}"
+                );
+            }
+        }
+    }
+
+    /// With every key of a hidden part gone the part is withheld, the other
+    /// part is unaffected, and the reply writes back without those keys.
+    #[test]
+    fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v1.json"));
+
+        let mut doc = full.clone();
+        for key in STATUS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        let reply = decode(&doc).expect("a reply without Status decodes");
+        assert_eq!(reply.node, Hidden::Withheld);
+        assert!(matches!(reply.peers, Hidden::Shown(_)));
+        assert_eq!(
+            serde_json::to_value(&reply).unwrap(),
+            doc,
+            "a withheld part writes none of its keys"
+        );
+
+        let mut doc = full;
+        for key in PEERS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        let reply = decode(&doc).expect("a reply without Peers decodes");
+        assert_eq!(reply.peers, Hidden::Withheld);
+        assert!(matches!(reply.node, Hidden::Shown(_)));
+        assert_eq!(serde_json::to_value(&reply).unwrap(), doc);
+    }
+
+    /// The crate's refusal of unknown keys holds for this reply too, though
+    /// it cannot carry the attribute on a flattened type.
+    #[test]
+    fn an_unknown_key_is_refused() {
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v1.json"));
+        doc.as_object_mut()
+            .unwrap()
+            .insert("emission_era".to_owned(), "Founding".into());
+        let refusal = decode(&doc).expect_err("an unknown key must not decode");
+        assert!(refusal.contains("emission_era"), "got {refusal:?}");
+    }
+
+    /// A key outside the hidden parts is required: dropping one is an error,
+    /// not a default.
+    #[test]
+    fn a_missing_required_key_is_refused() {
+        for key in [
+            "height",
+            "synchronized",
+            "tx_pool_size",
+            "restricted",
+            "burn_pct",
+        ] {
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v1.json"));
+            doc.as_object_mut().unwrap().remove(key);
+            let refusal = decode(&doc).expect_err("a missing required key must not decode");
+            assert!(refusal.contains(key), "{key}: got {refusal:?}");
+        }
+    }
+
+    /// One value under two wire names: a reply whose names disagree does not
+    /// decode. Each case changes one name of a repeated value.
+    #[test]
+    fn two_names_for_one_value_must_agree() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v1.json"));
+        let cases: [(&str, serde_json::Value); 7] = [
+            ("block_size_limit", 600_001.into()),
+            ("block_size_median", 300_001.into()),
+            ("difficulty", 123_456_788.into()),
+            ("difficulty_top64", 8.into()),
+            ("wide_cumulative_difficulty", "0x9000000003ade68b0".into()),
+            ("mainnet", false.into()),
+            ("testnet", true.into()),
+        ];
+        for (key, value) in cases {
+            let mut doc = full.clone();
+            doc.as_object_mut().unwrap().insert(key.to_owned(), value);
+            let refusal = decode(&doc).expect_err("disagreeing names must not decode");
+            assert!(
+                refusal.contains("disagree"),
+                "{key}: the refusal must say the names disagree; got {refusal:?}"
+            );
+        }
+    }
+
+    /// `KV_SERIALIZE_OPT(block_weight_limit, 0)`: a zero weight limit is
+    /// omitted, its `block_size_limit` twin is not, and the pair still
+    /// decodes as one value.
+    #[test]
+    fn a_zero_weight_limit_is_omitted_and_its_twin_is_not() {
+        let mut built = synced();
+        built.chain.block_weight_limit = 0;
+        built.chain.block_weight_median = 0;
+        let doc = serde_json::to_value(&built).unwrap();
+        let object = doc.as_object().unwrap();
+        assert!(!object.contains_key("block_weight_limit"));
+        assert!(!object.contains_key("block_weight_median"));
+        assert_eq!(object["block_size_limit"], 0);
+        assert_eq!(object["block_size_median"], 0);
+        assert_eq!(decode(&doc).unwrap(), built);
+    }
+}

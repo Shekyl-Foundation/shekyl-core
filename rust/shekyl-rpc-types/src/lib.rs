@@ -71,6 +71,7 @@ pub mod consensus_digest;
 pub mod hash;
 pub mod headers;
 pub mod identity;
+pub mod info;
 pub mod p2p;
 pub mod transactions;
 pub use archival::{
@@ -100,6 +101,10 @@ pub use headers::{
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
 };
 pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
+pub use info::{
+    GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+    InfoPeers, InfoPool, InfoStatus,
+};
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
