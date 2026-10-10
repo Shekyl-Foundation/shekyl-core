@@ -17079,8 +17079,13 @@ Each item is open. Its carrier is the only thing that closes it.
    0.319 of epochs (uniform 4/12 = 0.333), the other slot in 0.244 (the
    class-blind draw's 0.244), both slots in 0.064 (the product 0.067).
    A falsified height buys the attacker nothing it does not get by
-   being one of the sessions; TC-II's precondition for TC-I holds at
-   its uniform rate. Recorded, not a pass: the threshold is Rick's.
+   being one of the sessions. **TC-II is closed by construction (Rick,
+   2026-10-09):** there is no height input for a falsified height to
+   bias, and the test pins the attacker's shares at their uniform
+   values — the §99 reading is our result at blind chance, against the
+   paper's 15.3 % raised to 35.7 %. The paper's precondition for TC-I
+   therefore holds at its uniform rate and no better. Recorded under
+   §99's benchmark framing, not as a pass.
 2. **The operational replacement for the provisional 3250 ms.**
    The simulation in §95.3 is not this closure: it shows the
    transit-free input is short once Tor transit is on the return
@@ -17711,7 +17716,8 @@ touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
 
 ## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
 
-**Status: OPEN — registered; PM-2b has one model run (#1022); PM-1,
+**Status: OPEN — registered; PM-2b is closed by construction and has
+one model run at blind chance (#1022, recorded under §96 item 1); PM-1,
 PM-2a and PM-3 have not run. Not a gate (Rick, 2026-10-09).** The
 paper is `2607.07062v1_TOR_Deanonymizing.pdf` (arXiv 2607.07062,
 "ProxyMark"; referenced from `P2P_2_REQUIREMENTS_REGISTER.md` PW-15 and
@@ -17812,7 +17818,7 @@ state); P (persistent onion) is the sensitivity row.
 | --- | --- | --- | --- | --- | --- |
 | **PM-1** identity | A requester polling the node's cached disclosure sample tries to name the node's own address or onion. The paper's step: the node's own onion was the last entry of each timed-sync reply (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`); under the handshake-address ruling the own address is one uniform member of the sample with no position, and nothing is disclosed below the floor | Level 1 on the `shekyl-peerlist` sample instrument; Level 2 after PR-3 with per-boot and persistent onions, shortly after restart (A) and in steady state (B). Decides PWD-E7 | **100 % precision, 100 % recall** | A: — · B: — · P: — | One uniform guess among the disclosure population: `1 / (|W| + 1)` per guess; a sample of 12 contains the own address with probability `12 / (|W| + 1)` |
 | **PM-2a** connection occupation (TC-I) | Adversarial occupation of the 12 hidden outbound sessions over time, plus time to fill, under the attacker of 99.2 at the §97 knobs; D-S1's intake cap and the resulting `p_h` per connector are read off the same run | Level 1 on the `shekyl-peerlist` model plus the relay's hidden-slot draw (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure` extended with gray intake under D-S1 and the uniform white draw); Level 2 after PR-3 against the live dialer. **§96 item 3 is tracked here** | **A: 7–11 of 12** hidden outbound occupied after restarts · **B: 8–10 of 10** within about 20 minutes under periodic replacement | A: — · B: — · P: — | The attacker's uniform share of white times 12, and a fill time set by the dialer's honest refill rate, not by its flood |
-| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). `graph/proxymark.rs` (#1022) measures attacker sessions' hidden-slot and stem-slot share against their uniform share | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | model (#1022): — pending that PR's recording against §96 item 1 | The attacker's uniform share of the hidden outbound sessions (one occupied connection of 12: 8.3 %) |
+| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | Level 1 on the merged relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). `graph/proxymark.rs` (#1022) measures attacker sessions' hidden-slot and stem-slot share against their uniform share | **Proxy selection raised from 15.3 % to 35.7 %** with one occupied connection | **Closed by construction** (§96 item 1): no height input exists. Model, 2026-10-09 (`pm_2b_falsified_heights_buy_no_stem_or_hidden_slot_share`, 4 attacker of 12 hidden, 4 clearnet, 3000 epochs): origin's hop **0.319**, other slot **0.244**, both **0.064** — at blind chance. Profile-independent: no knob moves it. A and B: the same run | The attacker's uniform share of the hidden outbound sessions: 4 of 12 → 0.333 / 0.244 / 0.067 in the run above; one occupied connection of 12 → 8.3 % |
 | **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | Level 3: a documented procedure under TRC-1 (`TOR_COVER_POSTURE.md` §8), after RD, against operator relay volume, run at milestones. **§96 item 4's test** | **100 % precision, 93.8 % recall** for onion-service nodes; **100 % precision, 91.4 % recall** for Tor-client nodes | A: — · B: — · P: — | The guard's base rate: the target's share of the circuits it carries, with no recall from the signal |
 
 ### 99.4 The harness — three levels (stretch goal, Rick, 2026-10-09)
