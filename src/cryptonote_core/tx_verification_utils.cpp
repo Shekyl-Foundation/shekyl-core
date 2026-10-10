@@ -51,10 +51,10 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
     std::vector<const ct::CtSig*> rvv;
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
-    // Genesis minimum is version 3. The version-1 and version-2 arms were
-    // unreachable: both fork constants are 1.
-    const size_t max_tx_version = 3;
-    const size_t min_tx_version = 3;
+    // The only admitted transaction version. The two locals stay until the
+    // version comparisons collapse (docs/FOLLOWUPS.md).
+    const size_t max_tx_version = CURRENT_TRANSACTION_VERSION;
+    const size_t min_tx_version = CURRENT_TRANSACTION_VERSION;
 
     const size_t tx_weight_limit = get_transaction_weight_limit();
 

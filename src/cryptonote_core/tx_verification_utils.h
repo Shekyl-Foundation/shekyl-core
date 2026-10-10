@@ -95,7 +95,7 @@ struct block_connect_supplement
  * List of checks that we do for each transaction:
  *     1. Check tx blob size < get_max_tx_size()
  *     2. Check tx version != 0
- *     3. Check tx version is less than maximum for given hard fork version
+ *     3. Check the transaction version is CURRENT_TRANSACTION_VERSION
  *     4. Check tx weight < get_transaction_weight_limit()
  *     5. Passes core::check_tx_semantic()
  *     6. Passes Blockchain::check_tx_outputs()
