@@ -195,7 +195,11 @@ which existing outbound connections carry stem traffic, and it changes
 that choice each epoch.
 
 Capacity eviction is a draw, not a sort. Over the gray cap, drop a random
-gray address. Over the white cap, demote a random white address to gray. The
+drawable gray address. An outstanding draw is not a candidate: the dialer
+has it, and only `apply` moves it (§5). While those dials are in flight and
+no other drawable gray seat remains, gray may sit over the cap by that
+handful rather than cancelling one. Over the white cap, demote a random
+white address to gray. The
 caps move with the crate and are not re-derived
 (`src/cryptonote_config.h:176-177`). An `admit` of an address the operator
 just named evicts some other gray address when gray is at cap, so the named
@@ -274,11 +278,11 @@ The peerlist offers uniform draws and no ordered walk:
 
 | Operation | Effect |
 | --- | --- |
-| `draw_gray()` | One uniform gray address, remembered as an outstanding draw |
+| `draw_gray()` | One uniform drawable gray address, remembered as an outstanding draw. Outstanding is still gray to every reader, and is not drawn again until `apply` returns it |
 | `draw_white()` | One uniform white address. Used to re-contact, which can refresh the clock. Not a promotion |
 | `disclose()` | The connector's cached sample: `min(DISCLOSE_COUNT, white)` distinct white addresses of that connector, drawn uniformly once per 24-hour window and sent unchanged to every requester in the window (D3, §5a). A sample once drawn is served until its window ends, whatever white does meanwhile; the floor is checked only when a sample is drawn, and below `white_diversity_floor` nothing is drawn (F1, 2026-10-09). Gray is absent. `last_observed` is absent. No exceptions by default |
 | `snapshot()` | Read-only, for the RPC `peers` grant: every address and which list it is on. No `last_observed`, no order (PR-2, Rick 2026-10-09) |
-| `apply(outcome)` | The only writer of `White`, and the only drop of an outstanding gray draw. The match is total |
+| `apply(outcome)` | The only writer of `White`, and the only transition of an outstanding draw: promote, drop, or return it to drawable gray. The match is total |
 
 `apply` matches `DialOutcome`:
 
@@ -286,9 +290,9 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
-| `HarvestDone` | One of the six Foundation hosts: the same white write. Anyone else: white unchanged |
+| `HarvestDone` | One of the six Foundation hosts: the same white write, from any seat. Anyone else: white unchanged, and an outstanding draw of that address returns to drawable gray |
 | `DialFailed`, `PeerlistRefused` | Outstanding gray draw is dropped. A white address stays white |
-| `PayloadRefused` | No promotion, no demotion, no gray drop. An outstanding draw stays gray |
+| `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
 *Records-was: `handshake_confirmed` was the only writer, and `draw_failed`
 dropped an outstanding gray draw. A refused payload shared that failure
@@ -467,7 +471,7 @@ host to throttle; that is recorded there as the residual.
 
 | Operation | Effect |
 | --- | --- |
-| `admit_gray(address)` | Insert into gray. Does not touch a white entry at that address. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
+| `admit_gray(address)` | Insert into gray when the address sits nowhere. An address already gray, outstanding, or white is left where it sits; the call reports whether it newly entered gray, and a seated address is not a new intake charge. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
 | ban demotion | A white entry under an active ban moves to gray at the next white read: count, draw, or sample (D4, §5b). The clock is not copied across |
 | `bootstrap_harvested(addresses)` | `admit_gray` for each returned address. The dialed harvest peer is not promoted by this call |
 | expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
@@ -611,8 +615,8 @@ They check different things. Neither stands for the other.
    opened moves the clock; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
-   gray draw; `PayloadRefused` leaves that draw on gray; a failed redial
-   leaves white.
+   gray draw; `PayloadRefused`, and a non-fleet `HarvestDone`, return that
+   draw to drawable gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
@@ -789,10 +793,11 @@ line):
 
 One `Peerlist`, holding one partition per connector, keyed by
 `connector_for` at every admit; an address whose type no connector
-serves is refused there. Each partition: gray (a set of addresses, no
-clock), white (address → `last_observed: Tick`), the outstanding gray
-draws, the cached sample and its window, and the per-session intake
-ledger. Constants, each a named item the crate owns and §97 labels
+serves is refused there. Each partition gives an address one seat:
+drawable gray (no clock), an outstanding draw (still gray to every
+reader: the gray count, the snapshot and the file), or white
+(address → `last_observed: Tick`). Also the cached sample and its
+window, and the per-session intake ledger. Constants, each a named item the crate owns and §97 labels
 `Assumption`: `DISCLOSE_COUNT = 12`; `SESSION_INTAKE_CAP = 2 ×
 DISCLOSE_COUNT`; `INTERIM_WHITE_DIVERSITY_MULTIPLE = 4` and
 `white_diversity_floor() = 48`; `WHITE_REFILL_LINE = floor +
@@ -804,12 +809,15 @@ confirmations before the floor; RULED as D-PR2-2 below, labelled
 
 Operations, as §5 and §6 name them, with the ruling each carries:
 
-- `admit_gray(address, session, now)` → `Result<(), Refusal>`: the
+- `admit_gray(address, source, now)` → `Result<bool, Refusal>`: the
   connector from the type (none → `Refusal::NoConnector`); a banned
-  address is `Refusal::Banned` (D4); the session's distinct addresses
-  in the last 24 h at the cap is `Refusal::PeerlistRefused` (D-S1);
-  over `GRAY_CAP`, one random gray entry is evicted. A white entry at
-  that address is untouched.
+  address is `Refusal::Banned` (D4), before any intake charge; the
+  session's distinct addresses in the last 24 h at the cap is
+  `Refusal::PeerlistRefused` (D-S1); over `GRAY_CAP`, one random
+  drawable gray entry is evicted, never an outstanding draw. An address
+  already gray, outstanding, or white is left where it sits. The `bool`
+  is whether it newly entered gray; a seated address is not a new
+  intake charge. The session id is `ConnectionId`.
 - `draw_gray(connector, rng)` / `draw_white(connector, bans, now, rng)`:
   uniform; `draw_white` demotes banned entries first (D4) and evaluates
   expiry.
@@ -820,9 +828,12 @@ Operations, as §5 and §6 name them, with the ruling each carries:
   uniformly from white plus this node's own dialable address on that
   connector when one is set, cached for the window. Not rebuilt on a
   ban (D4).
-- `set_own_address(connector, Option<NetworkAddress>)`: the handshake
-  carries no address; this is how the node's own entry joins the
-  population.
+- `set_own_address(connector, Option<NetworkAddress>)` →
+  `Result<(), Refusal>`: `None` clears. An address of another connector
+  is `Refusal::ForeignConnector` and is not stored; an address no
+  connector serves is `Refusal::NoConnector`. The handshake carries no
+  address; this is how the node's own entry joins that connector's
+  disclosure population.
 - `white_count(connector, bans, now)`, `below_refill_line`,
   `next_deadline`: the floor and refill reads of §2, after demotion.
 - `snapshot()`: every address and its list, no clock (the RPC `peers`
