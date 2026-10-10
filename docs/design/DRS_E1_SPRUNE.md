@@ -153,6 +153,7 @@ candidate.
 | Bodies (prunable + `pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `tip = (close_epoch(k) + 2)·SEB` | `PDM-Q2` (RE-RULED 2026-09-22) |
 | Pop-undo journal | rows below `tip − D_max` | retention `≥ D_max` | `SCW-7` / `PDM-Q11` |
 | Slash log and the six other window-retired journals (`PDM-Q-F16`) | rows below `tip − (CRB + n·SEB + D_max)` | F19's expression, unchanged | `PDM-Q-F19` |
+| Slash log — **as built 2026-10-09 (`SLK-Q1`)** | rows below `tip − ((k + n)·SEB + reorg_cap)`, the floor `SlashLogFloor::under(height, in_force.settlement_schedule().blocks(), in_force.reorg_cap())` — both operands the rule set's (`SLK-2`), derived at the boundary, no cell (`SLK-3`) | every boundary `E·SEB`, `E ≥ 2`, in `prune_at_boundary` after the undo rows (`retire_slash_rows`); the one reader asserts the same floor (SI-26, `slash_log_after`) | `DRS_E4_SLASH_LOG_ROUND.md` §1.2; the other six dissolved into `undo_log` (`ARW-Q2`) and retire with it |
 
 **Two horizons by design, not one by coincidence.** Bodies and journals
 are separate horizons and neither is a tunable of the other: the body
@@ -181,7 +182,17 @@ noticed at commit 8), six of the seven dissolved into
 `undo_log` (`ARW-Q2`) and so retire with it, and the slash log — the one
 with a retirement left to build — is `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`'s,
 asserted at the writer's batch and retired beside this surface's body
-discard.
+discard. *Built 2026-10-09 (`SLK-Q1` RULED, four commits):* the retirement
+runs **in this surface's batch** — `prune_at_boundary` takes the rule set
+in force and, after the undo rows, retires `archival_slash_log` below
+`SlashLogFloor::under(height, SEB, reorg_cap)` (`retire_slash_rows`); the
+assertion is at the **read**, not the writer — `slash_log_after` refuses a
+range start below the floor its caller hands it (SI-26), an arm a
+mis-composed schedule reaches and data never does (`SLK-1`). The depth
+term is `RuleSet::reorg_cap`, never the store's `undo_retention` (`SLK-2`):
+`undo_retention > reorg_cap` moves the undo floor and not this one. Until
+this build `journal_horizon` had no production caller; this is the
+horizon's first enforcement.
 
 ## 4. The batch — an enumeration from `close_height`; no retention exceptions
 
@@ -461,7 +472,7 @@ have no Rust writer here); what this surface owes it is the function.
 | Body horizon | the epoch boundary after the shard's freeze epoch — `close_epoch(k) + 2 ≤ current_epoch`; the batch's set at `E` is `{k : close_epoch(k) + 2 ≤ E ≤ close_epoch(k) + 3}` (additive on `u64`, never `E − 2`); a rule, **no constant, no frontier** | ruled (`PDM-Q2`, 2026-09-22); `W` retired |
 | `SEB` | `settlement_epoch_blocks = 10,000`; `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:27`) | pinned |
 | `D_max` | 720, **PROVISIONAL** (`PDM-Q11`). Built 2026-09-25 as `shekyl_chain_rules::D_MAX`, **inheriting** `config/consensus_constants.json`'s `archival_reorg_depth_blocks` — a key doing two jobs (the pass-anchor depth it was tuned for, E4's; the reorg cap, consensus's), recorded as inherited per rule 05 until SO-D8 Slice C splits it (*was* "until E4"; re-owned by the FOLLOWUPS row 2026-09-29 and 2026-10-04; SPR-6 as corrected; FOLLOWUPS "Split `archival_reorg_depth_blocks`"). `SEB > D_MAX` is const-asserted beside the constant. A session pair with `retention` zero or `≥ SEB` is refused at open (`StoreCannot::RetentionNotInsideEpoch`), on a writer and on `open_read_only` — both take a checked `Horizons`. A shortened epoch names its own retention through `Horizons::new`. `SEB = 2` with retention 720 is not a configuration (rule 71). | PROVISIONAL numeric; constant built (`shekyl_chain_rules::reorg`) |
-| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX` (the production pair; `journal_horizon_under(tip, epoch_blocks, reorg_cap)` takes a session's `Horizons` pair, so a shortened schedule's horizon moves with it), consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`) |
+| Journal-horizon function | `tip − (CRB + n·SEB + D_max)` (F19) — `CRB`, `SEB`, `FAILURE_WINDOW_N` live in `shekyl-archival-retention`; `D_max` does not | **built** 2026-09-25 as `shekyl_chain_rules::journal_horizon(tip) -> Option<BlockHeight>` beside `D_MAX` (the production pair; `journal_horizon_under(tip, epoch_blocks, reorg_cap)` takes a session's `Horizons` pair, so a shortened schedule's horizon moves with it), consumed by S-ARCH when its journal writers land (`shekyl_archival_failure_window_params` is *not* it — it returns the m-of-n `(m, n, serve_budget)`). **UPDATE 2026-10-09 (`SLK-Q1` built):** first production consumer — `SlashLogFloor::under` wraps `journal_horizon_under` as a typed floor; `prune_at_boundary` derives it from the rule set in force and retires the slash log below it, `slash_log_after` asserts it (SI-26); `SlashLogFloor::window(epoch_blocks, reorg_cap)` is the `const` window `(k + n)·SEB + reorg_cap` a test derives its chain's length from (`SLK-5`). The `CRB` term above is history: the grace is `SLASH_GRACE_EPOCHS·SEB` since PR #921 (`k = 1`) |
 | `T` | **200 transactions per shard, PROVISIONAL** — the one consensus constant of the partition, one const-asserted home (the discipline `SHARD_BYTES` carried, the FOLLOWUPS shard-partition row); chosen so a typical shard at ~16.7 KB/tx lands near 3.33 MB | ruled (`PDM-Q6` item 5, 2026-09-23); **built** 2026-09-25 as `shekyl_types::SHARD_TX_COUNT`, sourced from `config/consensus_constants.json`'s `archival_shard_tx_count` through `shekyl-types/build.rs` like the gate's other numerics (SPR-10); numeric on the Round-2 gate with `n`, `D_max`, `w_launch`. **Superseded 2026-09-29 (`SHT-Q2`):** the constant is `W = 3,000,000` archival bytes, PROVISIONAL — `shekyl_types::SHARD_LENGTH`, from `archival_shard_length_bytes` by the same build script; `T` and its key are deleted |
 | Shard boundaries | `k·T` — no table, no rows, no prefix sum; `close_height(k) = height((k+1)·T − 1)` by binary search over the storage-id total | derived, never received (item 5). **Superseded 2026-09-29 (`SHT-Q2`):** offset `k·W` over the archival-length prefix sum `block_info.cumulative_archival_len`; `close_height(k)` is the first height whose sum reaches `(k+1)·W`, found by a descent that checks every block from `(E−1)·SEB` down to it against its parent — SI-13 on both folds and SI-24, its length rows summing to its cell (a binary search passes a run of cells shifted together, and monotonicity alone a shift that persists upward; PR #910 review); still no table of boundaries |
 | `first_tx_id(h)`, `cumulative_tx_count` | `cumulative_tx_count` is the listed-transaction fold. `first_tx_id(0) = 0`; for `h ≥ 1`, `first_tx_id(h) = storage_ids_through(cumulative_tx_count(h−1), h−1)` — listed plus one coinbase per block (`shekyl_types::storage_ids_through`, SPR-1). The primitive under `close_height`, and so under `close_epoch` | landed on #772 as the listed fold — **the coinbase term is SPR-1** |
@@ -580,6 +591,8 @@ chain-store, chain-rules and archival-retention (**359** + 14, **209** + 15,
 
 **What stays E4's / E5's / S-ARCH's**, unchanged by this build: the
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they
-land); §11's serve-credit precondition (the E3 cutover ordering; nothing in
+land — *landed 2026-10-09, `SLK-Q1`: the slash log's retirement runs in this
+batch, §3; the other six journals dissolved into `undo_log` and retire with
+it*); §11's serve-credit precondition (the E3 cutover ordering; nothing in
 production reads this store yet); the reward leg's `w_launch`.
 

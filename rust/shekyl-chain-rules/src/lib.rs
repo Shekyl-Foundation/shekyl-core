@@ -152,7 +152,8 @@ pub mod harness;
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
-    EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement, Slash,
+    DrawableSet, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
+    Slash,
 };
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
@@ -162,7 +163,7 @@ pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, SettlementCheck, Stale,
     ViewRead, MAX_FORM_ATTEMPTS,
 };
-pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
+pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule, ReorgCapNotInsideEpoch,
     RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,

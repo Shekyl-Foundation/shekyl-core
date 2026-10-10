@@ -230,6 +230,24 @@ impl Message<SignPassTranscript> for StakeEngine {
     }
 }
 
+/// The read-only handle on the actor's body store.
+///
+/// The writer stays on the actor (`WSS-Q1`(a)). The reader still holds the
+/// store key and decrypts on the serve path, so this is not `WSS-Q13`.
+pub(crate) struct ServingBodies;
+
+impl Message<ServingBodies> for StakeEngine {
+    type Reply = Result<shekyl_p_store::BodyStoreReader, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        _msg: ServingBodies,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.body_store.reader())
+    }
+}
+
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
 pub(crate) struct ActivePersona;

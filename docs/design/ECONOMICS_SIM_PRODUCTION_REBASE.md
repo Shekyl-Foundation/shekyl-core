@@ -329,6 +329,17 @@ registered the prediction (`da1a6b082`) and §5.9 records it.
 §5.11 records the first run. ESR-7's falsifier holds: the report prints the
 unenforced miner's zero-fee row beside the relay stuffer's.
 
+**Where the fixture tests run (2026-10-10).** The two `--stage2` narration
+tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
+PR #1009 both fixtures drifted at `783053554` and were regenerated two
+commits later, found by a fresh-clone run and not by CI. The nightly
+`economics-sim-ignored` job (`.github/workflows/nightly.yml`) now runs them,
+with the full-scale challenge-coverage reproduction and the secret draw's
+evidence set. Nightly runs after merge, so it is not the pre-push gate: a
+change to any lever a fold calls still runs
+`cargo test --locked --release -p shekyl-economics-sim -- --ignored matches_the_committed_fixture`
+from a fresh clone before it is pushed.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a

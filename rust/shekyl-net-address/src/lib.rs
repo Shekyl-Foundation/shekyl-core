@@ -15,7 +15,12 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// One peer address. The three variants are the closed address union.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Ord` and `Hash` are derived so a list can hold addresses in a set or
+/// map keyed by the address itself; the order is the derived one and
+/// carries no meaning (`shekyl-peerlist` draws uniformly by index and
+/// never walks it as a rank).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NetworkAddress {
     /// IPv4 and a port.
     Ipv4 {

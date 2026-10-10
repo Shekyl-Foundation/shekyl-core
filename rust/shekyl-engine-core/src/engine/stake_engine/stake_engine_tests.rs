@@ -33,7 +33,7 @@ use shekyl_standoff::draw::GapRng;
 use shekyl_tx_builder::TreeContext;
 use shekyl_types::{BlockHash, GlobalOutputIndex, PCanonicalId};
 
-use super::test_fixtures::{constructed_record, derive_bundle, spawn_over};
+use super::test_fixtures::{constructed_record, derive_bundle, ephemeral_body_store, spawn_over};
 use super::*;
 
 // Message families come from the sibling handlers directly, the way `handle.rs`
@@ -43,7 +43,7 @@ use super::*;
 // test, not hoisted here behind a `cfg(any(…))` list that grows a term per
 // feature.
 use super::helpers::draw_entry_gap_guarded;
-use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle};
+use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle, ServingBodies};
 use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
@@ -535,7 +535,12 @@ async fn activate_same_slot_is_idempotent() {
 #[test]
 #[should_panic(expected = "requires an ambient Tokio runtime")]
 fn spawn_without_ambient_runtime_panics() {
-    let _handle = StakeEngineHandle::spawn(BTreeMap::new(), BTreeSet::new(), None);
+    let _handle = StakeEngineHandle::spawn(
+        BTreeMap::new(),
+        BTreeSet::new(),
+        None,
+        ephemeral_body_store(),
+    );
 }
 
 // Mailbox `Send` contract (structural): message + reply types are `Send` as
@@ -546,6 +551,8 @@ fn message_and_reply_types_are_send() {
     assert_send::<MintPersonaHandle>();
     assert_send::<ActivatePersona>();
     assert_send::<ActivePersona>();
+    assert_send::<ServingBodies>();
+    assert_send::<shekyl_p_store::BodyStoreReader>();
     assert_send::<PersonaHandle>();
     assert_send::<PersonaIdentity>();
     assert_send::<StakeEngineError>();
@@ -799,6 +806,7 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
+            bodies: ephemeral_body_store(),
             #[cfg(feature = "conformance")]
             self_cert: TestSelfCert::Skip,
             observer: Box::new(Recorder(Arc::clone(&recorded))),
@@ -1180,6 +1188,7 @@ mod s6_self_cert {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
+            bodies: ephemeral_body_store(),
             self_cert: mode,
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
