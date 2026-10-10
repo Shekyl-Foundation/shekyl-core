@@ -364,8 +364,46 @@ goes in only if a conformance measurement in PR-2 shows it helps:
 
 The banned-entry exclusion is not measured: under D4 (§5b) a banned
 white entry is already demoted to gray before white is sampled, so
-there is nothing to exclude. **Results:** recorded here by PR-2's
-instrument (`shekyl-peerlist`, conformance), in this section.
+there is nothing to exclude.
+
+**Results (PR-2, `shekyl-peerlist::conformance::simulate_disclosure_exception`,
+pinned by `tests/exception.rs`).** `|O| = 12`, every outbound session
+on the connector hides the address (the hidden connector, where the
+hidden slot lives), 400 trials per cell. *beyond* is how many nodes
+the absence observer knows that are not on our white list (0 is an
+observer who knows `W` exactly); *ctrl* is how many of `O` it controls;
+`k` is windows polled. Cells are precision / recall on the uncontrolled
+outbound sessions; *slot* is the chance of naming the hidden stem slot.
+
+| `W` | beyond | ctrl | `k` | uniform, presence | uniform, absence | excluded, presence | excluded, absence | slot (excl. absence) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 48 | 0 | 0 | 1 | 0.25 / 0.25 | 0.25 / 0.75 | 0 / 0 | 0.33 / 1.00 | 0.083 |
+| 48 | 0 | 0 | 7 | 0.25 / 0.86 | 0.27 / 0.14 | 0 / 0 | 0.86 / 1.00 | 0.083 |
+| 48 | 0 | 0 | 30 | 0.25 / 1.00 | 0 / 0 | 0 / 0 | **1.00 / 1.00** | 0.083 |
+| 48 | 0 | 4 | 30 | 0.18 / 1.00 | 0 / 0 | 0 / 0 | **1.00 / 1.00** | 0.125 |
+| 48 | 48 | 0 | 30 | 0.25 / 1.00 | 0 / 0 | 0 / 0 | 0.20 / 1.00 | 0.083 |
+| 100 | 0 | 0 | 7 | 0.12 / 0.59 | 0.12 / 0.41 | 0 / 0 | 0.28 / 1.00 | 0.083 |
+| 100 | 0 | 0 | 30 | 0.12 / 0.98 | 0.10 / 0.02 | 0 / 0 | **0.93 / 1.00** | 0.083 |
+| 100 | 100 | 0 | 30 | 0.12 / 0.98 | 0.00 / 0.03 | 0 / 0 | 0.11 / 1.00 | 0.083 |
+
+**Reading.** Under the uniform sample neither observer learns anything
+about `O`: the presence observer's precision is the base rate
+`|O| / |W|` at every `k`, and the absence observer's falls to zero as
+the union of samples covers `W`. The exception silences the presence
+observer — a disclosed address is never an outbound session — and
+hands `O` to the absence observer: recall 1 at every `k`, precision
+rising to `|O| / (|O| + beyond + unseen)` as the uniform draw covers
+the rest of white, 1.00 at `|W| = 48` after thirty windows when `W` is
+known, 0.93 at `|W| = 100`, and the hidden slot one guess among the
+outbound hidden sessions (`1/12`) instead of one among the whole
+hidden white list. An observer who knows little beyond `W` gains
+certainty; an observer who knows twice `W` still gains over the
+uniform sample at every `k`.
+
+**Outcome, by the rule above: the exception is not adopted. The
+uniform sample stands.** It lowers one observer's success and raises
+another's, and the one it raises is the cheaper to be: polling and
+remembering what was *not* said.
 
 ### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09)
 
@@ -626,7 +664,7 @@ cannot express. Fix the signature. That does not widen white.
 | # | Content | Greens when |
 | --- | --- | --- |
 | 1 | The crate `shekyl-peerlist`: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the cached sample (D3), ban demotion (D4), the per-session intake cap (D-S1), the snapshot, the address file. No FFI, no C++ | The crate's tests cover §11.2, §11.3 and §11.5, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
-| 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes |
+| 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes. **Checked 2026-10-09 at the PR-2 pin (§16.1):** every C++ site in §8 is where the row says (the `net_peerlist.h` lines moved by four, §16.1), and each row's Rust column is an operation the crate has — `Peerlist::apply` (rows 1, 2, 3, 7), `Source::Session` admits with no clock (row 4), `draw_gray` / `draw_white` / `restore` uniform (row 5), `Partition::expire` through every white read (row 6), `insert_gray`'s keep-the-named eviction (row 8) |
 | 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/` | §11.3 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
@@ -683,9 +721,10 @@ does.*
 
 ## 16. PR-2 — pre-flight (rule 26 Round 0, 2026-10-09)
 
-**Status: OPEN — pre-flight recorded; the crate follows on
+**Status: OPEN — pre-flight recorded and increments 1 and 2 built on
 `feat/p2p3-pr2-peerlist`, stacked on #1018 (`487d4550fc`), rebased onto
-`dev` when #1018 merges.** PR-2 is increments 1 and 2 (§13). The
+`dev` when #1018 merges; the §5a measurement is in and the exception is
+not adopted; D-PR2-1 and D-PR2-2 (§16.3) await Rick.** PR-2 is increments 1 and 2 (§13). The
 rulings it implements are D3 (§5a), D4 (§5b), D-S1 (§5c) and the PR-2
 additions (§11.5), written in #1018's docs commit so they reach `dev`
 first. This section is the substrate re-check between those rulings
@@ -819,17 +858,19 @@ recall on `O` and on the hidden slot, under the uniform sample and
 under the sample that leaves `O` out. The exception is adopted only if
 it lowers both observers' success. Results are recorded in §5a.
 
-### 16.6 Commit plan (B5)
+### 16.6 Commit plan (B5) — landed locally, pushed on authorisation
 
-1. `docs: PR-2 pre-flight in the slice 1 brief §16` — this section.
+1. `docs: PR-2 pre-flight in the slice 1 brief §16` — `2b06d215fc`.
 2. `peerlist: the crate — gray, white, the door, the draws, expiry` —
    increment 1's core with §11.1–§11.3's tests; no caller yet (the
-   dialer is PR-3, named in §10 as the consumer).
+   dialer is PR-3, named in §10 as the consumer). `65e94ad1d4`.
 3. `peerlist: the cached sample (D3), ban demotion (D4), the intake cap
-   (D-S1), the snapshot` — §11.5's tests.
+   (D-S1)` — §11.5's tests; the snapshot landed with commit 2.
+   `9ecc3f02e2`; gray as an indexed set `093d4dbb3b`.
 4. `peerlist: the D3 exception instrument` — 16.5, results into §5a.
+   `cf380509b9`.
 5. `docs: the §8 divergence ledger at the increment's pin` — increment
-   2; §97's rows gain the crate's items; this section's status.
+   2; §97's rows name the crate's items; this section's status.
 
 ### 16.7 Round denominator
 
