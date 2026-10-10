@@ -31,8 +31,9 @@
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side). The emission-split epoch is closed over inside
-//! [`shekyl_economics::emission_share`], and [`HysteresisCq`] calls
+//! copy wallet-side). The shipped staker share is
+//! [`shekyl_economics::emission_share_at`] (the epoch and the shipped
+//! constants are closed over there). [`HysteresisCq`] calls
 //! `shekyl-economics::hysteresis_step`.
 //!
 //! I/O convention: this module renders; the binary target performs the
@@ -46,11 +47,11 @@ use shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share,
+    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share_at,
     fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step, paid_block_reward,
     projected_already_generated, quantize_pow2_ceil, relay_fee_floor, round_money_up_2,
     tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
-    RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    RELAY_ADMISSION_SLACK_BP,
 };
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
@@ -166,16 +167,7 @@ pub(crate) fn correction_factor_ratio(
         params.burn_base_rate,
         params.burn_cap,
     );
-    // Decay is measured from `EMISSION_SPLIT_EPOCH` inside `emission_share`.
-    // An origin of 0 would put σ a whole decay step ahead of the chain at an
-    // exact year boundary: `(k·BLOCKS_PER_YEAR − 0)/BPY = k`, while
-    // `(k·BPY − 1)/BPY = k − 1`.
-    let sigma = emission_share(
-        height,
-        STAKER_EMISSION_SHARE,
-        STAKER_EMISSION_DECAY,
-        BLOCKS_PER_YEAR,
-    );
+    let sigma = emission_share_at(height);
     // `C = (1 − σ)·M_r/(1 − b)`, composed by its owner (which also clamps
     // σ and b); the three operands are reported beside it.
     let c = fee_correction(volume, sigma, b, params);
