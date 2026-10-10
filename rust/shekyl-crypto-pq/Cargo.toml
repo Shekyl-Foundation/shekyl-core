@@ -56,6 +56,33 @@ fips205 = "=0.4.1"
 # a minor-version bump could panic at runtime. Exact pin + KEM_DERIVE_V1_KAT.json
 # tripwire + Cargo.lock = three layers of defense against silent behavior changes.
 fips203 = "=0.4.3"
+# FN-DSA-1024 (Falcon), the post-quantum half of the receipt scheme (hybrid
+# scheme byte 3; ARCHIVAL_SERVE_CREDIT_SPEC.md §6.2). **Pre-standard**: FIPS
+# 206 is not final and the crate states that keys and signatures made with
+# it may stop verifying under later versions; 1.0 is promised only after the
+# standard is. Every vector under docs/test_vectors/FN_DSA_HYBRID_V1_KAT.json
+# is therefore a pin on THIS version, and the genesis gate
+# (scripts/ci/check_fn_dsa_genesis_gate.py) refuses a genesis build on a
+# pre-1.0 lock.
+#
+# All five crates are pinned exact, and the four sub-crates are named here
+# only to pin them: `fn-dsa` depends on each as `0.4` (caret), so pinning the
+# wrapper alone would let a sub-crate move under it. Code imports the
+# wrapper's re-exports.
+#
+# Default features only (`default = []`). `no_avx2` is NOT set: on x86_64 the
+# crate picks an AVX2 path at run time for key generation, signing and
+# verification, and it roughly halves verification there. The consequence is
+# recorded rather than hidden: the x86_64 vectors run code the floor device
+# (aarch64, NEON) never runs, which is why the same vectors are also run
+# under aarch64 in CI. `small_context` is not set either: it trades 32 kB of
+# signing context for ~25% signing time and has not been measured here.
+# Dependency record: docs/design/FN_DSA_HYBRID.md §2.
+fn-dsa = "=0.4.0"
+fn-dsa-comm = "=0.4.0"
+fn-dsa-kgen = "=0.4.0"
+fn-dsa-sign = "=0.4.0"
+fn-dsa-vrfy = "=0.4.0"
 base64 = "0.22"
 hkdf = "0.12"
 sha2 = "0.10"
@@ -190,6 +217,11 @@ shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
 # dev-dependency entry (a duplicate would only risk version/feature drift).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
+# Instruction-count arm of the scheme-3 sign/verify bench (`fn_dsa_hybrid_iai`,
+# gated through `scripts/bench/capture_rust_baseline.sh`). Already a
+# dev-dependency of the engine crates and so already in `Cargo.lock` — this
+# adds no package to the supply chain (`17-dependency-discipline`).
+gungraun = "0.19"
 proptest = "1"
 # Wilson-Hilferty chi-square critical value + strict-alpha normal quantile for
 # the `enc_label` indistinguishability test. Single-sourced from the generic,
@@ -215,6 +247,14 @@ harness = false
 
 [[bench]]
 name = "fa6_decap_prefilter"
+harness = false
+
+[[bench]]
+name = "fn_dsa_hybrid"
+harness = false
+
+[[bench]]
+name = "fn_dsa_hybrid_iai"
 harness = false
 
 [[bin]]

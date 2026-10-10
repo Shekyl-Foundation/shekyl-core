@@ -165,7 +165,7 @@ pub struct OutputSecrets {
 
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
-/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// `combined_ss` is the 64-byte OKM from the private `kem::combine_shared_secrets`
 /// on the production scan path. Any length is accepted here (HKDF-Extract
 /// handles variable-length IKM); test vectors may supply synthetic IKM directly.
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {

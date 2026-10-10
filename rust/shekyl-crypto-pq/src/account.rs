@@ -518,7 +518,7 @@ pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
     ///
-    /// Wrapped in [`SpendPublicKey`](crate::keys::SpendPublicKey) for
+    /// Wrapped in [`SpendPublicKey`] for
     /// type-system protection at sites that distinguish "spend half"
     /// from "view half" of the account identity. `#[repr(transparent)]`
     /// preserves the bit-for-bit FFI layout invariant with
@@ -527,7 +527,7 @@ pub struct AllKeysBlob {
     pub spend_pk: SpendPublicKey,
     /// Ed25519 view public key.
     ///
-    /// Wrapped in [`ViewPublicKey`](crate::keys::ViewPublicKey) — see
+    /// Wrapped in [`ViewPublicKey`] — see
     /// `spend_pk` for the FFI-layout / accessor contract.
     pub view_pk: ViewPublicKey,
     /// ML-KEM-768 encap (public) key, 1184 bytes.
@@ -547,7 +547,7 @@ pub struct AllKeysBlob {
     // --- secret side (held by C++ only as opaque bytes) -------------------
     /// Ed25519 spend secret scalar, in canonical 32-byte little-endian form.
     ///
-    /// Wrapped in [`SpendSecret`](crate::keys::SpendSecret) for
+    /// Wrapped in [`SpendSecret`] for
     /// type-system protection and structural wipe-on-drop.
     /// `#[repr(transparent)]` preserves the bit-for-bit FFI layout
     /// invariant with `shekyl_ffi::ShekylAllKeysBlob.spend_sk: [u8; 32]`.
@@ -556,7 +556,7 @@ pub struct AllKeysBlob {
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
     ///
-    /// Wrapped in [`ViewSecret`](crate::keys::ViewSecret) for type-system
+    /// Wrapped in [`ViewSecret`] for type-system
     /// protection and structural wipe-on-drop. `#[repr(transparent)]`
     /// on `ViewSecret` preserves the bit-for-bit FFI layout invariant
     /// with `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Read
@@ -565,7 +565,7 @@ pub struct AllKeysBlob {
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
     /// open; persisted only via the master seed.
     ///
-    /// Wrapped in [`MlKem768DecapKey`](crate::keys::MlKem768DecapKey) for
+    /// Wrapped in [`MlKem768DecapKey`] for
     /// type-system protection and structural wipe-on-drop, per the
     /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
     /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI
