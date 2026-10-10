@@ -35,7 +35,7 @@ use crate::schema::{
     ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
-fn persona(fill: u8) -> PCanonicalId {
+pub(super) fn persona(fill: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([fill; 32])
 }
 
@@ -61,8 +61,9 @@ fn record() -> BondRecord {
     }
 }
 
-/// Plant rows raw: `f` receives the open write transaction.
-fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
+/// Plant rows raw: `f` receives the open write transaction. Shared with
+/// `prune_tests`, which plants slash rows across the retirement floor.
+pub(super) fn plant(path: &std::path::Path, f: impl FnOnce(&redb::WriteTransaction)) {
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     f(&txn);
@@ -143,7 +144,7 @@ fn a1_absent_is_none_present_decodes_and_a_bad_row_is_si7() {
 // A2 — the slash log strictly above a height
 // ---------------------------------------------------------------------------
 
-fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
+pub(super) fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
     SlashLogEntry {
         persona: *p,
         shard: shard(s),
@@ -154,7 +155,7 @@ fn slash_entry(p: &PCanonicalId, s: u64, e: u64, add: u64) -> SlashLogEntry {
     }
 }
 
-fn plant_slash(txn: &redb::WriteTransaction, h: u64, seq: u32, entry: &SlashLogEntry) {
+pub(super) fn plant_slash(txn: &redb::WriteTransaction, h: u64, seq: u32, entry: &SlashLogEntry) {
     let mut t = txn.open_table(ARCHIVAL_SLASH_LOG).expect("t");
     t.insert(
         SlashLogKey::new(BlockHeight::from_raw(h), seq).key(),

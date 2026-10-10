@@ -32,6 +32,13 @@
 //! pair would need ten thousand blocks per boundary). The expected
 //! partition is computed by [`Model`], a separate derivation from the
 //! lengths the fixture asked for.
+//!
+//! The last section is the slash log's retirement (`SLK-Q1`,
+//! `DRS_E4_SLASH_LOG_ROUND.md`): a `10 / 5` pair whose window
+//! ([`WINDOW`], derived from [`SlashLogFloor::window`]) a chain of empty
+//! blocks crosses, rows planted on both sides of the first floor, the read
+//! that asserts the floor (SI-26), a pop across the boundary, and a store
+//! whose undo retention is deeper than the cap (`SLK-2`).
 
 // A whole-file test module: the parent gates it with `#[cfg(test)]`, and
 // this self-declaration is what the debug-macro lint keys on — the
@@ -42,10 +49,11 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet};
+use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet, SlashLogFloor};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
+use super::archival_read_tests::{persona, plant, plant_slash, slash_entry};
 use super::connect_fixtures::{
     at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
     Listed, FIRST_SPEND_HEIGHT,
@@ -55,8 +63,8 @@ use super::*;
 use crate::codec::{
     Canonical, PropertyCell, PropertyCellBytes, Raw, SettlementEpochBlocks, UndoLogFloorCell,
 };
-use crate::ids::TxStorageId;
-use crate::schema::{BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, UNDO_LOG};
+use crate::ids::{SlashLogTuple, TxStorageId};
+use crate::schema::{ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, UNDO_LOG};
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
@@ -2154,5 +2162,282 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
         "its prunable hash row records the region it had"
     );
 
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// The slash log's retirement (`SLK-Q1`): a window the unit lane can cross
+// ---------------------------------------------------------------------------
+
+/// `SEB 10 / cap 5`: the pair whose window — `(k + n)·SEB + cap`,
+/// [`SlashLogFloor::window`] — a chain of empty blocks crosses in the unit
+/// lane (`DRS_E4_SLASH_LOG_ROUND.md` §1.1, build commit 3: "window 145").
+/// Nothing below spells the expression again: the chain's length, the
+/// floor and the heights planted around it are all read off the window.
+const WINDOW_SEB: u64 = 10;
+const WINDOW_CAP: u64 = 5;
+const WINDOW_RULES: RuleSet = RuleSet::fakechain(None, pair(WINDOW_SEB, WINDOW_CAP));
+/// The window under the pair, in blocks.
+const WINDOW: u64 = match SlashLogFloor::window(
+    WINDOW_RULES.settlement_schedule().blocks(),
+    WINDOW_RULES.reorg_cap(),
+) {
+    Some(window) => window.to_raw(),
+    None => panic!("the window fits"),
+};
+/// The first boundary with a floor: the first multiple of `SEB` at or past
+/// the window. The boundary before it has none.
+const FIRST_FLOORED_BOUNDARY: u64 = WINDOW.div_ceil(WINDOW_SEB) * WINDOW_SEB;
+/// The floor at that boundary: the rows planted below are retired there,
+/// the rows planted at and above it kept.
+const FIRST_FLOOR: u64 = FIRST_FLOORED_BOUNDARY - WINDOW;
+const _: () = assert!(
+    FIRST_FLOOR > 2 && FIRST_FLOOR + 1 < FIRST_FLOORED_BOUNDARY - WINDOW_CAP,
+    "the planted heights sit on both sides of the floor and under the undo floor"
+);
+
+/// The floor the batch at `boundary` derives, as the rule set states it.
+fn floor_at(boundary: u64) -> SlashLogFloor {
+    SlashLogFloor::under(
+        BlockHeight::from_raw(boundary),
+        WINDOW_RULES.settlement_schedule().blocks(),
+        WINDOW_RULES.reorg_cap(),
+    )
+}
+
+/// A store under the pair with the given undo retention — the cap, or
+/// deeper for `SLK-2`'s falsifier.
+fn window_store(path: &std::path::Path, retention: u64) -> ChainStore {
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(retention),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    ChainStore::with_horizons(path, ApplyPolicy::default(), horizons).expect("open")
+}
+
+/// Empty blocks to height `to` under the pair, with slot 0's persona
+/// joining at `join_at` so a block at the boundary can list a credit (a
+/// listing an empty-body chain can realise, and one that hashes the
+/// re-connected block apart from the popped one). The store is closed on
+/// return, for a raw plant; the connects are returned for the boundaries'
+/// `Pruned`.
+fn window_chain_to(
+    path: &std::path::Path,
+    retention: u64,
+    to: u64,
+    join_at: u64,
+) -> (Builder, Vec<Connected>) {
+    let store = window_store(path, retention);
+    let mut b = Builder::under(WINDOW_RULES);
+    let connects = b.connect_sized(&store, 0, to, 0, move |h| {
+        if h == join_at {
+            vec![Sized::Join]
+        } else {
+            Vec::new()
+        }
+    });
+    (b, connects)
+}
+
+/// Every `archival_slash_log` key, in table order.
+fn slash_rows(store: &ChainStore) -> Vec<SlashLogTuple> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(ARCHIVAL_SLASH_LOG).expect("table");
+    table
+        .range::<SlashLogTuple>(..)
+        .expect("range")
+        .map(|item| item.expect("row").0.value())
+        .collect()
+}
+
+/// The window is the round's: the first boundary with a floor is the one
+/// the pre-flight tabled, and the boundary before it has none — in the
+/// rule set's expression and in the store's `Pruned`.
+#[test]
+fn the_window_is_the_rounds_and_the_boundary_before_it_has_no_floor() {
+    assert_eq!(WINDOW, 145, "SEB 10 / cap 5: (k + n)·10 + 5");
+    assert_eq!(FIRST_FLOORED_BOUNDARY, 150);
+    assert_eq!(FIRST_FLOOR, 5);
+    assert_eq!(
+        floor_at(FIRST_FLOORED_BOUNDARY - WINDOW_SEB),
+        SlashLogFloor::NONE
+    );
+    assert_eq!(
+        floor_at(FIRST_FLOORED_BOUNDARY).height(),
+        Some(BlockHeight::from_raw(FIRST_FLOOR)),
+        "the first floor is the boundary less the window"
+    );
+
+    let path = tmp("slk-window");
+    let (_, connects) = window_chain_to(
+        &path,
+        WINDOW_CAP,
+        FIRST_FLOORED_BOUNDARY - 1,
+        FIRST_FLOORED_BOUNDARY - WINDOW_SEB,
+    );
+    let boundaries: Vec<(u64, SlashLogFloor)> = connects
+        .iter()
+        .filter_map(|c| c.pruned.map(|p| (c.height.to_raw(), p.slash_floor)))
+        .collect();
+    assert_eq!(
+        boundaries,
+        (super::prune::FIRST_PRUNING_EPOCH..FIRST_FLOORED_BOUNDARY / WINDOW_SEB)
+            .map(|e| (e * WINDOW_SEB, SlashLogFloor::NONE))
+            .collect::<Vec<_>>(),
+        "every boundary under the window ran, and none had a floor"
+    );
+    cleanup(&path);
+}
+
+/// The first enforcement of `journal_horizon` (`PDM-Q-F19`): at the first
+/// boundary with a floor, rows below it are gone and rows at and above it
+/// stay; the batch reports the floor it used; the one reader asserts the
+/// same floor (SI-26) — a read starting at the floor is sound and returns
+/// the kept rows, a read starting one below is the fault, with the asked
+/// height and the floor in it. Then a pop across the boundary and a
+/// different block reconnected at it: the pop restores nothing (the
+/// retirement is not journaled, like the body discards), and the batch
+/// re-derives the same floor and deletes the same, already empty, range.
+/// Both connects run the slash pass with that floor in hand; it never
+/// trips the arm, because every height it can ask about is inside the
+/// settling epoch, `(k + 1)` epochs below the connecting height, while the
+/// floor is `(k + n)` epochs and a cap below it (the margin;
+/// `slash.rs`, `slashed_after`). On this chain the pass has no draw to
+/// read for, so the margin is stated, not exercised; the bench witness
+/// exercises the read with a floor in hand.
+///
+/// **The check's falsifier:** delete the SI-26 arm in
+/// `archival_reads::slash_log_after` and the `unwrap_err` below panics on
+/// an `Ok` of two rows — the read would return the rows above the retired
+/// range as if they were the log. Delete `retire_slash_rows` and the first
+/// `slash_rows` assertion fails with the planted rows intact.
+#[test]
+fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
+    let path = tmp("slk-retire");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    // Rows two below, one below (two personas), at, and one above the floor.
+    let p = persona(0x51);
+    let q = persona(0x52);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 2, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 1, &slash_entry(&q, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor + 1, 0, &slash_entry(&p, 0, 1, 1));
+    });
+    let kept = vec![(floor, 0), (floor + 1, 0)];
+
+    let store = window_store(&path, WINDOW_CAP);
+    let first = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    let pruned = first.pruned.expect("the first floored boundary");
+    assert_eq!(pruned.slash_floor, floor_at(boundary));
+    assert_eq!(
+        pruned.slash_floor.height(),
+        Some(BlockHeight::from_raw(floor))
+    );
+    assert_eq!(
+        slash_rows(&store),
+        kept,
+        "below the floor gone, at and above it kept"
+    );
+
+    // The read, with the floor the batch used.
+    let snap = store.begin_read().expect("read");
+    let from_the_floor = snap
+        .slash_log_after(&p, BlockHeight::from_raw(floor - 1), pruned.slash_floor)
+        .expect("a read starting at the floor is sound");
+    assert_eq!(from_the_floor.len(), 2, "both kept rows are {p:?}'s");
+    let err = snap
+        .slash_log_after(&p, BlockHeight::from_raw(floor - 2), pruned.slash_floor)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::SlashLogReadBelowFloor {
+                asked,
+                floor: at
+            }) if asked == BlockHeight::from_raw(floor - 2) && at == BlockHeight::from_raw(floor)
+        ),
+        "a read starting below the floor is SI-26, not an empty prefix: {err}"
+    );
+    drop(snap);
+
+    // Across the boundary and back, on another block: the re-connected one
+    // lists the credit the join opened, so it hashes apart from the popped
+    // one.
+    let popped_hash = *b.hashes().last().expect("the boundary's block");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(out.map(|popped| popped.height.to_raw()), Ok(boundary));
+    b.forget(1);
+    assert_eq!(
+        slash_rows(&store),
+        kept,
+        "a pop restores no retired row: the retirement is not journaled"
+    );
+    let again = b
+        .connect_sized(&store, boundary, boundary, 0, |_| vec![credit(1_000)])
+        .remove(0);
+    assert_ne!(
+        *b.hashes().last().expect("re-connected"),
+        popped_hash,
+        "a different block at the boundary"
+    );
+    assert_eq!(
+        again.pruned.expect("the boundary fires again").slash_floor,
+        pruned.slash_floor,
+        "the same expression at the same height"
+    );
+    assert_eq!(slash_rows(&store), kept, "the same, already empty, range");
+    cleanup(&path);
+}
+
+/// `SLK-2`'s falsifier: the floor is the rule set's cap, not the store's
+/// retention. A store opened with `undo_retention` deeper than the cap
+/// moves its undo floor by the difference and the slash floor not at all —
+/// rows a retention-derived floor would have kept are retired. One value
+/// was doing two jobs; this is the seam where they are two.
+#[test]
+fn a_deeper_undo_retention_moves_the_undo_floor_and_not_the_slash_floor() {
+    let path = tmp("slk-retention");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let deeper = WINDOW_CAP + 2;
+    assert!(deeper < WINDOW_SEB, "inside the epoch, so the store opens");
+    let (mut b, _) = window_chain_to(&path, deeper, boundary - 1, boundary - WINDOW_SEB);
+
+    // The rows a floor that followed the retention would keep: at
+    // `floor − 2` and `floor − 1`, which `boundary − (window + 2)` sits
+    // below.
+    let p = persona(0x53);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 2, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+    });
+
+    let store = window_store(&path, deeper);
+    let pruned = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0)
+        .pruned
+        .expect("a boundary");
+    assert_eq!(
+        pruned.undo_floor,
+        BlockHeight::from_raw(boundary - deeper),
+        "the retention is the undo floor's"
+    );
+    assert_eq!(
+        pruned.slash_floor,
+        floor_at(boundary),
+        "and not the slash floor's: the cap is the rule set's"
+    );
+    assert_eq!(slash_rows(&store), vec![(floor, 0)]);
     cleanup(&path);
 }

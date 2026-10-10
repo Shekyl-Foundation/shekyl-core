@@ -167,7 +167,7 @@ const GENESIS_FLOOR: u64 = 1;
 /// The first epoch at which a shard can have crossed its boundary: a shard
 /// closing in epoch `c` is discarded at `c + 2`, so epochs `0` and `1` run
 /// no batch (§2's genesis guard — a branch, never `E − 2`).
-const FIRST_PRUNING_EPOCH: u64 = 2;
+pub(super) const FIRST_PRUNING_EPOCH: u64 = 2;
 
 /// The two horizons the store runs under: the settlement schedule the file
 /// is pinned to, and how many undo rows below the tip it keeps.

@@ -137,6 +137,24 @@ impl SlashLogFloor {
         Self(journal_horizon_under(tip, epoch_blocks.get(), reorg_cap))
     }
 
+    /// The window under a pair: how far below the tip a row must sit to be
+    /// retired, `(k + n)·SEB + reorg_cap`. The first boundary with a floor
+    /// is the first at or past it; a test that must cross the window
+    /// derives its chain's length from this rather than restating the
+    /// expression (`SLK-5`). `None` only if the product overflows. Const,
+    /// so a chain's length can be placed against the window where its
+    /// constants are declared.
+    #[must_use]
+    pub const fn window(
+        epoch_blocks: SettlementEpochBlocks,
+        reorg_cap: BlockCount,
+    ) -> Option<BlockCount> {
+        match window_blocks(epoch_blocks.get(), reorg_cap) {
+            Some(window) => Some(BlockCount::from_raw(window)),
+            None => None,
+        }
+    }
+
     /// The lowest retained height, or `None` while nothing is retired.
     #[must_use]
     pub const fn height(self) -> Option<BlockHeight> {
@@ -165,11 +183,21 @@ pub fn journal_horizon_under(
     epoch_blocks: u64,
     reorg_cap: BlockCount,
 ) -> Option<BlockHeight> {
-    let window = SLASH_GRACE_EPOCHS
-        .checked_add(u64::from(FAILURE_WINDOW_N))?
-        .checked_mul(epoch_blocks)?
-        .checked_add(reorg_cap.to_raw())?;
+    let window = window_blocks(epoch_blocks, reorg_cap)?;
     tip.to_raw().checked_sub(window).map(BlockHeight::from_raw)
+}
+
+/// `(k + n)·SEB + reorg_cap`, the one place the expression is spelled.
+/// `u64::from` would be the idiomatic widening of `n` but is not `const`.
+#[allow(clippy::cast_lossless)]
+const fn window_blocks(epoch_blocks: u64, reorg_cap: BlockCount) -> Option<u64> {
+    let Some(epochs) = SLASH_GRACE_EPOCHS.checked_add(FAILURE_WINDOW_N as u64) else {
+        return None;
+    };
+    let Some(blocks) = epochs.checked_mul(epoch_blocks) else {
+        return None;
+    };
+    blocks.checked_add(reorg_cap.to_raw())
 }
 
 #[cfg(test)]
@@ -234,6 +262,11 @@ mod tests {
         let epoch = SettlementEpochBlocks::new(100).expect("non-zero");
         let cap = BlockCount::from_raw(50);
         let short = (SLASH_GRACE_EPOCHS + u64::from(FAILURE_WINDOW_N)) * 100 + 50;
+        assert_eq!(
+            SlashLogFloor::window(epoch, cap),
+            Some(BlockCount::from_raw(short)),
+            "the window a test derives its length from is the floor's own"
+        );
         // Under the window: no floor, nothing retires — the same answer as
         // the constant for a table no prune has touched.
         let none = SlashLogFloor::under(BlockHeight::from_raw(short - 1), epoch, cap);
