@@ -424,9 +424,9 @@ chain question and this one are independent: a chunk arity passes the first
 the chain question alone would have admitted it. The file already holds
 one key that fails the second — `segment_leaf_count` (25992, "NOT a
 tunable", const-asserted to `leaves_per_segment()`), a freeze-era constant
-(`PDM-Q12` retired the freeze 2026-09-18) that leaves the file when E4 /
-S-ARCH deletes the freeze (the FOLLOWUPS shard-partition row already
-schedules it). Grandfathered and scheduled, not precedent; recorded at the
+(`PDM-Q12` retired the freeze 2026-09-18) that leaves the file when the
+cutover deletes the freeze (`DEL-008`; the FOLLOWUPS shard-partition row
+already schedules it). Grandfathered and scheduled, not precedent; recorded at the
 key. And CEN-I4's input cap is **not** a counter-example: a network could set
 a different cap, so it passes the second test; its lesson (FOLLOWUPS `:33`)
 was that it arrived from a library unratified — a sourcing failure, the
