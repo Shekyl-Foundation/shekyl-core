@@ -38,9 +38,9 @@
 //! There is no `Ok(false)` for a caller to mishandle. Fail-closed.
 
 use crate::error::PqcVerifyError;
+use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::CryptoError;
 use ed25519_dalek::{
-    Signature as Ed25519Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey,
     PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH,
     SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
 };
@@ -65,6 +65,13 @@ pub const HYBRID_KEY_VERSION: u8 = 1;
 /// `HYBRID_KEY_VERSION` stays 1 — the *key* format is unchanged.
 pub const HYBRID_SIG_VERSION: u8 = 2;
 pub const HYBRID_SCHEME_ID_ED25519_ML_DSA_65: u8 = 1;
+/// Ed25519 + FN-DSA-1024 ([`crate::fn_dsa_hybrid`]): the receipt key and the
+/// witness carrier signature (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.2). Value 2
+/// is the multisig container ([`crate::multisig::HYBRID_SCHEME_ID_MULTISIG`]).
+///
+/// This byte is not a transaction authorization scheme: [`verify_pqc_auth`]
+/// refuses it, so a receipt key cannot sign for an output.
+pub const HYBRID_SCHEME_ID_ED25519_FN_DSA_1024: u8 = 3;
 
 /// Scheme-level domain-separation strings (SA-R-2): one distinct string per
 /// signing **surface**. Each is the outer domain of the nested combiner — a
@@ -109,6 +116,16 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
+/// A serve receipt, under scheme 3: `P`'s signature over the 112-byte
+/// delivery transcript with its **receipt key**
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
+/// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
+/// identity key and scheme 1: one label never names two schemes.
+pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
+/// The witness's signature over a carrier's set commitment, under scheme 3
+/// with a key generated fresh for the block (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §7.3).
+pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
 // generic surface-A `pqc_auths` slot (SCHEME_DOMAIN_PQC_AUTH_TX), which binds a
@@ -155,7 +172,7 @@ impl HybridPublicKey {
     /// the value the container layer (`multisig.rs`) and its DoS ceilings
     /// derive from, so the length is never written twice.
     pub const CANONICAL_LEN: usize =
-        1 + 1 + 2 + 4 + ED25519_PUBLIC_KEY_LENGTH + 4 + ML_DSA_65_PUBLIC_KEY_LENGTH;
+        CANONICAL_OVERHEAD + ED25519_PUBLIC_KEY_LENGTH + ML_DSA_65_PUBLIC_KEY_LENGTH;
 
     pub fn validate(&self) -> Result<(), CryptoError> {
         if self.ml_dsa.len() != ML_DSA_65_PUBLIC_KEY_LENGTH {
@@ -164,45 +181,25 @@ impl HybridPublicKey {
         Ok(())
     }
 
-    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
-    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
-
-        let mut out =
-            Vec::with_capacity(1 + 1 + 2 + 4 + self.ed25519.len() + 4 + self.ml_dsa.len());
-        out.push(HYBRID_KEY_VERSION);
-        out.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&(self.ed25519.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ed25519);
-        out.extend_from_slice(&(self.ml_dsa.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ml_dsa);
-        Ok(out)
+        Ok(encode_canonical(
+            HYBRID_KEY_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &self.ed25519,
+            &self.ml_dsa,
+        ))
     }
 
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let mut cursor = 0usize;
-        let version = read_u8(bytes, &mut cursor)?;
-        let scheme = read_u8(bytes, &mut cursor)?;
-        let reserved = read_u16(bytes, &mut cursor)?;
-        let ed_len = read_u32(bytes, &mut cursor)? as usize;
-        let ed_bytes = read_vec(bytes, &mut cursor, ed_len)?;
-        let ml_len = read_u32(bytes, &mut cursor)? as usize;
-        let ml_dsa = read_vec(bytes, &mut cursor, ml_len)?;
-
-        if cursor != bytes.len()
-            || version != HYBRID_KEY_VERSION
-            || scheme != HYBRID_SCHEME_ID_ED25519_ML_DSA_65
-            || reserved != 0
-            || ed_len != ED25519_PUBLIC_KEY_LENGTH
-            || ml_len != ML_DSA_65_PUBLIC_KEY_LENGTH
-        {
-            return Err(CryptoError::SerializationError(
-                "invalid canonical hybrid public key".into(),
-            ));
-        }
-
+        let (ed_bytes, ml_dsa) = decode_canonical(
+            bytes,
+            HYBRID_KEY_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            ED25519_PUBLIC_KEY_LENGTH,
+            ML_DSA_65_PUBLIC_KEY_LENGTH,
+            "invalid canonical hybrid public key",
+        )?;
         let ed25519: [u8; ED25519_PUBLIC_KEY_LENGTH] = ed_bytes
             .try_into()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
@@ -222,45 +219,25 @@ impl HybridSecretKey {
         Ok(())
     }
 
-    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
-    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
-
-        let mut out =
-            Vec::with_capacity(1 + 1 + 2 + 4 + self.ed25519.len() + 4 + self.ml_dsa.len());
-        out.push(HYBRID_KEY_VERSION);
-        out.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&(self.ed25519.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ed25519);
-        out.extend_from_slice(&(self.ml_dsa.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ml_dsa);
-        Ok(out)
+        Ok(encode_canonical(
+            HYBRID_KEY_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &self.ed25519,
+            &self.ml_dsa,
+        ))
     }
 
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let mut cursor = 0usize;
-        let version = read_u8(bytes, &mut cursor)?;
-        let scheme = read_u8(bytes, &mut cursor)?;
-        let reserved = read_u16(bytes, &mut cursor)?;
-        let ed_len = read_u32(bytes, &mut cursor)? as usize;
-        let ed25519 = read_vec(bytes, &mut cursor, ed_len)?;
-        let ml_len = read_u32(bytes, &mut cursor)? as usize;
-        let ml_dsa = read_vec(bytes, &mut cursor, ml_len)?;
-
-        if cursor != bytes.len()
-            || version != HYBRID_KEY_VERSION
-            || scheme != HYBRID_SCHEME_ID_ED25519_ML_DSA_65
-            || reserved != 0
-            || ed_len != ED25519_SECRET_KEY_LENGTH
-            || ml_len != ML_DSA_65_SECRET_KEY_LENGTH
-        {
-            return Err(CryptoError::SerializationError(
-                "invalid canonical hybrid secret key".into(),
-            ));
-        }
-
+        let (ed25519, ml_dsa) = decode_canonical(
+            bytes,
+            HYBRID_KEY_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            ED25519_SECRET_KEY_LENGTH,
+            ML_DSA_65_SECRET_KEY_LENGTH,
+            "invalid canonical hybrid secret key",
+        )?;
         let secret_key = Self { ed25519, ml_dsa };
         secret_key.validate()?;
         Ok(secret_key)
@@ -272,7 +249,7 @@ impl HybridSignature {
     /// `HybridPublicKey::CANONICAL_LEN`, sig-sized) = 3385. The container
     /// layer and its DoS ceilings derive from this const.
     pub const CANONICAL_LEN: usize =
-        1 + 1 + 2 + 4 + ED25519_SIGNATURE_LENGTH + 4 + ML_DSA_65_SIGNATURE_LENGTH;
+        CANONICAL_OVERHEAD + ED25519_SIGNATURE_LENGTH + ML_DSA_65_SIGNATURE_LENGTH;
 
     pub fn validate(&self) -> Result<(), CryptoError> {
         if self.ed25519.len() != ED25519_SIGNATURE_LENGTH
@@ -285,62 +262,56 @@ impl HybridSignature {
         Ok(())
     }
 
-    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
-    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
-
-        let mut out =
-            Vec::with_capacity(1 + 1 + 2 + 4 + self.ed25519.len() + 4 + self.ml_dsa.len());
-        out.push(HYBRID_SIG_VERSION);
-        out.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&(self.ed25519.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ed25519);
-        out.extend_from_slice(&(self.ml_dsa.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.ml_dsa);
-        Ok(out)
+        Ok(encode_canonical(
+            HYBRID_SIG_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &self.ed25519,
+            &self.ml_dsa,
+        ))
     }
 
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let mut cursor = 0usize;
-        let version = read_u8(bytes, &mut cursor)?;
-        let scheme = read_u8(bytes, &mut cursor)?;
-        let reserved = read_u16(bytes, &mut cursor)?;
-        let ed_len = read_u32(bytes, &mut cursor)? as usize;
-        let ed25519 = read_vec(bytes, &mut cursor, ed_len)?;
-        let ml_len = read_u32(bytes, &mut cursor)? as usize;
-        let ml_dsa = read_vec(bytes, &mut cursor, ml_len)?;
-
-        if cursor != bytes.len()
-            || version != HYBRID_SIG_VERSION
-            || scheme != HYBRID_SCHEME_ID_ED25519_ML_DSA_65
-            || reserved != 0
-            || ed_len != ED25519_SIGNATURE_LENGTH
-            || ml_len != ML_DSA_65_SIGNATURE_LENGTH
-        {
-            return Err(CryptoError::SerializationError(
-                "invalid canonical hybrid signature".into(),
-            ));
-        }
-
+        let (ed25519, ml_dsa) = decode_canonical(
+            bytes,
+            HYBRID_SIG_VERSION,
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            ED25519_SIGNATURE_LENGTH,
+            ML_DSA_65_SIGNATURE_LENGTH,
+            "invalid canonical hybrid signature",
+        )?;
         let signature = Self { ed25519, ml_dsa };
         signature.validate()?;
         Ok(signature)
     }
 }
 
+/// A hybrid signature scheme: the nested combiner over Ed25519 and one
+/// post-quantum algorithm (the private `hybrid_combiner` module).
+///
+/// The key and signature types are the scheme's own. Two schemes share the
+/// trait and the combiner and nothing else: a key or signature of one is a
+/// different type from the other's, so handing an ML-DSA signature to an
+/// FN-DSA verifier is a compile error rather than a parse refusal.
 pub trait SignatureScheme {
+    /// The scheme's canonical public key.
+    type PublicKey;
+    /// The scheme's secret key.
+    type SecretKey;
+    /// The scheme's canonical signature.
+    type Signature;
+
     /// Sign `message` under scheme-level `domain` (SA-R-2). The domain is a
     /// required parameter — there is no bare-message signing path — and it is
     /// the outer domain of the nested combiner, distinct from any inner
     /// customization the caller applied to build `message`.
     fn sign(
         &self,
-        secret_key: &HybridSecretKey,
+        secret_key: &Self::SecretKey,
         domain: &[u8],
         message: &[u8],
-    ) -> Result<HybridSignature, CryptoError>;
+    ) -> Result<Self::Signature, CryptoError>;
     /// Verify a signature, returning `Ok(())` on success and `Err` on any
     /// failure — malformed inputs, a failed component, or a wrong signature.
     ///
@@ -350,57 +321,21 @@ pub trait SignatureScheme {
     /// Do not restore a boolean return.
     fn verify(
         &self,
-        public_key: &HybridPublicKey,
+        public_key: &Self::PublicKey,
         domain: &[u8],
         message: &[u8],
-        signature: &HybridSignature,
+        signature: &Self::Signature,
     ) -> Result<(), CryptoError>;
 }
 
 pub struct HybridEd25519MlDsa;
 
 impl HybridEd25519MlDsa {
-    /// The scheme's domain-separated inner preimage (SA-R-1 / SA-R-5):
-    /// `cSHAKE256-64(customization = domain, input = scheme_id ‖ message)`.
-    ///
-    /// Binding the scheme id in the signed bytes closes the cross-scheme
-    /// confusion the round found (a signature's input no longer depends only
-    /// on the message); the `domain` customization separates surfaces. The PQ
-    /// half signs this digest; the classical half signs `digest ‖ σ_pq`.
-    ///
-    /// The width is 64 bytes, not 32: this digest is the signed content, so
-    /// its collision resistance bounds the whole scheme's unforgeability
-    /// against a counterparty who influences message bytes (see the module
-    /// docs). Do not narrow it.
-    ///
-    /// Empty `domain` is refused: the underlying cSHAKE helper would assert,
-    /// and a consensus API must fail closed with `Err`, not abort.
-    fn preimage(domain: &[u8], message: &[u8]) -> Result<[u8; 64], CryptoError> {
-        if domain.is_empty() {
-            return Err(CryptoError::InvalidInput(
-                "scheme domain must be non-empty".into(),
-            ));
-        }
-        let mut framed = Vec::with_capacity(1 + message.len());
-        framed.push(HYBRID_SCHEME_ID_ED25519_ML_DSA_65);
-        framed.extend_from_slice(message);
-        Ok(shekyl_crypto_hash::cshake256_64(domain, &framed))
-    }
-
-    /// The classical-outer message: `inner ‖ σ_pq`. Load-bearing framing —
-    /// the exact bytes Ed25519 signs — single-sourced so sign and verify
-    /// cannot drift (the same reason [`Self::sign_nested`] exists).
-    fn outer_message(inner: &[u8; 64], sigma_pq: &[u8]) -> Vec<u8> {
-        let mut outer = Vec::with_capacity(inner.len() + sigma_pq.len());
-        outer.extend_from_slice(inner);
-        outer.extend_from_slice(sigma_pq);
-        outer
-    }
-
-    /// Single nested-sign body (SA-R-1). Production [`SignatureScheme::sign`]
-    /// and the deterministic bench path both call this — the only free
-    /// parameter is how the PQ half is drawn (hedged OsRng vs fixed seed).
-    /// Nesting order, preimage, and outer framing therefore cannot drift.
+    /// The nested sign with this scheme's post-quantum half
+    /// ([`hybrid_combiner::sign_nested`]). Production
+    /// [`SignatureScheme::sign`] and the deterministic bench path both call
+    /// this; the only free parameter is how the ML-DSA half is drawn (hedged
+    /// `OsRng` or a fixed seed).
     fn sign_nested(
         secret_key: &HybridSecretKey,
         domain: &[u8],
@@ -426,20 +361,19 @@ impl HybridEd25519MlDsa {
                 .try_into()
                 .map_err(|_| CryptoError::InvalidKeyMaterial)?,
         );
-
-        let signing_key = SigningKey::from_bytes(&ed25519_secret);
         let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
 
-        // Nested combiner: PQ-inner, Ed25519-outer. Load-bearing — do not flip.
-        let inner = Self::preimage(domain, message)?;
-        let ml_dsa_signature = sign_pq(&ml_dsa_private, &inner)?;
-        // Classical half signs `inner ‖ σ_pq`. A verifier that skips the PQ
-        // half cannot reconstruct this outer message (fails-closed).
-        let ed25519_signature = signing_key.sign(&Self::outer_message(&inner, &ml_dsa_signature));
+        let (ed25519_signature, ml_dsa_signature) = hybrid_combiner::sign_nested(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &ed25519_secret,
+            domain,
+            message,
+            |inner| sign_pq(&ml_dsa_private, inner),
+        )?;
 
         Ok(HybridSignature {
-            ed25519: ed25519_signature.to_bytes().to_vec(),
+            ed25519: ed25519_signature.to_vec(),
             ml_dsa: ml_dsa_signature.to_vec(),
         })
     }
@@ -456,7 +390,7 @@ impl HybridEd25519MlDsa {
     pub fn generate_ephemeral_keypair_for_tests(
         &self,
     ) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         let verifying_key = signing_key.verifying_key();
         let (ml_dsa_public, ml_dsa_secret) =
             ml_dsa_65::try_keygen().map_err(|e| CryptoError::KeyGenerationFailed(e.into()))?;
@@ -491,6 +425,10 @@ impl HybridEd25519MlDsa {
 }
 
 impl SignatureScheme for HybridEd25519MlDsa {
+    type PublicKey = HybridPublicKey;
+    type SecretKey = HybridSecretKey;
+    type Signature = HybridSignature;
+
     fn sign(
         &self,
         secret_key: &HybridSecretKey,
@@ -514,85 +452,35 @@ impl SignatureScheme for HybridEd25519MlDsa {
         public_key.validate()?;
         signature.validate()?;
 
-        let ed25519_verifying_key = VerifyingKey::from_bytes(&public_key.ed25519)
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let ed25519_signature = Ed25519Signature::try_from(signature.ed25519.as_slice())
-            .map_err(|_| CryptoError::SignatureVerificationFailed)?;
-
-        let ml_dsa_public: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = public_key
-            .ml_dsa
-            .clone()
-            .try_into()
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let ml_dsa_signature: [u8; ML_DSA_65_SIGNATURE_LENGTH] = signature
-            .ml_dsa
-            .clone()
-            .try_into()
-            .map_err(|_| CryptoError::SignatureVerificationFailed)?;
-
-        let ml_dsa_public_key = ml_dsa_65::PublicKey::try_from_bytes(ml_dsa_public)
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
-
-        let inner = Self::preimage(domain, message)?;
-        // Verify the PQ inner first (fails-closed order): the classical outer
-        // is meaningless if the PQ half it wraps is not itself valid.
-        if !ml_dsa_public_key.verify(&inner, &ml_dsa_signature, &[]) {
-            return Err(CryptoError::SignatureVerificationFailed);
-        }
-        ed25519_verifying_key
-            .verify(
-                &Self::outer_message(&inner, &ml_dsa_signature),
-                &ed25519_signature,
-            )
-            .map_err(|_| CryptoError::SignatureVerificationFailed)?;
-        Ok(())
+        hybrid_combiner::verify_nested(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &hybrid_combiner::NestedSignature {
+                ed25519_public: &public_key.ed25519,
+                ed25519_signature: &signature.ed25519,
+                sigma_pq: &signature.ml_dsa,
+            },
+            domain,
+            message,
+            || {
+                let ml_dsa_public: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = public_key
+                    .ml_dsa
+                    .clone()
+                    .try_into()
+                    .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+                ml_dsa_65::PublicKey::try_from_bytes(ml_dsa_public)
+                    .map_err(|e| CryptoError::SerializationError(e.into()))
+            },
+            |ml_dsa_public_key, inner, sigma_pq| {
+                // The header check above already fixed this length. A slice
+                // that is not the ML-DSA signature size fails closed here.
+                let Ok(ml_dsa_signature) = <[u8; ML_DSA_65_SIGNATURE_LENGTH]>::try_from(sigma_pq)
+                else {
+                    return false;
+                };
+                ml_dsa_public_key.verify(inner, &ml_dsa_signature, &[])
+            },
+        )
     }
-}
-
-fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, CryptoError> {
-    if *cursor + 1 > bytes.len() {
-        return Err(CryptoError::SerializationError(
-            "truncated canonical encoding".into(),
-        ));
-    }
-    let v = bytes[*cursor];
-    *cursor += 1;
-    Ok(v)
-}
-
-fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, CryptoError> {
-    if *cursor + 2 > bytes.len() {
-        return Err(CryptoError::SerializationError(
-            "truncated canonical encoding".into(),
-        ));
-    }
-    let mut buf = [0u8; 2];
-    buf.copy_from_slice(&bytes[*cursor..*cursor + 2]);
-    *cursor += 2;
-    Ok(u16::from_le_bytes(buf))
-}
-
-fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, CryptoError> {
-    if *cursor + 4 > bytes.len() {
-        return Err(CryptoError::SerializationError(
-            "truncated canonical encoding".into(),
-        ));
-    }
-    let mut buf = [0u8; 4];
-    buf.copy_from_slice(&bytes[*cursor..*cursor + 4]);
-    *cursor += 4;
-    Ok(u32::from_le_bytes(buf))
-}
-
-fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, CryptoError> {
-    if *cursor + len > bytes.len() {
-        return Err(CryptoError::SerializationError(
-            "truncated canonical encoding".into(),
-        ));
-    }
-    let out = bytes[*cursor..*cursor + len].to_vec();
-    *cursor += len;
-    Ok(out)
 }
 
 /// One transaction `pqc_auths` slot's signature, verified — **the** body
@@ -828,7 +716,7 @@ mod tests {
 
         // Recompute the inner preimage the PQ half signed and check the ML-DSA
         // component directly: empty ctx verifies, a non-empty ctx does not.
-        let inner = HybridEd25519MlDsa::preimage(D, msg).unwrap();
+        let inner = hybrid_combiner::preimage(HYBRID_SCHEME_ID_ED25519_ML_DSA_65, D, msg).unwrap();
         let ml_pk_bytes: [u8; ML_DSA_65_PUBLIC_KEY_LENGTH] = pk.ml_dsa.clone().try_into().unwrap();
         let ml_sig: [u8; ML_DSA_65_SIGNATURE_LENGTH] = sig.ml_dsa.clone().try_into().unwrap();
         let ml_pk = ml_dsa_65::PublicKey::try_from_bytes(ml_pk_bytes).unwrap();

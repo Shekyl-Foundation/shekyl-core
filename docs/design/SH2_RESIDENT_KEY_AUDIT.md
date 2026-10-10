@@ -12,7 +12,7 @@ slice; item 3's SH-2 closure criterion); `ARCHIVAL_SHARD_FETCH.md` `SF-D13`
 ("injection, not custody"; "named residency"); `BENCHMARK_ALIGNMENT.md` §S
 (the open question this slice answers); `FOLLOWUPS.md` *Daemon shard-fetch
 client (`SF-` round)* → SH-2 bullet (the TJ-D counters surface rides here);
-`IMPLEMENTATION_INDEX.md` `SH-1…SH-2`.
+`IMPLEMENTATION_INDEX.md` `SH-1…SH-3`.
 
 This is the rule-26 Round 0 record for the SH-2 remainder: wiring the
 persona's resident `hybrid_sign_sk` as the `PassKey` that `engine-core`
