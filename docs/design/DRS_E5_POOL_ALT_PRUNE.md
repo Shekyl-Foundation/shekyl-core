@@ -382,7 +382,9 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   test tree) each gaining `HeaderView`, and
   `scripts/ci/check_block_rule_corrupt_sites.py`, whose `IMPL_RE` reads
   `impl BlockRule for X` (`:101`) and must read the header-rule impl too
-  or its enumerated set shrinks under its floor. The measured
+  or its enumerated set shrinks under its floor (measured at a2: it did,
+  15 → 11 under a floor of 10, green; a2 derives the trait set from the
+  blanket impl instead — §5). The measured
   `HeaderView` is **two methods, not four**: `tip` and `header_at`.
   `height_of` and `depth_at` are header facts by classification and have
   no cheap-tier caller (`tx_against.rs:259/:424` only — I-rows, promotion);

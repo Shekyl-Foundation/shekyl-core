@@ -849,9 +849,15 @@ stored bond key that is not canonical is `ViewRead::Corrupt`. `validate`
 maps that into `Fault` once (`Fault::from`). The type over-claims — every
 block rule *can* halt the writer by its signature, and only B4 does — so the
 claim is held by a falsifier rather than a comment:
-`scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each `impl
-BlockRule` body for a way `Corrupt` can enter its error and refuses unless
-the set with a site is exactly `{B4}`. A transaction rule's error stays
+`scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each rule impl
+body — `impl BlockRule for X` and `impl HeaderRule for X` alike, the trait
+set derived from the blanket impl rather than listed — for a way `Corrupt`
+can enter its error and refuses unless the set with a site is exactly
+`{B4}`. A rule that reads header facts only is a `HeaderRule`
+(`check<'id, H: HeaderView<'id>>(cx, view) -> Result<Verdict<()>,
+ViewRead<H::Fault>>`), made a `BlockRule` by `impl<R: HeaderRule> BlockRule
+for R` so `run` composes it unchanged (DRS-E5 a2, 2026-10-10: D1, C1, C2,
+E1). A transaction rule's error stays
 `V::Fault`; `tx_against` widens to `ViewRead` at its own boundary, where I12
 already did. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx **at the slot each occupies** — both stages derive at the slot they
@@ -1312,8 +1318,19 @@ strips `//` comments, collects every function whose return type is
 `Result<…, ViewRead<…>>` (the lifting functions; `recorded` must be among
 them or the gate refuses its own subject) and every function whose return
 type is `ViewRead` itself (the converters: `parent_read`,
-`record_invariant`), then walks each balanced `impl BlockRule for X {}`
-body. A site is the path `ViewRead::Corrupt` in either form the crate
+`record_invariant`), then walks each balanced rule impl body — `impl T for X
+{}` for every rule trait `T`. **The rule traits are derived, not listed**
+(DRS-E5 a2, 2026-10-10): `BlockRule`, whose declaration must exist, plus
+every trait a blanket impl lifts into one, to a fixed point
+(`impl<R: HeaderRule> BlockRule for R` — in either the bound or the
+`where` form — adds `HeaderRule`). The derivation asserts itself: the gate
+independently finds every `fn check` with a rule's signature
+(`-> Result<Verdict<()>, ViewRead<…>>`), under a `trait` declaration or an
+`impl … for`, and refuses (exit 2) when that trait is not in the derived
+set — a third rule form reached by no blanket impl is a red run, not a
+quiet shortfall. The shortfall is what prompted this: with `IMPL_RE` reading
+only `impl BlockRule for X`, the four `HeaderRule`s of a2 dropped the count
+from 15 to 11 under a floor of 10, green. A site is the path `ViewRead::Corrupt` in either form the crate
 writes — the call `ViewRead::Corrupt(…)` or the constructor passed as a
 function, `map_err(ViewRead::Corrupt)`, which is how the archival folds
 lift a `Corrupt` — unless that path opens a match arm
@@ -1337,14 +1354,22 @@ message opening with "if the halt is intended, add it" invited whitelisting
 the defect. The same sentence is what a reader needs at a match guard on the
 variant (`ViewRead::Corrupt(c) if … =>`), which the walk counts as a site: a
 guard that stops the halt is consumption, not a false positive (reworded
-2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `impl BlockRule`,
-fewer than ten of them, no lifting function, `recorded` not a lifter.
-`--describe` prints every rule's sites; `--selftest` bites each refusal on
-synthetic sources, including `map_err(ViewRead::Corrupt)?` and
-`map_err(parent_read)?`, and proves the non-sites stay clean: a refusal
+2026-10-07, the I13/I15 carrier PR's first commit). Subject refusals exit 2: no rule sources, no `trait BlockRule`,
+no rule impl in any derived form, fewer than fourteen of them summed over
+the forms (15 at a2: 11 + 4), a rule-shaped `check` under an unreached
+trait, no lifting function, `recorded` not a lifter.
+`--describe` prints every rule's sites and the count per form; `--selftest`
+bites each refusal on synthetic sources (23 at a2), including
+`map_err(ViewRead::Corrupt)?` and `map_err(parent_read)?`, the three probes
+on a `HeaderRule` (a direct `Err(ViewRead::Corrupt(..))`, a `?` on an
+unlisted `ViewRead`-returning helper, the same helper in another module),
+the blanket impl removed, and a third form declared without one; and
+proves the non-sites stay clean: a refusal
 built inside a `match`, `Err(_) =>` and `ViewRead::Corrupt(c) =>` as
-patterns, `map_err(ViewRead::View)?`, and `Vec::extend` sharing a lifting
-method's name. Wired as two steps in `docs-gates.yml` after the §6.4 pair,
+patterns, `map_err(ViewRead::View)?`, `Vec::extend` sharing a lifting
+method's name, and the `where`-clause blanket form. The same three probes
+were planted in D1 (a `HeaderRule`) on the real tree at a2: each exit 1
+naming `rules/pow.rs`. Wired as two steps in `docs-gates.yml` after the §6.4 pair,
 same append pattern. Falsified on the real tree before landing: a
 `recorded(view, cx.connecting)?` planted in G1 produced `block rule G1 can
 produce ViewRead::Corrupt (rules/body.rs:181 recorded(…)?)`, exit 1. The
