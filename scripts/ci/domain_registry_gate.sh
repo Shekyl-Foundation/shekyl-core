@@ -296,7 +296,16 @@ count_pattern() {
 # `issued_draw_term` (shekyl/archival-issued-index-v1, one draw's term in
 # its epoch's digest). The tests call those through `select_counted` and
 # `issued_draw_term`; none adds a site.
-MECH1_EXPECTED=63
+# Slice C (2026-10-10): 63 -> 69. Four production sites in
+# rust/shekyl-archival-retention/src/secret_draw.rs -- `stream`
+# (shekyl/archival-draw-v1), `draw_commit` (shekyl/archival-draw-commit-v1),
+# `challenge_nonce` (shekyl/archival-challenge-nonce-v1), and
+# `serve_credit_batch_commitment` (shekyl/archival-serve-credit-batch-v1) --
+# plus two production sites 2c landed in rust/shekyl-p-store/src/store.rs
+# (`derive_store_key` / `slot_key`; shekyl/p-store-aead-v1,
+# shekyl/p-store-slot-v1) that this pin records with the labels.
+# The tests call those through the public functions; none adds a site.
+MECH1_EXPECTED=69
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

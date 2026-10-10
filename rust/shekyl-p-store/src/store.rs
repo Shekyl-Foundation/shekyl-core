@@ -33,6 +33,13 @@ const SALT_LEN: usize = 16;
 
 const SCHEMA_CELL: &str = "schema";
 
+/// cSHAKE256 customization for [`derive_store_key`] (rule 30: one label,
+/// one function, versioned).
+pub const STORE_AEAD_CUSTOMIZATION: &[u8] = b"shekyl/p-store-aead-v1";
+
+/// cSHAKE256 customization for the per-shard table slot.
+pub const STORE_SLOT_CUSTOMIZATION: &[u8] = b"shekyl/p-store-slot-v1";
+
 /// The single store key. Derived from the wallet's existing hierarchy
 /// ([`derive_store_key`]); never a per-shard key (`WSS-Q12` rejected
 /// per-shard wrapping).
@@ -57,7 +64,7 @@ impl StoreKey {
 /// loud AEAD miss rather than a decode at a random offset.
 #[must_use]
 pub fn derive_store_key(file_kek: &[u8; KEY_SIZE]) -> StoreKey {
-    StoreKey(cshake256_32(b"shekyl/p-store-aead-v1", file_kek))
+    StoreKey(cshake256_32(STORE_AEAD_CUSTOMIZATION, file_kek))
 }
 
 pub(crate) struct Inner {
@@ -268,7 +275,7 @@ fn slot_key(store_key: &[u8; KEY_SIZE], shard_id: ShardId) -> [u8; 32] {
     let mut input = [0u8; KEY_SIZE + 8];
     input[..KEY_SIZE].copy_from_slice(store_key);
     input[KEY_SIZE..].copy_from_slice(&shard_id.to_raw().to_le_bytes());
-    cshake256_32(b"shekyl/p-store-slot-v1", &input)
+    cshake256_32(STORE_SLOT_CUSTOMIZATION, &input)
 }
 
 fn chunk_key(slot: &[u8; 32], index: u64) -> [u8; CHUNK_KEY_LEN] {
