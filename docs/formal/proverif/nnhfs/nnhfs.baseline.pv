@@ -11,7 +11,8 @@ free c: channel.
 free hs: channel [private].
 
 const protocol_name: bitstring.
-(* Network ids are public: the first 16 bytes of the genesis hash. Two of
+(* Network ids are public: the first 16 bytes of cSHAKE256(S = NETWORK_ID_DST,
+   X = genesis block hash) (prefix.rs, `network_id_from_genesis`). Two of
    them, so a handshake across networks can be asked about. *)
 free nidA: bitstring.
 free nidB: bitstring.
@@ -43,13 +44,12 @@ let Initiator(nid: bitstring, link: channel, req: bitstring, leak: bool) =
   let dh = exp(re, ei) in
   let ck1 = kdfck(ck0, p2b(dh)) in
   let k1 = kdfk(ck0, p2b(dh)) in
-  let ct2b(ct) = adec(k1, n0, h2, cct) in
-  let h3 = mixh(h2, cct) in
+  let (ctb: bitstring, h3: bitstring) = dah(k1, n0, h2, cct) in
+  let ct2b(ct) = ctb in
   let ss = kdecaps(ct, eki) in
   let ck2 = kdfck(ck1, ss) in
   let k2 = kdfk(ck1, ss) in
-  let (=empty) = adec(k2, n0, h3, tag) in
-  let h4 = mixh(h3, tag) in
+  let (=empty, h4: bitstring) = dah(k2, n0, h3, tag) in
   let k_i2r = split1(ck2) in
   let k_r2i = split2(ck2) in
   event InitiatorDone(nid, k_i2r, k_r2i);

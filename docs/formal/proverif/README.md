@@ -52,7 +52,9 @@ library by replacing its prelude with `-lib` and nothing else.
 ## The NNhfs model — `nnhfs/run.py`
 
 Follows `rust/shekyl-p2p-transport/src/noise.rs` exactly: both sides start
-`h = ck = HASH(protocol_name)` and `MixHash(network_id)` — the prologue;
+`h = ck = HASH(protocol_name)` and `MixHash(network_id)` — the prologue, the
+network id being the first 16 bytes of a domain-separated cSHAKE256 of the
+genesis block hash (`prefix.rs`);
 message 1 is `e, ekem` hashed only (no key yet) and the empty payload
 mixed; message 2 is `e`, `MixKey(ee)`, `EncryptAndHash(ekem ct)`,
 `MixKey(ss)`, `EncryptAndHash(empty)`; `Split` is `HKDF(ck, empty)`.

@@ -105,6 +105,12 @@ reduc forall k: key, n: bitstring, ad: bitstring, m: bitstring;
 letfun eah(k: key, n: bitstring, h: bitstring, m: bitstring) =
   let ct = aead(k, n, h, m) in (ct, mixh(h, ct)).
 
+(* DecryptAndHash: the plaintext and h'. Fails as `adec` fails, so a
+   `let (m, h') = dah(...) in P else Q` takes Q on a ciphertext that does not
+   open under this key, nonce and transcript. *)
+letfun dah(k: key, n: bitstring, h: bitstring, ct: bitstring) =
+  let m = adec(k, n, h, ct) in (m, mixh(h, ct)).
+
 (* ---------------------------------------------------------------------- *)
 (* Type converters, so public keys and ciphertexts can be hashed and sent as
    byte strings without a model inventing an encoding. `[data]` makes them

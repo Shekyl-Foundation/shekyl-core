@@ -91,7 +91,8 @@ free c: channel.
 free hs: channel [private].
 
 const protocol_name: bitstring.
-(* Network ids are public: the first 16 bytes of the genesis hash. Two of
+(* Network ids are public: the first 16 bytes of cSHAKE256(S = NETWORK_ID_DST,
+   X = genesis block hash) (prefix.rs, `network_id_from_genesis`). Two of
    them, so a handshake across networks can be asked about. *)
 free nidA: bitstring.
 free nidB: bitstring.
@@ -145,7 +146,7 @@ def protocol(edits, breaks, leak_prefix):
     else:
         i_ee = f"  let dh = {dh_i} in\n  let ck1 = kdfck(ck0, p2b(dh)) in\n  let k1 = kdfk(ck0, p2b(dh)) in"
         r_ee = f"  let dh = {dh_r} in\n  let ck1 = kdfck(ck0, p2b(dh)) in\n  let k1 = kdfk(ck0, p2b(dh)) in"
-        i_ct = "  let ct2b(ct) = adec(k1, n0, h2, cct) in\n  let h3 = mixh(h2, cct) in"
+        i_ct = "  let (ctb: bitstring, h3: bitstring) = dah(k1, n0, h2, cct) in\n  let ct2b(ct) = ctb in"
         r_ct = "  let (cct: bitstring, h3: bitstring) = eah(k1, n0, h2, ct2b(ct)) in"
 
     # ekem: the ML-KEM secret mixed in, or broken, or (edit) no ciphertext.
@@ -173,7 +174,7 @@ def protocol(edits, breaks, leak_prefix):
         r_tag = "  let tag = empty in\n  let h4 = mixh(h3, tag) in"
         r_kem_post = "  let ck2 = ck1 in" if not no_ekem else ""
     else:
-        i_tag = f"  let (=empty) = adec({tag_key}, {tag_nonce}, h3, tag) in\n  let h4 = mixh(h3, tag) in"
+        i_tag = f"  let (=empty, h4: bitstring) = dah({tag_key}, {tag_nonce}, h3, tag) in"
         r_tag = f"  let (tag: bitstring, h4: bitstring) = eah({tag_key}, {tag_nonce}, h3, empty) in"
         r_kem_post = "" if no_ekem else "  let ck2 = kdfck(ck1, ss) in\n  let k2 = kdfk(ck1, ss) in"
 
@@ -334,7 +335,10 @@ def proverif_binary():
     except FileNotFoundError:
         sys.exit(f"run.py: no proverif on PATH (set PROVERIF=...); install with ../install_proverif.sh")
     banner = (out.stdout + out.stderr).splitlines()[0] if (out.stdout + out.stderr) else ""
-    if not banner.startswith(f"Proverif {PROVERIF_VERSION}"):
+    # The banner is "Proverif <version>. Cryptographic protocol verifier, ...".
+    # The whole version token is compared, so 2.05pl1 is not 2.05.
+    found = re.match(r"^Proverif (\S+)\. ", banner)
+    if not found or found.group(1) != PROVERIF_VERSION:
         sys.exit(f"run.py: pinned to ProVerif {PROVERIF_VERSION}, found: {banner!r}")
     return exe
 
@@ -362,7 +366,9 @@ def run_variant(exe, workdir, row):
         m = RESULT.match(line.strip())
         if m:
             results.append({"is true": "true", "is false": "false", "cannot be proved": "unproved"}[m.group(2)])
-    if rc != 0 and not results:
+    # Every nonzero exit is a failure, verdicts or not: a verifier that
+    # printed its results and then died has not finished its check.
+    if rc != 0:
         return name, {}, expected, f"proverif exited {rc}:\n{out[-3000:]}", time.monotonic() - started
     # ProVerif reports results in query order.
     got = dict(zip(expected.keys(), results))
@@ -394,9 +400,13 @@ def main():
             print(f"{name:26} main={mainp:9} edits={','.join(sorted(edits)) or '-':22} breaks={','.join(sorted(breaks)) or '-':8} expects {expected}")
         return 0
 
-    # The committed baseline must be what the generator produces.
-    if BASELINE.exists() and BASELINE.read_text(encoding="utf-8") != render(*VARIANTS[0]):
-        print("run.py: nnhfs.baseline.pv is stale; run --write-baseline and commit it", file=sys.stderr)
+    # The committed baseline must exist and be what the generator produces
+    # (rule 47: a missing subject fails, it does not pass).
+    if not BASELINE.exists():
+        print(f"run.py: {BASELINE.name} is missing; run --write-baseline and commit it", file=sys.stderr)
+        return 1
+    if BASELINE.read_text(encoding="utf-8") != render(*VARIANTS[0]):
+        print(f"run.py: {BASELINE.name} is stale; run --write-baseline and commit it", file=sys.stderr)
         return 1
 
     exe = proverif_binary()

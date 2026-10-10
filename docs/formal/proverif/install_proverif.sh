@@ -21,6 +21,11 @@
 # Every download is checked against a SHA-256 recorded here before it is
 # used.
 #
+# The opam repository is pinned to one revision, so a fresh install at a
+# later date resolves the same packages: exact package names alone do not
+# pin the repository's mutable metadata or the transitive solution, and the
+# CI cache key hashes this script, so the pin takes part in it.
+#
 # Usage:  install_proverif.sh PREFIX
 # Result: PREFIX/proverif2.05/proverif   (add that directory to PATH)
 
@@ -36,6 +41,20 @@ OPAM_SHA256="324e78e3f33efeba279aacf9f9610cfec7b2df7d7e0e1640f75f09de85f96cc9"
 OCAML_COMPILER="ocaml-base-compiler.4.14.2"
 OCAMLFIND="ocamlfind.1.9.8"
 OCAMLBUILD="ocamlbuild.0.16.1"
+OPAM_REPO_URL="https://github.com/ocaml/opam-repository.git"
+OPAM_REPO_REV="2aed95b093c97857aa873e1e949e712f397f6fa7"
+
+# The banner's first line is "Proverif <version>. ...". Captured, then
+# matched: a `grep -q` reading the binary's output directly can close the
+# pipe early and fail a good binary under pipefail (46-shell-gate-exits).
+is_pinned_proverif() {
+  local banner
+  banner="$("$1" -help 2>&1 || true)"
+  case "${banner}" in
+    "Proverif ${PROVERIF_VERSION}."*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 if [ "$(uname -s)-$(uname -m)" != "Linux-x86_64" ]; then
   echo "install_proverif.sh: this recipe pins an x86_64 Linux opam binary; got $(uname -s)-$(uname -m)" >&2
@@ -46,7 +65,7 @@ fi
 mkdir -p "${PREFIX}"
 PREFIX="$(cd "${PREFIX}" && pwd)"
 BINARY="${PREFIX}/proverif${PROVERIF_VERSION}/proverif"
-if [ -x "${BINARY}" ] && "${BINARY}" -help 2>&1 | grep -q "^Proverif ${PROVERIF_VERSION}\."; then
+if [ -x "${BINARY}" ] && is_pinned_proverif "${BINARY}"; then
   echo "install_proverif.sh: ${BINARY} is already ProVerif ${PROVERIF_VERSION}"
   exit 0
 fi
@@ -78,8 +97,12 @@ export OPAMCOLOR=never
 # Sandboxing needs bubblewrap and unprivileged user namespaces, which a CI
 # container may not grant. The packages built are the pinned compiler and two
 # build tools, fetched from the opam repository.
-[ -d "${OPAMROOT}" ] || "${OPAM}" init --bare --no-setup --disable-sandboxing
-"${OPAM}" switch list --short | grep -qx pv || "${OPAM}" switch create pv "${OCAML_COMPILER}"
+[ -d "${OPAMROOT}" ] || "${OPAM}" init --bare --no-setup --disable-sandboxing default "${OPAM_REPO_URL}#${OPAM_REPO_REV}"
+switches="$("${OPAM}" switch list --short)"
+case "${switches}" in
+  pv|pv$'\n'*|*$'\n'pv|*$'\n'pv$'\n'*) ;;
+  *) "${OPAM}" switch create pv "${OCAML_COMPILER}" ;;
+esac
 "${OPAM}" install --switch pv "${OCAMLFIND}" "${OCAMLBUILD}"
 
 fetch "${PROVERIF_URL}" "${PROVERIF_SHA256}" "proverif${PROVERIF_VERSION}.tar.gz"
@@ -89,7 +112,7 @@ cd "proverif${PROVERIF_VERSION}"
 eval "$("${OPAM}" env --switch pv --set-switch)"
 ./build -nointeract
 
-if ! "${BINARY}" -help 2>&1 | grep -q "^Proverif ${PROVERIF_VERSION}\."; then
+if ! is_pinned_proverif "${BINARY}"; then
   echo "install_proverif.sh: the build did not produce ProVerif ${PROVERIF_VERSION} at ${BINARY}" >&2
   exit 1
 fi
