@@ -254,18 +254,40 @@ def scan(root: Path, label: str = "") -> tuple[list[str], list[str]]:
     return production, tests
 
 
-def scan_all(roots: tuple[tuple[str, Path], ...]) -> tuple[list[str], list[str]]:
+def scan_all(
+    roots: tuple[tuple[str, Path], ...],
+) -> tuple[list[str], list[str], list[str]]:
+    """Hits across `roots`, and the labels of roots that are not directories.
+
+    A missing root is reported, not skipped: `scan` returns nothing for a
+    path that is not there, so without this a renamed or mistyped crate
+    path would leave the gate green on the other root's hits alone
+    (rule 47).
+    """
     production: list[str] = []
     tests: list[str] = []
+    missing: list[str] = []
     for label, root in roots:
+        if not root.is_dir():
+            missing.append(label)
+            continue
         found_production, found_tests = scan(root, label)
         production.extend(found_production)
         tests.extend(found_tests)
-    return production, tests
+    return production, tests, missing
 
 
-def judge(production: list[str], tests: list[str]) -> int:
+def judge(production: list[str], tests: list[str], missing: list[str] = ()) -> int:
     failed = False
+    if missing:
+        print(
+            "relay connector gate: a configured source root is not a directory; "
+            "the subject moved or the path is wrong",
+            file=sys.stderr,
+        )
+        for label in missing:
+            print(label, file=sys.stderr)
+        failed = True
     if production:
         print("relay connector gate: a production file names a connector", file=sys.stderr)
         for hit in production:
@@ -330,10 +352,19 @@ def selftest() -> int:
                 "fn prod() { let _ = ConnectorId::Tor; }\n",
                 encoding="utf-8",
             )
-            production, tests = scan_all((("first", root), ("second", second)))
-            if judge(production, tests) == 0 or production != ["second/stem_map/mod.rs:1"]:
+            production, tests, missing = scan_all((("first", root), ("second", second)))
+            if (
+                missing
+                or judge(production, tests, missing) == 0
+                or production != ["second/stem_map/mod.rs:1"]
+            ):
                 print(f"selftest: a hit in the second root was not reported: {production}", file=sys.stderr)
                 return 1
+        # A root that is not there is refused, however green the other is.
+        production, tests, missing = scan_all((("first", root), ("gone", root / "no-such-crate")))
+        if missing != ["gone"] or judge(production, tests, missing) == 0:
+            print(f"selftest: a missing root was accepted: {missing}", file=sys.stderr)
+            return 1
         (graph / "tests.rs").write_text("fn t() {}\n", encoding="utf-8")
         production, tests = scan(root)
         if judge(production, tests) == 0:
@@ -387,8 +418,8 @@ def selftest() -> int:
             return 1
     print(
         "relay connector gate selftest: production hit (named and unnamed variant), "
-        "test-only, whole-list constants, second root, empty subject, string brace, "
-        "comment exemption, and literal"
+        "test-only, whole-list constants, second root, missing root, empty subject, "
+        "string brace, comment exemption, and literal"
     )
     return 0
 
