@@ -13,7 +13,7 @@
 //! | --- | --- | --- |
 //! | Bodies (`txs_prunable`, `txs_pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `close_epoch(k) + 2 ≤ E` |
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
-//! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary; the cap is the in-force rule set's (`SLK-Q1`) |
+//! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
 //! to name and no watermark to store. The slash log's horizon is a
@@ -135,6 +135,7 @@ use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
 
+use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::{SlashLogKey, SlashLogTuple};
 use crate::schema::{
@@ -342,9 +343,10 @@ pub struct Pruned {
     pub shard_end: u64,
     /// The lowest height whose `undo_log` row is kept after this boundary.
     pub undo_floor: BlockHeight,
-    /// The slash log's retirement floor at this boundary under the in-force
-    /// rule set: rows below it are gone, rows at or above it kept. `NONE`
-    /// while the chain is shorter than the window.
+    /// The floor this boundary enforced. Rows below it are gone; rows at
+    /// or above it were kept. [`SlashLogFloor::NONE`] when this boundary
+    /// deleted nothing: the chain is under the window, or the session
+    /// does not apply `SlashLog`.
     pub slash_floor: SlashLogFloor,
 }
 
@@ -384,12 +386,11 @@ impl WriteBatch<'_, '_> {
         let undo_floor = self.retire_undo_rows(height.to_raw())?;
         // Both operands are the rule set's (SLK-2); `check_against` has
         // already held its epoch equal to the pinned one at this height.
-        let slash_floor = SlashLogFloor::under(
+        let slash_floor = self.retire_slash_rows(SlashLogFloor::under(
             height,
             in_force.settlement_schedule().blocks(),
             in_force.reorg_cap(),
-        );
-        self.retire_slash_rows(slash_floor)?;
+        ))?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,
@@ -398,10 +399,17 @@ impl WriteBatch<'_, '_> {
         }))
     }
 
-    /// Delete `archival_slash_log` rows below the floor — the slash log's
-    /// retirement (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`), the
-    /// first enforcement of the horizon `journal_horizon` has stated since
-    /// the writer landed. Nothing while the chain is under the window.
+    /// Delete `archival_slash_log` rows below `floor` — the slash log's
+    /// retirement (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`).
+    /// Returns the floor this call enforced.
+    ///
+    /// Nothing while the chain is under the window. Nothing when this
+    /// session does not apply [`ArchivalFamily::SlashLog`] (`ARW-9`): a
+    /// stubbed family's apply is skipped, so the table is not opened and
+    /// the enforced floor is [`SlashLogFloor::NONE`]. Opening the table
+    /// anyway would delete rows the session was told not to apply;
+    /// refusing the boundary would stop a stubbed session at the first
+    /// floored epoch.
     ///
     /// No floor is persisted and none is checked here (`SLK-3`): the
     /// expression is the floor, a re-run at the same height deletes the
@@ -414,17 +422,20 @@ impl WriteBatch<'_, '_> {
     /// below the tip with `retention < SEB` ([`Horizons::new`]), the slash
     /// floor at least `SEB + reorg_cap` below it, and a pop below the undo
     /// floor is `PopBelowFloor`.
-    fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
-        let Some(floor) = floor.height() else {
-            return Ok(());
+    fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<SlashLogFloor, StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(SlashLogFloor::NONE);
         };
+        if !self.apply_policy().applies(ArchivalFamily::SlashLog) {
+            return Ok(SlashLogFloor::NONE);
+        }
         let mut log = self
             .txn()
             .open_table(ARCHIVAL_SLASH_LOG)
             .map_err(EngineError::Table)?;
-        log.retain_in::<SlashLogTuple, _>(SlashLogKey::below(floor), |_, _| false)
+        log.retain_in::<SlashLogTuple, _>(SlashLogKey::below(kept_from), |_, _| false)
             .map_err(EngineError::Storage)?;
-        Ok(())
+        Ok(floor)
     }
 
     /// Delete `undo_log` rows below `height − retention` and raise the

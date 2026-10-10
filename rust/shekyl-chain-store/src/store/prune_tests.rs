@@ -37,8 +37,9 @@
 //! `DRS_E4_SLASH_LOG_ROUND.md`): a `10 / 5` pair whose window
 //! ([`WINDOW`], derived from [`SlashLogFloor::window`]) a chain of empty
 //! blocks crosses, rows planted on both sides of the first floor, the read
-//! that asserts the floor (SI-26), a pop across the boundary, and a store
-//! whose undo retention is deeper than the cap (`SLK-2`).
+//! that asserts the floor (SI-26), a pop across the boundary, a store
+//! whose undo retention is deeper than the cap (`SLK-2`), and a session
+//! that stubs `SlashLog` and therefore deletes none (`ARW-9`).
 
 // A whole-file test module: the parent gates it with `#[cfg(test)]`, and
 // this self-declaration is what the debug-macro lint keys on — the
@@ -2395,6 +2396,53 @@ fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
         "the same expression at the same height"
     );
     assert_eq!(slash_rows(&store), kept, "the same, already empty, range");
+    cleanup(&path);
+}
+
+/// A session that stubs `SlashLog` does not retire it (`ARW-9`). The
+/// boundary still runs — bodies and the undo journal are not that family —
+/// and reports no slash floor, because none was enforced. The planted rows
+/// below the floor stay. Opening the table would delete rows the session
+/// was told not to apply; refusing the connect would stop the session at
+/// the first floored epoch.
+#[test]
+fn a_stubbed_slash_log_is_not_retired_at_the_boundary() {
+    let path = tmp("slk-stub-retire");
+    let boundary = FIRST_FLOORED_BOUNDARY;
+    let floor = FIRST_FLOOR;
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+    let p = persona(0x54);
+    plant(&path, |txn| {
+        plant_slash(txn, floor - 1, 0, &slash_entry(&p, 0, 1, 1));
+        plant_slash(txn, floor, 0, &slash_entry(&p, 0, 1, 1));
+    });
+    let planted = vec![(floor - 1, 0), (floor, 0)];
+
+    let policy = ApplyPolicy::stubbed(&[crate::apply_policy::ArchivalFamily::SlashLog])
+        .expect("a named family");
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(WINDOW_CAP),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let store = ChainStore::with_horizons(&path, policy, horizons).expect("reopen stubbed");
+    let connected = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    assert_eq!(
+        connected
+            .pruned
+            .expect("the boundary still runs")
+            .slash_floor,
+        SlashLogFloor::NONE,
+        "a skipped apply enforced no floor"
+    );
+    assert_eq!(
+        slash_rows(&store),
+        planted,
+        "rows below the floor stay when the family is stubbed"
+    );
     cleanup(&path);
 }
 
