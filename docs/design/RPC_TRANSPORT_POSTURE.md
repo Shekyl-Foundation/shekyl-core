@@ -457,7 +457,7 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 | RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake — **the bite check, and the half that matters most: a pinned-mTLS harness that never observes a rejection is a check that cannot fail** — and assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
 | RT-P3 | ~~What does `ring` in the wallet-rpc graph do to the Windows lane?~~ **Withdrawn 2026-08-21** — `ring` is already in the graph (RT-O2), so the probe would measure today's state, not TLS's effect | — | — | — |
 
-**Results — 2026-08-22, PR #532, `rust/shekyl-rt-p2-spike` (DISPOSABLE; RT-W4
+**Results — 2026-08-22, PR #532, the `shekyl-rt-p2-spike` crate (deleted in RT-W8 of `RPC_CHANNEL.md` once its subject was superseded; DISPOSABLE; RT-W4
 rewrites what it keeps). Nine probes, each observed red under a named edit
 before its green was trusted.**
 

@@ -3268,7 +3268,6 @@ dependencies = [
  "time",
  "x509-parser",
  "yasna",
- "zeroize",
 ]
 
 [[package]]
@@ -4767,24 +4766,6 @@ dependencies = [
  "sha2",
  "shekyl-portable-storage",
  "shekyl-wire",
-]
-
-[[package]]
-name = "shekyl-rt-p2-spike"
-version = "3.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "rcgen",
- "rustls",
- "rustls-pki-types",
- "sha2",
- "tokio",
- "tokio-rustls",
- "zeroize",
 ]
 
 [[package]]

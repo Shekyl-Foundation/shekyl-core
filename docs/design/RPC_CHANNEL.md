@@ -1339,11 +1339,13 @@ one-line reason for each rejection.
   model and landed slices are untouched.
 - `IMPLEMENTATION_INDEX.md`: the `RT-` row says ruled.
 
+*Removed since, by its slice:* `shekyl-rt-p2-spike`, the pinned-mutual-TLS
+probe crate R0 marked disposable — deleted in RT-W8.
+
 ### 11.2 Still true today; removed by the slice that changes the code
 
 | What describes today's code | Removed by |
 |---|---|
-| `shekyl-rt-p2-spike`, the pinned-mutual-TLS probe crate (R0 marked it disposable; its subject is superseded) | RT-W8 |
 | `DAEMON_RPC_RUST.md`: "Restricted RPC stays", "Restricted Mode", and the local and remote rows of the auth table | RT-W10 |
 | The `removed_flags.cpp:189-190` message; `--restricted-rpc`, `--rpc-restricted-bind-port`, `--rpc-restricted-bind-ip`, `--rpc-restricted-bind-ipv6-address` (`rpc_args.{h,cpp}`, `core_rpc_server.cpp`, `daemon.cpp`). The plaintext bind flags are re-scoped to the `view` loopback listener and their parsing moves out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7) | RT-W10 |
 | The callers that **pass** those flags: `shekyl-gui-wallet` starts its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`), and the regtest end-to-end harness starts a second listener with `--rpc-restricted-bind-port` (`engine/regtest_e2e.rs`, `start_with_restricted_listener`). Each gets its replacement in the commit that deletes the flag, or the GUI's daemon and those tests stop starting | RT-W10 |
