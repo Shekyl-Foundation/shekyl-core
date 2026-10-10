@@ -347,6 +347,17 @@ conservation conjunction (§5.4 of the round) hold gains no new live
 operand. Absent row (epoch never closed / pruned) is a gather failure →
 reject, the NOTFOUND-is-not-zero posture of M1.
 
+**Two validators (`SO-D11`,
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).** The
+same close event is the C++ daemon's, the live consensus path, and goes with
+`DEL-008`. In the Rust validator the two rows are written an epoch apart. The
+close of `E` (connecting height `(E+1)·SEB − 1`) freezes `archival_budget[E]`
+and nothing else. The slash pass of `E` (connecting height `(E+2)·SEB − 1`)
+writes `archival_sigma_work[E]` and every `r_market(shard, E)` row. Each is
+insert-once: `SI-21` is two write sets. Between the two blocks the epoch has a
+budget and no denominator, and CEN-J23 refuses a claim of it on the absent
+`Σwork` row. Both operands are frozen rows for `E`.
+
 ## 4. Expiry — implicit under-mint (ratified)
 
 Budget unclaimed when the epoch exits the claim window

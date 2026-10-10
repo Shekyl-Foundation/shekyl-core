@@ -418,7 +418,18 @@ info:
   # SHARD_STILL_OPEN, -29535 SHARD_UNAVAILABLE (transient miss), -29536
   # SHARD_VIEW_NOT_OFFERED (data.cause "restricted" | "skeleton_absent").
   # api_version stays 1.
-  version: 0.11.0
+  # 0.12.0: staking_info and get_wallet_info.staking gain the optional
+  # integer serving_priority_not_lowered (SH-3). Absent when no serving
+  # lifecycle is parked. Zero is the steady reading: every serving thread
+  # that is running was lowered. Blocking threads start only when a
+  # connection needs one, so zero does not claim every thread that will
+  # ever exist. A positive count is how many of those threads are still at
+  # normal priority because the operating system refused the lower. A
+  # thread that has exited is not counted, including a blocking thread the
+  # runtime retires after it has been idle. Serving continues, and the
+  # wallet log names the cause once. The count does not say whether the
+  # daemon received more CPU. api_version stays 1.
+  version: 0.12.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -2815,6 +2826,29 @@ components:
             "what is being served now" rather than "what was intended".
             Consequently it can be absent for a wallet that is bonded —
             which is the honest reading, not a gap.
+        serving_priority_not_lowered:
+          type: integer
+          minimum: 0
+          description: >
+            How many threads of this wallet's serving host are still at
+            normal CPU priority because the operating system refused to
+            lower them. **Absent means no serving lifecycle is parked** —
+            the same reading as an absent `posture`. **Zero is the steady
+            reading**: every serving thread that is running was lowered.
+            Blocking threads start only when a connection needs one, so
+            zero does not claim that every thread which will ever exist
+            has already been lowered.
+
+            A positive count means that many threads are serving at normal
+            priority. A thread that has exited is no longer counted,
+            including a blocking thread the runtime retires after it has
+            been idle, so the number does not grow across idle gaps.
+            Serving continues. A priority the operating system would not
+            set is not a reason to stop answering. The wallet log names
+            the cause once. The count is the result of that call for the
+            threads that are still running. It does not say whether the
+            daemon received more CPU: that depends on how the two
+            processes are scheduled against each other.
 
     # ── Archival principal staking actions — WI-RPC-5 ────────────────
     # The principal↔P money legs that already exist in Engine: stake_in

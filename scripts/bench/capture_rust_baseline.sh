@@ -113,6 +113,12 @@ BENCHES=(
   # compositions, which are not on the shipped graph, so the feature rides
   # the row.
   "shekyl-p-serve::serve_response_iai:bench-internals"
+  # BA-T33's T1 arm: one nested sign and one nested verify under hybrid
+  # scheme 3 (Ed25519 + FN-DSA-1024). The iai arm pins FN-DSA's signing
+  # draw, so the rejection-sampling path is the same on every run; the
+  # criterion arm signs through the production entry and reports the
+  # distribution. The floor-device figures are BA-T33's T3 arm.
+  "shekyl-crypto-pq:fn_dsa_hybrid:fn_dsa_hybrid_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.

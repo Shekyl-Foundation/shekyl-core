@@ -718,9 +718,9 @@ impl SlashedChain {
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 18 856 bytes, 61 rows — four
+/// under `RULES`, `WITNESS_PERSONAS` personas: 18 836 bytes, 60 rows — four
 /// bonds, the twenty-two padding credits, thirteen closed epochs' budget
-/// and Σwork rows, and the slash families above. A fingerprint of bytes,
+/// rows and the twelve settled epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
 /// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
@@ -748,16 +748,23 @@ impl SlashedChain {
 /// 1 in place of thirty-one by persona 0: nine `ServeCredit` rows fewer,
 /// 9 × 60 = 540 bytes, the whole delta from 19 396. The budget rows are
 /// emission inflow and a join pays no fee, so they did not move; the
-/// Σwork rows are zero as before. *Records-was:*
+/// Σwork rows are zero as before. Re-pinned 2026-10-09 at `SO-D11`: an
+/// epoch's Σwork row is written by its slash pass, an epoch after its
+/// close, so the tip holds thirteen budget rows (epochs 0–12) and twelve
+/// Σwork rows (epochs 0–11) where it held thirteen of each — one row
+/// fewer, 4 + 16 = 20 bytes, the whole delta from 18 856. Nothing else
+/// moved. *Records-was:*
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
 /// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
 /// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
 /// (derived keys alone); `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
 /// (both, 17 536 bytes, 39 rows, until the I13 flip);
 /// `d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b`
-/// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27).
+/// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27);
+/// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
+/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4";
+    "ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

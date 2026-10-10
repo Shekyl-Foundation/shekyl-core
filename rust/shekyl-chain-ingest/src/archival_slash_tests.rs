@@ -57,7 +57,8 @@ use crate::connector::{Inject, Injected, IssueDraws};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, levered_rules, levered_schedule, mine_to, Filled,
+    close_shards, first_admissible_compact_join, first_pricing_epoch, levered_rules,
+    levered_schedule, mine_to, Filled,
 };
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
@@ -167,26 +168,29 @@ impl LeveredChain {
             at_post(0),
         );
         mine_to(&mut self.scenario, &mut self.chain, admissible).await;
-        // The price the join reads: the close that priced the later shard
-        // carries an `r_market` row for both.
-        let last_close = self
+        // The price the join reads: the slash pass that first finds the
+        // later shard final gathers an `r_market` row for both, and that
+        // epoch is the watermark at the join's parent.
+        let priced_epoch = self
             .filled
             .closed
-            .last()
-            .expect("two")
-            .close_height
-            .to_raw();
-        let priced_epoch = self.schedule.epoch_at_height(last_close + 1);
-        let pricing =
-            &self.chain[usize::try_from(self.schedule.last_block(priced_epoch)).expect("small")];
-        let close = pricing
+            .iter()
+            .map(|&close| first_pricing_epoch(&self.rules, close))
+            .max()
+            .expect("two shards closed");
+        let pass = self.schedule.slash_deadline_height(priced_epoch);
+        assert_eq!(admissible.to_raw(), pass + 1, "the join follows that pass");
+        let pricing = &self.chain[usize::try_from(pass).expect("small")];
+        let gather = pricing
             .archival
-            .close()
-            .expect("the epoch closes at its last block");
+            .gathers()
+            .iter()
+            .find(|g| g.epoch().to_raw() == priced_epoch)
+            .expect("the pass gathers the epoch it settles");
         for shard in [unserved, served] {
             assert!(
-                close.r_market().iter().any(|(id, _)| id.to_raw() == shard),
-                "epoch {priced_epoch}'s close priced shard {shard}"
+                gather.r_market().iter().any(|(id, _)| id.to_raw() == shard),
+                "epoch {priced_epoch}'s gather priced shard {shard}"
             );
         }
         let join_height = self.height();
