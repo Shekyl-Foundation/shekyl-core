@@ -162,7 +162,10 @@ namespace cryptonote
         return &std::get<txin_to_key>(in).k_image;
       return nullptr;
     }
+  }
 
+  namespace detail
+  {
     // The live template scan. Bodies are offered in fee order. One body may
     // cross the median. That body may not cross 13/10 of the median less the
     // coinbase reserve, and once the listed weight is already past the median
@@ -186,17 +189,6 @@ namespace cryptonote
                           / LISTED_WEIGHT_OVERSHOOT_DENOMINATOR
                       > CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE,
         "the zone's overshoot covers the coinbase reserve");
-
-    // What the scan does with one offered body.
-    // take: list it.
-    // pass: it would pass the cap; try a later, smaller body.
-    // end_scan: the listed weight is already past the median.
-    enum class listed_body_decision
-    {
-      take,
-      pass,
-      end_scan,
-    };
 
     // The most the listed bodies may weigh. Zero when 13/10 of the median
     // does not cover the coinbase reserve, or when the product does not fit:
@@ -225,10 +217,7 @@ namespace cryptonote
         return listed_body_decision::end_scan;
       return listed_body_decision::take;
     }
-  }
 
-  namespace detail
-  {
     std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
     {
       using rep = std::chrono::seconds::rep;
@@ -2093,7 +2082,7 @@ namespace cryptonote
     total_weight = 0;
     fee = 0;
 
-    const size_t listed_cap = listed_weight_cap(median_weight);
+    const size_t listed_cap = detail::listed_weight_cap(median_weight);
     std::unordered_set<crypto::key_image> k_images;
     std::unordered_set<std::string> archival_keys;
 
@@ -2147,13 +2136,13 @@ namespace cryptonote
         continue;
       }
 
-      const listed_body_decision decision = decide_listed_body(total_weight, meta.weight, median_weight, listed_cap);
-      if (decision == listed_body_decision::pass)
+      const detail::listed_body_decision decision = detail::decide_listed_body(total_weight, meta.weight, median_weight, listed_cap);
+      if (decision == detail::listed_body_decision::pass)
       {
         LOG_PRINT_L2("  would exceed maximum block weight");
         continue;
       }
-      if (decision == listed_body_decision::end_scan)
+      if (decision == detail::listed_body_decision::end_scan)
       {
         LOG_PRINT_L2("  would exceed median block weight");
         break;

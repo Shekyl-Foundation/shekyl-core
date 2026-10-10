@@ -89,6 +89,28 @@ namespace cryptonote
         `now` rather than only on whatever fraction the system clock happens to
         hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 and sec 22.2. */
     std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+
+    /*! What `fill_block_template`'s scan does with one offered body.
+        take: list it.
+        pass: it would pass the cap; try a later, smaller body.
+        end_scan: the listed weight is already past the median. */
+    enum class listed_body_decision
+    {
+      take,
+      pass,
+      end_scan,
+    };
+
+    /*! The most the listed bodies may weigh: 13/10 of the median less the
+        coinbase reserve, and zero when that does not cover the reserve or
+        the product does not fit. Declared here so both arms are testable;
+        the production median never reaches the zero arm. */
+    size_t listed_weight_cap(size_t median_weight);
+
+    /*! The scan's decision for one body. The cap is consulted before the
+        median: a body that would pass the cap is passed over even when the
+        listed weight is already past the median. */
+    listed_body_decision decide_listed_body(size_t listed_weight, size_t candidate_weight, size_t median_weight, size_t listed_cap);
   }
   /************************************************************************/
   /*                                                                      */
