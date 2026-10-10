@@ -4581,8 +4581,6 @@ dependencies = [
  "shekyl-types",
  "tempfile",
  "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -166,9 +166,11 @@ impl ServingHandle {
     /// §9.8): the call's result for the threads that are still running,
     /// and nothing more. A thread that has exited leaves the count. Zero
     /// on every supported platform; a non-zero count is the one thing the
-    /// operator is shown when the platform refused, beside the warning the
-    /// host logged. It does not say whether the lowering yields CPU to the
-    /// daemon. Born with this handle, so it reads after a failed start too.
+    /// operator is shown when the platform refused, beside the one warning
+    /// this task logs per host (the host itself, on `P`'s serving path,
+    /// logs nothing — `WSS-20`). It does not say whether the lowering
+    /// yields CPU to the daemon. Born with this handle, so it reads after a
+    /// failed start too.
     #[must_use]
     pub fn priority_not_lowered(&self) -> u32 {
         self.priority_failures.count()
@@ -376,6 +378,15 @@ async fn run_serving_task<P>(
     let Some(host) = start_host(tor, serving, pinner, &alarms, &priority_failures).await else {
         return;
     };
+    // The one warning per host when the OS refused to lower a serving
+    // thread (SH-3, rule 82). Logged here and not in the host: the host is
+    // on `P`'s serving path and carries no logging surface (WSS-20).
+    // Threads start as work arrives, so the check repeats on the loop's
+    // cadence below; `warned` keeps it to one line per host.
+    let mut warned = false;
+    if let Some(line) = priority_refusal_warning(&priority_failures, &mut warned) {
+        tracing::warn!("{line}");
+    }
 
     // OA-1's tor producer attaches to *this* host's supervisor, so the transport
     // conditions are on the board for as long as the host is.
@@ -439,6 +450,9 @@ async fn run_serving_task<P>(
             biased;
             () = cancel.cancelled() => break,
             _ = ticker.tick() => {}
+        }
+        if let Some(line) = priority_refusal_warning(&priority_failures, &mut warned) {
+            tracing::warn!("{line}");
         }
 
         // The refresh is an actor round trip with no timeout, so it stays
@@ -566,6 +580,29 @@ fn count(members: usize) -> u32 {
     u32::try_from(members).unwrap_or(u32::MAX)
 }
 
+/// The one warning a host gets when the OS refused to lower a serving
+/// thread's CPU priority, or `None`: nothing refused yet, or already said.
+///
+/// `warned` is the host's flag; the first call that finds a refusal sets
+/// it and returns the line, every later call returns `None`. The line
+/// names the first cause the platform gave and where the count is, and
+/// says serving continues — the operator's next action is to read the
+/// count, not to restart anything (rule 82).
+fn priority_refusal_warning(failures: &PriorityFailures, warned: &mut bool) -> Option<String> {
+    if *warned || failures.count() == 0 {
+        return None;
+    }
+    *warned = true;
+    let cause = failures
+        .first_refusal()
+        .unwrap_or_else(|| "cause not recorded".to_owned());
+    Some(format!(
+        "the OS refused to lower a serving thread's CPU priority ({cause}); it serves at normal \
+         priority, and the count of such threads is on the serving status as \
+         serving_priority_not_lowered"
+    ))
+}
+
 /// Start the host, reporting whichever condition prevented it.
 ///
 /// **One attempt per start call, deliberately.** `PersonaServingHost::start`
@@ -631,6 +668,33 @@ fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_priority_refusal_warning_is_said_once_and_only_after_a_refusal() {
+        let failures = super::PriorityFailures::new();
+        let mut warned = false;
+        assert_eq!(
+            super::priority_refusal_warning(&failures, &mut warned),
+            None
+        );
+        assert!(!warned, "nothing refused: the flag stays down");
+        // A refusal as the host's start hook records one: the cause is
+        // kept and the thread counted.
+        failures.refused_for_test(&shekyl_p_host::NotLowered::Unsupported);
+        let line = super::priority_refusal_warning(&failures, &mut warned)
+            .expect("a refusal is said once");
+        assert!(
+            line.contains("no per-thread priority under normal scheduling"),
+            "{line}"
+        );
+        assert!(line.contains("serving_priority_not_lowered"), "{line}");
+        assert!(warned);
+        assert_eq!(
+            super::priority_refusal_warning(&failures, &mut warned),
+            None,
+            "said once"
+        );
+    }
+
     use super::*;
 
     /// The bound is derived from the cadence and the chain's block target, not

@@ -31,8 +31,6 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync", "ti
 shekyl-runtime = { path = "../shekyl-runtime" }
 # Every thread of that runtime lowers its own CPU priority as it starts.
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
-# One warning per host when the platform refuses to lower a thread.
-tracing = "0.1"
 
 [features]
 # Arms `shekyl-p-serve`'s ephemeral `TestKeySigner` as a `PassKey`, so a host
@@ -63,9 +61,6 @@ tokio = { version = "1", default-features = false, features = [
 # under test (which never launches — the composition test drives it with a
 # binary that cannot pass the hash gate).
 tempfile = "3"
-# The refusal test counts the one warning. Already in the workspace
-# (`shekyl-logging`, `shekyl-engine-core`); a dev edge only.
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 [lints]
 workspace = true

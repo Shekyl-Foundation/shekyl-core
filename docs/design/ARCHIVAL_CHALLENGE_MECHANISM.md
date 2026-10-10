@@ -2301,8 +2301,10 @@ by default.
    threads are in that state right now. The start hook adds the thread;
    the stop hook removes it when the thread exits, including when the
    runtime retires an idle blocking thread and the next hop starts
-   another. The count therefore stays within the runtime's budget, and
-   the host logs one warning per host start naming what was not lowered
+   another. The count therefore stays within the runtime's budget. The
+   host keeps the first cause and logs nothing — it is on `P`'s serving
+   path, which carries no logging surface (`WSS-20`); the engine's serving
+   task logs one warning per host naming that cause, where the count is,
    and that serving continues. Serving is never refused for this: a
    persona that stops answering accrues misses toward a slash, and a
    priority it could not set is not a reason to be slashed. The counter

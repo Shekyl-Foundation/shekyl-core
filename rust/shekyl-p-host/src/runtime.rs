@@ -22,14 +22,16 @@
 //! contention, timing already reveals load, and a population of personas
 //! that could opt out would be a fingerprint. When the platform refuses,
 //! the thread serves at normal priority for as long as it keeps running.
-//! It is counted on [`PriorityFailures`] until it exits, and one warning
-//! is logged per host (rule 82). Serving is never refused for it.
+//! It is counted on [`PriorityFailures`] until it exits, and the first
+//! refusal's cause is kept there for the engine, which logs one warning
+//! per host (rule 82). This crate is on `P`'s serving path and writes no
+//! log line of its own (`WSS-20`). Serving is never refused for it.
 
 use std::cell::Cell;
 use std::io;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use shekyl_p_serve::MAX_INFLIGHT;
@@ -78,13 +80,6 @@ std::thread_local! {
     static THIS_THREAD_NOT_LOWERED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The one warning a host logs when lowering fails.
-///
-/// The failure-path test counts this text. One host logs it once; a
-/// second wording would be a second alarm.
-const SERVING_PRIORITY_REFUSAL: &str = "the OS refused to lower a serving thread's CPU priority; \
-     it serves at normal priority, and the count of such threads is on the serving status";
-
 /// How long the runtime's shutdown waits for a blocking hop still running.
 ///
 /// A hop is one chunk read and folded, or one sign round trip into the
@@ -106,8 +101,18 @@ const SERVING_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 /// are still running, and nothing more: it does not say whether the
 /// lowered priority yields CPU to the daemon, which depends on the two
 /// processes being in one scheduling group (§9.8, the confirming run).
+///
+/// The first refusal's cause is kept beside the count
+/// ([`Self::first_refusal`]) so the engine can say why in the one warning
+/// it logs per host. This crate logs nothing itself (`WSS-20`).
 #[derive(Clone, Debug, Default)]
-pub struct PriorityFailures(Arc<AtomicU32>);
+pub struct PriorityFailures(Arc<Refusals>);
+
+#[derive(Debug, Default)]
+struct Refusals {
+    live: AtomicU32,
+    first_cause: OnceLock<String>,
+}
 
 impl PriorityFailures {
     /// A fresh counter at zero.
@@ -119,12 +124,31 @@ impl PriorityFailures {
     /// Serving threads running at normal priority because lowering failed.
     #[must_use]
     pub fn count(&self) -> u32 {
-        self.0.load(Ordering::Relaxed)
+        self.0.live.load(Ordering::Relaxed)
+    }
+
+    /// Why the first thread that failed was not lowered, as the platform
+    /// put it, or `None` while every thread's call has succeeded. Set
+    /// once per counter; a later refusal does not replace it.
+    #[must_use]
+    pub fn first_refusal(&self) -> Option<String> {
+        self.0.first_cause.get().cloned()
+    }
+
+    /// A refusal recorded without a thread, for a test of the engine's
+    /// one warning. Dev edge only, on the same feature as the test signer;
+    /// `scripts/ci/check_p_fetch_dep_cut.py` keeps that feature out of
+    /// every production graph.
+    #[cfg(feature = "test-signer")]
+    pub fn refused_for_test(&self, cause: &NotLowered) {
+        self.retain(cause);
     }
 
     /// This thread is one of the live set.
-    fn retain(&self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
+    fn retain(&self, cause: &NotLowered) {
+        // `set` fails when a cause is already kept; the first stays.
+        let _already_kept = self.0.first_cause.set(cause.to_string());
+        self.0.live.fetch_add(1, Ordering::Relaxed);
     }
 
     /// This thread has exited. A release without a retain leaves the
@@ -136,6 +160,7 @@ impl PriorityFailures {
         // returned value is the reading the update observed.
         match self
             .0
+            .live
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 count.checked_sub(1)
             }) {
@@ -156,18 +181,11 @@ impl PriorityFailures {
     ) -> ThreadHooks {
         let retained = self.clone();
         let released = self.clone();
-        // One warning per host: the first thread that fails says so, with
-        // the cause; the rest only count. A persona whose platform refuses
-        // on every thread would otherwise log once per thread per start.
-        let warned = Arc::new(AtomicBool::new(false));
         ThreadHooks::pair(
             move || {
                 if let Err(cause) = lower() {
                     THIS_THREAD_NOT_LOWERED.with(|slot| slot.set(true));
-                    retained.retain();
-                    if !warned.swap(true, Ordering::Relaxed) {
-                        tracing::warn!(%cause, "{SERVING_PRIORITY_REFUSAL}");
-                    }
+                    retained.retain(&cause);
                 }
             },
             move || {
@@ -318,16 +336,8 @@ mod tests {
     /// that runtime still answers.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_lowering_is_counted_once_per_thread_and_serving_goes_on() {
-        let _warning = refusal_warning_lock().await;
-        let warnings = refusal_warning_log();
-        // A sibling test can register this callsite with no subscriber
-        // first. Interest is cached process-wide from that first hit, so
-        // recompute it against the subscriber installed above before any
-        // serving thread starts.
-        tracing::callsite::rebuild_interest_cache();
-        let warnings_before = refusal_warnings(&warnings);
-
         let failures = PriorityFailures::new();
+        assert_eq!(failures.first_refusal(), None, "nothing refused yet");
         let pool = ServingPool::build_with(&failures, || {
             Err(NotLowered::Refused(io::Error::from_raw_os_error(13)))
         })
@@ -388,11 +398,12 @@ mod tests {
         );
         drop(endpoint);
 
-        let warnings_after = refusal_warnings(&warnings);
-        assert_eq!(
-            warnings_after - warnings_before,
-            1,
-            "one warning for the host, not one per thread"
+        // The cause is kept once, for the engine's one warning; this crate
+        // logs nothing (WSS-20).
+        let cause = failures.first_refusal().expect("the first refusal is kept");
+        assert!(
+            cause.starts_with("the platform refused to lower this thread's priority"),
+            "kept cause: {cause}"
         );
         drop(pool);
     }
@@ -409,7 +420,6 @@ mod tests {
     /// zero.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_retired_blocking_thread_leaves_the_unlowered_count() {
-        let _warning = refusal_warning_lock().await;
         let failures = PriorityFailures::new();
         let workers = u32::try_from(SERVING_WORKERS).expect("worker count");
         let pool = ServingPool::build_with(&failures, || {
@@ -477,17 +487,6 @@ mod tests {
         }
     }
 
-    /// The two tests that refuse lowering both log the one warning into
-    /// the process-wide subscriber. They hold this for the whole test so
-    /// one test's warning is not the other's extra line. A tokio mutex,
-    /// because the guard stays across the awaits that run the runtime.
-    async fn refusal_warning_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await
-    }
-
     /// Dropping the pool from inside an async context does not panic and
     /// does not wait for a blocking hop. This is the path a failed start
     /// and an unwinding serving task both take. The hop stays detached;
@@ -525,57 +524,6 @@ mod tests {
         ) -> Result<Option<shekyl_p_serve::ShardBody>, shekyl_p_serve::ProviderError> {
             Ok(None)
         }
-    }
-
-    /// Process-wide, because a worker thread does not see a thread-local
-    /// subscriber. Installed once: `set_global_default` has no uninstall.
-    fn refusal_warning_log() -> Arc<Mutex<Vec<u8>>> {
-        use std::io::Write;
-        use std::sync::OnceLock;
-
-        #[derive(Clone, Default)]
-        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
-
-        impl Write for SharedBuf {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("warning log").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
-            type Writer = Self;
-
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        static LOG: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
-        LOG.get_or_init(|| {
-            let sink = SharedBuf::default();
-            let buf = Arc::clone(&sink.0);
-            let subscriber = tracing_subscriber::fmt()
-                .with_ansi(false)
-                .with_max_level(tracing::Level::WARN)
-                .with_writer(sink)
-                .finish();
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("this test process has no other global tracing subscriber");
-            buf
-        })
-        .clone()
-    }
-
-    fn refusal_warnings(log: &Mutex<Vec<u8>>) -> usize {
-        let text = log.lock().expect("warning log");
-        String::from_utf8_lossy(&text)
-            .matches(SERVING_PRIORITY_REFUSAL)
-            .count()
     }
 
     async fn request_status(addr: std::net::SocketAddr) -> String {
