@@ -13,7 +13,7 @@
 //! miner_emission  = block_emission − staker_emission
 //! ```
 //!
-//! One schedule. [`decayed_share`] is the elapsed-time kernel.
+//! One schedule. The elapsed-time kernel is private.
 //! [`emission_share`] closes it over [`EMISSION_SPLIT_EPOCH`].
 //! [`emission_share_at`] closes that over the shipped constants.
 //! [`compute_emission_split`] applies the shipped share to one block.
@@ -88,8 +88,8 @@ fn decayed_share(
 /// The staker emission share at `height` for a schedule that turns on at
 /// [`EMISSION_SPLIT_EPOCH`], in [`SCALE`] units.
 ///
-/// Zero below the epoch. From the epoch, [`decayed_share`] of
-/// `height − EMISSION_SPLIT_EPOCH`. A sweep of the initial share or the
+/// Zero below the epoch. From the epoch, the private elapsed-time kernel
+/// of `height − EMISSION_SPLIT_EPOCH`. A sweep of the initial share or the
 /// annual decay passes those here; it does not pass an epoch.
 #[must_use]
 pub fn emission_share(
