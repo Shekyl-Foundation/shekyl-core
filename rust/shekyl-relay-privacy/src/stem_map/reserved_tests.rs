@@ -30,6 +30,17 @@ fn merge(
     m.update_with_reserved(ids(hidden), ids(rest), rng)
 }
 
+/// The local origin's one route over that same split. The fill and the walk
+/// are this call; a test of the ruled behavior does not merge and then walk.
+fn route(
+    m: &mut StemMap<ReservedSlot>,
+    hidden: &[u8],
+    rest: &[u8],
+    rng: &mut SplitMix64,
+) -> Option<ConnectionId> {
+    m.route_local_origin(&ids(hidden), &ids(rest), rng)
+}
+
 #[test]
 fn slot_zero_is_drawn_from_the_reserved_class_and_the_rest_from_everything_else() {
     let hidden = ids(&[1, 2, 3, 4]);
@@ -248,38 +259,37 @@ fn the_local_pin_walks_to_its_alternate_through_the_reserved_fill_and_then_holds
         };
         assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
 
-        // The primary drops. Session 4 opened after the pin. The merge fills
-        // slot 0 with the pin's live alternate, not with 4 and not with 3.
+        // The primary drops. Session 4 opened after the pin. One route fills
+        // slot 0 with the pin's live alternate — not with 4 and not with 3 —
+        // and walks onto it.
         let dropped = vec![primary];
         let live = hidden_live(&dropped);
         let live_u8: Vec<u8> = live.iter().map(|p| p.0[0]).collect();
-        let _changed = merge(&mut m, &live_u8, &[11, 12], &mut rng);
         assert_eq!(
-            m.slots()[0],
+            route(&mut m, &live_u8, &[11, 12], &mut rng),
             Some(alternate),
-            "the hidden-slot fill takes the pin's alternate"
+            "the route fills slot 0 with the pin's alternate and walks onto it"
         );
-        assert_eq!(
-            m.stem_for_among(None, &live, &mut rng),
-            Some(alternate),
-            "the walk rides the alternate"
-        );
+        assert_eq!(m.slots()[0], Some(alternate));
 
         // The alternate drops too. The pin is exhausted: the local source
-        // holds. Slot 0 refills uniformly from the class for relayed traffic.
+        // holds. The same route refills slot 0 from the class for relayed
+        // traffic and does not hand the origin a session opened after the pin.
         let dropped = vec![primary, alternate];
         let live = hidden_live(&dropped);
         let live_u8: Vec<u8> = live.iter().map(|p| p.0[0]).collect();
-        let _changed = merge(&mut m, &live_u8, &[11, 12], &mut rng);
-        let refilled = m.slots()[0].expect("slot 0 refills for relayed traffic");
-        assert!(refilled == third || refilled == id(4));
         assert_eq!(
-            m.stem_for_among(None, &live, &mut rng),
+            route(&mut m, &live_u8, &[11, 12], &mut rng),
             None,
             "a session opened after the pin never serves the local source"
         );
-        // And stays held: the pin does not re-draw within the epoch.
-        assert_eq!(m.stem_for_among(None, &live, &mut rng), None);
+        let refilled = m.slots()[0].expect("slot 0 refills for relayed traffic");
+        assert!(refilled == third || refilled == id(4));
+        assert_eq!(
+            route(&mut m, &live_u8, &[11, 12], &mut rng),
+            None,
+            "the pin does not re-draw within the epoch"
+        );
         assert!(m.is_pinned(None));
     }
 }
@@ -298,23 +308,23 @@ fn an_alternate_that_dropped_first_leaves_the_pin_exhausted_at_the_primary_drop(
         .find(|p| *p != primary && *p != alternate)
         .expect("the remaining hidden session");
     assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
-    // The alternate drops while the primary is live: nothing moves yet.
-    let _changed = merge(&mut m, &[primary.0[0], third.0[0]], &[11], &mut rng);
-    assert_eq!(m.slots()[0], Some(primary));
+    // The alternate drops while the primary is live. The route does not
+    // merge: slot 0's peer is still in the class, so nothing moves, and the
+    // origin stays on the primary.
     assert_eq!(
-        m.stem_for_among(None, &[primary, third], &mut rng),
+        route(&mut m, &[primary.0[0], third.0[0]], &[11], &mut rng),
         Some(primary)
     );
-    // Then the primary drops: the alternate is gone, so the pin is exhausted
-    // while slot 0 refills from the class for relayed traffic (or stays
-    // empty when the class-blind draw already holds the third in slot 1).
+    assert_eq!(m.slots()[0], Some(primary));
+    // Then the primary drops. The alternate is already gone, so the pin is
+    // exhausted. Slot 0 refills from the class for relayed traffic, or stays
+    // empty when that session already occupies the other slot.
     let third_in_slot1 = m.slots()[1] == Some(third);
-    let _changed = merge(&mut m, &[third.0[0]], &[11], &mut rng);
+    assert_eq!(route(&mut m, &[third.0[0]], &[11], &mut rng), None);
     assert_eq!(
         m.slots()[0],
         if third_in_slot1 { None } else { Some(third) }
     );
-    assert_eq!(m.stem_for_among(None, &[third], &mut rng), None);
 }
 
 #[test]
@@ -325,15 +335,14 @@ fn an_alternate_already_in_the_other_slot_is_not_moved_and_the_walk_finds_it_the
     let primary = m.slots()[0].expect("filled");
     let alternate = m.slots()[1].expect("filled");
     assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
-    // The primary drops; the alternate is slotted already, so slot 0 stays
-    // empty (nothing unslotted in the class) and the walk resolves to slot 1.
-    let _changed = merge(&mut m, &[alternate.0[0]], &[], &mut rng);
-    assert_eq!(m.slots()[0], None);
-    assert_eq!(m.slots()[1], Some(alternate));
+    // The primary drops. The alternate already occupies the other slot, so
+    // the route leaves it there and walks onto it. Slot 0 stays empty.
     assert_eq!(
-        m.stem_for_among(None, &[alternate], &mut rng),
+        route(&mut m, &[alternate.0[0]], &[], &mut rng),
         Some(alternate)
     );
+    assert_eq!(m.slots()[0], None);
+    assert_eq!(m.slots()[1], Some(alternate));
     assert_eq!(
         m.usage(),
         &[0, 1],
@@ -372,13 +381,15 @@ fn a_slot_zero_death_before_the_local_pin_leaves_the_survivor_in_slot_one() {
             "no unslotted reserved session to fill slot 0"
         );
         assert_eq!(m.slots()[1], Some(survivor), "the survivor is not moved");
-        // The caller pins the local source on the survivor where it sits.
-        assert_eq!(m.pin_over(None, vec![survivor]), Some(survivor));
-        assert_eq!(m.usage(), &[0, 1]);
+        // The origin has not pinned yet. The route pins on the survivor
+        // where it sits and does not backfill slot 0.
         assert_eq!(
-            m.stem_for_among(None, &[survivor], &mut rng),
+            route(&mut m, &[survivor.0[0]], &[], &mut rng),
             Some(survivor)
         );
+        assert_eq!(m.slots()[0], None);
+        assert_eq!(m.slots()[1], Some(survivor));
+        assert_eq!(m.usage(), &[0, 1]);
     }
 }
 

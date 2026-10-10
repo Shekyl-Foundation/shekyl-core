@@ -24,32 +24,6 @@ pub(super) enum EpochMap {
     Reserved(StemMap<ReservedSlot>),
 }
 
-/// Reads both maps already share. The enum calls them through one match.
-trait SharedEpoch {
-    fn slots(&self) -> &[Option<ConnectionId>];
-    fn live_stems(&self) -> usize;
-    fn usage(&self) -> &[usize];
-    fn slot_of(&self, peer: ConnectionId) -> Option<SlotIndex>;
-}
-
-impl<Mode> SharedEpoch for StemMap<Mode> {
-    fn slots(&self) -> &[Option<ConnectionId>] {
-        StemMap::slots(self)
-    }
-
-    fn live_stems(&self) -> usize {
-        StemMap::live_stems(self)
-    }
-
-    fn usage(&self) -> &[usize] {
-        StemMap::usage(self)
-    }
-
-    fn slot_of(&self, peer: ConnectionId) -> Option<SlotIndex> {
-        StemMap::slot_of(self, peer)
-    }
-}
-
 impl EpochMap {
     /// A uniform map over `outbound`, width `stems`.
     pub(super) fn uniform<R: RelayRng + ?Sized>(
@@ -76,35 +50,40 @@ impl EpochMap {
         matches!(self, Self::Reserved(_))
     }
 
-    fn shared(&self) -> &dyn SharedEpoch {
-        match self {
-            Self::Uniform(map) => map,
-            Self::Reserved(map) => map,
-        }
-    }
-
     /// The stem slots in index order.
     #[must_use]
     pub(super) fn slots(&self) -> &[Option<ConnectionId>] {
-        self.shared().slots()
+        match self {
+            Self::Uniform(map) => map.slots(),
+            Self::Reserved(map) => map.slots(),
+        }
     }
 
     /// Stem slots backed by a live peer.
     #[must_use]
     pub(super) fn live_stems(&self) -> usize {
-        self.shared().live_stems()
+        match self {
+            Self::Uniform(map) => map.live_stems(),
+            Self::Reserved(map) => map.live_stems(),
+        }
     }
 
     /// Per-slot source counts.
     #[must_use]
     pub(super) fn usage(&self) -> &[usize] {
-        self.shared().usage()
+        match self {
+            Self::Uniform(map) => map.usage(),
+            Self::Reserved(map) => map.usage(),
+        }
     }
 
     /// The slot currently holding `peer`, if any.
     #[must_use]
     pub(super) fn slot_of(&self, peer: ConnectionId) -> Option<SlotIndex> {
-        self.shared().slot_of(peer)
+        match self {
+            Self::Uniform(map) => map.slot_of(peer),
+            Self::Reserved(map) => map.slot_of(peer),
+        }
     }
 
     /// The stem peer for `source`, assigning one on the first call this epoch.
@@ -121,7 +100,8 @@ impl EpochMap {
 
     /// Merge the live outbound partition. A uniform epoch draws every slot
     /// from the whole set. A reserved epoch gives slot 0 the class and the
-    /// other slots the whole set. One match: the variant is the mode.
+    /// other slots the whole set. The variant is the mode, so each arm calls
+    /// the merge that exists on that map.
     ///
     /// `StemSetChange` stays on the map for its own tests. Nothing in the
     /// zone re-points on it, so the bind is named and dropped.

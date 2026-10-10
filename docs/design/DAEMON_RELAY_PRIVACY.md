@@ -17232,15 +17232,18 @@ family.
 
 | | the instrument (`conformance/composition/mod.rs`) | production after PR-1 (`shekyl-relay/src/graph/`) |
 | --- | --- | --- |
-| mixed outbound sessions, hidden connector configured | `mixed_hidden_slot` (`:534` to `:561`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)` | `rebuild_stems`: one id drawn uniformly from the hidden-address outbound sessions, one from the remaining outbound sessions, `StemMap::new(slots, stems, rng)`; the local source resolves with `stem_for_among(None, &hidden_live)` where `hidden_live` is every outbound session whose declaration hides the address; its first pin freezes `stems` of them: slot 0's peer and `stems − 1` alternates drawn uniformly from the rest (D-PR1-1 (c′)). The instrument passes the slot peer alone and measures one origination per epoch, so the two agree on the primary, which is what §95.3 counts; the churn behaviour is 98.10's measurement |
-| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over every outbound session, local source `stem_for(None)` | the same call: every session is in the allowed set, so the primary is the load-balanced slot the paper's `stem_for(None)` would pick and the alternate is drawn from the rest of the hidden outbound sessions. One code path, two cases |
-| no hidden connector | `paper_map` | unchanged: `plan_relay`'s existing `stem_for` arm (`mod.rs:946` to `:952`), plan `Stem` |
+| mixed outbound sessions, hidden connector configured | `mixed_hidden_slot` (`:534` to `:559`): `pick_edge` over the hidden edges (`:467` to `:473`), one uniform pick from the rest, `StemMap::new(slots, width, rng)`, then `stem_for_among(None, &[hidden_id], rng)`. That pin is the slot peer alone. The instrument does not call `new_with_reserved_slot` or `route_local_origin`, and it does not run (c′) | `rebuild_stems` builds `StemMap<ReservedSlot>` through `new_with_reserved_slot`: slot 0 is uniform over the address-hiding sessions, the other slots uniform over the remainder. The local source is `route_local_origin`. Its primary is slot 0's peer when the class contains it, otherwise an address-hiding peer already occupying a later slot; the pin then freezes `stems − 1` alternates drawn from the class live at that moment (D-PR1-1 (c′)), including sessions the map has not slotted. On a fresh epoch the primary peer is uniform over the hidden class, which is the peer the instrument records, and that is what §95.3 counts. The alternate walk, the stranded slot, and fill-before-walk are production-only: 98.10 measures the walk's exposure, and the relay and stem-map tests lock the route |
+| all outbound hidden | `paper_map` (`:525` to `:531`): `StemMap::new` over every outbound session, local source `stem_for(None)`, recorded at map build. That is a load-balanced slot, not slot 0, and it is not (c′) | `new_with_reserved_slot` over the class with an empty rest. The primary is slot 0's peer even after a relayed source has unbalanced the slots; `stem_for(None)` would have moved. On a fresh map both primaries are uniform over the class, which is what §95.3 counts |
+| no hidden connector | `paper_map` | unchanged: `plan_relay`'s existing `stem_for` arm (`mod.rs:974` to `:978`), plan `Stem` |
 | hidden connector, no hidden outbound session | `hidden.is_empty()` takes the paper branch; the instrument has no "hidden connector with no hidden session" node | production holds: `NoOwnEdge`. The instrument never models this state, so nothing is transferred for it (coverage statement, 98.5) |
 
-The instrument's draw and production's are the same `StemMap` calls in
-the same order. Where the candidate orderings differ (the instrument
-orders edges by row, production by connection id), a same-seed test is
-not available and the distributional test in 98.6 is the pin.
+The instrument and production agree on the first-hop peer for one
+origination on a fresh epoch. They do not share a call, and the
+instrument is left on the draws above so the §95.3 posteriors stay the
+transferred model results (98.2). Where the candidate orderings differ
+(the instrument orders edges by row, production by connection id), a
+same-seed test is not available and the distributional test in 98.6 is
+the pin for that primary. It does not pin (c′).
 
 ### 98.2 Substrate re-check (A2) — every row read at `bf6d277efe`
 
@@ -17268,8 +17271,11 @@ caller in `shekyl-relay` (B3):** a *reserved slot*, as a type.
 `StemMap<ReservedSlot>` keeps slot 0 for a class the caller names at
 construction and at every merge (`new_with_reserved_slot`,
 `update_with_reserved`, `route_local_origin`). The wrong merge does not
-compile. Both merges are one private function; slot 0's pool is the only
-difference. The map never learns what the class is (structure ruling,
+compile. The two merges share the departed-peer pass and the slot
+backfill. Slot 0's fill — the local pin's next unslotted candidate, else
+a uniform draw from the class — lives only on `StemMap<ReservedSlot>`.
+The paper's `update` has no class and does not read the local pin. The
+map never learns what the class is (structure ruling,
 98.4). The constructor draws slot 0 uniformly from the reserved class
 (empty when the class is empty) and the other slots uniformly from
 everything not yet slotted. The merge's hidden-slot fill refills an
