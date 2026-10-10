@@ -25,18 +25,41 @@
 //! the first deliberate divergence from the C++ port.
 //!
 //! **The reserved slot (`DAEMON_RELAY_PRIVACY.md` §95.3, §98).** The second
-//! divergence. A map built with [`StemMap::new_with_reserved_slot`] keeps slot
-//! 0 for a class of sessions the caller names at construction and at every
-//! merge ([`StemMap::update_with_reserved`]); the map never learns what the
-//! class is. The relay names the address-hiding outbound sessions, and routes
-//! its own transactions through a pin whose candidates are all of that class
-//! ([`StemMap::pin_over`]), so an origin never stems to a peer that can see
-//! its address. Everything else is intended to match the C++. Anything else
+//! divergence. [`StemMap<ReservedSlot>`] keeps slot 0 for a class of sessions
+//! the caller names at construction and at every merge. [`StemMap<UniformSlots>`]
+//! is the paper's map. The mode is the type: [`StemMap::update`] exists only
+//! on the uniform map, and [`StemMap::update_with_reserved`] and
+//! [`StemMap::route_local_origin`] exist only on the reserved map, so the
+//! wrong merge does not compile. Both merges are one function; slot 0's pool
+//! is the only difference. The map never learns what the class is. The relay
+//! names the address-hiding outbound sessions and routes its own transactions
+//! through [`StemMap::route_local_origin`], which fills slot 0 before it
+//! walks the pin. Everything else is intended to match the C++. Anything else
 //! that differs is a bug in this module, not an improvement.
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 
 use crate::rng::{bounded_uniform, RelayRng};
+
+/// Slot 0 fills from the same live set as every other slot.
+///
+/// The type parameter of [`StemMap::new`] and [`StemMap::update`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UniformSlots;
+
+/// Slot 0 is reserved for the class the caller names at each merge.
+///
+/// The type parameter of [`StemMap::new_with_reserved_slot`],
+/// [`StemMap::update_with_reserved`], and [`StemMap::route_local_origin`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReservedSlot;
+
+/// Index of the slot [`ReservedSlot`] keeps for the caller's class.
+///
+/// The other slots start at the next index. A uniform map has no such slot;
+/// its backfill starts at the first index of the range.
+const RESERVED_SLOT_INDEX: usize = 0;
 
 /// A peer connection identity. Sixteen bytes, matching the `boost::uuids::uuid`
 /// the daemon's connection table is keyed by, so a future FFI cut is a memcpy
@@ -156,7 +179,7 @@ struct Pin {
 /// come and go. Per-source routing decisions are [`Pin`]s: frozen candidate
 /// sets that never grow mid-epoch (W3c / §19.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StemMap {
+pub struct StemMap<Mode = UniformSlots> {
     /// Stem slots. `None` is a slot whose peer disconnected.
     out: Vec<Option<ConnectionId>>,
     /// Source → its frozen routing decision. See [`SourceId`].
@@ -164,23 +187,28 @@ pub struct StemMap {
     /// Per-slot count of sources currently routed through it. Length is the
     /// configured stem count, which is `>= out.len()` at all times.
     usage: Vec<usize>,
-    /// Slot 0 is reserved for the class the caller names at each merge
-    /// (`update_with_reserved`). Set by `new_with_reserved_slot`; a plain
-    /// `new` or `empty` map has no reserved slot and merges with `update`.
-    reserved: bool,
+    /// [`UniformSlots`] or [`ReservedSlot`]. Carries no data: the impl blocks
+    /// are what make the wrong merge uncallable.
+    _mode: PhantomData<Mode>,
 }
 
-impl StemMap {
+impl<Mode> StemMap<Mode> {
+    fn from_parts(out: Vec<Option<ConnectionId>>, usage: Vec<usize>) -> Self {
+        Self {
+            out,
+            inbound: BTreeMap::new(),
+            usage,
+            _mode: PhantomData,
+        }
+    }
+}
+
+impl StemMap<UniformSlots> {
     /// An empty map that can route nothing. Equivalent to the C++
     /// default-constructed `connection_map`.
     #[must_use]
     pub fn empty() -> Self {
-        Self {
-            out: Vec::new(),
-            inbound: BTreeMap::new(),
-            usage: Vec::new(),
-            reserved: false,
-        }
+        Self::from_parts(Vec::new(), Vec::new())
     }
 
     /// Build a map over `out_connections`, keeping at most `stems` of them.
@@ -212,187 +240,56 @@ impl StemMap {
             }
         }
 
-        Self {
-            out: out_connections.into_iter().map(Some).collect(),
-            inbound: BTreeMap::new(),
-            usage: vec![0; stems],
-            reserved: false,
-        }
+        Self::from_parts(
+            out_connections.into_iter().map(Some).collect(),
+            vec![0; stems],
+        )
     }
 
-    /// Build a map whose slot 0 is **reserved** for `reserved`: a class of
-    /// sessions the caller names here and again at every merge
-    /// ([`Self::update_with_reserved`]). The map never learns what the class
-    /// is; the relay names the address-hiding outbound sessions
-    /// (`DAEMON_RELAY_PRIVACY.md` §98.3).
-    ///
-    /// Slot 0 is drawn uniformly from `reserved`, and is an empty slot when
-    /// `reserved` is empty (D-PR1-2 (i): it stays empty until a merge fills
-    /// it). The other slots are drawn from everything else — `rest` and the
-    /// reserved sessions not in slot 0 — exactly as [`Self::new`] draws
-    /// `stems − 1` of them. With `rest` empty this is `new` over `reserved`
-    /// (slot 0 uniform, the rest uniform over the remainder), which is how a
-    /// node whose every session hides its address reduces to the paper's
-    /// draw (§98.1). `stems == 0` routes nothing, as `new` does.
-    ///
-    /// `reserved` and `rest` are a partition: a session in both is a caller
-    /// error, caught in debug builds.
-    pub fn new_with_reserved_slot<R: RelayRng + ?Sized>(
-        mut reserved: Vec<ConnectionId>,
-        rest: Vec<ConnectionId>,
-        stems: usize,
-        rng: &mut R,
-    ) -> Self {
-        debug_assert!(
-            rest.iter().all(|r| !reserved.contains(r)),
-            "a session is in both the reserved class and the rest"
-        );
-        if stems == 0 {
-            let mut map = Self::empty();
-            map.reserved = true;
-            return map;
-        }
-        let slot0 = if reserved.is_empty() {
-            None
-        } else {
-            let pick = usize_from_u64(bounded_uniform(rng, (reserved.len() - 1) as u64));
-            Some(reserved.swap_remove(pick))
-        };
-        let mut remaining = rest;
-        remaining.extend(reserved);
-        let others = Self::new(remaining, stems - 1, rng).out;
-        let mut out = Vec::with_capacity(1 + others.len());
-        out.push(slot0);
-        out.extend(others);
-        Self {
-            out,
-            inbound: BTreeMap::new(),
-            usage: vec![0; stems],
-            reserved: true,
-        }
-    }
-
-    /// Whether slot 0 is reserved (the map was built by
-    /// [`Self::new_with_reserved_slot`]).
-    #[must_use]
-    pub fn has_reserved_slot(&self) -> bool {
-        self.reserved
-    }
-
-    /// Merge the current outbound connection set into the map.
+    /// Merge `current` into a uniform map.
     ///
     /// Slots whose peer has gone are emptied and backfilled from peers not
     /// already in use; empty stem slots are filled if candidates remain.
-    /// Returns [`StemSetChange::Changed`] if the set of live stem peers changed,
-    /// which is the signal the caller uses to decide whether downstream channels
-    /// need re-pointing.
+    /// Returns [`StemSetChange::Changed`] when the live stem set changed,
+    /// which is the signal the caller uses to re-point channels. A reserved
+    /// map has no `update`: that call does not compile.
     pub fn update<R: RelayRng + ?Sized>(
         &mut self,
         current: Vec<ConnectionId>,
         rng: &mut R,
     ) -> StemSetChange {
-        // Candidates not already serving as a stem.
-        let mut candidates: Vec<ConnectionId> = current;
-        candidates.sort_unstable();
-        candidates.dedup();
-
-        let mut replaced = false;
-        for slot in &mut self.out {
-            match slot {
-                Some(id) => {
-                    if let Ok(pos) = candidates.binary_search(id) {
-                        // Still connected; take it out of the candidate pool so
-                        // it cannot also be used to backfill another slot.
-                        candidates.remove(pos);
-                    } else {
-                        *slot = None;
-                        replaced = true;
-                    }
-                }
-                // A slot left empty by an earlier update still needs backfilling.
-                // The C++ `connection_map::update` re-marks nil slots (setting
-                // `replace = true`); mirror that, so the early-return below does
-                // not skip a fillable empty slot and `update` reports the change
-                // once the slot is filled.
-                None => replaced = true,
-            }
-        }
-
-        if !replaced && self.out.len() == self.usage.len() {
-            // Every slot is live and the map is at full width: nothing to do.
-            return StemSetChange::Unchanged;
-        }
-
-        let existing_outs = self.out.len();
-        for i in 0..self.usage.len() {
-            if candidates.is_empty() {
-                break;
-            }
-            let growing = self.out.len() <= i;
-            if growing || self.out[i].is_none() {
-                // Draw a uniformly random candidate by swapping it to the back
-                // and popping — same trick the C++ uses.
-                let last = candidates.len() - 1;
-                let pick = usize_from_u64(bounded_uniform(rng, last as u64));
-                candidates.swap(last, pick);
-                let chosen = candidates.pop().expect("candidates is non-empty");
-                if growing {
-                    self.out.push(Some(chosen));
-                } else {
-                    self.out[i] = Some(chosen);
-                }
-            }
-        }
-
-        if replaced || existing_outs < self.out.len() {
-            StemSetChange::Changed
-        } else {
-            StemSetChange::Unchanged
-        }
+        self.merge_live(None, current, rng)
     }
+}
 
-    /// [`Self::update`] for a map with a reserved slot: `reserved` is the
-    /// class slot 0 may hold, `rest` is everything else, both as live now.
+impl<Mode> StemMap<Mode> {
+    /// One merge. `class` is slot 0's pool; `None` means slot 0 draws from
+    /// `rest` with every other slot. `Some` fills an empty slot 0 from that
+    /// class only — the local pin's next live candidate, else a uniform draw,
+    /// else the slot stays empty — and the other slots from `class` plus `rest`.
     ///
-    /// Slots whose peer has gone are emptied. An empty **slot 0** is then
-    /// filled from `reserved` only — the **hidden-slot fill** of
-    /// `DAEMON_RELAY_PRIVACY.md` §98.3: the local pin's next live candidate
-    /// first (D-PR1-1 (c′): when the slot's peer drops, the slot takes the
-    /// pin's live alternate, so the pin's walk finds it in a slot), else a
-    /// uniform draw from the reserved sessions not already slotted, else the
-    /// slot stays empty (D-PR1-2 (i)). The other slots are backfilled from
-    /// every unslotted session, reserved or not, as `update` backfills them.
+    /// Peers are never moved between slots. A class member already occupying
+    /// another slot is not an unslotted candidate, so the slot-0 fill passes
+    /// over it.
     ///
-    /// Peers are never moved between slots. A local alternate that the
-    /// class-blind backfill has already placed in another slot is not an
-    /// unslotted candidate, so the fill passes over it and the pin's walk
-    /// resolves to it where it is. The same holds for the local **primary**:
-    /// when slot 0's peer dies before the local source has pinned and every
-    /// reserved session is already in another slot, slot 0 stays empty and
-    /// the caller pins the local source on a reserved peer where it sits
-    /// ([`Self::pin_over`] asks only that the head occupy *a* slot). A move
-    /// would re-point every source pinned on the moved peer's slot index in
-    /// the covert-channel binding and change the live set for no routing
-    /// reason.
-    ///
-    /// Returns [`StemSetChange::Changed`] on the same predicate as `update`.
-    pub fn update_with_reserved<R: RelayRng + ?Sized>(
+    /// Returns [`StemSetChange::Changed`] when a live peer left or a slot was
+    /// filled. An empty slot that stays empty still reports `Changed`, matching
+    /// the C++ `connection_map::update` re-mark of a nil slot.
+    fn merge_live<R: RelayRng + ?Sized>(
         &mut self,
-        reserved: Vec<ConnectionId>,
+        class: Option<Vec<ConnectionId>>,
         rest: Vec<ConnectionId>,
         rng: &mut R,
     ) -> StemSetChange {
-        debug_assert!(
-            self.reserved,
-            "update_with_reserved on a map built without a reserved slot"
-        );
         if self.usage.is_empty() {
             return StemSetChange::Unchanged;
         }
-        let mut reserved_candidates = reserved;
-        reserved_candidates.sort_unstable();
-        reserved_candidates.dedup();
-        let mut candidates: Vec<ConnectionId> = reserved_candidates.clone();
+        let mut class = class;
+        if let Some(pool) = class.as_mut() {
+            pool.sort_unstable();
+            pool.dedup();
+        }
+        let mut candidates = class.clone().unwrap_or_default();
         candidates.extend(rest);
         candidates.sort_unstable();
         candidates.dedup();
@@ -402,20 +299,29 @@ impl StemMap {
             match slot {
                 Some(id) => {
                     if let Ok(pos) = candidates.binary_search(id) {
+                        // Still connected; take it out of the pool so it cannot
+                        // also backfill another slot.
                         candidates.remove(pos);
-                        if let Ok(pos) = reserved_candidates.binary_search(id) {
-                            reserved_candidates.remove(pos);
+                        if let Some(pool) = class.as_mut() {
+                            if let Ok(pos) = pool.binary_search(id) {
+                                pool.remove(pos);
+                            }
                         }
                     } else {
                         *slot = None;
                         replaced = true;
                     }
                 }
+                // A slot left empty by an earlier merge still needs backfilling.
+                // The C++ `connection_map::update` re-marks nil slots (setting
+                // `replace = true`); mirror that, so the early-return below does
+                // not skip a fillable empty slot.
                 None => replaced = true,
             }
         }
-        if self.out.is_empty() {
-            // The reserved slot exists even when nothing has filled it.
+        // A reserved slot exists even when nothing has filled it. A uniform
+        // map grows from an empty `out` inside the loop below.
+        if class.is_some() && self.out.is_empty() {
             self.out.push(None);
             replaced = true;
         }
@@ -425,33 +331,38 @@ impl StemMap {
         }
 
         let existing_outs = self.out.len();
-        if self.out[0].is_none() {
-            let chosen =
-                self.local_pin_next_among(&reserved_candidates).or_else(
-                    || match reserved_candidates.len() {
+        let first_shared = if class.is_some() {
+            RESERVED_SLOT_INDEX + 1
+        } else {
+            0
+        };
+        if let Some(pool) = class.as_mut() {
+            if self.out[RESERVED_SLOT_INDEX].is_none() {
+                let chosen = self
+                    .local_pin_next_among(pool)
+                    .or_else(|| match pool.len() {
                         0 => None,
-                        n => Some(
-                            reserved_candidates
-                                [usize_from_u64(bounded_uniform(rng, (n - 1) as u64))],
-                        ),
-                    },
-                );
-            if let Some(peer) = chosen {
-                if let Ok(pos) = reserved_candidates.binary_search(&peer) {
-                    reserved_candidates.remove(pos);
+                        n => Some(pool[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))]),
+                    });
+                if let Some(peer) = chosen {
+                    if let Ok(pos) = pool.binary_search(&peer) {
+                        pool.remove(pos);
+                    }
+                    if let Ok(pos) = candidates.binary_search(&peer) {
+                        candidates.remove(pos);
+                    }
+                    self.out[RESERVED_SLOT_INDEX] = Some(peer);
                 }
-                if let Ok(pos) = candidates.binary_search(&peer) {
-                    candidates.remove(pos);
-                }
-                self.out[0] = Some(peer);
             }
         }
-        for i in 1..self.usage.len() {
+        for i in first_shared..self.usage.len() {
             if candidates.is_empty() {
                 break;
             }
             let growing = self.out.len() <= i;
             if growing || self.out[i].is_none() {
+                // Draw a uniformly random candidate by swapping it to the back
+                // and popping — same trick the C++ uses.
                 let last = candidates.len() - 1;
                 let pick = usize_from_u64(bounded_uniform(rng, last as u64));
                 candidates.swap(last, pick);
@@ -793,6 +704,168 @@ impl StemMap {
             n => Some(choices[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))]),
         }
     }
+}
+
+impl StemMap<ReservedSlot> {
+    /// Build a map whose slot 0 is reserved for `reserved`.
+    ///
+    /// The caller names the class here and again at every merge
+    /// ([`Self::update_with_reserved`]). The map never learns what the class
+    /// is; the relay names the address-hiding outbound sessions
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.3).
+    ///
+    /// Slot 0 is drawn uniformly from `reserved`, and is empty when
+    /// `reserved` is empty (D-PR1-2 (i): it stays empty until a merge fills
+    /// it). The other slots are [`StemMap::new`] over `rest` plus the reserved
+    /// sessions not placed in slot 0, of width `stems − 1`. With `rest` empty
+    /// this is the paper's draw over the class (§98.1). `stems == 0` routes
+    /// nothing.
+    ///
+    /// `reserved` and `rest` are a partition. A session in both is a caller
+    /// bug.
+    pub fn new_with_reserved_slot<R: RelayRng + ?Sized>(
+        mut reserved: Vec<ConnectionId>,
+        rest: Vec<ConnectionId>,
+        stems: usize,
+        rng: &mut R,
+    ) -> Self {
+        assert_partition(&reserved, &rest);
+        if stems == 0 {
+            return Self::from_parts(Vec::new(), Vec::new());
+        }
+        let slot0 = if reserved.is_empty() {
+            None
+        } else {
+            let pick = usize_from_u64(bounded_uniform(rng, (reserved.len() - 1) as u64));
+            Some(reserved.swap_remove(pick))
+        };
+        let mut remaining = rest;
+        remaining.extend(reserved);
+        let others = StemMap::new(remaining, stems - 1, rng).out;
+        let mut out = Vec::with_capacity(1 + others.len());
+        out.push(slot0);
+        out.extend(others);
+        Self::from_parts(out, vec![0; stems])
+    }
+
+    /// Merge `reserved` into slot 0 and `reserved` plus `rest` into the other
+    /// slots. One function serves this and [`StemMap::update`]; slot 0's pool
+    /// is the only difference.
+    ///
+    /// An empty slot 0 is filled from the class only: the local pin's next
+    /// live candidate, else a uniform draw from the class members not already
+    /// slotted, else the slot stays empty. Peers are never moved between
+    /// slots. The [`StemSetChange`] predicate matches [`StemMap::update`].
+    pub fn update_with_reserved<R: RelayRng + ?Sized>(
+        &mut self,
+        reserved: Vec<ConnectionId>,
+        rest: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> StemSetChange {
+        assert_partition(&reserved, &rest);
+        self.merge_live(Some(reserved), rest, rng)
+    }
+
+    /// The local origin's one route. The fill runs before the pin walk, and
+    /// the relay cannot call them in the other order.
+    ///
+    /// The merge runs only when slot 0's peer is in neither live list, or
+    /// slot 0 is empty and a class member occupies no slot. In the stranded
+    /// state — slot 0 empty, every class member already slotted — the merge
+    /// does not run, so an empty later slot is not backfilled as a side
+    /// effect of originating.
+    ///
+    /// Unpinned: the primary is slot 0's peer when the class contains it,
+    /// otherwise a class member occupying a later slot (uniform when several
+    /// do). Then `stems − 1` alternates, drawn uniformly from the other class
+    /// members live now. Pinned: the walk, and a chosen peer the class does
+    /// not contain is not a route. `None` pins nothing.
+    #[must_use]
+    pub fn route_local_origin<R: RelayRng + ?Sized>(
+        &mut self,
+        reserved: &[ConnectionId],
+        rest: &[ConnectionId],
+        rng: &mut R,
+    ) -> Option<ConnectionId> {
+        assert_partition(reserved, rest);
+        let pinned = self.is_pinned(None);
+        if self.slot_zero_needs_fill(reserved, rest) {
+            let _change = self.merge_live(Some(reserved.to_vec()), rest.to_vec(), rng);
+        }
+        if pinned {
+            let chosen = self.resolve_pin(None)?;
+            reserved.contains(&chosen).then_some(chosen)
+        } else {
+            let candidates = self.local_origin_candidates(reserved, rng);
+            self.pin_over(None, candidates)
+        }
+    }
+
+    /// Slot 0's peer has left the live partition, or the slot is empty and a
+    /// class member is still unslotted.
+    fn slot_zero_needs_fill(&self, class: &[ConnectionId], rest: &[ConnectionId]) -> bool {
+        match self.out.get(RESERVED_SLOT_INDEX).copied().flatten() {
+            Some(peer) => !class.contains(&peer) && !rest.contains(&peer),
+            None => class.iter().any(|peer| self.slot_of(*peer).is_none()),
+        }
+    }
+
+    /// The local source's pin: primary, then `stems − 1` alternates drawn by
+    /// the same partial Fisher-Yates as [`StemMap::new`].
+    ///
+    /// Slot 0's peer is the primary only when the class contains it. A peer
+    /// sitting there from outside the class is not an origin hop; the draw
+    /// falls through to class members in later slots. Empty when no slot
+    /// holds a class member, so [`StemMap::pin_over`] pins nothing.
+    fn local_origin_candidates<R: RelayRng + ?Sized>(
+        &self,
+        class_live: &[ConnectionId],
+        rng: &mut R,
+    ) -> Vec<ConnectionId> {
+        let primary = match self.out.get(RESERVED_SLOT_INDEX).copied().flatten() {
+            Some(peer) if class_live.contains(&peer) => peer,
+            _ => {
+                let slotted: Vec<ConnectionId> = self
+                    .out
+                    .iter()
+                    .skip(RESERVED_SLOT_INDEX + 1)
+                    .flatten()
+                    .copied()
+                    .filter(|peer| class_live.contains(peer))
+                    .collect();
+                match slotted.len() {
+                    0 => return Vec::new(),
+                    1 => slotted[0],
+                    n => slotted[usize_from_u64(bounded_uniform(rng, (n - 1) as u64))],
+                }
+            }
+        };
+        let mut alternates: Vec<ConnectionId> = class_live
+            .iter()
+            .copied()
+            .filter(|peer| *peer != primary)
+            .collect();
+        let take = self.usage.len().saturating_sub(1).min(alternates.len());
+        for i in 0..take {
+            let remaining = alternates.len() - i;
+            let pick = i + usize_from_u64(bounded_uniform(rng, (remaining - 1) as u64));
+            alternates.swap(i, pick);
+        }
+        alternates.truncate(take);
+        let mut candidates = Vec::with_capacity(1 + take);
+        candidates.push(primary);
+        candidates.extend(alternates);
+        candidates
+    }
+}
+
+/// `class` and `rest` name disjoint sessions. Overlap would let one peer
+/// fill slot 0 and another slot in the same merge.
+fn assert_partition(class: &[ConnectionId], rest: &[ConnectionId]) {
+    assert!(
+        rest.iter().all(|peer| !class.contains(peer)),
+        "a session is in both the reserved class and the rest"
+    );
 }
 
 /// Narrow a draw that is already bounded by a `usize`-derived range.

@@ -28,7 +28,7 @@ use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
-use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
+use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex};
 use shekyl_transport_layer::{declaration, Assessment, Declaration, NativeEncryption, YesNo};
 pub use shekyl_transport_layer::{ConnectorId, CoverClass};
 use shekyl_types::relay::RelayMethod;
@@ -36,7 +36,10 @@ use shekyl_types::relay::RelayMethod;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
 mod cover;
+mod epoch_map;
 mod hidden_slot;
+
+use epoch_map::EpochMap;
 
 pub use cover::{any_open_link, cover_class, transit_ms};
 
@@ -433,7 +436,8 @@ pub struct Relay {
     contexts: BTreeMap<ConnectionId, PeerFluff>,
     /// Stem routing for this epoch. Already Rust-backed since RP-2a; RP-3a
     /// takes ownership of it rather than reaching it through a C++ wrapper.
-    map: StemMap,
+    /// The variant is whether slot 0 is reserved.
+    map: EpochMap,
     /// Per-peer fluff batching deadlines.
     ///
     /// **The corrected draw (F-4/F-5).** Constructed `memoryless()`, never
@@ -453,10 +457,6 @@ pub struct Relay {
     /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
-    /// A configured connector hides this node's address, so slot 0 of the
-    /// stem map is reserved for the sessions that do and a local origin
-    /// plans [`RelayPlan::OwnEdge`] over a pin on them (`hidden_slot`).
-    origin_address_hidden: bool,
     /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
@@ -537,8 +537,8 @@ impl Relay {
                 });
             }
         }
-        let origin_address_hidden = any_hides_address_from_peer(configured);
-        if origin_address_hidden && stems < 2 {
+        let reserves_slot = any_hides_address_from_peer(configured);
+        if reserves_slot && stems < 2 {
             return Err(RelayNewError::HiddenSlotWidth { got: stems });
         }
         let epoch = EpochScheduler::new(params).start(now, rng);
@@ -547,15 +547,15 @@ impl Relay {
         } else {
             NoiseSchedule::Off
         };
-        // Built at full width with no peers rather than `StemMap::empty()`,
-        // so `update_stems` can grow into it. An empty map has no slots to
+        // Built at full width with no peers rather than an empty map, so
+        // `update_stems` can grow into it. An empty map has no slots to
         // fill, which is what forced the first-population special case that
         // then swallowed the epoch rebuild. Under a hidden connector slot 0
         // is reserved from the start; neither constructor draws on no peers.
-        let map = if origin_address_hidden {
-            StemMap::new_with_reserved_slot(Vec::new(), Vec::new(), stems, rng)
+        let map = if reserves_slot {
+            EpochMap::reserved(Vec::new(), Vec::new(), stems, rng)
         } else {
-            StemMap::new(Vec::new(), stems, rng)
+            EpochMap::uniform(Vec::new(), stems, rng)
         };
         Ok(Self {
             stem_watch: StemWatch::default(),
@@ -566,7 +566,6 @@ impl Relay {
             epoch_ends_at: epoch.ends_at,
             params,
             stems,
-            origin_address_hidden,
             noise,
         })
     }
@@ -859,15 +858,8 @@ impl Relay {
     /// nothing about the merged result looks wrong when it happens. A close
     /// does not call this. The dead slot stays until the next merge.
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
-        if self.origin_address_hidden {
-            self.merge_reserved(rng);
-            return;
-        }
-        // `StemMap::update` still returns `StemSetChange` for its own callers
-        // and tests; the zone no longer surfaces it — nothing re-points on push.
-        // Named bind: the value is `Copy + must_use`, so neither `drop` nor
-        // `let _ =` is available under the workspace lint table.
-        let _change = self.map.update(self.outbound_ids(), rng);
+        let (class, rest) = self.partitioned_outbound_ids();
+        self.map.merge_outbound(class, rest, rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -884,13 +876,13 @@ impl Relay {
     /// leaves unbound clears at its next due tick, both read from the map itself.
     pub fn rebuild_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         // Every pin goes with the map, the local origin's included: the next
-        // origination pins afresh (§98.3). Under a hidden connector slot 0 is
-        // reserved for the address-hiding sessions; otherwise the draw is
-        // class-blind, as the paper's.
-        self.map = if self.origin_address_hidden {
+        // origination pins afresh (§98.3). A reserved epoch keeps slot 0 for
+        // the address-hiding sessions; a uniform epoch is the paper's draw.
+        self.map = if self.map.reserves_slot() {
             self.reserved_stem_map(rng)
         } else {
-            StemMap::new(self.outbound_ids(), self.stems, rng)
+            let outbound = self.outbound_ids();
+            EpochMap::uniform(outbound, self.stems, rng)
         };
     }
 
@@ -971,7 +963,7 @@ impl Relay {
         if local_origin && node_sync == NodeSync::Unsynchronised {
             return RelayPlan::AwaitSync;
         }
-        if local_origin && self.origin_address_hidden {
+        if local_origin && self.map.reserves_slot() {
             return self.hidden_slot_plan(rng);
         }
         // No hidden-address connector: the origin's first hop is an
@@ -1299,6 +1291,8 @@ impl Relay {
 
 #[cfg(test)]
 mod edge;
+#[cfg(test)]
+mod hidden_slot_tests;
 #[cfg(test)]
 mod stem_draw;
 #[cfg(test)]

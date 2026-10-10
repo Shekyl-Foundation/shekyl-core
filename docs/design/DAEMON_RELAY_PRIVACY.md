@@ -17263,36 +17263,44 @@ not available and the distributional test in 98.6 is the pin.
 **Deleted:** `graph/own_edge.rs`; the `hop0_edge` field; `hop0_peer_live`.
 
 **Added in `shekyl-relay-privacy::stem_map`, each with a production
-caller in `shekyl-relay` (B3):** a *reserved slot*. Slot 0 may be
-reserved for a class of sessions the caller names at construction and at
-every merge; the map never learns what the class is (structure ruling,
-98.4). Three operations. A constructor that draws slot 0 uniformly from
-the reserved class (empty when the class is empty) and the other slots
-uniformly from everything not yet slotted. A merge whose hidden-slot
-fill refills an empty slot 0 from the reserved class only — the local
-pin's next live candidate first, else a uniform draw, else nothing — and
-the other slots as today. A first pin over a **supplied candidate list
-of length `stems`**, frozen as given, of which only the first must
-occupy a slot (D-PR1-1 (c′)); the caller builds the list — slot 0's
-peer, then `stems − 1` alternates drawn uniformly from the address-hiding
-sessions live at that moment — and `resolve_pin` then walks it exactly
-as it walks a relayed source's pin. The merge is what moves the live
-alternate into slot 0 so the walk finds it. Every source's pin has
-`stems` candidates; a relayed source's are the slot peers, the local
-source's are the slot-0 peer and its drawn alternates, and the walk is
-one function.
+caller in `shekyl-relay` (B3):** a *reserved slot*, as a type.
+`StemMap<UniformSlots>` is the paper's map (`new`, `update`).
+`StemMap<ReservedSlot>` keeps slot 0 for a class the caller names at
+construction and at every merge (`new_with_reserved_slot`,
+`update_with_reserved`, `route_local_origin`). The wrong merge does not
+compile. Both merges are one private function; slot 0's pool is the only
+difference. The map never learns what the class is (structure ruling,
+98.4). The constructor draws slot 0 uniformly from the reserved class
+(empty when the class is empty) and the other slots uniformly from
+everything not yet slotted. The merge's hidden-slot fill refills an
+empty slot 0 from the reserved class only — the local pin's next live
+candidate first, else a uniform draw, else nothing — and the other slots
+as today. `route_local_origin` is the local source's one entry. It
+merges only when slot 0's peer is in neither live list, or slot 0 is
+empty and an unslotted class member exists, and then it pins or walks.
+The pin list is drawn there: slot 0's peer when the class contains it,
+otherwise an address-hiding peer occupying another slot, then
+`stems − 1` alternates drawn uniformly from the class live at that
+moment, frozen by `pin_over`. `resolve_pin` is the one walk, and the
+fill runs before the walk inside `route_local_origin`, so the relay
+cannot sequence them the other way. `pin_over` and `stem_for_among`
+stay. The first freezes a supplied list; the second is how a relayed
+source, and the composition instrument, restrict a pin. Every source's
+pin has `stems` candidates; a relayed source's are the slot peers, the
+local source's are the slot-0 peer and its drawn alternates, and the
+walk is one function.
 
-**Changed in `shekyl-relay::graph`:** `rebuild_stems` partitions
-`outbound_ids()` by `address_hidden_from_peer` and, when a hidden
-connector is configured, builds the map with slot 0 reserved for the
-hidden class; `update_stems` merges the same partition; `plan_relay`'s
-hidden-origin arm merges first when slot 0's peer is no longer a live
-session (a close does not merge, `graph/mod.rs:613` to `:614`, and the
-refill is what the origin needs before it resolves), then returns
-`OwnEdge` over the pin — made at first origination over the supplied
-list, walked afterwards with `hidden_live` as the allowed set — or
-`NoOwnEdge`. No field names the hidden slot: it is slot 0 by
-construction. **The local primary may sit in a slot other than 0**
+**Changed in `shekyl-relay::graph`:** the epoch stores `EpochMap`,
+uniform or reserved. That variant is the only record of the mode; there
+is no flag beside the map. `rebuild_stems` partitions `outbound_ids()`
+by `address_hidden_from_peer` and, when a hidden connector is
+configured, builds the reserved variant; `update_stems` merges the same
+partition; `plan_relay`'s hidden-origin arm calls `route_local_origin`
+and returns `OwnEdge` or `NoOwnEdge`. The relay names the class. It does
+not sequence the merge and the walk. A close does not merge; the next
+outbound handshake does (`Relay::on_session_established`). No field names
+the hidden slot: it is slot 0 by construction. **The local primary may
+sit in a slot other than 0**
 (Rick, 2026-10-09): it is slot 0's peer when slot 0 holds one, otherwise
 an address-hiding peer occupying another slot, drawn uniformly when
 several do. The reason is that peers are never moved between slots — a
@@ -17302,10 +17310,10 @@ set for no routing reason — so when the class-blind draw has put an
 address-hiding session in slot 1 and slot 0's peer dies before the
 origin has pinned, the hidden-slot fill finds no *unslotted*
 address-hiding session, slot 0 stays empty, and the origin pins on the
-survivor where it sits. For the same reason the origination-time merge
-runs only when slot 0's peer is dead, or slot 0 is empty and an
-unslotted address-hiding session exists; in the stranded state nothing
-would change, so nothing merges. The class-of-one
+survivor where it sits. For the same reason the route merges only when
+slot 0's peer is not in the live partition, or slot 0 is empty and an
+unslotted address-hiding session exists; in the stranded state the merge
+does not run and nothing moves. The class-of-one
 rotation report (`hop-0 edge cannot rotate`) stays, at rebuild, when
 exactly one outbound session hides the address. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
@@ -17463,9 +17471,10 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
 - the connector gate's selftest fails a `ConnectorId::` variant in
   production code of either crate;
 - `Relay::new` refuses width 1 with a hidden connector;
-- the existing Rust own-edge tests (`edge.rs:100`, `:280`, `:333`,
-  `:367`, `:433`; `synthetic.rs:56`) are rewritten against the slot, not
-  deleted, where the property they named survives;
+- the existing Rust own-edge tests are rewritten against the slot, not
+  deleted, where the property they named survives: the distributional
+  and carrier tests stay in `edge.rs`, the pin walk is
+  `hidden_slot_tests.rs`, and `synthetic.rs` keeps its column case;
 - the C++ fixtures stay green unchanged:
   `hidden_connector_with_only_tcp_originates_nothing`
   (`levin.cpp:1425`), `private_local_without_padding` and

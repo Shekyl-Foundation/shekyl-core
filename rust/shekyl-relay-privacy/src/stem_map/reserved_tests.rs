@@ -8,7 +8,7 @@
 //! sessions as the reserved class; here the class is just `hidden`.
 
 use super::*;
-use crate::rng::SplitMix64;
+use crate::rng::{RelayRng, SplitMix64};
 
 fn id(tag: u8) -> ConnectionId {
     let mut b = [0_u8; 16];
@@ -21,7 +21,12 @@ fn ids(tags: &[u8]) -> Vec<ConnectionId> {
 }
 
 /// A live set split into the reserved class and the rest, merged into `m`.
-fn merge(m: &mut StemMap, hidden: &[u8], rest: &[u8], rng: &mut SplitMix64) -> StemSetChange {
+fn merge(
+    m: &mut StemMap<ReservedSlot>,
+    hidden: &[u8],
+    rest: &[u8],
+    rng: &mut SplitMix64,
+) -> StemSetChange {
     m.update_with_reserved(ids(hidden), ids(rest), rng)
 }
 
@@ -32,7 +37,6 @@ fn slot_zero_is_drawn_from_the_reserved_class_and_the_rest_from_everything_else(
     for seed in 0..64 {
         let mut rng = SplitMix64::new(seed);
         let m = StemMap::new_with_reserved_slot(hidden.clone(), rest.clone(), 2, &mut rng);
-        assert!(m.has_reserved_slot());
         assert_eq!(m.width(), 2);
         let slot0 = m.slots()[0].expect("slot 0 is filled when the class is non-empty");
         assert!(
@@ -376,4 +380,80 @@ fn a_slot_zero_death_before_the_local_pin_leaves_the_survivor_in_slot_one() {
             Some(survivor)
         );
     }
+}
+
+/// The caller does not merge first. One route fills slot 0 with the pin's
+/// unslotted alternate and then walks to it. A walk that ran first would
+/// still see the dropped primary in the slot, reject it as outside the live
+/// class, and return nothing.
+#[test]
+fn route_local_origin_fills_slot_zero_before_it_walks() {
+    let mut rng = SplitMix64::new(19);
+    let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2, 3]), ids(&[11]), 2, &mut rng);
+    let primary = m.slots()[0].expect("filled");
+    let alternate = ids(&[1, 2, 3])
+        .into_iter()
+        .find(|peer| m.slot_of(*peer).is_none())
+        .expect("one hidden session is unslotted");
+    assert_eq!(m.pin_over(None, vec![primary, alternate]), Some(primary));
+    let live: Vec<ConnectionId> = ids(&[1, 2, 3])
+        .into_iter()
+        .filter(|peer| *peer != primary)
+        .collect();
+    assert_eq!(
+        m.route_local_origin(&live, &ids(&[11]), &mut rng),
+        Some(alternate),
+        "the fill puts the alternate in a slot before the walk"
+    );
+    assert_eq!(m.slots()[0], Some(alternate));
+}
+
+/// Width 3, slot 0 already empty, the remaining class member sitting in a
+/// later slot, and a clearnet peer that has left its slot without a merge.
+/// Originating must not backfill that slot: the route merges only to fill
+/// slot 0, and here slot 0 has no unslotted class member.
+#[test]
+fn a_stranded_origin_does_not_backfill_a_dead_clearnet_slot() {
+    let mut found = false;
+    for seed in 0..128 {
+        let mut rng = SplitMix64::new(seed + 800);
+        let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2]), ids(&[11, 12]), 3, &mut rng);
+        let slot0 = m.slots()[0].expect("class non-empty");
+        let survivor = if slot0 == id(1) { 2 } else { 1 };
+        let _change = merge(&mut m, &[survivor], &[11, 12], &mut rng);
+        if m.slots().first().copied().flatten().is_some() || m.slot_of(id(survivor)).is_none() {
+            continue;
+        }
+        let slotted_clear: Vec<u8> = [11, 12]
+            .into_iter()
+            .filter(|tag| m.slot_of(id(*tag)).is_some())
+            .collect();
+        let unslotted_clear: Vec<u8> = [11, 12]
+            .into_iter()
+            .filter(|tag| m.slot_of(id(*tag)).is_none())
+            .collect();
+        if slotted_clear.len() != 1 || unslotted_clear.len() != 1 {
+            continue;
+        }
+        let before = m.slots().to_vec();
+        let mut untouched = rng.clone();
+        let probe_before = untouched.next_u64();
+        assert_eq!(
+            m.route_local_origin(&ids(&[survivor]), &ids(&unslotted_clear), &mut rng),
+            Some(id(survivor))
+        );
+        assert_eq!(
+            m.slots(),
+            before.as_slice(),
+            "origination does not backfill other slots"
+        );
+        assert_eq!(
+            rng.next_u64(),
+            probe_before,
+            "the stranded route draws nothing"
+        );
+        found = true;
+        break;
+    }
+    assert!(found, "a stranded width-3 map did not appear");
 }
