@@ -11,6 +11,7 @@
 // ^ Diagnostic-only float math; excluded from the default build.
 
 use crate::rng::{bernoulli, bounded_uniform, RelayRng};
+use crate::stem_map::{ConnectionId, ReservedSlot, StemMap};
 
 use super::util::usize_from;
 
@@ -567,13 +568,13 @@ pub enum HiddenSlotChurn {
 ///   every hidden session live at that moment, slot peer first; a drop walked
 ///   to the next live frozen candidate. Targeted drops walk it onto the
 ///   adversary with certainty at `k = H − 1`.
-/// - **`frozen_stems_exposure` — (c′), ruled.** The pin is the slot peer plus
-///   `stems − 1` alternates drawn uniformly from the other hidden sessions
-///   live at the pin. A drop of the hop walks to the live alternate;
-///   exhaustion holds (`NoOwnEdge`) for the rest of the epoch. Exposure is
-///   `P(any of the stems frozen candidates is adversarial)`, at most
-///   `stems / H` with one adversarial session, at every `k` and every flood,
-///   under either churn.
+/// - **`frozen_stems_exposure` — (c′), ruled.** The pin is the reserved map's
+///   [`StemMap::route_local_origin`]: slot 0 is the shared primary, and the
+///   map draws `stems − 1` alternates from the other hidden sessions live at
+///   the pin. A drop of the hop walks to the live alternate; exhaustion holds
+///   (`NoOwnEdge`) for the rest of the epoch. Exposure is `P(any frozen
+///   candidate the walk reaches is adversarial)`, at most `stems / H` with
+///   one adversarial session, at every `k` and every flood, under either churn.
 ///
 /// Each `*_held_share` is the share of trials in which that shape's frozen
 /// set was exhausted by the `k`-th drop, so the origin held until the epoch.
@@ -622,8 +623,8 @@ pub struct HiddenSlotChurnExposure {
     pub frozen_all_exposure: f64,
     /// (c), withdrawn: share of trials whose full frozen set was exhausted.
     pub frozen_all_held_share: f64,
-    /// (c′), ruled: the same when the pin is the slot peer plus `stems − 1`
-    /// drawn alternates.
+    /// (c′), ruled: the same when the pin is the reserved map's
+    /// [`StemMap::route_local_origin`], slot 0 fixed as the shared primary.
     pub frozen_stems_exposure: f64,
     /// (c′), ruled: share of trials whose `stems` candidates were all gone by
     /// drop `k` — the origin held until the epoch.
@@ -634,7 +635,7 @@ pub struct HiddenSlotChurnExposure {
 type Session = (usize, bool);
 
 /// A W3c pin as the model walks it: a frozen candidate list and a cursor.
-/// (a), (c) and (c′) are this with different lists.
+/// (a) and (c) are this with different lists. (c′) is [`ReservedWalk`].
 struct WalkArm {
     frozen: Vec<Session>,
     cursor: usize,
@@ -692,6 +693,95 @@ impl FollowArm {
         self.hop = live[pick];
         self.exposed |= self.hop.1;
     }
+}
+
+/// (c′) as [`StemMap::route_local_origin`] walks it on a [`ReservedSlot`] map.
+///
+/// The trial's shared primary is the whole reserved class at construction,
+/// so slot 0 is that hop and every arm opens on it. The live class at each
+/// step is every hidden session still up. The map draws the alternates and
+/// releases a departed hop before it walks, which is the production route.
+/// An exhausted pin holds: later steps do not draw.
+struct ReservedWalk {
+    map: StemMap<ReservedSlot>,
+    hop: Option<ConnectionId>,
+    exposed: bool,
+    held: bool,
+}
+
+impl ReservedWalk {
+    fn open<R: RelayRng + ?Sized>(
+        initial: &[Session],
+        primary: Session,
+        stems: usize,
+        rng: &mut R,
+    ) -> Self {
+        let rest = initial
+            .iter()
+            .filter(|session| session.0 != primary.0)
+            .map(|session| session_id(session.0))
+            .collect();
+        let mut map = StemMap::<ReservedSlot>::new_with_reserved_slot(
+            vec![session_id(primary.0)],
+            rest,
+            stems,
+            rng,
+        );
+        let hop = map.route_local_origin(&session_ids(initial), &[], rng);
+        debug_assert_eq!(hop.map(session_index), Some(primary.0));
+        Self {
+            map,
+            hop,
+            exposed: primary.1,
+            held: false,
+        }
+    }
+
+    /// The current hop when it is still live and not the adversary's.
+    /// Targeted churn drops that session.
+    fn honest_hop_id(&self, live: &[Session]) -> Option<usize> {
+        let hop = self.hop?;
+        let index = session_index(hop);
+        live.iter()
+            .find(|session| session.0 == index && !session.1)
+            .map(|session| session.0)
+    }
+
+    /// Route over `live` after this step's drop. `None` exhausts the pin.
+    fn observe<R: RelayRng + ?Sized>(&mut self, live: &[Session], rng: &mut R) {
+        if self.held {
+            return;
+        }
+        self.hop = self.map.route_local_origin(&session_ids(live), &[], rng);
+        match self.hop {
+            Some(hop) => self.exposed |= session_is_adversarial(live, hop),
+            None => self.held = true,
+        }
+    }
+}
+
+/// The first eight bytes of a [`ConnectionId`], little-endian, are the
+/// model session id. The same encoding as the composition instrument's
+/// peer ids.
+fn session_id(id: usize) -> ConnectionId {
+    let mut bytes = [0_u8; 16];
+    bytes[..8].copy_from_slice(&(id as u64).to_le_bytes());
+    ConnectionId::from_bytes(bytes)
+}
+
+fn session_index(id: ConnectionId) -> usize {
+    let mut buf = [0_u8; 8];
+    buf.copy_from_slice(&id.as_bytes()[..8]);
+    usize_from(u64::from_le_bytes(buf))
+}
+
+fn session_ids(live: &[Session]) -> Vec<ConnectionId> {
+    live.iter().map(|session| session_id(session.0)).collect()
+}
+
+fn session_is_adversarial(live: &[Session], id: ConnectionId) -> bool {
+    let index = session_index(id);
+    live.iter().any(|session| session.0 == index && session.1)
 }
 
 /// Drop `victim` from `live` and let the dialer replace it from gray.
@@ -764,8 +854,8 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
             .copied()
             .filter(|s| s.0 != primary.0)
             .collect();
-        // Shuffle the rest once; (c) freezes all of it in this order and (c′)
-        // takes its first `stems − 1` as the uniform alternates.
+        // Shuffle the rest once; (c) freezes all of it in this order. (c′)
+        // does not read this order: the reserved map draws its own alternates.
         for i in (1..rest.len()).rev() {
             let pick = usize_from(bounded_uniform(rng, i as u64));
             rest.swap(i, pick);
@@ -773,11 +863,13 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
         let mut frozen_all = Vec::with_capacity(h);
         frozen_all.push(primary);
         frozen_all.extend(rest.iter().copied());
-        let frozen_stems: Vec<Session> = frozen_all[..stems].to_vec();
 
         let mut slot = WalkArm::new(vec![primary]);
         let mut all = WalkArm::new(frozen_all);
-        let mut two = WalkArm::new(frozen_stems);
+        // (c′) is the production walk. Slot 0 is the shared primary, so k = 0
+        // is that hop's adversarial bit on every arm. The map draws its own
+        // alternates; the model's `rest` shuffle above stays (c)'s freeze.
+        let mut reserved = ReservedWalk::open(&initial, primary, stems, rng);
         let mut follow = FollowArm {
             hop: primary,
             exposed: primary.1,
@@ -793,8 +885,8 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
                     churn_one(&mut live, victim, &mut next_id, flood_num, FLOOD_DENOM, rng);
                     slot.on_drop(victim, &live);
                     all.on_drop(victim, &live);
-                    two.on_drop(victim, &live);
                     follow.on_drop(victim, &live, rng);
+                    reserved.observe(&live, rng);
                 }
             }
             HiddenSlotChurn::Targeted => {
@@ -802,11 +894,11 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
                 // honest, so each arm's session set evolves on its own.
                 let mut live_slot = initial.clone();
                 let mut live_all = initial.clone();
-                let mut live_two = initial.clone();
+                let mut live_reserved = initial.clone();
                 let mut live_follow = initial;
                 let mut id_slot = next_id;
                 let mut id_all = next_id;
-                let mut id_two = next_id;
+                let mut id_reserved = next_id;
                 let mut id_follow = next_id;
                 for _ in 0..forced_drops {
                     if let Some(hop) = slot.hop().filter(|hop| !hop.1) {
@@ -831,16 +923,16 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
                         );
                         all.on_drop(hop.0, &live_all);
                     }
-                    if let Some(hop) = two.hop().filter(|hop| !hop.1) {
+                    if let Some(victim) = reserved.honest_hop_id(&live_reserved) {
                         churn_one(
-                            &mut live_two,
-                            hop.0,
-                            &mut id_two,
+                            &mut live_reserved,
+                            victim,
+                            &mut id_reserved,
                             flood_num,
                             FLOOD_DENOM,
                             rng,
                         );
-                        two.on_drop(hop.0, &live_two);
+                        reserved.observe(&live_reserved, rng);
                     }
                     if !follow.hop.1 {
                         let victim = follow.hop.0;
@@ -863,8 +955,8 @@ pub fn simulate_hidden_slot_churn_exposure<R: RelayRng + ?Sized>(
         follow_hits += usize::from(follow.exposed);
         all_hits += usize::from(all.exposed);
         all_held += usize::from(all.held);
-        stems_hits += usize::from(two.exposed);
-        stems_held += usize::from(two.held);
+        stems_hits += usize::from(reserved.exposed);
+        stems_held += usize::from(reserved.held);
     }
 
     let t = trials as f64;

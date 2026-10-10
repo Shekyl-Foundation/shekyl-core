@@ -368,7 +368,8 @@ fn induced_churn_compounds_today_and_saturates_under_a_frozen_set() {
 /// **§98.10 (PR-1, D-PR1-1):** the local source under induced churn on the
 /// hidden stem slot. Four shapes on one trial — (a) the slot peer alone,
 /// (b) follow the refilled slot, (c) the full freeze (withdrawn), (c′) the
-/// slot peer plus `stems − 1` drawn alternates (ruled) — under two churns: the
+/// slot peer plus `stems − 1` alternates, walked by
+/// `StemMap<ReservedSlot>::route_local_origin` (ruled) — under two churns: the
 /// targeted adversary who drops the origin's current honest hidden hop (a
 /// worst-case bound: Tor is built to hide which session that is) and random
 /// churn that drops a uniformly random live hidden session. `H` is
