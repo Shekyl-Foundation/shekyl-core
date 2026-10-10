@@ -3,11 +3,15 @@
 **Status:** OPEN — Round 0 opened 2026-10-08. `SV-D1`, `SV-D2`, `SV-D3`,
 `SV-D9` **RULED** (Rick, 2026-10-08, in review of the shard-view plan);
 `SV-D4`…`SV-D8` **PROPOSED** with defaults, built as proposed and reopened on
-review. `SV-D9` is the blocker: the daemon has no facts source for the view
+review. `SV-D10` **PROPOSED 2026-10-10** (byte-derived texture layer; default
+not now). `SV-D9` is the blocker: the daemon has no facts source for the view
 until the `DRS-E3` store cutover, and the RPC says so with its own code.
 Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09); 2c
 is the wallet lane's (`WSS-Q1`). The round stays OPEN on `SV-D4`…`SV-D8`'s
-review and `SV-D9`'s falsifier.
+review, `SV-D9`'s falsifier, and `SV-D10`. Visualization continuation
+(entropy audit, CVD gate, candidate.v2 criteria) is in
+[`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) *SV-D
+continuation*.
 Identifier family `SV-D` (index row `SV-D1…SV-Dn`, registered at birth per
 rule 94 §1). Decision authority: Rick. Companion to
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) (what a
@@ -275,6 +279,43 @@ posture-correlated serving state `PDM-Q9` forbids in the daemon. If a future
 change proposes persisting it, that is a `PDM-Q9` question, not a cache
 tuning.
 
+### `SV-D10` — PROPOSED 2026-10-10: a byte-derived texture is a new wire field, not a v1 layer
+
+**The question.** Should `request_archival_shard` / `get_shard_view` grow a
+small, deterministic sketch of the shard's archival bytes — a 64×64
+local-entropy map or a byte-class histogram on a Hilbert-curve layout —
+so a later compositor can paint a texture that *is* the shard, not only
+a hash of it?
+
+**Why it is a round question.** The renderer today sees the aggregate
+(`SV-D1` hash + `SV-D4` counts). Folding a sketch into the view is a
+wire change and a new renderer input, so it cannot land as a
+`RENDER_REVISION` bump inside `candidate.v1` (*Spec version is chain
+data*; `V3_SHARD_VISUALIZATION.md` *candidate.v2 criteria*). The
+verifying pass (`SV-D8`) already touches every byte; the sketch is
+nearly free *to compute*. It is not free *to specify*.
+
+**Admissibility.** The sketch is a deterministic function of
+holder-readable archival bytes (ruling A, re-keyed `SV-D7`). It
+publishes nothing holding the shard does not. Closed-world: it is chain
+data, not a locale or a wallet setting.
+
+**Default (rule 21): not now.** candidate.v1 stays hash-seeded. No field
+is reserved on the wire (a reserved field is a `RESERVED` contract
+entry, not a code symbol — `23-disposition-visibility`).
+
+**Reopening criterion.** The perceptible-bit audit in
+`V3_SHARD_VISUALIZATION.md` is ruled **and** a named viewer (CLI, GUI
+Shards page, or shekyl-web) can state a job the hash picture cannot do
+that the texture would. Re-evaluation shape: design-round 1 of this
+question, decided by Rick; a `candidate.v2` is minted in the same change
+that admits the field.
+
+**Falsifier of a silent land.** `rg 'texture|byte_sketch|binvis|hilbert'
+rust/shekyl-rpc-types rust/shekyl-wallet-contract rust/shekyl-shard-visual`
+returns a production field or renderer input before this question is
+RULED admit.
+
 ---
 
 ## 3. What the view does not add
@@ -328,3 +369,6 @@ holder (`SF-D8` amendment, 2026-10-08).
   image backed by store rows), and on nothing else — not on time, not on a
   viewer wanting the picture sooner. A proposal to answer the view from the
   LMDB or from C++ reopens `SV-D3`, not this.
+- `SV-D10` reopens only on the criterion above (ruled audit + named
+  viewer job). A drive-by texture on `candidate.v1` is a defect, not a
+  landing.
