@@ -27,7 +27,38 @@ env:
   GITIAN_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # No genesis on a pre-standard FN-DSA (ARCHIVAL_SERVE_CREDIT_SPEC.md §11).
+  # Any tag that is not a recognised pre-release is the genesis release
+  # (RELEASE_PROMOTION.md); on such a tag this fails while `fn-dsa` is locked
+  # below 1.0, and the build waits on it. It reads the tree of the tag being
+  # built, which on a dispatch is not the ref the workflow runs from.
+  fn-dsa-genesis-gate:
+    name: fn-dsa genesis gate
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.GITIAN_TAG }}
+    - name: Refuse a genesis release on a pre-1.0 fn-dsa
+      run: |
+        gate=scripts/ci/check_fn_dsa_genesis_gate.py
+        if [ ! -f "$gate" ]; then
+          # A tag cut before the gate existed. The same rule as the script,
+          # in the same expression, which the script checks is here verbatim:
+          # a recognised pre-release passes, and any other shape is refused,
+          # not waved on. The tag reaches grep on a here-string, so the
+          # verdict is grep's own exit status and not a pipeline's.
+          if grep -Eiq '^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
+            echo "::notice::$GITIAN_TAG predates the fn-dsa genesis gate and is a pre-release: nothing to refuse"
+            exit 0
+          fi
+          echo "::error::$GITIAN_TAG is not a recognised pre-release and its tree has no fn-dsa genesis gate"
+          exit 1
+        fi
+        python3 "$gate" --release-tag "$GITIAN_TAG"
+
   build-gitian:
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
