@@ -208,6 +208,11 @@ pub enum FactsFault {
     /// index list) that would reach the caller as a fact about their request
     /// rather than a fault of this node.
     Inconsistent,
+    /// The chain store's data file could not be read for its size. Raised on
+    /// this side, by [`crate::info_facts::store_file_size`], and never
+    /// reported as a size of `0` — an empty store is `0`, and a store that
+    /// cannot be read is not that (RK-D23).
+    StoreUnreadable,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),

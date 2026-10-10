@@ -474,6 +474,93 @@ uint64_t shekyl_rpc_fee_grace_blocks_max(void);
 // The two peerlist capacities `print_peer_list_stats` reports a fraction of.
 void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
 
+// ── RK-5c: `get_info` ──────────────────────────────────────────────────────
+//
+// `get_info` is gathered by part (docs/design/DAEMON_RPC_KV_GET_INFO.md §4.2,
+// RK-D24): a part the caller will not be shown is not read. So there is one
+// export per unit of disclosure rather than one for the method, and the Rust
+// handler calls only those its caller is entitled to.
+
+// Health, identity, chain and the economics operands: read for every caller.
+// Every member that comes from the chain store is read under ONE chain lock
+// and carries its own tip (RK-D20), so a reply cannot pair one tip's hash with
+// another tip's difficulty.
+typedef struct shekyl_rpc_info_chain_facts {
+    uint64_t chain_height;             // top block height + 1
+    uint8_t  top_hash[32];
+    uint64_t difficulty_lo;            // next block's difficulty, 128 bits
+    uint64_t difficulty_hi;
+    uint64_t cumulative_difficulty_lo; // at the tip, 128 bits
+    uint64_t cumulative_difficulty_hi;
+    uint64_t difficulty_target;        // seconds
+    uint64_t total_transactions;       // coinbases included
+    uint64_t block_weight_limit;
+    uint64_t block_weight_median;
+    uint64_t adjusted_time;
+    uint64_t already_generated_coins;  // through the tip, atomic units
+    uint64_t total_burned;
+    uint64_t tx_volume_count_sum;      // the trailing volume window
+    uint64_t tx_volume_blocks;
+    uint64_t core_target_height;       // 0: the core has no target
+    uint8_t  synchronized;             // the protocol's predicate, read once
+    uint8_t  busy_syncing;
+    uint8_t  offline;
+    uint8_t  following_degraded;
+    uint8_t  nettype;                  // cryptonote::network_type
+    uint8_t  protocol_version;         // SHEKYL_PROTOCOL_VERSION, a C++ constant
+    uint8_t  reserved[2];
+} shekyl_rpc_info_chain_facts;
+
+int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
+
+// The pool's population. `include_unrelayed` = 0 counts the broadcast set,
+// which is what every caller may be told; non-zero adds the entries this node
+// has not broadcast, which is host-only data (RPC_CHANNEL.md §6.1, RT-O9.3)
+// and is asked for only on behalf of a caller who may see it.
+int shekyl_rpc_info_pool_count(core_rpc_handle* h, uint8_t include_unrelayed, uint64_t* out);
+
+// Status facts, read only for a caller who is shown Status. The store's
+// on-disk size is NOT here: a restricted reply still carries it, rounded, so
+// it has its own read (`shekyl_rpc_info_store_file`).
+typedef struct shekyl_rpc_info_status_facts {
+    uint64_t start_time;
+    uint64_t free_space;                   // of the data directory's volume
+    uint64_t alt_blocks_count;
+    uint64_t public_connections;           // the clearnet zone's sessions
+    uint64_t public_outgoing_connections;  // of which outbound
+} shekyl_rpc_info_status_facts;
+
+// The build's version string (SHEKYL_VERSION_FULL) is written to
+// `version_buf`, not NUL-terminated, with its length in `*version_len`. It
+// exists only in C++, and it is a Status field, so it rides this export. A
+// buffer too small for it is ERR_INTERNAL, never a truncated version.
+int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
+    char* version_buf, size_t version_cap, size_t* version_len);
+
+// Peers facts, read only for a caller who is shown Peers.
+typedef struct shekyl_rpc_info_peers_facts {
+    uint64_t public_incoming_sockets;
+    uint64_t public_outgoing_sockets;
+    uint64_t tor_incoming_sockets;
+    uint64_t tor_outgoing_sockets;
+    uint64_t white_peerlist_size;
+    uint64_t grey_peerlist_size;
+} shekyl_rpc_info_peers_facts;
+
+int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out);
+
+// The path of the chain store's data file, written to `path_buf`, not
+// NUL-terminated, with its length in `*path_len`.
+//
+// This crosses instead of a size because the store's own size getter swallows
+// the stat error and answers 0 — a zero that means "could not read". The Rust
+// side stats the file itself and reports a failure as a fault. It is also the
+// half that survives the store cutover: the Rust store names its file the
+// same way and the stat does not change. A store that names no file, or a
+// path longer than the buffer, is ERR_INTERNAL.
+int shekyl_rpc_info_store_file(core_rpc_handle* h, char* path_buf, size_t path_cap,
+    size_t* path_len);
+
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 //
 // **Their value rests on these definitions and their Rust counterparts being
@@ -505,6 +592,12 @@ int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* fact
 // `rpc_facts_ffi_roundtrip.cpp`, as `shekyl_rpc_tx_entry` is.
 void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
 int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
+void shekyl_rpc_info_chain_facts_test_fill(shekyl_rpc_info_chain_facts* out, uint64_t seed);
+int shekyl_rpc_info_chain_facts_test_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed);
+void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, uint64_t seed);
+int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed);
+void shekyl_rpc_info_peers_facts_test_fill(shekyl_rpc_info_peers_facts* out, uint64_t seed);
+int shekyl_rpc_info_peers_facts_test_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -540,6 +633,40 @@ namespace daemon_rpc_facts {
 
 int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
     shekyl_rpc_fee_estimate_facts* out) noexcept;
+
+// `get_info`'s chain snapshot. The five scalars are what the adapter reads
+// from `core` and the p2p payload object; everything else is read here, under
+// one chain lock.
+struct info_chain_scalars
+{
+  uint64_t core_target_height;
+  uint8_t synchronized;
+  uint8_t busy_syncing;
+  uint8_t offline;
+  uint8_t nettype;
+};
+
+int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
+    shekyl_rpc_info_chain_facts* out) noexcept;
+
+int info_pool_count(const cryptonote::tx_memory_pool& pool, uint8_t include_unrelayed,
+    uint64_t* out) noexcept;
+
+// `get_info`'s Status facts. The alt-block count is the one chain-store read;
+// the rest are `core` and p2p scalars the adapter snapshots.
+struct info_status_scalars
+{
+  uint64_t start_time;
+  uint64_t free_space;
+  uint64_t public_connections;
+  uint64_t public_outgoing_connections;
+};
+
+int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
+    shekyl_rpc_info_status_facts* out) noexcept;
+
+int info_store_file(cryptonote::Blockchain& bc, char* path_buf, size_t path_cap,
+    size_t* path_len) noexcept;
 
 int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
     uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept;

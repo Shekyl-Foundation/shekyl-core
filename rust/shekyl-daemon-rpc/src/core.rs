@@ -183,6 +183,27 @@ pub struct PeerFacts {
 /// than data a caller supplied, and there is no reply shape that could carry
 /// it faithfully anyway — the wire is JSON.
 ///
+/// Room for the build's version string. `SHEKYL_VERSION_FULL` is a version, a
+/// dash and a short commit hash; the callee refuses rather than truncates.
+const INFO_VERSION_CAP: usize = 128;
+
+/// Room for the chain store's data-file path: `PATH_MAX` on the platforms
+/// this daemon runs on. The callee refuses a longer one.
+const INFO_STORE_PATH_CAP: usize = 4096;
+
+/// A path as the operating system wrote it. On Unix a path is bytes and is
+/// taken as such; elsewhere it is the daemon's UTF-8 rendering of one.
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(bytes).into()
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: Vec<u8>) -> std::path::PathBuf {
+    String::from_utf8_lossy(&bytes).into_owned().into()
+}
+
 /// # Safety
 ///
 /// `ptr` must be null or point to `len` readable bytes that outlive the call.
@@ -327,6 +348,153 @@ impl CoreRpc {
         } else {
             Err(rc)
         }
+    }
+
+    /// `get_info`'s chain snapshot (`shekyl_rpc_info_chain`); `Err(code)` on
+    /// a non-OK return, including a null handle.
+    pub fn info_chain(&self) -> Result<ffi::InfoChainFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoChainFactsFfi {
+            chain_height: 0,
+            top_hash: [0; 32],
+            difficulty_lo: 0,
+            difficulty_hi: 0,
+            cumulative_difficulty_lo: 0,
+            cumulative_difficulty_hi: 0,
+            difficulty_target: 0,
+            total_transactions: 0,
+            block_weight_limit: 0,
+            block_weight_median: 0,
+            adjusted_time: 0,
+            already_generated_coins: 0,
+            total_burned: 0,
+            tx_volume_count_sum: 0,
+            tx_volume_blocks: 0,
+            core_target_height: 0,
+            synchronized: 0,
+            busy_syncing: 0,
+            offline: 0,
+            following_degraded: 0,
+            nettype: 0,
+            protocol_version: 0,
+            reserved: [0; 2],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_info_chain(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The pool's population (`shekyl_rpc_info_pool_count`): the broadcast
+    /// set, or every entry when `include_unrelayed`.
+    pub fn info_pool_count(&self, include_unrelayed: bool) -> Result<u64, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut count: u64 = 0;
+        // SAFETY: live handle; `count` is a valid out pointer for the call.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_pool_count(
+                self.handle,
+                u8::from(include_unrelayed),
+                &raw mut count,
+            )
+        };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(count)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// `get_info`'s Status facts and the build's version string
+    /// (`shekyl_rpc_info_status`).
+    pub fn info_status(&self) -> Result<(ffi::InfoStatusFactsFfi, String), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoStatusFactsFfi {
+            start_time: 0,
+            free_space: 0,
+            alt_blocks_count: 0,
+            public_connections: 0,
+            public_outgoing_connections: 0,
+        };
+        let mut version = [0u8; INFO_VERSION_CAP];
+        let mut version_len: usize = 0;
+        // SAFETY: live handle; `pod`, `version` and `version_len` are valid
+        // for the call, and the callee writes at most `INFO_VERSION_CAP`
+        // bytes into `version`.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_status(
+                self.handle,
+                &raw mut pod,
+                version.as_mut_ptr(),
+                version.len(),
+                &raw mut version_len,
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        let written = version
+            .get(..version_len)
+            .ok_or(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL)?;
+        Ok((pod, String::from_utf8_lossy(written).into_owned()))
+    }
+
+    /// `get_info`'s Peers facts (`shekyl_rpc_info_peers`).
+    pub fn info_peers(&self) -> Result<ffi::InfoPeersFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoPeersFactsFfi {
+            public_incoming_sockets: 0,
+            public_outgoing_sockets: 0,
+            tor_incoming_sockets: 0,
+            tor_outgoing_sockets: 0,
+            white_peerlist_size: 0,
+            grey_peerlist_size: 0,
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_info_peers(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The path of the chain store's data file (`shekyl_rpc_info_store_file`).
+    pub fn info_store_file(&self) -> Result<std::path::PathBuf, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut path = vec![0u8; INFO_STORE_PATH_CAP];
+        let mut path_len: usize = 0;
+        // SAFETY: live handle; `path` and `path_len` are valid for the call,
+        // and the callee writes at most `INFO_STORE_PATH_CAP` bytes.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_store_file(
+                self.handle,
+                path.as_mut_ptr(),
+                path.len(),
+                &raw mut path_len,
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        if path_len == 0 || path_len > path.len() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL);
+        }
+        path.truncate(path_len);
+        Ok(path_from_bytes(path))
     }
 
     /// Block hash at `height` plus the tip as of the same read

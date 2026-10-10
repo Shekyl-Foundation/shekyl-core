@@ -570,6 +570,174 @@ pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_check(
 
 // Narrow fields on purpose (see chain_tip_facts_filled).
 #[allow(clippy::cast_possible_truncation)]
+fn info_chain_facts_filled(seed: u64) -> crate::ffi::InfoChainFactsFfi {
+    let mut top_hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 1);
+    for (i, byte) in top_hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::InfoChainFactsFfi {
+        chain_height: submit_facts_field_value(seed, 0),
+        top_hash,
+        difficulty_lo: submit_facts_field_value(seed, 2),
+        difficulty_hi: submit_facts_field_value(seed, 3),
+        cumulative_difficulty_lo: submit_facts_field_value(seed, 4),
+        cumulative_difficulty_hi: submit_facts_field_value(seed, 5),
+        difficulty_target: submit_facts_field_value(seed, 6),
+        total_transactions: submit_facts_field_value(seed, 7),
+        block_weight_limit: submit_facts_field_value(seed, 8),
+        block_weight_median: submit_facts_field_value(seed, 9),
+        adjusted_time: submit_facts_field_value(seed, 10),
+        already_generated_coins: submit_facts_field_value(seed, 11),
+        total_burned: submit_facts_field_value(seed, 12),
+        tx_volume_count_sum: submit_facts_field_value(seed, 13),
+        tx_volume_blocks: submit_facts_field_value(seed, 14),
+        core_target_height: submit_facts_field_value(seed, 15),
+        synchronized: submit_facts_field_value(seed, 16) as u8,
+        busy_syncing: submit_facts_field_value(seed, 17) as u8,
+        offline: submit_facts_field_value(seed, 18) as u8,
+        following_degraded: submit_facts_field_value(seed, 19) as u8,
+        nettype: submit_facts_field_value(seed, 20) as u8,
+        protocol_version: submit_facts_field_value(seed, 21) as u8,
+        reserved: [0; 2],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_info_chain_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_info_chain_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_chain_facts_rust_fill(
+    out: *mut crate::ffi::InfoChainFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(info_chain_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_info_chain_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_info_chain_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_chain_facts_rust_check(
+    facts: *const crate::ffi::InfoChainFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == info_chain_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+fn info_status_facts_filled(seed: u64) -> crate::ffi::InfoStatusFactsFfi {
+    crate::ffi::InfoStatusFactsFfi {
+        start_time: submit_facts_field_value(seed, 0),
+        free_space: submit_facts_field_value(seed, 1),
+        alt_blocks_count: submit_facts_field_value(seed, 2),
+        public_connections: submit_facts_field_value(seed, 3),
+        public_outgoing_connections: submit_facts_field_value(seed, 4),
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_info_status_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_info_status_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_status_facts_rust_fill(
+    out: *mut crate::ffi::InfoStatusFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(info_status_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_info_status_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_info_status_facts`, or be
+/// null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_status_facts_rust_check(
+    facts: *const crate::ffi::InfoStatusFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == info_status_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+fn info_peers_facts_filled(seed: u64) -> crate::ffi::InfoPeersFactsFfi {
+    crate::ffi::InfoPeersFactsFfi {
+        public_incoming_sockets: submit_facts_field_value(seed, 0),
+        public_outgoing_sockets: submit_facts_field_value(seed, 1),
+        tor_incoming_sockets: submit_facts_field_value(seed, 2),
+        tor_outgoing_sockets: submit_facts_field_value(seed, 3),
+        white_peerlist_size: submit_facts_field_value(seed, 4),
+        grey_peerlist_size: submit_facts_field_value(seed, 5),
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_info_peers_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_info_peers_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_peers_facts_rust_fill(
+    out: *mut crate::ffi::InfoPeersFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(info_peers_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_info_peers_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_info_peers_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_info_peers_facts_rust_check(
+    facts: *const crate::ffi::InfoPeersFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == info_peers_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Narrow fields on purpose (see chain_tip_facts_filled).
+#[allow(clippy::cast_possible_truncation)]
 fn block_header_facts_filled(seed: u64) -> crate::ffi::BlockHeaderFactsFfi {
     let mut hashes = [[0u8; 32]; 6];
     for (f, hash) in hashes.iter_mut().enumerate() {

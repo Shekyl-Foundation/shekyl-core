@@ -4117,6 +4117,7 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
+ "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

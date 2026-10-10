@@ -27,6 +27,12 @@ void shekyl_rpc_fee_estimate_facts_rust_fill(shekyl_rpc_fee_estimate_facts* out,
 int shekyl_rpc_fee_estimate_facts_rust_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
 void shekyl_rpc_net_stats_facts_rust_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
 int shekyl_rpc_net_stats_facts_rust_check(const shekyl_rpc_net_stats_facts* facts, uint64_t seed);
+void shekyl_rpc_info_chain_facts_rust_fill(shekyl_rpc_info_chain_facts* out, uint64_t seed);
+int shekyl_rpc_info_chain_facts_rust_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed);
+void shekyl_rpc_info_status_facts_rust_fill(shekyl_rpc_info_status_facts* out, uint64_t seed);
+int shekyl_rpc_info_status_facts_rust_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed);
+void shekyl_rpc_info_peers_facts_rust_fill(shekyl_rpc_info_peers_facts* out, uint64_t seed);
+int shekyl_rpc_info_peers_facts_rust_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed);
 }
 
 namespace
@@ -139,6 +145,67 @@ TEST(rpc_facts_ffi_roundtrip, net_stats_facts_rust_writes_cpp_reads)
   }
 }
 
+// RK-5c: `get_info`'s three fact PODs, each pinned in both directions.
+TEST(rpc_facts_ffi_roundtrip, info_chain_facts_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_chain_facts facts;
+    shekyl_rpc_info_chain_facts_test_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_chain_facts_rust_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, info_chain_facts_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_chain_facts facts;
+    shekyl_rpc_info_chain_facts_rust_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_chain_facts_test_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, info_status_facts_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_status_facts facts;
+    shekyl_rpc_info_status_facts_test_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_status_facts_rust_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, info_status_facts_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_status_facts facts;
+    shekyl_rpc_info_status_facts_rust_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_status_facts_test_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, info_peers_facts_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_peers_facts facts;
+    shekyl_rpc_info_peers_facts_test_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_peers_facts_rust_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, info_peers_facts_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_info_peers_facts facts;
+    shekyl_rpc_info_peers_facts_rust_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_info_peers_facts_test_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
 TEST(rpc_facts_ffi_roundtrip, fee_estimate_facts_cpp_writes_rust_reads)
 {
   for (const uint64_t seed : seeds)
@@ -215,6 +282,20 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_tx_entry, reserved) == 108, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
+
+  // RK-5c. Mirrored by `const _: ()` asserts in `ffi.rs`.
+  static_assert(sizeof(shekyl_rpc_info_chain_facts) == 160, "info-chain facts POD changed size");
+  static_assert(alignof(shekyl_rpc_info_chain_facts) == 8, "info-chain facts alignment");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, top_hash) == 8, "top_hash offset");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, difficulty_lo) == 40, "difficulty_lo offset");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, core_target_height) == 144,
+    "core_target_height offset");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, synchronized) == 152, "synchronized offset");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, nettype) == 156, "nettype offset");
+  static_assert(offsetof(shekyl_rpc_info_chain_facts, protocol_version) == 157,
+    "protocol_version offset");
+  static_assert(sizeof(shekyl_rpc_info_status_facts) == 40, "info-status facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_info_peers_facts) == 48, "info-peers facts POD changed size");
   static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
