@@ -209,8 +209,9 @@ pub const P2P_DEFAULT_OUT_PEERS: u32 = 12;
 /// its own constant and not an alias of [`P2P_DEFAULT_OUT_PEERS`].
 ///
 /// It is also the address-hiding outbound target (Rick, 2026-10-07). The
-/// own-edge pool is the outbound sessions whose connector declares
-/// `address_hidden_from_peer`, and that pool is this degree. Dandelion++
+/// hidden outbound sessions — those whose connector declares
+/// `address_hidden_from_peer`, from which the relay draws the hidden stem
+/// slot (`DAEMON_RELAY_PRIVACY.md` §95.3) — are this degree. Dandelion++
 /// §4.3 Algorithm 2 draws its two outbound relays from the node's P2P
 /// outbound edges. "4-regular" is that graph's expected degree (two out
 /// plus about two in), not the pool size. *Records-was:
