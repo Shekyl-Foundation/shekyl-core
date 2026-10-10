@@ -90,7 +90,7 @@
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
 //! A1 + A5 + A7 + A8 composes them at its call site.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
@@ -484,15 +484,15 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// range at all. This hops the persona's shards the way [`served_shards`]
 /// hops serve-credit — seek to the next shard, never walk the shard ids
 /// between — and point-reads each requested epoch. An epoch with no Served
-/// shard is absent from the map. Empty `epochs` reads nothing. Only a
+/// shard is absent from the map. Empty `epochs` reads nothing. `epochs` is
+/// a set, so no epoch is read twice (`ChainView::served_at`). Only a
 /// requested epoch is decoded; a row that does not decode is SI-7.
 pub(super) fn served_at<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
-    epochs: &[SettlementEpoch],
+    epochs: &BTreeSet<SettlementEpoch>,
 ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, ReadFault> {
     let mut out = BTreeMap::new();
-    let epochs = distinct_epochs(epochs);
     if epochs.is_empty() {
         return Ok(out);
     }
@@ -504,7 +504,7 @@ pub(super) fn served_at<T: ReadTables>(
             break;
         };
         let shard = SettlementKey::from_key(row?.0.value()).shard();
-        for &epoch in &epochs {
+        for &epoch in epochs {
             let Some(guard) = table.get(SettlementKey::new(*persona, shard, epoch).key())? else {
                 continue;
             };
@@ -527,15 +527,6 @@ pub(super) fn served_at<T: ReadTables>(
         .key();
     }
     Ok(out)
-}
-
-/// `epochs` in order, each once. A claim that cites an epoch twice must
-/// not credit its shards twice.
-fn distinct_epochs(epochs: &[SettlementEpoch]) -> Vec<SettlementEpoch> {
-    let mut distinct = epochs.to_vec();
-    distinct.sort_unstable();
-    distinct.dedup();
-    distinct
 }
 
 /// The nine table-backed families of the archival snapshot

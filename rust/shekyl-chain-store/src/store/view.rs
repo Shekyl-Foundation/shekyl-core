@@ -85,7 +85,7 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
@@ -368,7 +368,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn served_at(
         &self,
         persona: &PCanonicalId,
-        epochs: &[SettlementEpoch],
+        epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
         archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
     }

@@ -25,6 +25,8 @@
 //! and `slash_writes_land_at_the_m_epoch_deadline` there is the 9b witness
 //! in the unit lane; the `#[ignore]`d B9 bench shares the chain.
 
+use std::collections::BTreeSet;
+
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault, Locus,
@@ -407,7 +409,7 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
         Some(zero)
     );
     assert!(
-        snap.served_at(&p, &[epoch(CREDIT_EPOCH)])
+        snap.served_at(&p, &BTreeSet::from([epoch(CREDIT_EPOCH)]))
             .expect("read")
             .is_empty(),
         "no draw was issued, so no shard is Served"

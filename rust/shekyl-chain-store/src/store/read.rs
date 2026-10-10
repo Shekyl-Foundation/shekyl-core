@@ -37,8 +37,6 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
-use std::collections::BTreeMap;
-
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
@@ -48,6 +46,7 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::archival_snapshot::ArchivalSnapshot;
 use crate::codec::{
@@ -1066,7 +1065,7 @@ impl ReadSnapshot<'_> {
     pub fn served_at(
         &self,
         persona: &PCanonicalId,
-        epochs: &[SettlementEpoch],
+        epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
         archival_reads::served_at(&self.txn, persona, epochs)
             .map_err(chain_reads::ReadFault::into_plain)
