@@ -187,6 +187,65 @@ so the two cannot disagree on a verdict without saying why.
 - **Still not shown, by design (RT-O11):** that Shekyl's handshake
   reproduces these vectors. That is RT-W9.
 
+## 4.2 What the model found by running (commit 7, RT-P7)
+
+Run 2026-10-10 with ProVerif 2.05: **27 verdicts, all as
+`RPC_CHANNEL.md` §4.1 and §4.2 predict.** The table of variants, queries
+and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`.
+
+- **Daemon authentication is hybrid:** it holds with X25519 broken and with
+  ML-KEM broken.
+- **Client authentication is classical at message 3 and hybrid at the
+  first record:** with X25519 broken, ProVerif finds the attack at message
+  3 and proves the property at the first record. With ML-KEM broken both
+  hold.
+- **The first request and the first reply stay secret** under either
+  break.
+- **The client's identity is hidden** from the path under either break,
+  and stays hidden when the daemon's static keys leak afterwards.
+- **Control:** with both primitives broken, authentication and secrecy
+  fail, so the breaks have teeth.
+- **Named edits fail as they must:** without message 1's `skem`, daemon
+  authentication falls to a broken X25519; without `se`, client
+  authentication at message 3 falls outright; without message 4's `skem`,
+  client authentication at the first record falls to a broken X25519.
+- **One session of each role runs to completion,** so none of this is
+  about a protocol that cannot run.
+
+Three things the running taught, kept because the next person to touch the
+model will meet them:
+
+- **A named edit exposed a flaw in the model itself.** The first version
+  had the daemon accept the first record only if it carried one particular
+  secret value. No attacker could produce that value whatever the handshake
+  did, so the edit that removes message 4's `skem` *passed*. The daemon now
+  accepts any record that opens under the session key, which is what key
+  confirmation means, and the edit fails as it should. This is what the
+  named edits are for.
+- **Two ways of modelling a broken primitive did not terminate in
+  practice.** An attacker rule for discrete logarithms beside the
+  Diffie-Hellman equation, and one recovering a KEM secret key from its
+  public key, reached 17 GiB in one process within half an hour. Publishing
+  the secret keys instead worked for X25519 and still ran out of memory
+  once the daemon's static ML-KEM key was published. The model now makes
+  every shared secret of a broken primitive a public constant, which gives
+  the attacker at least what a real break would, and every variant
+  finishes: about 22 minutes for the slowest on the dev box.
+- **RT-P7's row named a third edit, moving `skem` after `e`.** A symbolic
+  model does not distinguish token order within a message, so it has no
+  verdict to move. That edit is checked where it can fail: clatter refuses
+  the pattern at construction (`shekyl-rpc-channel-xcheck`, §4.1).
+
+**Installing ProVerif.** One version, 2.05, by one recipe,
+`rust/shekyl-rpc-channel/model/install_proverif.sh`, run on the dev box and
+by the CI job alike; `run.py` refuses any other version. The go-ahead named
+opam. opam supplies the pinned OCaml toolchain, but ProVerif itself is
+built from its source release with `./build -nointeract`: the opam package
+depends on GTK 2 development headers for an interactive simulator the
+model does not use, and those need root. Every download is checked against
+a recorded SHA-256. The recipe was run from an empty directory to prove it
+before it was committed.
+
 ---
 
 ## 5. Commit plan
@@ -199,7 +258,7 @@ Each is one unit of work, pushed as it is made.
 | 2 | Delete `shekyl-rt-p2-spike` | F-17; the lock diff is read and stated |
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
 | 4–6 | **Landed as one commit** (accepted 2026-10-09), because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
-| 7 | The ProVerif model, its runner and its CI job | RT-O15; RT-P7 |
+| 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted (§4.2) | RT-O15; RT-P7 |
 | 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` | Host claimed first |
 
 RT-W9 is not started from this branch.

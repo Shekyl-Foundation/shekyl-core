@@ -444,7 +444,14 @@ failing under a named edit** before its pass is trusted:
    ephemeral. If our implementation, drawing in that order, does not
    reproduce the pinned bytes, the difference is reported — a weaker
    comparison is not substituted and called this anchor.
-3. **The design:** the ProVerif model (RT-P7), which gates RT-W9.
+3. **The design:** the ProVerif model (RT-P7), which gates RT-W9. **Run
+   2026-10-10, ProVerif 2.05: every verdict as this section predicts** —
+   daemon authentication under either break; client authentication broken
+   at message 3 by a broken X25519 and intact at the first record; secrecy
+   of the first request and reply and of the client's identity under either
+   break; and each named edit failing as it must
+   (`rust/shekyl-rpc-channel/model/run.py`; the record is in the RT-W8
+   pre-flight, §4.2).
 
 **clatter is a test-only cross-check, never a production dependency** —
 the P2P round's read-not-depend posture for `snow` (PW-7a). That is encoded
