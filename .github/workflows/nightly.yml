@@ -10,7 +10,7 @@ on:
         required: false
         default: ""
       ref:
-        description: "economics-sim-ignored only: check out this ref on both legs, not main and dev. For proving the lane on a branch."
+        description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
         required: false
         default: ""
 
@@ -25,15 +25,18 @@ jobs:
     if: ${{ !inputs.job || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
     # schedule picks up whichever version of this file is on main. The matrix
-    # below makes each scheduled run cover both active branches in parallel;
-    # while tuning this job we may be ahead on dev, and workflow_dispatch with
+    # below makes each scheduled run cover both active branches in parallel.
+    # A dispatch that names the `ref` input runs one leg over that ref in
+    # their place, in every job the dispatch runs, which is how a lane is
+    # shown red on a branch before it merges.
+    # While tuning this job we may be ahead on dev, and workflow_dispatch with
     # ref=dev can exercise the newer config before it lands on main.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        branch: [main, dev]
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,7 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [main, dev]
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -226,9 +229,7 @@ jobs:
     # this file over both branches, so the `main` leg is red until the
     # release that carries the tests it names (and threads onto one tracking
     # issue until then); `workflow_dispatch` with ref=dev runs the newer
-    # config. A dispatch may also name a `ref` input: both legs then check
-    # out that ref, which is how the lane is shown red on a branch before it
-    # merges. A dispatched red opens no issue; the person who dispatched it
+    # config. A dispatched red opens no issue; the person who dispatched it
     # is reading it.
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -239,11 +240,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [main, dev]
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || matrix.branch }}
+          ref: ${{ matrix.branch }}
           submodules: recursive
 
       - name: Install Rust toolchain
@@ -313,7 +314,7 @@ jobs:
             exit 1
           fi
           END=$(date +%s)
-          echo "::notice::Economics sim ignored tests completed on ${{ inputs.ref || matrix.branch }} in $((END - START))s (budget 180m)"
+          echo "::notice::Economics sim ignored tests completed on ${{ matrix.branch }} in $((END - START))s (budget 180m)"
 
       - name: notify on red
         # Same step as `store-ignored`'s: a nightly red nobody reads is the
