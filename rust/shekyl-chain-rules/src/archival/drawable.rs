@@ -23,7 +23,7 @@ use crate::rules::miner::closed_shards_through;
 use crate::view::ChainView;
 
 /// The drawable `(P, s)` pairs of one settlement epoch, in canonical
-/// order (`shard_id` numeric, then persona).
+/// order (persona canonical-id bytes, then `shard_id` numeric).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DrawableSet {
     pairs: Vec<DrawablePair>,
@@ -78,8 +78,8 @@ impl DrawableSet {
 }
 
 /// Pin 1 (exclude `E_join ≥ E`), pin 2 (`CompleteTree` over the
-/// closed-and-final registry at `h_open`, not tip), pin 3 (sort
-/// `shard_id` then persona). `is_final` is the closed-and-final
+/// closed-and-final registry at `h_open`, not tip), pin 3 (sort persona
+/// canonical-id bytes, then `shard_id` numeric). `is_final` is the closed-and-final
 /// predicate at `h_open`; `closed` is that registry's upper bound so a
 /// CompleteTree walk does not invent shards past it.
 fn emit_pairs<E>(
