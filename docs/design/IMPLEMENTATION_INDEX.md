@@ -224,13 +224,14 @@ as-of SHA, and re-verify once merged with
 `cargo test -p shekyl-tor-control-client --lib` and a dispatch of the
 `tor-pin-verify` workflow.
 The `RK-` row (§2) and the `DAEMON_RPC_KV_GET_INFO.md` row are advanced
-the same way on PR #1008 (`feat/rk5c-get-info`), a docs-only pre-flight:
-their cells carry their own as-of dates (drafted 2026-10-08, ratified
-2026-10-09), every `file:line` in that document was read at `98fbd20ac`,
-and they re-verify once merged with
+the same way on PR #1017 (`feat/rk5c-origin-guard`), RK-5c's
+implementation; the pre-flight they describe merged with #1008. Their
+cells carry their own as-of dates (commits 1–4, 2026-10-09 and
+2026-10-10), and they re-verify once merged with
 `python3 scripts/ci/check_index_prefix_uniqueness.py`,
-`python3 scripts/ci/check_doc_code_citations.py` and
-`git grep -c "RK-Q11" docs/design/DAEMON_RPC_KV_GET_INFO.md`.
+`python3 scripts/ci/check_doc_code_citations.py`,
+`cargo test -p shekyl-rpc-types -p shekyl-daemon-rpc -p shekyl-economics`
+and `scripts/ci/run_live_daemon_gates.sh`.
 The unified stamp names a `dev` tree and
 does not move for a branch; it moves with the merge that lands the code
 (the lane's docs commit re-runs the checks then — including
