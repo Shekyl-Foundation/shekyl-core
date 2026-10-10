@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "Vectors for the RPC channel's handshake, Noise hybridXK (RPC_CHANNEL.md 4.1).",
+    "They record what clatter 2.3.0 produces from seeded randomness with the",
+    "channel's real prologue. RT-W9's implementation must reproduce them from the",
+    "same seeded streams; until it does they say nothing about Shekyl's code.",
+    "The seeded generator is defined in",
+    "rust/shekyl-rpc-channel-xcheck/tests/support/mod.rs and described in",
+    "vectors.json under `rng`. The static keys' secret halves are test values."
+  ],
+  "oracle": "clatter =2.3.0, default features off, RustCrypto ml-kem as locked",
+  "regeneration_command": "cargo test -p shekyl-rpc-channel-xcheck --test hybrid_xk regenerate -- --ignored",
+  "vectors_sha3_256_hex": "aadf89954cb95ece23a38cbb28fdb5970fa917a702757a068c99d5532dc09b1f"
+}

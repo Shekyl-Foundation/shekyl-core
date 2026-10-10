@@ -712,3 +712,19 @@ jobs:
         # here even though the Rust test would pass.
         if: '!cancelled()'
         run: python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py --check
+
+      - name: Run clatter production-graph gate
+        # clatter is an independent implementation of the RPC channel's
+        # handshake pattern, in the workspace as a test-only cross-check
+        # (RPC_CHANNEL.md section 4.1, RT-O12). This asserts the one edge to
+        # it is a dev-dependency of the cross-check crate, that nothing
+        # depends on that crate, and that clatter's C ML-KEM backend stays
+        # off. It reads the manifests and Cargo.lock; no build is needed.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_clatter_not_in_production.py
+
+      - name: Run clatter production-graph gate selftest
+        # Builds throwaway trees and bites each failure class red, beside a
+        # control that must stay green.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_clatter_not_in_production.py --selftest

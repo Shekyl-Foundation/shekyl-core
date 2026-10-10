@@ -1,0 +1,42 @@
+[package]
+name = "shekyl-rpc-channel-xcheck"
+description = "Test-only cross-check of the RPC channel's handshake against clatter (never a dependency of anything)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# This crate has no dependencies and exports nothing. Everything it does is a
+# test, so clatter is a dev-dependency and reaches no non-dev graph, this
+# crate's included. `scripts/ci/check_clatter_not_in_production.py` holds
+# that: only this manifest may name clatter, only under [dev-dependencies],
+# and no crate may depend on this one.
+
+[dev-dependencies]
+# RPC_CHANNEL.md RT-O12: clatter 2.3.0, an independent implementation of the
+# hybridXK pattern the channel adopts. Exact pin: the vectors it generates are
+# committed, and a different clatter is a different oracle.
+#
+# Default features are OFF. They include `use-pqclean-ml-kem`, a binding to
+# the PQClean C implementation with its own C build; the cross-check needs
+# only the Rust ML-KEM backend. `alloc` is for the `_vec` transport helpers.
+clatter = { version = "=2.3.0", default-features = false, features = [
+    "alloc",
+    "use-25519",
+    "use-chacha20poly1305",
+    "use-blake2",
+    "use-rust-crypto-ml-kem",
+] }
+# The seeded generator both roles draw from: one byte stream, SHAKE256 of a
+# role label. `rand_core` 0.6 is the version clatter 2.3.0 and `fips203` both
+# take, so one generator type serves either library.
+rand_core = "0.6"
+sha3 = { version = "0.10", default-features = false }
+hex = "0.4"
+serde_json = "1"
+# The real prologue, so the pinned vectors bind the bytes the channel will.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+
+[lints]
+workspace = true

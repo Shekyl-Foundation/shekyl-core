@@ -49,7 +49,7 @@ source.
 |---|---|---|---|
 | F-1 | clatter ships `hybridXK` as a named pattern in the order §4.1 adopts | clatter 2.3.0 `handshakepattern.rs:1238-1254` | **Holds.** `noise_hybrid_xk`: pre-message `s`; initiator `[skem, e, es]`, `[s, se]`; responder `[ekem, e, ee]`, `[skem]`. Identical in 3.0.0 |
 | F-2 | The protocol name is `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s` | clatter 2.3.0 `crypto_impl/x25519.rs:11-13`, `crypto_impl/rust_crypto_ml_kem.rs:28-31` | **Holds.** The code emits `25519` and `MLKEM768`. The README's example spells `X25519`; the code is what the transcript hashes |
-| F-3 | Both ML-KEM libraries draw the same randomness in the same order | `ml-kem` 0.2.1 `kem.rs:128-132`, `:194-200`; `fips203` 0.4.3 `ml_kem.rs:156-162`, `:226` | **Holds, read not run; re-run against 0.2.1 as RT-O12 required.** Key generation `d` then `z`, 32 bytes each; encapsulation one 32-byte `m`. The same was true of 0.3.2 |
+| F-3 | Both ML-KEM libraries draw the same randomness in the same order | `ml-kem` 0.2.1 and 0.2.3 `kem.rs:128-132`, `:194-200`; `fips203` 0.4.3 `ml_kem.rs:156-162`, `:226` | **Holds; re-run against 0.2.1 as RT-O12 required, and again against 0.2.3.** Key generation `d` then `z`, 32 bytes each; encapsulation one 32-byte `m`. clatter 2.3.0 asks for `ml-kem` 0.2.1 and the lock file resolves it to **0.2.3**, which is the version built; the two read identically at these lines. The same was true of 0.3.2 |
 | F-4 | Seeded randomness can be injected into clatter's hybrid handshake | clatter 2.3.0 `traits.rs:28-31`, `handshakestate/hybrid.rs:371` | **Holds, with a shape the design did not state.** The generator is a *type parameter* bounded by `RngCore + CryptoRng + Default + Clone`, and each handshake object builds its own with `RNG::default()`. A seeded stream is therefore a type whose `Default` yields it, and the two roles need two such types or they draw one stream twice |
 | F-5 | Ephemeral keys can be fixed without the generator | clatter 2.3.0 `handshakestate/hybrid.rs:460-466` | **Partly.** `e` and its KEM key are generated only when not already set, so they can be preset. Encapsulation randomness always comes from the generator, so F-4's type is needed regardless |
 | F-6 | One seeded stream can feed both libraries | clatter 2.3.0 `Cargo.toml` (`rand_core` `^0.6`); `rust/shekyl-p2p-transport/Cargo.toml` (`rand_core = "0.6"`) | **Moot since RT-O12.** Against 3.0.0 this was not established: it took `rand_core` 0.10 where `fips203` takes 0.6, so two adapters over one stream were needed and their agreement was itself a test. 2.3.0 takes the same `rand_core` 0.6 traits as `fips203`, so one generator type serves both and there is nothing between them to disagree |
@@ -57,7 +57,7 @@ source.
 | F-8 | No published vectors exist for any hybrid pattern | clatter's repository `vectors/` (`cacophony.txt`, `snow.txt` only) | **Holds for clatter.** Its own vector files are classical; it ships none for its hybrid patterns |
 | F-9 | clatter can be a dependency | `cargo search clatter` (2026-10-09) | **Yes, from the registry, at 2.3.0** (RT-O12). The unpublished 3.0.0 would have been a git dependency pinned by revision, and this workspace has none (no `git =` in any manifest) |
 | F-10 | clatter's toolchain needs fit | clatter 2.3.0 `Cargo.toml` (`edition = "2021"`, `rust-version = "1.81.0"`); `rust/Cargo.toml:447` (`rust-version = "1.94"`) | **Fits.** |
-| F-11 | What clatter brings into the lock file | clatter 2.3.0 `Cargo.toml` `[dependencies]`; `ml-kem` 0.2.1 `Cargo.toml` | `rand_core` 0.6, `x25519-dalek` 2.0.1, `chacha20poly1305` 0.10.1 and `blake2` 0.10.6 are the versions the production graph already carries, so they add nothing. New, test-only: `ml-kem` 0.2.1 and its tree, which includes **two pre-release crates**, `hybrid-array` 0.2.0-rc.9 and `kem` 0.3.0-pre.0; and `arrayvec`. The lock diff is read at the commit that adds them |
+| F-11 | What clatter brings into the lock file | `rust/Cargo.lock` at the commit that adds the cross-check crate | `rand_core` 0.6, `x25519-dalek` 2.0.1, `chacha20poly1305` 0.10.1 and `blake2` 0.10.6 are the versions the production graph already carries, so they add nothing. **Seven new packages, all test-only:** `clatter` 2.3.0; `ml-kem` 0.2.3; `hybrid-array` 0.2.3; `kem` 0.3.0-pre.0, the one **pre-release** among them (`ml-kem` pins it exactly); `thiserror-no-std` and `thiserror-impl-no-std` 2.0.2; and `syn` 1.0.109, a second major version of a build-time crate, pulled by the last |
 | F-12 | Shekyl's Noise primitives can be called from the new work | `rust/shekyl-p2p-transport/src/aead.rs:17-93` (every item `pub(crate)`), `noise.rs:58` (`struct Sym`, private) | **They cannot.** Nothing outside that crate can reach them until RT-W9 extracts the shared core. So RT-W8 has no Shekyl handshake to compare with anything (RT-O11) |
 | F-13 | Registering a domain string is a row in a file | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` header; `scripts/ci/domain_registry_gate.sh` | **It is a row and a Rust constant.** The gate requires the literal at its defining file with a `const` definition, and pins the count of cSHAKE call sites. RT-W8 therefore lands Rust code, and needs a crate to land it in (RT-O13). *Found at commit 3:* the registry groups rows by the mechanism that hashes them, and the prologue label fits none of the six — its own bytes go into the Noise handshake hash, not through cSHAKE. It is registered under a new one-entry mechanism 7, "Noise prologue label", with the gate and the registry test taught the id |
 | F-14 | The byte encodings the names depend on are fixed | `RPC_CHANNEL.md` §4.4, §5, §7.1 | **They are not.** The design names the inputs and not their encoding: how the prologue joins its customization to the network id; the input to the rendezvous name; the input to and the length of the static fingerprint (RT-O14) |
@@ -80,11 +80,9 @@ section says exactly what was and was not done.
 - **Not done, because the artifact does not exist:** the model, the
   vectors, the known-answer tests, the dependency gate. They are this
   slice's output.
-- **Not done, and it could have been:** compiling clatter 2.3.0 against
-  the workspace toolchain, and running its own tests. F-10 says it should
-  build; that is a reading of two manifests. It is the first thing the
-  cross-check commit does, and a failure there is reported, not worked
-  around.
+- **Done at commit 4:** clatter 2.3.0 compiled against the workspace
+  toolchain with its default features off, and its classical XK reproduced
+  the community vector. F-10's reading of two manifests is now a build.
 - **Not done, needs a host claim:** RT-P4 on the floor device. It is a
   long, quiet measurement and is claimed before it starts (rule 38).
 
@@ -126,9 +124,10 @@ randomness draws differed: they do not (F-3). F-6 is moot (see its row).
 
 Two things found while re-reading against 2.3.0, both handled inside the
 ruling rather than reopening it: the default features compile a C ML-KEM
-(F-18), so they are turned off; and `ml-kem` 0.2.1 depends on two
-pre-release crates (F-11), which are test-only and are named in the commit
-that adds them.
+(F-18), so they are turned off, and the gate holds them off; and the lock
+file resolves `ml-kem` to 0.2.3, not the 0.2.1 clatter names, with one
+pre-release crate in its tree (F-11). F-3 was read again at 0.2.3 before
+any vector was generated.
 
 ### RT-O13 — Where the constants and the two naming functions live
 
@@ -166,6 +165,23 @@ fails if a property query fails **or if a named-edit variant passes**.
 
 ---
 
+## 4.1 What the cross-check found by running (commits 4 to 6)
+
+- **Message 3 is 1,264 bytes plus its payload, not 1,280.** The design
+  document's cost paragraph had it wrong; the size test failed on clatter's
+  output and the document is corrected. Messages 1, 2 and 4 are as stated:
+  2,320, 2,320 and 1,120 plus payload.
+- **F-2 holds by execution:** clatter names the protocol
+  `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`.
+- **The prologue binding is observable.** With the randomness unchanged and
+  another network id, message 1 is identical except for its last 16 bytes.
+- **clatter enforces PQNoise's ordering rule.** The token order this round
+  first drafted (`e, es, skem`) is refused at pattern construction.
+- **Still not shown, by design (RT-O11):** that Shekyl's handshake
+  reproduces these vectors. That is RT-W9.
+
+---
+
 ## 5. Commit plan
 
 Each is one unit of work, pushed as it is made.
@@ -175,9 +191,7 @@ Each is one unit of work, pushed as it is made.
 | 1 | This document, with the round's ratification close-out | Docs only |
 | 2 | Delete `shekyl-rt-p2-spike` | F-17; the lock diff is read and stated |
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
-| 4 | The cross-check crate (clatter 2.3.0, default features off) and the clatter gate, with the gate's self-test; clatter built against the workspace toolchain | RT-O12; F-18 |
-| 5 | The classical anchor: clatter's XK against the community vector, taken from the file the P2P handshake already pins | F-7 |
-| 6 | The hybrid vectors under seeded randomness, each observed changing under its named edit | RT-O11; F-4, F-5 |
+| 4–6 | **Landed as one commit**, because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
 | 7 | The ProVerif model, its runner and its CI job | RT-O15; RT-P7 |
 | 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` | Host claimed first |
 

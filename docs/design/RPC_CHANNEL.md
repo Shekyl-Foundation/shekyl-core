@@ -399,9 +399,13 @@ The prologue (§4.4) is unchanged.
 - **Cost:** two round trips before the first request; three
   encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
   On the wire: message 1 is 2,320 bytes (1,088 ciphertext, 32 + 1,184
-  ephemerals, 16 tag); message 2 the same; message 3 is 1,280 bytes plus
-  its payload (both statics encrypted); message 4 is 1,120 bytes plus its
-  payload — about 7.0 KB in all. Paid once per channel session; §8 keeps
+  ephemerals, 16 tag); message 2 the same; message 3 is 1,264 bytes plus
+  its payload (32 + 16 and 1,184 + 16 for the two statics, each encrypted
+  with its own tag, and the payload's 16-byte tag); message 4 is 1,120
+  bytes plus its payload — about 7.0 KB in all. These are measured, not
+  only computed: the cross-check asserts them on clatter's output
+  (`shekyl-rpc-channel-xcheck`), and it corrected message 3, which this
+  section first gave as 1,280. Paid once per channel session; §8 keeps
   sessions alive.
 
 **What is and is not established about this pattern.** No published test
@@ -427,8 +431,9 @@ failing under a named edit** before its pass is trusted:
    the real prologue and commits the messages and transport keys as
    vectors; RT-W9 implements against them, red first. This anchor is
    complete only when RT-W9 lands, and RT-W8's record says so. Read at
-   source, **not yet run**: clatter's ML-KEM backend (RustCrypto `ml-kem`
-   0.2.1) and ours (`fips203` 0.4.3) draw the same randomness in the same
+   source: clatter's ML-KEM backend (RustCrypto `ml-kem`, which clatter
+   2.3.0 asks for as `0.2.1` and the lock file resolves to **0.2.3**; read
+   at both) and ours (`fips203` 0.4.3) draw the same randomness in the same
    order — key generation `d` then `z`, 32 bytes each (`ml-kem`
    `kem.rs:128-132`; `fips203` `ml_kem.rs:156-162`), encapsulation one
    32-byte `m` (`kem.rs:194-200`; `ml_kem.rs:226`) — and both X25519 sides

@@ -250,6 +250,11 @@ members = [
     # the three domain strings and the derivations that carry them, against
     # independently generated vectors. The handshake lands here in RT-W9.
     "shekyl-rpc-channel",
+    # Test-only: holds clatter, an independent implementation of the channel's
+    # handshake pattern, to the community vector and pins hybrid vectors from
+    # it (RT-O11, RT-O12). Nothing may depend on it; the gate is
+    # scripts/ci/check_clatter_not_in_production.py.
+    "shekyl-rpc-channel-xcheck",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
