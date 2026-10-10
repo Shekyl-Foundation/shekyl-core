@@ -738,7 +738,7 @@ every pair the draw did not reach as a miss.
 | The row | `shekyl_types::archival::SettlementRow`, built by `settle(passes, issued)` with `passes` counted among the three selected draws, floor 3, `issued` saturating at 255, `issued = 0` refused. Decoding re-settles the counts and refuses an outcome they do not give. It is the only `SettlementRow`: the count fold's type and its FFI are deleted | `rust/shekyl-types/src/archival/settlement.rs`; codec in `rust/shekyl-store-codec/src/archival.rs` |
 | The tables | `archival_settlement` is `([u8; 32], u64, u64) → Coded<SettlementRow>` at ordinal 19, sealed, written by the slash pass. The issued-draw index is `archival_issued_draw`, `(E, P, shard, h, j) → Coded<IssuedDraw>` (reveal height and the pass bit), and its digest is `archival_issued_digest`, `E → Coded<IssuedDigest>`; both Rust-only, ordinals 38 and 39. Layout 22. No block writes the index or the digest until admission lands; the Fakechain door is their one producer | `rust/shekyl-chain-store/src/schema.rs` (`ARCHIVAL_SETTLEMENT`, `ARCHIVAL_ISSUED_DRAW`, `ARCHIVAL_ISSUED_DIGEST`); `src/ids.rs` (`SettlementKey`, `IssuedDrawKey`); `src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`) |
 | The slash fold | Settles the epoch, then decides on rows. A pair is a candidate only if its row for the epoch is Missed; Served, NonObservation and no row are each no slash. The window walks back through earlier rows, passing over an unobserved epoch (`SO-D10b`), and stops where the record's standing ends, at `n` observations, past the serve budget, and at the retention horizon (§14.4 step 3). A complete-tree record's candidates are the shards it has a row for, in shard order, where the pass used to walk every closed shard; it is still slashed on the first failing one only. The one-challenge beacon geometry is gone from the Rust pass | `rust/shekyl-archival-retention/src/failure_window.rs` (`settlement_window_slashable`); `rust/shekyl-chain-rules/src/archival/slash.rs` (`scan_epoch`, `settle`, `challenge_failed`, the adapter `window_slashable`) |
-| Accrual | The epoch close credits a shard on any pass | `rust/shekyl-chain-rules/src/archival/close.rs:399-418` |
+| Accrual | A pair is credited for `E` iff its settlement row is Served. The slash pass of `E` gathers `r_market(·, E)` and `Σwork(E)` over the Served pairs, after it has slashed on the epoch, and the close freezes the budget only (§15, `SO-D11`). The claim verify re-gathers from the rows (`ChainView::served_at`, A17) | `rust/shekyl-chain-rules/src/archival/close.rs` (`Transition::gather`, `gather_universe`, `recorded_served`); `rules/tx_emission_against.rs` |
 | When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
 | `issued` | The length of a pair's counted draws in the stored index: those issued while it held the shard, read as `holds_shard_at` reads it. Nothing issues a draw on a block path yet, so the index is empty off Fakechain and the Rust pass settles and slashes nothing (`SO-D10a`) | `archival/slash.rs` (`counted`); `rust/shekyl-archival-retention/src/challenge_assignment.rs` (the urn, still without a caller outside its crate) |
 | A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`), and settlement reads it. Only the Fakechain door sets it. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands, and until then feeds accrual and the Release's served anchor, not the slash | `rust/shekyl-chain-store/src/schema.rs`; `store/archival_write.rs:183-211` |
@@ -868,7 +868,7 @@ live validator; the C++ daemon stays consensus, on the beacon, until
    beacon, and the Rust pass no longer decides that way. The committed
    capture stays as a record and goes with the capture tooling
    (`DEL-008`).
-4. **`SO-D10d`**: accrual reads the row.
+4. **`SO-D10d`**: accrual reads the row. **LANDED** as `SO-D11`, §15.
 5. **Admission and the draw.**
 
 ### 14.5 Rulings (maintainer, 2026-10-08)
@@ -924,13 +924,14 @@ unless noted.
 
 ---
 
-## 15. `SO-D11` — accrual reads the row, and the gather moves — RULED 2026-10-09
+## 15. `SO-D11` — accrual reads the row, and the gather moves — RULED 2026-10-09, LANDED
 
-Step 4 of §14.4. Grounded at `feat/settlement-writer@1ed03431ea`. Nothing
-here is built. Two rulings meet in this step, and the second rests on a
-premise the code does not bear out, so the step was posed before it was
-written. All eight sub-items are ruled (§15.8): as recommended, with one
-change to `SO-D11f`.
+Step 4 of §14.4. Grounded at `feat/settlement-writer@1ed03431ea`. Two
+rulings meet in this step, and the second rests on a premise the code did
+not bear out, so the step was posed before it was written. All eight
+sub-items are ruled (§15.8): as recommended, with one change to
+`SO-D11f`. It is built as ruled; §15.2 is the code as it stood when the
+step was posed, and §15.9 is what the build settled.
 
 ### 15.1 What is ruled
 
@@ -948,7 +949,7 @@ The second follows from the first: epoch `E`'s rows are written by the
 slash pass at `(E+2)·SEB − 1`, an epoch after `E`'s close at
 `(E+1)·SEB − 1`. A gather that reads rows cannot run at the close.
 
-### 15.2 What the code does today
+### 15.2 What the code did when this was posed
 
 | Subject | State | Where |
 | --- | --- | --- |
@@ -1051,3 +1052,46 @@ change.
 | `SO-D11f` | **As of the slash pass, and the universe is closed-and-final, not closed.** Bond admission and the drawable set use `closed_and_final`; the gather used plain "closed". A shard that closed inside the last reorg cap's worth of blocks would get a zero-count `r_market` row and could price CEN-J15 joins as maximally scarce while it is not yet bondable. One predicate. The FOLLOWUPS row "Two definitions of the shards that exist" closes with the implementing change |
 | `SO-D11g` | **No change to the wallet or the claim-source RPC in this step.** The RPC lane's item — gate an epoch on `Σwork`'s row, not only the budget's — is on the `DEL-008` row |
 | `SO-D11h` | **Re-pin the design text in the implementing change** |
+
+### 15.9 As built
+
+- **The gather runs after the epoch's own slashes**, over the records as
+  the pass left them. A record slashed for `E` carries the bad interval
+  that opens at `E`, so it is out of `E`'s market, and that is also the
+  record a claim's verify reads back later. Gathered before the slashes,
+  `Σwork(E)` would not be reproducible whenever a record Served on one
+  shard was slashed on another in the same pass, and every claim on `E`
+  would fail CEN-J25's comparison.
+- **The universe is read at the epoch's slash deadline, off the schedule**
+  (`gather_universe`), not at whichever block the caller is in. The pass
+  and the verify are then one read by construction.
+- **A shard's age is still measured at the epoch's close height.** The
+  ruling moved the universe and the records to the slash pass; the age
+  operand did not move. A shard that closed after `h_close(E)` and is
+  final by the pass is in the universe with no age.
+- **The gather runs for every settled epoch**, Served pairs or none. An
+  epoch with none gets a zero per shard and a zero `Σwork`, and that row
+  is what lets a claim cite the epoch.
+- **CEN-J15 refuses when no epoch is settled**, as it refuses an absent
+  price row.
+- **A complete tree that is slashed or released becomes a compact
+  record, and market membership reads that flag.** A settled epoch's
+  `Σwork` can therefore be recomputed differently after such a change.
+  The epoch close had the same exposure; it is not introduced here and
+  not closed here. It needs its own look.
+- **CEN-J25's driven negative moved.** The claim at `h_close(E)` was
+  refused by the finalisation bound; CEN-J23 now refuses every height
+  from there to the pass first. The bound's KAT in the retention crate
+  still pins it.
+- **The comparison with the C++ capture** is unchanged: the captured
+  chains' tips hold no row the two validators now write differently
+  (`vectors_tests`, `archival_sufficiency_tests` pass as they stood).
+
+Tests: the end-to-end claim (`scenario_emission_tests`, live lane) issues
+three passed draws, asserts the pass's gather against the arithmetic,
+is refused at CEN-J23 in the pass block and connects on the next. The
+store's `a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers`
+holds the two write sets and the state between them.
+`the_final_universe_counts_the_shards_the_predicate_accepts` holds the
+universe to `closed_and_final`. The CEN-J15 and CEN-J23 rule tests gain
+the watermark and the closed-not-settled cases.
