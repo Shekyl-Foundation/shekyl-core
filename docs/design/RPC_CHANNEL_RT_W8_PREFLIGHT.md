@@ -4,7 +4,7 @@
 discharged:** five questions (`RT-O11`…`RT-O15`, §4) are open, and no
 production commit lands on this branch until they are ruled (rule 26,
 *Halt*). Slice RT-W8 was authorized 2026-10-09 (Rick).
-**Ground:** `shekyl-core` `dev` **`bf6d277efe`**; `clatter` at
+**Ground:** `shekyl-core` `dev` **`a86ba6d13f`**; `clatter` at
 **`9a8d15c4f80d5911ca0403aa22e0de99ea59df08`** (v3.0.0, 2026-08-30),
 fetched and read, not built. Every `file:line` below was read at one of
 those two commits, and each citation says which.

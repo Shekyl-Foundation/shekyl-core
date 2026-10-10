@@ -6,7 +6,7 @@ authorizes no implementation; slices are authorized one at a time (§13).
 failure modes, keys, authorization, listeners, tunnel) were ratified whole
 on 2026-10-09. §9 registers the probes, which are measurements still to
 run, not open design.
-**Verified against:** `shekyl-core` @ `bf6d277efe` (`dev`). Every
+**Verified against:** `shekyl-core` @ `a86ba6d13f` (`dev`). Every
 `file:line` into this repository was read at that commit. Citations into
 clatter name their own commit (§4.1).
 **Token family:** continues `RT-` from
@@ -143,7 +143,7 @@ asks for more when it needs it. This replaces `--restricted-rpc` and
 restricted-RPC listener are removed", but only the first half was
 executed: the restricted listener is live
 ([`daemon.cpp:168-206`](../../src/daemon/daemon.cpp),
-[`core_rpc_server.cpp:101-102`](../../src/rpc/core_rpc_server.cpp)), and
+[`core_rpc_server.cpp:100-101`](../../src/rpc/core_rpc_server.cpp)), and
 `DAEMON_RPC_RUST.md` ("Restricted RPC stays") and the
 `removed_flags.cpp:189-190` message say it stays. RT-13 settles the
 contradiction: the listener goes, and its job (the operator's own
@@ -677,7 +677,7 @@ about the network with facts about this node, so it is served to any
 connection holding `health` and each field is present only when the
 connection holds that field's grant. **A field outside the grant is
 absent, never zero.** Today's restricted reply writes `0` for a hidden peer
-count (`core_rpc_server.cpp:213-232`), which a reader cannot tell from a
+count (`core_rpc_server.cpp:212-231`), which a reader cannot tell from a
 node with no peers. Absence means exactly one thing here — *not disclosed
 to this caller*. A fact the node has no answer for is `null`, and `0` is a
 value: the three wire states of RK-D23, ruled in the RK-5c round
@@ -734,7 +734,7 @@ can contain either.
   entries**: stem-phase and not-yet-broadcast transactions, including ones
   this node originated. The pool's sensitivity flag is what reaches them
   today: the pool listing, its hashes and its statistics
-  (`core_rpc_server.cpp:500-544`), `/get_transactions` by hash
+  (`core_rpc_server.cpp:499-543`), `/get_transactions` by hash
   (`handlers/json.rs:191-194`), and `get_info`'s pool size when it counts
   them. These are served **only to the host's administrator**: the owner
   leg (the same-user socket or pipe, RT-15) and the console key (service
@@ -752,7 +752,7 @@ can contain either.
   the host's administrator only. Never selected by nettype. *Today's defect,
   recorded:* `inject_archival_serve_credit` is absent from
   `RESTRICTED_METHODS`, so the restricted listener serves it, and its only
-  gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:947`) — the pattern
+  gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:946`) — the pattern
   rule 71 forbids.
 
 *Why each `status` field is out of view.*
@@ -761,7 +761,7 @@ can contain either.
 |---|---|
 | Build version string | The patch level, which tells an attacker which defects apply. The RPC contract version stays in `health` |
 | Start time | Uptime and restart times correlate this node's onion address with its clearnet address |
-| Free space, database size | A host fingerprint. Today's restricted reply rounds the size up to 5 GiB (`core_rpc_server.cpp:248-250`); under the split the field is absent |
+| Free space, database size | A host fingerprint. Today's restricted reply rounds the size up to 5 GiB (`core_rpc_server.cpp:247-249`); under the split the field is absent |
 | Aggregate peer counts, RPC connection count | Connectivity posture over time. The counts are sums over **every** connector (RK-Q3, ruled in the RK-5c round 2026-10-09), where today they count clearnet sessions only, so `status` discloses the node's whole session count |
 | Alt-blocks count and hashes | Which forks this node saw |
 
@@ -847,7 +847,7 @@ transport record decrypts (§4.1).
 
 The `restricted: bool` that today threads through `AppState`, the router,
 and the method handlers becomes the connection's grant; the two gate tests
-(`server.rs:787`, `json_rpc.rs`
+(`server.rs:796`, `json_rpc.rs`
 `admin_methods_are_refused_only_on_the_restricted_listener`) re-key to it.
 
 ### 6.3 Resource policy (RULED, RT-O9.4 — independent of §6.1)
