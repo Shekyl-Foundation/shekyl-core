@@ -18,13 +18,12 @@ use shekyl_archival_fetch_sched::{
     ShardClose, ShardFacts, ShardStanding, ViewDesk, ViewRefusal,
 };
 use shekyl_chain_rules::AtHeight;
-use shekyl_chain_store::store::{ChainStore, ErrorClass, ReadSnapshot, StoreError};
+use shekyl_chain_store::store::{ChainStore, ErrorClass, ReadSnapshot, ShardFold, StoreError};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_daemon_rpc::shard_view::{ShardViewFacts, ShardViewFuture, ShardViewRefusal};
 use shekyl_p_fetch::ServingEndpoint;
 use shekyl_types::archival::Holdings;
-use shekyl_types::{shard_of, ArchivalLength, BlockHash, BlockHeight, ShardId};
-use shekyl_wire::{carries_archival_good, Transaction, TxidParts};
+use shekyl_types::{BlockHash, BlockHeight, ShardId};
 
 use shekyl_daemon_rpc::chain_facts::FactsFault as RpcFactsFault;
 
@@ -68,23 +67,7 @@ impl ShardFacts for StoreShardFacts {
 
     fn shard(&self, shard_id: ShardId) -> Result<ShardStanding, FactsFault> {
         let snap = self.snapshot()?;
-        let Some(tip) = snap.tip().map_err(|e| store_fault(&e))?.recorded else {
-            return Ok(ShardStanding::Open {
-                open_shard: ShardId::from_raw(0),
-                archival_through_tip: ArchivalLength::ZERO,
-            });
-        };
-        let through = recorded(snap.block_info(tip.height).map_err(|e| store_fault(&e))?)?
-            .cumulative_archival_len;
-        let open_shard = shard_of(through);
-        if shard_id >= open_shard {
-            return Ok(ShardStanding::Open {
-                open_shard,
-                archival_through_tip: through,
-            });
-        }
-        let closed = closed_shard(&snap, shard_id, tip.height)?;
-        Ok(ShardStanding::Closed(Box::new(closed)))
+        standing(snap.shard_fold(shard_id).map_err(|e| store_fault(&e))?)
     }
 }
 
@@ -158,103 +141,34 @@ fn holds_shard(holdings: &Holdings, shard_id: ShardId) -> bool {
     }
 }
 
-fn closed_shard(
-    snap: &ReadSnapshot<'_>,
-    shard_id: ShardId,
-    tip: BlockHeight,
-) -> Result<ClosedShard, FactsFault> {
-    let mut cum = ArchivalLength::ZERO;
-    let mut txs = Vec::new();
-    let mut first_cum = None;
-    let mut first_h = None;
-    let mut last_h = None;
-    let mut first_ts = 0;
-    let mut last_ts = 0;
-    let mut tx_outputs = 0u64;
-
-    for h in 0..=tip.to_raw() {
-        let height = BlockHeight::from_raw(h);
-        let info = recorded(snap.block_info(height).map_err(|e| store_fault(&e))?)?;
-        let body = recorded(snap.block(height).map_err(|e| store_fault(&e))?)?;
-        let mut in_domain = false;
-        for hash in &body.block.transaction_hashes {
-            let record = snap
-                .tx_record(hash)
-                .map_err(|e| store_fault(&e))?
-                .ok_or(FactsFault::Inconsistent)?;
-            if shard_of(cum) == shard_id
-                && carries_archival_good(record.pqc_auth_hash, record.prunable_hash)
-            {
-                if first_cum.is_none() {
-                    first_cum = Some(cum);
-                }
-                let outs = Transaction::from_bytes(record.pruned.as_bytes())
-                    .map_err(|_| FactsFault::Inconsistent)?
-                    .prefix
-                    .outputs
-                    .len();
-                tx_outputs = tx_outputs
-                    .checked_add(u64::try_from(outs).expect("output count fits u64"))
-                    .ok_or(FactsFault::Inconsistent)?;
-                txs.push(TxidParts {
-                    hash: *hash,
-                    pqc_auth_hash: record.pqc_auth_hash,
-                    prunable_hash: record.prunable_hash,
-                    archival_len: record.archival_len,
-                });
-                in_domain = true;
-            }
-            cum = cum
-                .checked_add(record.archival_len)
-                .ok_or(FactsFault::Inconsistent)?;
+fn standing(fold: ShardFold) -> Result<ShardStanding, FactsFault> {
+    match fold {
+        ShardFold::Open {
+            open_shard,
+            archival_through_tip,
+        } => Ok(ShardStanding::Open {
+            open_shard,
+            archival_through_tip,
+        }),
+        ShardFold::Closed(rows) => {
+            let expected = ExpectedShard::new(rows.shard_id, rows.cum_before_first, rows.txs)
+                .map_err(|_| FactsFault::Inconsistent)?;
+            Ok(ShardStanding::Closed(Box::new(ClosedShard {
+                expected,
+                span: BlockSpan {
+                    first: rows.first,
+                    last: rows.last,
+                    first_timestamp: rows.first_timestamp,
+                    last_timestamp: rows.last_timestamp,
+                    coinbase_outputs: rows.coinbase_outputs,
+                    tx_outputs: rows.tx_outputs,
+                },
+                close: ShardClose {
+                    height: rows.last,
+                    hash: rows.close_hash,
+                },
+            })))
         }
-        if in_domain {
-            if first_h.is_none() {
-                first_h = Some(height);
-                first_ts = info.timestamp.to_raw();
-            }
-            last_h = Some(height);
-            last_ts = info.timestamp.to_raw();
-        }
-    }
-
-    let (first, last) = first_h.zip(last_h).ok_or(FactsFault::Inconsistent)?;
-    let mut coinbase_outputs = 0u64;
-    for h in first.to_raw()..=last.to_raw() {
-        let body = recorded(
-            snap.block(BlockHeight::from_raw(h))
-                .map_err(|e| store_fault(&e))?,
-        )?;
-        let n = body.block.miner_transaction.prefix.outputs.len();
-        coinbase_outputs = coinbase_outputs
-            .checked_add(u64::try_from(n).expect("output count fits u64"))
-            .ok_or(FactsFault::Inconsistent)?;
-    }
-
-    let expected = ExpectedShard::new(shard_id, first_cum.ok_or(FactsFault::Inconsistent)?, txs)
-        .map_err(|_| FactsFault::Inconsistent)?;
-    let last_info = recorded(snap.block_info(last).map_err(|e| store_fault(&e))?)?;
-    Ok(ClosedShard {
-        expected,
-        span: BlockSpan {
-            first,
-            last,
-            first_timestamp: first_ts,
-            last_timestamp: last_ts,
-            coinbase_outputs,
-            tx_outputs,
-        },
-        close: ShardClose {
-            height: last,
-            hash: last_info.hash,
-        },
-    })
-}
-
-fn recorded<T>(at: AtHeight<T>) -> Result<T, FactsFault> {
-    match at {
-        AtHeight::Recorded(value) => Ok(value),
-        AtHeight::AboveTip => Err(FactsFault::Inconsistent),
     }
 }
 
@@ -299,6 +213,7 @@ fn rpc_fault(fault: FactsFault) -> RpcFactsFault {
 mod tests {
     use super::*;
     use shekyl_types::archival::SettlementEpochBlocks;
+    use shekyl_types::ArchivalLength;
 
     fn empty_store() -> (StoreShardFacts, StoreHolderSource, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!(

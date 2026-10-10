@@ -43,7 +43,7 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet};
-use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
 use super::connect_fixtures::{
@@ -1143,6 +1143,46 @@ fn the_store_records_each_length_and_the_running_total() {
         // `BASE + 21`'s two — the prefix's coinbases add nothing.
         assert_eq!(through, 3_300_000);
     }
+    cleanup(&path);
+}
+
+/// Shard 0 has closed by `BASE + 21` (`through == 3_300_000`, `W` is
+/// 3_000_000) and shard 1 is the open shard. The fold is the indexed cell,
+/// not a scan from genesis.
+#[test]
+fn a_closed_shard_is_the_indexed_fold_and_the_next_is_open() {
+    let path = tmp("shard-fold");
+    let store = short_store(&path);
+    let mut b = Builder::under(SHORT);
+    b.connect_sized(&store, 0, BASE + 21, 0, short_spec(0));
+    let snap = store.begin_read().expect("read");
+    match snap.shard_fold(ShardId::from_raw(0)).expect("shard 0") {
+        ShardFold::Closed(rows) => {
+            assert!(
+                !rows.txs.is_empty(),
+                "a closed shard names its transactions"
+            );
+            assert_eq!(rows.cum_before_first, ArchivalLength::ZERO);
+            let sum: u64 = rows.txs.iter().map(|tx| tx.archival_len.to_raw()).sum();
+            assert!(
+                sum >= SHARD_LENGTH.to_raw(),
+                "in-domain lengths close the shard, summed {sum}"
+            );
+            assert!(rows.last >= rows.first);
+        }
+        ShardFold::Open { .. } => panic!("shard 0 is closed through BASE + 21"),
+    }
+    match snap.shard_fold(ShardId::from_raw(1)).expect("shard 1") {
+        ShardFold::Open {
+            open_shard,
+            archival_through_tip,
+        } => {
+            assert_eq!(open_shard, ShardId::from_raw(1));
+            assert_eq!(archival_through_tip, ArchivalLength::from_raw(3_300_000));
+        }
+        ShardFold::Closed(_) => panic!("shard 1 is still open through BASE + 21"),
+    }
+    drop(snap);
     cleanup(&path);
 }
 
