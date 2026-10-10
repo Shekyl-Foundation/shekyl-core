@@ -1,12 +1,12 @@
 # DRS-E5 — pool, alt chain, prune: the store's consuming increment (`E5-`)
 
-**Status:** OPEN — **Round 1 ruled 2026-10-10 apart from `E5-Q4` (HELD,
-priced in §8)**; Round 0 posed 2026-10-10 at `dev@14d68c00fc`, merged to
-`dev@ac95d6d04` before the draft PR (#1026) opened. Pre-flight in §1.1,
-findings `E5-1…E5-15` (`E5-13…E5-15` are PR-a commit 1's measurement, §1.7);
-questions `E5-Q1…E5-Q11` in §8, each with its ruling under its default. No
-cheap-tier code until `E5-Q4` is ruled — rule 26's halt applies to the
-commit that builds the question. Identifier families **`E5-`** (findings) and **`E5-Q`**
+**Status:** OPEN — **Round 1 ruled in full 2026-10-10** (`E5-Q4` last,
+γ: B4 split into B4a/B4b, §8); PR-a building (#1026, draft). Round 0 posed
+2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
+opened. Pre-flight in §1.1, findings `E5-1…E5-15` (`E5-13…E5-15` are PR-a
+commit 1's measurement, §1.7); questions `E5-Q1…E5-Q11` in §8, each with
+its ruling under its default. a4's census amendment (B4a/B4b row text) is
+drafted for ruling before it lands. Identifier families **`E5-`** (findings) and **`E5-Q`**
 (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule
 94 §1; `check_index_prefix_uniqueness.py` branch (a): `E5` and `E5-Q`
@@ -267,8 +267,9 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   "Re-validation over an alt `ChainView`" (REDB table 3; `census.rs:353`,
   `:369`) is therefore two different things that one phrase hid: the
   *cheap tier* (C2-R1 §5.5 Q1a; K4) reads only shape facts (measured at
-  `E5-14`: `tip` and the header record — two, not four) plus the
-  attestation's `bond_record`, and the *promotion tier* (K5) is `validate`
+  `E5-14`: `tip` and the header record — two, not four; the attestation's
+  `bond_record` read Round 0 listed here is B4b's, promotion's, under
+  `E5-Q4`'s ruling), and the *promotion tier* (K5) is `validate`
   over the batch's own `BatchView` after the pops. The alt view is a
   **header view** (§2.1, `E5-Q3`). SAL-7 is not contradicted — it forbids
   an accessor that tells a rule "this hash is an alt block", and a stitched
@@ -281,7 +282,8 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   makes an honest alt block fail the cheap tier. The error is one-sided
   (promotion re-validates against the true state; a wrong refusal is a
   liveness cost, never a wrong admission) and bounded by `D_max`. §4 prices
-  it; `E5-Q4` asks whether to inherit it.
+  it; `E5-Q4` asked whether to inherit it and ruled γ: the read is B4b's,
+  promotion's; the cheap tier makes no archival read.
 - **E5-7 — the switch's rollback is the transaction.** SAL-14 is confirmed
   at the tree: `store.write`'s closure returning `Err` discards every pop,
   insert and connect; there is nothing to "roll back" and nothing to
@@ -470,16 +472,34 @@ separation doing its one job. The same sentence covers every promotion-tier
 row — G1's `has_transaction`, the F-rows' emission reads, the I-rows — B5
 is named because a committed root reads as the alarming case.
 
+**CEN-B4b at the cheap tier is the second instance of the same cost, not
+a separate one.** Under `E5-Q4`'s ruling (γ) the bond-key countersignature
+check is promotion's, so **an alt block whose attestation witness is
+forged under a key nobody bonded is stored** — its root recomputes (B4a
+holds the `attestation_root` commitment and the anchor window before
+storage), but the signatures under it are unverified until promotion
+`validate` runs B4b over `BatchView`. Safe for the same two reasons as B5,
+in the same order: (1) nothing reads an alt block's attestation until
+promotion, and `AltValid` never becomes `ChainValid`; (2) a stored row is
+what it costs, PoW-bounded (`E5-Q7`). A reader who finds B5's statement
+and B4b's apart would take one for an oversight; they are one cost with
+two instances, and K4's amended admission list (a4) names B4a and defers
+B4b in the words of this paragraph.
+
 The cheap tier is then `alt_against<H: HeaderView>(block, &alt_view,
-&snapshot_view, rule_set) -> Result<AltValid, Verdict>`: B1/B2, the
+rule_set) -> Result<AltValid, Verdict>` (the `&snapshot_view` parameter
+Round 0 wrote left with `E5-Q4`'s ruling — nothing in the tier reads
+archival state): B1/B2, the
 timestamp rule over `alt_window_plan`, E1/E2 (an alt block at or below the
 last anchor refused — E2's home), D1–D3 PoW against D4's difficulty read
 through the stitched `header_at` (= D5, as `census.rs:353` anticipated),
 K1a/K1b, `prevalidate_miner_transaction`'s form rows, and K4's attestation
-step (B4, `E5-15`): the window from the alt view, the bond read from the
-**snapshot view** passed alongside — the C++'s approximation, named
-(`E5-6`); **which of B4's two reads the cheap tier makes is `E5-Q4`, HELD;
-the row set above is fixed except for that one step.** `AltValid`
+step as **B4a** (`E5-Q4` ruled γ, 2026-10-10): the stateless half and the
+anchor window from the alt view; no snapshot view is passed and no
+archival read is made — B4b is promotion's. *Round 0 and commit 1 wrote
+(SUPERSEDED):* "the attestation's witness check (K5b) reading
+`bond_record` from the snapshot view passed alongside — the C++'s
+approximation, named". The row set is fixed. `AltValid`
 carries `AltBlockFacts` and is what AL1 stores; it is not `ChainValid` and
 nothing converts it.
 
@@ -644,16 +664,18 @@ Adversarial items, each with the fixture that would notice:
   attests under that bond; the same chain presented one block longer (past
   the switch threshold). *Round 0 wrote (SUPERSEDED by Round 1's `E5-Q4`
   instruction):* "the fixture is the measurement `E5-Q4`'s ruling reads".
-  The fixture does not measure; it **asserts** whichever `E5-Q4` ruling
-  lands and **names** the refusal: under option α (the default) it asserts
-  the cheap tier refuses both presentations with `B4` at `Locus::Block`
-  and names the shape — *a bond change on the main chain within `D_max` of
-  the fork refuses an honest alt block until the main chain's record
-  agrees* — as the contract, so a later reader finds the liveness cost as a
-  stated property, not a surprise; under β or γ it asserts both
-  presentations are **stored** and the switch's promotion `validate`
-  refuses or admits them by the alt chain's own record. Either way the
-  fixture's name carries `E5-6`.
+  The fixture does not measure; it **asserts** the ruling. `E5-Q4` ruled γ
+  (2026-10-10): both presentations are **stored** — B4a holds at the cheap
+  tier (the root recomputes, the window is on the stitched chain) and no
+  archival read is made — and the switch's promotion `validate` runs B4b
+  by the alt chain's own record and **admits** them, because on the alt
+  chain the bond was never slashed. A second arm plants the forged case —
+  a witness signed under a key nobody bonded — and asserts it is stored
+  too and refused at promotion with `B4b` at `Locus::Block`, which is the
+  §2.1 cost statement as a test. The fixture's name carries `E5-6`.
+  *(Commit 1's α arm — "refuses both presentations with `B4` … a bond
+  change within `D_max` of the fork refuses an honest alt block" — is the
+  liveness cost γ removed; retained here as the shape the ruling rejected.)*
 - **A `PoolView` that reaches `connect`.** Negative control: a test that
   tries `connect(validate(.., &pool_view, ..))` and does not compile
   (`compile_fail`), beside `AdmissionPolicyId`'s existing one.
@@ -675,7 +697,7 @@ drops, with PR-b the caller.
 | a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
 | a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
 | a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test | 2 | yes |
-| a4 | `alt_against` (K1b, K4's tier, D5 via D4, E2's arm, K4's attestation step shaped by `E5-Q4`'s ruling — **blocked on that ruling**, `E5-15`); `AltValid` → AL1; census arms | 3 | yes |
+| a4 | **first commit, ruled before it lands:** the census amendment — B4 → B4a/B4b (`census.rs`, `CONSENSUS_RULE_CENSUS.md`), K4's admission list naming B4a, the reconciliation register rows, the `attestation.rs:77–78` sentence (rule 91); **then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm, B4a from the alt view); `AltValid` → AL1; census arms. UPDATE 2026-10-10: unblocked by `E5-Q4` ruled γ | 3 | yes |
 | a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |
 | a7 | a reorg capture for the corpus (`E5-Q9`): the C++ produces one switch, the trace gains the event, the grader compares | 2 | yes |
@@ -842,7 +864,8 @@ which is a settlement-writer change, not E5's. **Falsifier.** The fixture
 refuses an honest chain in a shape stressnet produces (a slash within
 `D_max` of a fork).
 
-**HELD 2026-10-10 — a third option to price, and the pricing.** The
+**HELD 2026-10-10 — a third option to price, and the pricing** *(the
+ruling follows the pricing, below)*. The
 ruling's reasoning: the default refuses honest alt blocks, which is a
 consensus-liveness cost, and `16-architectural-inheritance.mdc` says
 migrate the inherited approximation rather than rationalize it. The third
@@ -889,14 +912,64 @@ refusal. The pricing, against `E5-15`:
   B4a/B4b census split as well. Smaller than β in what it defers, larger
   in what it touches.
 
-**By the ruling's own criterion the default stands** (a K-row requires the
-check; `E5-15`), and the §4 fixture is rewritten to assert and name the
-refusal rather than measure it. The question stays HELD until the ruling
-confirms or chooses β/γ with the census amendment named: a4 does not land
-before then. **Reopen (rule 21):** an as-of-height archival read landing
-in the settlement writer (`PDM-Q3`'s re-key reversed) removes the
-approximation and with it the liveness cost — then α becomes the real read
-and this question closes without a tier change.
+*Commit 1 wrote (SUPERSEDED by the ruling below):* "by the ruling's own
+criterion the default stands (a K-row requires the check; `E5-15`) … the
+question stays HELD until the ruling confirms or chooses β/γ".
+
+**Ruled 2026-10-10 — γ, the split.** `E5-15` decides it: B4 makes two
+view reads that differ in kind — the anchor window is a header fact the
+stitched view answers *honestly*, the bond key is the archival read that is
+*wrong* on an alt chain — so B4 as one row conflates a read that works with
+one that does not, and **that conflation, not the wrong-chain read, is the
+defect**. α inherits a broken check, β discards a working one; γ treats the
+measurement as the finding: liveness is clean and the half of B4 that can
+be honestly checked before storage still is. The anchor-window half stays
+at the cheap tier on its own merits — a header fact, honestly answerable on
+the stitched view, cheap, refusing before storage — not because the C++
+checks it there; had the C++ deferred it, it would still belong early.
+
+The objection commit 1 raised against γ does not hold. `attestation.rs:77–78`'s
+"the census splits none of them" describes the census as it stood; it is
+not a prohibition — were it one, CEN-K1a/K1b could not exist. C2-R1c split
+K1 because "the census row conflated claimed and derived"
+(`CONSENSUS_C2_R1_REORG.md:1033–1034`): one row, two operands of different
+kinds, split to match — the same shape on all fours. Rule 91 applies: a
+finding that refutes a sentence's premise edits the sentence, and `E5-15`
+refutes that one (a4 edits it).
+
+**The rows.** **B4a** — the stateless half (extra parse, 49-byte records
+and cap, witness decode and pairing, root recompute, the A3 empty-witness
+arm) plus the anchor window: cheap tier, `HeaderRule`. **B4b** — the
+bond-key countersignature verification: promotion tier, `BlockRule`. One
+fact for a4, read at source: today `verify_countersignatures(window,
+pubkey_of)` (`attestation.rs:140`) judges the window arms (below the
+threshold, outside the window) and the key arms (no bond, bad signature)
+in one call, so B4a needs `AttestationSet` to expose window membership on
+its own — a4's first commit measures that seam before the row text is
+ruled. K4's admission list names B4a; what B4b's deferral costs is written in §2.1
+beside CEN-B5's statement — one cost, two instances. **The census
+amendment** (B4 → B4a/B4b in `census.rs` and `CONSENSUS_RULE_CENSUS.md`,
+K4's admission list, the reconciliation register rows, the
+`attestation.rs` sentence) is **a4's first commit**, drafted for ruling
+before it lands — the row text is ruled first, built second. a4 is
+unblocked on that.
+
+**The pattern, stated once so the fourth instance is not re-argued.** The
+census's granularity is inherited: a row says "here is one rule" and its
+boundary was drawn where the C++ put a check — often where a function
+ended. Every split so far has been that discovery: K1 (claimed vs derived
+height, C2-R1c), the per-class splits I9/H21 carry, now B4 (header read
+vs archival read). Three instances, one cause. Rule 16's corollary applies
+to the census as to any inherited grouping — it is a claim about its
+members, and the claim is testable. **The test:** does this row's
+statement have two operands of different kinds? If yes, the row is a
+transcription artifact, not a rule. This is not a licence to re-cut the
+census for tidiness; a split needs a measured finding of `E5-15`'s shape.
+
+**Reopen (rule 21):** an as-of-height archival read landing in the
+settlement writer (`PDM-Q3`'s re-key reversed) would let B4b run honestly
+at the cheap tier too — then the tiers' row sets re-merge for B4 and this
+question reopens on that read's landing, not before.
 
 ### E5-Q5 — Does `ForkChoiceVerdict` gain a `ForcedSwitch` arm, and is K7's discard a match on it?
 
@@ -1008,3 +1081,4 @@ Not E5's; found while reading the census at the pin.
 | --- | --- |
 | 2026-10-10 | Round 0 posed at `dev@14d68c00fc`. Pre-flight `E5-1…E5-12` (§1.7); questions `E5-Q1…E5-Q11` (§8) with defaults. Families `E5-`/`E5-Q` registered (index §2). `DEL-009` and `DEL-010` minted in `DAEMON_REDB_STORE.md` §12, `Planned`. Denominator corrected to 25 / 42 (`E5-3`; §7). No code. Halt for Round 1. |
 | 2026-10-10 | **Round 1 ruled apart from `E5-Q4`.** Q1, Q5, Q7–Q11 as defaulted; Q2 with the never-a-rule condition on the crate doc; Q3 the split, commit 1 owing the `header.rs` partition; Q6 with the policy-vs-capability line. 25 / 42 accepted; `DEL-009`/`DEL-010` `Planned` approved. Branch merged to `dev@ac95d6d04` (one conflict, `DAEMON_REDB_STORE.md` §12, both sides kept; coverage 118/151 and inland-height 151/151 unchanged on the merged tree); draft PR #1026 opened. **PR-a commit 1** measured the partition: `E5-13` (`block_at`'s record carries executed fields → `HeaderRecord`/`header_at`), `E5-14` (`header.rs` is B1/B2/B6 form + B5 promotion; the five re-bounded files are anchors, timestamps, pow, difficulty, attestation; `HeaderView` is `tip` + `header_at`), `E5-15` (CEN-K4 names CEN-B4 at admission). `E5-Q4` HELD, priced α/β/γ in §8: by the ruling's criterion the default stands; the §4 fixture asserts and names the refusal. §2.1 carries the CEN-B5 statement. a4 blocked on `E5-Q4`. |
+| 2026-10-10 | **`E5-Q4` ruled γ — B4 split into B4a (stateless + anchor window, cheap tier) and B4b (bond-key countersignature, promotion).** `E5-15` decides it: two reads of different kinds in one row is the defect, not the wrong-chain read. The "census splits none of them" objection refuted by the K1a/K1b precedent (C2-R1c); the split test stated once in §8 (two operands of different kinds → transcription artifact). B4b's deferral cost written beside B5's in §2.1. a4 unblocked; its first commit is the census amendment, drafted for ruling before it lands. a2 authorized and started. |
