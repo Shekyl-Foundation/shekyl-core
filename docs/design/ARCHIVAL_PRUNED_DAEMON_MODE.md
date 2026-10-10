@@ -1419,7 +1419,7 @@ the `bond_duration` precedent. *Built 2026-09-25 as
 `shekyl_chain_rules::D_MAX`, **inheriting** `archival_reorg_depth_blocks`
 (`config/consensus_constants.json`; a key doing two jobs — the pass-anchor
 depth it was tuned for and this cap — recorded as inherited per rule 05
-until E4 splits it, FOLLOWUPS "Split `archival_reorg_depth_blocks`"), with `SEB > D_MAX`
+until SO-D8 Slice C splits it (*was* "E4"; the FOLLOWUPS row "Split `archival_reorg_depth_blocks`" re-owned it 2026-09-29 and 2026-10-04), with `SEB > D_MAX`
 const-asserted beside it and the retention prune consuming it
 (`DRS_E1_SPRUNE.md` §14, SPR-6) — the numeric now has a mechanism to be
 tested against, which is what "provisional until tested" needed. The cap
@@ -1899,8 +1899,9 @@ registered at birth) is the wallet-side store's umbrella; `CTS-` closes as
 record and is partitioned by unit there. Its `WSS-Q1` — one store with two
 obligations, or two files — is the axis every one of Q12's unmade decisions
 inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE **LANDED 2026-09-25** (`DRS_E1_SPRUNE.md` §14; the retention prune is built, `D_max` has a mechanism to test against — the Q1 horizon check was not a precondition: `journal_horizon` is minted beside `D_MAX`, and Q1's assertion is S-ARCH's when its journal writers land), A3 (#772), A4, the daemon-uniformity constraint in
-`DAEMON_REDB_STORE.md` (#775's row); **E4 / S-ARCH** — the serve-credit
-verifier re-key (consensus) and the leaf-cluster deletion; **E6** — the
+`DAEMON_REDB_STORE.md` (#775's row); **SO-D8 Slice C** — the serve-credit
+verifier re-key (consensus), and **the cutover (`DEL-008`)** — the leaf-cluster
+deletion (*was* both "E4 / S-ARCH"; re-tensed 2026-10-10); **E6** — the
 `Trust` mode and the `CEN-E1`/`E2` re-key; **the reward leg** — the
 in-window commitment weight and `w_launch`; **`LV-`/`PWC-`** — the
 skeleton wire field (F28) (the `pruning_seed` deletion under Q7 is done, 2026-09-21);

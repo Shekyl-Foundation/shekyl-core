@@ -196,8 +196,9 @@ design-review material awaiting a ruling, and is marked so.
 - **A flat-mmap leaf array** — CT-1's rejected alternative with its reversion
   clause. Not reopened.
 - **The serve-credit admission verifier re-key** — `PDM-Q6` item 4 row 1;
-  consensus, and it lands at **E4 / S-ARCH** in `shekyl-chain-rules`, not here
-  (§5, row 7).
+  consensus, and it lands with **SO-D8 Slice C** in `shekyl-chain-rules`
+  (`ARCHIVAL_SERVE_CREDIT_SPEC.md`; *was* "at E4 / S-ARCH", re-homed
+  2026-10-04 and re-tensed here 2026-10-10), not here (§5, row 7).
 - **Any C++ deletion.** `PDM-Q-S0`: no C++ landing before the cutover.
 - **The `PDM` propagation sweep** — **named here because it is the reason this
   round exists, and refused here because it is not this round's.** `PDM-Q6` /
@@ -403,7 +404,7 @@ of one row rather than a redesign.
 | 4 | **Fill transport** | The **ordinary split transaction read every wallet already makes** — `shekyl-daemon-rpc/src/methods.rs:552-605` (`PDM-Q9`/`Q10`) | Consumes. `get_prunable_range` is **withdrawn** | **Any archival-serving RPC on the daemon is a falsifier of `PDM-Q9`**, not a convenience |
 | 5 | **The specified-to-scarce window** | `PDM-Q6` item 3 / `PDM-Q9` — shard `k` is bondable from `close_height(k)`, scarce at `discard(k)`, `≥ W` later | The window is **when** this store fills, from the local daemon over the operator leg | A fill outside the window with no recovery-fetch path |
 | 6 | **Codecs** | `shekyl-store-codec` (§8 (i), PR A) | Shares one **encoding contract** with the daemon store **without sharing a schema** | The two stores' `Canonical` impls diverge for one vocabulary type |
-| 7 | **The serve-credit admission verifier** | **E4 / S-ARCH in `shekyl-chain-rules`** (`PDM-Q6` item 4 row 1) | **Not this round's.** Named here only so the lane is not assumed | A preimage change landing in this lane |
+| 7 | **The serve-credit admission verifier** | **SO-D8 Slice C in `shekyl-chain-rules`** (`PDM-Q6` item 4 row 1; *was* "E4 / S-ARCH", re-homed 2026-10-04) | **Not this round's.** Named here only so the lane is not assumed | A preimage change landing in this lane |
 | 8 | **Format policy** | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §11.1(f) | Adopted **by citation**; not restated here | §11.1(f) changes and this row does not move |
 
 ### 5.1 Three properties of the new shard unit, put on the record (**open**, not this round's to rule)
@@ -468,7 +469,7 @@ what is still open is named there too: the daemon-lane halves of `WSS-Q6` /
 | **WSS-Q12** | **Where the `P`-store's encryption key lives** — the question the withdrawal (§6.2) shrank this to | `WSS-18`; `WSS-19`; [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc), [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc) | **RULED 2026-09-19.** **One** store key from the wallet's existing key hierarchy. It must stay **out of the Tor-facing serving task**, which follows from rule 36 anyway and is `WSS-Q13`. Per-shard keys, wrapping, crypto-shredding and a size-hiding layout are rejected (§6.2.3; `WSS-15` is an accepted residual). |
 | **WSS-Q14** | **Should "synced" be a type rather than a call-site check?** | `R-B`; `WSS-25`; [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc) | **RULED 2026-09-19.** One type — say `SyncedChainFacts` — whose only constructor refuses unless the daemon reports synchronized, so acting on an unsynced view is a **compile error**. Today only the submit watchdog honours sync state (`submit_watchdog.rs:218-221`: synced iff `target_height == 0 \|\| height ≥ target_height`), and its predicate becomes the constructor. **Consumers that must take it:** the release gate, fill finality (`close_height(k) + D_max ≤ tip`), fill-then-post and the bond builders, `P`'s anchor-gate height (`WSS-24`), and any epoch arithmetic feeding those. **Sweep owed:** every read of a daemon height, the bond record, or chain facts in `shekyl-engine-core`, `shekyl-p-host`, `shekyl-p-serve`, listed with `file:line` and classified as through-the-type or not — **a site that cannot be classified is a finding**. **R1 seam:** the type lives wallet-side and is built from the engine's daemon client, so a DRS response-shape change touches only the constructor |
 | **WSS-Q13** | **Secret locality on the serving path** — `shekyl-p-serve` needs plaintext bodies but must not hold the store key | [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc); §6.2.4 | **RULED 2026-09-19.** Plain rule 36 — **the store's owning actor decrypts, the serving path receives bodies, and the key never leaves the actor.** Nothing more is claimed: the bodies are public, so this is key locality, not a confidentiality boundary, and "a dropped shard cannot be served" is enforced by the held-slot token and row deletion (§6.2.3), not by this |
-| **WSS-Q11** | **What happens to the landed `SEGMENT_LEAF_COUNT` / `leaves_per_segment()` tie at E4** | `PDM-Q-F33` (ii); `WSS-9`; the FOLLOWUPS partition row | **RULED 2026-09-19.** **The tie is LANDED, not owed** — #780 put one home in `shekyl_fcmp::tree` with the consensus-side compile-time assert in `shekyl-archival-retention`'s production lib, red-checked at `segment_leaf_count = 26030`, and the CT-1 row closed with its dedup. What is open: it **dies at the cutover with the freeze** (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10) and is **not re-pointed at `SHARD_BYTES`** (`WSS-9`: one is a leaf count, the other a byte threshold). Its one possible survival is as the boundary of a proving-side subroot cache, which is `WSS-Q2`'s |
+| **WSS-Q11** | **What happens to the landed `SEGMENT_LEAF_COUNT` / `leaves_per_segment()` tie when the freeze deletes** (posed 2026-09-18 as "at E4"; the deletion is the cutover's, `DEL-008`) | `PDM-Q-F33` (ii); `WSS-9`; the FOLLOWUPS partition row | **RULED 2026-09-19.** **The tie is LANDED, not owed** — #780 put one home in `shekyl_fcmp::tree` with the consensus-side compile-time assert in `shekyl-archival-retention`'s production lib, red-checked at `segment_leaf_count = 26030`, and the CT-1 row closed with its dedup. What is open: it **dies at the cutover with the freeze** (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10) and is **not re-pointed at `SHARD_BYTES`** (`WSS-9`: one is a leaf count, the other a byte threshold). Its one possible survival is as the boundary of a proving-side subroot cache, which is `WSS-Q2`'s |
 
 ### 6.1 `WSS-Q1` — re-grounded on the firewall (steering review, 2026-09-18)
 
@@ -1417,8 +1418,9 @@ PR A         shekyl-store-codec                    [AUTHORIZED 2026-09-19]
     PR 4  switch the provider to P's store
     PR 5  delete the pin messages, ServingReader, posture tables
                  ▼
-  the leaf-cluster deletion   [E4 / S-ARCH — NOT this lane's:
-    freeze pipeline, challenge_leaf_index, the verifier re-key.
+  the leaf-cluster deletion   [the cutover, DEL-008 — NOT this lane's:
+    freeze pipeline, challenge_leaf_index; the verifier re-key lands
+    first, SO-D8 Slice C. (Was "E4 / S-ARCH"; re-tensed 2026-10-10.)
     Coordinated, not owned; this lane owns only the store half]
 ```
 
@@ -1463,7 +1465,7 @@ closed by the ruling rather than waiting on it.*
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **DRS-D3c, the cross-store leaf/position KAT** (daemon vs wallet `LeafStore`) | **Inherited, and re-scoped by `WSS-Q1`(b) as ruled.** The proving state is **not a leaf store**, so this is **no longer a cross-store leaf/position KAT**: its subject is **root-and-frontier parity** between the wallet's frontier at `F` and DRS-E3's `curve_tree_*`. It lands with the proving-state increment. Its leaf/position shape is recorded as superseded so the queue cannot direct a future increment to build a KAT for a store the ruling removes |
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **the archiver serving-store rebuild row** (`PDM-Q12`, owner "the wallet lane") | **Discharged as to ownership by this document**, which is the round it asks for. The row is updated: the successor round exists, the family is registered, and the row's remaining content is the *increment 3 gate*, not the absence of a round |
 | `PDM-Q-F33` (ii) — the interim partition tie | **Inherited** as `WSS-Q11`, with `WSS-9`'s correction: it dies with the freeze and is **not** re-pointed at `SHARD_BYTES` |
-| [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) — archive-or-contract under rule 95, now that the freeze is retired by `PDM-Q12` | **Owned by this round.** Its status banner is updated by this PR to record *retired by ruling, live in code until E4 / S-ARCH*; the **archive move lands with increment 4**, when the code goes, not before — archiving a document whose subject is still live would lower the citation ratchet on a live surface |
+| [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) — archive-or-contract under rule 95, now that the freeze is retired by `PDM-Q12` | **Owned by this round.** Its status banner is updated by this PR to record *retired by ruling, live in code until E4 / S-ARCH* (the banner was re-tensed 2026-10-10 to *until the cutover, `DEL-008`*); the **archive move lands with increment 4**, when the code goes, not before — archiving a document whose subject is still live would lower the citation ratchet on a live surface |
 
 ---
 
