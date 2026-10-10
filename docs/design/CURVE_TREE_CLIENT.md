@@ -729,8 +729,9 @@ assemble a spend path. They never did: a spend path needs the in-segment sibling
 hashes at every layer, which is exactly why [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)
 §6.3 keeps **per-output paths**, not sub-roots. The former §7.2.2's
 `SEGMENT_LEAF_COUNT = 25 992` derivation is not the shard size: the landed
-`leaves_per_segment()` tie is a leaf-count geometry that dies at E4 / S-ARCH
-with the freeze and is **not** re-pointed at `SHARD_BYTES` (`PDM-Q-F33`;
+`leaves_per_segment()` tie is a leaf-count geometry that dies at the cutover
+with the freeze (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10)
+and is **not** re-pointed at `SHARD_BYTES` (`PDM-Q-F33`;
 `WSS-Q11`). `shekyl-shard-visual`'s `shard_content_hash = R_k` input re-keys
 with the unit under its own document
 ([`V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md)).
