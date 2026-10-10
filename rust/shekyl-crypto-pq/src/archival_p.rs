@@ -539,7 +539,7 @@ fn build_hybrid(
 /// individually `ZeroizeOnDrop` — `spend_sk` / `view_sk` ([`SpendSecret`] /
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
 /// `bond_spend_sk` ([`HybridSecretKey`]), `receipt_sign_sk`
-/// ([`FnDsaHybridSecretKey`], both halves [`Zeroizing`]) and `hs_id_seed`
+/// ([`FnDsaHybridSecretKey`], both halves wiped on the heap) and `hs_id_seed`
 /// ([`Zeroizing`]) — so each wipes on drop via its own destructor. This is the rule-35 per-field discipline applied to a struct that
 /// also holds non-`Zeroize` public material.
 ///
