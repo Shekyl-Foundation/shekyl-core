@@ -1,7 +1,7 @@
 # Bond admission accepts only valid, closed, final shards — the ghost-shard guard
 
-**Status:** **RULED 2026-09-19** (maintainer). The rule is settled; three
-**design** questions are open and belong to the **daemon lane** (§4). Grounded
+**Status:** **RULED 2026-09-19** (maintainer); **BUILT 2026-10-07 as `CEN-J15`** (#983, `rules/tx_bond.rs`, the E6 slice-8 lane — not E4 / S-ARCH, which this document named; re-tensed 2026-10-10). The rule is settled; the three
+**design** questions of §4 were open and are answered — each by the substrate `CEN-J15` landed on, as recorded in [`CHAIN_RULES_SLICE_8.md`](../completed/CHAIN_RULES_SLICE_8.md) §3.4. Grounded
 at `dev` = `6c41bf820` (the #790 merge) and **re-based onto `fbc92287a`**
 (the #795–#798 `PDM` sweep and #786 S-TX); every code anchor below re-verified
 at that tree. Re-pin before implementing.
@@ -12,7 +12,7 @@ lane that owns the predicate. The finding is the wallet lane's; the rule is
 steering's; the implementation is the daemon lane's.
 
 **Identifier family:** none minted. This document carries one ruling and three
-questions owed to an existing lane (**E4 / S-ARCH**), so it registers no series
+questions owed to an existing lane (named **E4 / S-ARCH**; answered by **E6 slice 8**, `CEN-J15`), so it registers no series
 of its own ([`23-disposition-visibility`](../../.cursor/rules/23-disposition-visibility.mdc):
 zero code symbols, and no family where the owning lane already has one).
 
@@ -159,7 +159,7 @@ to honour rather than code to port.
 
 ## 4. The design questions, owed to the daemon lane
 
-The **rule** is ruled. These are **how**, and they are E4 / S-ARCH's:
+The **rule** is ruled. These are **how**, and they were owed to E4 / S-ARCH — **answered 2026-10-07 by `CEN-J15`** (#983; the record is `CHAIN_RULES_SLICE_8.md`'s): the predicate lives in `shekyl-chain-rules` `rules/tx_bond.rs` as `J15`'s body, with the retention crate's `check_admission` for the viability leg (Q1); it is evaluated over the `ChainView` at the **admitting block's parent** (`parent_height = chain_height − 1`), so the `blockchain.cpp:1478-1492` read-point hazard cannot arise (Q2); and `ShardSet::new` stays the pure constructor it is — the chain-context check is `closed_and_final(view, shard, parent, reorg_cap)`, a separate rule step, not the constructor's (Q3). The rows below are kept as posed:
 
 | # | Question | Why it is open |
 | --- | --- | --- |
@@ -189,8 +189,8 @@ length rows** land (S-CHAIN-W) and **S-PRUNE derives `b_*`** — the same gate
 
 **The obligation that travels with these questions (rule 94):** this document
 mints no identifier family, because the answering lane already has one. **When
-E4 / S-ARCH answers, its family is stamped into this document's
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 row**, so the trail runs
+the answering lane answers, its family is stamped into this document's
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 row** (done 2026-10-10: `CEN-J15`, #983 — the lane was E6 slice 8, not the E4 / S-ARCH this paragraph named), so the trail runs
 **both** directions — the questions point at the lane, and the lane's answer
 points back at the questions. Without that, a handoff with no family is a
 handoff with no return address.
