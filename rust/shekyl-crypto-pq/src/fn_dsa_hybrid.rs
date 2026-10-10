@@ -187,9 +187,17 @@ impl FnDsaHybridPublicKey {
 /// There is no canonical encoding for it and no `Clone`: the receipt key is
 /// re-derived from the wallet seed, and the witness key lives for one block
 /// in memory. Neither is written anywhere.
+///
+/// The FN-DSA half lives on the heap, in a buffer key generation writes in
+/// place. A 2,369-byte array held inline would be copied every time the key,
+/// or a bundle holding it, is moved, and `Zeroizing` wipes only the last
+/// place a value rested: each earlier copy would stay on a stack nobody
+/// wipes. Moving this type moves a pointer. The buffer is always
+/// [`FN_DSA_1024_SECRET_KEY_LENGTH`] bytes; nothing outside key generation
+/// constructs one.
 pub struct FnDsaHybridSecretKey {
     ed25519: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]>,
-    fn_dsa: Zeroizing<[u8; FN_DSA_1024_SECRET_KEY_LENGTH]>,
+    fn_dsa: Zeroizing<Box<[u8]>>,
 }
 
 impl std::fmt::Debug for FnDsaHybridSecretKey {
@@ -400,20 +408,18 @@ impl SignatureScheme for HybridEd25519FnDsa {
 /// the scratch on the caller, and `the_scheme_runs_on_a_small_stack` fails
 /// when that happens.
 #[inline(never)]
-fn fn_dsa_keygen(
-    seed: &[u8; 32],
-) -> (
-    [u8; FN_DSA_1024_PUBLIC_KEY_LENGTH],
-    Zeroizing<[u8; FN_DSA_1024_SECRET_KEY_LENGTH]>,
-) {
+fn fn_dsa_keygen(seed: &[u8; 32]) -> ([u8; FN_DSA_1024_PUBLIC_KEY_LENGTH], Zeroizing<Box<[u8]>>) {
     use rand::SeedableRng as _;
     // ChaCha20 by name, so the derivation does not move with `rand`'s
     // default generator.
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
     let mut generator = KeyPairGenerator1024::default();
-    let mut secret = Zeroizing::new([0u8; FN_DSA_1024_SECRET_KEY_LENGTH]);
+    // Allocated at its final address and written there: the secret key is
+    // never an array on this stack.
+    let mut secret: Zeroizing<Box<[u8]>> =
+        Zeroizing::new(vec![0u8; FN_DSA_1024_SECRET_KEY_LENGTH].into_boxed_slice());
     let mut public = [0u8; FN_DSA_1024_PUBLIC_KEY_LENGTH];
-    generator.keygen(FN_DSA_LOGN_1024, &mut rng, secret.as_mut(), &mut public);
+    generator.keygen(FN_DSA_LOGN_1024, &mut rng, &mut secret, &mut public);
     (public, secret)
 }
 
@@ -430,7 +436,7 @@ fn fn_dsa_keygen(
 /// that happens.
 #[inline(never)]
 fn fn_dsa_sign(
-    secret: &[u8; FN_DSA_1024_SECRET_KEY_LENGTH],
+    secret: &[u8],
     rng: &mut (impl RngCore + CryptoRng),
     inner: &[u8; 64],
 ) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError> {
@@ -450,6 +456,18 @@ fn fn_dsa_sign(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Moving a secret key moves a pointer, not the FN-DSA key bytes: an
+    /// inline array would leave an unwiped copy behind at every move.
+    #[test]
+    fn a_secret_key_is_not_its_fn_dsa_bytes_inline() {
+        assert!(
+            std::mem::size_of::<FnDsaHybridSecretKey>() < 128,
+            "the FN-DSA secret half must stay on the heap"
+        );
+        let (_, secret) = HybridEd25519FnDsa::keypair_from_seeds(&[1; 32], &[2; 32]).unwrap();
+        assert_eq!(secret.fn_dsa.len(), FN_DSA_1024_SECRET_KEY_LENGTH);
+    }
     use crate::error::PqcVerifyError;
     use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
 
