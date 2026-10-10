@@ -61,19 +61,6 @@ typedef struct shekyl_rpc_identity_facts {
 
 int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out);
 
-// One row of the hard-fork schedule.
-typedef struct shekyl_rpc_hardfork_entry {
-    uint8_t  version;
-    uint8_t  reserved[7];
-    uint64_t height;
-} shekyl_rpc_hardfork_entry;
-
-// Fills a C++-owned view of the schedule; release `*out_owner` with
-// shekyl_rpc_hardforks_free once the rows have been copied out.
-int shekyl_rpc_hardforks(core_rpc_handle* h,
-    const shekyl_rpc_hardfork_entry** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_hardforks_free(void* owner);
-
 // Block hash at a height, with the tip as of the same read (RK-2), so a
 // refusal can name the top height without a second call.
 typedef struct shekyl_rpc_block_hash_facts {
@@ -154,8 +141,8 @@ int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
 // The variable-length half of a block's facts (RK-3b): the three payloads
 // whose size the caller cannot know in advance. Allocated by C++, owned by
 // the opaque `owner` the export hands back, and released as one unit by
-// `shekyl_rpc_block_free` — the `shekyl_rpc_hardforks` shape, which §3.2
-// states as the rule for every variable-length payload.
+// `shekyl_rpc_block_free`, which §3.2 states as the rule for every
+// variable-length payload.
 //
 // `json` is epee's rendering of the whole block (RK-D11). It crosses as an
 // opaque string and Rust passes it through untouched; matching that renderer
@@ -452,51 +439,9 @@ void shekyl_rpc_peer_list_free(void* owner);
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 
-// Hard-fork info, exactly as the daemon reports it today.
-//
-// **A projection, not a model.** The daemon writes `window`, `votes` and
-// `threshold` as 0: there is no vote, and this struct does not invent one.
-// CEN-B2 (the reserved minor byte) is ratified and lives in the chain-rules
-// header predicate, not here. CEN-B3 (the height schedule, the discarded
-// `add` verdict, and the class that owns both) stays bucket 4 until
-// `hard_fork_info` is deleted. The projection is that in-flight surface.
-//
-// **Two versions, named apart, because the C++ overloaded one word.** The
-// request's `version` means "the fork I am asking about" (0 → the next one),
-// and the voting fields below all describe *that* version — but the C++
-// reply's `version` was `get_current_hard_fork_version()`, a different fact,
-// and nothing echoed the query. `show_status` asks with 0 and then prints
-// that field beside `earliest_height`, mixing the current fork's version with
-// the next fork's height in one line. Invisible today, since a single-entry
-// table makes both 1; a live defect the moment a second entry exists.
-typedef struct shekyl_rpc_hard_fork_facts {
-    uint64_t earliest_height;
-    uint32_t window;
-    uint32_t votes;
-    uint32_t threshold;
-    uint32_t state;
-    // The version the voting fields describe: the caller's, or the next fork
-    // version when the caller passed 0.
-    uint8_t  queried_version;
-    // The chain's current version. NOT the subject of the fields above.
-    uint8_t  active_version;
-    uint8_t  voting;
-    uint8_t  enabled;
-    uint8_t  reserved[4];
-} shekyl_rpc_hard_fork_facts;
-
-int shekyl_rpc_hard_fork_info(core_rpc_handle* h, uint8_t requested_version,
-    shekyl_rpc_hard_fork_facts* out);
-
 // The dynamic base-fee estimate.
 //
-// One estimator, not two. The C++ branched on
-// `version >= HF_VERSION_2021_SCALING`, and that constant is **1** while
-// `Blockchain` constructs `HardFork` with `original_version = 1` on every
-// network — so the comparison was a tautology and the other arm was
-// unreachable by construction, not merely unexercised. It and
-// `Blockchain::get_dynamic_base_fee_estimate`, which it was the only caller
-// of, are deleted (rule 60).
+// One estimator: the 2021-scaling one.
 //
 // `fees` is one slot per priced tier: [economy, standard, priority].
 // `fee_count` reports what was actually written so a change in that
@@ -549,12 +494,8 @@ void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_
 int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
-void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
-int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
 int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
-void shekyl_rpc_hard_fork_facts_test_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed);
-int shekyl_rpc_hard_fork_facts_test_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed);
 void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
 int shekyl_rpc_fee_estimate_facts_test_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
 void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
@@ -596,9 +537,6 @@ int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts
 namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
-
-int hard_fork_info(cryptonote::Blockchain& bc, uint8_t requested_version,
-    shekyl_rpc_hard_fork_facts* out) noexcept;
 
 int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
     shekyl_rpc_fee_estimate_facts* out) noexcept;

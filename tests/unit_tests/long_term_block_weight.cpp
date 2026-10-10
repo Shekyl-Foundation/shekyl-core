@@ -122,21 +122,14 @@ struct BlockchainAndPool
 #endif
 };
 
-#define PREFIX_WINDOW(hf_version,window) \
+#define PREFIX_WINDOW(window) \
   BlockchainAndPool bap; \
   cryptonote::Blockchain *bc = &bap.bc; \
-  struct get_test_options { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { \
-      hard_forks, \
-      window, \
-    }; \
-    get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
+  const cryptonote::test_options test_options = {window}; \
   TestDB *db = new TestDB(); \
-  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &opts.test_options, 0))
+  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &test_options, 0))
 
-#define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
+#define PREFIX() PREFIX_WINDOW(TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
 namespace
 {
@@ -161,7 +154,7 @@ TEST(long_term_block_weight, generated_macro_matches_the_ratified_factor)
 
 TEST(long_term_block_weight, surge_ceiling_bounds_the_effective_median_at_the_ratified_factor)
 {
-  PREFIX(1);
+  PREFIX();
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
   push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone * 100, zone);
@@ -173,7 +166,7 @@ TEST(long_term_block_weight, surge_ceiling_bounds_the_effective_median_at_the_ra
 
 TEST(long_term_block_weight, a_short_term_median_below_the_ceiling_is_not_clamped)
 {
-  PREFIX(1);
+  PREFIX();
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t below_ceiling = zone * (RATIFIED_SURGE_FACTOR - 1);
 
@@ -185,7 +178,7 @@ TEST(long_term_block_weight, a_short_term_median_below_the_ceiling_is_not_clampe
 
 TEST(long_term_block_weight, a_quiet_chain_does_not_fall_below_the_long_term_median)
 {
-  PREFIX(1);
+  PREFIX();
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
   push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone / 10, zone);
@@ -196,7 +189,7 @@ TEST(long_term_block_weight, a_quiet_chain_does_not_fall_below_the_long_term_med
 
 TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
 {
-  PREFIX(1);
+  PREFIX();
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   push_blocks(db, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW, zone, zone);
 

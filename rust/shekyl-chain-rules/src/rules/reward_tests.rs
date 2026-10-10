@@ -239,11 +239,7 @@ fn f16_splits_the_paid_reward_at_the_epoch() {
         );
         assert_eq!(
             paid.split,
-            shekyl_economics::compute_emission_split(
-                paid.paid.to_raw(),
-                3,
-                EMISSION_SPLIT_EPOCH.to_raw()
-            )
+            shekyl_economics::compute_emission_split(paid.paid.to_raw(), 3)
         );
     }
     assert!(penalised.split.miner_emission < full.split.miner_emission);

@@ -98,63 +98,9 @@ int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
   }
 }
 
-// Body of `shekyl_rpc_hard_fork_info`. A projection: it copies what
-// `get_hard_fork_voting_info` reports (the three counters are 0; there is
-// no vote) and resolves which version was asked about. See the header.
-//
-// The version resolution is here rather than in the adapter because it is the
-// one decision on this path and it needs a chain read: "0 means the next
-// fork" is request policy, and a fixture can drive both arms of it.
-int hard_fork_info(cryptonote::Blockchain& bc, uint8_t requested_version,
-  shekyl_rpc_hard_fork_facts* out) noexcept
-{
-  if (!out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  try
-  {
-    std::memset(out, 0, sizeof(*out));
-    const std::lock_guard<cryptonote::Blockchain> guard(bc);
-    // Resolved once and reported, so a caller can tell which fork the voting
-    // fields below describe. The C++ this replaces resolved it into a local
-    // and then reported a *different* version in the same struct.
-    const uint8_t queried =
-      requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();
-    out->queried_version = queried;
-    out->active_version = bc.get_current_hard_fork_version();
-    uint32_t window = 0, votes = 0, threshold = 0;
-    uint64_t earliest_height = 0;
-    uint8_t voting = 0;
-    out->enabled = bc.get_hard_fork_voting_info(queried, window, votes, threshold,
-      earliest_height, voting) ? 1 : 0;
-    out->window = window;
-    out->votes = votes;
-    out->threshold = threshold;
-    out->earliest_height = earliest_height;
-    out->voting = voting;
-    out->state = static_cast<uint32_t>(bc.get_hard_fork_state());
-    return SHEKYL_RPC_FACTS_OK;
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("hard fork facts: exception: " << e.what());
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("hard fork facts: unknown exception");
-    std::memset(out, 0, sizeof(*out));
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-}
-
 // Body of `shekyl_rpc_fee_estimate`.
 //
-// One estimator. The C++ handler chose between two on
-// `version >= HF_VERSION_2021_SCALING`, which is `>= 1` against a chain whose
-// `HardFork` is constructed with `original_version = 1` — a tautology, so the
-// other arm was unreachable by construction. It is gone, and so is
-// `Blockchain::get_dynamic_base_fee_estimate`, which it was the only caller of.
+// One estimator: the 2021-scaling one.
 int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
   shekyl_rpc_fee_estimate_facts* out) noexcept
 {
@@ -1521,53 +1467,6 @@ void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
     *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
 }
 
-int shekyl_rpc_hardforks(core_rpc_handle* h,
-  const shekyl_rpc_hardfork_entry** out, size_t* out_len, void** out_owner)
-{
-  // Cleared before anything can return. An owner slot is the one out-param
-  // whose stale value is dangerous rather than merely wrong: a caller reusing
-  // the variable across calls would be left holding — and freeing — the
-  // pointer from the previous one. See `shekyl_rpc_block_at`.
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc || !out || !out_len || !out_owner)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  *out = nullptr;
-  *out_len = 0;
-  std::unique_ptr<std::vector<shekyl_rpc_hardfork_entry>> rows;
-  try
-  {
-    rows.reset(new std::vector<shekyl_rpc_hardfork_entry>());
-    for (const hardfork_t& hf : h->rpc->get_core().get_blockchain_storage().get_hardforks())
-    {
-      shekyl_rpc_hardfork_entry e;
-      std::memset(&e, 0, sizeof(e));
-      e.version = hf.version;
-      e.height = hf.height;
-      rows->push_back(e);
-    }
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("hardforks facts: exception: " << e.what());
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("hardforks facts: unknown exception");
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  *out = rows->empty() ? nullptr : rows->data();
-  *out_len = rows->size();
-  *out_owner = rows.release();
-  return SHEKYL_RPC_FACTS_OK;
-}
-
-void shekyl_rpc_hardforks_free(void* owner)
-{
-  delete static_cast<std::vector<shekyl_rpc_hardfork_entry>*>(owner);
-}
-
 int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
   shekyl_rpc_block_hash_facts* out)
 {
@@ -1575,15 +1474,6 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     return SHEKYL_RPC_FACTS_ERR_NULL;
   return daemon_rpc_facts::block_hash_at(
     h->rpc->get_core().get_blockchain_storage(), height, out);
-}
-
-int shekyl_rpc_hard_fork_info(core_rpc_handle* h, uint8_t requested_version,
-  shekyl_rpc_hard_fork_facts* out)
-{
-  if (!h || !h->rpc || !out)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::hard_fork_info(
-    h->rpc->get_core().get_blockchain_storage(), requested_version, out);
 }
 
 int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
@@ -1717,31 +1607,6 @@ void shekyl_rpc_block_free(void* owner)
   delete static_cast<daemon_rpc_facts::block_payload_owner*>(owner);
 }
 
-void shekyl_rpc_hard_fork_facts_test_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed)
-{
-  if (!out)
-    return;
-  std::memset(out, 0, sizeof(*out));
-  out->earliest_height = field_value(seed, 0);
-  out->window = static_cast<uint32_t>(field_value(seed, 1));
-  out->votes = static_cast<uint32_t>(field_value(seed, 2));
-  out->threshold = static_cast<uint32_t>(field_value(seed, 3));
-  out->state = static_cast<uint32_t>(field_value(seed, 4));
-  out->queried_version = static_cast<uint8_t>(field_value(seed, 5));
-  out->active_version = static_cast<uint8_t>(field_value(seed, 6));
-  out->voting = static_cast<uint8_t>(field_value(seed, 7));
-  out->enabled = static_cast<uint8_t>(field_value(seed, 8));
-}
-
-int shekyl_rpc_hard_fork_facts_test_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed)
-{
-  if (!facts)
-    return -1;
-  shekyl_rpc_hard_fork_facts expected;
-  shekyl_rpc_hard_fork_facts_test_fill(&expected, seed);
-  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
-}
-
 void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed)
 {
   if (!out)
@@ -1826,24 +1691,6 @@ int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* fact
   shekyl_rpc_chain_tip_facts expected;
   shekyl_rpc_chain_tip_facts_test_fill(&expected, seed);
   return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
-}
-
-void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed)
-{
-  if (!out)
-    return;
-  std::memset(out, 0, sizeof(*out));
-  out->version = static_cast<uint8_t>(field_value(seed, 0));
-  out->height = field_value(seed, 1);
-}
-
-int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed)
-{
-  if (!entry)
-    return -1;
-  shekyl_rpc_hardfork_entry expected;
-  shekyl_rpc_hardfork_entry_test_fill(&expected, seed);
-  return std::memcmp(entry, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 
 void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed)

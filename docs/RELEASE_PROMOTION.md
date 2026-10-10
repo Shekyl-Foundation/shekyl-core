@@ -185,7 +185,6 @@ the candidate SHA:
 - [ ] `config::testnet::GENESIS_TX`
 - [ ] `config::testnet::GENESIS_NONCE`
 - [ ] handshake id: `shekyl_network_id(TESTNET)`, derived from the genesis block hash (`cSHAKE256`, domain `shekyl/p2p-network-id-v1`). The header does not carry the bytes. Diff the genesis tx and nonce above, and confirm the recorded testnet KAT.
-- [ ] testnet hardfork table (including the genesis HF height)
 - [ ] generated economics constants from `config/economics_params.json`
 
 If **any** changed → re-run the rehearsal from clean datadirs per
@@ -206,14 +205,13 @@ each before the genesis freeze — after it, these are immutable.**
 |---|---|---|
 | Tag | `v3.0.0-RCn` (pre-release) | first non-pre-release tag |
 | Frozen tuple | `config::testnet::*` | `config::mainnet::*` |
-| **Genesis HF number** | testnet artifact (`HF_VERSION_SHEKYL_NG = 17`) | **one canonical number, reconciled across code + `UPGRADE_POLICY.md` + HF table** |
-| Lead time before activation | accelerated | ≥ 4 weeks (`UPGRADE_POLICY.md`); 72 h floor for emergency forks |
+| Block version | `CURRENT_BLOCK_MAJOR_VERSION` 1 and `CURRENT_BLOCK_MINOR_VERSION` 0 | the same constants. There is no per-network fork number |
 | Snapshot allocation | none | per `GENESIS_TRANSPARENCY.md` decision |
 
-**Pre-freeze blocker:** the genesis HF number must be made canonical in one
-authority doc and every `hf_version >=` gate before mainnet. It is currently
-ambiguous (`UPGRADE_POLICY.md` says HF1; code uses 17). This is the one item
-with a hard, irreversible deadline.
+Block version is the constant 1.0 on every network. The hard-fork table is
+deleted, so there is no fork number, vote, or activation height to freeze.
+A later consensus change is a design document before any code
+(`design/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
 
 ---
 

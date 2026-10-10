@@ -590,32 +590,6 @@ bool t_command_parser_executor::in_peers(const std::vector<std::string>& args)
 	return m_executor.in_peers(set, limit);
 }
 
-bool t_command_parser_executor::hard_fork_info(const std::vector<std::string>& args)
-{
-  int version;
-  if (args.size() == 0) {
-    version = 0;
-  }
-  else if (args.size() == 1) {
-    try {
-      version = std::stoi(args[0]);
-    }
-    catch(const std::exception& ex) {
-        std::cout << "Invalid syntax: Failed to parse version number. For more details, use the help command." << std::endl;
-        return true;
-    }
-    if (version <= 0 || version > 255) {
-      std::cout << "Invalid syntax: Unknown version number. Must be between 0 and 255. For more details, use the help command." << std::endl;
-      return true;
-    }
-  }
-  else {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-  return m_executor.hard_fork_info(version);
-}
-
 bool t_command_parser_executor::show_bans(const std::vector<std::string>& args)
 {
   if (!args.empty()) {
