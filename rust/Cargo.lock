@@ -4092,8 +4092,14 @@ name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
  "shekyl-archival-fetch-sched",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-crypto-pq",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
+ "shekyl-p-fetch",
+ "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
