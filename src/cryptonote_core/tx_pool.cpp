@@ -175,6 +175,17 @@ namespace cryptonote
     // (docs/FOLLOWUPS.md). The coinbase reserve is still the pinned 600.
     constexpr size_t LISTED_WEIGHT_OVERSHOOT_NUMERATOR = 13;
     constexpr size_t LISTED_WEIGHT_OVERSHOOT_DENOMINATOR = 10;
+    // 13/10 is the inherited 130/100 at the median this node builds, and
+    // that overshoot still covers the coinbase reserve. A median below the
+    // reserve is the zero-cap arm, not a wrap.
+    static_assert((LISTED_WEIGHT_OVERSHOOT_NUMERATOR * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
+                          / LISTED_WEIGHT_OVERSHOOT_DENOMINATOR
+                      == (130 * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5) / 100,
+        "13/10 must equal the inherited 130/100 at the full-reward zone");
+    static_assert((LISTED_WEIGHT_OVERSHOOT_NUMERATOR * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
+                          / LISTED_WEIGHT_OVERSHOOT_DENOMINATOR
+                      > CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE,
+        "the zone's overshoot covers the coinbase reserve");
 
     // What the scan does with one offered body.
     // take: list it.
