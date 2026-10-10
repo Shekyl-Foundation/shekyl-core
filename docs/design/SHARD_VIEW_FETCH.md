@@ -6,8 +6,11 @@
 review. `SV-D10` **PROPOSED 2026-10-10** (byte-derived texture layer; default
 not now). `SV-D9` is the blocker: the daemon has no facts source for the view
 until the `DRS-E3` store cutover, and the RPC says so with its own code.
-Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09); 2c
-is the wallet lane's (`WSS-Q1`). The round stays OPEN on `SV-D4`…`SV-D8`'s
+Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09).
+2c's serve read landed 2026-10-10: `StoreShardProvider` over a
+`BodyStoreReader`, the writer owned by `StakeEngine` (`WSS-Q1`(a)).
+Fill (`WSS-Q4`) and erase (`WSS-Q8`) remain open, and the reader still
+decrypts, so `WSS-Q13` is not met. The round stays OPEN on `SV-D4`…`SV-D8`'s
 review, `SV-D9`'s falsifier, and `SV-D10`. Visualization continuation
 (entropy audit, CVD gate, candidate.v2 criteria) is in
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) *SV-D
@@ -337,7 +340,7 @@ branch.
 | 1 | `SV-D1`'s fold in `shekyl-types`, its KAT, the domain-registry entry; the Python mirror and re-pinned fixtures | this round | — |
 | 2a | fetch Sub-PR 2 client: tx-range frame, streaming per-tx `ContentVerify`, range-derived response ceiling, `ServedFrameHeader` / `recompute_segment_r_k` out of the client path | `SF-` (FOLLOWUPS row) | — |
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
-| 2c | the serve side: a `ShardProvider` over `P`'s body store serving the tx-range frame | the wallet lane (`WSS-`) | `WSS-Q1` |
+| 2c | the serve read: `StoreShardProvider` over a `BodyStoreReader` streams the tx-range frame. The writer is `StakeEngine`'s (`WSS-Q1`(a)). Fill (`WSS-Q4`) and erase (`WSS-Q8`) are not written, so an empty store answers 404 until fill. The reader still decrypts (`WSS-Q13` is not met) | the wallet lane (`WSS-`) | fill `WSS-Q4`, erase `WSS-Q8` |
 | 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in `shekyl-daemon-image` is `SV-D9`'s | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route — **landed 2026-10-09**: `get_shard_view` SPECIFIED (`wallet_rpc.yaml` 0.11.0; codes `-29534` `SHARD_STILL_OPEN`, `-29535` `SHARD_UNAVAILABLE`, `-29536` `SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` \| `skeleton_absent`), the daemon call and refusal mapping once in `shekyl-wallet-contract::shard_view::fetch_shard_view`, served by `shekyl-wallet-rpc`; CLI `shard fetch <id> [--png <path>] [--size <n>]`; GUI `get_shard_view` contract adapter drawing locally; `shekyl-shard-render` (`shekyl-shard-visual`, feature `cli`) for shekyl-web, whose `/api/shards/{id}/view[/png]` routes call the site daemon's unrestricted listener; the `ArchivalShardSource` stub deleted | this round | 3 |
 
@@ -346,14 +349,14 @@ branch.
 daemon* until the `DRS-E3` cutover. The states below it are built and
 tested against a fake daemon, not yet reached from a real one.
 
-Until 2c lands every fetch against the still-wired leaf-segment provider
-ends refused — `Malformed::Frame` where the raw leaf bytes are not the
-frame's version byte, `ContentRefused` where they happen to be; the body
-`P` signs is not the tx-range body the client expects — and every viewer
-shows *"this archive could not be retrieved"*, a visible state, never an
-empty picture (rule 82). That interim refusal is a property of the
-provider, not of `P`: no consumer may read it as evidence against the
-holder (`SF-D8` amendment, 2026-10-08).
+A fetch against the serve reads the tx-range frame from `P`'s body store
+(`StoreShardProvider`). Fill (`WSS-Q4`) is not written, so a store that
+holds no shard answers 404 and the viewer shows *"this archive could not
+be retrieved"*, a visible state, never an empty picture (rule 82). That
+404 is an empty store, not evidence against the holder (`SF-D8`
+amendment, 2026-10-08). Erase at the second absent epoch (`WSS-Q8`) is
+the same writer's later message. The reader still decrypts, so `WSS-Q13`
+is not met.
 
 ---
 
