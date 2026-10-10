@@ -1,19 +1,21 @@
 # Bond admission accepts only valid, closed, final shards — the ghost-shard guard
 
-**Status:** **RULED 2026-09-19** (maintainer); **BUILT 2026-10-07 as `CEN-J15`** (#983, `rules/tx_bond.rs`, the E6 slice-8 lane — not E4 / S-ARCH, which this document named; re-tensed 2026-10-10). The rule is settled; the three
-**design** questions of §4 were open and are answered — each by the substrate `CEN-J15` landed on, as recorded in [`CHAIN_RULES_SLICE_8.md`](../completed/CHAIN_RULES_SLICE_8.md) §3.4. Grounded
-at `dev` = `6c41bf820` (the #790 merge) and **re-based onto `fbc92287a`**
-(the #795–#798 `PDM` sweep and #786 S-TX); every code anchor below re-verified
-at that tree. Re-pin before implementing.
+**Status:** **RULED 2026-09-19** (maintainer); **BUILT 2026-10-07 as `CEN-J15`**
+(#983, `shekyl-chain-rules` `rules/tx_bond.rs`, `census.rs:509` `J15 implemented`).
+§4 answers the three design questions. The record is
+[`CHAIN_RULES_SLICE_8.md`](../completed/CHAIN_RULES_SLICE_8.md) §3.4. The ruling
+was grounded at `dev` = `6c41bf820` (the #790 merge) and re-based onto
+`fbc92287a` (the #795–#798 `PDM` sweep and #786 S-TX).
 
 **Provenance.** This is `WSS-22`, the one remainder of the wallet-side store
 round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.5), delivered to the
 lane that owns the predicate. The finding is the wallet lane's; the rule is
 steering's; the implementation is the daemon lane's.
 
-**Identifier family:** none minted. This document carries one ruling and three
-questions owed to an existing lane (named **E4 / S-ARCH**; answered by **E6 slice 8**, `CEN-J15`), so it registers no series
-of its own ([`23-disposition-visibility`](../../.cursor/rules/23-disposition-visibility.mdc):
+**Identifier family:** none minted. One ruling and three questions, answered by
+an existing lane (**E6 slice 8**, `CEN-J15`; posed to **E4 / S-ARCH**), so this
+document registers no series of its own
+([`23-disposition-visibility`](../../.cursor/rules/23-disposition-visibility.mdc):
 zero code symbols, and no family where the owning lane already has one).
 
 ---
@@ -34,7 +36,7 @@ an invention**: `PDM-Q6` item 3 already rules the **open frontier shard
 non-bondable** (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`). This ruling extends
 that reasoning to **the reorg window**, adds the **existence** leg, and states
 all of it as **one admission predicate** rather than facts a reader has to
-join. §3 sizes what that leaves to build.
+join. §3 is that sizing, as of the ruling. §4 is what was built.
 
 ### 1.1 What the rule is *not* justified by
 
@@ -127,11 +129,12 @@ sizes the work, so state it precisely rather than as a flat "no predecessor":**
 
 | Half | Predecessor in **design** | Predecessor in **code** |
 | --- | --- | --- |
-| **"closed and final"** | **Partly yes.** `PDM-Q6` item 3 already rules the **open frontier shard** (no `b_{k+1}` yet) **not bondable** — *"a clean `HoldingsUpdate` admission rule the per-tx model did not give"* (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`; the quoted kind is REJECTED 2026-09-20 and the source struck it 2026-09-22 — the rule now admits at `JoinMarket`, the only bonding event). **Unbuilt**, and silent on the reorg window, which this ruling adds | **No** |
-| **"exists"** | **No** | **No** |
+| **"closed and final"** | **Partly yes.** `PDM-Q6` item 3 already rules the **open frontier shard** (no `b_{k+1}` yet) **not bondable** — *"a clean `HoldingsUpdate` admission rule the per-tx model did not give"* (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`; the quoted kind is REJECTED 2026-09-20 and the source struck it 2026-09-22 — the rule now admits at `JoinMarket`, the only bonding event). Silent on the reorg window, which this ruling adds. **Unbuilt at the ruling** | **Built 2026-10-07** as `CEN-J15` |
+| **"exists"** | **No** | **Built 2026-10-07** — a shard past the frontier fails `closed_and_final` (`rust/shekyl-chain-rules/src/archival/close.rs:302`) |
 
-So the task is **a new rule plus an unimplemented old one**, not a translation
-and not a greenfield. The evidence for the code column:
+So the task, sized on 2026-09-19, was **a new rule plus an unimplemented old
+one**, not a translation and not a greenfield. The evidence for that code
+column, at the pin:
 
 - `ShardSet::new` — *"the one fallible constructor — every decoder / FFI
   marshal / builder routes through it"*
@@ -149,65 +152,72 @@ and not a greenfield. The evidence for the code column:
   (`src/rpc/archival_shard_coverage.cpp:34`), and the **freeze / pop-revert**
   path (`src/blockchain_db/lmdb/db_lmdb.cpp:7997`). **None is bond admission.**
 
-So the daemon lane is **building**, not porting — and a reader who trusts the
-inherited claim will look for a predecessor, find the C++ symbol, and conclude
-the work is a translation. **The one thing it *can* reuse is the design
-intent of `PDM-Q6` item 3's non-bondable frontier shard**, which is a paragraph
-to honour rather than code to port.
+The daemon lane was **building**, not porting. **It is built** (§4). A reader
+who trusts the inherited `frozen_segment_count` claim still finds no bond
+admission among its consumers; the Rust rule is `CEN-J15`, not a port of that
+symbol. The C++ gather admits a strict superset of what `CEN-J15` admits
+(open, unpriced shards clear there) and deletes at the cutover
+(`DAEMON_REDB_STORE.md`, the `DEL-008` permissive row on
+`check_archival_bond_post_input`). **The design intent reused is `PDM-Q6`
+item 3's non-bondable frontier shard**, a paragraph honoured rather than
+code ported.
 
 ---
 
-## 4. The design questions, owed to the daemon lane
+## 4. The design questions — ANSWERED 2026-10-07 (CEN-J15)
 
-The **rule** is ruled. These are **how**, and they were owed to E4 / S-ARCH — **answered 2026-10-07 by `CEN-J15`** (#983; the record is `CHAIN_RULES_SLICE_8.md`'s): the predicate lives in `shekyl-chain-rules` `rules/tx_bond.rs` as `J15`'s body, with the retention crate's `check_admission` for the viability leg (Q1); it is evaluated over the `ChainView` at the **admitting block's parent** (`parent_height = chain_height − 1`), so the `blockchain.cpp:1478-1492` read-point hazard cannot arise (Q2); and `ShardSet::new` stays the pure constructor it is — the chain-context check is `closed_and_final(view, shard, parent, reorg_cap)`, a separate rule step, not the constructor's (Q3). The rows below are kept as posed:
+The rule was posed to E4 / S-ARCH. E6 slice 8 answered it as `CEN-J15`
+(#983). The record is
+[`CHAIN_RULES_SLICE_8.md`](../completed/CHAIN_RULES_SLICE_8.md) §3.4. The code
+is `rules/tx_bond.rs` and `archival/close.rs`.
 
-| # | Question | Why it is open |
+| # | Question | Answer |
 | --- | --- | --- |
-| **1** | **Where does the predicate live?** | Admission-side in `shekyl-chain-rules`, or in `shekyl-archival-retention` beside the rest of the bond rules. The verifier that lands with SO-D8 Slice C (`PDM-Q6` item 4, row 1; *was* "at E4 / S-ARCH", re-homed 2026-10-04 by `SERVE_CREDIT_VERIFIER.md`) is the natural neighbour, but that is a placement argument, not a ruling |
-| **2** | **At what height is it evaluated?** | Admission reads chain state, so the predicate needs a stated evaluation point — and the same hazard `blockchain.cpp:1478-1492` documents for the D2 operand applies: *"a refactor that moves the read past `add_block` … must stop the node here"*. Whatever height is chosen, **the operand must be captured before the connecting block advances the chain**, or the check becomes a tautology that still passes every test |
-| **3** | **Does `ShardSet` gain chain context, or does a separate check own this?** | `ShardSet::new` is currently a **pure** constructor — cardinality and duplicates, no I/O, reachable from decoders, FFI marshals and builders alike. Giving it chain context would change that character on **every** one of those paths. A separate admission-side check keeps the constructor pure. **Trade named, not settled:** one fallible constructor is a strong invariant to keep, and a second check is a second thing to remember |
+| **1** | **Where does the predicate live?** | In `shekyl-chain-rules`. `closed_and_final` is `rust/shekyl-chain-rules/src/archival/close.rs:296`. `J15` calls it from `rust/shekyl-chain-rules/src/rules/tx_bond.rs:501`. The viability leg is the retention crate's `check_admission` (`rust/shekyl-archival-retention/src/admission.rs:420`). Slice C consumes this predicate; it does not own a second site |
+| **2** | **At what height is it evaluated?** | At the admitting block's parent. `parent` is `Tip::connecting_height(view.tip()) − 1` (`rust/shekyl-chain-rules/src/rules/tx_bond.rs:486`). `validate` judges over that parent `ChainView`, so a read taken after the connecting block advances the chain has no expression here. A compact set at genesis has no parent and is refused |
+| **3** | **Does `ShardSet` gain chain context, or does a separate check own this?** | A separate check. `ShardSet::new` (`rust/shekyl-types/src/archival/mod.rs:414`) stays the pure constructor: cardinality and duplicates, no chain. The chain check is `closed_and_final(view, shard, parent, reorg_cap)` |
 
-### 4.1 What the predicate needs, and what supplies it
+### 4.1 What the predicate reads
 
-- **`b_*`** — the shard partition, derived by **S-PRUNE's forward pass over the
-  A4 length rows, once**; the verifier *reads* it and mints nothing
-  (`PDM-Q9` (iii)).
-- **`close_height(k)`** — a binary search over `cumulative_tx_count`
-  (`PDM-Q6` item 3); no new state.
-- **`D_max`** — `archival_reorg_depth_blocks` = 720
-  (`config/consensus_constants.json:26`), for the finality leg.
-- **The dense `tx_id` space the partition is derived over.**
-  [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md) — **landed 2026-09-19, PR #786** — makes
-  `tx_count()` the dense count authority over `txs_pruned` (T2, `:233`) and
-  records that **`tx_id` order is ruled and dense** (SI-9, STX-10 `:494`). That
-  density is what makes *"does shard `k` exist"* a determinate question rather
-  than a lookup that can silently answer for a hole.
+`J15` reads these and mints none of them:
 
-**Gate on the whole predicate:** it cannot be implemented before the **A4
-length rows** land (S-CHAIN-W) and **S-PRUNE derives `b_*`** — the same gate
-`WALLET_SIDE_STORE.md` §5 rows 1–2 names for the wallet side.
+- **Closed and final** — `closed_and_final(view, shard, parent, rule_set.reorg_cap())`.
+  The cap is `RuleSet::reorg_cap()`, the reorg-cap job. A shard at or past the
+  frontier fails the closed leg (`rust/shekyl-chain-rules/src/archival/close.rs:302`);
+  that failure is the existence leg.
+- **The price** — `view.r_market(shard, last_settled_slash_epoch)`. Absent
+  watermark or absent row refuses (slice 8 Q4; `rust/shekyl-chain-rules/src/rules/tx_bond.rs:504`).
+- **Viability** — `check_admission` over that price and the age of the close
+  `closed_and_final` just placed. A complete tree gathers nothing and is
+  admitted (`rust/shekyl-chain-rules/src/rules/tx_bond.rs:483`).
 
-**The obligation that travels with these questions (rule 94):** this document
-mints no identifier family, because the answering lane already has one. **When
-the answering lane answers, its family is stamped into this document's
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 row** (done 2026-10-10: `CEN-J15`, #983 — the lane was E6 slice 8, not the E4 / S-ARCH this paragraph named), so the trail runs
-**both** directions — the questions point at the lane, and the lane's answer
-points back at the questions. Without that, a handoff with no family is a
-handoff with no return address.
+*Was:* a gate that the predicate could not be implemented before the A4
+length rows (S-CHAIN-W) and S-PRUNE's `b_*` forward pass, with
+`close_height(k)` searched over `cumulative_tx_count`. Dissolved.
+`PDM-Q6` item 5 withdraws A4, and `SHT-Q2` keys the frontier by
+`shard_of(cumulative_archival_len)` (`CHAIN_RULES_SLICE_8.md` §3.4). The
+wallet fill still wants `b_*` and `close_height(k)` as readable daemon
+facts (§5). Admission reads the fold, the price, and the viability check
+above.
+
+**Rule 94.** This document mints no family. The answer's family is `CEN-J15`
+(#983), stamped on this document's row in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7. The questions point
+at the lane, and the lane's row points back.
 
 ---
 
 ## 5. What this closes elsewhere
 
 - **`WSS-22`** — the wallet round's finding, delivered.
-- **`WSS-Q6` / `WSS-Q10`'s daemon-lane halves** — both were held open on *"how
-  `CompleteTree` admission works"* and on `b_*` / `close_height(k)` becoming
-  readable daemon facts. The ruling settles the **admission rule**; those halves
-  still wait on §4's answers and on the same A4 / S-PRUNE gate.
+- **`WSS-Q6` / `WSS-Q10`'s daemon-lane halves.** The admission rule those
+  halves were waiting on is `CEN-J15` (§4). What remains is `b_*` and
+  `close_height(k)` as readable daemon facts for the wallet fill
+  ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)). The A4 / S-PRUNE gate
+  those halves were also waiting on is dissolved (§4.1).
 - **`CompleteTree`'s *owed* set** is *"every closed, final shard"*
-  (`WALLET_SIDE_STORE.md` `WSS-Q10`), which is now the **same predicate** the
-  admission guard applies — one definition, two consumers, rather than two
-  phrasings that can drift apart.
+  (`WALLET_SIDE_STORE.md` `WSS-Q10`), the same predicate the admission guard
+  applies — one definition, two consumers.
 
 ---
 
@@ -216,3 +226,4 @@ handoff with no return address.
 | Date | Decision |
 | --- | --- |
 | 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. **No *ghost-specific* state is written along the way** — the terminal slash writes exactly what any withholding `P`'s slash writes (`db_lmdb.cpp:5964-5985`), which is the point. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1478-1492`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
+| 2026-10-10 | **The three §4 questions are answered, and the predicate is built.** `CEN-J15` (#983, E6 slice 8). Site: `closed_and_final` in `archival/close.rs`, called from `rules/tx_bond.rs`, with `check_admission` for viability. Height: the admitting block's parent (`connecting_height − 1`). `ShardSet::new` stays pure; the chain check is the rule step. The A4 / S-PRUNE gate in §4.1 is dissolved (`CHAIN_RULES_SLICE_8.md` §3.4). The 2026-09-19 row's "left to E4 / S-ARCH" and "neither half has one in code" are that day's sizing. |
