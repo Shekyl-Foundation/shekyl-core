@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainValid, ChainView, HeaderRecord, HeaderView, RecordedBlock,
-    RecordedWeights, StructurallyValid, Tip, TreeFrontier,
+    RecordedWeights, SlashLogFloor, StructurallyValid, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
     BondRecord, IndexedDraw, IssuedDigest, PassCount, RMarket, ServedShard, SettlementRow,
@@ -119,6 +119,7 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         &self,
         _: &PCanonicalId,
         _: BlockHeight,
+        _: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Infallible> {
         Ok(Vec::new())
     }
