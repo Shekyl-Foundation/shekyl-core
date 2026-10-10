@@ -464,6 +464,27 @@ impl ReadSnapshot<'_> {
         })
     }
 
+    /// How many outputs the transaction at `id` recorded, from
+    /// `tx_outputs` (**T5**). The shard fold counts in-domain outputs from
+    /// this row, not by parsing the pruned segment.
+    ///
+    /// # Errors
+    ///
+    /// As [`tx_prunable`](Self::tx_prunable): an id at or past the dense
+    /// count is [`AtIndex::BeyondCount`]; a hole below it is SI-9.
+    pub fn tx_output_count(&self, id: TxStorageId) -> Result<AtIndex<u64>, StoreError> {
+        Ok(
+            match tx_reads::output_indices_at(&self.txn, id)
+                .map_err(chain_reads::ReadFault::into_plain)?
+            {
+                AtIndex::Recorded(indices) => AtIndex::Recorded(
+                    u64::try_from(indices.0.len()).expect("an output count fits u64"),
+                ),
+                AtIndex::BeyondCount => AtIndex::BeyondCount,
+            },
+        )
+    }
+
     /// The long-term weight median **in force for** the block at `height`
     /// — the value it was validated and fee-floored against (SCR-19), the
     /// O(1) read that retires `rebuild_relay_floor_ring`'s stepped median
